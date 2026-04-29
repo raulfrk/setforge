@@ -12,7 +12,7 @@ Personal config for Claude Code + VSCode, managed with [dotdrop](https://github.
 ## Install on a new machine
 
 ```bash
-git clone https://github.com/<you>/dotfiles ~/dotfiles && cd ~/dotfiles && make install PROFILE=<profile>
+git clone https://github.com/raulfrk/dotfiles ~/dotfiles && cd ~/dotfiles && make install PROFILE=<profile>
 ```
 
 `make install` deploys tracked dotfiles to their live destinations and reinstalls VSCode extensions from `vscode-extensions/<profile>.txt` (skipped automatically if `code` is unavailable).
