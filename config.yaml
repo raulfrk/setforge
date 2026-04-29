@@ -6,6 +6,14 @@ config:
   ignoreempty: true
   link_dotfile_default: nolink
 
+dynvariables:
+  vscode_user_dir: |
+    if [ "$(uname -s)" = "Darwin" ]; then
+      echo "$HOME/Library/Application Support/Code/User"
+    else
+      echo "$HOME/.config/Code/User"
+    fi
+
 dotfiles:
   f_claude_md:
     src: claude/CLAUDE.md
@@ -16,10 +24,9 @@ dotfiles:
   f_vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
-  # TODO(human) - Enable this after copying the user settings
-  # f_vscode_user_settings:
-  #   src: vscode/user/settings.json
-  #   dst: ~/.vscode-server/data/User/settings.json
+  f_vscode_workstation_settings:
+    src: vscode/workstation/settings.json
+    dst: "{{@@ vscode_user_dir @@}}/settings.json"
 
 profiles:
   shared-base:
@@ -36,5 +43,5 @@ profiles:
   workstation:
     include:
       - shared-base
-    # TODO(human) - Add the user settings here
-    dotfiles: []
+    dotfiles:
+      - f_vscode_workstation_settings
