@@ -1,0 +1,40 @@
+# TODO(claude) - create a gh repo with ci capabilities (for the ci part the user should create the logic and claude should only create the stub)
+config:
+  backup: true
+  create: true
+  dotpath: tracked
+  ignoreempty: true
+  link_dotfile_default: nolink
+
+dotfiles:
+  f_claude_md:
+    src: claude/CLAUDE.md
+    dst: ~/.claude/CLAUDE.md
+  f_claude_settings:
+    src: claude/settings.json
+    dst: ~/.claude/settings.json
+  f_vscode_serv_settings:
+    src: vscode/vm/settings.json
+    dst: ~/.vscode-server/data/Machine/settings.json
+  # TODO(human) - Enable this after copying the user settings
+  # f_vscode_user_settings:
+  #   src: vscode/user/settings.json
+  #   dst: ~/.vscode-server/data/User/settings.json
+
+profiles:
+  shared-base:
+    dotfiles:
+      - f_claude_md
+
+  vm-headless:
+    include:
+      - shared-base
+    dotfiles:
+      - f_vscode_serv_settings
+      - f_claude_settings
+
+  workstation:
+    include:
+      - shared-base
+    # TODO(human) - Add the user settings here
+    dotfiles: []

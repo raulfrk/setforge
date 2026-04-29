@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "outputStyle": "Learning",
+  "theme": "dark",
+  "skipAutoPermissionPrompt": true,
+  "agentPushNotifEnabled": true
+}

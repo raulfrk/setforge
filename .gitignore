@@ -1,0 +1,22 @@
+# Never commit Claude credentials or runtime state
+.credentials.json
+**/sessions/
+**/projects/
+**/history.jsonl
+**/cache/
+**/paste-cache/
+**/shell-snapshots/
+**/session-env/
+**/file-history/
+**/ide/
+**/backups/
+**/mcp-needs-auth-cache.json
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+
+# pre-commit / dotdrop scratch
+.pre-commit-config.local
+*.bak
