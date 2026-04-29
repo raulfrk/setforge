@@ -1,4 +1,3 @@
-# TODO(claude) - create a gh repo with ci capabilities (for the ci part the user should create the logic and claude should only create the stub)
 config:
   backup: true
   create: true
