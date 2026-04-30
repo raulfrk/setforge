@@ -17,6 +17,12 @@ dotfiles:
   f_claude_md:
     src: claude/CLAUDE.md
     dst: ~/.claude/CLAUDE.md
+  f_claude_additional_md:
+    src: claude/additional-content.md
+    dst: ~/.claude/additional-content.md
+  f_claude_header_md:
+    src: claude/header.md
+    dst: ~/.claude/header.md
   f_claude_settings:
     src: claude/settings.json
     dst: ~/.claude/settings.json
@@ -38,6 +44,13 @@ profiles:
       - shared-base
     dotfiles:
       - f_vscode_serv_settings
+  vm-headless-full:
+    include:
+      - shared-base
+    dotfiles:
+      - f_vscode_serv_settings
+      - f_claude_additional_md
+      - f_claude_header_md
   vm-headless-vscode:
     dotfiles:
       - f_vscode_serv_settings

@@ -1,0 +1,13 @@
+anthropic.claude-code
+charliermarsh.ruff
+esbenp.prettier-vscode
+github.copilot-chat
+gruntfuggly.todo-tree
+mhutchie.git-graph
+ms-python.debugpy
+ms-python.python
+ms-python.vscode-pylance
+ms-python.vscode-python-envs
+redhat.vscode-yaml
+streetsidesoftware.code-spell-checker
+tamasfe.even-better-toml

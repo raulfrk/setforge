@@ -13,6 +13,10 @@ CFG      := --cfg $(HOME)/dotfiles/config.yaml
 DOTDROP  := uvx dotdrop $(CFG)
 PROFILE ?=
 
+LOCAL_FILES := \
+	$(HOME)/.claude/header.md \
+	$(HOME)/.claude/additional-content.md
+
 EXT_FILE := vscode-extensions/$(PROFILE).txt
 
 .PHONY: help compare capture update install install-ext sync require-profile
@@ -48,8 +52,14 @@ install-ext: require-profile ## Install extensions from vscode-extensions/<profi
 	@if [ ! -s $(EXT_FILE) ]; then echo "ERROR: $(EXT_FILE) is empty or missing"; exit 1; fi
 	xargs -L1 code --install-extension < $(EXT_FILE)
 
+bootstrap-local:
+	@for f in $(LOCAL_FILES); do \
+		[ -f "$$f" ] || { mkdir -p "$$(dirname "$$f")"; touch "$$f"; echo "created stub: $$f"; }; \
+	done
+
 install: require-profile ## Deploy tracked -> live + install extensions
 	$(DOTDROP) install -p $(PROFILE)
+	$(MAKE) bootstrap-local
 	@if command -v code >/dev/null && [ -s $(EXT_FILE) ]; then \
 		$(MAKE) install-ext PROFILE=$(PROFILE); \
 	else \

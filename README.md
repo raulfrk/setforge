@@ -19,11 +19,15 @@ git clone https://github.com/raulfrk/dotfiles ~/dotfiles && cd ~/dotfiles && mak
 
 ## Profiles
 
-| Profile | Includes | Used on |
+| Profile | Includes | Use on |
 |---|---|---|
-| `shared-base` | `CLAUDE.md` | (inherited by both below) |
-| `vm-headless` | shared-base + VSCode Machine settings | Remote-SSH VMs |
-| `workstation` | shared-base (+ User settings, once assigned) | desktop |
+| `shared-base` | `CLAUDE.md`, `~/.claude/settings.json` | inherited, not used directly |
+| `vm-headless` | shared-base + VSCode Machine settings | Remote-SSH VM, minimal Claude context |
+| `vm-headless-full` | vm-headless + `header.md` + `additional-content.md` stub | Remote-SSH VM, full Claude context |
+| `vm-headless-vscode` | VSCode Machine settings only | hosts with VSCode but no Claude Code |
+| `workstation` | shared-base + VSCode User settings (OS-detected path) | desktop (macOS or Linux) |
+
+`vm-headless` is the daily-driver; `vm-headless-full` is the explicit form that includes the shared header content and the host-local stub.
 
 ## Daily workflow
 
@@ -38,9 +42,11 @@ make help                            # list all targets
 
 `make sync` (alias for `make update`) is the "I tweaked something live, now save it" command. After it, `git diff` to review and `git commit` to lock in.
 
-## Add a new tracked dotfile
+## Host-local files
 
-dotdrop's bookkeeping is still the canonical way to register new entries:
+Edit `~/.claude/additional-content.md` directly on each host for machine-specific Claude Code rules. `make install` creates it as an empty file if missing; the repo never tracks its content.
+
+## Add a new tracked dotfile
 
 ```bash
 uvx dotdrop --cfg ~/dotfiles/config.yaml import -p <profile> <live-path>
@@ -56,3 +62,7 @@ Extensions are not dotfiles — they're captured as a name list per profile unde
 make sync    PROFILE=<profile>       # captures whatever is currently installed
 make install PROFILE=<profile>       # reinstalls everything in the list
 ```
+
+## CI
+
+Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml) (dotdrop config parse + gitleaks).
