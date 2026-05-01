@@ -26,6 +26,9 @@ dotfiles:
   f_claude_settings:
     src: claude/settings.json
     dst: ~/.claude/settings.json
+  f_claude_output_styles:
+    src: claude/output-styles
+    dst: ~/.claude/output-styles
   f_vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -38,6 +41,7 @@ profiles:
     dotfiles:
       - f_claude_md
       - f_claude_settings
+      - f_claude_output_styles
 
   vm-headless:
     include:
