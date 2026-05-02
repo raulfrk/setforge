@@ -6,6 +6,8 @@ This file is imported from CLAUDE.md so the directives ride the
 `<system-reminder>` "OVERRIDE default behavior" wrapper, which Superpowers
 is designed to defer to.
 
+Use superpowers where you see fit.
+
 ## Path overrides
 
 - Save specs to `~/.claude/projects/{cwd-slug}/specs/<YYYY-MM-DD>-<topic>.md`,
