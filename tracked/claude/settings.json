@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "mcp__private-journal",
-      "Skill"
+      "Skill(superpowers:*)",
+      "Skill(wiki:*)"
     ]
   },
   "theme": "dark",
