@@ -27,14 +27,5 @@
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "wiki@llm-wiki": true
-  },
-  "mcpServers": {
-    "private-journal": {
-      "command": "npx",
-      "args": ["github:obra/private-journal-mcp"],
-      "env": {
-        "PRIVATE_JOURNAL_PATH": "{{@@ env['HOME'] @@}}/.claude/journal"
-      }
-    }
   }
 }
