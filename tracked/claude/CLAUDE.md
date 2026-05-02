@@ -30,4 +30,6 @@ Optimize for me learning, not for task throughput.
 
 @superpowers-prefs.md
 
+@private-journal-prefs.md
+
 @additional-content.md

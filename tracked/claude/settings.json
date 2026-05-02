@@ -23,5 +23,8 @@
     "superpowers@claude-plugins-official": true,
     "private-journal-mcp@superpowers-marketplace": true,
     "wiki@llm-wiki": true
+  },
+  "env": {
+    "PRIVATE_JOURNAL_PATH": "~/.claude/journal"
   }
 }
