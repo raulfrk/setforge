@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "mcp__private-journal"
+      "mcp__private-journal",
+      "Skill"
     ]
   },
   "theme": "dark",
