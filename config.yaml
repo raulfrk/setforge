@@ -29,6 +29,9 @@ dotfiles:
   f_claude_output_styles:
     src: claude/output-styles
     dst: ~/.claude/output-styles
+  f_claude_superpowers_prefs:
+    src: claude/superpowers-prefs.md
+    dst: ~/.claude/superpowers-prefs.md
   f_vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -42,6 +45,7 @@ profiles:
       - f_claude_md
       - f_claude_settings
       - f_claude_output_styles
+      - f_claude_superpowers_prefs
 
   vm-headless:
     include:

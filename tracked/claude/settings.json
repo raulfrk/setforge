@@ -2,8 +2,26 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "outputStyle": "Learning",
   "theme": "dark",
   "skipAutoPermissionPrompt": true,
-  "agentPushNotifEnabled": true
+  "agentPushNotifEnabled": true,
+  "extraKnownMarketplaces": {
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace"
+      }
+    },
+    "llm-wiki": {
+      "source": {
+        "source": "github",
+        "repo": "nvk/llm-wiki"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "private-journal-mcp@superpowers-marketplace": true,
+    "wiki@llm-wiki": true
+  }
 }

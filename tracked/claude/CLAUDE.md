@@ -28,4 +28,6 @@ Optimize for me learning, not for task throughput.
 - Comments and documentation: Comments should be short and provide meaningful information as to why something was done if that cannot be immediately understood from the code. If a comment does not provide any meaningful value to the user (e.g. why a certain decision was made?), then it should not be added. Avoid narrating history or how a certain component was decided or implemented. Avoid describing non-actions ("intentionally not pinned") and especially avoid restating what the code already does.
 - Additionally, you are allowed to use section dividers in code, but those should be used sparingly and only to facilitate navigation throughout the code.
 
+@superpowers-prefs.md
+
 @additional-content.md
