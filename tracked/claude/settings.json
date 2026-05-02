@@ -29,7 +29,7 @@
       "command": "npx",
       "args": ["github:obra/private-journal-mcp"],
       "env": {
-        "PRIVATE_JOURNAL_PATH": "/home/raul/.claude/journal"
+        "PRIVATE_JOURNAL_PATH": "{{@@ env['HOME'] @@}}/.claude/journal"
       }
     }
   }
