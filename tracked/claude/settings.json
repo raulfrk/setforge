@@ -1,7 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "mcp__private-journal",
       "Skill(superpowers:*)",
       "Skill(wiki:*)"
     ]

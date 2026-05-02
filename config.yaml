@@ -13,21 +13,6 @@ dynvariables:
       echo "$HOME/.config/Code/User"
     fi
 
-actions:
-  post:
-    register_private_journal_mcp: |
-      if command -v claude >/dev/null 2>&1; then
-        expected="$HOME/.claude/journal"
-        current=$(jq -r '.mcpServers["private-journal"].env.PRIVATE_JOURNAL_PATH // ""' "$HOME/.claude.json" 2>/dev/null)
-        if [ "$current" != "$expected" ]; then
-          claude mcp remove -s user private-journal >/dev/null 2>&1 || true
-          claude mcp add -s user --env=PRIVATE_JOURNAL_PATH="$expected" private-journal -- npx github:obra/private-journal-mcp >/dev/null
-          echo "[dotdrop] private-journal MCP registered (PRIVATE_JOURNAL_PATH=$expected)"
-        fi
-      else
-        echo "[dotdrop] claude CLI not on PATH; skipping private-journal MCP registration"
-      fi
-
 dotfiles:
   f_claude_md:
     src: claude/CLAUDE.md
@@ -47,11 +32,6 @@ dotfiles:
   f_claude_superpowers_prefs:
     src: claude/superpowers-prefs.md
     dst: ~/.claude/superpowers-prefs.md
-  f_claude_private_journal_prefs:
-    src: claude/private-journal-prefs.md
-    dst: ~/.claude/private-journal-prefs.md
-    actions:
-      - register_private_journal_mcp
   f_vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -66,7 +46,6 @@ profiles:
       - f_claude_settings
       - f_claude_output_styles
       - f_claude_superpowers_prefs
-      - f_claude_private_journal_prefs
 
   vm-headless:
     include:
