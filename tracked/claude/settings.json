@@ -3,6 +3,7 @@
     "defaultMode": "auto"
   },
   "theme": "dark",
+  "outputStyle": "Socratic",
   "skipAutoPermissionPrompt": true,
   "agentPushNotifEnabled": true,
   "extraKnownMarketplaces": {
