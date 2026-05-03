@@ -1,30 +1,59 @@
 {
-  "permissions": {
-    "allow": [
-      "Skill(superpowers:*)",
-      "Skill(wiki:*)"
-    ]
-  },
-  "theme": "dark",
-  "outputStyle": "Socratic",
-  "skipAutoPermissionPrompt": true,
   "agentPushNotifEnabled": true,
-  "extraKnownMarketplaces": {
-    "superpowers-marketplace": {
-      "source": {
-        "source": "github",
-        "repo": "obra/superpowers-marketplace"
-      }
-    },
-    "llm-wiki": {
-      "source": {
-        "source": "github",
-        "repo": "nvk/llm-wiki"
-      }
-    }
+  "env": {
+    "BEADS_DIR": "/home/raul/.beads"
   },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "wiki@llm-wiki": true
-  }
+  },
+  "extraKnownMarketplaces": {
+    "llm-wiki": {
+      "source": {
+        "repo": "nvk/llm-wiki",
+        "source": "github"
+      }
+    },
+    "superpowers-marketplace": {
+      "source": {
+        "repo": "obra/superpowers-marketplace",
+        "source": "github"
+      }
+    }
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ]
+  },
+  "outputStyle": "Socratic",
+  "permissions": {
+    "allow": [
+      "Bash(bd *)",
+      "Bash(bd)",
+      "Skill(superpowers:*)",
+      "Skill(wiki:*)"
+    ]
+  },
+  "skipAutoPermissionPrompt": true,
+  "theme": "dark"
 }

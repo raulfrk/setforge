@@ -28,6 +28,30 @@ Optimize for me learning, not for task throughput.
 - Comments and documentation: Comments should be short and provide meaningful information as to why something was done if that cannot be immediately understood from the code. If a comment does not provide any meaningful value to the user (e.g. why a certain decision was made?), then it should not be added. Avoid narrating history or how a certain component was decided or implemented. Avoid describing non-actions ("intentionally not pinned") and especially avoid restating what the code already does.
 - Additionally, you are allowed to use section dividers in code, but those should be used sparingly and only to facilitate navigation throughout the code.
 
+## Beads (cross-project task tracking)
+
+You have access to **bd** (Beads) — an issue tracker. The beads home is at `~/.beads/` (set via `BEADS_DIR`), but **each project gets its own database** inside it (`~/.beads/embeddeddolt/<project>/`), auto-created on first write, with the issue prefix derived from the repo name (e.g. `dotfiles-jxt`). Issues do **not** cross databases unless you set up `bd repo add` (multi-repo hydration) or `bd federation`. `bd prime` runs automatically at session start and before compaction.
+
+**Worktrees:** All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect needed. **Always create worktrees under `~/projects/worktrees/`** — never inside the repo. The default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry, which we don't want; pass an explicit path instead (e.g. `bd worktree create ~/projects/worktrees/dotfiles-feature-x`). `git worktree add ~/projects/worktrees/<name>` also works and is auto-discovered by beads. `bd worktree list` shows the redirect state per worktree.
+
+**Rules:**
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
+- Use `bd remember` for persistent cross-session knowledge — do NOT use MEMORY.md files.
+- Run `bd prime` for the full command reference and current context.
+
+**Quick reference:**
+- `bd ready` — find available work
+- `bd q "<title>"` — quick capture, outputs only the new ID
+- `bd show <id>` — view issue details
+- `bd update <id> --claim` — claim work atomically
+- `bd close <id>` — complete an issue
+- `bd remember "<insight>"` — save a learning or preference
+
+**Session close:**
+- File issues for any incomplete work.
+- Update or close in-progress items.
+- Never push to git remotes automatically — the user pushes when ready.
+
 @superpowers-prefs.md
 
 @additional-content.md
