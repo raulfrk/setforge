@@ -9,7 +9,7 @@
 #   make update  PROFILE=vm-headless
 #   make install PROFILE=vm-headless
 
-CFG      := --cfg $(HOME)/dotfiles/config.yaml
+CFG      := --cfg $(HOME)/my-setup/config.yaml
 DOTDROP  := uvx dotdrop $(CFG)
 PROFILE ?=
 

@@ -25,7 +25,7 @@ The Claude Code workflow this repo configures relies on four tools:
 ## Install on a new machine
 
 ```bash
-git clone https://github.com/raulfrk/dotfiles ~/dotfiles && cd ~/dotfiles && make install PROFILE=<profile>
+git clone https://github.com/raulfrk/my-setup ~/my-setup && cd ~/my-setup && make install PROFILE=<profile>
 ```
 
 `make install` deploys tracked dotfiles to their live destinations and reinstalls VSCode extensions from `vscode-extensions/<profile>.txt` (skipped automatically if `code` is unavailable).
@@ -62,7 +62,7 @@ Edit `~/.claude/additional-content.md` directly on each host for machine-specifi
 ## Add a new tracked dotfile
 
 ```bash
-uvx dotdrop --cfg ~/dotfiles/config.yaml import -p <profile> <live-path>
+uvx dotdrop --cfg ~/my-setup/config.yaml import -p <profile> <live-path>
 ```
 
 Then edit `config.yaml` if you want to override the auto-generated key, `src` path, or profile assignment.

@@ -15,7 +15,7 @@ Use superpowers where you see fit.
 - Save plans to `~/.claude/projects/{cwd-slug}/plans/<YYYY-MM-DD>-<feature>.md`,
   not the in-repo default.
 - `{cwd-slug}` matches the auto-memory convention — the current working
-  directory with `/` replaced by `-` (e.g. `-home-raul-dotfiles`).
+  directory with `/` replaced by `-` (e.g. `-home-raul-my-setup`).
 
 ## Soften the hard-gates
 
