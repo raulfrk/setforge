@@ -2,6 +2,19 @@
 
 Personal config for Claude Code + VSCode, managed with [dotdrop](https://github.com/deadc0de6/dotdrop) (config files) and a thin [Makefile](Makefile) wrapper (extensions + orchestration).
 
+## Stack
+
+The Claude Code workflow this repo configures relies on four tools:
+
+| Tool | Role | Configured by this repo |
+|---|---|---|
+| Beads | Task tracking | Yes |
+| Superpowers | Development methodology | Yes |
+| Repomix | Repo packaging | No — install separately |
+| worktrunk | Worktree management for parallel agents | No — install separately |
+
+`make install` does not install these tools; install them yourself.
+
 ## Prerequisites
 
 - `git`
