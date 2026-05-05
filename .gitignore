@@ -20,3 +20,6 @@
 # pre-commit / dotdrop scratch
 .pre-commit-config.local
 *.bak
+
+# Repomix output (regenerated on demand)
+repomix-output.*
