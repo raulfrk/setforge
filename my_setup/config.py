@@ -9,10 +9,12 @@ writes that re-serialize the document.
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from ruamel.yaml import YAML
 
 from my_setup.errors import ConfigError, ProfileNotFound
+
+_STRICT = ConfigDict(extra="forbid")
 
 
 class ReconcilePolicy(StrEnum):
@@ -27,6 +29,8 @@ class MarketplaceSourceKind(StrEnum):
 
 
 class Dotfile(BaseModel):
+    model_config = _STRICT
+
     src: Path
     dst: str
     template: bool = False
@@ -35,6 +39,8 @@ class Dotfile(BaseModel):
 
 
 class MarketplaceSource(BaseModel):
+    model_config = _STRICT
+
     source: MarketplaceSourceKind
     repo: str | None = None
     path: Path | None = None
@@ -47,16 +53,22 @@ class MarketplaceSource(BaseModel):
 
 
 class ClaudePluginRef(BaseModel):
+    model_config = _STRICT
+
     marketplace: str
 
 
 class Extensions(BaseModel):
+    model_config = _STRICT
+
     include: list[str] = []
     exclude: list[str] = []
     reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
 
 
 class Profile(BaseModel):
+    model_config = _STRICT
+
     extends: str | None = None
     dotfiles: list[str] = []
     extensions: Extensions = Extensions()
@@ -73,6 +85,8 @@ class ResolvedProfile(BaseModel):
     Scalar fields take the deepest explicit value in the chain.
     """
 
+    model_config = _STRICT
+
     extends: None = None
     dotfiles: list[str] = []
     extensions: Extensions = Extensions()
@@ -82,6 +96,8 @@ class ResolvedProfile(BaseModel):
 
 
 class Config(BaseModel):
+    model_config = _STRICT
+
     version: int = 1
     dotfiles: dict[str, Dotfile]
     marketplaces: dict[str, MarketplaceSource] = {}

@@ -231,3 +231,56 @@ def test_resolve_unknown_parent_raises() -> None:
     cfg = _cfg({"child": Profile(extends="missing")})
     with pytest.raises(ProfileNotFound):
         resolve_profile(cfg, "child")
+
+
+def test_dotfile_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Dotfile.model_validate({"src": "a", "dst": "b", "typo": True})
+
+
+def test_profile_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Profile.model_validate({"extens": "base"})
+
+
+def test_extensions_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Extensions.model_validate({"includ": ["x"]})
+
+
+def test_marketplace_source_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        MarketplaceSource.model_validate(
+            {"source": "github", "repo": "a/b", "extra": 1}
+        )
+
+
+def test_claude_plugin_ref_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ClaudePluginRef.model_validate({"marketplace": "m", "version": "1.0"})
+
+
+def test_resolved_profile_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ResolvedProfile.model_validate({"unknown": True})
+
+
+def test_config_rejects_unknown_top_level_field() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Config.model_validate(
+            {
+                "dotfiles": {"a": {"src": "x", "dst": "y"}},
+                "profiles": {"p": {}},
+                "stray_top_level": 1,
+            }
+        )
+
+
+def test_config_rejects_unknown_field_in_nested_dotfile() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Config.model_validate(
+            {
+                "dotfiles": {"a": {"src": "x", "dst": "y", "tipo": True}},
+                "profiles": {"p": {}},
+            }
+        )
