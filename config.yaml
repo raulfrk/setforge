@@ -32,6 +32,12 @@ dotfiles:
   f_claude_superpowers_prefs:
     src: claude/superpowers-prefs.md
     dst: ~/.claude/superpowers-prefs.md
+  f_claude_bd_skill:
+    src: claude/skills/bd-reference/SKILL.md
+    dst: ~/.claude/skills/bd-reference/SKILL.md
+  f_claude_challenge_skill:
+    src: claude/skills/challenge/SKILL.md
+    dst: ~/.claude/skills/challenge/SKILL.md
   f_vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -46,6 +52,8 @@ profiles:
       - f_claude_settings
       - f_claude_output_styles
       - f_claude_superpowers_prefs
+      - f_claude_bd_skill
+      - f_claude_challenge_skill
 
   vm-headless:
     include:
