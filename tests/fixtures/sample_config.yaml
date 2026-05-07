@@ -1,0 +1,52 @@
+version: 1
+
+dotfiles:
+  claude_md:
+    src: claude/CLAUDE.md
+    dst: ~/.claude/CLAUDE.md
+    preserve_user_sections: true
+  vscode_settings:
+    src: vscode/settings.json
+    dst: "{{ vscode_user_dir }}/settings.json"
+    template: true
+    preserve_user_keys:
+      - "editor.fontSize"
+      - "workbench.colorTheme"
+
+marketplaces:
+  official:
+    source: github
+    repo: anthropics/claude-plugins-official
+  local-fork:
+    source: path
+    path: ~/dev/my-marketplace
+
+claude_plugins:
+  superpowers:
+    marketplace: official
+  bd-reference:
+    marketplace: official
+
+profiles:
+  base:
+    dotfiles:
+      - claude_md
+    extensions:
+      include:
+        - ms-python.python
+      reconcile: additive
+    claude_plugins:
+      - superpowers
+    bootstrap:
+      - ~/.claude/header.md
+
+  child:
+    extends: base
+    dotfiles:
+      - vscode_settings
+    extensions:
+      include:
+        - rust-lang.rust-analyzer
+      reconcile: prune
+    claude_plugins:
+      - bd-reference
