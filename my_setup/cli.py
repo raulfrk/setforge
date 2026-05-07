@@ -12,7 +12,7 @@ import typer
 from my_setup import capture as capture_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
-from my_setup.compare import resolve_dst, resolve_src
+from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import load_config, resolve_profile
 from my_setup.errors import MySetupError
 
@@ -54,13 +54,14 @@ def install(
         dotfile = cfg.dotfiles[name]
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
-        result = deploy.copy_atomic(
-            src,
-            dst,
-            preserve_user_sections=dotfile.preserve_user_sections,
-            preserve_user_keys=dotfile.preserve_user_keys or None,
-        )
-        typer.echo(f"{result.action.value:>8}  {dst}")
+        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
+            result = deploy.copy_atomic(
+                sub_src,
+                sub_dst,
+                preserve_user_sections=dotfile.preserve_user_sections,
+                preserve_user_keys=dotfile.preserve_user_keys or None,
+            )
+            typer.echo(f"{result.action.value:>8}  {sub_dst}")
 
 
 @app.command()

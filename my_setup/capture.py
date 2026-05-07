@@ -18,7 +18,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from my_setup import sections, yaml_merge
-from my_setup.compare import resolve_dst, resolve_src
+from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, resolve_profile
 
 
@@ -85,13 +85,16 @@ def capture_profile(
         dotfile = config.dotfiles[name]
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
-        result = capture_dotfile(
-            src,
-            dst,
-            preserve_user_sections=dotfile.preserve_user_sections,
-            preserve_user_keys=dotfile.preserve_user_keys,
-        )
-        results.append(
-            CaptureResult(name=name, action=result.action, reason=result.reason)
-        )
+        for sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
+            result = capture_dotfile(
+                sub_src,
+                sub_dst,
+                preserve_user_sections=dotfile.preserve_user_sections,
+                preserve_user_keys=dotfile.preserve_user_keys,
+            )
+            results.append(
+                CaptureResult(
+                    name=sub_name, action=result.action, reason=result.reason
+                )
+            )
     return results

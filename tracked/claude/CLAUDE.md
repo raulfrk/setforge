@@ -11,14 +11,17 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 
 ## Communication
 
+<!-- my-setup:user-section start communication -->
 - Goals (in order): high-quality output, high productivity, and learning where it's cheap. Surface trade-offs on multi-option decisions and let me pick — that's where learning happens cheaply without slowing throughput.
 - Plan mode whenever you need user input — design choice, ambiguity, multi-option decision. Mechanical edits with no input skip it.
 - Capture all load-bearing details into the bd issue's `design` / `acceptance` / `notes` fields before code — interfaces, edge cases, error model, data shapes, scope boundaries, what's explicitly out of scope. Plan mode and Superpowers brainstorming are the *means*; the bd issue is the *durable artifact*. Once the issue is sharpened, implement at human quality without per-decision gating — the issue carries the quality bar.
 - `TODO(human)` reserved for moments where I explicitly want to make a call myself during implementation (rare). `TODO(claude)` = my hint to you in code (research starting point). `QUESTION(human)` / `QUESTION(claude)` = inline bidirectional clarifications when something surfaces only during implementation.
 - For adversarial review of a load-bearing decision, use the `challenge` skill (`/challenge` or "challenge this"). Otherwise, present 2 options inline with trade-offs.
+<!-- my-setup:user-section end communication -->
 
 ## Workflow
 
+<!-- my-setup:user-section start workflow -->
 - Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (brainstorm → plan → implement → verify, applied within an issue).
 - bd issue = the contract. Read with `bd show <id>` at session start. The plan-mode session sharpens it; once accepted, code review is verification against the plan, not discovery.
 - Default: one issue per session. When no issue is named, `bd ready` picks the next unblocked leaf.
@@ -37,9 +40,11 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   6. `wt merge` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
+<!-- my-setup:user-section end workflow -->
 
 ## Python
 
+<!-- my-setup:user-section start python -->
 - Target the project's declared Python version; assume 3.11+ unless config says otherwise.
 - Annotate every public function, method, and module-level constant. Use `X | None`, never `Optional`; `X | Y`, never `Union` (PEP 604).
 - Import `Iterable`, `Sequence`, `Mapping`, `Callable` from `collections.abc`, never `typing` (PEP 585). Reserve `typing` for `Protocol`, `TypedDict`, `Literal`, `cast`, `override`, `Self`, `Never`.
@@ -55,15 +60,18 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Subprocess: list args, `check=True`, `text=True`, `timeout=`, `shutil.which()` for binaries; never `shell=True` with non-literal args.
 - `@typing.override` on overrides; `@typing.final` to lock subclass/override surface.
 - Docstrings (PEP 257): required on public modules, classes, and functions; one imperative sentence is enough unless behavior, raises, or invariants need calling out.
+<!-- my-setup:user-section end python -->
 
 ## Commits
 
+<!-- my-setup:user-section start commits -->
 - Subject: imperative mood, capitalized, no period, target 50 chars, hard cap 72. ("Fix X" not "Fixed X".)
 - Body required only when the diff is not self-evident: state the problem and the user-visible consequence, not diff narration. Skip body for renames, formatting, trivial fixes.
 - Wrap body at 72; one blank line between subject and body.
 - One logical change per commit — if the subject needs "and", split it.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
+<!-- my-setup:user-section end commits -->
 
 ## Beads (task tracking)
 

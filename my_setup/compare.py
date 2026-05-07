@@ -196,6 +196,24 @@ def _format_path(path: tuple) -> str:
     return "".join(out) or "<root>"
 
 
+def expand_dotfile(
+    name: str, src: Path, dst: Path
+) -> list[tuple[str, Path, Path]]:
+    """Expand a dotfile into ``(name, src_file, dst_file)`` triples.
+
+    Plain files yield a single triple; directories yield one triple per
+    contained file with a ``name/relpath`` synthetic name.
+    """
+    if src.is_dir():
+        triples: list[tuple[str, Path, Path]] = []
+        for file in sorted(src.rglob("*")):
+            if file.is_file():
+                rel = file.relative_to(src)
+                triples.append((f"{name}/{rel}", file, dst / rel))
+        return triples
+    return [(name, src, dst)]
+
+
 def compare_profile(
     config: Config,
     profile_name: str,
@@ -211,47 +229,54 @@ def compare_profile(
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
 
-        if not dst.exists():
-            entries.append(
-                FileCompare(
-                    name=name,
-                    status=CompareStatus.MISSING,
-                    diff="",
-                    expected_drift_keys=[],
-                    unexpected_drift_keys=[],
-                )
-            )
-            has_unexpected = True
-            continue
-
-        diff = diff_file(
-            src,
-            dst,
-            preserve_user_sections=dotfile.preserve_user_sections,
-            preserve_user_keys=dotfile.preserve_user_keys or None,
-        )
-
-        expected_keys: list[str] = []
-        unexpected_keys: list[str] = []
-        if dotfile.preserve_user_keys:
-            expected_keys, unexpected_keys = classify_yaml_drift(
-                src, dst, dotfile.preserve_user_keys
-            )
-
-        is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)
-        status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
-
-        if diff:
-            has_unexpected = True
-
-        entries.append(
-            FileCompare(
-                name=name,
-                status=status,
-                diff=diff,
-                expected_drift_keys=expected_keys,
-                unexpected_drift_keys=unexpected_keys,
-            )
-        )
+        for sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
+            entry, sub_unexpected = _compare_one(sub_name, sub_src, sub_dst, dotfile)
+            entries.append(entry)
+            if sub_unexpected:
+                has_unexpected = True
 
     return CompareReport(entries=entries, has_unexpected_drift=has_unexpected)
+
+
+def _compare_one(
+    name: str, src: Path, dst: Path, dotfile: Dotfile
+) -> tuple[FileCompare, bool]:
+    if not dst.exists():
+        return (
+            FileCompare(
+                name=name,
+                status=CompareStatus.MISSING,
+                diff="",
+                expected_drift_keys=[],
+                unexpected_drift_keys=[],
+            ),
+            True,
+        )
+
+    diff = diff_file(
+        src,
+        dst,
+        preserve_user_sections=dotfile.preserve_user_sections,
+        preserve_user_keys=dotfile.preserve_user_keys or None,
+    )
+
+    expected_keys: list[str] = []
+    unexpected_keys: list[str] = []
+    if dotfile.preserve_user_keys:
+        expected_keys, unexpected_keys = classify_yaml_drift(
+            src, dst, dotfile.preserve_user_keys
+        )
+
+    is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)
+    status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
+
+    return (
+        FileCompare(
+            name=name,
+            status=status,
+            diff=diff,
+            expected_drift_keys=expected_keys,
+            unexpected_drift_keys=unexpected_keys,
+        ),
+        bool(diff),
+    )
