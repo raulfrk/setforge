@@ -162,3 +162,17 @@ def resolve_binary(name: str) -> Path | None:
         return _validate(name, raw, layer="config")
     which = shutil.which(name)
     return Path(which) if which else None
+
+
+def ensure_local_config_stub() -> None:
+    """Create ``LOCAL_CONFIG_PATH`` with a commented stub if absent.
+
+    Idempotent: a pre-existing file (regardless of content) is never
+    touched. Creates parent directories as needed. Called from the
+    Typer ``@app.callback()`` so a fresh install gets the discoverable
+    file on first invocation of any subcommand.
+    """
+    if LOCAL_CONFIG_PATH.exists():
+        return
+    LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_CONFIG_PATH.write_text(_STUB_TEMPLATE, encoding="utf-8")

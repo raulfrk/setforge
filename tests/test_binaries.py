@@ -202,3 +202,32 @@ def test_resolve_invalid_config_override_raises(tmp_path):
     with pytest.raises(BinaryOverrideInvalid) as excinfo:
         binaries.resolve_binary("code")
     assert excinfo.value.layer == "config"
+
+
+def test_ensure_stub_creates_file_when_absent():
+    assert not binaries.LOCAL_CONFIG_PATH.exists()
+    binaries.ensure_local_config_stub()
+    assert binaries.LOCAL_CONFIG_PATH.exists()
+    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert "binaries:" in text
+    assert text.startswith("# my-setup host-local config")
+
+
+def test_ensure_stub_creates_parent_directories(monkeypatch, tmp_path):
+    nested = tmp_path / "deep" / "nested" / "local.yaml"
+    monkeypatch.setattr(binaries, "LOCAL_CONFIG_PATH", nested)
+    binaries.ensure_local_config_stub()
+    assert nested.exists()
+
+
+def test_ensure_stub_does_not_overwrite_existing():
+    binaries.LOCAL_CONFIG_PATH.write_text("user content\n")
+    binaries.ensure_local_config_stub()
+    assert binaries.LOCAL_CONFIG_PATH.read_text() == "user content\n"
+
+
+def test_ensure_stub_is_idempotent():
+    binaries.ensure_local_config_stub()
+    first_mtime = binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns
+    binaries.ensure_local_config_stub()
+    assert binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns == first_mtime
