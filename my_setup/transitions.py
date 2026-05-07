@@ -25,7 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from my_setup import __version__
-from my_setup.errors import RevertFailed
+from my_setup.errors import MySetupError, RevertFailed
 
 
 class TransitionCommand(StrEnum):
@@ -54,6 +54,27 @@ def state_root() -> Path:
 def transitions_root() -> Path:
     """Directory that holds every transition record for this host."""
     return state_root() / "transitions"
+
+
+def ensure_state_dir_writable() -> None:
+    """Probe the transition state dir for writability.
+
+    Called at the top of state-changing commands so install/sync fail
+    fast with a clear error before mutating live files. If the dir is
+    not writable (permissions, disk full, parent missing) the user
+    would otherwise end up with applied changes and no transition
+    record — no revert path.
+    """
+    root = transitions_root()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".my-setup-write-probe"
+        probe.touch()
+        probe.unlink()
+    except OSError as exc:
+        raise MySetupError(
+            f"transition state dir not writable: {root} ({exc})"
+        ) from exc
 
 
 def now_utc() -> datetime:

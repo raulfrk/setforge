@@ -61,6 +61,35 @@ def test_now_utc_is_aware() -> None:
     assert ts.tzinfo is timezone.utc
 
 
+def test_ensure_state_dir_writable_creates_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_setup.transitions import ensure_state_dir_writable
+
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "fresh"))
+    ensure_state_dir_writable()
+    assert (tmp_path / "fresh" / "transitions").is_dir()
+    # No probe file should be left.
+    assert not (tmp_path / "fresh" / "transitions" / ".my-setup-write-probe").exists()
+
+
+def test_ensure_state_dir_writable_raises_on_unwritable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_setup.errors import MySetupError
+    from my_setup.transitions import ensure_state_dir_writable
+
+    target = tmp_path / "ro" / "transitions"
+    target.mkdir(parents=True)
+    target.chmod(0o500)  # read+execute only, no write
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ro"))
+    try:
+        with pytest.raises(MySetupError, match="not writable"):
+            ensure_state_dir_writable()
+    finally:
+        target.chmod(0o700)  # restore for cleanup
+
+
 def test_transition_command_values() -> None:
     """Closed set must round-trip through json as the bare string value."""
     assert TransitionCommand.INSTALL.value == "install"

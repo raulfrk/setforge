@@ -67,6 +67,8 @@ def install(
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
 
+    if not no_transition:
+        transitions.ensure_state_dir_writable()
     deploy.validate_srcs_exist(cfg, resolved, repo_root)
     deploy.bootstrap_local(resolved.bootstrap)
 
@@ -194,6 +196,9 @@ def sync(
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
 
+    if not no_transition:
+        transitions.ensure_state_dir_writable()
+
     src_paths: list[Path] = []
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -234,50 +239,16 @@ def sync(
         typer.echo(f"transition: {target}")
 
 
-@app.command()
-def revert(
-    profile: str = _PROFILE_OPTION,
-    config: Path = _CONFIG_OPTION,
-) -> None:
-    """Revert the most recent transition for ``profile``.
+_JSONC_HINTS = (
+    "vscode-server/data/Machine/settings.json",
+    "Code/User/settings.json",
+)
 
-    Applies ``changes.patch`` in reverse via ``patch -R`` and reverses
-    any extension delta (uninstalling what was installed, re-installing
-    what was uninstalled). Records its own reverse transition so that a
-    second ``revert`` invocation acts as redo.
-    """
-    transition = transitions.load_latest(profile)
-    if transition is None:
-        raise NoTransitionFound(
-            f"no transition history for profile {profile!r}"
-        )
 
-    typer.echo(f"reverting: {transition}")
-
-    # Touched paths come from meta.json (canonical) so we don't have to
-    # re-parse diff headers — avoids ambiguity from diff bodies whose
-    # lines happen to start with `--- ` / `+++ `.
-    meta_payload = json.loads(
-        (transition / "meta.json").read_text(encoding="utf-8")
-    )
-    touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
-    file_pre = transitions.snapshot_paths(touched_paths)
-
-    transitions.apply_patch_reverse(transition)
-
-    # VSCode settings.json is JSONC; dotfiles-nen.6 tracks lossless
-    # round-trip. Notice fires only when the touched-paths list contains
-    # a known JSONC target — no more false positives from diff bodies.
-    _JSONC_HINTS = (
-        "vscode-server/data/Machine/settings.json",
-        "Code/User/settings.json",
-    )
-    jsonc_hit = any(
-        hint in path
-        for path in meta_payload.get("paths", [])
-        for hint in _JSONC_HINTS
-    )
-    if jsonc_hit:
+def _emit_jsonc_notice_if_relevant(paths: list[str]) -> None:
+    """One-line stderr notice when a known JSONC target is in the
+    transition's path list. dotfiles-nen.6 tracks lossless round-trip."""
+    if any(hint in p for p in paths for hint in _JSONC_HINTS):
         typer.secho(
             "note: VSCode settings.json was in the patch — JSONC "
             "round-trip is not lossless yet (dotfiles-nen.6).",
@@ -285,46 +256,93 @@ def revert(
             fg=typer.colors.YELLOW,
         )
 
+
+def _reverse_extensions(
+    delta: dict,
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+    """Apply the inverse of an extensions.json delta.
+
+    Returns ``(reverse_added, reverse_removed, failed)``. Per-extension
+    failures are caught (warn-and-continue) so the reverse transition
+    still gets written; ``failed`` records ``(ext_id, error_msg)`` for
+    logging by the caller.
+    """
+    reverse_added: list[str] = []
+    reverse_removed: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for ext_id in delta.get("added", []):
+        try:
+            extensions_mod.uninstall_one(ext_id)
+            reverse_removed.append(ext_id)
+        except ExtensionToolMissing as exc:
+            typer.secho(
+                f"warning: skipping uninstall of {ext_id} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except ExtensionInstallFailed as exc:
+            failed.append((ext_id, str(exc)))
+            typer.secho(
+                f"FAILED  uninstall {ext_id} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    for ext_id in delta.get("removed", []):
+        try:
+            extensions_mod.install_one(ext_id)
+            reverse_added.append(ext_id)
+        except ExtensionToolMissing as exc:
+            typer.secho(
+                f"warning: skipping install of {ext_id} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except ExtensionInstallFailed as exc:
+            failed.append((ext_id, str(exc)))
+            typer.secho(
+                f"FAILED  install {ext_id} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    return reverse_added, reverse_removed, failed
+
+
+@app.command()
+def revert(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Revert the most recent transition for the named profile.
+
+    Applies the recorded patch in reverse and reverses any extension
+    delta (uninstalling what was installed, re-installing what was
+    uninstalled). Records its own reverse transition so a second
+    revert invocation acts as redo.
+    """
+    transition = transitions.load_latest(profile)
+    if transition is None:
+        raise NoTransitionFound(
+            f"no transition history for profile {profile!r}"
+        )
+
+    transitions.ensure_state_dir_writable()
+    typer.echo(f"reverting: {transition}")
+
+    meta_payload = json.loads(
+        (transition / "meta.json").read_text(encoding="utf-8")
+    )
+    touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
+    file_pre = transitions.snapshot_paths(touched_paths)
+
+    transitions.apply_patch_reverse(transition)
+    _emit_jsonc_notice_if_relevant(meta_payload.get("paths", []))
+
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
-    ext_failed: list[tuple[str, str]] = []
     if ext_file.exists():
         delta = json.loads(ext_file.read_text())
-        for ext_id in delta.get("added", []):
-            try:
-                extensions_mod.uninstall_one(ext_id)
-                reverse_removed.append(ext_id)
-            except ExtensionToolMissing as exc:
-                typer.secho(
-                    f"warning: skipping uninstall of {ext_id} — {exc}",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
-            except ExtensionInstallFailed as exc:
-                ext_failed.append((ext_id, str(exc)))
-                typer.secho(
-                    f"FAILED  uninstall {ext_id} — {exc}",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
-        for ext_id in delta.get("removed", []):
-            try:
-                extensions_mod.install_one(ext_id)
-                reverse_added.append(ext_id)
-            except ExtensionToolMissing as exc:
-                typer.secho(
-                    f"warning: skipping install of {ext_id} — {exc}",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
-            except ExtensionInstallFailed as exc:
-                ext_failed.append((ext_id, str(exc)))
-                typer.secho(
-                    f"FAILED  install {ext_id} — {exc}",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
+        reverse_added, reverse_removed, _ = _reverse_extensions(delta)
 
     file_post = transitions.snapshot_paths(touched_paths)
     reverse_meta = transitions.make_meta(
