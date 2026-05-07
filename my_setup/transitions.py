@@ -107,3 +107,53 @@ def write_meta(transition_dir: Path, meta: TransitionMeta) -> None:
     transition_dir.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(meta.to_dict(), indent=2) + "\n"
     (transition_dir / "meta.json").write_text(payload, encoding="utf-8")
+
+
+def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
+    """Read every path in ``paths``. Missing files map to ``None``.
+
+    Returns a dict so callers can pass it directly to :func:`compute_patch`.
+    Reads as text/UTF-8; binary file deploys are out of scope for v1
+    (the deploy primitive itself only handles text dotfiles today).
+    """
+    out: dict[Path, str | None] = {}
+    for p in paths:
+        try:
+            out[p] = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            out[p] = None
+    return out
+
+
+def compute_patch(
+    pre: Mapping[Path, str | None],
+    post: Mapping[Path, str | None],
+) -> str:
+    """Return one combined unified diff covering every path that
+    differs between ``pre`` and ``post``.
+
+    Missing files appear as ``/dev/null`` so ``patch`` can apply
+    creations on forward (``+++ /a/b``) and deletions on reverse
+    (``--- /a/b`` paired with ``+++ /dev/null``).
+    """
+    chunks: list[str] = []
+    for path in sorted(set(pre) | set(post), key=str):
+        before = pre.get(path)
+        after = post.get(path)
+        if before == after:
+            continue
+        before_lines = (before or "").splitlines(keepends=True)
+        after_lines = (after or "").splitlines(keepends=True)
+        from_path = "/dev/null" if before is None else str(path)
+        to_path = "/dev/null" if after is None else str(path)
+        chunks.append(
+            "".join(
+                difflib.unified_diff(
+                    before_lines,
+                    after_lines,
+                    fromfile=from_path,
+                    tofile=to_path,
+                )
+            )
+        )
+    return "".join(chunks)

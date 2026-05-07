@@ -9,8 +9,10 @@ import pytest
 from my_setup.transitions import (
     TransitionCommand,
     TransitionMeta,
+    compute_patch,
     make_meta,
     now_utc,
+    snapshot_paths,
     state_root,
     transition_dirname,
     transitions_root,
@@ -100,3 +102,54 @@ def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
     payload = json.loads((target / "meta.json").read_text())
     assert payload["command"] == "install"
     assert payload["profile"] == "vmh"
+
+
+def test_snapshot_paths_records_existing_and_missing(tmp_path: Path) -> None:
+    a = tmp_path / "a.txt"
+    a.write_text("hello\n")
+    b = tmp_path / "missing.txt"
+    snap = snapshot_paths([a, b])
+    assert snap == {a: "hello\n", b: None}
+
+
+def test_compute_patch_empty_when_unchanged(tmp_path: Path) -> None:
+    a = tmp_path / "a.txt"
+    snap = {a: "x\n"}
+    assert compute_patch(snap, snap) == ""
+
+
+def test_compute_patch_modified_file(tmp_path: Path) -> None:
+    a = tmp_path / "a.txt"
+    pre = {a: "before\n"}
+    post = {a: "after\n"}
+    patch = compute_patch(pre, post)
+    assert f"--- {a}" in patch
+    assert f"+++ {a}" in patch
+    assert "-before" in patch
+    assert "+after" in patch
+
+
+def test_compute_patch_new_file_uses_dev_null(tmp_path: Path) -> None:
+    a = tmp_path / "new.txt"
+    patch = compute_patch({a: None}, {a: "fresh\n"})
+    assert "--- /dev/null" in patch
+    assert f"+++ {a}" in patch
+    assert "+fresh" in patch
+
+
+def test_compute_patch_deleted_file_uses_dev_null(tmp_path: Path) -> None:
+    a = tmp_path / "gone.txt"
+    patch = compute_patch({a: "old\n"}, {a: None})
+    assert f"--- {a}" in patch
+    assert "+++ /dev/null" in patch
+    assert "-old" in patch
+
+
+def test_compute_patch_combines_multiple_files(tmp_path: Path) -> None:
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    pre = {a: "1\n", b: "2\n"}
+    post = {a: "1\n", b: "X\n"}  # only b changed
+    patch = compute_patch(pre, post)
+    assert f"+++ {b}" in patch
+    assert f"+++ {a}" not in patch  # unchanged file omitted
