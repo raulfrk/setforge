@@ -16,7 +16,6 @@ import difflib
 import json
 import os
 import platform
-import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -25,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from my_setup import __version__
+from my_setup.binaries import resolve_binary
 from my_setup.errors import MySetupError, RevertFailed
 
 
@@ -321,15 +321,17 @@ def apply_patch_reverse(transition_dir: Path) -> None:
     patch_file = transition_dir / "changes.patch"
     if not patch_file.exists():
         return
-    patch_bin = shutil.which("patch")
+    patch_bin = resolve_binary("patch")
     if patch_bin is None:
         raise RevertFailed(
-            "`patch` binary not on PATH; revert cannot apply file diffs"
+            "`patch` binary not on PATH; revert cannot apply file diffs. "
+            "Tip: set 'binaries.patch' in ~/.config/my-setup/local.yaml "
+            "to override."
         )
     # Run with cwd=/ and -p0 so root-relative paths in the diff
     # (per :func:`_diff_path`) resolve to absolute targets.
     base_args = [
-        patch_bin,
+        str(patch_bin),
         "-p0",
         "-R",
         "-d", "/",

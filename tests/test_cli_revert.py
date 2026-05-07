@@ -47,11 +47,15 @@ def _state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `code` CLI absent (warn-and-skip for extension leg) without
-    breaking lookups for other binaries (e.g. `patch` for revert)."""
-    real_which = shutil.which
+    breaking lookups for other binaries (e.g. `patch` for revert).
+
+    ``extensions.resolve_binary`` and ``transitions.resolve_binary`` are
+    distinct module attributes even though they reference the same
+    function; patching one leaves the other free to hit real PATH.
+    """
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which",
-        lambda name: None if name == "code" else real_which(name),
+        "my_setup.extensions.resolve_binary",
+        lambda name: None,
     )
 
 
@@ -245,10 +249,9 @@ def test_revert_restores_extension_state_to_pre_install(
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(args)
 
-    real_which = shutil.which
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which",
-        lambda name: "/usr/bin/code" if name == "code" else real_which(name),
+        "my_setup.extensions.resolve_binary",
+        lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
     monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
 
@@ -377,10 +380,9 @@ def test_revert_continues_after_extension_uninstall_failure(
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(args)
 
-    real_which = shutil.which
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which",
-        lambda name: "/usr/bin/code" if name == "code" else real_which(name),
+        "my_setup.extensions.resolve_binary",
+        lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
     monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
 
