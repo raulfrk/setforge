@@ -273,3 +273,97 @@ def test_revert_restores_extension_state_to_pre_install(
     assert sorted(state["installed"]) == pre_install
     # And the file revert also took effect.
     assert not dst.exists()
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_revert_refuses_when_target_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a touched file has drifted since the transition was recorded,
+    revert refuses with a non-zero exit and no partial changes."""
+    from my_setup.errors import RevertFailed
+
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+
+    # Drift the live file so patch -R can't reverse it cleanly.
+    dst.write_text("manually edited content\n", encoding="utf-8")
+    drifted_content = dst.read_text()
+
+    result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, RevertFailed)
+    # Drifted content survived — no partial revert.
+    assert dst.read_text() == drifted_content
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_install_revert_revert_restores_install_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """revert records its own transition, so revert-of-revert ('redo')
+    restores the post-install state."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert dst.read_text() == "hello\n"
+
+    runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    assert not dst.exists()
+
+    redo = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    assert redo.exit_code == 0, redo.output
+    assert dst.read_text() == "hello\n"
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_revert_emits_jsonc_notice_for_vscode_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the patch touches a VSCode settings.json file, revert prints
+    a notice flagging the JSONC round-trip limitation (nen.6)."""
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    src = repo / "tracked" / "settings.json"
+    src.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    # Use a path that contains the JSONC hint substring.
+    machine_dir = tmp_path / "live" / "vscode-server" / "data" / "Machine"
+    dst = machine_dir / "settings.json"
+    cfg = repo / "my_setup.yaml"
+    cfg.write_text(
+        "version: 1\n"
+        "dotfiles:\n"
+        "  vscode_settings:\n"
+        "    src: settings.json\n"
+        f"    dst: {dst}\n"
+        "profiles:\n"
+        "  vmh:\n"
+        "    dotfiles: [vscode_settings]\n",
+        encoding="utf-8",
+    )
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert result.exit_code == 0, result.output
+    # Notice goes to stderr; CliRunner's default output captures both.
+    assert "JSONC" in result.output or "JSONC" in (result.stderr or "")

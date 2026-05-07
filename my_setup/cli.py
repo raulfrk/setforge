@@ -271,6 +271,23 @@ def revert(
 
     transitions.apply_patch_reverse(transition)
 
+    # Per project CLAUDE.md: VSCode settings.json is JSONC. Transitions
+    # store its bytes as text. Surface a one-line notice if the JSONC
+    # file was in the diff so the user knows the limitation applied.
+    _JSONC_HINTS = (
+        "vscode-server/data/Machine/settings.json",
+        "Code/User/settings.json",
+    )
+    if patch_file.exists():
+        body = patch_file.read_text()
+        if any(hint in body for hint in _JSONC_HINTS):
+            typer.secho(
+                "note: VSCode settings.json was in the patch — JSONC "
+                "round-trip is not lossless yet (dotfiles-nen.6).",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
