@@ -18,7 +18,7 @@ dev = [
 ]
 
 [project.scripts]
-my-setup = "my_setup.cli:app"
+my-setup = "my_setup.cli:main"
 
 [build-system]
 requires = ["hatchling"]
