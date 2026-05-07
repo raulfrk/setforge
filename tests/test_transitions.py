@@ -214,6 +214,28 @@ def test_write_transition_full_shape(
     assert "before" in (out / "changes.patch").read_text()
     payload = json.loads((out / "extensions.json").read_text())
     assert payload == {"added": ["a.x"], "removed": ["b.y"]}
+    # meta.json now records touched paths so revert can read them
+    # without re-parsing the diff.
+    meta_payload = json.loads((out / "meta.json").read_text())
+    assert meta_payload["paths"] == [str(target_file)]
+
+
+def test_write_transition_meta_paths_omits_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path with identical pre/post is unchanged and should NOT appear
+    in meta.json's `paths` list."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    a = tmp_path / "changed.txt"
+    b = tmp_path / "unchanged.txt"
+    out = write_transition(
+        _make_meta(),
+        {a: "before\n", b: "same\n"},
+        {a: "after\n", b: "same\n"},
+        None,
+    )
+    meta_payload = json.loads((out / "meta.json").read_text())
+    assert meta_payload["paths"] == [str(a)]
 
 
 def test_write_transition_omits_empty_patch(
@@ -264,12 +286,22 @@ def test_load_latest_returns_none_when_root_missing(
     assert load_latest("vmh") is None
 
 
+def _stub_transition(target: Path, profile: str) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "meta.json").write_text(
+        json.dumps({"profile": profile, "command": "install"}),
+        encoding="utf-8",
+    )
+
+
 def test_load_latest_returns_none_when_no_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
-    (tmp_path / "transitions").mkdir()
-    (tmp_path / "transitions" / "20260507T120000Z-install-other").mkdir()
+    _stub_transition(
+        tmp_path / "transitions" / "20260507T120000Z-install-other",
+        profile="other",
+    )
     assert load_latest("vmh") is None
 
 
@@ -281,9 +313,24 @@ def test_load_latest_picks_most_recent(
     root.mkdir()
     older = root / "20260507T090000Z-install-vmh"
     newer = root / "20260507T170000Z-install-vmh"
-    older.mkdir()
-    newer.mkdir()
+    _stub_transition(older, profile="vmh")
+    _stub_transition(newer, profile="vmh")
     assert load_latest("vmh") == newer
+
+
+def test_load_latest_does_not_match_profile_substring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`endswith('-vmh')` would match 'vm-headless-vmh'; the meta.json
+    profile field must be an exact match."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    # Note dirname suffix is '-headless' but meta.json says 'vm-headless'.
+    decoy = root / "20260507T120000Z-install-vm-headless"
+    _stub_transition(decoy, profile="vm-headless")
+    # Looking for 'headless' must NOT pick up vm-headless.
+    assert load_latest("headless") is None
 
 
 def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:

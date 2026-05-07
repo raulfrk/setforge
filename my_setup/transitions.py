@@ -102,13 +102,24 @@ def make_meta(command: TransitionCommand, profile: str) -> TransitionMeta:
     )
 
 
-def write_meta(transition_dir: Path, meta: TransitionMeta) -> None:
+def write_meta(
+    transition_dir: Path,
+    meta: TransitionMeta,
+    paths: list[Path] | None = None,
+) -> None:
     """Serialize ``meta`` to ``<transition_dir>/meta.json``.
 
-    Creates ``transition_dir`` (with parents) if needed.
+    If ``paths`` is provided, every absolute path is recorded in a
+    ``paths`` field on the JSON payload so :func:`load_latest` can
+    identify the touched files without re-parsing the diff and so
+    ``revert`` can snapshot pre/post state directly. Creates
+    ``transition_dir`` (with parents) if needed.
     """
     transition_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(meta.to_dict(), indent=2) + "\n"
+    body: dict[str, object] = dict(meta.to_dict())
+    if paths is not None:
+        body["paths"] = [str(p) for p in paths]
+    payload = json.dumps(body, indent=2) + "\n"
     (transition_dir / "meta.json").write_text(payload, encoding="utf-8")
 
 
@@ -190,6 +201,19 @@ class ExtensionDelta:
         return not (self.added or self.removed)
 
 
+def _touched_paths(
+    pre: Mapping[Path, str | None], post: Mapping[Path, str | None]
+) -> list[Path]:
+    """Return the sorted set of paths whose content differs between pre
+    and post snapshots. Used to populate ``meta.json``'s ``paths`` field
+    so ``revert`` doesn't need to parse diff headers to know what was
+    touched."""
+    return sorted(
+        (p for p in (set(pre) | set(post)) if pre.get(p) != post.get(p)),
+        key=str,
+    )
+
+
 def write_transition(
     meta: TransitionMeta,
     file_pre: Mapping[Path, str | None],
@@ -199,7 +223,8 @@ def write_transition(
     """Write a complete transition directory under :func:`transitions_root`.
 
     Layout:
-    - ``meta.json`` — always present.
+    - ``meta.json`` — always present, includes a ``paths`` field listing
+      every absolute path the transition touched.
     - ``changes.patch`` — present iff :func:`compute_patch` returned non-empty.
     - ``extensions.json`` — present iff ``ext_delta`` is non-None and
       non-empty.
@@ -209,7 +234,8 @@ def write_transition(
     target = transitions_root() / transition_dirname(
         meta.timestamp, meta.command.value, meta.profile
     )
-    write_meta(target, meta)
+    touched = _touched_paths(file_pre, file_post)
+    write_meta(target, meta, paths=touched)
 
     patch = compute_patch(file_pre, file_post)
     if patch:
@@ -228,16 +254,29 @@ def load_latest(profile: str) -> Path | None:
     """Return the most recent transition directory for ``profile``,
     or ``None`` if no history exists.
 
-    Sorts lexicographically; transition_dirname's UTC-ISO prefix makes
-    that equivalent to chronological order.
+    Walks every transition directory and reads its ``meta.json`` to
+    compare ``profile`` exactly. The dirname encodes profile as a
+    suffix for sortability, but a substring match would conflate
+    e.g. ``headless`` with ``vm-headless`` — meta.json is the canonical
+    identity. Sorts lexicographically by dirname; transition_dirname's
+    UTC-ISO prefix makes that equivalent to chronological order.
     """
     root = transitions_root()
     if not root.exists():
         return None
-    candidates = [
-        d for d in root.iterdir()
-        if d.is_dir() and d.name.endswith(f"-{profile}")
-    ]
+    candidates: list[Path] = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        meta_file = d / "meta.json"
+        if not meta_file.exists():
+            continue
+        try:
+            payload = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("profile") == profile:
+            candidates.append(d)
     if not candidates:
         return None
     return max(candidates, key=lambda d: d.name)

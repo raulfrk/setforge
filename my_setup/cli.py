@@ -254,40 +254,36 @@ def revert(
 
     typer.echo(f"reverting: {transition}")
 
-    # Snapshot files the patch would touch — used to populate the reverse
-    # transition's pre-state.
-    patch_file = transition / "changes.patch"
-    touched_paths: list[Path] = []
-    if patch_file.exists():
-        for line in patch_file.read_text().splitlines():
-            if line.startswith("--- ") or line.startswith("+++ "):
-                token = line[4:].split("\t", 1)[0].strip()
-                if token and token != "/dev/null":
-                    # Diff stores paths root-relative; restore the leading /
-                    abs_path = token if token.startswith("/") else f"/{token}"
-                    touched_paths.append(Path(abs_path))
-    # Dedup while preserving order
-    touched_paths = list(dict.fromkeys(touched_paths))
+    # Touched paths come from meta.json (canonical) so we don't have to
+    # re-parse diff headers — avoids ambiguity from diff bodies whose
+    # lines happen to start with `--- ` / `+++ `.
+    meta_payload = json.loads(
+        (transition / "meta.json").read_text(encoding="utf-8")
+    )
+    touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
     file_pre = transitions.snapshot_paths(touched_paths)
 
     transitions.apply_patch_reverse(transition)
 
-    # Per project CLAUDE.md: VSCode settings.json is JSONC. Transitions
-    # store its bytes as text. Surface a one-line notice if the JSONC
-    # file was in the diff so the user knows the limitation applied.
+    # VSCode settings.json is JSONC; dotfiles-nen.6 tracks lossless
+    # round-trip. Notice fires only when the touched-paths list contains
+    # a known JSONC target — no more false positives from diff bodies.
     _JSONC_HINTS = (
         "vscode-server/data/Machine/settings.json",
         "Code/User/settings.json",
     )
-    if patch_file.exists():
-        body = patch_file.read_text()
-        if any(hint in body for hint in _JSONC_HINTS):
-            typer.secho(
-                "note: VSCode settings.json was in the patch — JSONC "
-                "round-trip is not lossless yet (dotfiles-nen.6).",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
+    jsonc_hit = any(
+        hint in path
+        for path in meta_payload.get("paths", [])
+        for hint in _JSONC_HINTS
+    )
+    if jsonc_hit:
+        typer.secho(
+            "note: VSCode settings.json was in the patch — JSONC "
+            "round-trip is not lossless yet (dotfiles-nen.6).",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
 
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
