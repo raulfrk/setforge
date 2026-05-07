@@ -23,3 +23,11 @@
 
 # Repomix output (regenerated on demand)
 repomix-output.*
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+*.egg-info/
