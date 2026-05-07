@@ -110,3 +110,30 @@ def test_install_transition_records_stub_creation(
     patch = (transition / "changes.patch").read_text()
     assert "/dev/null" in patch
     assert str(dst) in patch
+
+
+def test_sync_writes_transition_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, dst = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    install_result = runner.invoke(
+        app, ["install", "--profile=vmh", f"--config={cfg}", "--no-transition"]
+    )
+    assert install_result.exit_code == 0, install_result.output
+    dst.write_text("hello edited\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["sync", "--profile=vmh", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+
+    children = list((state / "transitions").iterdir())
+    assert len(children) == 1
+    sync_transition = children[0]
+    meta = json.loads((sync_transition / "meta.json").read_text())
+    assert meta["command"] == "sync"
+    patch = (sync_transition / "changes.patch").read_text()
+    # The src under tracked/ is what changed.
+    assert "greeting.md" in patch

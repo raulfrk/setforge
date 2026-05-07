@@ -175,9 +175,33 @@ def capture(
 def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    no_transition: bool = typer.Option(
+        False,
+        "--no-transition",
+        hidden=True,
+        help="Skip writing a transition record (testing / debugging).",
+    ),
 ) -> None:
     """Capture live → tracked for dotfiles and extensions."""
-    capture(profile=profile, config=config)
+    cfg = load_config(config)
+    repo_root = config.resolve().parent
+    resolved = resolve_profile(cfg, profile)
+
+    src_paths: list[Path] = []
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, sub_src, _ in expand_dotfile(name, src, dst):
+            src_paths.append(sub_src)
+    src_paths.append(config.resolve())
+
+    file_pre = transitions.snapshot_paths(src_paths)
+
+    results = capture_mod.capture_profile(cfg, profile, repo_root)
+    for result in results:
+        typer.echo(f"{result.action.value:>8}  {result.name}")
+
     try:
         changed = extensions_mod.capture_extensions(config, profile)
     except ExtensionToolMissing as exc:
@@ -186,10 +210,21 @@ def sync(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        return
-    typer.echo(
-        f"extensions: include {'updated' if changed else 'unchanged'}"
-    )
+    else:
+        typer.echo(
+            f"extensions: include {'updated' if changed else 'unchanged'}"
+        )
+
+    file_post = transitions.snapshot_paths(src_paths)
+
+    if not no_transition:
+        target = transitions.write_transition(
+            transitions.make_meta(transitions.TransitionCommand.SYNC, profile),
+            file_pre,
+            file_post,
+            None,  # sync's extension change is reflected in the YAML diff
+        )
+        typer.echo(f"transition: {target}")
 
 
 ext_app = typer.Typer(
