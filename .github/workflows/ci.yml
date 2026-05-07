@@ -10,24 +10,14 @@ permissions:
   contents: read
 
 jobs:
-  validate-config:
-    name: Validate dotdrop config
+  tests:
+    name: my-setup unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: |
-          set -euo pipefail
-          profiles=$(uvx dotdrop --cfg config.yaml profiles -Gb | tail -n +2)
-          for profile in $profiles; do
-            echo "=== Profile: $profile ==="
-            output=$(uvx dotdrop --cfg config.yaml files -p $profile)
-            echo "$output"
-            if echo "$output" | grep -F '{{@@'; then
-              echo "::error::Unrendered template marker in profile $profile" >&2
-              exit 1
-            fi
-          done
+      - run: uv sync --extra dev
+      - run: uv run pytest
 
   secrets-scan:
     name: Secrets scan (gitleaks)
