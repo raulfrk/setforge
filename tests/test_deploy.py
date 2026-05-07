@@ -169,3 +169,68 @@ def test_bootstrap_local_idempotent(tmp_path: Path) -> None:
     target.write_text("existing\n")
     bootstrap_local([target])
     assert target.read_text() == "existing\n"
+
+
+def _build_profile(
+    tmp_path: Path, present: list[str], missing: list[str]
+):
+    from my_setup.config import Config, Dotfile, Profile, resolve_profile
+
+    repo = tmp_path / "repo"
+    live = tmp_path / "live"
+    for name in present:
+        (repo / "tracked" / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / "tracked" / name).write_text("data\n")
+    cfg = Config(
+        dotfiles={
+            name: Dotfile(src=Path(name), dst=str(live / name))
+            for name in (*present, *missing)
+        },
+        profiles={"p": Profile(dotfiles=[*present, *missing])},
+    )
+    return repo, live, cfg, resolve_profile(cfg, "p")
+
+
+def test_validate_srcs_exist_passes_when_all_present(tmp_path: Path) -> None:
+    from my_setup.deploy import validate_srcs_exist
+
+    repo, _, cfg, resolved = _build_profile(tmp_path, ["a", "b"], [])
+    validate_srcs_exist(cfg, resolved, repo)
+
+
+def test_validate_srcs_exist_raises_with_single_missing(tmp_path: Path) -> None:
+    from my_setup.deploy import validate_srcs_exist
+    from my_setup.errors import MissingTrackedFile
+
+    repo, _, cfg, resolved = _build_profile(tmp_path, ["a"], ["ghost"])
+    with pytest.raises(MissingTrackedFile, match="ghost"):
+        validate_srcs_exist(cfg, resolved, repo)
+
+
+def test_validate_srcs_exist_lists_all_missing(tmp_path: Path) -> None:
+    from my_setup.deploy import validate_srcs_exist
+    from my_setup.errors import MissingTrackedFile
+
+    repo, _, cfg, resolved = _build_profile(
+        tmp_path, ["ok"], ["miss1", "miss2", "miss3"]
+    )
+    with pytest.raises(MissingTrackedFile) as exc_info:
+        validate_srcs_exist(cfg, resolved, repo)
+    msg = str(exc_info.value)
+    assert "miss1" in msg
+    assert "miss2" in msg
+    assert "miss3" in msg
+
+
+def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> None:
+    """Pre-flight runs before any deploy, so a missing src must not
+    leave any dotfile half-applied to live.
+    """
+    from my_setup.deploy import validate_srcs_exist
+    from my_setup.errors import MissingTrackedFile
+
+    repo, live, cfg, resolved = _build_profile(tmp_path, ["a"], ["ghost"])
+    with pytest.raises(MissingTrackedFile):
+        validate_srcs_exist(cfg, resolved, repo)
+    assert not (live / "a").exists()
+    assert not (live / "ghost").exists()

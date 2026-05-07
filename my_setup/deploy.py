@@ -27,6 +27,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from my_setup import sections, yaml_merge
+from my_setup.config import Config, ResolvedProfile
 from my_setup.errors import MissingTrackedFile
 
 LOGGER = logging.getLogger(__name__)
@@ -178,3 +179,24 @@ def bootstrap_local(paths: list[Path]) -> None:
         if not path.exists():
             path.touch()
             LOGGER.info("created stub: %s", path)
+
+
+def validate_srcs_exist(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> None:
+    """Pre-flight: every tracked ``src`` path in the resolved profile
+    must exist on disk. Raises a single :class:`MissingTrackedFile`
+    listing every missing path so ``install`` fails before any deploy
+    or backup happens.
+    """
+    from my_setup.compare import resolve_src
+
+    missing: list[str] = []
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        src = resolve_src(dotfile, repo_root)
+        if not src.exists():
+            missing.append(f"{name}: {src}")
+    if missing:
+        joined = "\n  ".join(missing)
+        raise MissingTrackedFile(f"missing tracked source(s):\n  {joined}")

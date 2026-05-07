@@ -48,6 +48,7 @@ def install(
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
 
+    deploy.validate_srcs_exist(cfg, resolved, repo_root)
     deploy.bootstrap_local(resolved.bootstrap)
 
     for name in resolved.dotfiles:
