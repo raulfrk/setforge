@@ -15,6 +15,7 @@ from my_setup import capture as capture_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
 from my_setup import extensions as extensions_mod
+from my_setup import transitions
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import ExtensionToolMissing, MySetupError
@@ -47,6 +48,12 @@ _PROFILE_OPTION = typer.Option(
 def install(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    no_transition: bool = typer.Option(
+        False,
+        "--no-transition",
+        hidden=True,
+        help="Skip writing a transition record (testing / debugging).",
+    ),
 ) -> None:
     """Deploy tracked → live for every dotfile in the profile."""
     cfg = load_config(config)
@@ -55,6 +62,17 @@ def install(
 
     deploy.validate_srcs_exist(cfg, resolved, repo_root)
     deploy.bootstrap_local(resolved.bootstrap)
+
+    dst_paths: list[Path] = []
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, _, sub_dst in expand_dotfile(name, src, dst):
+            dst_paths.append(sub_dst)
+    dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
+
+    file_pre = transitions.snapshot_paths(dst_paths)
 
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -69,6 +87,7 @@ def install(
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
 
+    ext_delta: transitions.ExtensionDelta | None = None
     try:
         report = extensions_mod.reconcile(resolved.extensions)
     except ExtensionToolMissing as exc:
@@ -77,21 +96,35 @@ def install(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        return
-
-    failed_ids = {ext_id for ext_id, _ in report.failed}
-    for ext_id in report.to_install:
-        if ext_id not in failed_ids:
-            typer.echo(f"installed  {ext_id}")
-    for ext_id in report.to_uninstall:
-        if ext_id not in failed_ids:
-            typer.echo(f"uninstalled  {ext_id}")
-    for ext_id, err in report.failed:
-        typer.secho(
-            f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
+    else:
+        failed_ids = {ext_id for ext_id, _ in report.failed}
+        for ext_id in report.to_install:
+            if ext_id not in failed_ids:
+                typer.echo(f"installed  {ext_id}")
+        for ext_id in report.to_uninstall:
+            if ext_id not in failed_ids:
+                typer.echo(f"uninstalled  {ext_id}")
+        for ext_id, err in report.failed:
+            typer.secho(
+                f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
+            )
+        if not report:
+            typer.echo("extensions: nothing to reconcile")
+        ext_delta = transitions.ExtensionDelta(
+            added=[i for i in report.to_install if i not in failed_ids],
+            removed=[i for i in report.to_uninstall if i not in failed_ids],
         )
-    if not report:
-        typer.echo("extensions: nothing to reconcile")
+
+    file_post = transitions.snapshot_paths(dst_paths)
+
+    if not no_transition:
+        target = transitions.write_transition(
+            transitions.make_meta(transitions.TransitionCommand.INSTALL, profile),
+            file_pre,
+            file_post,
+            ext_delta,
+        )
+        typer.echo(f"transition: {target}")
 
 
 @app.command()
