@@ -118,3 +118,25 @@ def set_cli_overrides(
     for name, value in (("code", code), ("claude", claude), ("patch", patch)):
         if value is not None:
             _cli_overrides[name] = value
+
+
+def _validate(name: str, raw_path: str, layer: str) -> Path:
+    """Confirm an override path exists and is executable.
+
+    Raises :class:`BinaryOverrideInvalid` with structured fields when
+    the path is missing or not executable. Returns the resolved
+    :class:`Path` otherwise.
+    """
+    p = Path(raw_path)
+    if not p.exists():
+        raise BinaryOverrideInvalid(
+            layer=layer, binary=name, path=raw_path, reason="not found"
+        )
+    if not os.access(p, os.X_OK):
+        raise BinaryOverrideInvalid(
+            layer=layer,
+            binary=name,
+            path=raw_path,
+            reason="not executable",
+        )
+    return p

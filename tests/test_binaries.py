@@ -113,3 +113,32 @@ def test_set_cli_overrides_replaces_prior():
     binaries.set_cli_overrides(code="/first")
     binaries.set_cli_overrides(claude="/second")
     assert binaries._cli_overrides == {"claude": "/second"}
+
+
+def _make_executable(path: Path) -> Path:
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def test_validate_missing_path_raises(tmp_path):
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries._validate("code", str(tmp_path / "nope"), layer="cli")
+    assert excinfo.value.layer == "cli"
+    assert excinfo.value.binary == "code"
+    assert excinfo.value.reason == "not found"
+
+
+def test_validate_non_executable_raises(tmp_path):
+    bin_path = tmp_path / "code"
+    bin_path.write_text("not executable")
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries._validate("code", str(bin_path), layer="env")
+    assert excinfo.value.layer == "env"
+    assert excinfo.value.reason == "not executable"
+
+
+def test_validate_returns_path_for_valid_executable(tmp_path):
+    bin_path = _make_executable(tmp_path / "code")
+    result = binaries._validate("code", str(bin_path), layer="config")
+    assert result == bin_path
