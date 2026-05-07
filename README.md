@@ -51,10 +51,13 @@ All commands require `--profile=<name>`.
 uv run my-setup compare --profile=vm-headless     # show drift between live and tracked/
 uv run my-setup sync    --profile=vm-headless     # capture live edits into tracked/
 uv run my-setup install --profile=vm-headless     # deploy tracked/ -> live
+uv run my-setup revert  --profile=vm-headless     # undo the most recent install/sync
 uv run my-setup --help                             # list all commands
 ```
 
 `sync` is the alias for `capture` — "I tweaked something live, now save it." After it, `git diff` to review and `git commit` to lock in.
+
+`revert` undoes the most recent `install` or `sync` for the named profile by replaying its transition record in reverse — file diffs via `patch -R`, plus uninstalling extensions that were installed (and reinstalling extensions that were uninstalled). Drift on any touched file aborts cleanly with no partial revert. A second `revert` acts as redo. Transition records are written to `~/.local/state/my-setup/transitions/` and kept indefinitely; if that directory grows large, you can `rm -rf` it (a future bead, `dotfiles-nen`-tracked, will add automatic pruning).
 
 ## User-section preservation
 
