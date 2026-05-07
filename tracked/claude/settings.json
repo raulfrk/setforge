@@ -3,24 +3,6 @@
   "env": {
     "BEADS_DIR": "/home/raul/.beads"
   },
-  "enabledPlugins": {
-    "superpowers@claude-plugins-official": true,
-    "wiki@llm-wiki": true
-  },
-  "extraKnownMarketplaces": {
-    "llm-wiki": {
-      "source": {
-        "repo": "nvk/llm-wiki",
-        "source": "github"
-      }
-    },
-    "superpowers-marketplace": {
-      "source": {
-        "repo": "obra/superpowers-marketplace",
-        "source": "github"
-      }
-    }
-  },
   "hooks": {
     "PreCompact": [
       {
