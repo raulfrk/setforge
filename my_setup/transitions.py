@@ -16,6 +16,8 @@ import difflib
 import json
 import os
 import platform
+import shutil
+import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from my_setup import __version__
+from my_setup.errors import RevertFailed
 
 
 class TransitionCommand(StrEnum):
@@ -125,6 +128,19 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     return out
 
 
+def _diff_path(path: Path) -> str:
+    """Format a Path for a diff header.
+
+    GNU patch's safe-paths feature rejects absolute paths as "potentially
+    dangerous." Workaround: emit paths root-relative (no leading ``/``),
+    and apply with ``patch -d /`` so the relative path resolves
+    absolute. ``/dev/null`` is the standard sentinel for missing files
+    and must NOT be stripped.
+    """
+    s = str(path)
+    return s.lstrip("/") if s.startswith("/") else s
+
+
 def compute_patch(
     pre: Mapping[Path, str | None],
     post: Mapping[Path, str | None],
@@ -133,8 +149,10 @@ def compute_patch(
     differs between ``pre`` and ``post``.
 
     Missing files appear as ``/dev/null`` so ``patch`` can apply
-    creations on forward (``+++ /a/b``) and deletions on reverse
-    (``--- /a/b`` paired with ``+++ /dev/null``).
+    creations on forward (``+++ a/b``) and deletions on reverse
+    (``--- a/b`` paired with ``+++ /dev/null``). Real paths are emitted
+    root-relative (leading ``/`` stripped) so :func:`apply_patch_reverse`
+    can invoke ``patch -d /`` and bypass GNU patch's safe-paths check.
     """
     chunks: list[str] = []
     for path in sorted(set(pre) | set(post), key=str):
@@ -144,8 +162,8 @@ def compute_patch(
             continue
         before_lines = (before or "").splitlines(keepends=True)
         after_lines = (after or "").splitlines(keepends=True)
-        from_path = "/dev/null" if before is None else str(path)
-        to_path = "/dev/null" if after is None else str(path)
+        from_path = "/dev/null" if before is None else _diff_path(path)
+        to_path = "/dev/null" if after is None else _diff_path(path)
         chunks.append(
             "".join(
                 difflib.unified_diff(
@@ -204,3 +222,62 @@ def write_transition(
         (target / "extensions.json").write_text(payload, encoding="utf-8")
 
     return target
+
+
+def load_latest(profile: str) -> Path | None:
+    """Return the most recent transition directory for ``profile``,
+    or ``None`` if no history exists.
+
+    Sorts lexicographically; transition_dirname's UTC-ISO prefix makes
+    that equivalent to chronological order.
+    """
+    root = transitions_root()
+    if not root.exists():
+        return None
+    candidates = [
+        d for d in root.iterdir()
+        if d.is_dir() and d.name.endswith(f"-{profile}")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.name)
+
+
+def apply_patch_reverse(transition_dir: Path) -> None:
+    """Apply ``<transition_dir>/changes.patch`` in reverse via ``patch -R``.
+
+    No-op if the patch file is absent (e.g. transition recorded only an
+    extension delta).
+
+    Raises :class:`RevertFailed` if the ``patch`` binary is missing or
+    the reverse application fails (typically because target files have
+    drifted since the transition was recorded — patch's stderr is
+    surfaced verbatim).
+    """
+    patch_file = transition_dir / "changes.patch"
+    if not patch_file.exists():
+        return
+    patch_bin = shutil.which("patch")
+    if patch_bin is None:
+        raise RevertFailed(
+            "`patch` binary not on PATH; revert cannot apply file diffs"
+        )
+    # Run with cwd=/ and -p0 so root-relative paths in the diff
+    # (per :func:`_diff_path`) resolve to absolute targets.
+    result = subprocess.run(
+        [
+            patch_bin,
+            "-p0",
+            "-R",
+            "-d", "/",
+            "--input", str(patch_file.resolve()),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RevertFailed(
+            f"patch -R failed (exit {result.returncode}):\n"
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )

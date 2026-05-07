@@ -1,16 +1,20 @@
 """Tests for the transitions module."""
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from my_setup.errors import RevertFailed
 from my_setup.transitions import (
     ExtensionDelta,
     TransitionCommand,
     TransitionMeta,
+    apply_patch_reverse,
     compute_patch,
+    load_latest,
     make_meta,
     now_utc,
     snapshot_paths,
@@ -120,13 +124,19 @@ def test_compute_patch_empty_when_unchanged(tmp_path: Path) -> None:
     assert compute_patch(snap, snap) == ""
 
 
+def _root_relative(p: Path) -> str:
+    """Mirror transitions._diff_path: leading ``/`` stripped for assertions."""
+    s = str(p)
+    return s.lstrip("/") if s.startswith("/") else s
+
+
 def test_compute_patch_modified_file(tmp_path: Path) -> None:
     a = tmp_path / "a.txt"
     pre = {a: "before\n"}
     post = {a: "after\n"}
     patch = compute_patch(pre, post)
-    assert f"--- {a}" in patch
-    assert f"+++ {a}" in patch
+    assert f"--- {_root_relative(a)}" in patch
+    assert f"+++ {_root_relative(a)}" in patch
     assert "-before" in patch
     assert "+after" in patch
 
@@ -135,14 +145,14 @@ def test_compute_patch_new_file_uses_dev_null(tmp_path: Path) -> None:
     a = tmp_path / "new.txt"
     patch = compute_patch({a: None}, {a: "fresh\n"})
     assert "--- /dev/null" in patch
-    assert f"+++ {a}" in patch
+    assert f"+++ {_root_relative(a)}" in patch
     assert "+fresh" in patch
 
 
 def test_compute_patch_deleted_file_uses_dev_null(tmp_path: Path) -> None:
     a = tmp_path / "gone.txt"
     patch = compute_patch({a: "old\n"}, {a: None})
-    assert f"--- {a}" in patch
+    assert f"--- {_root_relative(a)}" in patch
     assert "+++ /dev/null" in patch
     assert "-old" in patch
 
@@ -153,8 +163,21 @@ def test_compute_patch_combines_multiple_files(tmp_path: Path) -> None:
     pre = {a: "1\n", b: "2\n"}
     post = {a: "1\n", b: "X\n"}  # only b changed
     patch = compute_patch(pre, post)
-    assert f"+++ {b}" in patch
-    assert f"+++ {a}" not in patch  # unchanged file omitted
+    assert f"+++ {_root_relative(b)}" in patch
+    assert f"+++ {_root_relative(a)}" not in patch  # unchanged file omitted
+
+
+def test_compute_patch_paths_are_root_relative_for_patch_safety(
+    tmp_path: Path,
+) -> None:
+    """GNU patch rejects absolute paths as dangerous; we strip the
+    leading slash and pair with `patch -d /` on apply."""
+    a = tmp_path / "a.txt"
+    patch = compute_patch({a: "x\n"}, {a: "y\n"})
+    assert f"--- {str(a)[0]}" not in patch.split("\n")[0] or not patch.startswith(
+        "--- /"
+    )
+    assert "--- /tmp" not in patch  # no leading slash on real paths
 
 
 def _make_meta(command: TransitionCommand = TransitionCommand.INSTALL) -> TransitionMeta:
@@ -232,3 +255,72 @@ def test_write_transition_omits_extension_delta_when_none(
         None,
     )
     assert not (out / "extensions.json").exists()
+
+
+def test_load_latest_returns_none_when_root_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    assert load_latest("vmh") is None
+
+
+def test_load_latest_returns_none_when_no_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    (tmp_path / "transitions").mkdir()
+    (tmp_path / "transitions" / "20260507T120000Z-install-other").mkdir()
+    assert load_latest("vmh") is None
+
+
+def test_load_latest_picks_most_recent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    older = root / "20260507T090000Z-install-vmh"
+    newer = root / "20260507T170000Z-install-vmh"
+    older.mkdir()
+    newer.mkdir()
+    assert load_latest("vmh") == newer
+
+
+def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
+    apply_patch_reverse(tmp_path)  # no changes.patch → silent no-op
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
+    """Forward content edit, then apply_patch_reverse restores original."""
+    target = tmp_path / "live.txt"
+    target.write_text("after\n", encoding="utf-8")
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch({target: "before\n"}, {target: "after\n"}),
+        encoding="utf-8",
+    )
+
+    apply_patch_reverse(transition)
+
+    assert target.read_text() == "before\n"
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
+    target = tmp_path / "live.txt"
+    target.write_text("drifted-content\n", encoding="utf-8")
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch({target: "before\n"}, {target: "after\n"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RevertFailed):
+        apply_patch_reverse(transition)

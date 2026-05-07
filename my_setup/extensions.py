@@ -202,6 +202,27 @@ def install_one(ext_id: str) -> None:
         ) from exc
 
 
+def uninstall_one(ext_id: str) -> None:
+    """Uninstall a single extension via ``code --uninstall-extension``.
+
+    Raises :class:`ExtensionInstallFailed` on non-zero exit or timeout,
+    with the captured stderr in the message.
+    """
+    code = _ensure_code()
+    try:
+        subprocess.run(
+            [code, "--uninstall-extension", ext_id],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ExtensionInstallFailed(
+            f"uninstall of {ext_id!r} failed: {_stderr_of(exc)}"
+        ) from exc
+
+
 def _load_yaml_doc(config_path: Path):
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")

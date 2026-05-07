@@ -109,7 +109,9 @@ def test_install_transition_records_stub_creation(
     transition = next((state / "transitions").iterdir())
     patch = (transition / "changes.patch").read_text()
     assert "/dev/null" in patch
-    assert str(dst) in patch
+    # Paths are root-relative (no leading /) so GNU patch's safe-paths
+    # check passes when revert applies with `-d /`.
+    assert str(dst).lstrip("/") in patch
 
 
 def test_sync_writes_transition_dir(
