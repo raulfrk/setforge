@@ -18,8 +18,10 @@ Superpowers skills are designed to defer to.
    (no summary, no reflow). User reviews and annotates. On approval,
    capture load-bearing details into the bd issue's `--design` /
    `--acceptance` / `--notes`.
-3. **Plan in plan mode** — write the implementation plan verbatim into
-   the plan body. User reviews and annotates.
+3. **Plan** — produce the implementation plan as a normal response
+   (no `EnterPlanMode`). The bd issue's `--design` / `--acceptance` /
+   `--notes` already carries the contract from step 2; the plan is
+   internal scaffolding, not a review surface.
 4. **Implement** (`superpowers:executing-plans` by default;
    `superpowers:subagent-driven-development` when there are 2+
    genuinely independent threads). Work against the bd issue (the
@@ -29,8 +31,25 @@ Superpowers skills are designed to defer to.
    Verify the implementation satisfies the spec, not just that tools
    pass. Out-of-scope findings → new `bd create` with a dep link.
 
-Both spec and plan ride through plan mode verbatim. That is the
-user-facing review surface — do not summarize or reflow.
+The **spec** rides through plan mode verbatim — no summary, no reflow.
+That is the user-facing review surface. The **plan** does NOT enter
+plan mode by default.
+
+**Parallel-workflow rule.** When an effort produces multiple specs
+(e.g. several bd issues sharpened in one session, or a subagent-driven
+task with multiple independent threads), specs are NEVER written in
+parallel without plan-mode review. Two acceptable shapes:
+
+- **Sequential**: one `EnterPlanMode` session per spec, the user
+  reviews and annotates each before moving on.
+- **Batched**: a single `EnterPlanMode` session whose plan body
+  contains all specs as separate sections, so the user can review and
+  annotate every element in one pass.
+
+Pick batched when the specs are tightly related and reviewing them
+together adds context; pick sequential when they're independent enough
+that the user's annotations on spec N shouldn't be tangled with spec
+N+1.
 
 ## Path overrides
 
