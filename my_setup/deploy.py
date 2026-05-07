@@ -26,7 +26,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from my_setup import sections, yaml_merge
+from my_setup import jsonc, sections, yaml_merge
 from my_setup.config import Config, ResolvedProfile
 from my_setup.errors import MissingTrackedFile
 
@@ -103,7 +103,13 @@ def _compute_content(
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
 ) -> str:
-    if preserve_user_keys and dst_existed:
+    if preserve_user_keys and dst_existed and jsonc.is_jsonc_file(src):
+        tracked_text = src.read_text(encoding="utf-8")
+        live_text = dst.read_text(encoding="utf-8")
+        content = jsonc.overlay_user_keys(
+            tracked_text, live_text, preserve_user_keys
+        )
+    elif preserve_user_keys and dst_existed:
         yaml = YAML(typ="rt")
         with src.open("r", encoding="utf-8") as fh:
             src_doc = yaml.load(fh)

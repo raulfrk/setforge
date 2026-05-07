@@ -267,24 +267,6 @@ def sync(
         typer.echo(f"transition: {target}")
 
 
-_JSONC_HINTS = (
-    "vscode-server/data/Machine/settings.json",
-    "Code/User/settings.json",
-)
-
-
-def _emit_jsonc_notice_if_relevant(paths: list[str]) -> None:
-    """One-line stderr notice when a known JSONC target is in the
-    transition's path list. dotfiles-nen.6 tracks lossless round-trip."""
-    if any(hint in p for p in paths for hint in _JSONC_HINTS):
-        typer.secho(
-            "note: VSCode settings.json was in the patch — JSONC "
-            "round-trip is not lossless yet (dotfiles-nen.6).",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-
-
 def _reverse_extensions(
     delta: dict,
 ) -> tuple[list[str], list[str], list[tuple[str, str]]]:
@@ -363,7 +345,6 @@ def revert(
     file_pre = transitions.snapshot_paths(touched_paths)
 
     transitions.apply_patch_reverse(transition)
-    _emit_jsonc_notice_if_relevant(meta_payload.get("paths", []))
 
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []

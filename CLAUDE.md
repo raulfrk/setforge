@@ -32,7 +32,7 @@ Beads + Superpowers configured by this repo. Repomix + worktrunk installed exter
 
 `~/.claude/additional-content.md` is intentionally untracked per host. `my-setup install` creates a stub if missing. Never commit its content.
 
-`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Pillar 1's `preserve_user_keys` works only on YAML — VSCode settings.json is JSONC, which ruamel.yaml can't parse. Until JSONC support lands, expect persistent compare drift on this file and drop the relevant keys from the diff before any `git add`.
+`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. The profile's `preserve_user_keys` overlays those keys from live to tracked on `install`, and `capture` strips them from tracked, so they stay host-local without manual intervention. Comments in the JSONC settings file are preserved end-to-end.
 
 ## Don't-do list
 

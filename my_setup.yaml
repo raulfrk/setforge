@@ -46,11 +46,17 @@ dotfiles:
   vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
+    preserve_user_keys:
+      - claudeCode.allowDangerouslySkipPermissions
+      - claudeCode.initialPermissionMode
 
   vscode_workstation_settings:
     src: vscode/workstation/settings.json
     dst: "{{ vscode_user_dir }}/settings.json"
     template: true
+    preserve_user_keys:
+      - claudeCode.allowDangerouslySkipPermissions
+      - claudeCode.initialPermissionMode
 
 # ============================================================================
 # Claude marketplaces — registered via `claude plugin marketplace add`.

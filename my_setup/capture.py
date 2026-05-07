@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from my_setup import sections, yaml_merge
+from my_setup import jsonc, sections, yaml_merge
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, SectionMode, resolve_profile
 
@@ -57,7 +57,10 @@ def capture_dotfile(
     if not dst.exists():
         return CaptureResult(name=src.name, action=CaptureAction.SKIPPED, reason="live missing")
 
-    if preserve_user_keys:
+    if preserve_user_keys and jsonc.is_jsonc_file(dst):
+        live_text = dst.read_text(encoding="utf-8")
+        content = jsonc.strip_user_keys(live_text, preserve_user_keys)
+    elif preserve_user_keys:
         yaml = YAML(typ="rt")
         with dst.open("r", encoding="utf-8") as fh:
             doc = yaml.load(fh)

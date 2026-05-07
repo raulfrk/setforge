@@ -18,7 +18,7 @@ from pathlib import Path
 from jinja2 import Template
 from ruamel.yaml import YAML
 
-from my_setup import sections, yaml_merge
+from my_setup import jsonc, sections, yaml_merge
 from my_setup.config import Config, Dotfile, resolve_profile
 from my_setup.paths import template_context
 
@@ -93,7 +93,13 @@ def _render_with_merges(
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
 ) -> str:
-    if preserve_user_keys:
+    if preserve_user_keys and jsonc.is_jsonc_file(src):
+        tracked_text = src.read_text(encoding="utf-8")
+        live_text = dst.read_text(encoding="utf-8")
+        content = jsonc.overlay_user_keys(
+            tracked_text, live_text, preserve_user_keys
+        )
+    elif preserve_user_keys:
         yaml = YAML(typ="rt")
         with src.open("r", encoding="utf-8") as fh:
             src_doc = yaml.load(fh)
@@ -263,9 +269,16 @@ def _compare_one(
     expected_keys: list[str] = []
     unexpected_keys: list[str] = []
     if dotfile.preserve_user_keys:
-        expected_keys, unexpected_keys = classify_yaml_drift(
-            src, dst, dotfile.preserve_user_keys
-        )
+        if jsonc.is_jsonc_file(src):
+            expected_keys, unexpected_keys = jsonc.classify_jsonc_drift(
+                src.read_text(encoding="utf-8"),
+                dst.read_text(encoding="utf-8"),
+                dotfile.preserve_user_keys,
+            )
+        else:
+            expected_keys, unexpected_keys = classify_yaml_drift(
+                src, dst, dotfile.preserve_user_keys
+            )
 
     is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
