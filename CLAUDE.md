@@ -1,40 +1,39 @@
 # my-setup
 
-Dotfiles + VSCode extensions, dotdrop-managed. About to gain a Python CLI that replaces the Makefile orchestration (branch `python-rewrite-design`).
+Dotfiles + VSCode extensions, driven by a single Python CLI (`my-setup`) and a typed `my_setup.yaml`.
 
 ## The meta-twist: live vs tracked
 
-`tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `make install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `make sync` first.
+`tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `my-setup install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `my-setup sync` first.
 
-## Profiles — always pass PROFILE=
+User-section markers in tracked CLAUDE.md (HTML comments around section bodies) make those regions per-host: edits to live `~/.claude/CLAUDE.md` between markers survive a re-install.
 
-Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md). Never run a `make` target without `PROFILE=`.
+## Profiles — always pass --profile=
+
+Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md). Never run a `my-setup` command without `--profile=`.
 
 ## Workflow verbs
 
-- `make compare PROFILE=<name>` — read-only drift check (live vs tracked).
-- `make sync PROFILE=<name>` — capture live edits + extensions into tracked/. Always `git diff` after to review.
-- `make install PROFILE=<name>` — deploy tracked → live + reinstall extensions.
+- `uv run my-setup compare --profile=<name>` — read-only drift check (live vs tracked).
+- `uv run my-setup sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review.
+- `uv run my-setup install --profile=<name>` — deploy tracked → live.
 
 ## The four-tool stack
 
-Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `make install` does NOT bootstrap them.
+Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `my-setup install` does NOT bootstrap them.
 
 ## Adding tracked files and extensions
 
-- Dotfile: `uvx dotdrop --cfg ~/my-setup/config.yaml import -p <profile> <live-path>`, then edit `config.yaml` if needed.
-- Extension: install in VSCode, then `make sync PROFILE=...`. Never hand-edit `vscode-extensions/<profile>.txt`.
+- Dotfile: edit `my_setup.yaml` to add an entry under `dotfiles:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
+- Extension: add the extension ID to the profile's `extensions.include:` list in `my_setup.yaml`. (Pillar 2 will add an `ext` subcommand that edits this YAML in place.)
 
 ## Host-local, never-tracked
 
-`~/.claude/additional-content.md` is intentionally untracked per host. `make install` creates a stub if missing. Never commit its content.
+`~/.claude/additional-content.md` is intentionally untracked per host. `my-setup install` creates a stub if missing. Never commit its content.
 
-## Python rewrite (branch: python-rewrite-design)
-
-Goal: replace the Makefile orchestration with a Python CLI. Scope (thin shim vs wider replacement of dotdrop) is being decided in a separate session — defer Python-tooling-specific decisions (ruff/mypy strictness, src layout, entry point, test layout) until that session resolves. The Makefile is the legacy orchestrator; do not add features to both.
+`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Pillar 1's `preserve_user_keys` works only on YAML — VSCode settings.json is JSONC, which ruamel.yaml can't parse. Until JSONC support lands, expect persistent compare drift on this file and drop the relevant keys from the diff before any `git add`.
 
 ## Don't-do list
 
 - Don't push to git remotes automatically — I push when ready.
-- Don't add features to the Makefile and the Python rewrite simultaneously.
-- Don't auto-create `vscode-extensions/<profile>.txt` content; capture via `make sync`.
+- Don't auto-edit `my_setup.yaml`'s extension lists — those land via the dedicated `ext` subcommand once Pillar 2 ships.

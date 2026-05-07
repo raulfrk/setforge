@@ -1,0 +1,164 @@
+version: 1
+
+# ============================================================================
+# Dotfiles. Profiles below pick subsets via `dotfiles:` lists. `src` is
+# resolved relative to `tracked/`; `dst` may use Jinja2 templating when
+# `template: true` (only `{{ vscode_user_dir }}` is exposed today).
+# ============================================================================
+dotfiles:
+  claude_md:
+    src: claude/CLAUDE.md
+    dst: ~/.claude/CLAUDE.md
+    preserve_user_sections: true
+
+  claude_additional_md:
+    src: claude/additional-content.md
+    dst: ~/.claude/additional-content.md
+
+  claude_header_md:
+    src: claude/header.md
+    dst: ~/.claude/header.md
+
+  claude_settings:
+    src: claude/settings.json
+    dst: ~/.claude/settings.json
+
+  claude_output_styles:
+    src: claude/output-styles
+    dst: ~/.claude/output-styles
+
+  claude_superpowers_prefs:
+    src: claude/superpowers-prefs.md
+    dst: ~/.claude/superpowers-prefs.md
+
+  claude_bd_skill:
+    src: claude/skills/bd-reference/SKILL.md
+    dst: ~/.claude/skills/bd-reference/SKILL.md
+
+  claude_challenge_skill:
+    src: claude/skills/challenge/SKILL.md
+    dst: ~/.claude/skills/challenge/SKILL.md
+
+  claude_wt_skill:
+    src: claude/skills/wt-reference/SKILL.md
+    dst: ~/.claude/skills/wt-reference/SKILL.md
+
+  vscode_serv_settings:
+    src: vscode/vm/settings.json
+    dst: ~/.vscode-server/data/Machine/settings.json
+
+  vscode_workstation_settings:
+    src: vscode/workstation/settings.json
+    dst: "{{ vscode_user_dir }}/settings.json"
+    template: true
+
+# ============================================================================
+# Claude marketplaces — registered via `claude plugin marketplace add`.
+# `claude-plugins-official` is Anthropic's default; listed here explicitly
+# so a clean install doesn't depend on Claude pre-registering it.
+# ============================================================================
+marketplaces:
+  claude-plugins-official:
+    source: github
+    repo: anthropics/claude-plugins-official
+  llm-wiki:
+    source: github
+    repo: nvk/llm-wiki
+  superpowers-marketplace:
+    source: github
+    repo: obra/superpowers-marketplace
+  repomix:
+    source: github
+    repo: yamadashy/repomix
+
+# ============================================================================
+# Claude plugins — installed via `claude plugin install <name>@<marketplace>`.
+# Pillar 3 reconciles these against the live install state.
+# ============================================================================
+claude_plugins:
+  superpowers:
+    marketplace: claude-plugins-official
+  wiki:
+    marketplace: llm-wiki
+  repomix-mcp:
+    marketplace: repomix
+  repomix-commands:
+    marketplace: repomix
+  repomix-explorer:
+    marketplace: repomix
+
+# ============================================================================
+# Profiles. `extends:` composes lists (parent-first, dedup) and overrides
+# scalars only when explicitly set in the child.
+# ============================================================================
+profiles:
+  shared-base:
+    dotfiles:
+      - claude_md
+      - claude_settings
+      - claude_output_styles
+      - claude_superpowers_prefs
+      - claude_bd_skill
+      - claude_challenge_skill
+      - claude_wt_skill
+    claude_plugins:
+      - superpowers
+      - wiki
+      - repomix-mcp
+      - repomix-commands
+      - repomix-explorer
+    bootstrap:
+      - ~/.claude/header.md
+      - ~/.claude/additional-content.md
+
+  vm-headless:
+    extends: shared-base
+    dotfiles:
+      - vscode_serv_settings
+    extensions:
+      include:
+        - anthropic.claude-code
+        - charliermarsh.ruff
+        - esbenp.prettier-vscode
+        - github.copilot-chat
+        - gruntfuggly.todo-tree
+        - mhutchie.git-graph
+        - ms-python.debugpy
+        - ms-python.python
+        - ms-python.vscode-pylance
+        - ms-python.vscode-python-envs
+        - redhat.vscode-yaml
+        - streetsidesoftware.code-spell-checker
+        - tamasfe.even-better-toml
+
+  vm-headless-full:
+    extends: vm-headless
+    dotfiles:
+      - claude_additional_md
+      - claude_header_md
+
+  vm-headless-vscode:
+    dotfiles:
+      - vscode_serv_settings
+    extensions:
+      include:
+        - anthropic.claude-code
+        - charliermarsh.ruff
+        - esbenp.prettier-vscode
+        - github.copilot-chat
+        - gruntfuggly.todo-tree
+        - mhutchie.git-graph
+        - ms-python.debugpy
+        - ms-python.python
+        - ms-python.vscode-pylance
+        - ms-python.vscode-python-envs
+        - redhat.vscode-yaml
+        - streetsidesoftware.code-spell-checker
+        - tamasfe.even-better-toml
+
+  workstation:
+    extends: shared-base
+    dotfiles:
+      - vscode_workstation_settings
+    extensions:
+      include: []
