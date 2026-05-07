@@ -13,6 +13,7 @@ from pathlib import Path
 
 import typer
 
+from my_setup import binaries
 from my_setup import capture as capture_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
@@ -49,6 +50,32 @@ _PROFILE_OPTION = typer.Option(
     "-p",
     help="Profile name from my_setup.yaml.",
 )
+
+
+@app.callback()
+def _root(
+    code_bin: str | None = typer.Option(
+        None,
+        "--code-bin",
+        help="Override path to the 'code' (VSCode) binary. "
+        "Takes precedence over MY_SETUP_CODE_BIN and ~/.config/my-setup/local.yaml.",
+    ),
+    claude_bin: str | None = typer.Option(
+        None,
+        "--claude-bin",
+        help="Override path to the 'claude' binary. "
+        "Takes precedence over MY_SETUP_CLAUDE_BIN and ~/.config/my-setup/local.yaml.",
+    ),
+    patch_bin: str | None = typer.Option(
+        None,
+        "--patch-bin",
+        help="Override path to the GNU 'patch' binary. "
+        "Takes precedence over MY_SETUP_PATCH_BIN and ~/.config/my-setup/local.yaml.",
+    ),
+) -> None:
+    """Wire host-local binary overrides and ensure the local config stub exists."""
+    binaries.set_cli_overrides(code=code_bin, claude=claude_bin, patch=patch_bin)
+    binaries.ensure_local_config_stub()
 
 
 @app.command()
