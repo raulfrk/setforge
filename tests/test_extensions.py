@@ -6,8 +6,8 @@ assert on the exact sequence of install/uninstall invocations without
 touching a real ``code`` CLI.
 """
 
-import logging
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -15,8 +15,11 @@ from my_setup.config import Extensions, ReconcilePolicy
 from my_setup.errors import ExtensionToolMissing
 from my_setup.extensions import (
     ReconcileReport,
+    add_to_include,
+    capture_extensions,
     list_installed,
     reconcile,
+    remove_from_include,
 )
 
 
@@ -167,21 +170,18 @@ def test_report_computes_diffs_without_acting(fake_code) -> None:
     assert fake.uninstall_args == []
 
 
-def test_dry_run_runs_no_install_or_uninstall(
-    fake_code, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_dry_run_runs_no_install_or_uninstall(fake_code) -> None:
     fake = fake_code(["existing.one"])
     ext = Extensions(
         include=["existing.one", "new.one"],
         reconcile=ReconcilePolicy.PRUNE,
     )
-    with caplog.at_level(logging.INFO, logger="my_setup.extensions"):
-        report = reconcile(ext, dry_run=True)
+    report = reconcile(ext, dry_run=True)
     assert report.dry_run is True
     assert report.to_install == ["new.one"]
+    assert report.to_uninstall == []
     assert fake.install_args == []
     assert fake.uninstall_args == []
-    assert any("would install" in rec.message for rec in caplog.records)
 
 
 def test_exclude_overrides_include(fake_code) -> None:
@@ -205,11 +205,182 @@ def test_clean_state_returns_falsy_report(fake_code) -> None:
     assert bool(report) is False
 
 
+# ---- subprocess failure handling ----------------------------------------
+
+def test_install_one_wraps_called_process_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from my_setup.extensions import install_one
+    from my_setup.errors import ExtensionInstallFailed
+
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+    )
+
+    def boom(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, args, output="", stderr="marketplace 404"
+        )
+
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    with pytest.raises(ExtensionInstallFailed, match="marketplace 404"):
+        install_one("ghost.extension")
+
+
+def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from my_setup.extensions import install_one
+    from my_setup.errors import ExtensionInstallFailed
+
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+    )
+
+    def boom(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, 30)
+
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    with pytest.raises(ExtensionInstallFailed):
+        install_one("slow.one")
+
+
+def test_list_installed_wraps_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from my_setup.errors import ExtensionInstallFailed
+
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+    )
+
+    def boom(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            2, args, output="", stderr="connection refused"
+        )
+
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    with pytest.raises(ExtensionInstallFailed, match="connection refused"):
+        list_installed()
+
+
+def test_reconcile_continues_after_install_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bad install must not abort the rest of the loop."""
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+    )
+
+    state = {"installed": ["existing.one"], "calls": []}
+
+    def fake_run(args, **kwargs):
+        state["calls"].append(list(args))
+        if args[1] == "--list-extensions":
+            return subprocess.CompletedProcess(
+                args, 0, "existing.one\n", ""
+            )
+        if args[1] == "--install-extension":
+            ext = args[2]
+            if ext == "broken.one":
+                raise subprocess.CalledProcessError(
+                    1, args, output="", stderr="install died"
+                )
+            state["installed"].append(ext)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[1] == "--uninstall-extension":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+
+    ext = Extensions(
+        include=["existing.one", "broken.one", "good.one"],
+        reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(ext)
+    assert sorted(report.to_install) == ["broken.one", "good.one"]
+    assert len(report.failed) == 1
+    failed_id, failed_msg = report.failed[0]
+    assert failed_id == "broken.one"
+    assert "install died" in failed_msg
+    # Loop continued: good.one was installed despite broken.one failure.
+    install_calls = [c[2] for c in state["calls"] if c[1] == "--install-extension"]
+    assert "good.one" in install_calls
+    assert "broken.one" in install_calls
+
+
+# ---- ext add / ext remove guards ----------------------------------------
+
+def test_add_to_include_rejects_when_in_exclude(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    from my_setup.errors import ConfigError as _ConfigError
+
+    with pytest.raises(_ConfigError, match="exclude"):
+        add_to_include(cfg, "base", "drop.me")
+
+
+def test_remove_from_include_errors_when_only_in_parent(tmp_path: Path) -> None:
+    """If ext is declared in an extends: ancestor, the user can't remove
+    it from the child without going to the ancestor (or using --exclude).
+    """
+    from my_setup.errors import ConfigError as _ConfigError
+
+    fixture = """\
+version: 1
+dotfiles:
+  d: {src: x, dst: y}
+profiles:
+  parent:
+    dotfiles: [d]
+    extensions:
+      include:
+        - inherited.one
+  child:
+    extends: parent
+    dotfiles: [d]
+"""
+    p = tmp_path / "my_setup.yaml"
+    p.write_text(fixture, encoding="utf-8")
+    with pytest.raises(_ConfigError, match="inherited profile 'parent'"):
+        remove_from_include(p, "child", "inherited.one")
+
+
+def test_remove_from_include_with_exclude_flag_overrides_parent(
+    tmp_path: Path,
+) -> None:
+    """--exclude should let the user override an inherited declaration."""
+    fixture = """\
+version: 1
+dotfiles:
+  d: {src: x, dst: y}
+profiles:
+  parent:
+    dotfiles: [d]
+    extensions:
+      include:
+        - inherited.one
+  child:
+    extends: parent
+    dotfiles: [d]
+"""
+    p = tmp_path / "my_setup.yaml"
+    p.write_text(fixture, encoding="utf-8")
+    changed = remove_from_include(
+        p, "child", "inherited.one", add_to_exclude_list=True
+    )
+    assert changed is True
+    text = p.read_text()
+    # exclude entry should now sit under child
+    assert "inherited.one" in text
+    # And it's still under parent.include — child override doesn't touch parent
+    from my_setup.config import load_config
+
+    cfg = load_config(p)
+    assert "inherited.one" in cfg.profiles["parent"].extensions.include
+    assert "inherited.one" in cfg.profiles["child"].extensions.exclude
+
+
 # ---- YAML-edit helpers ---------------------------------------------------
 
-from pathlib import Path
-
-from my_setup.extensions import add_to_include, remove_from_include
 from my_setup.errors import ProfileNotFound
 
 
@@ -321,8 +492,6 @@ def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
 
 
 # ---- capture_extensions --------------------------------------------------
-
-from my_setup.extensions import capture_extensions
 
 
 def test_capture_extensions_writes_installed_minus_exclude(

@@ -14,14 +14,19 @@ import logging
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from my_setup.config import Extensions, ReconcilePolicy
-from my_setup.errors import ConfigError, ExtensionToolMissing, ProfileNotFound
+from my_setup.config import Extensions, ReconcilePolicy, load_config, resolve_profile
+from my_setup.errors import (
+    ConfigError,
+    ExtensionInstallFailed,
+    ExtensionToolMissing,
+    ProfileNotFound,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,12 +41,18 @@ _EXT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$")
 
 @dataclass(frozen=True, slots=True)
 class ReconcileReport:
-    """Summary of what reconcile did (or would do for REPORT / dry_run)."""
+    """Summary of what reconcile did (or would do for REPORT / dry_run).
+
+    ``failed`` lists ``(ext_id, error_msg)`` tuples for individual
+    install/uninstall calls that failed; the rest of the loop continues
+    so one bad extension doesn't abort the whole reconcile.
+    """
 
     policy: ReconcilePolicy
     to_install: list[str]
     to_uninstall: list[str]
     dry_run: bool
+    failed: list[tuple[str, str]] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.to_install or self.to_uninstall)
@@ -58,21 +69,33 @@ def _ensure_code() -> str:
     return path
 
 
+def _stderr_of(exc: BaseException) -> str:
+    return (getattr(exc, "stderr", None) or "").strip() or str(exc)
+
+
 def list_installed() -> set[str]:
     """Return the set of currently-installed extension IDs.
 
     Lines that don't match the ``publisher.name`` extension-ID format are
     silently dropped — the Remote-SSH ``code`` CLI emits a header line
     (``"Extensions installed on SSH: <ip>:"``) on stdout before the IDs.
+
+    Raises :class:`ExtensionInstallFailed` if the underlying ``code``
+    invocation exits non-zero or times out.
     """
     code = _ensure_code()
-    result = subprocess.run(
-        [code, "--list-extensions"],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    try:
+        result = subprocess.run(
+            [code, "--list-extensions"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ExtensionInstallFailed(
+            f"`code --list-extensions` failed: {_stderr_of(exc)}"
+        ) from exc
     return {
         line.strip()
         for line in result.stdout.splitlines()
@@ -111,47 +134,72 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
     )
 
     if ext.reconcile is ReconcilePolicy.REPORT or dry_run:
-        prefix = "dry-run" if dry_run else "report"
-        for name in to_install:
-            LOGGER.info("[%s] would install: %s", prefix, name)
-        for name in to_uninstall:
-            LOGGER.info("[%s] would uninstall: %s", prefix, name)
         return report
+
+    failed: list[tuple[str, str]] = []
 
     for name in to_install:
         LOGGER.info("installing extension: %s", name)
-        subprocess.run(
-            [code, "--install-extension", name],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
-
-    if ext.reconcile is ReconcilePolicy.PRUNE:
-        for name in to_uninstall:
-            LOGGER.info("uninstalling extension: %s", name)
+        try:
             subprocess.run(
-                [code, "--uninstall-extension", name],
+                [code, "--install-extension", name],
                 check=True,
                 text=True,
                 capture_output=True,
                 timeout=_TIMEOUT_S,
             )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            msg = _stderr_of(exc)
+            LOGGER.warning("install failed for %s: %s", name, msg)
+            failed.append((name, msg))
 
-    return report
+    if ext.reconcile is ReconcilePolicy.PRUNE:
+        for name in to_uninstall:
+            LOGGER.info("uninstalling extension: %s", name)
+            try:
+                subprocess.run(
+                    [code, "--uninstall-extension", name],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=_TIMEOUT_S,
+                )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as exc:
+                msg = _stderr_of(exc)
+                LOGGER.warning("uninstall failed for %s: %s", name, msg)
+                failed.append((name, msg))
+
+    return ReconcileReport(
+        policy=ext.reconcile,
+        to_install=to_install,
+        to_uninstall=to_uninstall,
+        dry_run=False,
+        failed=failed,
+    )
 
 
 def install_one(ext_id: str) -> None:
-    """Install a single extension via ``code --install-extension``."""
+    """Install a single extension via ``code --install-extension``.
+
+    Raises :class:`ExtensionInstallFailed` on non-zero exit or timeout,
+    with the captured stderr in the message.
+    """
     code = _ensure_code()
-    subprocess.run(
-        [code, "--install-extension", ext_id],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    try:
+        subprocess.run(
+            [code, "--install-extension", ext_id],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ExtensionInstallFailed(
+            f"install of {ext_id!r} failed: {_stderr_of(exc)}"
+        ) from exc
 
 
 def _load_yaml_doc(config_path: Path):
@@ -189,7 +237,19 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
 
     Comments and key order in the YAML document are preserved via
     ruamel.yaml round-trip mode.
+
+    Raises :class:`ConfigError` if ``ext_id`` is in this profile's
+    literal ``exclude`` list, since "exclude wins" would silently drop
+    the new addition on the next reconcile.
     """
+    cfg = load_config(config_path)
+    if profile not in cfg.profiles:
+        raise ProfileNotFound(f"profile not found: {profile}")
+    if ext_id in cfg.profiles[profile].extensions.exclude:
+        raise ConfigError(
+            f"{ext_id!r} is in {profile}.extensions.exclude — remove it from "
+            "exclude first (e.g. by editing my_setup.yaml) before adding to include"
+        )
     yaml, doc = _load_yaml_doc(config_path)
     ext_block = _profile_extensions_block(doc, profile)
     include = _ensure_list(ext_block, "include")
@@ -199,6 +259,20 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     with config_path.open("w", encoding="utf-8") as fh:
         yaml.dump(doc, fh)
     return True
+
+
+def _ancestor_declaring(cfg, profile: str, ext_id: str) -> str | None:
+    """Walk the extends: chain of ``profile`` (excluding ``profile`` itself)
+    and return the first ancestor whose literal ``include`` lists ``ext_id``,
+    or ``None``."""
+    current = cfg.profiles[profile].extends
+    while current is not None:
+        if current not in cfg.profiles:
+            return None
+        if ext_id in cfg.profiles[current].extensions.include:
+            return current
+        current = cfg.profiles[current].extends
+    return None
 
 
 def capture_extensions(config_path: Path, profile: str) -> bool:
@@ -212,8 +286,6 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     Returns ``True`` iff the YAML changed. Comments and key order survive
     via ruamel.yaml round-trip.
     """
-    from my_setup.config import load_config, resolve_profile
-
     cfg = load_config(config_path)
     resolved = resolve_profile(cfg, profile)
     installed = list_installed()
@@ -240,9 +312,29 @@ def remove_from_include(
 ) -> bool:
     """Remove ``ext_id`` from ``profiles.<profile>.extensions.include``.
 
-    If ``add_to_exclude_list`` is true, also append it to ``exclude``
-    (idempotent). Returns ``True`` if any change was made.
+    If ``add_to_exclude_list`` is true, also append to ``exclude``
+    (idempotent). Returns ``True`` iff any change was made.
+
+    Raises :class:`ConfigError` if ``ext_id`` isn't in this profile's
+    literal ``include`` but IS declared by an inherited profile —
+    silently no-op'ing in that case would be confusing UX. Pass
+    ``--exclude`` (which sets ``add_to_exclude_list=True``) to override
+    inherited declarations via the ``exclude`` mechanism.
     """
+    cfg = load_config(config_path)
+    if profile not in cfg.profiles:
+        raise ProfileNotFound(f"profile not found: {profile}")
+
+    in_literal_include = ext_id in cfg.profiles[profile].extensions.include
+    if not in_literal_include and not add_to_exclude_list:
+        ancestor = _ancestor_declaring(cfg, profile, ext_id)
+        if ancestor is not None:
+            raise ConfigError(
+                f"{ext_id!r} is declared in inherited profile {ancestor!r}; "
+                f"remove it from {ancestor} or pass --exclude to override "
+                f"the inherited declaration via {profile}.extensions.exclude"
+            )
+
     yaml, doc = _load_yaml_doc(config_path)
     ext_block = _profile_extensions_block(doc, profile)
     include = _ensure_list(ext_block, "include")

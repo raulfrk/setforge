@@ -52,3 +52,10 @@ class MergeTypeMismatch(MySetupError):
     """Raised by yaml_merge.overlay when a preserved key path has
     incompatible leaf types in src vs live (e.g. tracked str vs live
     list)."""
+
+
+class ExtensionInstallFailed(MySetupError):
+    """Raised when ``code --install-extension`` or
+    ``--uninstall-extension`` exits non-zero or times out, or when
+    ``code --list-extensions`` itself fails. The message includes the
+    extension ID (when applicable) and the captured stderr."""

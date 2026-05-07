@@ -16,7 +16,7 @@ from my_setup import compare as compare_mod
 from my_setup import deploy
 from my_setup import extensions as extensions_mod
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import load_config, resolve_profile
+from my_setup.config import ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import ExtensionToolMissing, MySetupError
 
 LOGGER = logging.getLogger(__name__)
@@ -79,10 +79,17 @@ def install(
         )
         return
 
+    failed_ids = {ext_id for ext_id, _ in report.failed}
     for ext_id in report.to_install:
-        typer.echo(f"installed  {ext_id}")
+        if ext_id not in failed_ids:
+            typer.echo(f"installed  {ext_id}")
     for ext_id in report.to_uninstall:
-        typer.echo(f"uninstalled  {ext_id}")
+        if ext_id not in failed_ids:
+            typer.echo(f"uninstalled  {ext_id}")
+    for ext_id, err in report.failed:
+        typer.secho(
+            f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
+        )
     if not report:
         typer.echo("extensions: nothing to reconcile")
 
@@ -255,7 +262,11 @@ def ext_reconcile(
         False, "--dry-run", help="Compute actions without invoking code CLI."
     ),
 ) -> None:
-    """Run reconcile explicitly (in addition to the install loop)."""
+    """Run reconcile explicitly (in addition to the install loop).
+
+    Exits non-zero on non-empty drift when policy is REPORT or
+    ``--dry-run`` is set — both are read-only modes intended for CI.
+    """
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:
@@ -263,12 +274,28 @@ def ext_reconcile(
     except ExtensionToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
+
+    is_read_only = (
+        resolved.extensions.reconcile is ReconcilePolicy.REPORT or dry_run
+    )
+
+    failed_ids = {ext_id for ext_id, _ in report.failed}
     for ext_id in report.to_install:
-        typer.echo(f"{'(dry) ' if dry_run else ''}install   {ext_id}")
+        verb = "would install" if is_read_only else "install"
+        if ext_id not in failed_ids:
+            typer.echo(f"{verb}    {ext_id}")
     for ext_id in report.to_uninstall:
-        typer.echo(f"{'(dry) ' if dry_run else ''}uninstall {ext_id}")
+        verb = "would uninstall" if is_read_only else "uninstall"
+        if ext_id not in failed_ids:
+            typer.echo(f"{verb}  {ext_id}")
+    for ext_id, err in report.failed:
+        typer.secho(
+            f"FAILED   {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
+        )
     if not report:
         typer.echo("nothing to reconcile")
+    elif is_read_only:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:
