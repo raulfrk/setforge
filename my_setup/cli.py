@@ -2,9 +2,11 @@
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
 Pillar 2 adds extension reconcile inside ``install``. Claude plugin
-reconcile lands in Pillar 3.
+reconcile lands in Pillar 3. ``revert`` (dotfiles-19n) replays the most
+recent transition for a profile in reverse.
 """
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -18,7 +20,11 @@ from my_setup import extensions as extensions_mod
 from my_setup import transitions
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import ReconcilePolicy, load_config, resolve_profile
-from my_setup.errors import ExtensionToolMissing, MySetupError
+from my_setup.errors import (
+    ExtensionToolMissing,
+    MySetupError,
+    NoTransitionFound,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -225,6 +231,85 @@ def sync(
             None,  # sync's extension change is reflected in the YAML diff
         )
         typer.echo(f"transition: {target}")
+
+
+@app.command()
+def revert(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Revert the most recent transition for ``profile``.
+
+    Applies ``changes.patch`` in reverse via ``patch -R`` and reverses
+    any extension delta (uninstalling what was installed, re-installing
+    what was uninstalled). Records its own reverse transition so that a
+    second ``revert`` invocation acts as redo.
+    """
+    transition = transitions.load_latest(profile)
+    if transition is None:
+        raise NoTransitionFound(
+            f"no transition history for profile {profile!r}"
+        )
+
+    typer.echo(f"reverting: {transition}")
+
+    # Snapshot files the patch would touch — used to populate the reverse
+    # transition's pre-state.
+    patch_file = transition / "changes.patch"
+    touched_paths: list[Path] = []
+    if patch_file.exists():
+        for line in patch_file.read_text().splitlines():
+            if line.startswith("--- ") or line.startswith("+++ "):
+                token = line[4:].split("\t", 1)[0].strip()
+                if token and token != "/dev/null":
+                    # Diff stores paths root-relative; restore the leading /
+                    abs_path = token if token.startswith("/") else f"/{token}"
+                    touched_paths.append(Path(abs_path))
+    # Dedup while preserving order
+    touched_paths = list(dict.fromkeys(touched_paths))
+    file_pre = transitions.snapshot_paths(touched_paths)
+
+    transitions.apply_patch_reverse(transition)
+
+    ext_file = transition / "extensions.json"
+    reverse_added: list[str] = []
+    reverse_removed: list[str] = []
+    if ext_file.exists():
+        delta = json.loads(ext_file.read_text())
+        for ext_id in delta.get("added", []):
+            try:
+                extensions_mod.uninstall_one(ext_id)
+                reverse_removed.append(ext_id)
+            except ExtensionToolMissing as exc:
+                typer.secho(
+                    f"warning: skipping uninstall of {ext_id} — {exc}",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+        for ext_id in delta.get("removed", []):
+            try:
+                extensions_mod.install_one(ext_id)
+                reverse_added.append(ext_id)
+            except ExtensionToolMissing as exc:
+                typer.secho(
+                    f"warning: skipping install of {ext_id} — {exc}",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+
+    file_post = transitions.snapshot_paths(touched_paths)
+    reverse_meta = transitions.make_meta(
+        transitions.TransitionCommand.REVERT, profile
+    )
+    reverse_delta: transitions.ExtensionDelta | None = None
+    if reverse_added or reverse_removed:
+        reverse_delta = transitions.ExtensionDelta(
+            added=reverse_added, removed=reverse_removed
+        )
+    target = transitions.write_transition(
+        reverse_meta, file_pre, file_post, reverse_delta
+    )
+    typer.echo(f"transition: {target}")
 
 
 ext_app = typer.Typer(

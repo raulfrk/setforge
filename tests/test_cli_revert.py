@@ -5,6 +5,8 @@ profile + tmp_path live tree, with subprocess.run mocked for the code CLI.
 """
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -44,9 +46,12 @@ def _state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make code CLI absent so install skips the extension leg cleanly."""
+    """Make `code` CLI absent (warn-and-skip for extension leg) without
+    breaking lookups for other binaries (e.g. `patch` for revert)."""
+    real_which = shutil.which
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: None
+        "my_setup.extensions.shutil.which",
+        lambda name: None if name == "code" else real_which(name),
     )
 
 
@@ -139,3 +144,132 @@ def test_sync_writes_transition_dir(
     patch = (sync_transition / "changes.patch").read_text()
     # The src under tracked/ is what changed.
     assert "greeting.md" in patch
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_install_then_revert_restores_pre_install_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """install creates a stub file; revert deletes it (round-trip via patch -R)."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    install_result = runner.invoke(
+        app, ["install", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert install_result.exit_code == 0, install_result.output
+    assert dst.exists()
+    assert dst.read_text() == "hello\n"
+
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+    assert not dst.exists(), "stub file should be removed by revert"
+
+
+def test_revert_with_no_history_exits_non_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty history → non-zero exit with NoTransitionFound. CliRunner
+    bypasses the CLI's main() error wrapper, so the exit comes via the
+    raised exception rather than printed output; assert on both."""
+    from my_setup.errors import NoTransitionFound
+
+    cfg, _ = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    result = CliRunner().invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, NoTransitionFound)
+    assert "no transition history" in str(result.exception)
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_revert_restores_extension_state_to_pre_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-state assertion: after revert, the fake installed-extension set
+    must match its pre-install state — not just files.
+
+    Drives a fake `code` CLI that mutates an in-memory installed list,
+    runs install (which adds extensions), then revert (which must remove
+    them). The final installed set is asserted byte-equal to pre-install.
+    """
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+
+    # Patch the fixture YAML to declare an extension include list.
+    yaml = cfg.read_text(encoding="utf-8")
+    yaml = yaml.replace(
+        "    dotfiles: [greeting]\n",
+        "    dotfiles: [greeting]\n"
+        "    extensions:\n"
+        "      include:\n"
+        "        - example.ext-a\n"
+        "        - example.ext-b\n",
+    )
+    cfg.write_text(yaml, encoding="utf-8")
+
+    state = {"installed": []}
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        # Intercept only `code` invocations; let everything else (notably
+        # `patch -R` from apply_patch_reverse) hit the real binary.
+        if args[0] != "/usr/bin/code":
+            return real_run(args, **kwargs)
+        if args[1] == "--list-extensions":
+            stdout = "\n".join(state["installed"]) + (
+                "\n" if state["installed"] else ""
+            )
+            return subprocess.CompletedProcess(args, 0, stdout, "")
+        if args[1] == "--install-extension":
+            ext_id = args[2]
+            if ext_id not in state["installed"]:
+                state["installed"].append(ext_id)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[1] == "--uninstall-extension":
+            ext_id = args[2]
+            if ext_id in state["installed"]:
+                state["installed"].remove(ext_id)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(args)
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which",
+        lambda name: "/usr/bin/code" if name == "code" else real_which(name),
+    )
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+
+    pre_install = sorted(state["installed"])
+
+    runner = CliRunner()
+    install_result = runner.invoke(
+        app, ["install", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert install_result.exit_code == 0, install_result.output
+    assert sorted(state["installed"]) == [
+        "example.ext-a",
+        "example.ext-b",
+    ]
+
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+
+    # End-state assertion: extension set is back to pre-install bytes.
+    assert sorted(state["installed"]) == pre_install
+    # And the file revert also took effect.
+    assert not dst.exists()
