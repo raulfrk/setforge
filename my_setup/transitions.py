@@ -12,14 +12,25 @@ a profile, applies the patch in reverse via ``patch -R``, reverses the
 extension delta, and records its own reverse transition.
 """
 
+import difflib
 import json
 import os
 import platform
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 
 from my_setup import __version__
+
+
+class TransitionCommand(StrEnum):
+    """Closed set of state-changing commands that record transitions."""
+
+    INSTALL = "install"
+    SYNC = "sync"
+    REVERT = "revert"
 
 _STATE_ENV = "MY_SETUP_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
@@ -61,7 +72,7 @@ def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
 class TransitionMeta:
     """Metadata for one transition. Serialized to ``meta.json``."""
 
-    command: str           # "install" | "sync" | "revert"
+    command: TransitionCommand
     profile: str
     timestamp: datetime    # UTC; serialized as ISO 8601
     host: str              # platform.node()
@@ -69,7 +80,7 @@ class TransitionMeta:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "command": self.command,
+            "command": self.command.value,
             "profile": self.profile,
             "timestamp": self.timestamp.astimezone(timezone.utc).isoformat(),
             "host": self.host,
@@ -77,7 +88,7 @@ class TransitionMeta:
         }
 
 
-def make_meta(command: str, profile: str) -> TransitionMeta:
+def make_meta(command: TransitionCommand, profile: str) -> TransitionMeta:
     """Build a TransitionMeta with current host + version + UTC timestamp."""
     return TransitionMeta(
         command=command,

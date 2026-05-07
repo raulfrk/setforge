@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from my_setup.transitions import (
+    TransitionCommand,
     TransitionMeta,
     make_meta,
     now_utc,
@@ -52,10 +53,17 @@ def test_now_utc_is_aware() -> None:
     assert ts.tzinfo is timezone.utc
 
 
+def test_transition_command_values() -> None:
+    """Closed set must round-trip through json as the bare string value."""
+    assert TransitionCommand.INSTALL.value == "install"
+    assert TransitionCommand.SYNC.value == "sync"
+    assert TransitionCommand.REVERT.value == "revert"
+
+
 def test_transition_meta_to_dict_iso_timestamp() -> None:
     ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=timezone.utc)
     meta = TransitionMeta(
-        command="install",
+        command=TransitionCommand.INSTALL,
         profile="vm-headless",
         timestamp=ts,
         host="example",
@@ -72,8 +80,8 @@ def test_transition_meta_to_dict_iso_timestamp() -> None:
 
 
 def test_make_meta_uses_current_host_and_version() -> None:
-    meta = make_meta("install", "vm-headless")
-    assert meta.command == "install"
+    meta = make_meta(TransitionCommand.INSTALL, "vm-headless")
+    assert meta.command is TransitionCommand.INSTALL
     assert meta.profile == "vm-headless"
     assert meta.host  # not empty
     assert meta.version  # not empty
@@ -82,7 +90,7 @@ def test_make_meta_uses_current_host_and_version() -> None:
 def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
     target = tmp_path / "20260507T120000Z-install-vmh"
     meta = TransitionMeta(
-        command="install",
+        command=TransitionCommand.INSTALL,
         profile="vmh",
         timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
         host="h",
