@@ -82,3 +82,20 @@ def _load_local_config() -> dict[str, str]:
             f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping"
         )
     return {str(k): str(v) for k, v in binaries.items()}
+
+
+def _env_overrides() -> dict[str, str]:
+    """Return env-var overrides for the supported binaries.
+
+    Reads ``MY_SETUP_<NAME>_BIN`` for each name in
+    :data:`SUPPORTED_BINARIES`. Empty-string values are treated as
+    unset (avoids surprising the user when a wrapper sets the var
+    blank).
+    """
+    out: dict[str, str] = {}
+    for name in SUPPORTED_BINARIES:
+        var = f"{_ENV_VAR_PREFIX}{name.upper()}{_ENV_VAR_SUFFIX}"
+        value = os.environ.get(var)
+        if value:
+            out[name] = value
+    return out

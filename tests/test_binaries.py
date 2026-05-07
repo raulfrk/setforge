@@ -69,3 +69,28 @@ def test_load_local_config_top_level_not_a_mapping_raises():
     binaries.LOCAL_CONFIG_PATH.write_text("- list\n- only\n")
     with pytest.raises(ConfigError, match="top-level"):
         binaries._load_local_config()
+
+
+def test_env_overrides_none_set_returns_empty():
+    assert binaries._env_overrides() == {}
+
+
+def test_env_overrides_one_set(monkeypatch):
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", "/env/code")
+    assert binaries._env_overrides() == {"code": "/env/code"}
+
+
+def test_env_overrides_all_three_set(monkeypatch):
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", "/env/code")
+    monkeypatch.setenv("MY_SETUP_CLAUDE_BIN", "/env/claude")
+    monkeypatch.setenv("MY_SETUP_PATCH_BIN", "/env/patch")
+    assert binaries._env_overrides() == {
+        "code": "/env/code",
+        "claude": "/env/claude",
+        "patch": "/env/patch",
+    }
+
+
+def test_env_overrides_empty_string_treated_as_unset(monkeypatch):
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", "")
+    assert binaries._env_overrides() == {}
