@@ -65,8 +65,8 @@ def fake_code(monkeypatch: pytest.MonkeyPatch):
     def factory(installed: list[str]) -> FakeCode:
         fake = FakeCode(installed)
         monkeypatch.setattr(
-            "my_setup.extensions.shutil.which",
-            lambda name: "/usr/bin/code" if name == "code" else None,
+            "my_setup.extensions.resolve_binary",
+            lambda name: Path("/usr/bin/code") if name == "code" else None,
         )
         monkeypatch.setattr("my_setup.extensions.subprocess.run", fake.run)
         return fake
@@ -98,7 +98,7 @@ def test_list_installed_skips_non_extension_id_lines(fake_code) -> None:
 
 
 def test_missing_code_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("my_setup.extensions.shutil.which", lambda _: None)
+    monkeypatch.setattr("my_setup.extensions.resolve_binary", lambda _: None)
     with pytest.raises(ExtensionToolMissing, match="not found"):
         list_installed()
     with pytest.raises(ExtensionToolMissing, match="not found"):
@@ -214,7 +214,7 @@ def test_install_one_wraps_called_process_error(
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
@@ -232,7 +232,7 @@ def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
@@ -249,7 +249,7 @@ def test_list_installed_wraps_failure(
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
@@ -267,7 +267,7 @@ def test_reconcile_continues_after_install_failure(
 ) -> None:
     """One bad install must not abort the rest of the loop."""
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     state = {"installed": ["existing.one"], "calls": []}

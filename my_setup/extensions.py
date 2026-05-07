@@ -1,9 +1,12 @@
 """VSCode extension reconcile, driven by the ``code`` CLI.
 
-All subprocess invocations honor the locked hygiene rules: ``shutil.which``
-is consulted up front (raising :class:`ExtensionToolMissing` if missing),
-``subprocess.run`` always uses ``check=True, text=True, capture_output=True,
-timeout=30``, and args are always a list with no ``shell=True``.
+All subprocess invocations honor the locked hygiene rules: the ``code``
+binary is resolved via :func:`my_setup.binaries.resolve_binary` (which
+walks CLI flag → env var → host-local config → PATH), raising
+:class:`ExtensionToolMissing` if every layer comes up empty.
+``subprocess.run`` always uses ``check=True, text=True,
+capture_output=True, timeout=30``, and args are always a list with no
+``shell=True``.
 
 Also exposes YAML-edit helpers used by the ``ext`` subcommand group to
 mutate a profile's ``extensions.include`` / ``extensions.exclude`` lists
@@ -12,7 +15,6 @@ in ``my_setup.yaml`` without losing comments.
 
 import logging
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +22,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from my_setup.binaries import resolve_binary
 from my_setup.config import Extensions, ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
     ConfigError,
@@ -59,14 +62,16 @@ class ReconcileReport:
 
 
 def _ensure_code() -> str:
-    """Resolve the ``code`` binary on PATH or raise."""
-    path = shutil.which(_CODE_BIN)
+    """Resolve the ``code`` binary via :func:`resolve_binary` or raise."""
+    path = resolve_binary(_CODE_BIN)
     if path is None:
         raise ExtensionToolMissing(
             f"{_CODE_BIN!r} CLI not found on PATH; install VSCode "
-            "or open a terminal in a VSCode session"
+            "or open a terminal in a VSCode session. "
+            f"Tip: set 'binaries.{_CODE_BIN}' in "
+            "~/.config/my-setup/local.yaml to override."
         )
-    return path
+    return str(path)
 
 
 def _stderr_of(exc: BaseException) -> str:

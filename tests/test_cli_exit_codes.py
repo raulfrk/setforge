@@ -60,7 +60,7 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
     monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
     return cfg
@@ -116,7 +116,7 @@ def test_ext_reconcile_clean_state_exits_0(
     cfg = _setup_fixture(tmp_path, monkeypatch)
     # Pre-install the declared extension so there's no drift.
     monkeypatch.setattr(
-        "my_setup.extensions.shutil.which", lambda _: "/usr/bin/code"
+        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def fake_run(args, **kwargs):
