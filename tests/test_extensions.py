@@ -82,6 +82,18 @@ def test_list_installed_skips_blank_lines(fake_code) -> None:
     assert list_installed() == {"a.x", "b.y"}
 
 
+def test_list_installed_skips_non_extension_id_lines(fake_code) -> None:
+    """The Remote-SSH `code` CLI prepends a header line; ignore it."""
+    fake = fake_code([])
+    fake.installed = [
+        "Extensions installed on SSH: 1.2.3.4:",
+        "anthropic.claude-code",
+        "ms-python.python",
+        "Some other noise line",
+    ]
+    assert list_installed() == {"anthropic.claude-code", "ms-python.python"}
+
+
 def test_missing_code_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("my_setup.extensions.shutil.which", lambda _: None)
     with pytest.raises(ExtensionToolMissing, match="not found"):
@@ -191,3 +203,118 @@ def test_clean_state_returns_falsy_report(fake_code) -> None:
     report = reconcile(ext)
     assert isinstance(report, ReconcileReport)
     assert bool(report) is False
+
+
+# ---- YAML-edit helpers ---------------------------------------------------
+
+from pathlib import Path
+
+from my_setup.extensions import add_to_include, remove_from_include
+from my_setup.errors import ProfileNotFound
+
+
+_FIXTURE_YAML = """\
+version: 1
+
+# Top-level comment.
+dotfiles:
+  d:
+    src: x
+    dst: y
+
+profiles:
+  base:
+    # Base profile comment.
+    dotfiles:
+      - d
+    extensions:
+      include:
+        - keep.me
+      # Inline comment between keys.
+      exclude:
+        - drop.me
+  bare:
+    dotfiles:
+      - d
+"""
+
+
+def _write_fixture(tmp_path: Path) -> Path:
+    p = tmp_path / "my_setup.yaml"
+    p.write_text(_FIXTURE_YAML, encoding="utf-8")
+    return p
+
+
+def test_add_to_include_appends(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    added = add_to_include(cfg, "base", "new.one")
+    assert added is True
+    text = cfg.read_text()
+    assert "new.one" in text
+    assert "Top-level comment." in text
+    assert "Base profile comment." in text
+    assert "Inline comment between keys." in text
+
+
+def test_add_to_include_idempotent(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    added = add_to_include(cfg, "base", "keep.me")
+    assert added is False
+    assert cfg.read_text().count("keep.me") == 1
+
+
+def test_add_to_include_creates_extensions_block_when_missing(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_fixture(tmp_path)
+    added = add_to_include(cfg, "bare", "first.one")
+    assert added is True
+    text = cfg.read_text()
+    assert "first.one" in text
+
+
+def test_add_to_include_unknown_profile_raises(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    with pytest.raises(ProfileNotFound):
+        add_to_include(cfg, "ghost", "x")
+
+
+def test_remove_from_include_drops_entry(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    changed = remove_from_include(cfg, "base", "keep.me")
+    assert changed is True
+    assert "keep.me" not in cfg.read_text()
+
+
+def test_remove_from_include_with_exclude_flag_appends_to_exclude(
+    tmp_path: Path,
+) -> None:
+    cfg = _write_fixture(tmp_path)
+    changed = remove_from_include(
+        cfg, "base", "keep.me", add_to_exclude_list=True
+    )
+    assert changed is True
+    text = cfg.read_text()
+    assert "keep.me" in text  # under exclude now
+    # And no longer under include — count once total
+    assert text.count("keep.me") == 1
+
+
+def test_remove_from_include_idempotent_when_absent(tmp_path: Path) -> None:
+    cfg = _write_fixture(tmp_path)
+    before = cfg.read_text()
+    changed = remove_from_include(cfg, "base", "never.was")
+    assert changed is False
+    assert cfg.read_text() == before
+
+
+def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
+    tmp_path: Path,
+) -> None:
+    """After an edit, load_config must still validate the file."""
+    from my_setup.config import load_config
+
+    cfg = _write_fixture(tmp_path)
+    add_to_include(cfg, "base", "post.edit")
+    config = load_config(cfg)
+    assert "post.edit" in config.profiles["base"].extensions.include

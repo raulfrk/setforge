@@ -140,6 +140,125 @@ def sync(
     capture(profile=profile, config=config)
 
 
+ext_app = typer.Typer(
+    help="Manage VSCode extensions in my_setup.yaml.",
+    no_args_is_help=True,
+)
+app.add_typer(ext_app, name="ext")
+
+
+@ext_app.command("list")
+def ext_list(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Show declared (YAML) vs installed (code --list-extensions)."""
+    cfg = load_config(config)
+    resolved = resolve_profile(cfg, profile)
+    declared_include = set(resolved.extensions.include)
+    declared_exclude = set(resolved.extensions.exclude)
+
+    try:
+        installed = extensions_mod.list_installed()
+    except ExtensionToolMissing as exc:
+        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+        installed = set()
+
+    all_ids = sorted(declared_include | declared_exclude | installed)
+    if not all_ids:
+        typer.echo("(no extensions declared or installed)")
+        return
+
+    width = max(len(ext_id) for ext_id in all_ids) + 2
+    typer.echo(f"{'extension':<{width}}{'declared':<12}{'installed':<10}")
+    for ext_id in all_ids:
+        if ext_id in declared_exclude:
+            declared = "exclude"
+        elif ext_id in declared_include:
+            declared = "include"
+        else:
+            declared = "-"
+        is_installed = "yes" if ext_id in installed else "no"
+        typer.echo(f"{ext_id:<{width}}{declared:<12}{is_installed:<10}")
+
+
+@ext_app.command("add")
+def ext_add(
+    extension_id: str = typer.Argument(..., help="VSCode extension ID."),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    install: bool = typer.Option(
+        True,
+        "--install/--no-install",
+        help="Run code --install-extension after editing YAML.",
+    ),
+) -> None:
+    """Append an extension ID to the profile's extensions.include list."""
+    added = extensions_mod.add_to_include(config, profile, extension_id)
+    if added:
+        typer.echo(f"added to {profile}.extensions.include: {extension_id}")
+    else:
+        typer.echo(
+            f"already in {profile}.extensions.include: {extension_id}"
+        )
+    if install:
+        try:
+            extensions_mod.install_one(extension_id)
+            typer.echo(f"installed  {extension_id}")
+        except ExtensionToolMissing as exc:
+            typer.secho(
+                f"warning: skipping install — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+
+
+@ext_app.command("remove")
+def ext_remove(
+    extension_id: str = typer.Argument(..., help="VSCode extension ID."),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    exclude: bool = typer.Option(
+        False,
+        "--exclude",
+        help="Also add to extensions.exclude so reconcile actively uninstalls.",
+    ),
+) -> None:
+    """Remove an extension ID from the profile's extensions.include list."""
+    changed = extensions_mod.remove_from_include(
+        config, profile, extension_id, add_to_exclude_list=exclude
+    )
+    if changed:
+        target = "include + exclude" if exclude else "include"
+        typer.echo(f"updated {profile}.extensions.{target}: {extension_id}")
+    else:
+        typer.echo(f"no change: {extension_id} not in include list")
+
+
+@ext_app.command("reconcile")
+def ext_reconcile(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compute actions without invoking code CLI."
+    ),
+) -> None:
+    """Run reconcile explicitly (in addition to the install loop)."""
+    cfg = load_config(config)
+    resolved = resolve_profile(cfg, profile)
+    try:
+        report = extensions_mod.reconcile(resolved.extensions, dry_run=dry_run)
+    except ExtensionToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    for ext_id in report.to_install:
+        typer.echo(f"{'(dry) ' if dry_run else ''}install   {ext_id}")
+    for ext_id in report.to_uninstall:
+        typer.echo(f"{'(dry) ' if dry_run else ''}uninstall {ext_id}")
+    if not report:
+        typer.echo("nothing to reconcile")
+
+
 def main() -> None:
     """Entry point that wraps ``app`` with :class:`MySetupError` handling."""
     try:
