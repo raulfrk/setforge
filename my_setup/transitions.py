@@ -157,3 +157,50 @@ def compute_patch(
             )
         )
     return "".join(chunks)
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionDelta:
+    """Net successful changes to the installed extension set during a
+    state-changing command. Failed installs/uninstalls are excluded so
+    revert never tries to reverse a no-op."""
+
+    added: list[str]      # successfully installed during the command
+    removed: list[str]    # successfully uninstalled during the command
+
+    def is_empty(self) -> bool:
+        return not (self.added or self.removed)
+
+
+def write_transition(
+    meta: TransitionMeta,
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+    ext_delta: ExtensionDelta | None,
+) -> Path:
+    """Write a complete transition directory under :func:`transitions_root`.
+
+    Layout:
+    - ``meta.json`` — always present.
+    - ``changes.patch`` — present iff :func:`compute_patch` returned non-empty.
+    - ``extensions.json`` — present iff ``ext_delta`` is non-None and
+      non-empty.
+
+    Returns the absolute path of the directory written.
+    """
+    target = transitions_root() / transition_dirname(
+        meta.timestamp, meta.command.value, meta.profile
+    )
+    write_meta(target, meta)
+
+    patch = compute_patch(file_pre, file_post)
+    if patch:
+        (target / "changes.patch").write_text(patch, encoding="utf-8")
+
+    if ext_delta is not None and not ext_delta.is_empty():
+        payload = json.dumps(
+            {"added": ext_delta.added, "removed": ext_delta.removed}, indent=2
+        ) + "\n"
+        (target / "extensions.json").write_text(payload, encoding="utf-8")
+
+    return target

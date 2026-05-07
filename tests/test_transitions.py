@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from my_setup.transitions import (
+    ExtensionDelta,
     TransitionCommand,
     TransitionMeta,
     compute_patch,
@@ -17,6 +18,7 @@ from my_setup.transitions import (
     transition_dirname,
     transitions_root,
     write_meta,
+    write_transition,
 )
 
 
@@ -153,3 +155,80 @@ def test_compute_patch_combines_multiple_files(tmp_path: Path) -> None:
     patch = compute_patch(pre, post)
     assert f"+++ {b}" in patch
     assert f"+++ {a}" not in patch  # unchanged file omitted
+
+
+def _make_meta(command: TransitionCommand = TransitionCommand.INSTALL) -> TransitionMeta:
+    return TransitionMeta(
+        command=command,
+        profile="vmh",
+        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
+        host="h",
+        version="0.1.0",
+    )
+
+
+def test_extension_delta_is_empty() -> None:
+    assert ExtensionDelta(added=[], removed=[]).is_empty() is True
+    assert ExtensionDelta(added=["a.x"], removed=[]).is_empty() is False
+    assert ExtensionDelta(added=[], removed=["b.y"]).is_empty() is False
+
+
+def test_write_transition_full_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    target_file = tmp_path / "live.txt"
+    pre = {target_file: "before\n"}
+    post = {target_file: "after\n"}
+    delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
+
+    out = write_transition(_make_meta(), pre, post, delta)
+
+    assert out.exists()
+    assert (out / "meta.json").exists()
+    assert (out / "changes.patch").exists()
+    assert (out / "extensions.json").exists()
+    assert "before" in (out / "changes.patch").read_text()
+    payload = json.loads((out / "extensions.json").read_text())
+    assert payload == {"added": ["a.x"], "removed": ["b.y"]}
+
+
+def test_write_transition_omits_empty_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    same = {tmp_path / "x": "same\n"}
+    out = write_transition(
+        _make_meta(), same, same, ExtensionDelta(added=["a.x"], removed=[])
+    )
+    assert (out / "meta.json").exists()
+    assert not (out / "changes.patch").exists()
+    assert (out / "extensions.json").exists()
+
+
+def test_write_transition_omits_empty_extension_delta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    target_file = tmp_path / "live.txt"
+    out = write_transition(
+        _make_meta(),
+        {target_file: "a\n"},
+        {target_file: "b\n"},
+        ExtensionDelta(added=[], removed=[]),
+    )
+    assert (out / "changes.patch").exists()
+    assert not (out / "extensions.json").exists()
+
+
+def test_write_transition_omits_extension_delta_when_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    out = write_transition(
+        _make_meta(),
+        {tmp_path / "x": "a\n"},
+        {tmp_path / "x": "b\n"},
+        None,
+    )
+    assert not (out / "extensions.json").exists()
