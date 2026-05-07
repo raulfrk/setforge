@@ -19,8 +19,15 @@ read lazily on each lookup so tests can monkey-patch the environment or
 """
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import Final
+
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
+
+from my_setup.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = (
     Path.home() / ".config" / "my-setup" / "local.yaml"
@@ -42,3 +49,36 @@ _STUB_TEMPLATE: Final[str] = """\
 """
 
 _cli_overrides: dict[str, str] = {}
+
+
+def _load_local_config() -> dict[str, str]:
+    """Return the ``binaries:`` dict from ``LOCAL_CONFIG_PATH``.
+
+    Returns ``{}`` if the file is absent, empty, or has no ``binaries:``
+    key. Raises :class:`ConfigError` on YAML parse failure or when
+    ``binaries:`` is present but not a mapping. Values are coerced to
+    ``str`` for downstream uniformity.
+    """
+    if not LOCAL_CONFIG_PATH.exists():
+        return {}
+    yaml = YAML(typ="safe")
+    try:
+        data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    except YAMLError as exc:
+        raise ConfigError(
+            f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}"
+        ) from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"top-level of {LOCAL_CONFIG_PATH} must be a mapping"
+        )
+    binaries = data.get("binaries")
+    if binaries is None:
+        return {}
+    if not isinstance(binaries, dict):
+        raise ConfigError(
+            f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping"
+        )
+    return {str(k): str(v) for k, v in binaries.items()}
