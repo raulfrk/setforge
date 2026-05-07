@@ -362,3 +362,174 @@ def apply_patch_reverse(transition_dir: Path) -> None:
             f"(exit {result.returncode}):\n"
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionListing:
+    """One row of ``my-setup transitions list``. Decoded from a transition
+    directory's ``meta.json`` (canonical) plus an optional ``extensions.json``
+    sibling. Read-only — does not represent any in-flight state."""
+
+    directory: Path
+    timestamp: datetime
+    command: str
+    profile: str
+    file_count: int
+    ext_count: int
+
+
+def _load_listing(transition_dir: Path) -> TransitionListing | None:
+    """Decode one transition directory into a :class:`TransitionListing`,
+    or return ``None`` if its ``meta.json`` is missing or unreadable. Used
+    by :func:`list_transitions` to skip half-written / corrupted dirs
+    without aborting the whole listing."""
+    meta_file = transition_dir / "meta.json"
+    if not meta_file.exists():
+        return None
+    try:
+        payload = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(payload["timestamp"])
+        command = str(payload["command"])
+        profile = str(payload["profile"])
+    except (KeyError, ValueError):
+        return None
+
+    paths = payload.get("paths", [])
+    file_count = len(paths) if isinstance(paths, list) else 0
+
+    ext_file = transition_dir / "extensions.json"
+    ext_count = 0
+    if ext_file.exists():
+        try:
+            ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
+            added = ext_payload.get("added", [])
+            removed = ext_payload.get("removed", [])
+            ext_count = (len(added) if isinstance(added, list) else 0) + (
+                len(removed) if isinstance(removed, list) else 0
+            )
+        except (OSError, json.JSONDecodeError):
+            ext_count = 0
+
+    return TransitionListing(
+        directory=transition_dir,
+        timestamp=timestamp,
+        command=command,
+        profile=profile,
+        file_count=file_count,
+        ext_count=ext_count,
+    )
+
+
+def list_transitions(
+    profile_filter: list[str] | None = None,
+    reverse: bool = False,
+) -> list[TransitionListing]:
+    """Return every transition record under :func:`transitions_root`.
+
+    ``profile_filter`` is an OR-filter — non-empty list keeps only entries
+    whose profile is in the list. ``None`` or empty list keeps all.
+
+    Default order is chronological (oldest first), matching the
+    ``transition_dirname`` lexicographic invariant. ``reverse=True`` flips
+    that to newest-first.
+
+    Half-written or corrupted transition dirs (missing/unreadable
+    ``meta.json``) are silently skipped; the listing degrades gracefully
+    rather than failing the whole command.
+    """
+    root = transitions_root()
+    if not root.exists():
+        return []
+    keep = set(profile_filter) if profile_filter else None
+    listings: list[TransitionListing] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        listing = _load_listing(child)
+        if listing is None:
+            continue
+        if keep is not None and listing.profile not in keep:
+            continue
+        listings.append(listing)
+    listings.sort(key=lambda x: x.directory.name)
+    if reverse:
+        listings.reverse()
+    return listings
+
+
+def resolve_transition_prefix(prefix: str) -> Path:
+    """Resolve a dirname prefix (or full dirname) to one transition directory.
+
+    Resolution rules:
+    1. Exact dirname match → return that directory.
+    2. Otherwise collect every directory whose dirname starts with ``prefix``.
+    3. Zero matches → raise :class:`MySetupError`.
+    4. One match → return it.
+    5. Multiple matches → raise :class:`MySetupError` listing every candidate
+       sorted ascending so the user can disambiguate.
+
+    Used by ``my-setup transitions show <prefix>``. Read-only.
+    """
+    root = transitions_root()
+    if not root.exists():
+        raise MySetupError(f"no transition matching prefix {prefix!r}")
+    exact = root / prefix
+    if exact.is_dir() and (exact / "meta.json").exists():
+        return exact
+    matches = sorted(
+        child
+        for child in root.iterdir()
+        if child.is_dir()
+        and child.name.startswith(prefix)
+        and (child / "meta.json").exists()
+    )
+    if not matches:
+        raise MySetupError(f"no transition matching prefix {prefix!r}")
+    if len(matches) > 1:
+        joined = "\n  ".join(child.name for child in matches)
+        raise MySetupError(
+            f"prefix {prefix!r} matches {len(matches)} transitions:\n  {joined}"
+        )
+    return matches[0]
+
+
+def summarize_transition(transition_dir: Path) -> dict[str, str]:
+    """Map every absolute path touched by ``transition_dir`` to one of
+    ``"created"``, ``"deleted"``, ``"modified"``.
+
+    Derived from the ``--- old`` / ``+++ new`` headers of every hunk in
+    ``changes.patch``. Returns an empty dict when the patch file is absent
+    (e.g. transitions that recorded only an extension delta). Pairs of
+    ``/dev/null`` indicate creation (forward) or deletion (forward); both
+    real paths indicate modification.
+
+    Path round-trip: :func:`_diff_path` strips the leading ``/`` to satisfy
+    GNU patch's safe-paths rule, so reversing means prepending ``/``.
+    """
+    patch_file = transition_dir / "changes.patch"
+    if not patch_file.exists():
+        return {}
+    text = patch_file.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    out: dict[str, str] = {}
+    i = 0
+    while i < len(lines) - 1:
+        if not lines[i].startswith("--- "):
+            i += 1
+            continue
+        if not lines[i + 1].startswith("+++ "):
+            i += 1
+            continue
+        from_path = lines[i][4:].split("\t", 1)[0]
+        to_path = lines[i + 1][4:].split("\t", 1)[0]
+        if from_path == "/dev/null" and to_path != "/dev/null":
+            out["/" + to_path] = "created"
+        elif to_path == "/dev/null" and from_path != "/dev/null":
+            out["/" + from_path] = "deleted"
+        elif from_path != "/dev/null":
+            out["/" + from_path] = "modified"
+        i += 2
+    return out

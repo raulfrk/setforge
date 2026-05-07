@@ -7,18 +7,22 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.errors import RevertFailed
+from my_setup.errors import MySetupError, RevertFailed
 from my_setup.transitions import (
     ExtensionDelta,
     TransitionCommand,
+    TransitionListing,
     TransitionMeta,
     apply_patch_reverse,
     compute_patch,
+    list_transitions,
     load_latest,
     make_meta,
     now_utc,
+    resolve_transition_prefix,
     snapshot_paths,
     state_root,
+    summarize_transition,
     transition_dirname,
     transitions_root,
     write_meta,
@@ -433,3 +437,267 @@ def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
     # No .rej files anywhere in the tree.
     rej_files = list(tmp_path.rglob("*.rej"))
     assert rej_files == [], f"unexpected .rej files: {rej_files}"
+
+
+def _stub_full_transition(
+    target: Path,
+    *,
+    profile: str,
+    command: str = "install",
+    timestamp: str = "2026-05-07T12:00:00+00:00",
+    paths: list[str] | None = None,
+    extensions_added: list[str] | None = None,
+    extensions_removed: list[str] | None = None,
+    patch_text: str | None = None,
+) -> None:
+    """Write a self-consistent transition directory with optional sidecars.
+
+    The dirname is left to the caller (encoded chronological order matters
+    for sort tests). meta.json's `paths` field drives `file_count`, and the
+    optional ``extensions.json`` sidecar drives `ext_count` — both flow
+    through to TransitionListing.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "command": command,
+        "profile": profile,
+        "timestamp": timestamp,
+        "host": "h",
+        "version": "0.1.0",
+    }
+    if paths is not None:
+        meta["paths"] = paths
+    (target / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    if extensions_added is not None or extensions_removed is not None:
+        (target / "extensions.json").write_text(
+            json.dumps(
+                {
+                    "added": extensions_added or [],
+                    "removed": extensions_removed or [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    if patch_text is not None:
+        (target / "changes.patch").write_text(patch_text, encoding="utf-8")
+
+
+def test_list_transitions_empty_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    assert list_transitions() == []
+
+
+def test_list_transitions_returns_chronological_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub_full_transition(
+        root / "20260507T090000Z-install-vmh",
+        profile="vmh",
+        timestamp="2026-05-07T09:00:00+00:00",
+    )
+    _stub_full_transition(
+        root / "20260507T170000Z-sync-vmh",
+        profile="vmh",
+        command="sync",
+        timestamp="2026-05-07T17:00:00+00:00",
+    )
+
+    listings = list_transitions()
+
+    assert [entry.command for entry in listings] == ["install", "sync"]
+
+
+def test_list_transitions_reverse_flips_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub_full_transition(root / "20260507T090000Z-install-vmh", profile="vmh")
+    _stub_full_transition(
+        root / "20260507T170000Z-sync-vmh", profile="vmh", command="sync"
+    )
+
+    listings = list_transitions(reverse=True)
+
+    assert [entry.command for entry in listings] == ["sync", "install"]
+
+
+def test_list_transitions_profile_filter_or_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub_full_transition(root / "20260507T090000Z-install-vmh", profile="vmh")
+    _stub_full_transition(root / "20260507T100000Z-install-ws", profile="ws")
+    _stub_full_transition(
+        root / "20260507T110000Z-install-other", profile="other"
+    )
+
+    listings = list_transitions(profile_filter=["vmh", "ws"])
+
+    assert {entry.profile for entry in listings} == {"vmh", "ws"}
+
+
+def test_list_transitions_skips_corrupted_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half-written or unreadable dirs are silently skipped — graceful
+    degradation matters here because partial writes are real (issue
+    dotfiles-nen.16/.17 track atomic writes)."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    # No meta.json at all.
+    (root / "20260507T080000Z-broken").mkdir()
+    # Malformed JSON.
+    bad = root / "20260507T090000Z-malformed-vmh"
+    bad.mkdir()
+    (bad / "meta.json").write_text("{not json", encoding="utf-8")
+    # Valid.
+    _stub_full_transition(root / "20260507T100000Z-install-vmh", profile="vmh")
+
+    listings = list_transitions()
+
+    assert len(listings) == 1
+    assert listings[0].profile == "vmh"
+
+
+def test_list_transitions_file_count_and_ext_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub_full_transition(
+        root / "20260507T090000Z-install-vmh",
+        profile="vmh",
+        paths=["/a", "/b", "/c"],
+        extensions_added=["x.y", "z.w"],
+        extensions_removed=["a.b"],
+    )
+
+    [entry] = list_transitions()
+
+    assert entry.file_count == 3
+    assert entry.ext_count == 3
+
+
+def test_resolve_transition_prefix_exact_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    target = root / "20260507T120000Z-install-vmh"
+    _stub_full_transition(target, profile="vmh")
+
+    assert resolve_transition_prefix(target.name) == target
+
+
+def test_resolve_transition_prefix_unique_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    target = root / "20260507T120000Z-install-vmh"
+    _stub_full_transition(target, profile="vmh")
+
+    assert resolve_transition_prefix("20260507T120") == target
+
+
+def test_resolve_transition_prefix_zero_match_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub_full_transition(
+        root / "20260507T120000Z-install-vmh", profile="vmh"
+    )
+
+    with pytest.raises(MySetupError, match="no transition matching prefix"):
+        resolve_transition_prefix("19990101")
+
+
+def test_resolve_transition_prefix_ambiguous_lists_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    a = root / "20260507T120000Z-install-vmh"
+    b = root / "20260507T130000Z-sync-vmh"
+    _stub_full_transition(a, profile="vmh")
+    _stub_full_transition(b, profile="vmh", command="sync")
+
+    with pytest.raises(MySetupError) as exc_info:
+        resolve_transition_prefix("20260507T1")
+
+    msg = str(exc_info.value)
+    assert "matches 2 transitions" in msg
+    assert a.name in msg
+    assert b.name in msg
+
+
+def test_resolve_transition_prefix_root_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No state dir at all → same not-found error path; don't crash on
+    ``.iterdir()`` of a missing directory."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+
+    with pytest.raises(MySetupError, match="no transition matching prefix"):
+        resolve_transition_prefix("anything")
+
+
+def test_summarize_transition_no_patch_returns_empty(tmp_path: Path) -> None:
+    """Extension-only transitions have no changes.patch — summarize is a
+    no-op for them, not an error."""
+    transition = tmp_path / "extensions-only"
+    transition.mkdir()
+    assert summarize_transition(transition) == {}
+
+
+def test_summarize_transition_classifies_each_action(tmp_path: Path) -> None:
+    """One patch covering create / modify / delete in one call. Asserts
+    the path round-trip too: leading-slash strip on write must be reversed
+    when summarize reports back to the user."""
+    created = Path("/tmp/test-summarize-created.txt")
+    modified = Path("/tmp/test-summarize-modified.txt")
+    deleted = Path("/tmp/test-summarize-deleted.txt")
+    pre = {created: None, modified: "before\n", deleted: "old\n"}
+    post = {created: "fresh\n", modified: "after\n", deleted: None}
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch(pre, post), encoding="utf-8"
+    )
+
+    actions = summarize_transition(transition)
+
+    assert actions[str(created)] == "created"
+    assert actions[str(modified)] == "modified"
+    assert actions[str(deleted)] == "deleted"
+
+
+def test_transition_listing_dataclass_is_frozen() -> None:
+    """The listing struct is a value object — defending the frozen invariant
+    so callers don't accidentally mutate cached entries."""
+    listing = TransitionListing(
+        directory=Path("/x"),
+        timestamp=datetime(2026, 5, 7, tzinfo=timezone.utc),
+        command="install",
+        profile="vmh",
+        file_count=1,
+        ext_count=0,
+    )
+    with pytest.raises(AttributeError):
+        listing.command = "sync"  # type: ignore[misc]

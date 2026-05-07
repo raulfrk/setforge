@@ -9,6 +9,7 @@ recent transition for a profile in reverse.
 import json
 import logging
 import sys
+from datetime import timezone
 from pathlib import Path
 
 import typer
@@ -384,6 +385,98 @@ def revert(
         reverse_meta, file_pre, file_post, reverse_delta
     )
     typer.echo(f"transition: {target}")
+
+
+transitions_app = typer.Typer(
+    help="Inspect transition history for install/sync/revert.",
+    no_args_is_help=True,
+)
+app.add_typer(transitions_app, name="transitions")
+
+
+@transitions_app.command("list")
+def transitions_list(
+    profile: list[str] = typer.Option(
+        [],
+        "--profile",
+        "-p",
+        help="Filter to specified profile(s). Repeatable; OR-filter.",
+    ),
+    reverse: bool = typer.Option(
+        False, "--reverse", help="Newest-first instead of oldest-first."
+    ),
+) -> None:
+    """List recorded transitions across all profiles."""
+    listings = transitions.list_transitions(
+        profile_filter=list(profile) if profile else None,
+        reverse=reverse,
+    )
+    if not listings:
+        typer.echo("(no transitions)")
+        return
+    rows = [
+        (
+            entry.timestamp.astimezone(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            entry.command,
+            entry.profile,
+            str(entry.file_count),
+            str(entry.ext_count),
+            entry.directory.name,
+        )
+        for entry in listings
+    ]
+    headers = ("TIMESTAMP", "COMMAND", "PROFILE", "FILES", "EXTS", "DIRECTORY")
+    widths = [
+        max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
+        for i in range(len(headers))
+    ]
+    typer.echo(
+        "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=False))
+    )
+    for row in rows:
+        typer.echo(
+            "  ".join(c.ljust(w) for c, w in zip(row, widths, strict=False))
+        )
+
+
+@transitions_app.command("show")
+def transitions_show(
+    prefix: str = typer.Argument(..., help="Dirname or unique-prefix match."),
+) -> None:
+    """Show metadata and per-file action summary for one transition."""
+    target = transitions.resolve_transition_prefix(prefix)
+    meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+    typer.echo(f"DIRECTORY  {target.name}")
+    typer.echo(f"COMMAND    {meta.get('command', '')}")
+    typer.echo(f"PROFILE    {meta.get('profile', '')}")
+    typer.echo(f"TIMESTAMP  {meta.get('timestamp', '')}")
+    if "host" in meta:
+        typer.echo(f"HOST       {meta['host']}")
+    if "version" in meta:
+        typer.echo(f"VERSION    {meta['version']}")
+
+    file_actions = transitions.summarize_transition(target)
+    if file_actions:
+        typer.echo("")
+        typer.echo("FILES")
+        action_width = max(len(action) for action in file_actions.values())
+        for path, action in sorted(file_actions.items()):
+            typer.echo(f"  {action.ljust(action_width)}  {path}")
+
+    ext_file = target / "extensions.json"
+    if ext_file.exists():
+        ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
+        added = ext_payload.get("added", []) or []
+        removed = ext_payload.get("removed", []) or []
+        if added or removed:
+            typer.echo("")
+            typer.echo("EXTENSIONS")
+            for ext_id in added:
+                typer.echo(f"  added    {ext_id}")
+            for ext_id in removed:
+                typer.echo(f"  removed  {ext_id}")
 
 
 ext_app = typer.Typer(
