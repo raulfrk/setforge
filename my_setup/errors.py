@@ -71,3 +71,21 @@ class RevertFailed(MySetupError):
 class NoTransitionFound(MySetupError):
     """Raised by ``my-setup revert`` when no transition history exists
     for the requested profile."""
+
+
+class BinaryOverrideInvalid(MySetupError):
+    """Raised when a host-local binary override (CLI flag, env var, or
+    ``~/.config/my-setup/local.yaml``) points at a path that does not
+    exist or is not executable. Carries the layer, binary name, path,
+    and reason as structured fields so callers can render or test
+    against them precisely."""
+
+    def __init__(self, *, layer: str, binary: str, path: str, reason: str):
+        self.layer = layer
+        self.binary = binary
+        self.path = path
+        self.reason = reason
+        super().__init__(
+            f"{layer} override for {binary!r} → {path!r}: {reason}. "
+            f"Edit ~/.config/my-setup/local.yaml or unset the override."
+        )
