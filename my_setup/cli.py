@@ -1,9 +1,11 @@
 """Typer CLI entry point for ``my-setup``.
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
-Extension and Claude-plugin reconcile land in Pillars 2 and 3.
+Pillar 2 adds extension reconcile inside ``install``. Claude plugin
+reconcile lands in Pillar 3.
 """
 
+import logging
 import sys
 from pathlib import Path
 
@@ -12,9 +14,12 @@ import typer
 from my_setup import capture as capture_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
+from my_setup import extensions as extensions_mod
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import load_config, resolve_profile
-from my_setup.errors import MySetupError
+from my_setup.errors import ExtensionToolMissing, MySetupError
+
+LOGGER = logging.getLogger(__name__)
 
 app = typer.Typer(
     help="my-setup: dotfile + extension + Claude-plugin orchestration.",
@@ -63,6 +68,23 @@ def install(
                 preserve_user_keys=dotfile.preserve_user_keys or None,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
+
+    try:
+        report = extensions_mod.reconcile(resolved.extensions)
+    except ExtensionToolMissing as exc:
+        typer.secho(
+            f"warning: skipping extension reconcile — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    for ext_id in report.to_install:
+        typer.echo(f"installed  {ext_id}")
+    for ext_id in report.to_uninstall:
+        typer.echo(f"uninstalled  {ext_id}")
+    if not report:
+        typer.echo("extensions: nothing to reconcile")
 
 
 @app.command()
