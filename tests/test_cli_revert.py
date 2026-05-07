@@ -332,6 +332,88 @@ def test_install_revert_revert_restores_install_state(
 @pytest.mark.skipif(
     shutil.which("patch") is None, reason="GNU patch not on PATH"
 )
+def test_revert_continues_after_extension_uninstall_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ExtensionInstallFailed during revert's uninstall loop must not
+    abort revert. Other extensions continue, and the reverse transition
+    is still written so the user has a redo path."""
+    cfg, dst = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+
+    yaml = cfg.read_text(encoding="utf-8")
+    yaml = yaml.replace(
+        "    dotfiles: [greeting]\n",
+        "    dotfiles: [greeting]\n"
+        "    extensions:\n"
+        "      include:\n"
+        "        - good.one\n"
+        "        - broken.one\n",
+    )
+    cfg.write_text(yaml, encoding="utf-8")
+
+    state_ext = {"installed": [], "fail_uninstall": set()}
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        if args[0] != "/usr/bin/code":
+            return real_run(args, **kwargs)
+        if args[1] == "--list-extensions":
+            stdout = "\n".join(state_ext["installed"]) + (
+                "\n" if state_ext["installed"] else ""
+            )
+            return subprocess.CompletedProcess(args, 0, stdout, "")
+        if args[1] == "--install-extension":
+            state_ext["installed"].append(args[2])
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[1] == "--uninstall-extension":
+            ext_id = args[2]
+            if ext_id in state_ext["fail_uninstall"]:
+                raise subprocess.CalledProcessError(
+                    1, args, output="", stderr="simulated failure"
+                )
+            if ext_id in state_ext["installed"]:
+                state_ext["installed"].remove(ext_id)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(args)
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "my_setup.extensions.shutil.which",
+        lambda name: "/usr/bin/code" if name == "code" else real_which(name),
+    )
+    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+
+    runner = CliRunner()
+    install_result = runner.invoke(
+        app, ["install", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert install_result.exit_code == 0, install_result.output
+    assert sorted(state_ext["installed"]) == ["broken.one", "good.one"]
+
+    # Wire the failure for the reverse uninstall.
+    state_ext["fail_uninstall"].add("broken.one")
+
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}"]
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+
+    # `good.one` got uninstalled despite `broken.one`'s failure.
+    assert "good.one" not in state_ext["installed"]
+    # `broken.one` is still installed (uninstall failed).
+    assert "broken.one" in state_ext["installed"]
+    # Reverse transition was still written (redo path preserved).
+    transitions_dir = list((state / "transitions").iterdir())
+    revert_dirs = [d for d in transitions_dir if "revert" in d.name]
+    assert len(revert_dirs) == 1
+    # FAILED is surfaced in stderr (CliRunner mixes by default).
+    assert "FAILED" in revert_result.output
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
 def test_revert_emits_jsonc_notice_for_vscode_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

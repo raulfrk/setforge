@@ -21,6 +21,7 @@ from my_setup import transitions
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
+    ExtensionInstallFailed,
     ExtensionToolMissing,
     MySetupError,
     NoTransitionFound,
@@ -291,6 +292,7 @@ def revert(
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
+    ext_failed: list[tuple[str, str]] = []
     if ext_file.exists():
         delta = json.loads(ext_file.read_text())
         for ext_id in delta.get("added", []):
@@ -303,6 +305,13 @@ def revert(
                     err=True,
                     fg=typer.colors.YELLOW,
                 )
+            except ExtensionInstallFailed as exc:
+                ext_failed.append((ext_id, str(exc)))
+                typer.secho(
+                    f"FAILED  uninstall {ext_id} — {exc}",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
         for ext_id in delta.get("removed", []):
             try:
                 extensions_mod.install_one(ext_id)
@@ -310,6 +319,13 @@ def revert(
             except ExtensionToolMissing as exc:
                 typer.secho(
                     f"warning: skipping install of {ext_id} — {exc}",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+            except ExtensionInstallFailed as exc:
+                ext_failed.append((ext_id, str(exc)))
+                typer.secho(
+                    f"FAILED  install {ext_id} — {exc}",
                     err=True,
                     fg=typer.colors.YELLOW,
                 )
