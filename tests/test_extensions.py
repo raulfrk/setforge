@@ -318,3 +318,63 @@ def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
     add_to_include(cfg, "base", "post.edit")
     config = load_config(cfg)
     assert "post.edit" in config.profiles["base"].extensions.include
+
+
+# ---- capture_extensions --------------------------------------------------
+
+from my_setup.extensions import capture_extensions
+
+
+def test_capture_extensions_writes_installed_minus_exclude(
+    tmp_path: Path, fake_code
+) -> None:
+    cfg = _write_fixture(tmp_path)
+    fake_code(["a.x", "b.y", "drop.me", "extra.one"])
+
+    changed = capture_extensions(cfg, "base")
+
+    assert changed is True
+    text = cfg.read_text()
+    assert "a.x" in text
+    assert "b.y" in text
+    assert "extra.one" in text
+    assert "drop.me" in text  # appears under exclude (already there)
+    # "drop.me" is excluded so it shouldn't end up in the new include list
+    from my_setup.config import load_config
+
+    reloaded = load_config(cfg)
+    assert "drop.me" not in reloaded.profiles["base"].extensions.include
+    assert "drop.me" in reloaded.profiles["base"].extensions.exclude
+
+
+def test_capture_extensions_preserves_comments(
+    tmp_path: Path, fake_code
+) -> None:
+    cfg = _write_fixture(tmp_path)
+    fake_code(["a.x"])
+    capture_extensions(cfg, "base")
+    text = cfg.read_text()
+    assert "Top-level comment." in text
+    assert "Base profile comment." in text
+
+
+def test_capture_extensions_idempotent(tmp_path: Path, fake_code) -> None:
+    """Two captures in a row: the second is a no-op."""
+    cfg = _write_fixture(tmp_path)
+    fake_code(["keep.me", "added.one"])
+    first = capture_extensions(cfg, "base")
+    second = capture_extensions(cfg, "base")
+    assert first is True
+    assert second is False
+
+
+def test_capture_extensions_does_not_touch_exclude(
+    tmp_path: Path, fake_code
+) -> None:
+    cfg = _write_fixture(tmp_path)
+    before = cfg.read_text()
+    fake_code(["drop.me", "a.x"])
+    capture_extensions(cfg, "base")
+    after = cfg.read_text()
+    # exclude block survives intact (drop.me still listed there once)
+    assert before.count("drop.me") == after.count("drop.me")

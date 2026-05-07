@@ -158,6 +158,10 @@ def _load_yaml_doc(config_path: Path):
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
     yaml = YAML(typ="rt")
+    # Match the indent style used in my_setup.yaml so list edits don't
+    # noisy-reformat the rest of the file (lists indented under their key).
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.preserve_quotes = True
     with config_path.open("r", encoding="utf-8") as fh:
         return yaml, yaml.load(fh)
 
@@ -192,6 +196,36 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     if ext_id in include:
         return False
     include.append(ext_id)
+    with config_path.open("w", encoding="utf-8") as fh:
+        yaml.dump(doc, fh)
+    return True
+
+
+def capture_extensions(config_path: Path, profile: str) -> bool:
+    """Replace ``profiles.<profile>.extensions.include`` with the current
+    installed set minus the resolved profile's ``exclude``.
+
+    Per locked decision (spec § Locked implementation decisions #7):
+    capture only ever edits ``include``. ``exclude`` is never auto-touched
+    — to remove something from the declared set, use ``my-setup ext remove``.
+
+    Returns ``True`` iff the YAML changed. Comments and key order survive
+    via ruamel.yaml round-trip.
+    """
+    from my_setup.config import load_config, resolve_profile
+
+    cfg = load_config(config_path)
+    resolved = resolve_profile(cfg, profile)
+    installed = list_installed()
+    excluded = set(resolved.extensions.exclude)
+    new_include = sorted(installed - excluded)
+
+    yaml, doc = _load_yaml_doc(config_path)
+    ext_block = _profile_extensions_block(doc, profile)
+    current = list(ext_block.get("include", []))
+    if list(current) == new_include:
+        return False
+    ext_block["include"] = CommentedSeq(new_include)
     with config_path.open("w", encoding="utf-8") as fh:
         yaml.dump(doc, fh)
     return True

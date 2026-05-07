@@ -136,8 +136,20 @@ def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
 ) -> None:
-    """Alias for ``capture`` (live → tracked)."""
+    """Capture live → tracked for dotfiles and extensions."""
     capture(profile=profile, config=config)
+    try:
+        changed = extensions_mod.capture_extensions(config, profile)
+    except ExtensionToolMissing as exc:
+        typer.secho(
+            f"warning: skipping extension capture — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+    typer.echo(
+        f"extensions: include {'updated' if changed else 'unchanged'}"
+    )
 
 
 ext_app = typer.Typer(
