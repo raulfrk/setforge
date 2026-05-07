@@ -14,6 +14,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 <!-- my-setup:user-section start communication -->
 - Goals (in order): high-quality output, high productivity, and learning where it's cheap. Surface trade-offs on multi-option decisions and let me pick — that's where learning happens cheaply without slowing throughput.
 - Plan mode whenever you need user input — design choice, ambiguity, multi-option decision. Mechanical edits with no input skip it.
+- Every plan mode response opens with a **TL;DR** — one or two sentences naming the proposed approach and the key trade-off — before any sectioned plan body.
 - Capture all load-bearing details into the bd issue's `design` / `acceptance` / `notes` fields before code — interfaces, edge cases, error model, data shapes, scope boundaries, what's explicitly out of scope. Plan mode and Superpowers brainstorming are the *means*; the bd issue is the *durable artifact*. Once the issue is sharpened, implement at human quality without per-decision gating — the issue carries the quality bar.
 - `TODO(human)` reserved for moments where I explicitly want to make a call myself during implementation (rare). `TODO(claude)` = my hint to you in code (research starting point). `QUESTION(human)` / `QUESTION(claude)` = inline bidirectional clarifications when something surfaces only during implementation.
 - For adversarial review of a load-bearing decision, use the `challenge` skill (`/challenge` or "challenge this"). Otherwise, present 2 options inline with trade-offs.
@@ -75,8 +76,9 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 
 ## Beads (task tracking)
 
+- **Invoke the `bd-reference` skill via the Skill tool the first time bd is involved in a session** — before any `bd` command other than `bd prime` (which the SessionStart hook handles). It carries flag syntax, lifecycle verbs (defer / supersede / stale / orphans), quality flags (`--validate` / `--acceptance` / `--design` / `--notes`), and handoff patterns. Do not guess bd flags from memory; flags drift between releases. Once loaded in a session, it stays loaded — no need to re-invoke.
 - Use `bd` for ALL task tracking — never TodoWrite, never markdown TODO lists.
-- Run `bd prime` for live workflow context. Run `bd <cmd> --help` to verify flags. Full taxonomy and command surface lives in the `bd-reference` skill.
+- `bd prime` gives live workflow context (auto-fired by SessionStart hook). `bd <cmd> --help` verifies a specific flag set on the installed binary when in doubt.
 - Persistence layers (pick the right one): **memory** (`bd remember`, cross-project), **issue notes** (`bd note <id>`, body field), **comments** (`bd comment <id>`, timestamped thread for handoffs), **structured fields** (`bd update --description/--design/--acceptance`).
 - Never use `bd edit` — it opens `$EDITOR` and blocks the agent. Use `bd update --notes/--design/...` or `bd note` / `bd comment`.
 - Worktrees: always create under `~/projects/worktrees/`. `bd` auto-discovers via git common-directory.

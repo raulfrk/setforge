@@ -17,6 +17,12 @@ Use superpowers where you see fit.
 - `{cwd-slug}` matches the auto-memory convention — the current working
   directory with `/` replaced by `-` (e.g. `-home-raul-my-setup`).
 
+## Spec review
+
+After Superpowers writes a spec, immediately enter plan mode and paste the
+spec verbatim as the plan body — no summary, no reflow — so I can review
+and annotate it there before any code lands. Same applies to plans.
+
 ## Soften the hard-gates
 
 - Do not auto-create git worktrees. I'll branch myself when I want a branch.
