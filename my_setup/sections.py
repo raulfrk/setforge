@@ -139,3 +139,20 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
         )
 
     return "".join(out_lines)
+
+
+def strip_section_content(text: str) -> str:
+    """Return ``text`` with content between every user-section marker pair
+    removed. Markers themselves are kept so the file remains a valid
+    template for re-merging on a future deploy."""
+    out_lines: list[str] = []
+    in_section = False
+    for line in text.splitlines(keepends=True):
+        match = _MARKER_RE.match(line)
+        if match is None:
+            if not in_section:
+                out_lines.append(line)
+            continue
+        out_lines.append(line)
+        in_section = match.group(1) == "start"
+    return "".join(out_lines)
