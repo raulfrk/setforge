@@ -208,7 +208,9 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
 def load_config(path: Path) -> Config:
     """Parse ``my_setup.yaml`` from disk and validate against the schema.
 
-    Raises :class:`ConfigError` on file-not-found or YAML parse errors.
+    Raises :class:`ConfigError` on file-not-found, YAML parse errors, or
+    cross-field violations (e.g. profile ``claude_plugins`` referencing
+    a name absent from the top-level ``claude_plugins:`` registry).
     Pydantic validation errors are propagated unchanged so the caller
     sees the full field-level message.
     """
@@ -219,4 +221,28 @@ def load_config(path: Path) -> Config:
         data = yaml.load(fh)
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
-    return Config.model_validate(data)
+    config = Config.model_validate(data)
+    _validate_plugin_references(config)
+    return config
+
+
+def _validate_plugin_references(config: Config) -> None:
+    """Verify every ``profile.claude_plugins`` entry exists in the
+    top-level ``Config.claude_plugins`` registry.
+
+    Collects every offender across every profile into a single
+    :class:`ConfigError` message so the user fixes all references in
+    one round-trip, not one error per re-run.
+    """
+    registry = set(config.claude_plugins)
+    offenders: list[tuple[str, str]] = []
+    for profile_name, profile in config.profiles.items():
+        for bare_name in profile.claude_plugins:
+            if bare_name not in registry:
+                offenders.append((profile_name, bare_name))
+    if offenders:
+        details = ", ".join(f"{profile}.{name}" for profile, name in offenders)
+        raise ConfigError(
+            f"profile claude_plugins reference undeclared plugin(s): "
+            f"{details} (add to top-level claude_plugins:)"
+        )

@@ -25,7 +25,7 @@ from my_setup.config import (
     ReconcilePolicy,
     ResolvedProfile,
 )
-from my_setup.errors import PluginToolMissing
+from my_setup.errors import ConfigError, PluginToolMissing
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +323,14 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
     from my_setup.claude_plugins import reconcile
 
     fake = fake_claude()
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={
+            "a": ClaudePluginRef(marketplace="m1"),
+            "b": ClaudePluginRef(marketplace="m1"),
+        }
+    )
     profile = _make_resolved(
-        claude_plugins=["a@m1", "b@m1"],
+        claude_plugins=["a", "b"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
     report = reconcile(cfg, profile)
@@ -345,9 +350,11 @@ def test_reconcile_declared_but_disabled_enables_not_reinstalls(
     fake = fake_claude(
         plugins=[{"id": "a@m1", "enabled": False}]
     )
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
+    )
     profile = _make_resolved(
-        claude_plugins=["a@m1"],
+        claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
     report = reconcile(cfg, profile)
@@ -369,9 +376,11 @@ def test_reconcile_additive_does_not_disable_extras(fake_claude) -> None:
             {"id": "extra@m1", "enabled": True},
         ]
     )
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
+    )
     profile = _make_resolved(
-        claude_plugins=["a@m1"],
+        claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
     report = reconcile(cfg, profile)
@@ -389,9 +398,11 @@ def test_reconcile_prune_disables_extras(fake_claude) -> None:
             {"id": "extra@m1", "enabled": True},
         ]
     )
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
+    )
     profile = _make_resolved(
-        claude_plugins=["a@m1"],
+        claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
     report = reconcile(cfg, profile)
@@ -411,9 +422,14 @@ def test_reconcile_mixed_states_prune(fake_claude) -> None:
             {"id": "d@m1", "enabled": False},
         ]
     )
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={
+            "a": ClaudePluginRef(marketplace="m1"),
+            "b": ClaudePluginRef(marketplace="m1"),
+        }
+    )
     profile = _make_resolved(
-        claude_plugins=["a@m1", "b@m1"],
+        claude_plugins=["a", "b"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
     report = reconcile(cfg, profile)
@@ -459,9 +475,11 @@ def test_reconcile_report_policy_runs_no_subprocesses(
         )
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={"declared": ClaudePluginRef(marketplace="m1")}
+    )
     profile = _make_resolved(
-        claude_plugins=["declared@m1"],
+        claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.REPORT,
     )
     report = reconcile(cfg, profile)
@@ -497,9 +515,11 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
         )
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
-    cfg = _make_config()
+    cfg = _make_config(
+        claude_plugins={"declared": ClaudePluginRef(marketplace="m1")}
+    )
     profile = _make_resolved(
-        claude_plugins=["declared@m1"],
+        claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
     report = reconcile(cfg, profile, dry_run=True)
@@ -555,6 +575,101 @@ def test_reconcile_additive_disabled_not_in_to_disable(fake_claude) -> None:
     )
     report = reconcile(cfg, profile)
     assert report.to_disable == []
+
+
+# ---------------------------------------------------------------------------
+# P3.3 — Bare-name resolution via top-level claude_plugins registry
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_resolves_bare_profile_names_via_registry(fake_claude) -> None:
+    """Bare profile names resolve to <name>@<marketplace> via cfg.claude_plugins.
+
+    Profile holds bare names like ['superpowers']; the top-level registry
+    maps each name to a marketplace; reconcile must combine them into
+    '<name>@<marketplace>' form before diffing against installed plugins.
+    """
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude(
+        plugins=[{"id": "superpowers@official", "enabled": True}]
+    )
+    cfg = _make_config(
+        claude_plugins={
+            "superpowers": ClaudePluginRef(marketplace="official"),
+        }
+    )
+    profile = _make_resolved(
+        claude_plugins=["superpowers"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    assert report.to_install == []
+    assert report.to_enable == []
+    assert report.to_disable == []
+    assert fake.install_args() == []
+    assert fake.enable_args() == []
+
+
+def test_reconcile_bare_name_to_install_emits_at_form_pair(fake_claude) -> None:
+    """First-time-declared bare name lands in to_install as (name, marketplace);
+    install loop receives @-form id without _split_id crashing."""
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude()
+    cfg = _make_config(
+        claude_plugins={
+            "new-plugin": ClaudePluginRef(marketplace="m1"),
+        }
+    )
+    profile = _make_resolved(
+        claude_plugins=["new-plugin"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    assert report.to_install == [("new-plugin", "m1")]
+    assert fake.install_args() == ["new-plugin@m1"]
+
+
+def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
+    """Already-installed-but-disabled plugin: bare profile name resolves via
+    registry, matches the @-form id from claude plugin list, lands in to_enable."""
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude(
+        plugins=[{"id": "wiki@llm-wiki", "enabled": False}]
+    )
+    cfg = _make_config(
+        claude_plugins={
+            "wiki": ClaudePluginRef(marketplace="llm-wiki"),
+        }
+    )
+    profile = _make_resolved(
+        claude_plugins=["wiki"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    assert report.to_install == []
+    assert report.to_enable == ["wiki@llm-wiki"]
+    assert fake.enable_args() == ["wiki@llm-wiki"]
+
+
+def test_reconcile_undeclared_bare_name_raises_config_error(fake_claude) -> None:
+    """Profile lists a bare name not in the top-level registry → ConfigError
+    naming the offending plugin, before any plugin write subprocesses run."""
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude()
+    cfg = _make_config()  # empty registry
+    profile = _make_resolved(
+        claude_plugins=["mystery-plugin"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    with pytest.raises(ConfigError, match="mystery-plugin"):
+        reconcile(cfg, profile)
+    assert fake.install_args() == []
+    assert fake.enable_args() == []
+    assert fake.disable_args() == []
 
 
 # ---------------------------------------------------------------------------
@@ -669,9 +784,13 @@ def test_yaml_add_plugin_idempotent(tmp_path: Path) -> None:
 
 
 def test_yaml_add_plugin_to_profile(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_plugin_to_profile
+    from my_setup.claude_plugins import yaml_add_plugin, yaml_add_plugin_to_profile
 
     p = _write_yaml_fixture(tmp_path)
+    # Mirror the production CLI flow: register in top-level claude_plugins
+    # first, then append to the profile list. load_config validates that
+    # every profile reference exists in the registry.
+    yaml_add_plugin(p, "new-plugin", "existing-mp")
     added = yaml_add_plugin_to_profile(p, "myprofile", "new-plugin")
     assert added is True
     from my_setup.config import load_config

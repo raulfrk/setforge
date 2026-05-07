@@ -79,6 +79,72 @@ def test_load_config_empty_file(tmp_path: Path) -> None:
         load_config(empty)
 
 
+def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None:
+    """A profile referencing a plugin missing from the top-level
+    claude_plugins registry raises ConfigError naming both the profile
+    and the offending plugin, before any subprocess work runs."""
+    config_path = tmp_path / "my_setup.yaml"
+    config_path.write_text(
+        """\
+version: 1
+dotfiles:
+  d:
+    src: x
+    dst: y
+marketplaces:
+  official:
+    source: github
+    repo: a/b
+claude_plugins:
+  declared-plugin:
+    marketplace: official
+profiles:
+  base:
+    dotfiles:
+      - d
+    claude_plugins:
+      - declared-plugin
+      - missing-plugin
+"""
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(config_path)
+    msg = str(exc_info.value)
+    assert "missing-plugin" in msg
+    assert "base" in msg
+
+
+def test_load_config_collects_multiple_undeclared_plugin_references(
+    tmp_path: Path,
+) -> None:
+    """When several profiles reference undeclared plugins, all offenders
+    appear in a single ConfigError message — no early-bail on the first."""
+    config_path = tmp_path / "my_setup.yaml"
+    config_path.write_text(
+        """\
+version: 1
+dotfiles:
+  d:
+    src: x
+    dst: y
+profiles:
+  alpha:
+    dotfiles: [d]
+    claude_plugins:
+      - ghost-a
+  beta:
+    dotfiles: [d]
+    claude_plugins:
+      - ghost-b
+"""
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(config_path)
+    msg = str(exc_info.value)
+    assert "ghost-a" in msg
+    assert "ghost-b" in msg
+
+
 def test_dotfile_defaults() -> None:
     df = Dotfile(src=Path("a"), dst="b")
     assert df.template is False

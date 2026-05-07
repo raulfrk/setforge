@@ -280,11 +280,25 @@ def reconcile(
     ``dry_run=True`` logs intended actions and returns without running any
     write subprocess. ``REPORT`` policy behaves identically to
     ``dry_run=True`` for write suppression.
+
+    Bare profile names (e.g. ``"superpowers"``) are resolved to
+    ``"<name>@<marketplace>"`` form via the top-level
+    :attr:`Config.claude_plugins` registry before any subprocess work.
+    A name not present in the registry raises :class:`ConfigError`.
     """
+    declared: set[str] = set()
+    for bare_name in profile.claude_plugins:
+        ref = cfg.claude_plugins.get(bare_name)
+        if ref is None:
+            raise ConfigError(
+                f"profile references undeclared plugin: {bare_name!r} "
+                f"(add it to top-level claude_plugins:)"
+            )
+        declared.add(f"{bare_name}@{ref.marketplace}")
+
     installed = list_installed()
     enabled = {pid for pid, p in installed.items() if p.get("enabled", True)}
     disabled = {pid for pid, p in installed.items() if not p.get("enabled", True)}
-    declared: set[str] = set(profile.claude_plugins)
 
     to_install = sorted(declared - (enabled | disabled))
     to_enable = sorted(declared & disabled)
