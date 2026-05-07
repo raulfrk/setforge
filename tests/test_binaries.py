@@ -142,3 +142,63 @@ def test_validate_returns_path_for_valid_executable(tmp_path):
     bin_path = _make_executable(tmp_path / "code")
     result = binaries._validate("code", str(bin_path), layer="config")
     assert result == bin_path
+
+
+def test_resolve_falls_back_to_which(monkeypatch, tmp_path):
+    fake = _make_executable(tmp_path / "code")
+    monkeypatch.setattr(
+        binaries.shutil, "which", lambda n: str(fake) if n == "code" else None
+    )
+    assert binaries.resolve_binary("code") == Path(str(fake))
+
+
+def test_resolve_returns_none_when_unresolved(monkeypatch):
+    monkeypatch.setattr(binaries.shutil, "which", lambda _: None)
+    assert binaries.resolve_binary("code") is None
+
+
+def test_resolve_config_layer(tmp_path):
+    bin_path = _make_executable(tmp_path / "code")
+    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {bin_path}\n")
+    assert binaries.resolve_binary("code") == bin_path
+
+
+def test_resolve_env_overrides_config(monkeypatch, tmp_path):
+    cfg_bin = _make_executable(tmp_path / "cfg-code")
+    env_bin = _make_executable(tmp_path / "env-code")
+    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(env_bin))
+    assert binaries.resolve_binary("code") == env_bin
+
+
+def test_resolve_cli_overrides_env_and_config(monkeypatch, tmp_path):
+    cfg_bin = _make_executable(tmp_path / "cfg-code")
+    env_bin = _make_executable(tmp_path / "env-code")
+    cli_bin = _make_executable(tmp_path / "cli-code")
+    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(env_bin))
+    binaries.set_cli_overrides(code=str(cli_bin))
+    assert binaries.resolve_binary("code") == cli_bin
+
+
+def test_resolve_invalid_cli_override_raises(tmp_path):
+    binaries.set_cli_overrides(code=str(tmp_path / "nope"))
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries.resolve_binary("code")
+    assert excinfo.value.layer == "cli"
+
+
+def test_resolve_invalid_env_override_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(tmp_path / "nope"))
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries.resolve_binary("code")
+    assert excinfo.value.layer == "env"
+
+
+def test_resolve_invalid_config_override_raises(tmp_path):
+    binaries.LOCAL_CONFIG_PATH.write_text(
+        f"binaries:\n  code: {tmp_path / 'nope'}\n"
+    )
+    with pytest.raises(BinaryOverrideInvalid) as excinfo:
+        binaries.resolve_binary("code")
+    assert excinfo.value.layer == "config"

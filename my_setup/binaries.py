@@ -140,3 +140,25 @@ def _validate(name: str, raw_path: str, layer: str) -> Path:
             reason="not executable",
         )
     return p
+
+
+def resolve_binary(name: str) -> Path | None:
+    """Resolve ``name`` through the precedence chain.
+
+    Order: CLI override → env var → config file → ``shutil.which``.
+    Returns an absolute :class:`Path` for a hit at any layer, or
+    ``None`` when no layer resolves the name.
+
+    Raises :class:`BinaryOverrideInvalid` if a layer above ``which``
+    produced a path that fails :func:`_validate`. (We do not silently
+    fall through a broken override; an invalid override is a user
+    error worth surfacing.)
+    """
+    if (raw := _cli_overrides.get(name)) is not None:
+        return _validate(name, raw, layer="cli")
+    if (raw := _env_overrides().get(name)) is not None:
+        return _validate(name, raw, layer="env")
+    if (raw := _load_local_config().get(name)) is not None:
+        return _validate(name, raw, layer="config")
+    which = shutil.which(name)
+    return Path(which) if which else None
