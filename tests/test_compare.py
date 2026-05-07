@@ -1,13 +1,16 @@
 """Tests for drift compare and YAML drift classification."""
 
+import io
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from my_setup.compare import (
     CompareStatus,
     classify_yaml_drift,
     compare_profile,
+    compare_summary_table,
     diff_file,
 )
 from my_setup.config import Config, Dotfile, Profile
@@ -215,3 +218,256 @@ def test_compare_profile_missing_dst(tmp_path: Path) -> None:
     report = compare_profile(config, "p", repo)
     assert report.entries[0].status is CompareStatus.MISSING
     assert report.has_unexpected_drift is True
+
+
+# ---------------------------------------------------------------------------
+# P4.1 — rich summary table + --check / --check --strict exit codes
+# ---------------------------------------------------------------------------
+
+
+def _make_config_with_yaml(tmp_path: Path, src_text: str, dst_text: str, preserve: list[str]) -> tuple[Config, Path]:
+    """Helper: write src + dst files, return (Config, repo_root)."""
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x.yaml"
+    _write(src, src_text)
+    dst = tmp_path / "live" / "x.yaml"
+    _write(dst, dst_text)
+    config = _make_config(
+        Profile(dotfiles=["x"]),
+        Dotfile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=preserve),
+        "x",
+    )
+    return config, repo
+
+
+def test_compare_summary_table_renders_headers(tmp_path: Path) -> None:
+    """compare_summary_table returns a Table whose columns include 'file',
+    'expected drift', and 'unexpected drift'."""
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x.yaml"
+    _write(src, "a: 1\n")
+    dst = tmp_path / "live" / "x.yaml"
+    _write(dst, "a: 1\n")
+    config = _make_config(
+        Profile(dotfiles=["x"]),
+        Dotfile(src=Path("x.yaml"), dst=str(dst)),
+        "x",
+    )
+    report = compare_profile(config, "p", repo)
+    table = compare_summary_table(report)
+    # Capture via Console to a StringIO
+    buf = io.StringIO()
+    console = Console(file=buf, highlight=False, markup=False, no_color=True)
+    console.print(table)
+    output = buf.getvalue()
+    assert "file" in output.lower()
+    assert "expected" in output.lower()
+    assert "unexpected" in output.lower()
+
+
+def test_compare_summary_table_drifted_row(tmp_path: Path) -> None:
+    """A DRIFTED entry with unexpected drift appears in the table."""
+    config, repo = _make_config_with_yaml(
+        tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", ["a"]
+    )
+    report = compare_profile(config, "p", repo)
+    table = compare_summary_table(report)
+    buf = io.StringIO()
+    console = Console(file=buf, highlight=False, markup=False, no_color=True)
+    console.print(table)
+    output = buf.getvalue()
+    assert "x" in output  # dotfile name appears as a row
+
+
+def test_check_flag_clean_exits_0(tmp_path: Path) -> None:
+    """--check exits 0 on a clean profile (no drift)."""
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    config = _make_config(
+        Profile(dotfiles=["x"]),
+        Dotfile(src=Path("x"), dst=str(dst)),
+        "x",
+    )
+    report = compare_profile(config, "p", repo)
+    assert not report.has_unexpected_drift
+    # also assert no DRIFTED entries
+    assert all(e.status != CompareStatus.DRIFTED for e in report.entries)
+
+
+def test_check_flag_all_expected_drift_exits_0(tmp_path: Path) -> None:
+    """--check: when all drift is in preserve_user_keys, has_unexpected_drift is False."""
+    config, repo = _make_config_with_yaml(
+        tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 2\n", ["a"]
+    )
+    report = compare_profile(config, "p", repo)
+    assert not report.has_unexpected_drift
+
+
+def test_check_flag_unexpected_drift_exits_1(tmp_path: Path) -> None:
+    """--check: has_unexpected_drift True when unexpected drift present."""
+    config, repo = _make_config_with_yaml(
+        tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", ["a"]
+    )
+    report = compare_profile(config, "p", repo)
+    assert report.has_unexpected_drift
+
+
+def test_check_strict_all_expected_is_drifted(tmp_path: Path) -> None:
+    """--check --strict: even all-expected drift triggers 'has_any_drift' (DRIFTED entry)."""
+    config, repo = _make_config_with_yaml(
+        tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 2\n", ["a"]
+    )
+    report = compare_profile(config, "p", repo)
+    # For strict mode: any DRIFTED entry should be treated as failing
+    has_any_drift = any(e.status == CompareStatus.DRIFTED for e in report.entries)
+    assert has_any_drift
+
+
+def test_check_strict_clean_is_not_drifted(tmp_path: Path) -> None:
+    """--check --strict: clean profile has no DRIFTED entries."""
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    config = _make_config(
+        Profile(dotfiles=["x"]),
+        Dotfile(src=Path("x"), dst=str(dst)),
+        "x",
+    )
+    report = compare_profile(config, "p", repo)
+    has_any_drift = any(e.status == CompareStatus.DRIFTED for e in report.entries)
+    assert not has_any_drift
+
+
+def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
+    """CLI compare --check exits 0 on clean profile."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    assert result.exit_code == 0
+
+
+def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
+    """CLI compare --check exits 1 when unexpected drift exists."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x.yaml"
+    _write(src, "a: 1\nb: 2\n")
+    dst = tmp_path / "live" / "x.yaml"
+    _write(dst, "a: 99\nb: 88\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    assert result.exit_code == 1
+
+
+def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
+    """CLI compare --check exits 0 when all drift is expected (preserve_user_keys)."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x.yaml"
+    _write(src, "a: 1\nb: 2\n")
+    dst = tmp_path / "live" / "x.yaml"
+    _write(dst, "a: 99\nb: 2\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    assert result.exit_code == 0
+
+
+def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None:
+    """CLI compare --check --strict exits 1 on expected drift."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x.yaml"
+    _write(src, "a: 1\nb: 2\n")
+    dst = tmp_path / "live" / "x.yaml"
+    _write(dst, "a: 99\nb: 2\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check", "--strict"]
+    )
+    assert result.exit_code == 1
+
+
+def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
+    """CLI compare --check --strict exits 0 on a clean profile."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check", "--strict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
+    """CLI compare --full-diff includes +++ / --- diff markers."""
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "tracked\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "live\n")
+    cfg_path = repo / "my_setup.yaml"
+    cfg_path.write_text(
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--full-diff"]
+    )
+    assert result.exit_code == 0
+    assert "+++" in result.stdout or "---" in result.stdout

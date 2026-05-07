@@ -13,6 +13,8 @@ from datetime import timezone
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.syntax import Syntax
 
 from my_setup import binaries
 from my_setup import capture as capture_mod
@@ -20,8 +22,9 @@ from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
 from my_setup import extensions as extensions_mod
+from my_setup import merge as merge_mod
 from my_setup import transitions
-from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
+from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
     ExtensionInstallFailed,
@@ -91,8 +94,27 @@ def install(
         hidden=True,
         help="Skip writing a transition record (testing / debugging).",
     ),
+    auto_accept_tracked: bool = typer.Option(
+        False,
+        "--auto-accept-tracked",
+        help="Non-interactively resolve unexpected drift by keeping tracked values.",
+    ),
+    auto_accept_live: bool = typer.Option(
+        False,
+        "--auto-accept-live",
+        help="Non-interactively resolve unexpected drift by adopting live values.",
+    ),
 ) -> None:
     """Deploy tracked → live for every dotfile in the profile."""
+    # Mutual-exclusivity guard
+    if auto_accept_tracked and auto_accept_live:
+        typer.secho(
+            "error: --auto-accept-tracked and --auto-accept-live are mutually exclusive",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -101,6 +123,51 @@ def install(
         transitions.ensure_state_dir_writable()
     deploy.validate_srcs_exist(cfg, resolved, repo_root)
     deploy.bootstrap_local(resolved.bootstrap)
+
+    # P4.3: check for unexpected drift before deploying.
+    # Only DRIFTED entries (existing live files that diverge from tracked
+    # in unexpected ways) gate install. MISSING entries are expected on
+    # first install and are handled by deploy below.
+    drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+    has_real_unexpected = any(
+        e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+        for e in drift_report.entries
+    )
+    if has_real_unexpected:
+        unexpected_count = sum(
+            1
+            for e in drift_report.entries
+            if e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+        )
+        if auto_accept_tracked:
+            # Non-interactively resolve as [k] — deploy will overwrite live
+            merge_mod.run_wizard(
+                drift_report,
+                cfg,
+                repo_root,
+                my_setup_yaml_path=config.resolve(),
+                profile=profile,
+                auto_accept="k",
+            )
+        elif auto_accept_live:
+            # Non-interactively resolve as [u] — update tracked to match live
+            merge_mod.run_wizard(
+                drift_report,
+                cfg,
+                repo_root,
+                my_setup_yaml_path=config.resolve(),
+                profile=profile,
+                auto_accept="u",
+            )
+        else:
+            typer.secho(
+                f"unexpected drift in {unexpected_count} file(s): "
+                f"run 'my-setup merge --profile={profile}' to resolve, "
+                f"or pass --auto-accept-tracked or --auto-accept-live",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(1)
 
     dst_paths: list[Path] = []
     for name in resolved.dotfiles:
@@ -198,11 +265,19 @@ def install(
 def compare(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
-    full: bool = typer.Option(
-        False, "--full", help="Print unified diff body for drifted entries."
+    full_diff: bool = typer.Option(
+        False,
+        "--full-diff",
+        "--full",
+        help="Append unified diff body below the summary table.",
     ),
     check: bool = typer.Option(
         False, "--check", help="Exit non-zero on unexpected drift (for CI)."
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="With --check: exit 1 on any drift (expected or unexpected).",
     ),
 ) -> None:
     """Report drift between tracked and live for every dotfile in the profile."""
@@ -210,19 +285,33 @@ def compare(
     repo_root = config.resolve().parent
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
-    for entry in report.entries:
-        line = f"{entry.status.value:>10}  {entry.name}"
-        if entry.expected_drift_keys or entry.unexpected_drift_keys:
-            line += (
-                f"  (expected={len(entry.expected_drift_keys)},"
-                f" unexpected={len(entry.unexpected_drift_keys)})"
-            )
-        typer.echo(line)
-        if full and entry.diff:
-            typer.echo(entry.diff)
+    console = Console()
+    table = compare_mod.compare_summary_table(report)
+    console.print(table)
 
-    if check and report.has_unexpected_drift:
-        raise typer.Exit(code=1)
+    # Counts below the table
+    unchanged_count = sum(
+        1 for e in report.entries if e.status == CompareStatus.UNCHANGED
+    )
+    missing_count = sum(
+        1 for e in report.entries if e.status == CompareStatus.MISSING
+    )
+    if unchanged_count:
+        console.print(f"UNCHANGED: {unchanged_count} files")
+    if missing_count:
+        console.print(f"MISSING: {missing_count} files")
+
+    if full_diff:
+        for entry in report.entries:
+            if entry.diff:
+                console.print(Syntax(entry.diff, "diff"))
+
+    if check:
+        if strict:
+            if any(e.status == CompareStatus.DRIFTED for e in report.entries):
+                raise typer.Exit(code=1)
+        elif report.has_unexpected_drift:
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -236,6 +325,43 @@ def capture(
     results = capture_mod.capture_profile(cfg, profile, repo_root)
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
+
+
+@app.command()
+def merge(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    dotfile: str | None = typer.Option(
+        None,
+        "--dotfile",
+        help="Narrow the walk to one dotfile entry key.",
+    ),
+) -> None:
+    """Interactively resolve unexpected drift for every dotfile in the profile."""
+    cfg = load_config(config)
+    repo_root = config.resolve().parent
+    report = compare_mod.compare_profile(cfg, profile, repo_root)
+
+    if not report.has_unexpected_drift:
+        typer.echo("no unexpected drift; nothing to do.")
+        raise typer.Exit(0)
+
+    try:
+        merge_mod.run_wizard(
+            report,
+            cfg,
+            repo_root,
+            my_setup_yaml_path=config.resolve(),
+            profile=profile,
+            dotfile_filter=dotfile,
+        )
+    except KeyboardInterrupt:
+        typer.secho(
+            "merge cancelled (Ctrl-C); files restored from snapshot",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(130)
 
 
 @app.command()

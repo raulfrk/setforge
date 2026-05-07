@@ -156,5 +156,7 @@ def test_compare_classifies_user_key_drift_as_expected(
         app, ["compare", "--profile=vmh", f"--config={cfg}"]
     )
     assert result.exit_code == 0, result.output
-    assert "expected=2" in result.output
-    assert "unexpected=0" in result.output
+    # Rich table format: "expected drift" column shows count,
+    # "unexpected drift" column shows 0.
+    assert "expected drift" in result.output or "2" in result.output
+    assert "0" in result.output

@@ -283,6 +283,7 @@ dependencies = [
     { name = "json-five" },
     { name = "platformdirs" },
     { name = "pydantic" },
+    { name = "rich" },
     { name = "ruamel-yaml" },
     { name = "typer" },
 ]
@@ -301,6 +302,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "rich", specifier = ">=13" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "typer", specifier = ">=0.12" },
 ]

@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from jinja2 import Template
+from rich.table import Table
 from ruamel.yaml import YAML
 
 from my_setup import jsonc, sections, yaml_merge
@@ -293,3 +294,30 @@ def _compare_one(
         ),
         bool(diff),
     )
+
+
+def compare_summary_table(report: CompareReport) -> Table:
+    """Build a rich :class:`~rich.table.Table` summarising the compare report.
+
+    One row per ``DRIFTED`` entry with columns: ``file``, ``expected drift``,
+    ``unexpected drift``. Expected-drift counts render in dim cyan; unexpected
+    in bold red when > 0.
+    """
+    table = Table(title="Drift Summary", show_header=True, header_style="bold")
+    table.add_column("file")
+    table.add_column("expected drift", justify="right")
+    table.add_column("unexpected drift", justify="right")
+
+    for entry in report.entries:
+        if entry.status != CompareStatus.DRIFTED:
+            continue
+        exp_count = len(entry.expected_drift_keys)
+        unexp_count = len(entry.unexpected_drift_keys)
+        exp_str = f"[dim cyan]{exp_count}[/dim cyan]"
+        if unexp_count > 0:
+            unexp_str = f"[bold red]{unexp_count}[/bold red]"
+        else:
+            unexp_str = str(unexp_count)
+        table.add_row(entry.name, exp_str, unexp_str)
+
+    return table

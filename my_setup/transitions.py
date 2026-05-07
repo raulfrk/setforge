@@ -34,6 +34,7 @@ class TransitionCommand(StrEnum):
     INSTALL = "install"
     SYNC = "sync"
     REVERT = "revert"
+    MERGE = "merge"
 
 _STATE_ENV = "MY_SETUP_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
