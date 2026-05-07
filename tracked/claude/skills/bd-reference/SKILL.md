@@ -1,6 +1,6 @@
 ---
 name: bd-reference
-description: Beads task-tracking command reference and workflow taxonomy. Use when working with bd commands, dependency graphs, lifecycle (defer/supersede/stale/orphans), quality flags (--validate/--acceptance/--design/--notes), handoff patterns between sessions or agents, multi-project hydration, or when specific bd command syntax is needed.
+description: Beads task-tracking command reference. Invoke at the first sign of bd involvement in a session (other than `bd prime`, which the SessionStart hook fires). Triggers include: any `bd` command (create/update/show/list/ready/close/note/comment/dep/search/recall), claiming an issue when work begins, looking up flag syntax, deciding which persistence layer (memory/note/comment/structured field) to use, lifecycle verbs (defer/supersede/stale/orphans), quality flags (--validate/--acceptance/--design/--notes), or handoff patterns between sessions or agents. If the next action involves creating, updating, claiming, closing, or querying a bd issue, invoke this skill first.
 ---
 
 # Beads command reference
@@ -8,6 +8,25 @@ description: Beads task-tracking command reference and workflow taxonomy. Use wh
 The beads home is at `~/.beads/` (set via `BEADS_DIR`); each project gets its own database inside it (`~/.beads/embeddeddolt/<project>/`), auto-created on first write, with the issue prefix derived from the repo name. Issues do NOT cross databases unless `bd repo add` (multi-repo hydration) or `bd federation` is configured. Memories are cross-project (separate storage from issues).
 
 All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect. `bd worktree list` shows the redirect state per worktree. Default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry; pass an explicit path under `~/projects/worktrees/` instead. `git worktree add ~/projects/worktrees/<name>` also works and is auto-discovered.
+
+## Starting work on an issue
+
+The moment you begin substantive work on a bd issue — reading code for
+the fix, sketching a design, writing tests, anything more than a quick
+look — claim it:
+
+```
+bd update <id> --claim
+```
+
+`--claim` is atomic: assignee = you AND status = `in_progress`.
+Idempotent if already yours. **Run this before code work, not after.**
+It tells anyone watching the queue the issue is being touched, and it
+produces a clean started-at timestamp.
+
+If you stop without finishing, leave a handoff trail with
+`bd comment <id> "stopped because X, next step Y"` and let the
+assignment stand; the comment thread is the handoff signal.
 
 ## Persistence taxonomy
 

@@ -23,12 +23,13 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 ## Workflow
 
 <!-- my-setup:user-section start workflow -->
-- Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (brainstorm → plan → implement → verify, applied within an issue).
-- bd issue = the contract. Read with `bd show <id>` at session start. The plan-mode session sharpens it; once accepted, code review is verification against the plan, not discovery.
+- Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (brainstorm → spec → plan → implement → review, applied within an issue). See `superpowers-prefs.md` for the phase flow and hard-gate posture.
+- Default phase flow on non-trivial work: **brainstorm → spec → plan → implement → review**. Both spec and plan are written verbatim into plan mode for user approval before code lands. Escape hatch is narrow — single-file mechanical edits only.
+- bd issue = the contract. Read with `bd show <id>` at session start. The plan-mode spec/plan sessions sharpen it; once accepted, code review is verification against the spec, not discovery.
 - Default: one issue per session. When no issue is named, `bd ready` picks the next unblocked leaf.
 - Out-of-scope findings during review → new `bd create` issue with a dep link, NEVER inline-fix into the current change. This keeps diffs small.
 - Tier self-review by blast radius. Leaf / throwaway → spot-check. Public API, concurrency, data pipelines, auth/security → line-by-line.
-- Verification means more than "tools passed." Confirm: plan satisfied, nothing introduced outside the plan, tests assert the right thing.
+- Verification means more than "tools passed." Confirm: spec satisfied, nothing introduced outside the spec, tests assert the right thing.
 - When the contract isn't obvious, write tests first and treat them as the reviewable spec — names, asserts, what's NOT asserted, edge cases.
 - Keep changes small. A 200-line diff understood beats 1500 skimmed. Refuse scope creep within a change.
 - Worktree primitive: `wt switch --create <slug>` (worktrunk), not raw `git worktree add`. Worktrees land under `~/projects/worktrees/<slug>` per wt's configured location. See the `wt-reference` skill for the command surface.
@@ -36,8 +37,8 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   1. `bd ready` — pick the next unblocked issue.
   2. `bd show <id>` — load the contract.
   3. `wt switch --create <slug>` — new worktree + branch (slug should include the bd id, e.g. `dotfiles-g20-py-rewrite`).
-  4. `bd update <id> --claim` — mark in_progress.
-  5. Sharpen the issue in plan mode if user input is needed; implement once it's sharp.
+  4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
+  5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan (plan-mode review) → implement → review.
   6. `wt merge` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
