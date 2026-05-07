@@ -59,3 +59,15 @@ class ExtensionInstallFailed(MySetupError):
     ``--uninstall-extension`` exits non-zero or times out, or when
     ``code --list-extensions`` itself fails. The message includes the
     extension ID (when applicable) and the captured stderr."""
+
+
+class RevertFailed(MySetupError):
+    """Raised by ``my-setup revert`` when ``patch -R`` rejects the diff
+    (drifted files), when the ``patch`` binary isn't on PATH, or when
+    an extension reverse install/uninstall fails. Message includes the
+    captured stderr or the conflicting paths."""
+
+
+class NoTransitionFound(MySetupError):
+    """Raised by ``my-setup revert`` when no transition history exists
+    for the requested profile."""
