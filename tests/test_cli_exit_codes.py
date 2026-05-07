@@ -109,6 +109,33 @@ def test_ext_reconcile_prune_exits_0_after_acting(
     assert "install    declared.one" in result.stdout
 
 
+def test_install_warns_and_exits_0_when_claude_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """install with claude absent emits a warning and still exits 0."""
+    cfg = _setup_fixture(tmp_path, monkeypatch)
+
+    # Claude binary is absent.
+    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
+
+    # CliRunner merges stdout + stderr into result.output by default.
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "install",
+            "--profile=vmh",
+            f"--config={cfg}",
+            "--no-transition",
+        ],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, f"output: {result.output}"
+    # Warning must mention 'claude' (case-insensitive).
+    assert "claude" in result.output.lower()
+
+
 def test_ext_reconcile_clean_state_exits_0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

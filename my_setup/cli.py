@@ -16,6 +16,7 @@ import typer
 
 from my_setup import binaries
 from my_setup import capture as capture_mod
+from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
 from my_setup import extensions as extensions_mod
@@ -27,6 +28,7 @@ from my_setup.errors import (
     ExtensionToolMissing,
     MySetupError,
     NoTransitionFound,
+    PluginToolMissing,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -151,6 +153,34 @@ def install(
             added=[i for i in report.to_install if i not in failed_ids],
             removed=[i for i in report.to_uninstall if i not in failed_ids],
         )
+
+    # Step 5: Claude plugin reconcile (warn-and-skip if claude absent).
+    try:
+        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+    except PluginToolMissing as exc:
+        typer.secho(
+            f"warning: skipping claude plugin reconcile — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
+        for name, mp in plugin_report.to_install:
+            pid = f"{name}@{mp}"
+            if pid not in failed_plugin_ids:
+                typer.echo(f"plugin installed  {pid}")
+        for pid in plugin_report.to_enable:
+            if pid not in failed_plugin_ids:
+                typer.echo(f"plugin enabled    {pid}")
+        for pid in plugin_report.to_disable:
+            if pid not in failed_plugin_ids:
+                typer.echo(f"plugin disabled   {pid}")
+        for pid, err in plugin_report.failed:
+            typer.secho(
+                f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW
+            )
+        if not plugin_report:
+            typer.echo("plugins: nothing to reconcile")
 
     file_post = transitions.snapshot_paths(dst_paths)
 
@@ -597,6 +627,294 @@ def ext_reconcile(
         typer.echo("nothing to reconcile")
     elif is_read_only:
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# plugin sub-app
+# ---------------------------------------------------------------------------
+
+plugin_app = typer.Typer(
+    help="Manage Claude plugins in my_setup.yaml.",
+    no_args_is_help=True,
+)
+app.add_typer(plugin_app, name="plugin")
+
+
+@plugin_app.command("list")
+def plugin_list(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Show declared (YAML) vs installed (claude plugin list) status."""
+    cfg = load_config(config)
+    resolved = resolve_profile(cfg, profile)
+    declared_ids = set(resolved.claude_plugins)
+
+    try:
+        installed = claude_plugins_mod.list_installed()
+    except PluginToolMissing as exc:
+        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+        installed = {}
+
+    # Columns: Declared | Installed | Status
+    # Status values:  enabled / disabled / missing-from-decl / missing-from-install
+    all_ids = sorted(declared_ids | set(installed))
+    if not all_ids:
+        typer.echo("(no plugins declared or installed)")
+        return
+
+    width = max(len(pid) for pid in all_ids) + 2
+    typer.echo(f"{'plugin':<{width}}{'declared':<12}{'status':<22}")
+    for pid in all_ids:
+        is_declared = "yes" if pid in declared_ids else "no"
+        if pid in installed:
+            status = "enabled" if installed[pid].get("enabled", True) else "disabled"
+        elif pid in declared_ids:
+            status = "missing-from-install"
+        else:
+            status = "missing-from-decl"
+        typer.echo(f"{pid:<{width}}{is_declared:<12}{status:<22}")
+
+
+@plugin_app.command("add")
+def plugin_add(
+    name: str = typer.Argument(..., help="Plugin name (in <name>@<marketplace> form or just <name> with --marketplace)."),
+    from_: str = typer.Option(
+        ...,
+        "--from",
+        help="Marketplace source: 'github:owner/repo' or 'path:/local/dir'.",
+    ),
+    marketplace: str | None = typer.Option(
+        None,
+        "--marketplace",
+        "-m",
+        help="Marketplace name to install the plugin from (when name is bare).",
+    ),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    no_install: bool = typer.Option(
+        False,
+        "--no-install",
+        help="Register in YAML only; skip `claude plugin install`.",
+    ),
+) -> None:
+    """Register a marketplace (if new), declare plugin in YAML, and install."""
+    # Parse plugin name and marketplace from the argument
+    if "@" in name:
+        plugin_name, mp_name = name.split("@", 1)
+    elif marketplace:
+        plugin_name = name
+        mp_name = marketplace
+    else:
+        typer.secho(
+            "error: provide plugin as <name>@<marketplace> or use --marketplace",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    cfg = load_config(config)
+
+    # Parse --from into a MarketplaceSource
+    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
+
+    if from_.startswith("github:"):
+        repo = from_[len("github:"):]
+        source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
+    elif from_.startswith("path:"):
+        local_path = Path(from_[len("path:"):]).expanduser()
+        source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
+    else:
+        typer.secho(
+            f"error: unrecognised --from format {from_!r}; use github:owner/repo or path:/dir",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    # Register marketplace in YAML if not already present
+    mp_added = claude_plugins_mod.yaml_add_marketplace(config, mp_name, source)
+    if mp_added:
+        typer.echo(f"registered marketplace: {mp_name}")
+        # Add marketplace to claude via CLI
+        try:
+            claude_plugins_mod.marketplace_add(mp_name, source)
+            typer.echo(f"marketplace added: {mp_name}")
+        except PluginToolMissing as exc:
+            typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+
+    # Declare plugin in top-level claude_plugins block
+    plugin_declared = claude_plugins_mod.yaml_add_plugin(config, plugin_name, mp_name)
+    if plugin_declared:
+        typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
+
+    # Add to profile
+    profile_added = claude_plugins_mod.yaml_add_plugin_to_profile(config, profile, f"{plugin_name}@{mp_name}")
+    if profile_added:
+        typer.echo(f"added to {profile}.claude_plugins: {plugin_name}@{mp_name}")
+
+    # Install via claude CLI
+    if not no_install:
+        try:
+            claude_plugins_mod.plugin_install(plugin_name, mp_name)
+            typer.echo(f"installed plugin: {plugin_name}@{mp_name}")
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping install — {exc}", err=True, fg=typer.colors.YELLOW
+            )
+
+
+@plugin_app.command("remove")
+def plugin_remove(
+    name: str = typer.Argument(..., help="Plugin name (bare or <name>@<marketplace>)."),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    disable: bool = typer.Option(
+        False,
+        "--disable",
+        help="Also run `claude plugin disable` after removing from YAML.",
+    ),
+) -> None:
+    """Remove a plugin from the profile's claude_plugins list."""
+    plugin_ref = name  # already in <name>@<marketplace> form or just name
+    changed = claude_plugins_mod.yaml_remove_plugin_from_profile(config, profile, plugin_ref)
+    if changed:
+        typer.echo(f"removed from {profile}.claude_plugins: {plugin_ref}")
+    else:
+        typer.echo(f"not in {profile}.claude_plugins: {plugin_ref}")
+    if disable:
+        try:
+            claude_plugins_mod.plugin_disable(plugin_ref)
+            typer.echo(f"disabled plugin: {plugin_ref}")
+        except PluginToolMissing as exc:
+            typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+
+
+@plugin_app.command("reconcile")
+def plugin_reconcile(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compute actions without calling claude CLI."
+    ),
+) -> None:
+    """Explicit reconcile (in addition to the automatic run inside install).
+
+    Exits non-zero when policy is REPORT or --dry-run and there is drift.
+    """
+    cfg = load_config(config)
+    resolved = resolve_profile(cfg, profile)
+    try:
+        report = claude_plugins_mod.reconcile(cfg, resolved, dry_run=dry_run)
+    except PluginToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    is_read_only = resolved.plugins_reconcile is ReconcilePolicy.REPORT or dry_run
+    failed_ids = {pid for pid, _ in report.failed}
+
+    for name, mp in report.to_install:
+        pid = f"{name}@{mp}"
+        verb = "would install" if is_read_only else "installed"
+        if pid not in failed_ids:
+            typer.echo(f"{verb}  {pid}")
+    for pid in report.to_enable:
+        verb = "would enable" if is_read_only else "enabled"
+        if pid not in failed_ids:
+            typer.echo(f"{verb}   {pid}")
+    for pid in report.to_disable:
+        verb = "would disable" if is_read_only else "disabled"
+        if pid not in failed_ids:
+            typer.echo(f"{verb}  {pid}")
+    for pid, err in report.failed:
+        typer.secho(f"FAILED  {pid} — {err}", err=True, fg=typer.colors.YELLOW)
+    if not report:
+        typer.echo("plugins: nothing to reconcile")
+    elif is_read_only:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# marketplace sub-app
+# ---------------------------------------------------------------------------
+
+marketplace_app = typer.Typer(
+    help="Manage Claude plugin marketplaces in my_setup.yaml.",
+    no_args_is_help=True,
+)
+app.add_typer(marketplace_app, name="marketplace")
+
+
+@marketplace_app.command("add")
+def marketplace_add_cmd(
+    name: str = typer.Argument(..., help="Marketplace name."),
+    from_: str = typer.Option(
+        ...,
+        "--from",
+        help="Source: 'github:owner/repo' or 'path:/local/dir'.",
+    ),
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Register a marketplace in YAML and run claude plugin marketplace add."""
+    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
+
+    if from_.startswith("github:"):
+        repo = from_[len("github:"):]
+        source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
+    elif from_.startswith("path:"):
+        local_path = Path(from_[len("path:"):]).expanduser()
+        source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
+    else:
+        typer.secho(
+            f"error: unrecognised --from format {from_!r}; use github:owner/repo or path:/dir",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    yaml_changed = claude_plugins_mod.yaml_add_marketplace(config, name, source)
+    if yaml_changed:
+        typer.echo(f"added {name} to marketplaces in YAML")
+    else:
+        typer.echo(f"marketplace already declared: {name}")
+
+    try:
+        claude_plugins_mod.marketplace_add(name, source)
+        typer.echo(f"registered marketplace: {name}")
+    except PluginToolMissing as exc:
+        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+
+
+@marketplace_app.command("remove")
+def marketplace_remove_cmd(
+    name: str = typer.Argument(..., help="Marketplace name."),
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Remove a marketplace from YAML and run claude plugin marketplace remove."""
+    yaml_changed = claude_plugins_mod.yaml_remove_marketplace(config, name)
+    if yaml_changed:
+        typer.echo(f"removed {name} from marketplaces in YAML")
+    else:
+        typer.echo(f"marketplace not found in YAML: {name}")
+
+    try:
+        claude_plugins_mod.marketplace_remove(name)
+        typer.echo(f"removed marketplace: {name}")
+    except PluginToolMissing as exc:
+        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+
+
+@marketplace_app.command("update")
+def marketplace_update_cmd(
+    name: str = typer.Argument(..., help="Marketplace name."),
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Run claude plugin marketplace update for a named marketplace."""
+    try:
+        claude_plugins_mod.marketplace_update(name)
+        typer.echo(f"updated marketplace: {name}")
+    except PluginToolMissing as exc:
+        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
 
 def main() -> None:
