@@ -12,9 +12,14 @@ a profile, applies the patch in reverse via ``patch -R``, reverses the
 extension delta, and records its own reverse transition.
 """
 
+import json
 import os
+import platform
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from my_setup import __version__
 
 _STATE_ENV = "MY_SETUP_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
@@ -50,3 +55,44 @@ def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
     """
     iso = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{iso}-{command}-{profile}"
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionMeta:
+    """Metadata for one transition. Serialized to ``meta.json``."""
+
+    command: str           # "install" | "sync" | "revert"
+    profile: str
+    timestamp: datetime    # UTC; serialized as ISO 8601
+    host: str              # platform.node()
+    version: str           # my_setup.__version__
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "command": self.command,
+            "profile": self.profile,
+            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat(),
+            "host": self.host,
+            "version": self.version,
+        }
+
+
+def make_meta(command: str, profile: str) -> TransitionMeta:
+    """Build a TransitionMeta with current host + version + UTC timestamp."""
+    return TransitionMeta(
+        command=command,
+        profile=profile,
+        timestamp=now_utc(),
+        host=platform.node(),
+        version=__version__,
+    )
+
+
+def write_meta(transition_dir: Path, meta: TransitionMeta) -> None:
+    """Serialize ``meta`` to ``<transition_dir>/meta.json``.
+
+    Creates ``transition_dir`` (with parents) if needed.
+    """
+    transition_dir.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(meta.to_dict(), indent=2) + "\n"
+    (transition_dir / "meta.json").write_text(payload, encoding="utf-8")
