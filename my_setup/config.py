@@ -28,6 +28,25 @@ class MarketplaceSourceKind(StrEnum):
     PATH = "path"
 
 
+class SectionMode(StrEnum):
+    """How capture treats marker bodies in dotfiles with
+    ``preserve_user_sections: true``.
+
+    ``keep_defaults`` (default, non-destructive): capture re-splices the
+    tracked file's existing marker bodies into the live content before
+    writing tracked, so global defaults baked into tracked survive every
+    sync. Falls back to ``strip`` semantics when there's no existing
+    tracked file (no defaults to preserve).
+
+    ``strip`` (opt-in, destructive): capture wipes marker bodies entirely.
+    Use only when markers are pure host-local placeholders that must
+    never persist into the tracked source.
+    """
+
+    KEEP_DEFAULTS = "keep_defaults"
+    STRIP = "strip"
+
+
 class Dotfile(BaseModel):
     model_config = _STRICT
 
@@ -35,6 +54,7 @@ class Dotfile(BaseModel):
     dst: str
     template: bool = False
     preserve_user_sections: bool = False
+    preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
     preserve_user_keys: list[str] = []
 
 

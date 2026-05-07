@@ -19,7 +19,7 @@ from ruamel.yaml import YAML
 
 from my_setup import sections, yaml_merge
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import Config, resolve_profile
+from my_setup.config import Config, SectionMode, resolve_profile
 
 
 class CaptureAction(StrEnum):
@@ -41,12 +41,18 @@ def capture_dotfile(
     *,
     preserve_user_sections: bool,
     preserve_user_keys: list[str],
+    preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS,
 ) -> CaptureResult:
     """Write a stripped version of ``dst`` (live) back to ``src`` (tracked).
 
     Empty ``preserve_user_keys`` and ``preserve_user_sections`` mean a
     direct copy. Returns :class:`CaptureResult.NOOP` if the resulting
     tracked content is byte-identical to the existing tracked file.
+
+    ``preserve_user_sections_mode`` decides whether marker bodies in
+    tracked are preserved (``KEEP_DEFAULTS``, default) or wiped
+    (``STRIP``). KEEP_DEFAULTS falls back to STRIP semantics when src
+    doesn't yet exist — no defaults to preserve.
     """
     if not dst.exists():
         return CaptureResult(name=src.name, action=CaptureAction.SKIPPED, reason="live missing")
@@ -63,7 +69,15 @@ def capture_dotfile(
         content = dst.read_text(encoding="utf-8")
 
     if preserve_user_sections:
-        content = sections.strip_section_content(content)
+        if (
+            preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS
+            and src.exists()
+        ):
+            tracked_text = src.read_text(encoding="utf-8")
+            tracked_sections = sections.extract_sections(tracked_text)
+            content = sections.merge_sections(content, tracked_sections)
+        else:
+            content = sections.strip_section_content(content)
 
     src.parent.mkdir(parents=True, exist_ok=True)
     if src.exists() and src.read_text(encoding="utf-8") == content:
@@ -91,6 +105,7 @@ def capture_profile(
                 sub_dst,
                 preserve_user_sections=dotfile.preserve_user_sections,
                 preserve_user_keys=dotfile.preserve_user_keys,
+                preserve_user_sections_mode=dotfile.preserve_user_sections_mode,
             )
             results.append(
                 CaptureResult(

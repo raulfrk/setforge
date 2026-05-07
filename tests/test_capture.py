@@ -7,7 +7,7 @@ from my_setup.capture import (
     capture_dotfile,
     capture_profile,
 )
-from my_setup.config import Config, Dotfile, Profile
+from my_setup.config import Config, Dotfile, Profile, SectionMode
 
 
 def _write(path: Path, content: str) -> None:
@@ -37,7 +37,11 @@ def test_capture_noop_when_unchanged(tmp_path: Path) -> None:
     assert result.action is CaptureAction.NOOP
 
 
-def test_capture_strips_user_sections(tmp_path: Path) -> None:
+def test_capture_strips_user_sections_when_no_tracked_exists(
+    tmp_path: Path,
+) -> None:
+    """First-time capture with no existing tracked file → strip semantics
+    apply regardless of mode (no defaults to preserve)."""
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
     _write(
@@ -57,6 +61,114 @@ def test_capture_strips_user_sections(tmp_path: Path) -> None:
     assert "<!-- my-setup:user-section end -->" in text
     assert "header\n" in text
     assert "footer\n" in text
+
+
+def test_capture_keep_defaults_preserves_tracked_marker_bodies(
+    tmp_path: Path,
+) -> None:
+    """Default mode: tracked has bullet defaults inside markers, live has
+    drifted marker content; capture leaves tracked's marker bodies
+    untouched."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    _write(
+        src,
+        "header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "tracked default bullet\n"
+        "<!-- my-setup:user-section end -->\n"
+        "footer\n",
+    )
+    _write(
+        dst,
+        "header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "live host-only edit\n"
+        "<!-- my-setup:user-section end -->\n"
+        "footer\n",
+    )
+    capture_dotfile(
+        src, dst, preserve_user_sections=True, preserve_user_keys=[]
+    )
+    text = src.read_text()
+    assert "tracked default bullet" in text
+    assert "live host-only edit" not in text
+
+
+def test_capture_keep_defaults_propagates_non_marker_edits(
+    tmp_path: Path,
+) -> None:
+    """Edits to tracked content OUTSIDE marker regions still flow live →
+    tracked. Only marker bodies are protected under keep_defaults."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    _write(
+        src,
+        "old header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "tracked default\n"
+        "<!-- my-setup:user-section end -->\n"
+        "old footer\n",
+    )
+    _write(
+        dst,
+        "new header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "live host edit\n"
+        "<!-- my-setup:user-section end -->\n"
+        "new footer\n",
+    )
+    capture_dotfile(
+        src, dst, preserve_user_sections=True, preserve_user_keys=[]
+    )
+    text = src.read_text()
+    assert "new header" in text
+    assert "new footer" in text
+    assert "tracked default" in text
+    assert "live host edit" not in text
+
+
+def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
+    """Explicit STRIP mode wipes marker bodies even when tracked exists.
+    This is the legitimate use case for markers as host-local placeholders."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    _write(
+        src,
+        "header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "tracked content\n"
+        "<!-- my-setup:user-section end -->\n"
+        "footer\n",
+    )
+    _write(
+        dst,
+        "header\n"
+        "<!-- my-setup:user-section start -->\n"
+        "live content\n"
+        "<!-- my-setup:user-section end -->\n"
+        "footer\n",
+    )
+    capture_dotfile(
+        src,
+        dst,
+        preserve_user_sections=True,
+        preserve_user_keys=[],
+        preserve_user_sections_mode=SectionMode.STRIP,
+    )
+    text = src.read_text()
+    assert "tracked content" not in text
+    assert "live content" not in text
+    assert "<!-- my-setup:user-section start -->" in text
+
+
+def test_dotfile_default_section_mode_is_keep_defaults() -> None:
+    """Schema default protects users from accidental destruction. If this
+    flips, every existing yaml with `preserve_user_sections: true` would
+    silently start stripping global defaults on sync."""
+    assert Dotfile(src=Path("x"), dst="y").preserve_user_sections_mode is (
+        SectionMode.KEEP_DEFAULTS
+    )
 
 
 def test_capture_strips_yaml_keys(tmp_path: Path) -> None:
