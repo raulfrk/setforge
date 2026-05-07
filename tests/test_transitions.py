@@ -324,3 +324,36 @@ def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
 
     with pytest.raises(RevertFailed):
         apply_patch_reverse(transition)
+
+
+@pytest.mark.skipif(
+    shutil.which("patch") is None, reason="GNU patch not on PATH"
+)
+def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
+    """Multi-file diff with drift on one file: dry-run aborts before
+    any file is written. The other (clean) file must remain at its
+    post-state, and no .rej files must leak."""
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("after-a\n", encoding="utf-8")  # clean — would reverse OK
+    b.write_text("DRIFTED-b\n", encoding="utf-8")  # drifted
+
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch(
+            {a: "before-a\n", b: "before-b\n"},
+            {a: "after-a\n", b: "after-b\n"},
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RevertFailed):
+        apply_patch_reverse(transition)
+
+    # No partial revert: a stays at post-state, b stays drifted.
+    assert a.read_text() == "after-a\n"
+    assert b.read_text() == "DRIFTED-b\n"
+    # No .rej files anywhere in the tree.
+    rej_files = list(tmp_path.rglob("*.rej"))
+    assert rej_files == [], f"unexpected .rej files: {rej_files}"

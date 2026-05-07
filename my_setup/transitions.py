@@ -249,10 +249,14 @@ def apply_patch_reverse(transition_dir: Path) -> None:
     No-op if the patch file is absent (e.g. transition recorded only an
     extension delta).
 
+    Atomicity: a ``--dry-run`` pass runs first so drift on any single
+    file aborts before any file is written. ``--reject-file=-`` discards
+    rejected hunks (would otherwise leave ``.rej`` siblings in the
+    user's tree). On a clean dry-run, the real apply follows.
+
     Raises :class:`RevertFailed` if the ``patch`` binary is missing or
-    the reverse application fails (typically because target files have
-    drifted since the transition was recorded — patch's stderr is
-    surfaced verbatim).
+    if either pass fails. The patch's stderr is surfaced verbatim so
+    the user sees the conflicting paths.
     """
     patch_file = transition_dir / "changes.patch"
     if not patch_file.exists():
@@ -264,20 +268,35 @@ def apply_patch_reverse(transition_dir: Path) -> None:
         )
     # Run with cwd=/ and -p0 so root-relative paths in the diff
     # (per :func:`_diff_path`) resolve to absolute targets.
+    base_args = [
+        patch_bin,
+        "-p0",
+        "-R",
+        "-d", "/",
+        "--reject-file=-",
+        "--input", str(patch_file.resolve()),
+    ]
+    dry = subprocess.run(
+        [*base_args, "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if dry.returncode != 0:
+        raise RevertFailed(
+            f"patch -R dry-run failed (exit {dry.returncode}); no files changed:\n"
+            f"{dry.stderr.strip() or dry.stdout.strip()}"
+        )
     result = subprocess.run(
-        [
-            patch_bin,
-            "-p0",
-            "-R",
-            "-d", "/",
-            "--input", str(patch_file.resolve()),
-        ],
+        base_args,
         capture_output=True,
         text=True,
         timeout=60,
     )
     if result.returncode != 0:
+        # Should not happen after a clean dry-run; surface for forensics.
         raise RevertFailed(
-            f"patch -R failed (exit {result.returncode}):\n"
+            f"patch -R failed unexpectedly after dry-run succeeded "
+            f"(exit {result.returncode}):\n"
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
