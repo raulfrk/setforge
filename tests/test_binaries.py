@@ -94,3 +94,22 @@ def test_env_overrides_all_three_set(monkeypatch):
 def test_env_overrides_empty_string_treated_as_unset(monkeypatch):
     monkeypatch.setenv("MY_SETUP_CODE_BIN", "")
     assert binaries._env_overrides() == {}
+
+
+def test_set_cli_overrides_stores_provided_values():
+    binaries.set_cli_overrides(code="/cli/code", patch="/cli/patch")
+    assert binaries._cli_overrides == {
+        "code": "/cli/code",
+        "patch": "/cli/patch",
+    }
+
+
+def test_set_cli_overrides_none_skipped():
+    binaries.set_cli_overrides(code=None, claude=None, patch=None)
+    assert binaries._cli_overrides == {}
+
+
+def test_set_cli_overrides_replaces_prior():
+    binaries.set_cli_overrides(code="/first")
+    binaries.set_cli_overrides(claude="/second")
+    assert binaries._cli_overrides == {"claude": "/second"}

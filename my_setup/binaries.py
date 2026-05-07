@@ -99,3 +99,22 @@ def _env_overrides() -> dict[str, str]:
         if value:
             out[name] = value
     return out
+
+
+def set_cli_overrides(
+    *,
+    code: str | None = None,
+    claude: str | None = None,
+    patch: str | None = None,
+) -> None:
+    """Record CLI-flag overrides; called once by the Typer app callback.
+
+    Re-invocation replaces the prior set (which matters in tests, not
+    production where the callback fires once per process). ``None``
+    values are dropped, so unset flags don't shadow lower precedence
+    layers.
+    """
+    _cli_overrides.clear()
+    for name, value in (("code", code), ("claude", claude), ("patch", patch)):
+        if value is not None:
+            _cli_overrides[name] = value
