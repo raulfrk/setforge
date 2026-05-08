@@ -27,7 +27,7 @@
       }
     ]
   },
-  "outputStyle": "Socratic",
+  "outputStyle": "Explanatory",
   "permissions": {
     "allow": [
       "Bash(bd *)",
