@@ -65,21 +65,37 @@ def _check_leaf_type(src_val: Any, live_val: Any, path: str) -> None:
         )
 
 
-def overlay(src_doc: Any, live_doc: Any, key_paths: list[str]) -> Any:
+def overlay(
+    src_doc: Any,
+    live_doc: Any,
+    key_paths: list[str],
+    deep_key_paths: list[str] = (),
+) -> Any:
     """Return a deep copy of ``src_doc`` with ``live_doc``'s values overlaid
     at every JSONPath-lite path in ``key_paths``.
 
-    Conflict rules:
+    Conflict rules (shallow mode, ``key_paths``):
 
     - Path absent in ``live_doc`` → keep src's value.
     - Path absent in ``src_doc`` → add live's key (whole subtree).
     - Leaf type mismatch (str vs list, scalar vs dict, etc.) at a preserved
       path → raise :class:`MergeTypeMismatch`.
+
+    Deep mode (``deep_key_paths``):
+
+    The terminal value at each path is recursively deep-merged: tracked-only
+    sub-keys survive, live-only sub-keys are added, shared scalars take live's
+    value, shared dicts recurse, shared lists are whole-replaced (live wins).
+    Type mismatches at any depth raise :class:`MergeTypeMismatch`. The deep
+    loop runs after the shallow loop so deep-merge sees src post-shallow.
     """
     result = copy.deepcopy(src_doc)
     for path in key_paths:
         tokens = _parse_path(path)
         _apply_overlay(result, live_doc, tokens, path)
+    for path in deep_key_paths:
+        tokens = _parse_path(path)
+        _apply_deep_overlay(result, live_doc, tokens, path)
     return result
 
 
@@ -137,6 +153,82 @@ def _apply_overlay(
         for i in range(len(src_list), len(live_value)):
             src_list.append(copy.deepcopy(live_value[i]))
         return
+
+
+def _apply_deep_overlay(
+    src_node: Any,
+    live_node: Any,
+    tokens: list[tuple[str, str]],
+    path: str,
+) -> None:
+    """Like :func:`_apply_overlay` but at the terminal, deep-merge dicts
+    instead of whole-leaf replace. The two helpers mirror each other's
+    intermediate-walk shape; they diverge only on the terminal step.
+    """
+    kind, key = tokens[0]
+    rest = tokens[1:]
+    if kind != "key":
+        # Validator on Dotfile.preserve_user_keys_deep already rejects
+        # [*] / [] suffixes — defensive only.
+        raise ValueError(f"deep overlay does not support {path!r}")
+    if not isinstance(live_node, Mapping) or key not in live_node:
+        return
+    live_value = live_node[key]
+    if not isinstance(src_node, MutableMapping):
+        raise MergeTypeMismatch(
+            f"cannot descend into non-mapping at {path!r}"
+        )
+
+    if not rest:
+        # Terminal: deep-merge the dict at src_node[key] with live_value.
+        if key not in src_node:
+            src_node[key] = copy.deepcopy(live_value)
+            return
+        src_value = src_node[key]
+        if not (isinstance(src_value, Mapping) and isinstance(live_value, Mapping)):
+            raise MergeTypeMismatch(
+                f"deep-merge at {path!r} requires dict on both sides; "
+                f"got src={_shape(src_value)}, live={_shape(live_value)}"
+            )
+        _deep_merge_dicts(src_value, live_value, path)
+        return
+
+    # Non-terminal: walk down (mirror _apply_overlay's intermediate case).
+    if key not in src_node:
+        src_node[key] = copy.deepcopy(live_value)
+        return
+    _apply_deep_overlay(src_node[key], live_value, rest, path)
+
+
+def _deep_merge_dicts(
+    src_dict: MutableMapping,
+    live_dict: Mapping,
+    path: str,
+) -> None:
+    """Mutate ``src_dict`` in place: union of keys, live wins on shared
+    scalars, recurse on shared dicts, raise on shape mismatch, whole-list
+    replace on shared arrays. Live-only keys added; tracked-only kept.
+    """
+    for key, live_value in live_dict.items():
+        sub_path = f"{path}.{key}"
+        if key not in src_dict:
+            src_dict[key] = copy.deepcopy(live_value)
+            continue
+        src_value = src_dict[key]
+        match (src_value, live_value):
+            case (Mapping(), Mapping()):
+                _deep_merge_dicts(src_value, live_value, sub_path)
+            case (list(), list()):
+                src_value.clear()
+                src_value.extend(copy.deepcopy(item) for item in live_value)
+            case _ if _shape(src_value) != _shape(live_value):
+                raise MergeTypeMismatch(
+                    f"type mismatch at {sub_path!r}: src is {_shape(src_value)}, "
+                    f"live is {_shape(live_value)}"
+                )
+            case _:
+                # Both scalars: live wins.
+                src_dict[key] = copy.deepcopy(live_value)
 
 
 def extract_keys(doc: Any, key_paths: list[str]) -> dict[str, Any]:

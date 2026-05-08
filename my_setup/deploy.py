@@ -53,6 +53,7 @@ def copy_atomic(
     backup: bool = True,
     preserve_user_sections: bool = False,
     preserve_user_keys: list[str] | None = None,
+    preserve_user_keys_deep: list[str] | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -79,6 +80,7 @@ def copy_atomic(
         dst_existed,
         preserve_user_sections,
         preserve_user_keys,
+        preserve_user_keys_deep,
     )
 
     if dst_existed:
@@ -102,20 +104,24 @@ def _compute_content(
     dst_existed: bool,
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
+    preserve_user_keys_deep: list[str] | None = None,
 ) -> str:
-    if preserve_user_keys and dst_existed and jsonc.is_jsonc_file(src):
+    shallow = preserve_user_keys or []
+    deep = preserve_user_keys_deep or []
+    has_keys = bool(shallow or deep)
+    if has_keys and dst_existed and jsonc.is_jsonc_file(src):
         tracked_text = src.read_text(encoding="utf-8")
         live_text = dst.read_text(encoding="utf-8")
         content = jsonc.overlay_user_keys(
-            tracked_text, live_text, preserve_user_keys
+            tracked_text, live_text, shallow, deep_key_names=deep
         )
-    elif preserve_user_keys and dst_existed:
+    elif has_keys and dst_existed:
         yaml = YAML(typ="rt")
         with src.open("r", encoding="utf-8") as fh:
             src_doc = yaml.load(fh)
         with dst.open("r", encoding="utf-8") as fh:
             live_doc = yaml.load(fh)
-        merged = yaml_merge.overlay(src_doc, live_doc, preserve_user_keys)
+        merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
         buf = io.StringIO()
         yaml.dump(merged, buf)
         content = buf.getvalue()

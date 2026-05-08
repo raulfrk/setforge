@@ -237,6 +237,7 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     original_src_content = src.read_text()
@@ -261,6 +262,7 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
@@ -290,6 +292,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=88,
         file_format="jsonc",
+        mode="shallow",
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
@@ -335,6 +338,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     result = apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.SAVE_AS_PRESERVED
@@ -377,6 +381,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     y = YAML(typ="rt")
@@ -398,6 +403,7 @@ def test_apply_action_m_y_launches_editor(tmp_path: Path, monkeypatch: pytest.Mo
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
@@ -429,6 +435,7 @@ def test_apply_action_m_n_returns_manual_pending(tmp_path: Path, monkeypatch: py
         tracked_value=2,
         live_value=88,
         file_format="yaml",
+        mode="shallow",
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
@@ -619,6 +626,7 @@ def test_use_live_yaml_comments_survive(tmp_path: Path) -> None:
         tracked_value=1,
         live_value=999,
         file_format="yaml",
+        mode="shallow",
     )
     apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
@@ -641,6 +649,7 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=99,
         file_format="jsonc",
+        mode="shallow",
     )
     apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
@@ -663,6 +672,7 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         tracked_value=2,
         live_value=99,
         file_format="yaml",
+        mode="shallow",
     )
     apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     assert "# my config" in my_setup_yaml.read_text()

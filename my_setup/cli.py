@@ -191,6 +191,7 @@ def install(
                 sub_dst,
                 preserve_user_sections=dotfile.preserve_user_sections,
                 preserve_user_keys=dotfile.preserve_user_keys or None,
+                preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
 

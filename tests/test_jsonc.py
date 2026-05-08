@@ -95,15 +95,6 @@ def test_overlay_handles_string_boolean_null_int_values() -> None:
     assert parsed == {"s": "hi", "b": False, "n": None, "i": 42}
 
 
-def test_overlay_rejects_nested_value_loudly() -> None:
-    """v1 scope is scalar-only — nested values must fail loud rather
-    than silently emit a malformed model."""
-    tracked = "{}\n"
-    live = '{"obj": {"nested": 1}}'
-    with pytest.raises(NotImplementedError, match="dotfiles-nen.6.1"):
-        overlay_user_keys(tracked, live, ["obj"])
-
-
 def test_strip_removes_top_level_key_preserving_comments() -> None:
     text = """{
   // header comment
@@ -168,4 +159,71 @@ def test_classify_drift_treats_missing_key_as_drift() -> None:
     live = '{"a": 1, "extra": true}'
     expected, unexpected = classify_jsonc_drift(src, live, ["extra"])
     assert expected == ["extra"]
+    assert unexpected == []
+
+
+# ---------------------------------------------------------------------------
+# Deep-merge mode + lifted scalar restriction (dotfiles-nen.21)
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_user_keys_deep_unions_top_level_object() -> None:
+    """Deep mode unions sub-keys of a top-level object key, preserving
+    comments on tracked's existing sub-keys."""
+    tracked = (
+        "{\n"
+        "  // model default\n"
+        '  "claudeCode": {"model": "opus"}\n'
+        "}\n"
+    )
+    live = '{"claudeCode": {"fontSize": 14, "model": "opus"}}\n'
+    out = overlay_user_keys(tracked, live, [], deep_key_names=["claudeCode"])
+    parsed = parse_jsonc(out)
+    assert parsed == {"claudeCode": {"model": "opus", "fontSize": 14}}
+    assert "// model default" in out
+
+
+def test_python_to_node_supports_nested_object() -> None:
+    from json5.dumper import ModelDumper, dumps
+    from json5.model import JSONObject
+
+    from my_setup.jsonc import _python_to_node, parse_jsonc
+
+    node = _python_to_node({"a": {"b": 1}})
+    assert isinstance(node, JSONObject)
+    # Round-trip via the model dumper: wrap in a Model? dumps takes a value too.
+    text = dumps(node, dumper=ModelDumper())
+    assert parse_jsonc(text) == {"a": {"b": 1}}
+
+
+def test_python_to_node_supports_nested_array() -> None:
+    from json5.dumper import ModelDumper, dumps
+    from json5.model import JSONArray
+
+    from my_setup.jsonc import _python_to_node, parse_jsonc
+
+    node = _python_to_node([1, "two", {"a": 1}])
+    assert isinstance(node, JSONArray)
+    text = dumps(node, dumper=ModelDumper())
+    assert parse_jsonc(text) == [1, "two", {"a": 1}]
+
+
+def test_overlay_user_keys_shallow_now_handles_nested_object_values() -> None:
+    """Shallow mode no longer raises on nested-object live values —
+    the lifted scalar-only restriction means a top-level user-key with
+    a nested object value writes as-is."""
+    tracked = '{"a": 1}\n'
+    live = '{"foo": {"nested": true}}\n'
+    out = overlay_user_keys(tracked, live, ["foo"])
+    parsed = parse_jsonc(out)
+    assert parsed == {"a": 1, "foo": {"nested": True}}
+
+
+def test_classify_jsonc_drift_treats_deep_keys_as_expected() -> None:
+    src = '{"x": 1}'
+    live = '{"x": 2}'
+    expected, unexpected = classify_jsonc_drift(
+        src, live, [], deep_key_names=["x"]
+    )
+    assert expected == ["x"]
     assert unexpected == []

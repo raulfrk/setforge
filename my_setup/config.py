@@ -8,6 +8,7 @@ writes that re-serialize the document.
 
 from enum import StrEnum
 from pathlib import Path
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from ruamel.yaml import YAML
@@ -58,6 +59,40 @@ class Dotfile(BaseModel):
     preserve_user_sections: bool = False
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
     preserve_user_keys: list[str] = []
+    preserve_user_keys_deep: list[str] = []
+    """Paths whose live → tracked overlay does a *deep* merge instead of
+    the shallow whole-leaf replace of ``preserve_user_keys``. Tracked
+    sub-keys absent on the live side survive. Live-only sub-keys are
+    added. List values at sub-paths are whole-replaced (live wins). Type
+    mismatches at deep terminals raise ``MergeTypeMismatch``.
+
+    Mutually exclusive with ``preserve_user_keys`` per-path: a path may
+    appear in at most one of the two lists. ``[*]`` / ``[]`` list
+    suffixes are not supported on this list — use the shallow list for
+    list-targeted paths.
+    """
+
+    @model_validator(mode="after")
+    def _no_preserve_path_overlap(self) -> Self:
+        overlap = set(self.preserve_user_keys) & set(self.preserve_user_keys_deep)
+        if overlap:
+            raise ValueError(
+                f"path(s) declared in both preserve_user_keys and "
+                f"preserve_user_keys_deep: {sorted(overlap)}"
+            )
+        return self
+
+    @field_validator("preserve_user_keys_deep")
+    @classmethod
+    def _no_list_suffix_on_deep(cls, v: list[str]) -> list[str]:
+        for path in v:
+            if path.endswith("[*]") or path.endswith("[]"):
+                raise ValueError(
+                    f"preserve_user_keys_deep does not support [*] / [] "
+                    f"list suffixes (got {path!r}); use preserve_user_keys "
+                    f"for list-targeted paths."
+                )
+        return v
 
     @field_validator("src", "dst", mode="before")
     @classmethod

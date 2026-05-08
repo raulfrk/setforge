@@ -373,3 +373,28 @@ def test_config_rejects_unknown_field_in_nested_dotfile() -> None:
                 "profiles": {"p": {}},
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# preserve_user_keys_deep validators (dotfiles-nen.21)
+# ---------------------------------------------------------------------------
+
+
+def test_dotfile_rejects_path_in_both_preserve_lists() -> None:
+    with pytest.raises(ValidationError, match="declared in both"):
+        Dotfile(
+            src=Path("a"),
+            dst="b",
+            preserve_user_keys=["a.b"],
+            preserve_user_keys_deep=["a.b"],
+        )
+
+
+@pytest.mark.parametrize("path", ["a[*]", "a[]"])
+def test_dotfile_rejects_list_suffix_in_preserve_user_keys_deep(path: str) -> None:
+    with pytest.raises(ValidationError, match="does not support"):
+        Dotfile(
+            src=Path("a"),
+            dst="b",
+            preserve_user_keys_deep=[path],
+        )

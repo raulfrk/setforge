@@ -29,6 +29,7 @@ breaking change in json-five requires a single-module fix.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +40,13 @@ from json5.model import (
     DoubleQuotedString,
     Float,
     Integer,
+    JSONArray,
     JSONObject,
     KeyValuePair,
     NullLiteral,
 )
+
+from my_setup.errors import MergeTypeMismatch
 
 
 def is_jsonc_file(path: Path) -> bool:
@@ -72,16 +76,23 @@ def overlay_user_keys(
     tracked_text: str,
     live_text: str,
     key_names: list[str],
+    deep_key_names: list[str] = (),
 ) -> str:
     """Splice live's top-level user-key values into tracked.
 
-    For each name in ``key_names``: if live has it as a top-level key,
-    set tracked's same key to live's value (replacing if already
-    present, appending if not). Comments and formatting in tracked are
-    preserved end-to-end.
+    Shallow mode (``key_names``): for each name, if live has it as a
+    top-level key, set tracked's same key to live's value (replacing
+    if already present, appending if not).
 
-    Top-level keys only — names are matched as literal strings against
-    each top-level entry's key text, no dotted-path nesting.
+    Deep mode (``deep_key_names``): for each name, if live's value at
+    that name is a JSON object AND tracked's value at the same name is
+    also a JSON object, recursively deep-merge — tracked-only sub-keys
+    survive, live-only added, scalars take live, lists whole-replaced,
+    type mismatches at any depth raise :class:`MergeTypeMismatch`.
+
+    Comments and formatting in tracked are preserved end-to-end across
+    both modes. Top-level keys only — names match as literal strings
+    against each top-level entry's key text.
     """
     tracked_model = loads(tracked_text, loader=ModelLoader())
     live_value = loads(live_text)
@@ -97,19 +108,102 @@ def overlay_user_keys(
         idx = _find_key_index(tracked_top, name)
         if idx is not None:
             tracked_top.values[idx] = new_value_node
-            tracked_top.key_value_pairs[idx] = KeyValuePair(
-                tracked_top.keys[idx], new_value_node
-            )
         else:
             new_key_node = DoubleQuotedString(
                 characters=name, raw_value=json.dumps(name)
             )
             new_key_node.wsc_before = [indent]
-            new_kvp = KeyValuePair(new_key_node, new_value_node)
-            tracked_top.key_value_pairs.append(new_kvp)
             tracked_top.keys.append(new_key_node)
             tracked_top.values.append(new_value_node)
+    for name in deep_key_names:
+        if name not in live_value:
+            continue
+        live_sub = live_value[name]
+        idx = _find_key_index(tracked_top, name)
+        if idx is None:
+            new_value_node = _python_to_node(live_sub)
+            new_value_node.wsc_before = [" "]
+            new_key_node = DoubleQuotedString(
+                characters=name, raw_value=json.dumps(name)
+            )
+            new_key_node.wsc_before = [indent]
+            tracked_top.keys.append(new_key_node)
+            tracked_top.values.append(new_value_node)
+            continue
+        src_value_node = tracked_top.values[idx]
+        match (src_value_node, live_sub):
+            case (JSONObject(), Mapping()):
+                _deep_merge_jsonobject(src_value_node, live_sub, name)
+            case (JSONObject(), _):
+                raise MergeTypeMismatch(
+                    f"deep-merge at {name!r} requires dict on both sides; "
+                    f"live is {type(live_sub).__name__}"
+                )
+            case (_, Mapping()):
+                raise MergeTypeMismatch(
+                    f"deep-merge at {name!r} requires dict on both sides; "
+                    f"src is {type(src_value_node).__name__}"
+                )
+            case _:
+                # Mixed scalar/list at top-level deep-key: fall back to
+                # whole-leaf replace — live wins, comments on the existing
+                # value node are dropped (acceptable for live-wins overlay).
+                new_value_node = _python_to_node(live_sub)
+                new_value_node.wsc_before = getattr(
+                    src_value_node, "wsc_before", [" "]
+                )
+                tracked_top.values[idx] = new_value_node
     return dumps(tracked_model, dumper=ModelDumper())
+
+
+def _deep_merge_jsonobject(
+    src_obj: JSONObject,
+    live_dict: Mapping,
+    path: str,
+) -> None:
+    """Merge ``live_dict`` (parsed Python view) into ``src_obj`` (model
+    view) in place. Comments on src's existing keys are preserved by
+    editing ``src_obj.values[idx]`` directly; live-only keys append a
+    fresh :class:`KeyValuePair` with default formatting.
+    """
+    indent = _detect_indent(src_obj)
+    for key, live_value in live_dict.items():
+        sub_path = f"{path}.{key}"
+        idx = _find_key_index(src_obj, key)
+        if idx is None:
+            new_key = DoubleQuotedString(
+                characters=key, raw_value=json.dumps(key)
+            )
+            new_key.wsc_before = [indent]
+            new_val = _python_to_node(live_value)
+            new_val.wsc_before = [" "]
+            src_obj.keys.append(new_key)
+            src_obj.values.append(new_val)
+            continue
+        src_value_node = src_obj.values[idx]
+        match (src_value_node, live_value):
+            case (JSONObject(), Mapping()):
+                _deep_merge_jsonobject(src_value_node, live_value, sub_path)
+            case (JSONObject(), _):
+                raise MergeTypeMismatch(
+                    f"type mismatch at {sub_path!r}: src is JSONObject, "
+                    f"live is {type(live_value).__name__}"
+                )
+            case (_, Mapping()):
+                raise MergeTypeMismatch(
+                    f"type mismatch at {sub_path!r}: src is "
+                    f"{type(src_value_node).__name__}, live is dict"
+                )
+            case _:
+                # Scalar / list / mixed-shape: replace the whole node
+                # while preserving the leading whitespace on the
+                # KeyValuePair (comments on the replaced value node are
+                # dropped — acceptable for live-wins overlay).
+                new_val = _python_to_node(live_value)
+                new_val.wsc_before = getattr(
+                    src_value_node, "wsc_before", [" "]
+                )
+                src_obj.values[idx] = new_val
 
 
 def strip_user_keys(text: str, key_names: list[str]) -> str:
@@ -135,20 +229,23 @@ def classify_jsonc_drift(
     src_text: str,
     live_text: str,
     key_names: list[str],
+    deep_key_names: list[str] = (),
 ) -> tuple[list[str], list[str]]:
     """Return ``(expected, unexpected)`` lists of top-level key names that
     differ between parsed ``src_text`` and ``live_text``.
 
-    Expected = key is in ``key_names`` (drift covered by the
-    preserve-user-keys contract). Unexpected = drift on any other
-    top-level key. Top-level only — nested differences are out of scope
-    for v1.
+    Expected = key is in ``key_names`` (shallow whole-leaf overlay
+    contract) OR in ``deep_key_names`` (deep-merge overlay contract).
+    Unexpected = drift on any other top-level key. Top-level only —
+    nested differences within a deep-merge key still classify as a
+    single "expected" entry (the deep-merge overlay reconciles them at
+    deploy time).
     """
     src = parse_jsonc(src_text)
     live = parse_jsonc(live_text)
     if not isinstance(src, dict) or not isinstance(live, dict):
         return [], []
-    preserve = set(key_names)
+    preserve = set(key_names) | set(deep_key_names)
     expected: list[str] = []
     unexpected: list[str] = []
     for key in sorted(set(src) | set(live)):
@@ -213,28 +310,62 @@ def _detect_indent(top_obj: JSONObject) -> str:
 
 
 def _python_to_node(value: Any) -> Any:
-    """Convert a Python plain value into a JSON5 model leaf node.
+    """Convert a Python plain value into a JSON5 model leaf or container.
 
-    Supports the JSON5 scalar set: ``bool`` / ``None`` / ``int`` /
-    ``float`` / ``str``. Bool MUST be checked before int because
-    ``isinstance(True, int)`` is True in Python.
-
-    Nested objects and lists are explicitly out of scope for v1 and
-    raise :class:`NotImplementedError` so the failure surfaces loud
-    rather than silently emitting a malformed model.
+    Supports JSON5 scalars (``None`` / ``bool`` / ``int`` / ``float`` /
+    ``str``) plus nested ``Mapping`` / ``list`` containers. Nested
+    containers are built via :func:`_python_dict_to_jsonobject` and
+    :func:`_python_list_to_jsonarray` (recursive).
     """
-    if value is None:
-        return NullLiteral()
-    if isinstance(value, bool):
-        return BooleanLiteral(value=value)
-    if isinstance(value, int):
-        return Integer(raw_value=str(value))
-    if isinstance(value, float):
-        return Float(raw_value=str(value))
-    if isinstance(value, str):
-        return DoubleQuotedString(characters=value, raw_value=json.dumps(value))
-    raise NotImplementedError(
-        f"JSONC overlay v1 only supports scalar values; got "
-        f"{type(value).__name__}. Track nested support via "
-        f"dotfiles-nen.6.1."
-    )
+    match value:
+        case None:
+            return NullLiteral()
+        case bool():
+            # MUST precede ``case int()`` — isinstance(True, int) is True,
+            # and class patterns use isinstance() semantics.
+            return BooleanLiteral(value=value)
+        case int():
+            return Integer(raw_value=str(value))
+        case float():
+            return Float(raw_value=str(value))
+        case str():
+            return DoubleQuotedString(
+                characters=value, raw_value=json.dumps(value)
+            )
+        case Mapping():
+            return _python_dict_to_jsonobject(value)
+        case list():
+            return _python_list_to_jsonarray(value)
+        case _:
+            raise TypeError(
+                f"unsupported value type for JSONC overlay: "
+                f"{type(value).__name__}"
+            )
+
+
+def _python_dict_to_jsonobject(d: Mapping) -> JSONObject:
+    """Build a :class:`JSONObject` with :class:`KeyValuePair` entries
+    from a Python mapping.
+
+    The model's ``__init__`` populates ``.keys`` and ``.values`` from
+    its ``*key_value_pairs`` varargs; the ``key_value_pairs`` attribute
+    on the resulting instance is a derived property, not a stored field.
+    """
+    kvps: list[KeyValuePair] = []
+    for k, v in d.items():
+        if not isinstance(k, str):
+            raise TypeError(
+                f"JSON object keys must be strings; got {type(k).__name__}"
+            )
+        key_node = DoubleQuotedString(characters=k, raw_value=json.dumps(k))
+        val_node = _python_to_node(v)
+        kvps.append(KeyValuePair(key_node, val_node))
+    return JSONObject(*kvps)
+
+
+def _python_list_to_jsonarray(items: list) -> JSONArray:
+    """Build a :class:`JSONArray` from a Python list. Each element is
+    converted via :func:`_python_to_node` (recursive).
+    """
+    nodes = [_python_to_node(item) for item in items]
+    return JSONArray(*nodes)

@@ -50,6 +50,10 @@ def walk_unexpected_drift(
     Iterates over every ``DRIFTED`` entry that has unexpected keys.
     When ``dotfile_filter`` is set, entries whose dotfile name does not match
     are skipped. Values are resolved from the live/tracked files at yield time.
+
+    The ``mode`` field on each yielded item reflects whether the key sits
+    in ``preserve_user_keys_deep`` (``"deep"``) or otherwise (``"shallow"``);
+    ``_action_use_live`` routes through the matching overlay variant.
     """
     from my_setup.compare import resolve_dst, resolve_src
 
@@ -87,9 +91,11 @@ def walk_unexpected_drift(
             tracked_parsed = y.load(src.read_text(encoding="utf-8"))
             live_parsed = y.load(dst.read_text(encoding="utf-8"))
 
+        deep_paths = set(dotfile.preserve_user_keys_deep)
         for key_path in entry.unexpected_drift_keys:
             tracked_val = _get_value(tracked_parsed, key_path, fmt)
             live_val = _get_value(live_parsed, key_path, fmt)
+            mode: Literal["shallow", "deep"] = "deep" if key_path in deep_paths else "shallow"
             yield DriftItem(
                 dotfile_name=dotfile_base,
                 src_path=src,
@@ -98,6 +104,7 @@ def walk_unexpected_drift(
                 tracked_value=tracked_val,
                 live_value=live_val,
                 file_format=fmt,
+                mode=mode,
             )
 
 

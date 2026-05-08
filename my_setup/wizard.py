@@ -96,6 +96,14 @@ class DriftItem:
     file_format: Literal["yaml", "jsonc"]
     """Routes [u]se-live action to the correct write primitive."""
 
+    mode: Literal["shallow", "deep"] = "shallow"
+    """Whether the key sits in ``preserve_user_keys`` (shallow whole-leaf
+    overlay) or ``preserve_user_keys_deep`` (recursive deep-merge).
+    Routes the [u]se-live action to the matching overlay variant.
+    Defaults to ``"shallow"`` for back-compat with callers that
+    construct :class:`DriftItem` without the field; trigger-specific
+    walkers populate it from the dotfile's two preserve lists."""
+
 
 @dataclass
 class Snapshot:
@@ -289,11 +297,22 @@ def apply_action(
 
 
 def _action_use_live(item: DriftItem) -> ActionResult:
-    """Write the live key value into the tracked file."""
+    """Write the live key value into the tracked file.
+
+    For ``item.mode == "deep"`` the overlay is called with the deep-list
+    parameter so tracked-only sub-keys at the path survive the merge.
+    """
     if item.file_format == "jsonc":
         tracked_text = item.src_path.read_text(encoding="utf-8")
         live_text = item.dst_path.read_text(encoding="utf-8")
-        result_text = jsonc.overlay_user_keys(tracked_text, live_text, [item.key_path])
+        if item.mode == "deep":
+            result_text = jsonc.overlay_user_keys(
+                tracked_text, live_text, [], deep_key_names=[item.key_path]
+            )
+        else:
+            result_text = jsonc.overlay_user_keys(
+                tracked_text, live_text, [item.key_path]
+            )
         item.src_path.write_text(result_text, encoding="utf-8")
     else:
         y = YAML(typ="rt")
@@ -301,7 +320,12 @@ def _action_use_live(item: DriftItem) -> ActionResult:
             src_doc = y.load(fh)
         with item.dst_path.open("r", encoding="utf-8") as fh:
             live_doc = y.load(fh)
-        merged = yaml_merge.overlay(src_doc, live_doc, [item.key_path])
+        if item.mode == "deep":
+            merged = yaml_merge.overlay(
+                src_doc, live_doc, [], deep_key_paths=[item.key_path]
+            )
+        else:
+            merged = yaml_merge.overlay(src_doc, live_doc, [item.key_path])
         buf = io.StringIO()
         y.dump(merged, buf)
         item.src_path.write_text(buf.getvalue(), encoding="utf-8")

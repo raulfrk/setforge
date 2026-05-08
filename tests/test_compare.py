@@ -450,6 +450,20 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+def test_yaml_compare_drift_treats_deep_paths_as_expected(tmp_path: Path) -> None:
+    """Deep-list paths whose drift would otherwise look 'unexpected'
+    must classify as expected so the wizard does not surface them."""
+    src = tmp_path / "src.yaml"
+    dst = tmp_path / "dst.yaml"
+    _write(src, "a:\n  b: 1\n")
+    _write(dst, "a:\n  b: 99\n  c: 2\n")
+    expected, unexpected = classify_yaml_drift(
+        src, dst, [], preserve_user_keys_deep=["a"]
+    )
+    assert "a.b" in expected or "a" in expected or "a.c" in expected
+    assert unexpected == []
+
+
 def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     """CLI compare --full-diff includes +++ / --- diff markers."""
     from typer.testing import CliRunner

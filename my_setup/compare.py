@@ -66,6 +66,7 @@ def diff_file(
     *,
     preserve_user_sections: bool = False,
     preserve_user_keys: list[str] | None = None,
+    preserve_user_keys_deep: list[str] | None = None,
 ) -> str:
     """Return the unified diff between ``src`` and ``dst``.
 
@@ -76,7 +77,11 @@ def diff_file(
     if not dst.exists():
         return ""
     rendered_src = _render_with_merges(
-        src, dst, preserve_user_sections, preserve_user_keys
+        src,
+        dst,
+        preserve_user_sections,
+        preserve_user_keys,
+        preserve_user_keys_deep,
     )
     live_text = dst.read_text(encoding="utf-8")
     diff_lines = difflib.unified_diff(
@@ -93,20 +98,23 @@ def _render_with_merges(
     dst: Path,
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
+    preserve_user_keys_deep: list[str] | None = None,
 ) -> str:
-    if preserve_user_keys and jsonc.is_jsonc_file(src):
+    shallow = preserve_user_keys or []
+    deep = preserve_user_keys_deep or []
+    if (shallow or deep) and jsonc.is_jsonc_file(src):
         tracked_text = src.read_text(encoding="utf-8")
         live_text = dst.read_text(encoding="utf-8")
         content = jsonc.overlay_user_keys(
-            tracked_text, live_text, preserve_user_keys
+            tracked_text, live_text, shallow, deep_key_names=deep
         )
-    elif preserve_user_keys:
+    elif shallow or deep:
         yaml = YAML(typ="rt")
         with src.open("r", encoding="utf-8") as fh:
             src_doc = yaml.load(fh)
         with dst.open("r", encoding="utf-8") as fh:
             live_doc = yaml.load(fh)
-        merged = yaml_merge.overlay(src_doc, live_doc, preserve_user_keys)
+        merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
         buf = io.StringIO()
         yaml.dump(merged, buf)
         content = buf.getvalue()
@@ -125,13 +133,17 @@ def classify_yaml_drift(
     src: Path,
     dst: Path,
     preserve_user_keys: list[str],
+    preserve_user_keys_deep: list[str] = (),
 ) -> tuple[list[str], list[str]]:
     """Return ``(expected, unexpected)`` JSONPath-lite paths where ``src``
     and ``dst`` diverge.
 
     A diverged path is *expected* iff covered by some entry in
-    ``preserve_user_keys`` (exact match or a parent path with ``[*]``/``[]``).
-    Everything else is *unexpected*.
+    ``preserve_user_keys`` (shallow whole-leaf overlay, exact match or
+    a parent path with ``[*]``/``[]``) OR by some entry in
+    ``preserve_user_keys_deep`` (deep-merge overlay; any sub-path
+    beneath a deep entry classifies as expected because deploy
+    reconciles them at deep-merge time). Everything else is *unexpected*.
     """
     yaml = YAML(typ="rt")
     with src.open("r", encoding="utf-8") as fh:
@@ -141,6 +153,7 @@ def classify_yaml_drift(
 
     diverged_paths = _diff_paths(src_doc, live_doc)
     preserve_prefixes = [_to_prefix(p) for p in preserve_user_keys]
+    preserve_prefixes.extend(_to_prefix(p) for p in preserve_user_keys_deep)
 
     expected: list[str] = []
     unexpected: list[str] = []
@@ -265,20 +278,25 @@ def _compare_one(
         dst,
         preserve_user_sections=dotfile.preserve_user_sections,
         preserve_user_keys=dotfile.preserve_user_keys or None,
+        preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
     )
 
     expected_keys: list[str] = []
     unexpected_keys: list[str] = []
-    if dotfile.preserve_user_keys:
+    if dotfile.preserve_user_keys or dotfile.preserve_user_keys_deep:
         if jsonc.is_jsonc_file(src):
             expected_keys, unexpected_keys = jsonc.classify_jsonc_drift(
                 src.read_text(encoding="utf-8"),
                 dst.read_text(encoding="utf-8"),
                 dotfile.preserve_user_keys,
+                deep_key_names=dotfile.preserve_user_keys_deep,
             )
         else:
             expected_keys, unexpected_keys = classify_yaml_drift(
-                src, dst, dotfile.preserve_user_keys
+                src,
+                dst,
+                dotfile.preserve_user_keys,
+                preserve_user_keys_deep=dotfile.preserve_user_keys_deep,
             )
 
     is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)

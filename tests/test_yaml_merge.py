@@ -108,3 +108,76 @@ def test_multiple_paths_compose() -> None:
     live = {"a": 10, "b": {"c": 20}, "e": [99, 88, 77]}
     merged = overlay(src, live, ["a", "b.c", "e[]"])
     assert merged == {"a": 10, "b": {"c": 20, "d": 3}, "e": [99, 88, 77]}
+
+
+# ---------------------------------------------------------------------------
+# Deep-merge mode (dotfiles-nen.21)
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_deep_merge_unions_keys() -> None:
+    src = {"a": {"b": 1, "c": 2}}
+    live = {"a": {"b": 99, "c": 2, "d": "new"}}
+    merged = overlay(src, live, [], deep_key_paths=["a"])
+    assert merged == {"a": {"b": 99, "c": 2, "d": "new"}}
+
+
+def test_overlay_deep_merge_keeps_tracked_only_subkeys() -> None:
+    """PRIMARY VALUE GATE — tracked-only sub-keys must survive deep-merge."""
+    src = {"a": {"b": 1, "e": "tracked_only"}}
+    live = {"a": {"b": 99}}
+    merged = overlay(src, live, [], deep_key_paths=["a"])
+    assert merged == {"a": {"b": 99, "e": "tracked_only"}}
+
+
+def test_overlay_deep_merge_recurses_nested_dicts() -> None:
+    src = {"a": {"b": {"c": {"x": 1, "y": 2}}}}
+    live = {"a": {"b": {"c": {"x": 99}}}}
+    merged = overlay(src, live, [], deep_key_paths=["a"])
+    assert merged == {"a": {"b": {"c": {"x": 99, "y": 2}}}}
+
+
+def test_overlay_deep_merge_raises_on_terminal_shape_mismatch() -> None:
+    src = {"a": 5}
+    live = {"a": {"b": 1}}
+    with pytest.raises(MergeTypeMismatch) as exc_info:
+        overlay(src, live, [], deep_key_paths=["a"])
+    msg = str(exc_info.value)
+    assert "a" in msg
+    assert "scalar" in msg
+    assert "dict" in msg
+
+
+def test_overlay_deep_merge_raises_on_nested_shape_mismatch() -> None:
+    src = {"a": {"b": 5}}
+    live = {"a": {"b": {"c": 1}}}
+    with pytest.raises(MergeTypeMismatch, match=r"a\.b"):
+        overlay(src, live, [], deep_key_paths=["a"])
+
+
+def test_overlay_deep_merge_whole_list_replace_at_nested_arrays() -> None:
+    src = {"a": {"xs": [1, 2, 3]}}
+    live = {"a": {"xs": [9]}}
+    merged = overlay(src, live, [], deep_key_paths=["a"])
+    assert merged == {"a": {"xs": [9]}}
+
+
+def test_overlay_deep_merge_path_absent_in_src_adds_subtree() -> None:
+    src: dict = {}
+    live = {"a": {"b": 1}}
+    merged = overlay(src, live, [], deep_key_paths=["a"])
+    assert merged == {"a": {"b": 1}}
+    # Deep-copied — mutating live must not bleed into result.
+    assert merged["a"] is not live["a"]
+
+
+def test_overlay_shallow_path_unchanged_when_deep_list_used() -> None:
+    """Regression gate: positional/keyword-empty calls must keep
+    today's shallow-only semantics. Locks the back-compat contract for
+    every existing caller. xfail until Phase 3 lands the kwarg."""
+    src = {"a": {"b": 1, "c": 2}}
+    live = {"a": {"b": 99, "c": 2}}
+    merged_kwargless = overlay(src, live, ["a.b"])
+    merged_with_empty = overlay(src, live, ["a.b"], deep_key_paths=[])
+    assert merged_kwargless == merged_with_empty
+    assert merged_kwargless == {"a": {"b": 99, "c": 2}}
