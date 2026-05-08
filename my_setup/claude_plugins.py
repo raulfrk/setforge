@@ -341,6 +341,16 @@ def reconcile(
             LOGGER.warning("marketplace_add failed for %s: %s", mp_name, msg)
             failed.append((mp_name, msg))
 
+    # Per spec § Algorithm β2 (dotfiles-l37): freshly-installed plugins
+    # land disabled in installed_plugins.json — `claude plugin install`
+    # never touches enabledPlugins. To make a single reconcile run land
+    # the plugin active, we route successful installs through the enable
+    # loop via a separate working list, leaving the report's
+    # `to_enable` field semantically clean (only the original
+    # `declared ∩ disabled` set, NOT freshly-installed plugins). Failed
+    # installs are NOT enabled.
+    runtime_to_enable: list[str] = list(to_enable)
+
     for pid in to_install:
         name, mp = _split_id(pid)
         LOGGER.info("installing plugin: %s @ %s", name, mp)
@@ -350,8 +360,10 @@ def reconcile(
             msg = _stderr_of(exc)
             LOGGER.warning("plugin_install failed for %s: %s", pid, msg)
             failed.append((pid, msg))
+        else:
+            runtime_to_enable.append(pid)
 
-    for pid in to_enable:
+    for pid in runtime_to_enable:
         LOGGER.info("enabling plugin: %s", pid)
         try:
             plugin_enable(pid)

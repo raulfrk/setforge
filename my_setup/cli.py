@@ -8,6 +8,7 @@ recent transition for a profile in reverse.
 
 import json
 import logging
+import subprocess
 import sys
 from datetime import timezone
 from pathlib import Path
@@ -879,15 +880,34 @@ def plugin_add(
     if profile_added:
         typer.echo(f"added to {profile}.claude_plugins: {plugin_name}@{mp_name}")
 
-    # Install via claude CLI
+    # Install via claude CLI, then strictly enable. The enable step is
+    # required because `claude plugin install` writes
+    # ``installed_plugins.json`` without flipping ``enabledPlugins`` —
+    # without this second call the plugin lands disabled (see
+    # dotfiles-l37). Strict failure on enable matches the interactive
+    # single-plugin shape of `plugin add`: a silent warning would be a
+    # footgun. The install half retains today's pattern; latent
+    # subprocess-error handling on install is tracked separately as
+    # dotfiles-oyv.
     if not no_install:
         try:
             claude_plugins_mod.plugin_install(plugin_name, mp_name)
-            typer.echo(f"installed plugin: {plugin_name}@{mp_name}")
         except PluginToolMissing as exc:
             typer.secho(
                 f"warning: skipping install — {exc}", err=True, fg=typer.colors.YELLOW
             )
+        else:
+            typer.echo(f"installed plugin: {plugin_name}@{mp_name}")
+            try:
+                claude_plugins_mod.plugin_enable(f"{plugin_name}@{mp_name}")
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                typer.secho(
+                    f"ERROR: enable failed — {claude_plugins_mod._stderr_of(exc)}",
+                    err=True,
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1) from exc
+            typer.echo(f"enabled plugin: {plugin_name}@{mp_name}")
 
 
 @plugin_app.command("remove")

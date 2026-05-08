@@ -107,13 +107,16 @@ class FakeClaude:
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "install"]:
             plugin_arg = cmd[2]  # "name@marketplace" or similar
             # "--scope=user" may follow
-            entry = {"id": plugin_arg, "enabled": True, "scope": "user"}
             if not any(p["id"] == plugin_arg for p in self._plugins):
-                self._plugins.append(entry)
-            else:
-                for p in self._plugins:
-                    if p["id"] == plugin_arg:
-                        p["enabled"] = True
+                # Match production: install adds to installed_plugins.json
+                # without touching enabledPlugins. Plugin lands disabled
+                # until 'enable' runs.
+                self._plugins.append(
+                    {"id": plugin_arg, "enabled": False, "scope": "user"}
+                )
+            # Re-install of an already-installed plugin: no-op on enabled
+            # state (production claude doesn't touch enabledPlugins on
+            # re-install).
             return subprocess.CompletedProcess(args, 0, "", "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "enable"]:
             name = cmd[2]
@@ -339,6 +342,131 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
     assert report.to_disable == []
     assert sorted(fake.install_args()) == ["a@m1", "b@m1"]
     assert fake.disable_args() == []
+
+
+def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
+    """Fresh install must trigger an enable so the plugin lands active.
+
+    Primary acceptance gate for dotfiles-l37: a freshly-declared plugin
+    must be both installed AND enabled in a single reconcile run, even
+    though `claude plugin install` alone leaves it disabled.
+    `to_enable` in the report keeps clean β2 semantics: only the
+    original `declared ∩ disabled` set, NOT freshly-installed plugins.
+    """
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude()
+    cfg = _make_config(
+        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
+    )
+    profile = _make_resolved(
+        claude_plugins=["a"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    assert fake.install_args() == ["a@m1"]
+    assert fake.enable_args() == ["a@m1"]
+    entry = next(p for p in fake._plugins if p["id"] == "a@m1")
+    assert entry["enabled"] is True
+    assert report.to_install == [("a", "m1")]
+    # β2: to_enable is the original pre-loop set; fresh installs are NOT
+    # in it.
+    assert report.to_enable == []
+
+
+def test_reconcile_fresh_install_failure_skips_enable(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If install raises, plugin_enable is NOT called for that pid.
+
+    The install loop's ``except`` branch must skip appending to the
+    runtime enable working list, so a failed install never feeds an
+    enable attempt.
+    """
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude()
+    real_run = fake.run
+
+    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd == ["plugin", "install", "bad@m1", "--scope=user"]:
+            fake.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="install bombed"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    cfg = _make_config(
+        claude_plugins={
+            "bad": ClaudePluginRef(marketplace="m1"),
+            "good": ClaudePluginRef(marketplace="m1"),
+        }
+    )
+    profile = _make_resolved(
+        claude_plugins=["bad", "good"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    # bad@m1 never reached the enable loop; good@m1 did.
+    assert fake.enable_args() == ["good@m1"]
+    failed_pids = [pid for pid, _ in report.failed]
+    assert "bad@m1" in failed_pids
+    failed_msg = next(msg for pid, msg in report.failed if pid == "bad@m1")
+    assert failed_msg
+    # to_install reflects intent (sorted set diff), regardless of failure.
+    assert ("bad", "m1") in report.to_install
+    assert ("good", "m1") in report.to_install
+
+
+def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Install OK, enable raises → pid in report.failed, NOT in to_enable.
+
+    Self-healing semantics: pid is in `to_install` (install half landed
+    on disk), pid is in `failed` with the enable-step stderr, pid is
+    NOT added to `to_enable` in the report (clean β2 semantics). The
+    next reconcile run will pick the plugin up via the existing
+    ``declared ∩ disabled`` path with no new code.
+    """
+    from my_setup.claude_plugins import reconcile
+
+    fake = fake_claude()
+    real_run = fake.run
+
+    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd == ["plugin", "enable", "a@m1"]:
+            fake.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="enable bombed"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    cfg = _make_config(
+        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
+    )
+    profile = _make_resolved(
+        claude_plugins=["a"],
+        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    )
+    report = reconcile(cfg, profile)
+    failed_pids = [pid for pid, _ in report.failed]
+    assert "a@m1" in failed_pids
+    failed_msg = next(msg for pid, msg in report.failed if pid == "a@m1")
+    assert failed_msg
+    # Install half landed on disk; enable half raised, so entry stays
+    # disabled.
+    entry = next(p for p in fake._plugins if p["id"] == "a@m1")
+    assert entry["enabled"] is False
+    assert ("a", "m1") in report.to_install
+    # β2 clean semantics: `to_enable` is the original pre-loop set.
+    assert "a@m1" not in report.to_enable
 
 
 def test_reconcile_declared_but_disabled_enables_not_reinstalls(
@@ -913,3 +1041,84 @@ def test_reconcile_marketplaces_dry_run_not_added(
     report = reconcile(cfg, profile)
     assert "anthropic" in report.marketplaces_added
     assert report.dry_run is True
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-l37 — `plugin add` strict enable behavior
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_add_calls_enable_after_install(
+    fake_claude, tmp_path: Path
+) -> None:
+    """`plugin add` must run `plugin enable` after a successful install.
+
+    Mirrors the reconcile-path fix at the CLI surface: a freshly added
+    plugin should be active in a single command invocation, not two.
+    """
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    p = _write_yaml_fixture(tmp_path)
+    fake = fake_claude()  # marketplace + plugin lists start empty
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "plugin", "add", "newp@existing-mp",
+            "--from=github:foo/bar",
+            "--profile=myprofile",
+            f"--config={p}",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.install_args() == ["newp@existing-mp"]
+    assert fake.enable_args() == ["newp@existing-mp"]
+    assert "installed plugin: newp@existing-mp" in result.output
+    assert "enabled plugin: newp@existing-mp" in result.output
+
+
+def test_plugin_add_strict_exits_nonzero_when_enable_fails(
+    fake_claude, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plugin add` must exit non-zero with a clear ERROR when enable fails.
+
+    The install half retains today's pattern; the enable half is strict
+    because `plugin add` is an interactive single-plugin command — a
+    silent warning would be a footgun.
+    """
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    p = _write_yaml_fixture(tmp_path)
+    fake = fake_claude()
+    real_run = fake.run
+
+    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd == ["plugin", "enable", "newp@existing-mp"]:
+            fake.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="enable broke"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "plugin", "add", "newp@existing-mp",
+            "--from=github:foo/bar",
+            "--profile=myprofile",
+            f"--config={p}",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "ERROR: enable failed" in result.output
+    assert "enable broke" in result.output
+    # Install half ran successfully before the strict failure.
+    assert "installed plugin: newp@existing-mp" in result.output
+    assert fake.install_args() == ["newp@existing-mp"]
