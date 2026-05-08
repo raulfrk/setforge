@@ -28,6 +28,7 @@ from my_setup import transitions
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
+    CaptureRequiresInteractive,
     ExtensionInstallFailed,
     ExtensionToolMissing,
     MySetupError,
@@ -320,11 +321,51 @@ def compare(
 def capture(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    auto: str | None = typer.Option(
+        None,
+        "--auto",
+        help=(
+            "Non-interactive resolution for capture-time drift: "
+            "'use-live' absorbs all drift (today's silent-absorb "
+            "behavior), 'keep-tracked' rejects all drift."
+        ),
+    ),
 ) -> None:
-    """Capture live → tracked for every dotfile in the profile."""
+    """Capture live → tracked for every dotfile in the profile.
+
+    When tracked declares ``preserve_user_keys_deep`` or carries
+    non-preserve top-level drift, the merge wizard fires interactively;
+    pass ``--auto={use-live, keep-tracked}`` for non-interactive
+    contexts.
+    """
+    if auto is not None and auto not in {"use-live", "keep-tracked"}:
+        typer.secho(
+            f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    results = capture_mod.capture_profile(cfg, profile, repo_root)
+    try:
+        results = capture_mod.capture_profile(
+            cfg,
+            profile,
+            repo_root,
+            my_setup_yaml_path=config.resolve(),
+            auto=auto,  # type: ignore[arg-type]
+        )
+    except CaptureRequiresInteractive as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        typer.secho(
+            "capture cancelled (Ctrl-C); files restored from snapshot",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(130)
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
@@ -376,8 +417,36 @@ def sync(
         hidden=True,
         help="Skip writing a transition record (testing / debugging).",
     ),
+    auto: str | None = typer.Option(
+        None,
+        "--auto",
+        help=(
+            "Non-interactive resolution for capture-time drift: "
+            "'use-live' absorbs all drift (today's silent-absorb "
+            "behavior), 'keep-tracked' rejects all drift. Without TTY "
+            "and without --auto, sync exits 1 with "
+            "CaptureRequiresInteractive."
+        ),
+    ),
 ) -> None:
-    """Capture live → tracked for dotfiles and extensions."""
+    """Capture live → tracked for dotfiles and extensions.
+
+    When tracked declares ``preserve_user_keys_deep`` or carries
+    non-preserve top-level drift, the merge wizard fires interactively
+    so you can review each diverged sub-key / top-level key; this
+    behavior is symmetric with ``my-setup install``'s drift gate. Pass
+    ``--auto=use-live`` to reproduce the pre-`nen.23` silent-absorb
+    behavior (e.g. for scripted runs) or ``--auto=keep-tracked`` to
+    refuse to absorb drift.
+    """
+    if auto is not None and auto not in {"use-live", "keep-tracked"}:
+        typer.secho(
+            f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -396,7 +465,24 @@ def sync(
 
     file_pre = transitions.snapshot_paths(src_paths)
 
-    results = capture_mod.capture_profile(cfg, profile, repo_root)
+    try:
+        results = capture_mod.capture_profile(
+            cfg,
+            profile,
+            repo_root,
+            my_setup_yaml_path=config.resolve(),
+            auto=auto,  # type: ignore[arg-type]
+        )
+    except CaptureRequiresInteractive as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        typer.secho(
+            "sync cancelled (Ctrl-C); files restored from snapshot",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(130)
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 

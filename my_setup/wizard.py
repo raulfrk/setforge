@@ -299,20 +299,21 @@ def apply_action(
 def _action_use_live(item: DriftItem) -> ActionResult:
     """Write the live key value into the tracked file.
 
-    For ``item.mode == "deep"`` the overlay is called with the deep-list
-    parameter so tracked-only sub-keys at the path survive the merge.
+    Per the `nen.23` locked design (spec table line 51), ``mode`` on a
+    :class:`DriftItem` is informational only — both ``"shallow"`` and
+    ``"deep"`` walker output reach this action as per-leaf items, and
+    a shallow whole-leaf overlay write covers both. The deep-overlay
+    primitives (``deep_key_paths`` / ``deep_key_names``) require the
+    terminal value to be a dict on both sides; capture's walker yields
+    leaves under deep-merge top-level paths, so shallow overlay is
+    the right primitive at this seam.
     """
     if item.file_format == "jsonc":
         tracked_text = item.src_path.read_text(encoding="utf-8")
         live_text = item.dst_path.read_text(encoding="utf-8")
-        if item.mode == "deep":
-            result_text = jsonc.overlay_user_keys(
-                tracked_text, live_text, [], deep_key_names=[item.key_path]
-            )
-        else:
-            result_text = jsonc.overlay_user_keys(
-                tracked_text, live_text, [item.key_path]
-            )
+        result_text = jsonc.overlay_user_keys(
+            tracked_text, live_text, [item.key_path]
+        )
         item.src_path.write_text(result_text, encoding="utf-8")
     else:
         y = YAML(typ="rt")
@@ -320,12 +321,7 @@ def _action_use_live(item: DriftItem) -> ActionResult:
             src_doc = y.load(fh)
         with item.dst_path.open("r", encoding="utf-8") as fh:
             live_doc = y.load(fh)
-        if item.mode == "deep":
-            merged = yaml_merge.overlay(
-                src_doc, live_doc, [], deep_key_paths=[item.key_path]
-            )
-        else:
-            merged = yaml_merge.overlay(src_doc, live_doc, [item.key_path])
+        merged = yaml_merge.overlay(src_doc, live_doc, [item.key_path])
         buf = io.StringIO()
         y.dump(merged, buf)
         item.src_path.write_text(buf.getvalue(), encoding="utf-8")

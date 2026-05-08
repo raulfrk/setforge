@@ -68,6 +68,18 @@ class RevertFailed(MySetupError):
     captured stderr or the conflicting paths."""
 
 
+class CaptureRequiresInteractive(MySetupError):
+    """Raised when ``my-setup sync`` would need wizard prompts but no
+    TTY is available and ``--auto`` wasn't passed.
+
+    Triggered by :func:`my_setup.capture.capture_profile` when the
+    capture-time wizard would surface drift (deep-merge sub-key drift or
+    top-level non-preserve drift) and the caller cannot prompt. The
+    escape hatch is the ``--auto={use-live, keep-tracked}`` CLI flag,
+    which routes through :func:`my_setup.wizard.run_wizard_loop`'s
+    ``auto_accept`` parameter."""
+
+
 class NoTransitionFound(MySetupError):
     """Raised by ``my-setup revert`` when no transition history exists
     for the requested profile."""

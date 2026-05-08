@@ -15,7 +15,7 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 ## Workflow verbs
 
 - `uv run my-setup compare --profile=<name>` — read-only drift check (live vs tracked).
-- `uv run my-setup sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review.
+- `uv run my-setup sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on `preserve_user_keys_deep` sub-keys or top-level non-preserve keys triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
 - `uv run my-setup install --profile=<name>` — deploy tracked → live.
 - `uv run my-setup revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/my-setup/transitions/` (kept indefinitely; pruning is a future bead).
 

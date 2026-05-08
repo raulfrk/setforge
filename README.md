@@ -57,6 +57,14 @@ uv run my-setup --help                             # list all commands
 
 `sync` is the alias for `capture` — "I tweaked something live, now save it." After it, `git diff` to review and `git commit` to lock in.
 
+When tracked declares `preserve_user_keys_deep` or carries top-level non-preserve drift between tracked and live, `sync` fires the merge wizard interactively (symmetric with `install`'s drift gate). Each diverged sub-key / top-level key surfaces a `[k]eep tracked / [u]se live / [s]ave-as-preserved / [m]anual edit` prompt; the wizard mutates tracked in place per choice. Tracked-only top-level keys are preserved through `sync` (behavior change vs pre-`nen.23`, where they were silently lost).
+
+For non-interactive contexts (CI, scripted runs):
+
+- `--auto=use-live` reproduces today's silent-absorb behavior — every drift item is absorbed into tracked.
+- `--auto=keep-tracked` is the safer alternative — every drift item is rejected, tracked stays as-is.
+- Without TTY and without `--auto`, `sync` exits 1 with `CaptureRequiresInteractive`. Migration: scripted runs of `my-setup sync` need to add `--auto=use-live` (compatibility) or `--auto=keep-tracked` (stricter) once a profile starts declaring `preserve_user_keys_deep` or accumulating top-level non-preserve drift.
+
 `revert` undoes the most recent `install` or `sync` for the named profile by replaying its transition record in reverse — file diffs via `patch -R`, plus uninstalling extensions that were installed (and reinstalling extensions that were uninstalled). Drift on any touched file aborts cleanly with no partial revert. A second `revert` acts as redo. Transition records are written to `~/.local/state/my-setup/transitions/` and kept indefinitely; if that directory grows large, you can `rm -rf` it (a future bead, `dotfiles-nen`-tracked, will add automatic pruning).
 
 ## User-section preservation
