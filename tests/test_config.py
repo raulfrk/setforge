@@ -152,6 +152,29 @@ def test_dotfile_defaults() -> None:
     assert df.preserve_user_keys == []
 
 
+def test_dotfile_rejects_tab_in_src() -> None:
+    """Tab in src would corrupt the unified-diff format used by
+    transitions; reject at config-load time with the offending byte
+    surfaced as ``\\xNN`` for diagnosability."""
+    with pytest.raises(ValidationError) as exc_info:
+        Dotfile(src="path/with\ttab", dst="~/x")
+    assert "\\x09" in str(exc_info.value)
+
+
+def test_dotfile_rejects_newline_in_dst() -> None:
+    """Same hazard via ``dst``; ensure both fields are guarded."""
+    with pytest.raises(ValidationError) as exc_info:
+        Dotfile(src="ok", dst="bad\npath")
+    assert "\\x0a" in str(exc_info.value)
+
+
+def test_dotfile_accepts_paths_with_spaces_and_unicode() -> None:
+    """Negative test guarding against over-rejection: spaces and
+    non-ASCII (C1+) characters are valid in real paths."""
+    df = Dotfile(src="my path/with spaces.txt", dst="~/some/é-named/file")
+    assert df.dst == "~/some/é-named/file"
+
+
 def test_profile_defaults() -> None:
     p = Profile()
     assert p.extends is None

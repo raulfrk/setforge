@@ -9,12 +9,14 @@ writes that re-serialize the document.
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from ruamel.yaml import YAML
 
 from my_setup.errors import ConfigError, ProfileNotFound
 
 _STRICT = ConfigDict(extra="forbid")
+
+_FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
 
 class ReconcilePolicy(StrEnum):
@@ -56,6 +58,25 @@ class Dotfile(BaseModel):
     preserve_user_sections: bool = False
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
     preserve_user_keys: list[str] = []
+
+    @field_validator("src", "dst", mode="before")
+    @classmethod
+    def _no_control_chars_in_path(cls, v: object) -> object:
+        """Reject paths containing C0 control characters or DEL.
+
+        Tab and newline corrupt unified-diff field separators; DEL
+        and other C0 controls are similarly hostile to most tooling.
+        Cleaner to fail at config load than to silently emit malformed
+        transitions or ``patch``-rejected diffs.
+        """
+        s = str(v)
+        bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
+        if bad:
+            escaped = ", ".join(f"\\x{ord(c):02x}" for c in bad)
+            raise ValueError(
+                f"path contains forbidden control character(s) [{escaped}]: {s!r}"
+            )
+        return v
 
 
 class MarketplaceSource(BaseModel):
