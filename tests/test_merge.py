@@ -1,7 +1,7 @@
 """Tests for the merge subcommand — P4.2.
 
 Covers:
-- Walker yields UnexpectedKey items for YAML and JSONC drift
+- Walker yields DriftItem items for YAML and JSONC drift
 - dotfile_filter narrows walker output
 - _read_one_choice: valid key, invalid key (bell + re-read), Ctrl-C
 - apply_action [k], [u] YAML (comments preserved), [u] JSONC (comments preserved)
@@ -27,13 +27,13 @@ from ruamel.yaml import YAML
 
 from my_setup.compare import CompareReport, CompareStatus, FileCompare
 from my_setup.config import Config, Dotfile, Profile
-from my_setup.merge import (
+from my_setup.merge import walk_unexpected_drift
+from my_setup.wizard import (
     ActionResult,
+    DriftItem,
     Snapshot,
-    UnexpectedKey,
     _read_one_choice,
     apply_action,
-    walk_unexpected_drift,
 )
 
 
@@ -106,7 +106,7 @@ def _make_config(
 
 
 def test_walk_unexpected_drift_yaml(tmp_path: Path) -> None:
-    """Walker yields one UnexpectedKey per unexpected YAML drift path."""
+    """Walker yields one DriftItem per unexpected YAML drift path."""
     config, repo, src, dst = _make_config(
         tmp_path,
         "a: 1\nb: 2\n",
@@ -124,7 +124,7 @@ def test_walk_unexpected_drift_yaml(tmp_path: Path) -> None:
 
 
 def test_walk_unexpected_drift_jsonc(tmp_path: Path) -> None:
-    """Walker yields one UnexpectedKey per unexpected JSONC drift key."""
+    """Walker yields one DriftItem per unexpected JSONC drift key."""
     tracked_text = '{\n  "a": 1,\n  "b": 2\n}\n'
     live_text = '{\n  "a": 99,\n  "b": 88\n}\n'
     config, repo, src, dst = _make_config(
@@ -171,9 +171,9 @@ def _make_stdin(chars: str):
 def test_read_one_choice_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Valid key is returned lowercased."""
     monkeypatch.setattr("sys.stdin", io.StringIO("k"))
-    monkeypatch.setattr("my_setup.merge.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.merge.tty.setraw", lambda fd: None)
-    monkeypatch.setattr("my_setup.merge.termios.tcsetattr", lambda fd, when, attr: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None)
     result = _read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
 
@@ -181,9 +181,9 @@ def test_read_one_choice_valid(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_read_one_choice_uppercase_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     """Uppercase input is lowercased and accepted."""
     monkeypatch.setattr("sys.stdin", io.StringIO("K"))
-    monkeypatch.setattr("my_setup.merge.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.merge.tty.setraw", lambda fd: None)
-    monkeypatch.setattr("my_setup.merge.termios.tcsetattr", lambda fd, when, attr: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None)
     result = _read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
 
@@ -191,7 +191,7 @@ def test_read_one_choice_uppercase_accepted(monkeypatch: pytest.MonkeyPatch) -> 
 def test_read_one_choice_invalid_then_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Invalid key triggers bell and re-reads; valid key then accepted."""
     bells: list[str] = []
-    monkeypatch.setattr("my_setup.merge.sys.stdin", io.StringIO("xk"))
+    monkeypatch.setattr("my_setup.wizard.sys.stdin", io.StringIO("xk"))
 
     written: list[str] = []
 
@@ -212,9 +212,9 @@ def test_read_one_choice_invalid_then_valid(monkeypatch: pytest.MonkeyPatch) -> 
 def test_read_one_choice_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ctrl-C (\\x03) raises KeyboardInterrupt."""
     monkeypatch.setattr("sys.stdin", io.StringIO("\x03"))
-    monkeypatch.setattr("my_setup.merge.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.merge.tty.setraw", lambda fd: None)
-    monkeypatch.setattr("my_setup.merge.termios.tcsetattr", lambda fd, when, attr: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None)
     with pytest.raises(KeyboardInterrupt):
         _read_one_choice("Choice: ", {"k", "u", "s", "m"})
 
@@ -229,7 +229,7 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -253,7 +253,7 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path, tracked_yaml, live_yaml, preserve=["a"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -282,7 +282,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path, tracked_json, live_json, preserve=["a"], is_json=True
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -327,7 +327,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -369,7 +369,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a", "b"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -390,7 +390,7 @@ def test_apply_action_m_y_launches_editor(tmp_path: Path, monkeypatch: pytest.Mo
     config, repo, src, dst = _make_config(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -408,8 +408,8 @@ def test_apply_action_m_y_launches_editor(tmp_path: Path, monkeypatch: pytest.Mo
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setenv("EDITOR", "myfakeeditor")
-    monkeypatch.setattr("my_setup.merge.subprocess.run", fake_run)
-    monkeypatch.setattr("my_setup.merge._read_one_choice", lambda prompt, choices: "y")
+    monkeypatch.setattr("my_setup.wizard.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "y")
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_EDIT_DONE
@@ -421,7 +421,7 @@ def test_apply_action_m_n_returns_manual_pending(tmp_path: Path, monkeypatch: py
     config, repo, src, dst = _make_config(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -432,10 +432,10 @@ def test_apply_action_m_n_returns_manual_pending(tmp_path: Path, monkeypatch: py
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
-    monkeypatch.setattr("my_setup.merge._read_one_choice", lambda prompt, choices: "n")
+    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "n")
 
     run_called = []
-    monkeypatch.setattr("my_setup.merge.subprocess.run", lambda *a, **kw: run_called.append(a))
+    monkeypatch.setattr("my_setup.wizard.subprocess.run", lambda *a, **kw: run_called.append(a))
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_PENDING
@@ -491,7 +491,7 @@ def test_snapshot_restore_on_sigint(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # Monkeypatch write_transition to detect if it's called
     transition_calls: list[Any] = []
-    monkeypatch.setattr("my_setup.merge.transitions.write_transition", lambda *a, **kw: transition_calls.append(1))
+    monkeypatch.setattr("my_setup.wizard.transitions.write_transition", lambda *a, **kw: transition_calls.append(1))
 
     # Run wizard in-process, inject SIGINT via KeyboardInterrupt
     config, repo, src, dst = _make_config(
@@ -506,7 +506,7 @@ def test_snapshot_restore_on_sigint(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     # Simulate SIGINT via raising KeyboardInterrupt inside _read_one_choice
     snap_root = tmp_path / "snaps"
     monkeypatch.setattr(
-        "my_setup.merge._read_one_choice",
+        "my_setup.wizard._read_one_choice",
         lambda prompt, choices: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -538,11 +538,11 @@ def test_successful_walk_records_one_transition(tmp_path: Path, monkeypatch: pyt
 
     transition_calls: list[Any] = []
     monkeypatch.setattr(
-        "my_setup.merge.transitions.write_transition",
+        "my_setup.wizard.transitions.write_transition",
         lambda *a, **kw: transition_calls.append(1) or Path("/tmp/fake"),
     )
     # choose [k] for every prompt
-    monkeypatch.setattr("my_setup.merge._read_one_choice", lambda prompt, choices: "k")
+    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "k")
 
     snap_root = tmp_path / "snaps"
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -589,12 +589,12 @@ def test_manual_pending_records_transition_for_applied(tmp_path: Path, monkeypat
 
     transition_calls: list[Any] = []
     monkeypatch.setattr(
-        "my_setup.merge.transitions.write_transition",
+        "my_setup.wizard.transitions.write_transition",
         lambda *a, **kw: transition_calls.append(1) or Path("/tmp/fake"),
     )
 
     choices = iter(["k", "m", "n"])
-    monkeypatch.setattr("my_setup.merge._read_one_choice", lambda prompt, cs: next(choices))
+    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, cs: next(choices))
 
     snap_root = tmp_path / "snaps"
     run_wizard(report, config, repo, my_setup_yaml_path=my_setup_yaml, snapshot_base=snap_root, profile="p")
@@ -611,7 +611,7 @@ def test_use_live_yaml_comments_survive(tmp_path: Path) -> None:
     tracked_yaml = "# top-level comment\nfoo: bar  # inline\nbaz: 1\n"
     live_yaml = "foo: bar\nbaz: 999\n"
     config, repo, src, dst = _make_config(tmp_path, tracked_yaml, live_yaml, preserve=["foo"])
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -633,7 +633,7 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
     config, repo, src, dst = _make_config(
         tmp_path, tracked_json, live_json, preserve=["a"], is_json=True
     )
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
@@ -655,7 +655,7 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     config, repo, src, dst = _make_config(tmp_path / "sub", "a: 1\nb: 2\n", "a: 1\nb: 99\n", preserve=["a"])
-    uk = UnexpectedKey(
+    uk = DriftItem(
         dotfile_name="x",
         src_path=src,
         dst_path=dst,
