@@ -47,7 +47,7 @@ def test_state_root_env_override(
 def test_transition_dirname_format() -> None:
     ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=timezone.utc)
     assert transition_dirname(ts, "install", "vm-headless") == (
-        "20260507T123045Z-install-vm-headless"
+        "20260507T123045000000Z-install-vm-headless"
     )
 
 
@@ -58,6 +58,35 @@ def test_transition_dirname_sort_matches_time() -> None:
     a = transition_dirname(earlier, "install", "vm-headless")
     b = transition_dirname(later, "install", "vm-headless")
     assert sorted([b, a]) == [a, b]
+
+
+def test_transition_dirname_includes_microseconds() -> None:
+    """Microsecond field renders as six digits between seconds and ``Z``."""
+    ts = datetime(2026, 5, 8, 12, 7, 30, 123456, tzinfo=timezone.utc)
+    assert transition_dirname(ts, "install", "vm-headless").startswith(
+        "20260508T120730123456Z-"
+    )
+
+
+def test_transition_dirname_zero_microseconds_zero_padded() -> None:
+    """Zero microseconds must render as six padded zeros, not be omitted —
+    that's what keeps lexicographic sort matching chronological sort across
+    sub-second and whole-second timestamps."""
+    ts = datetime(2026, 5, 8, 12, 7, 30, 0, tzinfo=timezone.utc)
+    assert transition_dirname(ts, "install", "vm-headless").startswith(
+        "20260508T120730000000Z-"
+    )
+
+
+def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
+    """Two timestamps in the same wall-clock second but different microseconds
+    must produce distinct dirnames — this is the collision the format change
+    eliminates (dotfiles-nen.16)."""
+    a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=timezone.utc)
+    b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=timezone.utc)
+    assert transition_dirname(a, "install", "vmh") != transition_dirname(
+        b, "install", "vmh"
+    )
 
 
 def test_now_utc_is_aware() -> None:
@@ -129,7 +158,7 @@ def test_make_meta_uses_current_host_and_version() -> None:
 
 
 def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
-    target = tmp_path / "20260507T120000Z-install-vmh"
+    target = tmp_path / "20260507T120000000000Z-install-vmh"
     meta = TransitionMeta(
         command=TransitionCommand.INSTALL,
         profile="vmh",
@@ -332,7 +361,7 @@ def test_load_latest_returns_none_when_no_match(
 ) -> None:
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     _stub_transition(
-        tmp_path / "transitions" / "20260507T120000Z-install-other",
+        tmp_path / "transitions" / "20260507T120000000000Z-install-other",
         profile="other",
     )
     assert load_latest("vmh") is None
@@ -344,8 +373,8 @@ def test_load_latest_picks_most_recent(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    older = root / "20260507T090000Z-install-vmh"
-    newer = root / "20260507T170000Z-install-vmh"
+    older = root / "20260507T090000000000Z-install-vmh"
+    newer = root / "20260507T170000000000Z-install-vmh"
     _stub_transition(older, profile="vmh")
     _stub_transition(newer, profile="vmh")
     assert load_latest("vmh") == newer
@@ -360,7 +389,7 @@ def test_load_latest_does_not_match_profile_substring(
     root = tmp_path / "transitions"
     root.mkdir()
     # Note dirname suffix is '-headless' but meta.json says 'vm-headless'.
-    decoy = root / "20260507T120000Z-install-vm-headless"
+    decoy = root / "20260507T120000000000Z-install-vm-headless"
     _stub_transition(decoy, profile="vm-headless")
     # Looking for 'headless' must NOT pick up vm-headless.
     assert load_latest("headless") is None
@@ -496,12 +525,12 @@ def test_list_transitions_returns_chronological_default(
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(
-        root / "20260507T090000Z-install-vmh",
+        root / "20260507T090000000000Z-install-vmh",
         profile="vmh",
         timestamp="2026-05-07T09:00:00+00:00",
     )
     _stub_full_transition(
-        root / "20260507T170000Z-sync-vmh",
+        root / "20260507T170000000000Z-sync-vmh",
         profile="vmh",
         command="sync",
         timestamp="2026-05-07T17:00:00+00:00",
@@ -518,9 +547,9 @@ def test_list_transitions_reverse_flips_order(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub_full_transition(root / "20260507T090000Z-install-vmh", profile="vmh")
+    _stub_full_transition(root / "20260507T090000000000Z-install-vmh", profile="vmh")
     _stub_full_transition(
-        root / "20260507T170000Z-sync-vmh", profile="vmh", command="sync"
+        root / "20260507T170000000000Z-sync-vmh", profile="vmh", command="sync"
     )
 
     listings = list_transitions(reverse=True)
@@ -534,10 +563,10 @@ def test_list_transitions_profile_filter_or_match(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub_full_transition(root / "20260507T090000Z-install-vmh", profile="vmh")
-    _stub_full_transition(root / "20260507T100000Z-install-ws", profile="ws")
+    _stub_full_transition(root / "20260507T090000000000Z-install-vmh", profile="vmh")
+    _stub_full_transition(root / "20260507T100000000000Z-install-ws", profile="ws")
     _stub_full_transition(
-        root / "20260507T110000Z-install-other", profile="other"
+        root / "20260507T110000000000Z-install-other", profile="other"
     )
 
     listings = list_transitions(profile_filter=["vmh", "ws"])
@@ -555,13 +584,13 @@ def test_list_transitions_skips_corrupted_dirs(
     root = tmp_path / "transitions"
     root.mkdir()
     # No meta.json at all.
-    (root / "20260507T080000Z-broken").mkdir()
+    (root / "20260507T080000000000Z-broken").mkdir()
     # Malformed JSON.
-    bad = root / "20260507T090000Z-malformed-vmh"
+    bad = root / "20260507T090000000000Z-malformed-vmh"
     bad.mkdir()
     (bad / "meta.json").write_text("{not json", encoding="utf-8")
     # Valid.
-    _stub_full_transition(root / "20260507T100000Z-install-vmh", profile="vmh")
+    _stub_full_transition(root / "20260507T100000000000Z-install-vmh", profile="vmh")
 
     listings = list_transitions()
 
@@ -576,7 +605,7 @@ def test_list_transitions_file_count_and_ext_count(
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(
-        root / "20260507T090000Z-install-vmh",
+        root / "20260507T090000000000Z-install-vmh",
         profile="vmh",
         paths=["/a", "/b", "/c"],
         extensions_added=["x.y", "z.w"],
@@ -595,7 +624,7 @@ def test_resolve_transition_prefix_exact_match(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    target = root / "20260507T120000Z-install-vmh"
+    target = root / "20260507T120000000000Z-install-vmh"
     _stub_full_transition(target, profile="vmh")
 
     assert resolve_transition_prefix(target.name) == target
@@ -607,7 +636,7 @@ def test_resolve_transition_prefix_unique_prefix(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    target = root / "20260507T120000Z-install-vmh"
+    target = root / "20260507T120000000000Z-install-vmh"
     _stub_full_transition(target, profile="vmh")
 
     assert resolve_transition_prefix("20260507T120") == target
@@ -620,7 +649,7 @@ def test_resolve_transition_prefix_zero_match_raises(
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(
-        root / "20260507T120000Z-install-vmh", profile="vmh"
+        root / "20260507T120000000000Z-install-vmh", profile="vmh"
     )
 
     with pytest.raises(MySetupError, match="no transition matching prefix"):
@@ -633,8 +662,8 @@ def test_resolve_transition_prefix_ambiguous_lists_candidates(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    a = root / "20260507T120000Z-install-vmh"
-    b = root / "20260507T130000Z-sync-vmh"
+    a = root / "20260507T120000000000Z-install-vmh"
+    b = root / "20260507T130000000000Z-sync-vmh"
     _stub_full_transition(a, profile="vmh")
     _stub_full_transition(b, profile="vmh", command="sync")
 

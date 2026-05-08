@@ -75,13 +75,13 @@ def test_list_renders_columns_and_chronological_order(
     root.mkdir()
     _stub(
         root,
-        dirname="20260507T090000Z-install-vmh",
+        dirname="20260507T090000000000Z-install-vmh",
         profile="vmh",
         timestamp="2026-05-07T09:00:00+00:00",
     )
     _stub(
         root,
-        dirname="20260507T170000Z-sync-vmh",
+        dirname="20260507T170000000000Z-sync-vmh",
         profile="vmh",
         command="sync",
         timestamp="2026-05-07T17:00:00+00:00",
@@ -108,11 +108,11 @@ def test_list_reverse_flips_order(
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(
-        root, dirname="20260507T090000Z-install-vmh", profile="vmh"
+        root, dirname="20260507T090000000000Z-install-vmh", profile="vmh"
     )
     _stub(
         root,
-        dirname="20260507T170000Z-sync-vmh",
+        dirname="20260507T170000000000Z-sync-vmh",
         profile="vmh",
         command="sync",
     )
@@ -136,9 +136,9 @@ def test_list_profile_filter_repeatable(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub(root, dirname="20260507T090000Z-install-vmh", profile="vmh")
-    _stub(root, dirname="20260507T100000Z-install-ws", profile="ws")
-    _stub(root, dirname="20260507T110000Z-install-other", profile="other")
+    _stub(root, dirname="20260507T090000000000Z-install-vmh", profile="vmh")
+    _stub(root, dirname="20260507T100000000000Z-install-ws", profile="ws")
+    _stub(root, dirname="20260507T110000000000Z-install-other", profile="other")
 
     result = CliRunner().invoke(
         app, ["transitions", "list", "--profile=vmh", "--profile=ws"]
@@ -158,7 +158,7 @@ def test_show_resolves_unique_prefix(
     root.mkdir()
     _stub(
         root,
-        dirname="20260507T120000Z-install-vmh",
+        dirname="20260507T120000000000Z-install-vmh",
         profile="vmh",
         paths=["/tmp/test-show-modified.txt"],
         # Sentinel patch with one modified file.
@@ -175,7 +175,7 @@ def test_show_resolves_unique_prefix(
 
     assert result.exit_code == 0, result.output
     assert "DIRECTORY" in result.output
-    assert "20260507T120000Z-install-vmh" in result.output
+    assert "20260507T120000000000Z-install-vmh" in result.output
     assert "FILES" in result.output
     assert "modified" in result.output
     assert "/tmp/test-show-modified.txt" in result.output
@@ -187,10 +187,10 @@ def test_show_ambiguous_prefix_lists_candidates(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub(root, dirname="20260507T120000Z-install-vmh", profile="vmh")
+    _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
     _stub(
         root,
-        dirname="20260507T130000Z-sync-vmh",
+        dirname="20260507T130000000000Z-sync-vmh",
         profile="vmh",
         command="sync",
     )
@@ -203,8 +203,8 @@ def test_show_ambiguous_prefix_lists_candidates(
     assert isinstance(result.exception, MySetupError)
     msg = str(result.exception)
     assert "matches 2 transitions" in msg
-    assert "20260507T120000Z-install-vmh" in msg
-    assert "20260507T130000Z-sync-vmh" in msg
+    assert "20260507T120000000000Z-install-vmh" in msg
+    assert "20260507T130000000000Z-sync-vmh" in msg
 
 
 def test_show_zero_match_prefix_errors(
@@ -213,7 +213,7 @@ def test_show_zero_match_prefix_errors(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub(root, dirname="20260507T120000Z-install-vmh", profile="vmh")
+    _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
 
     from my_setup.errors import MySetupError
 
@@ -233,7 +233,7 @@ def test_show_omits_files_section_when_no_patch(
     root.mkdir()
     _stub(
         root,
-        dirname="20260507T120000Z-install-vmh",
+        dirname="20260507T120000000000Z-install-vmh",
         profile="vmh",
         extensions_added=["x.y"],
     )
@@ -254,7 +254,7 @@ def test_show_omits_extensions_section_when_absent(
     root.mkdir()
     _stub(
         root,
-        dirname="20260507T120000Z-install-vmh",
+        dirname="20260507T120000000000Z-install-vmh",
         profile="vmh",
         paths=["/tmp/test-show-no-exts.txt"],
         patch_text=(

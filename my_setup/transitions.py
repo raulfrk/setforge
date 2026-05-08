@@ -86,10 +86,13 @@ def now_utc() -> datetime:
 def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
     """Return the directory name for one transition.
 
-    Format: ``YYYYMMDDTHHMMSSZ-<command>-<profile>`` so that lexicographic
-    sort matches chronological sort and ``load_latest`` is a single ``max()``.
+    Format: ``YYYYMMDDTHHMMSSffffffZ-<command>-<profile>`` (microseconds
+    appended; ``ffffff`` is six-digit zero-padded microseconds) so that
+    lexicographic sort matches chronological sort and ``load_latest`` is
+    a single ``max()``. Microsecond precision avoids same-second
+    dirname collisions when state-changing commands run rapidly.
     """
-    iso = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    iso = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{iso}-{command}-{profile}"
 
 
