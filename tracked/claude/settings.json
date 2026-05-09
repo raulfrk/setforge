@@ -1,8 +1,6 @@
 {
   "agentPushNotifEnabled": true,
-  "env": {
-    "BEADS_DIR": "/home/raul/.beads"
-  },
+  "env": {},
   "hooks": {
     "PreCompact": [
       {
@@ -29,12 +27,7 @@
   },
   "outputStyle": "Explanatory",
   "permissions": {
-    "allow": [
-      "Bash(bd *)",
-      "Bash(bd)",
-      "Skill(superpowers:*)",
-      "Skill(wiki:*)"
-    ]
+    "allow": ["Bash(bd *)", "Bash(bd)", "Skill(superpowers:*)", "Skill(wiki:*)"]
   },
   "skipAutoPermissionPrompt": true,
   "theme": "dark"
