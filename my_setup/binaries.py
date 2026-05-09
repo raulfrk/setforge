@@ -142,6 +142,17 @@ def _validate(name: str, raw_path: str, layer: str) -> Path:
     return p
 
 
+def stderr_of(exc: BaseException) -> str:
+    """Best-effort extraction of stderr from a subprocess exception.
+
+    Returns the stripped stderr if the exception carries one (typically
+    ``CalledProcessError`` or ``TimeoutExpired`` raised from a
+    ``subprocess.run(capture_output=True, ...)`` call), otherwise the
+    exception's ``str()`` form.
+    """
+    return (getattr(exc, "stderr", None) or "").strip() or str(exc)
+
+
 def resolve_binary(name: str) -> Path | None:
     """Resolve ``name`` through the precedence chain.
 

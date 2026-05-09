@@ -985,7 +985,7 @@ def plugin_add(
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             typer.secho(
-                f"ERROR: install failed — {claude_plugins_mod._stderr_of(exc)}",
+                f"ERROR: install failed — {binaries.stderr_of(exc)}",
                 err=True,
                 fg=typer.colors.RED,
             )
@@ -996,7 +996,7 @@ def plugin_add(
                 claude_plugins_mod.plugin_enable(f"{plugin_name}@{mp_name}")
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 typer.secho(
-                    f"ERROR: enable failed — {claude_plugins_mod._stderr_of(exc)}",
+                    f"ERROR: enable failed — {binaries.stderr_of(exc)}",
                     err=True,
                     fg=typer.colors.RED,
                 )

@@ -30,7 +30,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from my_setup.binaries import resolve_binary
+from my_setup.binaries import resolve_binary, stderr_of
 from my_setup.config import (
     Config,
     MarketplaceSource,
@@ -69,10 +69,6 @@ def _get_claude_bin() -> Path:
         )
     _claude_bin = path
     return _claude_bin
-
-
-def _stderr_of(exc: BaseException) -> str:
-    return (getattr(exc, "stderr", None) or "").strip() or str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +124,7 @@ def list_marketplaces() -> dict[str, dict]:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PluginToolMissing(
-            f"`claude plugin marketplace list` failed: {_stderr_of(exc)}"
+            f"`claude plugin marketplace list` failed: {stderr_of(exc)}"
         ) from exc
     entries: list[dict] = json.loads(result.stdout)
     return {e["name"]: e for e in entries if "name" in e}
@@ -152,7 +148,7 @@ def list_installed() -> dict[str, dict]:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PluginToolMissing(
-            f"`claude plugin list` failed: {_stderr_of(exc)}"
+            f"`claude plugin list` failed: {stderr_of(exc)}"
         ) from exc
     entries: list[dict] = json.loads(result.stdout)
     return {e["id"]: e for e in entries if "id" in e}
@@ -337,7 +333,7 @@ def reconcile(
         try:
             marketplace_add(mp_name, cfg.marketplaces[mp_name])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = _stderr_of(exc)
+            msg = stderr_of(exc)
             LOGGER.warning("marketplace_add failed for %s: %s", mp_name, msg)
             failed.append((mp_name, msg))
 
@@ -357,7 +353,7 @@ def reconcile(
         try:
             plugin_install(name, mp)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = _stderr_of(exc)
+            msg = stderr_of(exc)
             LOGGER.warning("plugin_install failed for %s: %s", pid, msg)
             failed.append((pid, msg))
         else:
@@ -368,7 +364,7 @@ def reconcile(
         try:
             plugin_enable(pid)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = _stderr_of(exc)
+            msg = stderr_of(exc)
             LOGGER.warning("plugin_enable failed for %s: %s", pid, msg)
             failed.append((pid, msg))
 
@@ -378,7 +374,7 @@ def reconcile(
             try:
                 plugin_disable(pid)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                msg = _stderr_of(exc)
+                msg = stderr_of(exc)
                 LOGGER.warning("plugin_disable failed for %s: %s", pid, msg)
                 failed.append((pid, msg))
 

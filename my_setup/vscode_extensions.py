@@ -22,7 +22,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from my_setup.binaries import resolve_binary
+from my_setup.binaries import resolve_binary, stderr_of
 from my_setup.config import Extensions, ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
     ConfigError,
@@ -74,10 +74,6 @@ def _ensure_code() -> str:
     return str(path)
 
 
-def _stderr_of(exc: BaseException) -> str:
-    return (getattr(exc, "stderr", None) or "").strip() or str(exc)
-
-
 def list_installed() -> set[str]:
     """Return the set of currently-installed extension IDs.
 
@@ -99,7 +95,7 @@ def list_installed() -> set[str]:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ExtensionInstallFailed(
-            f"`code --list-extensions` failed: {_stderr_of(exc)}"
+            f"`code --list-extensions` failed: {stderr_of(exc)}"
         ) from exc
     return {
         line.strip()
@@ -154,7 +150,7 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
                 timeout=_TIMEOUT_S,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = _stderr_of(exc)
+            msg = stderr_of(exc)
             LOGGER.warning("install failed for %s: %s", name, msg)
             failed.append((name, msg))
 
@@ -173,7 +169,7 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
                 subprocess.CalledProcessError,
                 subprocess.TimeoutExpired,
             ) as exc:
-                msg = _stderr_of(exc)
+                msg = stderr_of(exc)
                 LOGGER.warning("uninstall failed for %s: %s", name, msg)
                 failed.append((name, msg))
 
@@ -203,7 +199,7 @@ def install_one(ext_id: str) -> None:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ExtensionInstallFailed(
-            f"install of {ext_id!r} failed: {_stderr_of(exc)}"
+            f"install of {ext_id!r} failed: {stderr_of(exc)}"
         ) from exc
 
 
@@ -224,7 +220,7 @@ def uninstall_one(ext_id: str) -> None:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ExtensionInstallFailed(
-            f"uninstall of {ext_id!r} failed: {_stderr_of(exc)}"
+            f"uninstall of {ext_id!r} failed: {stderr_of(exc)}"
         ) from exc
 
 
