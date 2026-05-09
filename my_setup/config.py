@@ -294,6 +294,10 @@ def _validate_plugin_references(config: Config) -> None:
     offenders: list[tuple[str, str]] = []
     for profile_name, profile in config.profiles.items():
         for bare_name in profile.claude_plugins:
+            # Skip empty/whitespace refs — Check 5b in _check_profile
+            # catches those with a dedicated "empty ref" message.
+            if not bare_name.strip():
+                continue
             if bare_name not in registry:
                 offenders.append((profile_name, bare_name))
     if offenders:

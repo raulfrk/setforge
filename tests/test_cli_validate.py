@@ -11,6 +11,8 @@ Covers each of the six failure modes plus a clean-run baseline:
 8. Extension include: empty ID → exit 1.
 9. Extension include: duplicate ID → exit 1.
 10. Undefined template variable (StrictUndefined) → exit 1.
+11. claude_plugins: empty ref → exit 1.
+12. claude_plugins: duplicate ref → exit 1.
 """
 
 from pathlib import Path
@@ -355,3 +357,64 @@ profiles:
     # Both missing srcs should be reported
     assert "missing1.txt" in result.output
     assert "missing2.txt" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Test 11: claude_plugins — empty ref
+# ---------------------------------------------------------------------------
+
+
+def test_validate_empty_plugin_ref_exits_1(tmp_path: Path) -> None:
+    """An empty string in claude_plugins → exit 1, message names the profile."""
+    empty_plugin_yaml = """\
+version: 1
+dotfiles:
+  d:
+    src: tracked_file.txt
+    dst: ~/.some-dotfile
+profiles:
+  p:
+    dotfiles: [d]
+    claude_plugins: [""]
+"""
+    cfg = _write_config(tmp_path, empty_plugin_yaml)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "claude_plugins contains empty ref" in result.output
+    assert "p" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Test 12: claude_plugins — duplicate ref
+# ---------------------------------------------------------------------------
+
+
+def test_validate_duplicate_plugin_ref_exits_1(tmp_path: Path) -> None:
+    """A duplicate ref in claude_plugins → exit 1, message names the ref and profile.
+
+    The check runs against the raw profile (before extends-merging) so that
+    duplicates silently dropped by _merge_list are still caught at their source.
+    """
+    dup_plugin_yaml = """\
+version: 1
+dotfiles:
+  d:
+    src: tracked_file.txt
+    dst: ~/.some-dotfile
+marketplaces:
+  my-market:
+    source: github
+    repo: owner/repo
+claude_plugins:
+  myplugin:
+    marketplace: my-market
+profiles:
+  p:
+    dotfiles: [d]
+    claude_plugins: ["myplugin", "myplugin"]
+"""
+    cfg = _write_config(tmp_path, dup_plugin_yaml)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "claude_plugins duplicate" in result.output
+    assert "'myplugin'" in result.output

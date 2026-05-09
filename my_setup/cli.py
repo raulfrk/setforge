@@ -1210,6 +1210,20 @@ def _check_profile(
         else:
             seen_ext.add(ext_id)
 
+    # Check 5b: claude_plugins list — non-empty refs, no duplicates.
+    # Same raw-profile rationale as Check 5: _merge_list dedupes during
+    # resolve_profile, so duplicates would be silently swallowed by the
+    # resolved list. Walk the raw list to catch them at config time.
+    raw_plugins = cfg.profiles[prof_name].claude_plugins
+    seen_plugin: set[str] = set()
+    for plugin_ref in raw_plugins:
+        if not plugin_ref.strip():
+            failures.append(f"{ctx}: claude_plugins contains empty ref")
+        elif plugin_ref in seen_plugin:
+            failures.append(f"{ctx}: claude_plugins duplicate: {plugin_ref!r}")
+        else:
+            seen_plugin.add(plugin_ref)
+
     # Check 6: claude_plugins marketplace-reference internal consistency.
     # Every plugin referenced in the profile must have its marketplace
     # declared in cfg.marketplaces. (Plugin existence in cfg.claude_plugins
