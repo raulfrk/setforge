@@ -1,8 +1,9 @@
 """Tests for the transitions module."""
 
 import json
+import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -730,3 +731,156 @@ def test_transition_listing_dataclass_is_frozen() -> None:
     )
     with pytest.raises(AttributeError):
         listing.command = "sync"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Atomic write (dotfiles-nen.17) — staging dir + os.rename commit marker
+# ---------------------------------------------------------------------------
+
+
+def _make_transition_args(
+    tmp_path: Path,
+) -> tuple[TransitionMeta, dict[Path, str | None], dict[Path, str | None], ExtensionDelta]:
+    """Return a minimal set of args for write_transition suitable for crash tests."""
+    target_file = tmp_path / "live.txt"
+    meta = TransitionMeta(
+        command=TransitionCommand.INSTALL,
+        profile="vmh",
+        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
+        host="h",
+        version="0.1.0",
+    )
+    pre = {target_file: "before\n"}
+    post = {target_file: "after\n"}
+    delta = ExtensionDelta(added=["a.x"], removed=[])
+    return meta, pre, post, delta
+
+
+def test_write_transition_clean_run_no_pending_siblings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean run: target dir exists with meta.json; no .pending-* siblings remain."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    meta, pre, post, delta = _make_transition_args(tmp_path)
+
+    out = write_transition(meta, pre, post, delta)
+
+    assert out.exists()
+    assert (out / "meta.json").exists()
+    root = transitions_root()
+    pending_siblings = [d for d in root.iterdir() if d.name.startswith(".pending-")]
+    assert pending_siblings == [], f"unexpected .pending-* dirs: {pending_siblings}"
+
+
+def test_write_transition_crash_before_rename_leaves_pending_not_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulated crash (os.rename raises) before rename:
+    - No entry is visible to load_latest.
+    - The orphan .pending-* dir exists on disk.
+    """
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    meta, pre, post, delta = _make_transition_args(tmp_path)
+
+    import my_setup.transitions as _transitions_mod
+
+    def _raise_on_rename(src: str | Path, dst: str | Path) -> None:
+        raise SystemExit("simulated crash before rename")
+
+    monkeypatch.setattr(_transitions_mod.os, "rename", _raise_on_rename)
+
+    with pytest.raises(SystemExit):
+        write_transition(meta, pre, post, delta)
+
+    # load_latest must not return anything — no committed transition.
+    assert load_latest("vmh") is None
+
+    # The .pending-* orphan must exist on disk.
+    root = transitions_root()
+    pending = [d for d in root.iterdir() if d.name.startswith(".pending-")]
+    assert len(pending) == 1, f"expected exactly one .pending-* dir, got: {pending}"
+
+
+def test_write_transition_crash_after_rename_before_meta_not_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulated crash (write_meta raises) after rename but before meta.json write:
+    - load_latest returns None (no meta.json in the committed target dir).
+    """
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    meta, pre, post, delta = _make_transition_args(tmp_path)
+
+    import my_setup.transitions as _transitions_mod
+
+    def _raise_on_write_meta(
+        transition_dir: Path,
+        m: TransitionMeta,
+        paths: list[Path] | None = None,
+    ) -> None:
+        raise SystemExit("simulated crash before meta.json")
+
+    monkeypatch.setattr(_transitions_mod, "write_meta", _raise_on_write_meta)
+
+    with pytest.raises(SystemExit):
+        write_transition(meta, pre, post, delta)
+
+    assert load_latest("vmh") is None
+
+
+def test_load_latest_sweeps_stale_pending_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .pending-* dir with mtime > 24h old is removed by load_latest."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+
+    stale_pending = root / ".pending-20260507T120000000000Z-install-vmh"
+    stale_pending.mkdir()
+    past_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).timestamp()
+    os.utime(stale_pending, (past_ts, past_ts))
+
+    load_latest("vmh")  # should sweep the stale dir
+
+    assert not stale_pending.exists(), "stale .pending-* dir should have been removed"
+
+
+def test_load_latest_preserves_fresh_pending_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .pending-* dir with mtime < 24h is preserved (might be an in-flight write)."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+
+    fresh_pending = root / ".pending-20260507T120000000000Z-install-vmh"
+    fresh_pending.mkdir()
+    recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+    os.utime(fresh_pending, (recent_ts, recent_ts))
+
+    load_latest("vmh")  # must NOT remove the fresh dir
+
+    assert fresh_pending.exists(), "fresh .pending-* dir must not be removed"
+
+
+def test_load_latest_skips_pending_dirs_as_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .pending-* dir with a meta.json inside is NOT returned by load_latest
+    (name guard must apply before the meta.json check)."""
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+
+    # Fabricate a .pending-* dir that has a meta.json (shouldn't happen in
+    # practice, but the name guard must still protect against it).
+    pending = root / ".pending-20260507T120000000000Z-install-vmh"
+    pending.mkdir()
+    # Give it a recent mtime so the stale sweep won't remove it.
+    recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+    os.utime(pending, (recent_ts, recent_ts))
+    (pending / "meta.json").write_text(
+        json.dumps({"profile": "vmh", "command": "install"}), encoding="utf-8"
+    )
+
+    assert load_latest("vmh") is None

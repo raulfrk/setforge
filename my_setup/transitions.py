@@ -16,10 +16,11 @@ import difflib
 import json
 import os
 import platform
+import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 
@@ -38,6 +39,7 @@ class TransitionCommand(StrEnum):
 
 _STATE_ENV = "MY_SETUP_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
+_STALE_PENDING_AGE = timedelta(hours=24)
 
 
 def state_root() -> Path:
@@ -247,30 +249,52 @@ def write_transition(
 ) -> Path:
     """Write a complete transition directory under :func:`transitions_root`.
 
-    Layout:
+    Uses a two-phase write with atomic ``os.rename`` as the commit marker so
+    a crash mid-write never leaves a half-formed transition visible to
+    :func:`load_latest`.
+
+    Write order:
+    1. Create ``.pending-<dirname>/`` staging dir.
+    2. Write ``changes.patch`` into staging (if non-empty).
+    3. Write ``extensions.json`` into staging (if non-empty).
+    4. ``os.rename(pending, target)`` — atomic POSIX rename, same fs.
+    5. Write ``meta.json`` inside the now-real ``target/`` dir. ← commit point.
+
+    A crash before step 5 leaves either a ``.pending-<dirname>/`` (skipped by
+    :func:`load_latest` via the ``.pending-`` name guard) or a ``<dirname>/``
+    with no ``meta.json`` (skipped by the existing meta.json filter).
+
+    Layout of the committed directory:
     - ``meta.json`` — always present, includes a ``paths`` field listing
       every absolute path the transition touched.
     - ``changes.patch`` — present iff :func:`compute_patch` returned non-empty.
     - ``extensions.json`` — present iff ``ext_delta`` is non-None and
       non-empty.
 
-    Returns the absolute path of the directory written.
+    Returns the absolute path of the committed directory.
     """
-    target = transitions_root() / transition_dirname(
-        meta.timestamp, meta.command.value, meta.profile
-    )
-    touched = _touched_paths(file_pre, file_post)
-    write_meta(target, meta, paths=touched)
+    root = transitions_root()
+    dirname = transition_dirname(meta.timestamp, meta.command.value, meta.profile)
+    target = root / dirname
+    pending = root / f".pending-{dirname}"
+
+    root.mkdir(parents=True, exist_ok=True)
+    pending.mkdir(parents=True, exist_ok=False)
 
     patch = compute_patch(file_pre, file_post)
     if patch:
-        (target / "changes.patch").write_text(patch, encoding="utf-8")
+        (pending / "changes.patch").write_text(patch, encoding="utf-8")
 
     if ext_delta is not None and not ext_delta.is_empty():
         payload = json.dumps(
             {"added": ext_delta.added, "removed": ext_delta.removed}, indent=2
         ) + "\n"
-        (target / "extensions.json").write_text(payload, encoding="utf-8")
+        (pending / "extensions.json").write_text(payload, encoding="utf-8")
+
+    os.rename(pending, target)
+
+    touched = _touched_paths(file_pre, file_post)
+    write_meta(target, meta, paths=touched)
 
     return target
 
@@ -285,13 +309,28 @@ def load_latest(profile: str) -> Path | None:
     e.g. ``headless`` with ``vm-headless`` — meta.json is the canonical
     identity. Sorts lexicographically by dirname; transition_dirname's
     UTC-ISO prefix makes that equivalent to chronological order.
+
+    Best-effort sweeps ``.pending-*`` dirs older than
+    :data:`_STALE_PENDING_AGE` (24 h) before scanning candidates. These
+    are orphans from a crashed :func:`write_transition`. Fresh pending
+    dirs (a write in progress) are left alone.
     """
     root = transitions_root()
     if not root.exists():
         return None
+
+    now = datetime.now(timezone.utc).timestamp()
+    for d in root.iterdir():
+        if d.is_dir() and d.name.startswith(".pending-"):
+            try:
+                if now - d.stat().st_mtime > _STALE_PENDING_AGE.total_seconds():
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                continue
+
     candidates: list[Path] = []
     for d in root.iterdir():
-        if not d.is_dir():
+        if not d.is_dir() or d.name.startswith(".pending-"):
             continue
         meta_file = d / "meta.json"
         if not meta_file.exists():
