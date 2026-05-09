@@ -489,6 +489,8 @@ def list_transitions(
     keep = set(profile_filter) if profile_filter else None
     listings: list[TransitionListing] = []
     for child in root.iterdir():
+        if child.name.startswith(".pending-"):
+            continue
         if not child.is_dir():
             continue
         listing = _load_listing(child)
@@ -526,6 +528,7 @@ def resolve_transition_prefix(prefix: str) -> Path:
         child
         for child in root.iterdir()
         if child.is_dir()
+        and not child.name.startswith(".pending-")
         and child.name.startswith(prefix)
         and (child / "meta.json").exists()
     )

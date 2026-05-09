@@ -782,12 +782,10 @@ def test_write_transition_crash_before_rename_leaves_pending_not_visible(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     meta, pre, post, delta = _make_transition_args(tmp_path)
 
-    import my_setup.transitions as _transitions_mod
-
     def _raise_on_rename(src: str | Path, dst: str | Path) -> None:
         raise SystemExit("simulated crash before rename")
 
-    monkeypatch.setattr(_transitions_mod.os, "rename", _raise_on_rename)
+    monkeypatch.setattr("my_setup.transitions.os.rename", _raise_on_rename)
 
     with pytest.raises(SystemExit):
         write_transition(meta, pre, post, delta)
@@ -810,8 +808,6 @@ def test_write_transition_crash_after_rename_before_meta_not_visible(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     meta, pre, post, delta = _make_transition_args(tmp_path)
 
-    import my_setup.transitions as _transitions_mod
-
     def _raise_on_write_meta(
         transition_dir: Path,
         m: TransitionMeta,
@@ -819,7 +815,7 @@ def test_write_transition_crash_after_rename_before_meta_not_visible(
     ) -> None:
         raise SystemExit("simulated crash before meta.json")
 
-    monkeypatch.setattr(_transitions_mod, "write_meta", _raise_on_write_meta)
+    monkeypatch.setattr("my_setup.transitions.write_meta", _raise_on_write_meta)
 
     with pytest.raises(SystemExit):
         write_transition(meta, pre, post, delta)
