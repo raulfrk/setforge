@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -231,3 +232,20 @@ def test_ensure_stub_is_idempotent():
     first_mtime = binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns
     binaries.ensure_local_config_stub()
     assert binaries.LOCAL_CONFIG_PATH.stat().st_mtime_ns == first_mtime
+
+
+def test_stderr_of_returns_stripped_stderr_when_present():
+    exc = subprocess.CalledProcessError(
+        1, ["claude"], stderr="  installation failed  \n"
+    )
+    assert binaries.stderr_of(exc) == "installation failed"
+
+
+def test_stderr_of_falls_back_to_str_when_stderr_is_none():
+    exc = subprocess.TimeoutExpired(["claude"], 30)
+    assert binaries.stderr_of(exc) == str(exc)
+
+
+def test_stderr_of_falls_back_to_str_for_generic_exception():
+    exc = ValueError("plain error")
+    assert binaries.stderr_of(exc) == "plain error"
