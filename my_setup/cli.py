@@ -1210,7 +1210,6 @@ def _check_profile(
         else:
             seen_ext.add(ext_id)
 
-    # Check 5b: claude_plugins list — non-empty refs, no duplicates.
     # Same raw-profile rationale as Check 5: _merge_list dedupes during
     # resolve_profile, so duplicates would be silently swallowed by the
     # resolved list. Walk the raw list to catch them at config time.
