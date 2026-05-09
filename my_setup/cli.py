@@ -1157,6 +1157,126 @@ def marketplace_update_cmd(
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
 
+@app.command("validate")
+def validate(
+    profile: str | None = typer.Option(
+        None, "--profile", help="Validate a specific profile."
+    ),
+    all_profiles: bool = typer.Option(
+        False, "--all", help="Validate every profile in the YAML."
+    ),
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Config-shape validation. No filesystem comparison; no live target paths needed."""
+    if profile is not None and all_profiles:
+        typer.secho(
+            "error: --profile and --all are mutually exclusive",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+    if profile is None and not all_profiles:
+        typer.secho(
+            "error: one of --profile or --all is required",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+
+    from jinja2 import TemplateSyntaxError, UndefinedError
+    from pydantic import ValidationError
+
+    from my_setup.compare import resolve_src
+    from my_setup.paths import template_context
+
+    failures: list[str] = []
+
+    # Check 1: Pydantic schema validation + cross-field checks in load_config.
+    try:
+        cfg = load_config(config)
+    except ValidationError as exc:
+        failures.append(f"schema: {exc}")
+        for line in failures:
+            typer.echo(line)
+        raise typer.Exit(1) from exc
+    except MySetupError as exc:
+        failures.append(f"schema: {exc}")
+        for line in failures:
+            typer.echo(line)
+        raise typer.Exit(1) from exc
+
+    repo_root = config.resolve().parent
+
+    profiles_to_check: list[str] = (
+        list(cfg.profiles) if all_profiles else [profile]  # type: ignore[list-item]
+    )
+
+    for prof_name in profiles_to_check:
+        ctx = f"profile {prof_name!r}"
+
+        # Check 2: Profile resolution (covers missing profiles + cycle detection).
+        try:
+            resolved = resolve_profile(cfg, prof_name)
+        except MySetupError as exc:
+            failures.append(f"{ctx}: {exc}")
+            continue
+
+        for dotfile_name in resolved.dotfiles:
+            dotfile = cfg.dotfiles[dotfile_name]
+            dot_ctx = f"{ctx}: dotfile {dotfile_name!r}"
+
+            # Check 3: Jinja2 dst template renderability.
+            if dotfile.template:
+                try:
+                    from jinja2 import Template as _Template
+
+                    _Template(dotfile.dst).render(**template_context())
+                except (TemplateSyntaxError, UndefinedError) as exc:
+                    failures.append(f"{dot_ctx}: unrenderable dst template: {exc}")
+                    continue
+
+            # Check 4: tracked src exists on disk.
+            src = resolve_src(dotfile, repo_root)
+            if not src.exists():
+                failures.append(
+                    f"{dot_ctx}: src {dotfile.src} does not exist"
+                )
+
+        # Check 5: extension include list — non-empty IDs, no duplicates.
+        seen_ext: set[str] = set()
+        for ext_id in resolved.extensions.include:
+            if not ext_id.strip():
+                failures.append(f"{ctx}: extensions.include contains empty ID")
+            elif ext_id in seen_ext:
+                failures.append(
+                    f"{ctx}: extensions.include duplicate: {ext_id!r}"
+                )
+            else:
+                seen_ext.add(ext_id)
+
+        # Check 6: claude_plugins marketplace-reference internal consistency.
+        # Every plugin referenced in the profile must have its marketplace
+        # declared in cfg.marketplaces. (Plugin existence in cfg.claude_plugins
+        # is already validated by load_config → _validate_plugin_references.)
+        marketplace_keys = set(cfg.marketplaces)
+        for plugin_ref in resolved.claude_plugins:
+            bare_name = plugin_ref.split("@")[0]
+            if bare_name in cfg.claude_plugins:
+                mp_name = cfg.claude_plugins[bare_name].marketplace
+                if mp_name not in marketplace_keys:
+                    failures.append(
+                        f"{ctx}: plugin {bare_name!r} references unknown "
+                        f"marketplace {mp_name!r}"
+                    )
+
+    if failures:
+        for line in failures:
+            typer.echo(line)
+        raise typer.Exit(1)
+
+    typer.echo("ok")
+
+
 def main() -> None:
     """Entry point that wraps ``app`` with :class:`MySetupError` handling."""
     try:

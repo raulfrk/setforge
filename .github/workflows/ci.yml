@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
+      - run: uv run my-setup validate --all
       - run: uv run pytest
 
   secrets-scan:
