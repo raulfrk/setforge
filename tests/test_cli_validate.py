@@ -418,3 +418,70 @@ profiles:
     assert result.exit_code == 1, result.output
     assert "claude_plugins duplicate" in result.output
     assert "'myplugin'" in result.output
+
+
+def test_validate_double_empty_emits_single_message_per_field(tmp_path: Path) -> None:
+    """N empty entries collapse to one error line per field per profile.
+
+    Without dedup, ['', ''] would produce two identical 'contains empty'
+    messages — same shape as Check 5 / 5b's loop firing per-iteration.
+    """
+    double_empty_yaml = """\
+version: 1
+dotfiles:
+  d:
+    src: tracked_file.txt
+    dst: ~/.some-dotfile
+marketplaces:
+  my-market:
+    source: github
+    repo: owner/repo
+claude_plugins:
+  myplugin:
+    marketplace: my-market
+profiles:
+  p:
+    dotfiles: [d]
+    extensions:
+      include: ["", ""]
+    claude_plugins: ["", ""]
+"""
+    cfg = _write_config(tmp_path, double_empty_yaml)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert result.output.count("extensions.include contains empty ID") == 1
+    assert result.output.count("claude_plugins contains empty ref") == 1
+
+
+def test_validate_triple_duplicate_emits_single_message_per_value(tmp_path: Path) -> None:
+    """N copies of the same value collapse to one duplicate line per value per field.
+
+    Without dedup, ['x', 'x', 'x'] would produce two identical 'duplicate' messages
+    (one per repeat after the first) — same shape as Check 5 / 5b's loop firing
+    per-iteration on each subsequent occurrence.
+    """
+    triple_dup_yaml = """\
+version: 1
+dotfiles:
+  d:
+    src: tracked_file.txt
+    dst: ~/.some-dotfile
+marketplaces:
+  my-market:
+    source: github
+    repo: owner/repo
+claude_plugins:
+  myplugin:
+    marketplace: my-market
+profiles:
+  p:
+    dotfiles: [d]
+    extensions:
+      include: ["foo.bar", "foo.bar", "foo.bar"]
+    claude_plugins: ["myplugin", "myplugin", "myplugin"]
+"""
+    cfg = _write_config(tmp_path, triple_dup_yaml)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert result.output.count("extensions.include duplicate: 'foo.bar'") == 1
+    assert result.output.count("claude_plugins duplicate: 'myplugin'") == 1

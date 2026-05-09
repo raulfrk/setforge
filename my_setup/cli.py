@@ -1202,11 +1202,17 @@ def _check_profile(
     # _merge_list would silently drop are still caught here.
     raw_include = cfg.profiles[prof_name].extensions.include
     seen_ext: set[str] = set()
+    reported_dup_ext: set[str] = set()
+    empty_reported_ext = False
     for ext_id in raw_include:
         if not ext_id.strip():
-            failures.append(f"{ctx}: extensions.include contains empty ID")
+            if not empty_reported_ext:
+                failures.append(f"{ctx}: extensions.include contains empty ID")
+                empty_reported_ext = True
         elif ext_id in seen_ext:
-            failures.append(f"{ctx}: extensions.include duplicate: {ext_id!r}")
+            if ext_id not in reported_dup_ext:
+                failures.append(f"{ctx}: extensions.include duplicate: {ext_id!r}")
+                reported_dup_ext.add(ext_id)
         else:
             seen_ext.add(ext_id)
 
@@ -1215,11 +1221,17 @@ def _check_profile(
     # resolved list. Walk the raw list to catch them at config time.
     raw_plugins = cfg.profiles[prof_name].claude_plugins
     seen_plugin: set[str] = set()
+    reported_dup_plugin: set[str] = set()
+    empty_reported_plugin = False
     for plugin_ref in raw_plugins:
         if not plugin_ref.strip():
-            failures.append(f"{ctx}: claude_plugins contains empty ref")
+            if not empty_reported_plugin:
+                failures.append(f"{ctx}: claude_plugins contains empty ref")
+                empty_reported_plugin = True
         elif plugin_ref in seen_plugin:
-            failures.append(f"{ctx}: claude_plugins duplicate: {plugin_ref!r}")
+            if plugin_ref not in reported_dup_plugin:
+                failures.append(f"{ctx}: claude_plugins duplicate: {plugin_ref!r}")
+                reported_dup_plugin.add(plugin_ref)
         else:
             seen_plugin.add(plugin_ref)
 
