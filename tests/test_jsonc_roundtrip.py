@@ -81,7 +81,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("my_setup.extensions.resolve_binary", lambda name: None)
+    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda name: None)
 
 
 def test_install_preserves_tracked_comments_and_keeps_user_keys(

@@ -64,9 +64,9 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
     return cfg
 
 
@@ -147,7 +147,7 @@ def test_ext_reconcile_clean_state_exits_0(
     cfg = _setup_fixture(tmp_path, monkeypatch)
     # Pre-install the declared extension so there's no drift.
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def fake_run(args, **kwargs):
@@ -155,7 +155,7 @@ def test_ext_reconcile_clean_state_exits_0(
             return subprocess.CompletedProcess(args, 0, "declared.one\n", "")
         return subprocess.CompletedProcess(args, 0, "", "")
 
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
     runner = CliRunner()
     result = runner.invoke(
         app, ["ext", "reconcile", "--profile=vmh", f"--config={cfg}"]
@@ -200,7 +200,7 @@ def _setup_install_fixture(
 
     # Disable extension reconcile (no code binary)
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: None
+        "my_setup.vscode_extensions.resolve_binary", lambda _: None
     )
     # Disable transition writes for most tests
     monkeypatch.setattr(
@@ -247,7 +247,7 @@ def test_install_unexpected_drift_exits_1_with_message(
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
 
-    monkeypatch.setattr("my_setup.extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
     monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
         "my_setup.transitions.write_transition",
@@ -309,7 +309,7 @@ def test_install_auto_accept_live_resolves_drift(
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
 
-    monkeypatch.setattr("my_setup.extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
     monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
         "my_setup.transitions.write_transition",

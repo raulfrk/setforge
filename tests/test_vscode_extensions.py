@@ -13,7 +13,7 @@ import pytest
 
 from my_setup.config import Extensions, ReconcilePolicy
 from my_setup.errors import ExtensionToolMissing
-from my_setup.extensions import (
+from my_setup.vscode_extensions import (
     ReconcileReport,
     add_to_include,
     capture_extensions,
@@ -65,10 +65,10 @@ def fake_code(monkeypatch: pytest.MonkeyPatch):
     def factory(installed: list[str]) -> FakeCode:
         fake = FakeCode(installed)
         monkeypatch.setattr(
-            "my_setup.extensions.resolve_binary",
+            "my_setup.vscode_extensions.resolve_binary",
             lambda name: Path("/usr/bin/code") if name == "code" else None,
         )
-        monkeypatch.setattr("my_setup.extensions.subprocess.run", fake.run)
+        monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake.run)
         return fake
 
     return factory
@@ -98,7 +98,7 @@ def test_list_installed_skips_non_extension_id_lines(fake_code) -> None:
 
 
 def test_missing_code_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("my_setup.extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
     with pytest.raises(ExtensionToolMissing, match="not found"):
         list_installed()
     with pytest.raises(ExtensionToolMissing, match="not found"):
@@ -210,11 +210,11 @@ def test_clean_state_returns_falsy_report(fake_code) -> None:
 def test_install_one_wraps_called_process_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.extensions import install_one
+    from my_setup.vscode_extensions import install_one
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
@@ -222,23 +222,23 @@ def test_install_one_wraps_called_process_error(
             1, args, output="", stderr="marketplace 404"
         )
 
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed, match="marketplace 404"):
         install_one("ghost.extension")
 
 
 def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from my_setup.extensions import install_one
+    from my_setup.vscode_extensions import install_one
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
         raise subprocess.TimeoutExpired(args, 30)
 
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed):
         install_one("slow.one")
 
@@ -249,7 +249,7 @@ def test_list_installed_wraps_failure(
     from my_setup.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs):
@@ -257,7 +257,7 @@ def test_list_installed_wraps_failure(
             2, args, output="", stderr="connection refused"
         )
 
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", boom)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed, match="connection refused"):
         list_installed()
 
@@ -267,7 +267,7 @@ def test_reconcile_continues_after_install_failure(
 ) -> None:
     """One bad install must not abort the rest of the loop."""
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     state = {"installed": ["existing.one"], "calls": []}
@@ -290,7 +290,7 @@ def test_reconcile_continues_after_install_failure(
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(args)
 
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
 
     ext = Extensions(
         include=["existing.one", "broken.one", "good.one"],

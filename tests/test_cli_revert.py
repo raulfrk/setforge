@@ -49,12 +49,12 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `code` CLI absent (warn-and-skip for extension leg) without
     breaking lookups for other binaries (e.g. `patch` for revert).
 
-    ``extensions.resolve_binary`` and ``transitions.resolve_binary`` are
-    distinct module attributes even though they reference the same
+    ``vscode_extensions.resolve_binary`` and ``transitions.resolve_binary``
+    are distinct module attributes even though they reference the same
     function; patching one leaves the other free to hit real PATH.
     """
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary",
+        "my_setup.vscode_extensions.resolve_binary",
         lambda name: None,
     )
 
@@ -250,10 +250,10 @@ def test_revert_restores_extension_state_to_pre_install(
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary",
+        "my_setup.vscode_extensions.resolve_binary",
         lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
 
     pre_install = sorted(state["installed"])
 
@@ -381,10 +381,10 @@ def test_revert_continues_after_extension_uninstall_failure(
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.extensions.resolve_binary",
+        "my_setup.vscode_extensions.resolve_binary",
         lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
-    monkeypatch.setattr("my_setup.extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
 
     runner = CliRunner()
     install_result = runner.invoke(
