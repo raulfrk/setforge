@@ -52,7 +52,7 @@ uv run my-setup compare --profile=vm-headless     # show drift between live and 
 uv run my-setup sync    --profile=vm-headless     # capture live edits into tracked/
 uv run my-setup install --profile=vm-headless     # deploy tracked/ -> live
 uv run my-setup revert  --profile=vm-headless     # undo the most recent install/sync
-uv run my-setup validate --profile=vm-headless     # config-shape check (no live target paths needed)
+uv run my-setup validate --profile=vm-headless    # config-shape check (no live target paths needed)
 uv run my-setup --help                             # list all commands
 ```
 
