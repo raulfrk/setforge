@@ -22,8 +22,8 @@ from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
-from my_setup import vscode_extensions
 from my_setup import merge as merge_mod
+from my_setup import vscode_extensions
 from my_setup import transitions
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, ReconcilePolicy, load_config, resolve_profile
