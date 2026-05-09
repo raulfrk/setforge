@@ -983,6 +983,13 @@ def plugin_add(
             typer.secho(
                 f"warning: skipping install — {exc}", err=True, fg=typer.colors.YELLOW
             )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            typer.secho(
+                f"ERROR: install failed — {claude_plugins_mod._stderr_of(exc)}",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1) from exc
         else:
             typer.echo(f"installed plugin: {plugin_name}@{mp_name}")
             try:

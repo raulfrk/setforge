@@ -1122,3 +1122,125 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
     # Install half ran successfully before the strict failure.
     assert "installed plugin: newp@existing-mp" in result.output
     assert fake.install_args() == ["newp@existing-mp"]
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-oyv — `plugin add` install subprocess error handling
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
+    fake_claude, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plugin add` must exit 1 with a red ERROR when install raises CalledProcessError.
+
+    The enable step must NOT be called after a failed install.
+    """
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    p = _write_yaml_fixture(tmp_path)
+    fake = fake_claude()
+    real_run = fake.run
+
+    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd[:2] == ["plugin", "install"]:
+            fake.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="install exploded"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "plugin", "add", "newp@existing-mp",
+            "--from=github:foo/bar",
+            "--profile=myprofile",
+            f"--config={p}",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "ERROR: install failed" in result.output
+    assert "install exploded" in result.output
+    # Enable must NOT have been called.
+    assert fake.enable_args() == []
+
+
+def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
+    fake_claude, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plugin add` must exit 1 with a red ERROR when install raises TimeoutExpired.
+
+    The enable step must NOT be called after a timed-out install.
+    """
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+
+    p = _write_yaml_fixture(tmp_path)
+    fake = fake_claude()
+    real_run = fake.run
+
+    def timing_out_run(args, **kwargs) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd[:2] == ["plugin", "install"]:
+            fake.calls.append(list(args))
+            raise subprocess.TimeoutExpired(list(args), timeout=30)
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", timing_out_run)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "plugin", "add", "newp@existing-mp",
+            "--from=github:foo/bar",
+            "--profile=myprofile",
+            f"--config={p}",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "ERROR: install failed" in result.output
+    # Enable must NOT have been called.
+    assert fake.enable_args() == []
+
+
+def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plugin add` must warn and continue (exit 0) when claude binary is absent.
+
+    PluginToolMissing from plugin_install keeps the warn-and-skip path;
+    enable is also skipped since there is nothing installed.
+    """
+    from typer.testing import CliRunner
+    from my_setup.cli import app
+    from my_setup.errors import PluginToolMissing
+
+    p = _write_yaml_fixture(tmp_path)
+
+    # Make claude binary resolution always fail.
+    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "plugin", "add", "newp@existing-mp",
+            "--from=github:foo/bar",
+            "--profile=myprofile",
+            f"--config={p}",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # typer CliRunner mixes stderr into result.output
+    assert "warning: skipping install" in result.output
+    # No install success message, no enable.
+    assert "installed plugin" not in result.output
+    assert "enabled plugin" not in result.output
