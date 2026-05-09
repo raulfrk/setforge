@@ -12,6 +12,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 ## Communication
 
 <!-- my-setup:user-section start communication -->
+- **[CRITICAL] Ground every decision-ask in concrete context before asking.** Before presenting design questions, options, plans, specs, or any choice that depends on the current state of code: surface WHAT each thing is (file:line refs, current code shapes), WHY it's a problem (the specific smell, bug, or constraint at stake), THEN options as concrete code shapes — never abstract A/B/C without grounding. Applies to brainstorming, plan mode, exploratory questions, and inline trade-offs alike. *Highest-priority communication rule; overrides terseness preferences when they conflict.*
 - Goals (in order): high-quality output, high productivity, and learning where it's cheap. Surface trade-offs on multi-option decisions and let me pick — that's where learning happens cheaply without slowing throughput.
 - Plan mode whenever you need user input — design choice, ambiguity, multi-option decision. Mechanical edits with no input skip it.
 - Every plan mode response opens with a **TL;DR** — one or two sentences naming the proposed approach and the key trade-off — before any sectioned plan body.
