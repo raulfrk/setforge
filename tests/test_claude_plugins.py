@@ -1206,6 +1206,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
     )
     assert result.exit_code == 1, result.output
     assert "ERROR: install failed" in result.output
+    assert "timed out" in result.output
     # Enable must NOT have been called.
     assert fake.enable_args() == []
 
@@ -1224,9 +1225,12 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 
     p = _write_yaml_fixture(tmp_path)
 
-    # Make claude binary resolution always fail.
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
-    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
+    # Directly raise PluginToolMissing from plugin_install to test the handler
+    # in cli.py's plugin_add in isolation, independent of binary-resolution internals.
+    def fake_install(name: str, marketplace: str) -> None:
+        raise PluginToolMissing("fake message")
+
+    monkeypatch.setattr("my_setup.claude_plugins.plugin_install", fake_install)
 
     runner = CliRunner()
     result = runner.invoke(
