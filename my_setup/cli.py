@@ -22,7 +22,7 @@ from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import deploy
-from my_setup import vscode_extensions as extensions_mod
+from my_setup import vscode_extensions
 from my_setup import merge as merge_mod
 from my_setup import transitions
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
@@ -198,7 +198,7 @@ def install(
 
     ext_delta: transitions.ExtensionDelta | None = None
     try:
-        report = extensions_mod.reconcile(resolved.extensions)
+        report = vscode_extensions.reconcile(resolved.extensions)
     except ExtensionToolMissing as exc:
         typer.secho(
             f"warning: skipping extension reconcile — {exc}",
@@ -487,7 +487,7 @@ def sync(
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
     try:
-        changed = extensions_mod.capture_extensions(config, profile)
+        changed = vscode_extensions.capture_extensions(config, profile)
     except ExtensionToolMissing as exc:
         typer.secho(
             f"warning: skipping extension capture — {exc}",
@@ -526,7 +526,7 @@ def _reverse_extensions(
     failed: list[tuple[str, str]] = []
     for ext_id in delta.get("added", []):
         try:
-            extensions_mod.uninstall_one(ext_id)
+            vscode_extensions.uninstall_one(ext_id)
             reverse_removed.append(ext_id)
         except ExtensionToolMissing as exc:
             typer.secho(
@@ -543,7 +543,7 @@ def _reverse_extensions(
             )
     for ext_id in delta.get("removed", []):
         try:
-            extensions_mod.install_one(ext_id)
+            vscode_extensions.install_one(ext_id)
             reverse_added.append(ext_id)
         except ExtensionToolMissing as exc:
             typer.secho(
@@ -723,7 +723,7 @@ def ext_list(
     declared_exclude = set(resolved.extensions.exclude)
 
     try:
-        installed = extensions_mod.list_installed()
+        installed = vscode_extensions.list_installed()
     except ExtensionToolMissing as exc:
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
         installed = set()
@@ -758,7 +758,7 @@ def ext_add(
     ),
 ) -> None:
     """Append an extension ID to the profile's extensions.include list."""
-    added = extensions_mod.add_to_include(config, profile, extension_id)
+    added = vscode_extensions.add_to_include(config, profile, extension_id)
     if added:
         typer.echo(f"added to {profile}.extensions.include: {extension_id}")
     else:
@@ -767,7 +767,7 @@ def ext_add(
         )
     if install:
         try:
-            extensions_mod.install_one(extension_id)
+            vscode_extensions.install_one(extension_id)
             typer.echo(f"installed  {extension_id}")
         except ExtensionToolMissing as exc:
             typer.secho(
@@ -789,7 +789,7 @@ def ext_remove(
     ),
 ) -> None:
     """Remove an extension ID from the profile's extensions.include list."""
-    changed = extensions_mod.remove_from_include(
+    changed = vscode_extensions.remove_from_include(
         config, profile, extension_id, add_to_exclude_list=exclude
     )
     if changed:
@@ -815,7 +815,7 @@ def ext_reconcile(
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:
-        report = extensions_mod.reconcile(resolved.extensions, dry_run=dry_run)
+        report = vscode_extensions.reconcile(resolved.extensions, dry_run=dry_run)
     except ExtensionToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
