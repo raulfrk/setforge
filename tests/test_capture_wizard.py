@@ -537,7 +537,6 @@ def test_capture_profile_auto_keep_tracked_rejects_all_drift(
         preserve_user_keys_deep=["deep_root"],
     )
     my_setup_yaml = _make_my_setup_yaml(tmp_path)
-    src.read_text()
 
     capture_profile(
         config,
