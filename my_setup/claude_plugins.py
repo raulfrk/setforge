@@ -56,7 +56,8 @@ def _get_claude_bin() -> Path:
     :func:`functools.lru_cache`. Tests that change the resolved path
     between cases must call ``_get_claude_bin.cache_clear()``.
     Raises :class:`PluginToolMissing` when the resolved path is ``None``
-    (binary not found at any layer) or when it is not executable.
+    (binary not found at any layer). Non-executable paths surface as
+    :class:`BinaryOverrideInvalid` propagated from :func:`resolve_binary`.
     """
     path = resolve_binary(_CLAUDE_BIN_NAME)
     if path is None:
