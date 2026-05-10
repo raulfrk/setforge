@@ -52,9 +52,7 @@ def test_capture_strips_user_sections_when_no_tracked_exists(
         "<!-- my-setup:user-section end -->\n"
         "footer\n",
     )
-    capture_dotfile(
-        src, dst, preserve_user_sections=True, preserve_user_keys=[]
-    )
+    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "host-specific stuff" not in text
     assert "<!-- my-setup:user-section start -->" in text
@@ -87,9 +85,7 @@ def test_capture_keep_defaults_preserves_tracked_marker_bodies(
         "<!-- my-setup:user-section end -->\n"
         "footer\n",
     )
-    capture_dotfile(
-        src, dst, preserve_user_sections=True, preserve_user_keys=[]
-    )
+    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "tracked default bullet" in text
     assert "live host-only edit" not in text
@@ -118,9 +114,7 @@ def test_capture_keep_defaults_propagates_non_marker_edits(
         "<!-- my-setup:user-section end -->\n"
         "new footer\n",
     )
-    capture_dotfile(
-        src, dst, preserve_user_sections=True, preserve_user_keys=[]
-    )
+    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "new header" in text
     assert "new footer" in text
@@ -189,14 +183,9 @@ def test_capture_yaml_preserves_comments(tmp_path: Path) -> None:
     dst = tmp_path / "dst.yaml"
     _write(
         dst,
-        "# leading comment\n"
-        "a: 1  # inline a\n"
-        "b: 2  # inline b\n"
-        "# trailing comment\n",
+        "# leading comment\na: 1  # inline a\nb: 2  # inline b\n# trailing comment\n",
     )
-    capture_dotfile(
-        src, dst, preserve_user_sections=False, preserve_user_keys=["a"]
-    )
+    capture_dotfile(src, dst, preserve_user_sections=False, preserve_user_keys=["a"])
     text = src.read_text()
     assert "# leading comment" in text
     assert "# inline b" in text

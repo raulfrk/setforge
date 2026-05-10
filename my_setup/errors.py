@@ -92,7 +92,7 @@ class BinaryOverrideInvalid(MySetupError):
     and reason as structured fields so callers can render or test
     against them precisely."""
 
-    def __init__(self, *, layer: str, binary: str, path: str, reason: str):
+    def __init__(self, *, layer: str, binary: str, path: str, reason: str) -> None:
         self.layer = layer
         self.binary = binary
         self.path = path

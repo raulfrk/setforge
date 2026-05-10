@@ -55,7 +55,6 @@ from my_setup.errors import CaptureRequiresInteractive
 from my_setup.transitions import TransitionCommand
 from my_setup.wizard import ActionResult, DriftItem
 
-
 __all__ = [
     "CaptureRequiresInteractive",
     "run_capture_wizard",
@@ -126,7 +125,7 @@ def walk_capture_drift(
             continue
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
-        for sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
+        for _sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
             if not sub_src.exists() or not sub_dst.exists():
                 continue
             yield from _walk_one_file(
@@ -172,9 +171,7 @@ def _walk_one_file(
     # `dotfiles-nen.19`. JSONC deep-merge top-level overlay still flows
     # through the existing capture-on-deploy primitives (``overlay_user_keys``
     # at deploy time) — capture-time wizard skips it for JSONC files.
-    deep_paths_to_walk = (
-        preserve_user_keys_deep if fmt != "jsonc" else []
-    )
+    deep_paths_to_walk = preserve_user_keys_deep if fmt != "jsonc" else []
     for deep_path in deep_paths_to_walk:
         tracked_at = _navigate(tracked, deep_path)
         live_at = _navigate(live, deep_path)
@@ -388,9 +385,7 @@ def run_capture_wizard(
         code 130.
     """
     if snapshot_base is None:
-        snapshot_base = (
-            Path.home() / ".local" / "state" / "my-setup" / "sync-snapshots"
-        )
+        snapshot_base = Path.home() / ".local" / "state" / "my-setup" / "sync-snapshots"
     if console is None:
         console = Console()
 

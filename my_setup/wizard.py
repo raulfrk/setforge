@@ -45,13 +45,12 @@ from ruamel.yaml import YAML
 from my_setup import jsonc, transitions, yaml_merge
 from my_setup.transitions import TransitionCommand
 
-
 __all__ = [
     "ActionResult",
     "DriftItem",
     "Snapshot",
-    "prompt_one",
     "apply_action",
+    "prompt_one",
     "run_wizard_loop",
 ]
 
@@ -171,6 +170,7 @@ class Snapshot:
         avoid collisions between files with the same name in different dirs.
         """
         import hashlib
+
         hex_prefix = hashlib.sha256(str(original).encode()).hexdigest()[:8]
         return self.snapshot_dir / f"{hex_prefix}_{original.name}"
 
@@ -252,9 +252,15 @@ def prompt_one(item: DriftItem, console: Console) -> str:
     console.print(t)
 
     console.print("")
-    console.print("   [bold][[k]][/bold] keep tracked       [dim](live overwritten on next deploy)[/dim]")
-    console.print("   [bold][[u]][/bold] use live           [dim](write live value into tracked now)[/dim]")
-    console.print("   [bold][[s]][/bold] save-as-preserved  [dim](extend preserve_user_keys; live stays)[/dim]")
+    console.print(
+        "   [bold][[k]][/bold] keep tracked       [dim](live overwritten on next deploy)[/dim]"
+    )
+    console.print(
+        "   [bold][[u]][/bold] use live           [dim](write live value into tracked now)[/dim]"
+    )
+    console.print(
+        "   [bold][[s]][/bold] save-as-preserved  [dim](extend preserve_user_keys; live stays)[/dim]"
+    )
     console.print("   [bold][[m]][/bold] manual edit")
     console.print("")
 
@@ -311,9 +317,7 @@ def _action_use_live(item: DriftItem) -> ActionResult:
     if item.file_format == "jsonc":
         tracked_text = item.src_path.read_text(encoding="utf-8")
         live_text = item.dst_path.read_text(encoding="utf-8")
-        result_text = jsonc.overlay_user_keys(
-            tracked_text, live_text, [item.key_path]
-        )
+        result_text = jsonc.overlay_user_keys(tracked_text, live_text, [item.key_path])
         item.src_path.write_text(result_text, encoding="utf-8")
     else:
         y = YAML(typ="rt")
@@ -328,7 +332,9 @@ def _action_use_live(item: DriftItem) -> ActionResult:
     return ActionResult.USE_LIVE
 
 
-def _action_save_as_preserved(item: DriftItem, my_setup_yaml_path: Path) -> ActionResult:
+def _action_save_as_preserved(
+    item: DriftItem, my_setup_yaml_path: Path
+) -> ActionResult:
     """Append ``item.key_path`` to the dotfile's ``preserve_user_keys`` in my_setup.yaml."""
     y = YAML(typ="rt")
     with my_setup_yaml_path.open("r", encoding="utf-8") as fh:
@@ -359,9 +365,7 @@ def _action_save_as_preserved(item: DriftItem, my_setup_yaml_path: Path) -> Acti
 def _action_manual_edit(item: DriftItem) -> ActionResult:
     """Sub-prompt y/n; y opens ``$EDITOR`` on the tracked file; n returns pending."""
     file_display = item.src_path
-    yn = _read_one_choice(
-        f"   Open $EDITOR on {file_display} now? (y/n): ", {"y", "n"}
-    )
+    yn = _read_one_choice(f"   Open $EDITOR on {file_display} now? (y/n): ", {"y", "n"})
     if yn == "y":
         editor = os.environ.get("EDITOR", "vi")
         subprocess.run([editor, str(item.src_path)], check=True)
@@ -376,6 +380,7 @@ def _action_manual_edit(item: DriftItem) -> ActionResult:
 
 def _make_signal_handler(snapshot: Snapshot, sig_name: str) -> object:
     """Return a signal handler that restores ``snapshot`` then re-raises the signal."""
+
     def _handler(signum: int, frame: object) -> None:
         n = snapshot.restore()
         print(
@@ -495,10 +500,7 @@ def run_wizard_loop(
     decisions: list[tuple[DriftItem, ActionResult]] = []
 
     with snap:
-        if auto_accept is None:
-            prev_handlers = _install_signal_handlers(snap)
-        else:
-            prev_handlers = {}
+        prev_handlers = _install_signal_handlers(snap) if auto_accept is None else {}
 
         try:
             file_pre = transitions.snapshot_paths(affected_paths)
@@ -509,7 +511,9 @@ def run_wizard_loop(
                 else:
                     choice = prompt_one(item, console)
 
-                result = apply_action(item, choice, my_setup_yaml_path=my_setup_yaml_path)
+                result = apply_action(
+                    item, choice, my_setup_yaml_path=my_setup_yaml_path
+                )
                 decisions.append((item, result))
 
                 if result == ActionResult.MANUAL_PENDING:

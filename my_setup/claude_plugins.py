@@ -96,7 +96,9 @@ class ReconcileReport:
 
     def __bool__(self) -> bool:
         return bool(
-            self.to_install or self.to_enable or self.to_disable
+            self.to_install
+            or self.to_enable
+            or self.to_disable
             or self.marketplaces_added
         )
 
@@ -316,7 +318,10 @@ def reconcile(
         LOGGER.info(
             "reconcile (read-only): to_install=%s to_enable=%s to_disable=%s "
             "marketplaces_to_add=%s",
-            to_install, to_enable, to_disable, mps_to_add,
+            to_install,
+            to_enable,
+            to_disable,
+            mps_to_add,
         )
         return ReconcileReport(
             to_install=[_split_id(pid) for pid in to_install],

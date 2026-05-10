@@ -134,9 +134,7 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
             placeholder_lines = []
 
     for key in sorted(set(live_sections) - consumed):
-        LOGGER.warning(
-            "live has user-section %r not present in tracked; dropping", key
-        )
+        LOGGER.warning("live has user-section %r not present in tracked; dropping", key)
 
     return "".join(out_lines)
 

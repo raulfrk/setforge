@@ -10,14 +10,11 @@ exits non-zero in read-only modes when drift exists, and that
 import subprocess
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
 
 from my_setup.cli import app
-from my_setup.compare import CompareReport, CompareStatus, FileCompare
-
 
 _FIXTURE_YAML = """\
 version: 1
@@ -52,7 +49,9 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     def fake_run(args, **kwargs):
         if args[1] == "--list-extensions":
-            stdout = "\n".join(state["installed"]) + ("\n" if state["installed"] else "")
+            stdout = "\n".join(state["installed"]) + (
+                "\n" if state["installed"] else ""
+            )
             return subprocess.CompletedProcess(args, 0, stdout, "")
         if args[1] == "--install-extension":
             state["installed"].append(args[2])
@@ -192,20 +191,14 @@ def _setup_install_fixture(
     dst.write_text(dst_text, encoding="utf-8")
 
     cfg = tmp_path / "my_setup.yaml"
-    cfg.write_text(
-        _INSTALL_FIXTURE_YAML.format(dst=dst), encoding="utf-8"
-    )
+    cfg.write_text(_INSTALL_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "dotfile.txt").write_text(src_text, encoding="utf-8")
 
     # Disable extension reconcile (no code binary)
-    monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
     # Disable transition writes for most tests
-    monkeypatch.setattr(
-        "my_setup.transitions.ensure_state_dir_writable", lambda: None
-    )
+    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
         "my_setup.transitions.write_transition",
         lambda *a, **kw: tmp_path / "fake_transition",

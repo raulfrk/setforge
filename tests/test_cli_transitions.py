@@ -107,9 +107,7 @@ def test_list_reverse_flips_order(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub(
-        root, dirname="20260507T090000000000Z-install-vmh", profile="vmh"
-    )
+    _stub(root, dirname="20260507T090000000000Z-install-vmh", profile="vmh")
     _stub(
         root,
         dirname="20260507T170000000000Z-sync-vmh",
@@ -258,10 +256,7 @@ def test_show_omits_extensions_section_when_absent(
         profile="vmh",
         paths=["/tmp/test-show-no-exts.txt"],
         patch_text=(
-            "--- /dev/null\n"
-            "+++ tmp/test-show-no-exts.txt\n"
-            "@@ -0,0 +1 @@\n"
-            "+hello\n"
+            "--- /dev/null\n+++ tmp/test-show-no-exts.txt\n@@ -0,0 +1 @@\n+hello\n"
         ),
     )
 

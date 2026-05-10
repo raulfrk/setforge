@@ -22,8 +22,6 @@ tracked + ``my_setup.yaml`` to pre-wizard state and short-circuits the
 writeback.
 """
 
-import io
-import os
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -31,16 +29,12 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from my_setup import capture as capture_mod
-from my_setup import capture_wizard
-from my_setup import wizard as wizard_mod
 from my_setup.capture import CaptureAction, capture_profile
 from my_setup.capture_wizard import run_capture_wizard, walk_capture_drift
 from my_setup.config import Config, Dotfile, Profile
 from my_setup.errors import CaptureRequiresInteractive
 from my_setup.transitions import TransitionCommand
 from my_setup.wizard import ActionResult, DriftItem
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,9 +101,7 @@ def _make_my_setup_yaml(tmp_path: Path, *, dotfile_name: str = "x") -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_state_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _isolate_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect transition state to ``tmp_path`` so tests never touch ~."""
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
 
@@ -382,7 +374,7 @@ def test_run_capture_wizard_delegates_to_loop(
 ) -> None:
     """run_capture_wizard auto_accept='k' walks 2 items and records one
     SYNC transition under MY_SETUP_STATE_DIR."""
-    config, repo, src, _dst = _make_config(
+    config, repo, _src, _dst = _make_config(
         tmp_path,
         src_text="a: 1\nb: 2\n",
         dst_text="a: 99\nb: 88\n",
@@ -457,7 +449,7 @@ def test_capture_profile_proceeds_in_non_interactive_when_no_drift(
     tmp_path: Path,
 ) -> None:
     """No drift + non-interactive → no error, results contain NOOP."""
-    config, repo, src, _dst = _make_config(
+    config, repo, _src, _dst = _make_config(
         tmp_path,
         src_text="a: 1\n",
         dst_text="a: 1\n",
@@ -545,7 +537,7 @@ def test_capture_profile_auto_keep_tracked_rejects_all_drift(
         preserve_user_keys_deep=["deep_root"],
     )
     my_setup_yaml = _make_my_setup_yaml(tmp_path)
-    src_before = src.read_text()
+    src.read_text()
 
     capture_profile(
         config,
@@ -582,10 +574,7 @@ def test_capture_profile_interactive_mixed_decisions(
             "save_top: tracked_save\n"
         ),
         dst_text=(
-            "deep_root:\n"
-            "  k_keep: live_keep\n"
-            "  k_use: live_use\n"
-            "save_top: live_save\n"
+            "deep_root:\n  k_keep: live_keep\n  k_use: live_use\nsave_top: live_save\n"
         ),
         preserve_user_keys_deep=["deep_root"],
     )
@@ -627,16 +616,8 @@ def test_capture_wizard_cancel_restores_tracked(
     from snapshot. Capture writeback does not run."""
     config, repo, src, _dst = _make_config(
         tmp_path,
-        src_text=(
-            "deep_root:\n"
-            "  a: tracked_a\n"
-            "  b: tracked_b\n"
-        ),
-        dst_text=(
-            "deep_root:\n"
-            "  a: live_a\n"
-            "  b: live_b\n"
-        ),
+        src_text=("deep_root:\n  a: tracked_a\n  b: tracked_b\n"),
+        dst_text=("deep_root:\n  a: live_a\n  b: live_b\n"),
         preserve_user_keys_deep=["deep_root"],
     )
     my_setup_yaml = _make_my_setup_yaml(tmp_path)

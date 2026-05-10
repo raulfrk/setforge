@@ -26,16 +26,14 @@ from my_setup.vscode_extensions import (
 class FakeCode:
     """Tracks calls to a faked ``code`` CLI and mutates installed state."""
 
-    def __init__(self, installed: list[str]):
+    def __init__(self, installed: list[str]) -> None:
         self.installed: list[str] = list(installed)
         self.calls: list[list[str]] = []
 
     def run(self, args, **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
         if args[1] == "--list-extensions":
-            stdout = (
-                "\n".join(self.installed) + ("\n" if self.installed else "")
-            )
+            stdout = "\n".join(self.installed) + ("\n" if self.installed else "")
             return subprocess.CompletedProcess(args, 0, stdout, "")
         if args[1] == "--install-extension":
             ext_id = args[2]
@@ -107,9 +105,7 @@ def test_missing_code_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_additive_fresh_host_installs_declared(fake_code) -> None:
     fake = fake_code([])
-    ext = Extensions(
-        include=["a.x", "b.y"], reconcile=ReconcilePolicy.ADDITIVE
-    )
+    ext = Extensions(include=["a.x", "b.y"], reconcile=ReconcilePolicy.ADDITIVE)
     report = reconcile(ext)
     assert report.to_install == ["a.x", "b.y"]
     assert report.to_uninstall == []
@@ -119,9 +115,7 @@ def test_additive_fresh_host_installs_declared(fake_code) -> None:
 
 def test_additive_leaves_extras_untouched(fake_code) -> None:
     fake = fake_code(["a.x", "extra.one", "extra.two"])
-    ext = Extensions(
-        include=["a.x", "new.one"], reconcile=ReconcilePolicy.ADDITIVE
-    )
+    ext = Extensions(include=["a.x", "new.one"], reconcile=ReconcilePolicy.ADDITIVE)
     report = reconcile(ext)
     assert report.to_install == ["new.one"]
     assert report.to_uninstall == []
@@ -158,9 +152,7 @@ def test_prune_installs_missing_and_uninstalls_extras(fake_code) -> None:
 
 def test_report_computes_diffs_without_acting(fake_code) -> None:
     fake = fake_code(["a.x", "extra.one"])
-    ext = Extensions(
-        include=["a.x", "b.y"], reconcile=ReconcilePolicy.REPORT
-    )
+    ext = Extensions(include=["a.x", "b.y"], reconcile=ReconcilePolicy.REPORT)
     report = reconcile(ext)
     assert report.to_install == ["b.y"]
     assert report.to_uninstall == ["extra.one"]
@@ -197,9 +189,7 @@ def test_exclude_overrides_include(fake_code) -> None:
 
 def test_clean_state_returns_falsy_report(fake_code) -> None:
     fake_code(["a.x", "b.y"])
-    ext = Extensions(
-        include=["a.x", "b.y"], reconcile=ReconcilePolicy.PRUNE
-    )
+    ext = Extensions(include=["a.x", "b.y"], reconcile=ReconcilePolicy.PRUNE)
     report = reconcile(ext)
     assert isinstance(report, ReconcileReport)
     assert bool(report) is False
@@ -207,11 +197,12 @@ def test_clean_state_returns_falsy_report(fake_code) -> None:
 
 # ---- subprocess failure handling ----------------------------------------
 
+
 def test_install_one_wraps_called_process_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.vscode_extensions import install_one
     from my_setup.errors import ExtensionInstallFailed
+    from my_setup.vscode_extensions import install_one
 
     monkeypatch.setattr(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
@@ -228,8 +219,8 @@ def test_install_one_wraps_called_process_error(
 
 
 def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from my_setup.vscode_extensions import install_one
     from my_setup.errors import ExtensionInstallFailed
+    from my_setup.vscode_extensions import install_one
 
     monkeypatch.setattr(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
@@ -275,9 +266,7 @@ def test_reconcile_continues_after_install_failure(
     def fake_run(args, **kwargs):
         state["calls"].append(list(args))
         if args[1] == "--list-extensions":
-            return subprocess.CompletedProcess(
-                args, 0, "existing.one\n", ""
-            )
+            return subprocess.CompletedProcess(args, 0, "existing.one\n", "")
         if args[1] == "--install-extension":
             ext = args[2]
             if ext == "broken.one":
@@ -309,6 +298,7 @@ def test_reconcile_continues_after_install_failure(
 
 
 # ---- ext add / ext remove guards ----------------------------------------
+
 
 def test_add_to_include_rejects_when_in_exclude(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
@@ -364,9 +354,7 @@ profiles:
 """
     p = tmp_path / "my_setup.yaml"
     p.write_text(fixture, encoding="utf-8")
-    changed = remove_from_include(
-        p, "child", "inherited.one", add_to_exclude_list=True
-    )
+    changed = remove_from_include(p, "child", "inherited.one", add_to_exclude_list=True)
     assert changed is True
     text = p.read_text()
     # exclude entry should now sit under child
@@ -382,7 +370,6 @@ profiles:
 # ---- YAML-edit helpers ---------------------------------------------------
 
 from my_setup.errors import ProfileNotFound
-
 
 _FIXTURE_YAML = """\
 version: 1
@@ -461,9 +448,7 @@ def test_remove_from_include_with_exclude_flag_appends_to_exclude(
     tmp_path: Path,
 ) -> None:
     cfg = _write_fixture(tmp_path)
-    changed = remove_from_include(
-        cfg, "base", "keep.me", add_to_exclude_list=True
-    )
+    changed = remove_from_include(cfg, "base", "keep.me", add_to_exclude_list=True)
     assert changed is True
     text = cfg.read_text()
     assert "keep.me" in text  # under exclude now
@@ -516,9 +501,7 @@ def test_capture_extensions_writes_installed_minus_exclude(
     assert "drop.me" in reloaded.profiles["base"].extensions.exclude
 
 
-def test_capture_extensions_preserves_comments(
-    tmp_path: Path, fake_code
-) -> None:
+def test_capture_extensions_preserves_comments(tmp_path: Path, fake_code) -> None:
     cfg = _write_fixture(tmp_path)
     fake_code(["a.x"])
     capture_extensions(cfg, "base")
@@ -537,9 +520,7 @@ def test_capture_extensions_idempotent(tmp_path: Path, fake_code) -> None:
     assert second is False
 
 
-def test_capture_extensions_does_not_touch_exclude(
-    tmp_path: Path, fake_code
-) -> None:
+def test_capture_extensions_does_not_touch_exclude(tmp_path: Path, fake_code) -> None:
     cfg = _write_fixture(tmp_path)
     before = cfg.read_text()
     fake_code(["drop.me", "a.x"])

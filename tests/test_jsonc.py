@@ -1,7 +1,5 @@
 """Tests for my_setup.jsonc — JSONC overlay / strip / drift classify."""
 
-import pytest
-
 from my_setup.jsonc import (
     classify_jsonc_drift,
     overlay_user_keys,
@@ -60,9 +58,7 @@ def test_overlay_replaces_existing_value_with_comments_intact() -> None:
   "claudeCode.initialPermissionMode": "bypassPermissions"
 }
 """
-    out = overlay_user_keys(
-        tracked, live, ["claudeCode.initialPermissionMode"]
-    )
+    out = overlay_user_keys(tracked, live, ["claudeCode.initialPermissionMode"])
     assert '"claudeCode.initialPermissionMode": "bypassPermissions"' in out
     assert "// top comment" in out
     assert "// inline" in out
@@ -170,12 +166,7 @@ def test_classify_drift_treats_missing_key_as_drift() -> None:
 def test_overlay_user_keys_deep_unions_top_level_object() -> None:
     """Deep mode unions sub-keys of a top-level object key, preserving
     comments on tracked's existing sub-keys."""
-    tracked = (
-        "{\n"
-        "  // model default\n"
-        '  "claudeCode": {"model": "opus"}\n'
-        "}\n"
-    )
+    tracked = '{\n  // model default\n  "claudeCode": {"model": "opus"}\n}\n'
     live = '{"claudeCode": {"fontSize": 14, "model": "opus"}}\n'
     out = overlay_user_keys(tracked, live, [], deep_key_names=["claudeCode"])
     parsed = parse_jsonc(out)
@@ -222,8 +213,6 @@ def test_overlay_user_keys_shallow_now_handles_nested_object_values() -> None:
 def test_classify_jsonc_drift_treats_deep_keys_as_expected() -> None:
     src = '{"x": 1}'
     live = '{"x": 2}'
-    expected, unexpected = classify_jsonc_drift(
-        src, live, [], deep_key_names=["x"]
-    )
+    expected, unexpected = classify_jsonc_drift(src, live, [], deep_key_names=["x"])
     assert expected == ["x"]
     assert unexpected == []

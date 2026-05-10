@@ -3,7 +3,7 @@
 import json
 import os
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -46,7 +46,7 @@ def test_state_root_env_override(
 
 
 def test_transition_dirname_format() -> None:
-    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=timezone.utc)
+    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=UTC)
     assert transition_dirname(ts, "install", "vm-headless") == (
         "20260507T123045000000Z-install-vm-headless"
     )
@@ -54,8 +54,8 @@ def test_transition_dirname_format() -> None:
 
 def test_transition_dirname_sort_matches_time() -> None:
     """Lexicographic sort across dirnames must match chronological sort."""
-    earlier = datetime(2026, 5, 7, 9, 0, 0, tzinfo=timezone.utc)
-    later = datetime(2026, 5, 7, 17, 0, 0, tzinfo=timezone.utc)
+    earlier = datetime(2026, 5, 7, 9, 0, 0, tzinfo=UTC)
+    later = datetime(2026, 5, 7, 17, 0, 0, tzinfo=UTC)
     a = transition_dirname(earlier, "install", "vm-headless")
     b = transition_dirname(later, "install", "vm-headless")
     assert sorted([b, a]) == [a, b]
@@ -63,7 +63,7 @@ def test_transition_dirname_sort_matches_time() -> None:
 
 def test_transition_dirname_includes_microseconds() -> None:
     """Microsecond field renders as six digits between seconds and ``Z``."""
-    ts = datetime(2026, 5, 8, 12, 7, 30, 123456, tzinfo=timezone.utc)
+    ts = datetime(2026, 5, 8, 12, 7, 30, 123456, tzinfo=UTC)
     assert transition_dirname(ts, "install", "vm-headless").startswith(
         "20260508T120730123456Z-"
     )
@@ -73,7 +73,7 @@ def test_transition_dirname_zero_microseconds_zero_padded() -> None:
     """Zero microseconds must render as six padded zeros, not be omitted —
     that's what keeps lexicographic sort matching chronological sort across
     sub-second and whole-second timestamps."""
-    ts = datetime(2026, 5, 8, 12, 7, 30, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 5, 8, 12, 7, 30, 0, tzinfo=UTC)
     assert transition_dirname(ts, "install", "vm-headless").startswith(
         "20260508T120730000000Z-"
     )
@@ -83,8 +83,8 @@ def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
     """Two timestamps in the same wall-clock second but different microseconds
     must produce distinct dirnames — this is the collision the format change
     eliminates (dotfiles-nen.16)."""
-    a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=timezone.utc)
-    b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=timezone.utc)
+    a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=UTC)
+    b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=UTC)
     assert transition_dirname(a, "install", "vmh") != transition_dirname(
         b, "install", "vmh"
     )
@@ -92,7 +92,7 @@ def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
 
 def test_now_utc_is_aware() -> None:
     ts = now_utc()
-    assert ts.tzinfo is timezone.utc
+    assert ts.tzinfo is UTC
 
 
 def test_ensure_state_dir_writable_creates_dir(
@@ -132,7 +132,7 @@ def test_transition_command_values() -> None:
 
 
 def test_transition_meta_to_dict_iso_timestamp() -> None:
-    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=timezone.utc)
+    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=UTC)
     meta = TransitionMeta(
         command=TransitionCommand.INSTALL,
         profile="vm-headless",
@@ -163,7 +163,7 @@ def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
     meta = TransitionMeta(
         command=TransitionCommand.INSTALL,
         profile="vmh",
-        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=UTC),
         host="h",
         version="0.1.0",
     )
@@ -243,11 +243,13 @@ def test_compute_patch_paths_are_root_relative_for_patch_safety(
     assert "--- /tmp" not in patch  # no leading slash on real paths
 
 
-def _make_meta(command: TransitionCommand = TransitionCommand.INSTALL) -> TransitionMeta:
+def _make_meta(
+    command: TransitionCommand = TransitionCommand.INSTALL,
+) -> TransitionMeta:
     return TransitionMeta(
         command=command,
         profile="vmh",
-        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=UTC),
         host="h",
         version="0.1.0",
     )
@@ -400,9 +402,7 @@ def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
     apply_patch_reverse(tmp_path)  # no changes.patch → silent no-op
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
     """Forward content edit, then apply_patch_reverse restores original."""
     target = tmp_path / "live.txt"
@@ -419,9 +419,7 @@ def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
     assert target.read_text() == "before\n"
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
     target = tmp_path / "live.txt"
     target.write_text("drifted-content\n", encoding="utf-8")
@@ -436,9 +434,7 @@ def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
         apply_patch_reverse(transition)
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
     """Multi-file diff with drift on one file: dry-run aborts before
     any file is written. The other (clean) file must remain at its
@@ -649,9 +645,7 @@ def test_resolve_transition_prefix_zero_match_raises(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
-    _stub_full_transition(
-        root / "20260507T120000000000Z-install-vmh", profile="vmh"
-    )
+    _stub_full_transition(root / "20260507T120000000000Z-install-vmh", profile="vmh")
 
     with pytest.raises(MySetupError, match="no transition matching prefix"):
         resolve_transition_prefix("19990101")
@@ -723,7 +717,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
     so callers don't accidentally mutate cached entries."""
     listing = TransitionListing(
         directory=Path("/x"),
-        timestamp=datetime(2026, 5, 7, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 5, 7, tzinfo=UTC),
         command="install",
         profile="vmh",
         file_count=1,
@@ -740,13 +734,15 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 
 def _make_transition_args(
     tmp_path: Path,
-) -> tuple[TransitionMeta, dict[Path, str | None], dict[Path, str | None], ExtensionDelta]:
+) -> tuple[
+    TransitionMeta, dict[Path, str | None], dict[Path, str | None], ExtensionDelta
+]:
     """Return a minimal set of args for write_transition suitable for crash tests."""
     target_file = tmp_path / "live.txt"
     meta = TransitionMeta(
         command=TransitionCommand.INSTALL,
         profile="vmh",
-        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 5, 7, 12, 0, 0, tzinfo=UTC),
         host="h",
         version="0.1.0",
     )
@@ -833,7 +829,7 @@ def test_load_latest_sweeps_stale_pending_dirs(
 
     stale_pending = root / ".pending-20260507T120000000000Z-install-vmh"
     stale_pending.mkdir()
-    past_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).timestamp()
+    past_ts = (datetime.now(UTC) - timedelta(hours=25)).timestamp()
     os.utime(stale_pending, (past_ts, past_ts))
 
     load_latest("vmh")  # should sweep the stale dir
@@ -851,7 +847,7 @@ def test_load_latest_preserves_fresh_pending_dirs(
 
     fresh_pending = root / ".pending-20260507T120000000000Z-install-vmh"
     fresh_pending.mkdir()
-    recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+    recent_ts = (datetime.now(UTC) - timedelta(hours=1)).timestamp()
     os.utime(fresh_pending, (recent_ts, recent_ts))
 
     load_latest("vmh")  # must NOT remove the fresh dir
@@ -873,7 +869,7 @@ def test_load_latest_skips_pending_dirs_as_candidates(
     pending = root / ".pending-20260507T120000000000Z-install-vmh"
     pending.mkdir()
     # Give it a recent mtime so the stale sweep won't remove it.
-    recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+    recent_ts = (datetime.now(UTC) - timedelta(hours=1)).timestamp()
     os.utime(pending, (recent_ts, recent_ts))
     (pending / "meta.json").write_text(
         json.dumps({"profile": "vmh", "command": "install"}), encoding="utf-8"

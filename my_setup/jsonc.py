@@ -149,9 +149,7 @@ def overlay_user_keys(
                 # whole-leaf replace — live wins, comments on the existing
                 # value node are dropped (acceptable for live-wins overlay).
                 new_value_node = _python_to_node(live_sub)
-                new_value_node.wsc_before = getattr(
-                    src_value_node, "wsc_before", [" "]
-                )
+                new_value_node.wsc_before = getattr(src_value_node, "wsc_before", [" "])
                 tracked_top.values[idx] = new_value_node
     return dumps(tracked_model, dumper=ModelDumper())
 
@@ -171,9 +169,7 @@ def _deep_merge_jsonobject(
         sub_path = f"{path}.{key}"
         idx = _find_key_index(src_obj, key)
         if idx is None:
-            new_key = DoubleQuotedString(
-                characters=key, raw_value=json.dumps(key)
-            )
+            new_key = DoubleQuotedString(characters=key, raw_value=json.dumps(key))
             new_key.wsc_before = [indent]
             new_val = _python_to_node(live_value)
             new_val.wsc_before = [" "]
@@ -200,9 +196,7 @@ def _deep_merge_jsonobject(
                 # KeyValuePair (comments on the replaced value node are
                 # dropped — acceptable for live-wins overlay).
                 new_val = _python_to_node(live_value)
-                new_val.wsc_before = getattr(
-                    src_value_node, "wsc_before", [" "]
-                )
+                new_val.wsc_before = getattr(src_value_node, "wsc_before", [" "])
                 src_obj.values[idx] = new_val
 
 
@@ -329,17 +323,14 @@ def _python_to_node(value: Any) -> Any:
         case float():
             return Float(raw_value=str(value))
         case str():
-            return DoubleQuotedString(
-                characters=value, raw_value=json.dumps(value)
-            )
+            return DoubleQuotedString(characters=value, raw_value=json.dumps(value))
         case Mapping():
             return _python_dict_to_jsonobject(value)
         case list():
             return _python_list_to_jsonarray(value)
         case _:
             raise TypeError(
-                f"unsupported value type for JSONC overlay: "
-                f"{type(value).__name__}"
+                f"unsupported value type for JSONC overlay: {type(value).__name__}"
             )
 
 
@@ -354,9 +345,7 @@ def _python_dict_to_jsonobject(d: Mapping) -> JSONObject:
     kvps: list[KeyValuePair] = []
     for k, v in d.items():
         if not isinstance(k, str):
-            raise TypeError(
-                f"JSON object keys must be strings; got {type(k).__name__}"
-            )
+            raise TypeError(f"JSON object keys must be strings; got {type(k).__name__}")
         key_node = DoubleQuotedString(characters=k, raw_value=json.dumps(k))
         val_node = _python_to_node(v)
         kvps.append(KeyValuePair(key_node, val_node))

@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 
 from my_setup.cli import app
 
-
 _FIXTURE_YAML = """\
 version: 1
 dotfiles:
@@ -62,13 +61,11 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_install_writes_transition_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
 
-    result = CliRunner().invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = CliRunner().invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
 
     transitions_dir = state / "transitions"
@@ -89,7 +86,7 @@ def test_install_writes_transition_dir(
 def test_install_no_transition_flag_skips_recording(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
 
@@ -111,9 +108,7 @@ def test_install_transition_records_stub_creation(
     _no_code(monkeypatch)
 
     assert not dst.exists()
-    result = CliRunner().invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = CliRunner().invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 0
     transition = next((state / "transitions").iterdir())
     patch = (transition / "changes.patch").read_text()
@@ -150,9 +145,7 @@ def test_sync_writes_transition_dir(
     assert "greeting.md" in patch
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_install_then_revert_restores_pre_install_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -162,16 +155,12 @@ def test_install_then_revert_restores_pre_install_state(
     _no_code(monkeypatch)
 
     runner = CliRunner()
-    install_result = runner.invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_result.exit_code == 0, install_result.output
     assert dst.exists()
     assert dst.read_text() == "hello\n"
 
-    revert_result = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}"]
-    )
+    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert revert_result.exit_code == 0, revert_result.output
     assert not dst.exists(), "stub file should be removed by revert"
 
@@ -188,17 +177,13 @@ def test_revert_with_no_history_exits_non_zero(
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
 
-    result = CliRunner().invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = CliRunner().invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 1
     assert isinstance(result.exception, NoTransitionFound)
     assert "no transition history" in str(result.exception)
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_restores_extension_state_to_pre_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -258,18 +243,14 @@ def test_revert_restores_extension_state_to_pre_install(
     pre_install = sorted(state["installed"])
 
     runner = CliRunner()
-    install_result = runner.invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_result.exit_code == 0, install_result.output
     assert sorted(state["installed"]) == [
         "example.ext-a",
         "example.ext-b",
     ]
 
-    revert_result = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}"]
-    )
+    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert revert_result.exit_code == 0, revert_result.output
 
     # End-state assertion: extension set is back to pre-install bytes.
@@ -278,9 +259,7 @@ def test_revert_restores_extension_state_to_pre_install(
     assert not dst.exists()
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_refuses_when_target_drifted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -299,18 +278,14 @@ def test_revert_refuses_when_target_drifted(
     dst.write_text("manually edited content\n", encoding="utf-8")
     drifted_content = dst.read_text()
 
-    result = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 1
     assert isinstance(result.exception, RevertFailed)
     # Drifted content survived — no partial revert.
     assert dst.read_text() == drifted_content
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_install_revert_revert_restores_install_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -332,16 +307,14 @@ def test_install_revert_revert_restores_install_state(
     assert dst.read_text() == "hello\n"
 
 
-@pytest.mark.skipif(
-    shutil.which("patch") is None, reason="GNU patch not on PATH"
-)
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
 def test_revert_continues_after_extension_uninstall_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An ExtensionInstallFailed during revert's uninstall loop must not
     abort revert. Other extensions continue, and the reverse transition
     is still written so the user has a redo path."""
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     state = _state_root(tmp_path, monkeypatch)
 
     yaml = cfg.read_text(encoding="utf-8")
@@ -387,18 +360,14 @@ def test_revert_continues_after_extension_uninstall_failure(
     monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
 
     runner = CliRunner()
-    install_result = runner.invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_result.exit_code == 0, install_result.output
     assert sorted(state_ext["installed"]) == ["broken.one", "good.one"]
 
     # Wire the failure for the reverse uninstall.
     state_ext["fail_uninstall"].add("broken.one")
 
-    revert_result = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}"]
-    )
+    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
     assert revert_result.exit_code == 0, revert_result.output
 
     # `good.one` got uninstalled despite `broken.one`'s failure.
@@ -411,5 +380,3 @@ def test_revert_continues_after_extension_uninstall_failure(
     assert len(revert_dirs) == 1
     # FAILED is surfaced in stderr (CliRunner mixes by default).
     assert "FAILED" in revert_result.output
-
-

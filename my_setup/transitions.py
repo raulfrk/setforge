@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
@@ -36,6 +36,7 @@ class TransitionCommand(StrEnum):
     SYNC = "sync"
     REVERT = "revert"
     MERGE = "merge"
+
 
 _STATE_ENV = "MY_SETUP_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
@@ -82,7 +83,7 @@ def ensure_state_dir_writable() -> None:
 
 def now_utc() -> datetime:
     """Single source of truth for transition timestamps."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
@@ -94,7 +95,7 @@ def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
     a single ``max()``. Microsecond precision avoids same-second
     dirname collisions when state-changing commands run rapidly.
     """
-    iso = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    iso = timestamp.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{iso}-{command}-{profile}"
 
 
@@ -104,15 +105,15 @@ class TransitionMeta:
 
     command: TransitionCommand
     profile: str
-    timestamp: datetime    # UTC; serialized as ISO 8601
-    host: str              # platform.node()
-    version: str           # my_setup.__version__
+    timestamp: datetime  # UTC; serialized as ISO 8601
+    host: str  # platform.node()
+    version: str  # my_setup.__version__
 
     def to_dict(self) -> dict[str, str]:
         return {
             "command": self.command.value,
             "profile": self.profile,
-            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat(),
+            "timestamp": self.timestamp.astimezone(UTC).isoformat(),
             "host": self.host,
             "version": self.version,
         }
@@ -221,8 +222,8 @@ class ExtensionDelta:
     state-changing command. Failed installs/uninstalls are excluded so
     revert never tries to reverse a no-op."""
 
-    added: list[str]      # successfully installed during the command
-    removed: list[str]    # successfully uninstalled during the command
+    added: list[str]  # successfully installed during the command
+    removed: list[str]  # successfully uninstalled during the command
 
     def is_empty(self) -> bool:
         return not (self.added or self.removed)
@@ -286,9 +287,12 @@ def write_transition(
         (pending / "changes.patch").write_text(patch, encoding="utf-8")
 
     if ext_delta is not None and not ext_delta.is_empty():
-        payload = json.dumps(
-            {"added": ext_delta.added, "removed": ext_delta.removed}, indent=2
-        ) + "\n"
+        payload = (
+            json.dumps(
+                {"added": ext_delta.added, "removed": ext_delta.removed}, indent=2
+            )
+            + "\n"
+        )
         (pending / "extensions.json").write_text(payload, encoding="utf-8")
 
     os.rename(pending, target)
@@ -319,7 +323,7 @@ def load_latest(profile: str) -> Path | None:
     if not root.exists():
         return None
 
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
     for d in root.iterdir():
         if d.is_dir() and d.name.startswith(".pending-"):
             try:
@@ -377,9 +381,11 @@ def apply_patch_reverse(transition_dir: Path) -> None:
         str(patch_bin),
         "-p0",
         "-R",
-        "-d", "/",
+        "-d",
+        "/",
         "--reject-file=-",
-        "--input", str(patch_file.resolve()),
+        "--input",
+        str(patch_file.resolve()),
     ]
     dry = subprocess.run(
         [*base_args, "--dry-run"],

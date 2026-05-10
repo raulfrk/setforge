@@ -14,6 +14,7 @@ markdown sections into the result, though in practice a given dotfile is
 either YAML or markdown.
 """
 
+import contextlib
 import errno
 import io
 import logging
@@ -85,9 +86,7 @@ def copy_atomic(
 
     if dst_existed:
         existing = real_dst.read_text(encoding="utf-8")
-        action = (
-            DeployAction.NOOP if existing == content else DeployAction.UPDATED
-        )
+        action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
     else:
         action = DeployAction.CREATED
 
@@ -152,10 +151,8 @@ def _atomic_write(
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             fh.write(content)
-        try:
+        with contextlib.suppress(OSError):
             shutil.copystat(src, tmp_path)
-        except OSError:
-            pass
 
         backup_path: Path | None = None
         if backup and dst_existed:
@@ -172,10 +169,8 @@ def _atomic_write(
         os.replace(tmp_path, dst)
         return backup_path
     finally:
-        try:
+        with contextlib.suppress(OSError):
             tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def bootstrap_local(paths: list[Path]) -> None:

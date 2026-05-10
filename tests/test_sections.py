@@ -75,10 +75,7 @@ def test_extract_named_sections_keyed_by_name() -> None:
 
 
 def test_mismatched_missing_end_raises() -> None:
-    text = (
-        "<!-- my-setup:user-section start -->\n"
-        "content\n"
-    )
+    text = "<!-- my-setup:user-section start -->\ncontent\n"
     with pytest.raises(MarkerError, match="unclosed"):
         extract_sections(text)
 

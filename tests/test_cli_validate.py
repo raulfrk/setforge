@@ -17,11 +17,9 @@ Covers each of the six failure modes plus a clean-run baseline:
 
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from my_setup.cli import app
-
 
 # ---------------------------------------------------------------------------
 # Minimal YAML builder helpers
@@ -64,7 +62,9 @@ def _write_config(tmp_path: Path, content: str, *, create_src: bool = True) -> P
     cfg.write_text(content, encoding="utf-8")
     (tmp_path / "tracked").mkdir(exist_ok=True)
     if create_src:
-        (tmp_path / "tracked" / "tracked_file.txt").write_text("data\n", encoding="utf-8")
+        (tmp_path / "tracked" / "tracked_file.txt").write_text(
+            "data\n", encoding="utf-8"
+        )
     return cfg
 
 
@@ -453,7 +453,9 @@ profiles:
     assert result.output.count("claude_plugins contains empty ref") == 1
 
 
-def test_validate_triple_duplicate_emits_single_message_per_value(tmp_path: Path) -> None:
+def test_validate_triple_duplicate_emits_single_message_per_value(
+    tmp_path: Path,
+) -> None:
     """N copies of the same value collapse to one duplicate line per value per field.
 
     Without dedup, ['x', 'x', 'x'] would produce two identical 'duplicate' messages

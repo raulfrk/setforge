@@ -113,9 +113,7 @@ def _apply_overlay(
     live_value = live_node[key]
 
     if not isinstance(src_node, MutableMapping):
-        raise MergeTypeMismatch(
-            f"cannot descend into non-mapping at {path!r}"
-        )
+        raise MergeTypeMismatch(f"cannot descend into non-mapping at {path!r}")
 
     if kind == "key":
         if not rest:
@@ -175,9 +173,7 @@ def _apply_deep_overlay(
         return
     live_value = live_node[key]
     if not isinstance(src_node, MutableMapping):
-        raise MergeTypeMismatch(
-            f"cannot descend into non-mapping at {path!r}"
-        )
+        raise MergeTypeMismatch(f"cannot descend into non-mapping at {path!r}")
 
     if not rest:
         # Terminal: deep-merge the dict at src_node[key] with live_value.
@@ -279,7 +275,7 @@ def delete_keys(doc: Any, key_paths: list[str]) -> None:
 def _delete_path(node: Any, tokens: list[tuple[str, str]]) -> None:
     if not tokens:
         return
-    kind, key = tokens[0]
+    _kind, key = tokens[0]
     rest = tokens[1:]
     if not isinstance(node, MutableMapping) or key not in node:
         return

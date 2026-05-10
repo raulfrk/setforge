@@ -17,6 +17,7 @@ The CLI layer is set once at process start; env and config layers are
 read lazily on each lookup so tests can monkey-patch the environment or
 ``LOCAL_CONFIG_PATH`` between calls without touching module state.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,9 +30,7 @@ from ruamel.yaml.error import YAMLError
 
 from my_setup.errors import BinaryOverrideInvalid, ConfigError
 
-LOCAL_CONFIG_PATH: Final[Path] = (
-    Path.home() / ".config" / "my-setup" / "local.yaml"
-)
+LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "my-setup" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("code", "claude", "patch")
 _ENV_VAR_PREFIX: Final[str] = "MY_SETUP_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
@@ -65,22 +64,16 @@ def _load_local_config() -> dict[str, str]:
     try:
         data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
     except YAMLError as exc:
-        raise ConfigError(
-            f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}"
-        ) from exc
+        raise ConfigError(f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}") from exc
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ConfigError(
-            f"top-level of {LOCAL_CONFIG_PATH} must be a mapping"
-        )
+        raise ConfigError(f"top-level of {LOCAL_CONFIG_PATH} must be a mapping")
     binaries = data.get("binaries")
     if binaries is None:
         return {}
     if not isinstance(binaries, dict):
-        raise ConfigError(
-            f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping"
-        )
+        raise ConfigError(f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping")
     return {str(k): str(v) for k, v in binaries.items()}
 
 

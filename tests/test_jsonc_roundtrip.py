@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 
 from my_setup.cli import app
 
-
 _TRACKED_FIXTURE = """\
 {
   // Top-of-file comment that ships in tracked.
@@ -93,9 +92,7 @@ def test_install_preserves_tracked_comments_and_keeps_user_keys(
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
 
-    result = CliRunner().invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = CliRunner().invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
 
     live_text = dst.read_text(encoding="utf-8")
@@ -103,13 +100,8 @@ def test_install_preserves_tracked_comments_and_keeps_user_keys(
     assert "/* Block comment between sections." in live_text
     assert "// inline at end of line" in live_text
     assert "// Trailing comment before close brace." in live_text
-    assert (
-        '"claudeCode.allowDangerouslySkipPermissions": true' in live_text
-    )
-    assert (
-        '"claudeCode.initialPermissionMode": "bypassPermissions"'
-        in live_text
-    )
+    assert '"claudeCode.allowDangerouslySkipPermissions": true' in live_text
+    assert '"claudeCode.initialPermissionMode": "bypassPermissions"' in live_text
 
 
 def test_install_then_capture_round_trips_tracked_byte_identical(
@@ -124,7 +116,7 @@ def test_install_then_capture_round_trips_tracked_byte_identical(
     (``==``), not "approximately equal" — drift here is unacceptable for
     daily-driver dotfile management.
     """
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
     runner = CliRunner()
@@ -134,9 +126,7 @@ def test_install_then_capture_round_trips_tracked_byte_identical(
     )
     assert install_result.exit_code == 0, install_result.output
 
-    capture_result = runner.invoke(
-        app, ["capture", "--profile=vmh", f"--config={cfg}"]
-    )
+    capture_result = runner.invoke(app, ["capture", "--profile=vmh", f"--config={cfg}"])
     assert capture_result.exit_code == 0, capture_result.output
 
     src = cfg.parent / "tracked" / "settings.json"
@@ -148,13 +138,11 @@ def test_compare_classifies_user_key_drift_as_expected(
 ) -> None:
     """``compare`` on a JSONC file with diverging user-keys reports
     expected drift (non-zero count) and zero unexpected drift."""
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
 
-    result = CliRunner().invoke(
-        app, ["compare", "--profile=vmh", f"--config={cfg}"]
-    )
+    result = CliRunner().invoke(app, ["compare", "--profile=vmh", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     # Rich table format: "expected drift" column shows count,
     # "unexpected drift" column shows 0.

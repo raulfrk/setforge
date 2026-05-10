@@ -3,7 +3,6 @@
 import io
 from pathlib import Path
 
-import pytest
 from rich.console import Console
 
 from my_setup.compare import (
@@ -42,8 +41,7 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
     dst = tmp_path / "dst.md"
     _write(
         src,
-        "<!-- my-setup:user-section start -->\n"
-        "<!-- my-setup:user-section end -->\n",
+        "<!-- my-setup:user-section start -->\n<!-- my-setup:user-section end -->\n",
     )
     _write(
         dst,
@@ -225,7 +223,9 @@ def test_compare_profile_missing_dst(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_config_with_yaml(tmp_path: Path, src_text: str, dst_text: str, preserve: list[str]) -> tuple[Config, Path]:
+def _make_config_with_yaml(
+    tmp_path: Path, src_text: str, dst_text: str, preserve: list[str]
+) -> tuple[Config, Path]:
     """Helper: write src + dst files, return (Config, repo_root)."""
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
@@ -346,6 +346,7 @@ def test_check_strict_clean_is_not_drifted(tmp_path: Path) -> None:
 def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 0 on clean profile."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"
@@ -359,13 +360,16 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     runner = CliRunner()
-    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
+    )
     assert result.exit_code == 0
 
 
 def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 1 when unexpected drift exists."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"
@@ -380,13 +384,16 @@ def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     runner = CliRunner()
-    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
+    )
     assert result.exit_code == 1
 
 
 def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 0 when all drift is expected (preserve_user_keys)."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"
@@ -401,13 +408,16 @@ def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     runner = CliRunner()
-    result = runner.invoke(app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"])
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
+    )
     assert result.exit_code == 0
 
 
 def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None:
     """CLI compare --check --strict exits 1 on expected drift."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"
@@ -431,6 +441,7 @@ def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None
 def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     """CLI compare --check --strict exits 0 on a clean profile."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"
@@ -467,6 +478,7 @@ def test_yaml_compare_drift_treats_deep_paths_as_expected(tmp_path: Path) -> Non
 def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     """CLI compare --full-diff includes +++ / --- diff markers."""
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     repo = tmp_path / "repo"

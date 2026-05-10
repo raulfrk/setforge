@@ -171,9 +171,7 @@ def test_bootstrap_local_idempotent(tmp_path: Path) -> None:
     assert target.read_text() == "existing\n"
 
 
-def _build_profile(
-    tmp_path: Path, present: list[str], missing: list[str]
-):
+def _build_profile(tmp_path: Path, present: list[str], missing: list[str]):
     from my_setup.config import Config, Dotfile, Profile, resolve_profile
 
     repo = tmp_path / "repo"

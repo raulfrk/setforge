@@ -33,7 +33,6 @@ from my_setup.compare import CompareReport, CompareStatus
 from my_setup.config import Config
 from my_setup.wizard import ActionResult, DriftItem
 
-
 # ---------------------------------------------------------------------------
 # Walker
 # ---------------------------------------------------------------------------
@@ -95,7 +94,9 @@ def walk_unexpected_drift(
         for key_path in entry.unexpected_drift_keys:
             tracked_val = _get_value(tracked_parsed, key_path, fmt)
             live_val = _get_value(live_parsed, key_path, fmt)
-            mode: Literal["shallow", "deep"] = "deep" if key_path in deep_paths else "shallow"
+            mode: Literal["shallow", "deep"] = (
+                "deep" if key_path in deep_paths else "shallow"
+            )
             yield DriftItem(
                 dotfile_name=dotfile_base,
                 src_path=src,
@@ -187,11 +188,15 @@ def run_wizard(
         code 130.
     """
     if snapshot_base is None:
-        snapshot_base = Path.home() / ".local" / "state" / "my-setup" / "merge-snapshots"
+        snapshot_base = (
+            Path.home() / ".local" / "state" / "my-setup" / "merge-snapshots"
+        )
     if console is None:
         console = Console()
 
-    items = walk_unexpected_drift(report, config, repo_root, dotfile_filter=dotfile_filter)
+    items = walk_unexpected_drift(
+        report, config, repo_root, dotfile_filter=dotfile_filter
+    )
     pending_message = (
         f"[yellow]pending manual edit in {{src_path}}; "
         f"resume with: my-setup merge --profile={profile}[/yellow]"

@@ -10,21 +10,18 @@ import json
 import logging
 import subprocess
 import sys
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from my_setup import binaries
+from my_setup import binaries, deploy, transitions, vscode_extensions
 from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
-from my_setup import deploy
 from my_setup import merge as merge_mod
-from my_setup import vscode_extensions
-from my_setup import transitions
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, ReconcilePolicy, load_config, resolve_profile
 from my_setup.errors import (
@@ -214,9 +211,7 @@ def install(
             if ext_id not in failed_ids:
                 typer.echo(f"uninstalled  {ext_id}")
         for ext_id, err in report.failed:
-            typer.secho(
-                f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
-            )
+            typer.secho(f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
         if not report:
             typer.echo("extensions: nothing to reconcile")
         ext_delta = transitions.ExtensionDelta(
@@ -296,9 +291,7 @@ def compare(
     unchanged_count = sum(
         1 for e in report.entries if e.status == CompareStatus.UNCHANGED
     )
-    missing_count = sum(
-        1 for e in report.entries if e.status == CompareStatus.MISSING
-    )
+    missing_count = sum(1 for e in report.entries if e.status == CompareStatus.MISSING)
     if unchanged_count:
         console.print(f"UNCHANGED: {unchanged_count} files")
     if missing_count:
@@ -495,9 +488,7 @@ def sync(
             fg=typer.colors.YELLOW,
         )
     else:
-        typer.echo(
-            f"extensions: include {'updated' if changed else 'unchanged'}"
-        )
+        typer.echo(f"extensions: include {'updated' if changed else 'unchanged'}")
 
     file_post = transitions.snapshot_paths(src_paths)
 
@@ -575,16 +566,12 @@ def revert(
     """
     transition = transitions.load_latest(profile)
     if transition is None:
-        raise NoTransitionFound(
-            f"no transition history for profile {profile!r}"
-        )
+        raise NoTransitionFound(f"no transition history for profile {profile!r}")
 
     transitions.ensure_state_dir_writable()
     typer.echo(f"reverting: {transition}")
 
-    meta_payload = json.loads(
-        (transition / "meta.json").read_text(encoding="utf-8")
-    )
+    meta_payload = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
     touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
     file_pre = transitions.snapshot_paths(touched_paths)
 
@@ -598,9 +585,7 @@ def revert(
         reverse_added, reverse_removed, _ = _reverse_extensions(delta)
 
     file_post = transitions.snapshot_paths(touched_paths)
-    reverse_meta = transitions.make_meta(
-        transitions.TransitionCommand.REVERT, profile
-    )
+    reverse_meta = transitions.make_meta(transitions.TransitionCommand.REVERT, profile)
     reverse_delta: transitions.ExtensionDelta | None = None
     if reverse_added or reverse_removed:
         reverse_delta = transitions.ExtensionDelta(
@@ -641,9 +626,7 @@ def transitions_list(
         return
     rows = [
         (
-            entry.timestamp.astimezone(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
+            entry.timestamp.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             entry.command,
             entry.profile,
             str(entry.file_count),
@@ -657,13 +640,9 @@ def transitions_list(
         max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
         for i in range(len(headers))
     ]
-    typer.echo(
-        "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=False))
-    )
+    typer.echo("  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=False)))
     for row in rows:
-        typer.echo(
-            "  ".join(c.ljust(w) for c, w in zip(row, widths, strict=False))
-        )
+        typer.echo("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=False)))
 
 
 @transitions_app.command("show")
@@ -762,9 +741,7 @@ def ext_add(
     if added:
         typer.echo(f"added to {profile}.extensions.include: {extension_id}")
     else:
-        typer.echo(
-            f"already in {profile}.extensions.include: {extension_id}"
-        )
+        typer.echo(f"already in {profile}.extensions.include: {extension_id}")
     if install:
         try:
             vscode_extensions.install_one(extension_id)
@@ -820,9 +797,7 @@ def ext_reconcile(
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    is_read_only = (
-        resolved.extensions.reconcile is ReconcilePolicy.REPORT or dry_run
-    )
+    is_read_only = resolved.extensions.reconcile is ReconcilePolicy.REPORT or dry_run
 
     failed_ids = {ext_id for ext_id, _ in report.failed}
     for ext_id in report.to_install:
@@ -834,9 +809,7 @@ def ext_reconcile(
         if ext_id not in failed_ids:
             typer.echo(f"{verb}  {ext_id}")
     for ext_id, err in report.failed:
-        typer.secho(
-            f"FAILED   {ext_id} — {err}", err=True, fg=typer.colors.YELLOW
-        )
+        typer.secho(f"FAILED   {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
     if not report:
         typer.echo("nothing to reconcile")
     elif is_read_only:
@@ -892,7 +865,10 @@ def plugin_list(
 
 @plugin_app.command("add")
 def plugin_add(
-    name: str = typer.Argument(..., help="Plugin name (in <name>@<marketplace> form or just <name> with --marketplace)."),
+    name: str = typer.Argument(
+        ...,
+        help="Plugin name (in <name>@<marketplace> form or just <name> with --marketplace).",
+    ),
     from_: str = typer.Option(
         ...,
         "--from",
@@ -927,16 +903,16 @@ def plugin_add(
         )
         raise typer.Exit(code=1)
 
-    cfg = load_config(config)
+    load_config(config)
 
     # Parse --from into a MarketplaceSource
     from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     if from_.startswith("github:"):
-        repo = from_[len("github:"):]
+        repo = from_[len("github:") :]
         source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
     elif from_.startswith("path:"):
-        local_path = Path(from_[len("path:"):]).expanduser()
+        local_path = Path(from_[len("path:") :]).expanduser()
         source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
     else:
         typer.secho(
@@ -963,7 +939,9 @@ def plugin_add(
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
     # Add to profile
-    profile_added = claude_plugins_mod.yaml_add_plugin_to_profile(config, profile, f"{plugin_name}@{mp_name}")
+    profile_added = claude_plugins_mod.yaml_add_plugin_to_profile(
+        config, profile, f"{plugin_name}@{mp_name}"
+    )
     if profile_added:
         typer.echo(f"added to {profile}.claude_plugins: {plugin_name}@{mp_name}")
 
@@ -1017,7 +995,9 @@ def plugin_remove(
 ) -> None:
     """Remove a plugin from the profile's claude_plugins list."""
     plugin_ref = name  # already in <name>@<marketplace> form or just name
-    changed = claude_plugins_mod.yaml_remove_plugin_from_profile(config, profile, plugin_ref)
+    changed = claude_plugins_mod.yaml_remove_plugin_from_profile(
+        config, profile, plugin_ref
+    )
     if changed:
         typer.echo(f"removed from {profile}.claude_plugins: {plugin_ref}")
     else:
@@ -1099,10 +1079,10 @@ def marketplace_add_cmd(
     from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     if from_.startswith("github:"):
-        repo = from_[len("github:"):]
+        repo = from_[len("github:") :]
         source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
     elif from_.startswith("path:"):
-        local_path = Path(from_[len("path:"):]).expanduser()
+        local_path = Path(from_[len("path:") :]).expanduser()
         source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
     else:
         typer.secho(

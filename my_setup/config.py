@@ -199,9 +199,7 @@ def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
     merged_include = _merge_list(parent.include, child.include)
     merged_exclude = _merge_list(parent.exclude, child.exclude)
     reconcile = (
-        child.reconcile
-        if "reconcile" in child.model_fields_set
-        else parent.reconcile
+        child.reconcile if "reconcile" in child.model_fields_set else parent.reconcile
     )
     return Extensions(
         include=merged_include,

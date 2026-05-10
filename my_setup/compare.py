@@ -122,9 +122,7 @@ def _render_with_merges(
         content = src.read_text(encoding="utf-8")
 
     if preserve_user_sections:
-        live_sections = sections.extract_sections(
-            dst.read_text(encoding="utf-8")
-        )
+        live_sections = sections.extract_sections(dst.read_text(encoding="utf-8"))
         content = sections.merge_sections(content, live_sections)
     return content
 
@@ -187,17 +185,17 @@ def _diff_paths(src: object, live: object, prefix: tuple = ()) -> list[tuple]:
         diffs: list[tuple] = []
         for key in set(src) | set(live):
             if key not in src or key not in live:
-                diffs.append(prefix + (key,))
+                diffs.append((*prefix, key))
                 continue
-            diffs.extend(_diff_paths(src[key], live[key], prefix + (key,)))
+            diffs.extend(_diff_paths(src[key], live[key], (*prefix, key)))
         return diffs
     if isinstance(src, list) and isinstance(live, list):
         diffs = []
         for i in range(max(len(src), len(live))):
             if i >= len(src) or i >= len(live):
-                diffs.append(prefix + (i,))
+                diffs.append((*prefix, i))
                 continue
-            diffs.extend(_diff_paths(src[i], live[i], prefix + (i,)))
+            diffs.extend(_diff_paths(src[i], live[i], (*prefix, i)))
         return diffs
     if src != live:
         return [prefix]
@@ -216,9 +214,7 @@ def _format_path(path: tuple) -> str:
     return "".join(out) or "<root>"
 
 
-def expand_dotfile(
-    name: str, src: Path, dst: Path
-) -> list[tuple[str, Path, Path]]:
+def expand_dotfile(name: str, src: Path, dst: Path) -> list[tuple[str, Path, Path]]:
     """Expand a dotfile into ``(name, src_file, dst_file)`` triples.
 
     Plain files yield a single triple; directories yield one triple per

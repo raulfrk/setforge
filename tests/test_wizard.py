@@ -7,7 +7,6 @@ delegates to (snapshot, prompt, action handlers) are already covered by
 trigger-specific pending message).
 """
 
-import io
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,6 @@ from my_setup.transitions import TransitionCommand
 from my_setup.wizard import (
     ActionResult,
     DriftItem,
-    apply_action,
     run_wizard_loop,
 )
 

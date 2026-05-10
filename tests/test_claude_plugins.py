@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 
 from my_setup.config import (
-    Config,
     ClaudePluginRef,
+    Config,
     Dotfile,
     MarketplaceSource,
     MarketplaceSourceKind,
@@ -26,7 +26,6 @@ from my_setup.config import (
     ResolvedProfile,
 )
 from my_setup.errors import ConfigError, PluginToolMissing
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +70,7 @@ class FakeClaude:
         *,
         marketplaces: list[dict] | None = None,
         plugins: list[dict] | None = None,
-    ):
+    ) -> None:
         # Each marketplace entry: {"name": str, "source": str, ...}
         self._marketplaces: list[dict] = list(marketplaces or [])
         # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
@@ -85,24 +84,34 @@ class FakeClaude:
 
         if cmd == ["plugin", "marketplace", "list", "--json"]:
             import json
+
             return subprocess.CompletedProcess(
                 args, 0, json.dumps(self._marketplaces), ""
             )
         if cmd == ["plugin", "list", "--json"]:
             import json
-            return subprocess.CompletedProcess(
-                args, 0, json.dumps(self._plugins), ""
-            )
+
+            return subprocess.CompletedProcess(args, 0, json.dumps(self._plugins), "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "add":
             # claude plugin marketplace add <source-url>
             source_url = cmd[3]
             self._marketplaces.append({"name": source_url, "source": source_url})
             return subprocess.CompletedProcess(args, 0, "", "")
-        if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "remove":
+        if (
+            len(cmd) >= 3
+            and cmd[:2] == ["plugin", "marketplace"]
+            and cmd[2] == "remove"
+        ):
             name = cmd[3]
-            self._marketplaces = [m for m in self._marketplaces if m.get("name") != name]
+            self._marketplaces = [
+                m for m in self._marketplaces if m.get("name") != name
+            ]
             return subprocess.CompletedProcess(args, 0, "", "")
-        if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "update":
+        if (
+            len(cmd) >= 3
+            and cmd[:2] == ["plugin", "marketplace"]
+            and cmd[2] == "update"
+        ):
             return subprocess.CompletedProcess(args, 0, "", "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "install"]:
             plugin_arg = cmd[2]  # "name@marketplace" or similar
@@ -169,9 +178,7 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch):
             "my_setup.claude_plugins.resolve_binary",
             lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
         )
-        monkeypatch.setattr(
-            "my_setup.claude_plugins.subprocess.run", fake.run
-        )
+        monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", fake.run)
         # Reset module-level binary cache so each test starts fresh.
         monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
         return fake
@@ -227,9 +234,7 @@ def test_plugin_install_passes_scope_user(fake_claude) -> None:
 def test_plugin_enable_synthesises_correct_command(fake_claude) -> None:
     from my_setup.claude_plugins import plugin_enable
 
-    fake = fake_claude(
-        plugins=[{"id": "cline@anthropic", "enabled": False}]
-    )
+    fake = fake_claude(plugins=[{"id": "cline@anthropic", "enabled": False}])
     plugin_enable("cline@anthropic")
     assert fake.enable_args() == ["cline@anthropic"]
 
@@ -237,9 +242,7 @@ def test_plugin_enable_synthesises_correct_command(fake_claude) -> None:
 def test_plugin_disable_synthesises_correct_command(fake_claude) -> None:
     from my_setup.claude_plugins import plugin_disable
 
-    fake = fake_claude(
-        plugins=[{"id": "cline@anthropic", "enabled": True}]
-    )
+    fake = fake_claude(plugins=[{"id": "cline@anthropic", "enabled": True}])
     plugin_disable("cline@anthropic")
     assert fake.disable_args() == ["cline@anthropic"]
 
@@ -247,12 +250,14 @@ def test_plugin_disable_synthesises_correct_command(fake_claude) -> None:
 def test_missing_claude_binary_raises_plugin_tool_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.claude_plugins import list_installed, list_marketplaces, plugin_install
+    from my_setup.claude_plugins import (
+        list_installed,
+        list_marketplaces,
+        plugin_install,
+    )
 
     monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
-    monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
     with pytest.raises(PluginToolMissing, match="claude"):
         list_installed()
     with pytest.raises(PluginToolMissing, match="claude"):
@@ -284,10 +289,11 @@ def test_get_claude_bin_consults_resolve_binary(
 
 def test_marketplace_add_calls_correct_args(fake_claude) -> None:
     from my_setup.claude_plugins import marketplace_add
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     fake = fake_claude()
-    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropics/plugins")
+    src = MarketplaceSource(
+        source=MarketplaceSourceKind.GITHUB, repo="anthropics/plugins"
+    )
     marketplace_add("anthropic", src)
     mp_calls = [c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "add"]]
     assert len(mp_calls) == 1
@@ -302,7 +308,9 @@ def test_marketplace_remove_calls_correct_args(fake_claude) -> None:
         marketplaces=[{"name": "anthropic", "source": "github:anthropics/plugins"}]
     )
     marketplace_remove("anthropic")
-    remove_calls = [c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "remove"]]
+    remove_calls = [
+        c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "remove"]
+    ]
     assert len(remove_calls) == 1
     assert "anthropic" in remove_calls[0]
 
@@ -312,7 +320,9 @@ def test_marketplace_update_calls_correct_args(fake_claude) -> None:
 
     fake = fake_claude()
     marketplace_update("anthropic")
-    update_calls = [c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "update"]]
+    update_calls = [
+        c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "update"]
+    ]
     assert len(update_calls) == 1
 
 
@@ -356,9 +366,7 @@ def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     from my_setup.claude_plugins import reconcile
 
     fake = fake_claude()
-    cfg = _make_config(
-        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
@@ -448,9 +456,7 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
 
-    cfg = _make_config(
-        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
@@ -475,12 +481,8 @@ def test_reconcile_declared_but_disabled_enables_not_reinstalls(
     """declared = {a@m1}, installed = {a@m1: disabled} → enable only."""
     from my_setup.claude_plugins import reconcile
 
-    fake = fake_claude(
-        plugins=[{"id": "a@m1", "enabled": False}]
-    )
-    cfg = _make_config(
-        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
-    )
+    fake = fake_claude(plugins=[{"id": "a@m1", "enabled": False}])
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
@@ -504,9 +506,7 @@ def test_reconcile_additive_does_not_disable_extras(fake_claude) -> None:
             {"id": "extra@m1", "enabled": True},
         ]
     )
-    cfg = _make_config(
-        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
@@ -526,9 +526,7 @@ def test_reconcile_prune_disables_extras(fake_claude) -> None:
             {"id": "extra@m1", "enabled": True},
         ]
     )
-    cfg = _make_config(
-        claude_plugins={"a": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
@@ -598,14 +596,10 @@ def test_reconcile_report_policy_runs_no_subprocesses(
         if cmd == ["plugin", "marketplace", "list", "--json"]:
             return subprocess.CompletedProcess(args, 0, json.dumps([]), "")
         # Any write command must NOT be called
-        raise AssertionError(
-            f"REPORT mode must not invoke write command: {args!r}"
-        )
+        raise AssertionError(f"REPORT mode must not invoke write command: {args!r}")
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
-    cfg = _make_config(
-        claude_plugins={"declared": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"declared": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.REPORT,
@@ -638,14 +632,10 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
             )
         if cmd == ["plugin", "marketplace", "list", "--json"]:
             return subprocess.CompletedProcess(args, 0, json.dumps([]), "")
-        raise AssertionError(
-            f"dry_run must not invoke write command: {args!r}"
-        )
+        raise AssertionError(f"dry_run must not invoke write command: {args!r}")
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
-    cfg = _make_config(
-        claude_plugins={"declared": ClaudePluginRef(marketplace="m1")}
-    )
+    cfg = _make_config(claude_plugins={"declared": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
@@ -659,7 +649,6 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
 def test_reconcile_marketplaces_always_added(fake_claude) -> None:
     """Declared marketplace not in list_marketplaces() → marketplace_add."""
     from my_setup.claude_plugins import reconcile
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     fake = fake_claude(marketplaces=[])
     cfg = _make_config(
@@ -679,13 +668,13 @@ def test_reconcile_stale_marketplace_not_evicted(fake_claude) -> None:
     """Marketplace installed but not declared → no remove call."""
     from my_setup.claude_plugins import reconcile
 
-    fake = fake_claude(
-        marketplaces=[{"name": "stale", "source": "github:stale/mp"}]
-    )
+    fake = fake_claude(marketplaces=[{"name": "stale", "source": "github:stale/mp"}])
     cfg = _make_config()  # no declared marketplaces
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.PRUNE)
     reconcile(cfg, profile)
-    remove_calls = [c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "remove"]]
+    remove_calls = [
+        c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "remove"]
+    ]
     assert remove_calls == []
 
 
@@ -693,9 +682,7 @@ def test_reconcile_additive_disabled_not_in_to_disable(fake_claude) -> None:
     """ADDITIVE: disabled plugins not declared → not in to_disable."""
     from my_setup.claude_plugins import reconcile
 
-    fake_claude(
-        plugins=[{"id": "undeclared@m1", "enabled": False}]
-    )
+    fake_claude(plugins=[{"id": "undeclared@m1", "enabled": False}])
     cfg = _make_config()
     profile = _make_resolved(
         claude_plugins=[],
@@ -719,9 +706,7 @@ def test_reconcile_resolves_bare_profile_names_via_registry(fake_claude) -> None
     """
     from my_setup.claude_plugins import reconcile
 
-    fake = fake_claude(
-        plugins=[{"id": "superpowers@official", "enabled": True}]
-    )
+    fake = fake_claude(plugins=[{"id": "superpowers@official", "enabled": True}])
     cfg = _make_config(
         claude_plugins={
             "superpowers": ClaudePluginRef(marketplace="official"),
@@ -764,9 +749,7 @@ def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
     registry, matches the @-form id from claude plugin list, lands in to_enable."""
     from my_setup.claude_plugins import reconcile
 
-    fake = fake_claude(
-        plugins=[{"id": "wiki@llm-wiki", "enabled": False}]
-    )
+    fake = fake_claude(plugins=[{"id": "wiki@llm-wiki", "enabled": False}])
     cfg = _make_config(
         claude_plugins={
             "wiki": ClaudePluginRef(marketplace="llm-wiki"),
@@ -845,7 +828,6 @@ def _write_yaml_fixture(tmp_path: Path) -> Path:
 
 def test_yaml_add_marketplace_appends(tmp_path: Path) -> None:
     from my_setup.claude_plugins import yaml_add_marketplace
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     p = _write_yaml_fixture(tmp_path)
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
@@ -862,10 +844,11 @@ def test_yaml_add_marketplace_appends(tmp_path: Path) -> None:
 
 def test_yaml_add_marketplace_idempotent(tmp_path: Path) -> None:
     from my_setup.claude_plugins import yaml_add_marketplace
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     p = _write_yaml_fixture(tmp_path)
-    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="owner/existing-mp")
+    src = MarketplaceSource(
+        source=MarketplaceSourceKind.GITHUB, repo="owner/existing-mp"
+    )
     added = yaml_add_marketplace(p, "existing-mp", src)
     assert added is False
     # Only one occurrence in YAML
@@ -879,6 +862,7 @@ def test_yaml_remove_marketplace(tmp_path: Path) -> None:
     removed = yaml_remove_marketplace(p, "existing-mp")
     assert removed is True
     from my_setup.config import load_config
+
     cfg = load_config(p)
     assert "existing-mp" not in cfg.marketplaces
 
@@ -922,6 +906,7 @@ def test_yaml_add_plugin_to_profile(tmp_path: Path) -> None:
     added = yaml_add_plugin_to_profile(p, "myprofile", "new-plugin")
     assert added is True
     from my_setup.config import load_config
+
     cfg = load_config(p)
     assert "new-plugin" in cfg.profiles["myprofile"].claude_plugins
 
@@ -941,6 +926,7 @@ def test_yaml_remove_plugin_from_profile(tmp_path: Path) -> None:
     removed = yaml_remove_plugin_from_profile(p, "myprofile", "existing-plugin")
     assert removed is True
     from my_setup.config import load_config
+
     cfg = load_config(p)
     assert "existing-plugin" not in cfg.profiles["myprofile"].claude_plugins
 
@@ -952,7 +938,6 @@ def test_yaml_comments_preserved_after_edits(tmp_path: Path) -> None:
         yaml_add_plugin,
         yaml_add_plugin_to_profile,
     )
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     p = _write_yaml_fixture(tmp_path)
     yaml_add_marketplace(
@@ -974,6 +959,7 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
 ) -> None:
     """--claude-bin flag must call binaries.set_cli_overrides(claude=...)."""
     from typer.testing import CliRunner
+
     import my_setup.binaries as binaries_mod
     from my_setup.cli import app
 
@@ -984,6 +970,7 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
         calls.append(dict(kwargs))
         # Reset claude_bin cache after override change
         import my_setup.claude_plugins as cp
+
         cp._claude_bin = None
         original_set_cli_overrides(**kwargs)
 
@@ -995,7 +982,7 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
     # Use compare on a nonexistent profile so the callback fires but the
     # subcommand fails with a known error. We don't care about the exit code;
     # we only need to verify set_cli_overrides was called with claude=.
-    result = runner.invoke(
+    runner.invoke(
         app,
         ["--claude-bin=/tmp/fake-claude", "compare", "--profile=nonexistent"],
     )
@@ -1010,7 +997,6 @@ def test_reconcile_marketplaces_dry_run_not_added(
 ) -> None:
     """Under REPORT policy, marketplace_add is NOT called."""
     from my_setup.claude_plugins import reconcile
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
 
     monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
     monkeypatch.setattr(
@@ -1022,11 +1008,12 @@ def test_reconcile_marketplaces_dry_run_not_added(
         import json
 
         cmd = args[1:]
-        if cmd in (["plugin", "list", "--json"], ["plugin", "marketplace", "list", "--json"]):
+        if cmd in (
+            ["plugin", "list", "--json"],
+            ["plugin", "marketplace", "list", "--json"],
+        ):
             return subprocess.CompletedProcess(args, 0, json.dumps([]), "")
-        raise AssertionError(
-            f"REPORT mode must not invoke write command: {args!r}"
-        )
+        raise AssertionError(f"REPORT mode must not invoke write command: {args!r}")
 
     monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
     cfg = _make_config(
@@ -1048,15 +1035,14 @@ def test_reconcile_marketplaces_dry_run_not_added(
 # ---------------------------------------------------------------------------
 
 
-def test_plugin_add_calls_enable_after_install(
-    fake_claude, tmp_path: Path
-) -> None:
+def test_plugin_add_calls_enable_after_install(fake_claude, tmp_path: Path) -> None:
     """`plugin add` must run `plugin enable` after a successful install.
 
     Mirrors the reconcile-path fix at the CLI surface: a freshly added
     plugin should be active in a single command invocation, not two.
     """
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     p = _write_yaml_fixture(tmp_path)
@@ -1066,7 +1052,9 @@ def test_plugin_add_calls_enable_after_install(
     result = runner.invoke(
         app,
         [
-            "plugin", "add", "newp@existing-mp",
+            "plugin",
+            "add",
+            "newp@existing-mp",
             "--from=github:foo/bar",
             "--profile=myprofile",
             f"--config={p}",
@@ -1089,6 +1077,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
     silent warning would be a footgun.
     """
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     p = _write_yaml_fixture(tmp_path)
@@ -1110,7 +1099,9 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
     result = runner.invoke(
         app,
         [
-            "plugin", "add", "newp@existing-mp",
+            "plugin",
+            "add",
+            "newp@existing-mp",
             "--from=github:foo/bar",
             "--profile=myprofile",
             f"--config={p}",
@@ -1137,6 +1128,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
     The enable step must NOT be called after a failed install.
     """
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     p = _write_yaml_fixture(tmp_path)
@@ -1158,7 +1150,9 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
     result = runner.invoke(
         app,
         [
-            "plugin", "add", "newp@existing-mp",
+            "plugin",
+            "add",
+            "newp@existing-mp",
             "--from=github:foo/bar",
             "--profile=myprofile",
             f"--config={p}",
@@ -1179,6 +1173,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
     The enable step must NOT be called after a timed-out install.
     """
     from typer.testing import CliRunner
+
     from my_setup.cli import app
 
     p = _write_yaml_fixture(tmp_path)
@@ -1198,7 +1193,9 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
     result = runner.invoke(
         app,
         [
-            "plugin", "add", "newp@existing-mp",
+            "plugin",
+            "add",
+            "newp@existing-mp",
             "--from=github:foo/bar",
             "--profile=myprofile",
             f"--config={p}",
@@ -1220,6 +1217,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     enable is also skipped since there is nothing installed.
     """
     from typer.testing import CliRunner
+
     from my_setup.cli import app
     from my_setup.errors import PluginToolMissing
 
@@ -1236,7 +1234,9 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     result = runner.invoke(
         app,
         [
-            "plugin", "add", "newp@existing-mp",
+            "plugin",
+            "add",
+            "newp@existing-mp",
             "--from=github:foo/bar",
             "--profile=myprofile",
             f"--config={p}",

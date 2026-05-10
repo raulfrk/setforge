@@ -85,7 +85,9 @@ def capture_dotfile(
     tracked, NOT a wholesale live-stripped overwrite.
     """
     if not dst.exists():
-        return CaptureResult(name=src.name, action=CaptureAction.SKIPPED, reason="live missing")
+        return CaptureResult(
+            name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
+        )
 
     # Markdown / preserve_user_sections path: capture's section
     # handling is unchanged from pre-`nen.23` (the capture-time wizard
@@ -105,10 +107,7 @@ def capture_dotfile(
             content = buf.getvalue()
         else:
             content = dst.read_text(encoding="utf-8")
-        if (
-            preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS
-            and src.exists()
-        ):
+        if preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS and src.exists():
             tracked_text = src.read_text(encoding="utf-8")
             tracked_sections = sections.extract_sections(tracked_text)
             content = sections.merge_sections(content, tracked_sections)
@@ -142,9 +141,7 @@ def capture_dotfile(
         return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
 
     # Tracked exists, no section handling.
-    has_structured_preserve = bool(preserve_user_keys) or bool(
-        preserve_user_keys_deep
-    )
+    has_structured_preserve = bool(preserve_user_keys) or bool(preserve_user_keys_deep)
 
     if not has_structured_preserve:
         # No preserve declarations on this dotfile — capture's
@@ -290,8 +287,6 @@ def capture_profile(
                 preserve_user_sections_mode=dotfile.preserve_user_sections_mode,
             )
             results.append(
-                CaptureResult(
-                    name=sub_name, action=result.action, reason=result.reason
-                )
+                CaptureResult(name=sub_name, action=result.action, reason=result.reason)
             )
     return results
