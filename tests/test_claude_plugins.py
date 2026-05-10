@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from my_setup import claude_plugins as cp
 from my_setup.config import (
     ClaudePluginRef,
     Config,
@@ -180,7 +181,7 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch):
         )
         monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", fake.run)
         # Reset module-level binary cache so each test starts fresh.
-        monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+        cp._get_claude_bin.cache_clear()
         return fake
 
     return factory
@@ -256,7 +257,7 @@ def test_missing_claude_binary_raises_plugin_tool_missing(
         plugin_install,
     )
 
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
     with pytest.raises(PluginToolMissing, match="claude"):
         list_installed()
@@ -270,17 +271,15 @@ def test_get_claude_bin_consults_resolve_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_get_claude_bin() must delegate to resolve_binary, not shutil.which."""
-    import my_setup.claude_plugins as cp
-
     calls: list[str] = []
 
     def recording_resolver(name: str) -> Path | None:
         calls.append(name)
         return Path("/custom/claude")
 
-    # Reset module-level cache BEFORE setting the new resolver so the
-    # next call actually hits the resolver (not the cached path).
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    # Reset cache BEFORE setting the new resolver so the next call
+    # actually hits the resolver (not the cached path).
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", recording_resolver)
     path = cp._get_claude_bin()
     assert "claude" in calls
@@ -574,7 +573,7 @@ def test_reconcile_report_policy_runs_no_subprocesses(
     """REPORT: all three diffs computed, zero subprocess writes."""
     from my_setup.claude_plugins import reconcile
 
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    cp._get_claude_bin.cache_clear()
     # Monkeypatch resolve_binary to return a valid path
     monkeypatch.setattr(
         "my_setup.claude_plugins.resolve_binary",
@@ -616,7 +615,7 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
     """dry_run=True: zero subprocess writes, regardless of policy."""
     from my_setup.claude_plugins import reconcile
 
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
         "my_setup.claude_plugins.resolve_binary",
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
@@ -969,9 +968,7 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
     def recording_set_cli_overrides(**kwargs):
         calls.append(dict(kwargs))
         # Reset claude_bin cache after override change
-        import my_setup.claude_plugins as cp
-
-        cp._claude_bin = None
+        cp._get_claude_bin.cache_clear()
         original_set_cli_overrides(**kwargs)
 
     # Patch the function on the binaries module itself so that
@@ -998,7 +995,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
     """Under REPORT policy, marketplace_add is NOT called."""
     from my_setup.claude_plugins import reconcile
 
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
         "my_setup.claude_plugins.resolve_binary",
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,

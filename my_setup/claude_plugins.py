@@ -21,6 +21,7 @@ trigger ``marketplace_add``; stale marketplaces are never auto-evicted.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import subprocess
@@ -46,29 +47,24 @@ LOGGER = logging.getLogger(__name__)
 _CLAUDE_BIN_NAME = "claude"
 _TIMEOUT_S = 30
 
-# Module-level cache — populated on first call and reused within the process.
-_claude_bin: Path | None = None
 
-
+@functools.lru_cache(maxsize=1)
 def _get_claude_bin() -> Path:
     """Resolve the ``claude`` binary via :func:`resolve_binary` or raise.
 
-    The result is cached in ``_claude_bin`` after the first successful
-    lookup so the resolver isn't reinvoked on every wrapper call.
+    The result is cached for the process lifetime via
+    :func:`functools.lru_cache`. Tests that change the resolved path
+    between cases must call ``_get_claude_bin.cache_clear()``.
     Raises :class:`PluginToolMissing` when the resolved path is ``None``
     (binary not found at any layer) or when it is not executable.
     """
-    global _claude_bin
-    if _claude_bin is not None:
-        return _claude_bin
     path = resolve_binary(_CLAUDE_BIN_NAME)
     if path is None:
         raise PluginToolMissing(
             "claude binary not found; install Claude CLI or set "
             "--claude-bin / MY_SETUP_CLAUDE_BIN / local.yaml"
         )
-    _claude_bin = path
-    return _claude_bin
+    return path
 
 
 # ---------------------------------------------------------------------------

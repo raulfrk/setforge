@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from my_setup import claude_plugins as cp
 from my_setup.cli import app
 
 _FIXTURE_YAML = """\
@@ -119,7 +120,7 @@ def test_install_warns_and_exits_0_when_claude_absent(
     cfg = _setup_fixture(tmp_path, monkeypatch)
 
     # Claude binary is absent.
-    monkeypatch.setattr("my_setup.claude_plugins._claude_bin", None)
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
 
     # CliRunner merges stdout + stderr into result.output by default.
