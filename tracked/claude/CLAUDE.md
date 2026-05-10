@@ -60,7 +60,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - F-strings only. `with` for resources. `contextlib.suppress(Exc)` over empty `except Exc: pass`.
 - Functions: aim under ~40 lines, nesting depth ≤ 3. Exceeded → extract a helper.
 - Use `uv` (env, install, run); never raw pip/poetry/virtualenv.
-- Subprocess: list args, `check=True`, `text=True`, `timeout=`, `shutil.which()` for binaries; never `shell=True` with non-literal args.
+- Subprocess: list args, `check=True`, `text=True`, `timeout=`, `shutil.which()` for binaries; never `shell=True` with non-literal args. Use `import subprocess` and call `subprocess.run(...)` — never `from subprocess import run` — when test monkeypatching of the call site depends on the module-attribute access path.
 - `@typing.override` on overrides; `@typing.final` to lock subclass/override surface.
 - Docstrings (PEP 257): required on public modules, classes, and functions; one imperative sentence is enough unless behavior, raises, or invariants need calling out.
 <!-- my-setup:user-section end python -->
