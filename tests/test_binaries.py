@@ -238,8 +238,13 @@ def test_stderr_of_returns_stripped_stderr_when_present() -> None:
     assert binaries.stderr_of(exc) == "installation failed"
 
 
-def test_stderr_of_falls_back_to_str_when_stderr_is_none() -> None:
+def test_stderr_of_falls_back_to_str_when_stderr_attr_is_none() -> None:
     exc = subprocess.TimeoutExpired(["claude"], 30)
+    assert binaries.stderr_of(exc) == str(exc)
+
+
+def test_stderr_of_falls_back_to_str_when_stderr_is_whitespace_only() -> None:
+    exc = subprocess.CalledProcessError(1, ["claude"], stderr="   \n  ")
     assert binaries.stderr_of(exc) == str(exc)
 
 
