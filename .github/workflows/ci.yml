@@ -18,6 +18,8 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
       - run: uv run my-setup validate --all
+      - run: uv run ruff check
+      - run: uv run ruff format --check
       - run: uv run pytest
 
   secrets-scan:
