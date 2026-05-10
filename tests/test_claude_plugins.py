@@ -180,7 +180,6 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch):
             lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
         )
         monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", fake.run)
-        # Reset module-level binary cache so each test starts fresh.
         cp._get_claude_bin.cache_clear()
         return fake
 
