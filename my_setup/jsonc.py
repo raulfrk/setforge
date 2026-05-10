@@ -39,11 +39,13 @@ from json5.model import (
     BooleanLiteral,
     DoubleQuotedString,
     Float,
+    Identifier,
     Integer,
     JSONArray,
     JSONObject,
     KeyValuePair,
     NullLiteral,
+    SingleQuotedString,
 )
 
 from my_setup.errors import MergeTypeMismatch
@@ -276,11 +278,13 @@ def _key_text(key_node: Any) -> str:
     double-quoted, and VSCode emits double-quoted. For input we read,
     fall back to a string repr if the node shape is unexpected.
     """
-    if hasattr(key_node, "characters"):
-        return str(key_node.characters)
-    if hasattr(key_node, "name"):
-        return str(key_node.name)
-    return str(key_node)
+    match key_node:
+        case DoubleQuotedString(characters=c) | SingleQuotedString(characters=c):
+            return str(c)
+        case Identifier(name=n):
+            return str(n)
+        case _:
+            return str(key_node)
 
 
 def _detect_indent(top_obj: JSONObject) -> str:
