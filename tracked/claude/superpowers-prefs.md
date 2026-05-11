@@ -1,10 +1,14 @@
 # Superpowers as the leading workflow
 
-Superpowers is the primary working framework on this VM. Its multi-phase
-flow — brainstorm → spec → plan → implement → review — is the default
-for non-trivial work. The Socratic output style shapes *engagement
-within* a phase (question before assert, surface trade-offs, draw out
-user reasoning); it does not compete with the phase structure.
+Superpowers is the primary working framework on this VM. Its 7-phase
+scaling flow — brainstorm → spec → plan → implement → review fan →
+address-findings+merge → post-merge review — is the default for
+non-trivial work. The flow scales by context: review parallelism is
+always-on; implementation parallelism kicks in only when work is
+decomposable into independent threads. The Socratic output style
+shapes *engagement within* a phase (question before assert, surface
+trade-offs, draw out user reasoning); it does not compete with the
+phase structure.
 
 This file is imported from `CLAUDE.md` so its directives ride the
 `<system-reminder>` "OVERRIDE default behavior" wrapper, which
@@ -12,24 +16,92 @@ Superpowers skills are designed to defer to.
 
 ## Canonical phase flow
 
-1. **Brainstorm** (`superpowers:brainstorming`) — explore intent,
-   requirements, constraints. May produce or sharpen a bd issue.
-2. **Spec in plan mode** — write the spec verbatim into the plan body
+1. **Phase 1 — Brainstorm** (`superpowers:brainstorming`) — explore
+   intent, requirements, constraints. May produce or sharpen a bd
+   issue. Always fires for non-trivial work.
+
+2. **Phase 2 — Spec in plan mode** — write the spec verbatim into the plan body
    (no summary, no reflow). User reviews and annotates. On approval,
    capture load-bearing details into the bd issue's `--design` /
-   `--acceptance` / `--notes`.
-3. **Plan** — produce the implementation plan as a normal response
-   (no `EnterPlanMode`). The bd issue's `--design` / `--acceptance` /
-   `--notes` already carries the contract from step 2; the plan is
-   internal scaffolding, not a review surface.
-4. **Implement** (`superpowers:executing-plans` by default;
-   `superpowers:subagent-driven-development` when there are 2+
-   genuinely independent threads). Work against the bd issue (the
-   contract). TDD where it fits.
-5. **Review** (`superpowers:verification-before-completion`, plus
-   `superpowers:requesting-code-review` when the change is load-bearing).
-   Verify the implementation satisfies the spec, not just that tools
-   pass. Out-of-scope findings → new `bd create` with a dep link.
+   `--acceptance` / `--notes`. Conventions:
+   - **Acceptance as commands.** Acceptance criteria = concrete
+     commands that exit 0, NOT abstract counts. "CI has ruff steps"
+     can be satisfied without `uv run ruff check` exiting 0; "uv run
+     ruff check exits 0 in CI" cannot. *(empirical observation B)*
+   - **Symbol names, not line offsets.** Reference content by symbol
+     name ("find function X, replace with..."), not line offset
+     ("replace lines 285-289"). Line numbers drift across reformats;
+     symbols persist. *(empirical observation H)*
+   - **Spec is snapshot; bd is contract.** The archived spec file is
+     a historical record of what was agreed at brainstorm time. The
+     bd issue's `--design` / `--acceptance` / `--notes` is the
+     authoritative contract — update it when scope changes; don't try
+     to keep the spec file current. *(empirical observation I)*
+
+3. **Phase 3 — Plan** — produce the implementation plan as a normal response
+   (no `EnterPlanMode`). The bd issue's structured fields carry the
+   contract from step 2; the plan is internal scaffolding, not a
+   review surface. **NOT optional.** Walks the implementation against
+   actual code; verifies symbol names exist; catches pre-implementation
+   typos. *(empirical observation A — omitting this caused the cxj
+   typo bug.)*
+
+4. **Phase 4 — Implement** — single-stream by default
+   (`superpowers:executing-plans`). Parallel ONLY when work is
+   decomposable into independent threads (disjoint file footprints,
+   no shared state) — done **cross-worktree** via the bd ↔ wt loop
+   in CLAUDE.md (sibling worktrees, new Claude sessions), NOT via
+   `superpowers:subagent-driven-development` (which is in-session
+   Task-subagent dispatch, a different mechanism for context
+   isolation within one bead). When parallel cross-worktree: one bd
+   issue per worktree; sibling branches off a common parent. TDD
+   where it fits (`superpowers:test-driven-development`).
+
+5. **Phase 5 — Review fan** — always parallel. Invoke the appropriate
+   `reviewing-X` skill for the artifact:
+   - `reviewing-python-code` for Python source / pyproject / CI / pre-commit.
+   - `reviewing-claude-md` for tracked/claude/ docs / skills / agents.
+   - Mixed-artifact: invoke both.
+
+   The skill dispatches 4 aspect agents (spec / form / substance /
+   specifics) in a single message — true parallel. For multi-worktree:
+   the fan fires per worktree (4 × N reviewers total), all in one
+   message. Satisfies the `superpowers:requesting-code-review` gate.
+   `superpowers:verification-before-completion` still applies for ALL
+   completion claims (test results, tooling exit codes, deployment
+   acks) — the review fan is one source of evidence, not a replacement.
+   - **Verify cited evidence.** Reviewers check the EVIDENCE
+     implementers cite (e.g., "line 184 already used X"), not just
+     the deviation outcome. Made-up justifications are IMPORTANT
+     findings even when the change itself is sound. *(empirical
+     observation D)*
+
+6. **Phase 6 — Address findings + merge** —
+   - CRITICAL → fix immediately.
+   - IMPORTANT → fix before merge.
+   - MINOR → file new bd issues with dep links; never inline-fix
+     out-of-scope work into the current change.
+
+   Review-fix commits land as their OWN commits — never squashed into
+   the implementation commit. *(empirical observation F; also in
+   CLAUDE.md Commits section.)*
+   - **Single-worktree merge**: ff-only into target (typically main).
+   - **Multi-worktree merge** (sibling rebase): when N sibling
+     worktrees branch from a common parent and the parent gets a
+     review-fix commit, rebase each sibling onto the updated parent
+     before ff-merge into main. Conflict-free when parent's review-fix
+     file footprint doesn't overlap with sibling worktrees; otherwise
+     resolve manually. *(empirical observation G; cross-ref
+     `wt-reference` skill.)*
+
+7. **Phase 7 — Post-merge cross-cutting review** — invoke the appropriate
+   `reviewing-X` skill ONCE MORE against the merged HEAD on the
+   target branch. Catches issues that emerged from integration (e.g.,
+   tool version skew between pre-commit pin and uv-resolved). Mandatory
+   for multi-worktree work; recommended for single-stream non-trivial
+   work. See project-scope CLAUDE.md for the canonical final-check
+   command on each project (`pre-commit run --all-files` on this VM —
+   empirical observation E).
 
 The **spec** rides through plan mode verbatim — no summary, no reflow.
 That is the user-facing review surface. The **plan** does NOT enter
@@ -71,11 +143,24 @@ N+1.
 - **Auto-create git worktrees**: off. The user creates worktrees
   explicitly via `wt switch --create <slug>` per the bd ↔ wt loop in
   CLAUDE.md.
-- **Subagent-driven implementation**
-  (`superpowers:subagent-driven-development`): off by default.
-  Dispatch only when the work has 2+ genuinely independent threads or
-  when context isolation is the explicit goal — not as a default for
-  serial implementation.
+- **In-session subagent dispatch**
+  (`superpowers:subagent-driven-development`): use when a single bead
+  has independent in-session sub-tasks that benefit from context
+  isolation. Distinct from cross-worktree parallelism (which is
+  governed by the bd ↔ wt loop, new Claude sessions, NOT this skill).
+- **Cross-worktree parallel implementation**: conditional on
+  decomposability of the *work itself*. When work has 2+ genuinely
+  independent threads (disjoint file footprints, no shared state),
+  spawn sibling worktrees via the bd ↔ wt loop. Single-stream when
+  not. Not opt-in only — driven by the work shape.
+- **Review fan** (Phase 5): always-on for non-trivial work. Invokes
+  the appropriate `reviewing-X` skill (4 aspect agents in parallel) —
+  non-negotiable. Single-worktree work still gets the full 4-agent
+  fan; multi-worktree gets 4 × N.
+- **Post-merge cross-cutting review** (Phase 7): mandatory for
+  multi-worktree work; recommended for single-stream non-trivial
+  work. Re-invokes the same `reviewing-X` skill against merged HEAD
+  on the target branch.
 
 ## Stance
 

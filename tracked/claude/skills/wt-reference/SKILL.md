@@ -25,6 +25,24 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - bd auto-discovers the worktree's database via git common-directory — no `--db` redirect.
 - After `wt merge`: `bd close <id>`, then `wt remove` to clean both layers.
 
+## Sibling-from-parent rebase pattern
+
+When N sibling worktrees branch from a common parent (typical multi-bead batch shape) and the parent receives a review-fix commit during Phase 6 of the canonical flow (see `superpowers-prefs.md`), each sibling must rebase onto the updated parent before `wt merge`:
+
+```
+# In each sibling worktree:
+git fetch
+git rebase <parent-branch>
+# Resolve any conflicts surfaced by the rebase
+wt merge
+```
+
+**Conflict-free condition:** the parent's review-fix file footprint does NOT overlap with any sibling's file footprint. When they overlap, expect manual conflict resolution during the rebase.
+
+**Convention when planning multi-worktree batches:** size sibling worktrees so their file footprints don't overlap with the parent's review-fix surface. If overlap is unavoidable, document the rebase plan up front.
+
+*(empirical observation G from dotfiles-23k: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
+
 ## Anti-patterns
 
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.

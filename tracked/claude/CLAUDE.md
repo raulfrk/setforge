@@ -24,8 +24,9 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 ## Workflow
 
 <!-- my-setup:user-section start workflow -->
-- Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (brainstorm → spec → plan → implement → review, applied within an issue). See `superpowers-prefs.md` for the phase flow and hard-gate posture.
-- Default phase flow on non-trivial work: **brainstorm → spec → plan → implement → review**. The **spec** is written verbatim into plan mode for user approval; the **plan** is a normal response. For parallel work that produces multiple specs, run them sequentially through plan mode or batch them into one plan-mode session — never skip plan-mode review of a spec. Escape hatch is narrow — single-file mechanical edits only.
+- Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (the multi-phase flow applied within an issue). See `superpowers-prefs.md` for the canonical phase flow and hard-gate posture.
+- Default phase flow on non-trivial work: **brainstorm → spec → plan → implement → review fan → address-findings+merge → post-merge review**. The **spec** is written verbatim into plan mode for user approval; the **plan** is a normal response. For parallel work that produces multiple specs, run them sequentially through plan mode or batch them into one plan-mode session — never skip plan-mode review of a spec. Escape hatch is narrow — single-file mechanical edits only.
+- After implementation, invoke the appropriate `reviewing-X` skill for the artifact: `reviewing-python-code` for Python source / pyproject / CI workflow / pre-commit-config; `reviewing-claude-md` for tracked/claude/ docs / skills / agents. Each fires a 4-aspect parallel review fan (spec / form / substance / specifics) before merge, and again post-merge against merged HEAD. Mixed-artifact diffs invoke both.
 - bd issue = the contract. Read with `bd show <id>` at session start. The plan-mode spec session sharpens it; once accepted, code review is verification against the spec, not discovery.
 - Default: one issue per session. When no issue is named, `bd ready` picks the next unblocked leaf.
 - Out-of-scope findings during review → new `bd create` issue with a dep link, NEVER inline-fix into the current change. This keeps diffs small.
@@ -39,7 +40,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   2. `bd show <id>` — load the contract.
   3. `wt switch --create <slug>` — new worktree + branch (slug should include the bd id, e.g. `dotfiles-g20-py-rewrite`).
   4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
-  5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review.
+  5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review fan (`reviewing-X` skill) → address-findings+merge → post-merge cross-cutting review.
   6. `wt merge` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
@@ -72,6 +73,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Body required only when the diff is not self-evident: state the problem and the user-visible consequence, not diff narration. Skip body for renames, formatting, trivial fixes.
 - Wrap body at 72; one blank line between subject and body.
 - One logical change per commit — if the subject needs "and", split it.
+- Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
 <!-- my-setup:user-section end commits -->

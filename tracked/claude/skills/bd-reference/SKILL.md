@@ -39,7 +39,9 @@ assignment stand; the comment thread is the handoff signal.
 
 **Memory:** `bd remember "<text>" [--key <name>]` (same `--key` updates in place), `bd memories [search]`, `bd recall <key>`, `bd forget <key>`.
 
-**Multi-line text:** `bd note` / `bd comment` / `bd update --description` all accept `--stdin` or `--file <path>` — use these instead of long quoted CLI args.
+**Multi-line text:** `bd note` / `bd comment` / `bd update --description` all accept `--stdin` or `--file <path>` — use these instead of long quoted CLI args. Note: `--design` uses `--design-file <path>` (not `--file`); `--acceptance` has no file variant — use shell expansion (`--acceptance "$(cat /tmp/path)"`).
+
+**Spec vs bd contract:** The spec file archived at `~/.claude/projects/{cwd-slug}/specs/...` is a snapshot of what was agreed at brainstorm time. The bd issue's `--design` / `--acceptance` / `--notes` is the **durable contract** — update it when scope changes; treat the spec file as a historical record, not a living document. *(empirical observation I from dotfiles-23k.)*
 
 ## Handoffs (between sessions, agents, or to a human)
 
@@ -63,11 +65,15 @@ assignment stand; the comment thread is the handoff signal.
 ## Quality flags on `create` / `update`
 
 - `--validate` — fail if required sections are missing for the type.
-- `--acceptance "..."` — acceptance criteria (checked by `--validate`).
+- `--acceptance "..."` — acceptance criteria (checked by `--validate`). Prefer **concrete commands that exit 0** over abstract counts. "lint count drops to zero in non-deferred categories" is hard to verify; "`uv run ruff check` exits 0 in CI" is binary. *(empirical observation B from dotfiles-23k: abstract count acceptance passed spec review but CI still broke on first push because the criterion didn't specify command-level success.)*
 - `--design "..."` — design notes.
 - `--notes "..."` (initial) or `bd note <id>` later — supplementary context.
 - `--parent <id>` — file as hierarchical child.
 - `--dry-run` — preview without writing.
+
+## Sizing follow-up beads
+
+When measure-then-decide work surfaces follow-up beads with concrete counts (e.g., "fix N sites of category X"), measure **post-auto-fix**, not pre-fix. Tooling like `ruff check --fix --unsafe-fixes` can materially change the count before you file. *(empirical observation C from dotfiles-23k: cxj originally sized ANN201 follow-up at 34 sites; auto-fix collapsed it to 2. RUF059 was 38 → 0. Three of seven planned bead categories materially changed.)*
 
 ## Lifecycle
 

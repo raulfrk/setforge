@@ -43,6 +43,46 @@ dotfiles:
     src: claude/skills/wt-reference/SKILL.md
     dst: ~/.claude/skills/wt-reference/SKILL.md
 
+  claude_agent_python_spec_reviewer:
+    src: claude/agents/python-spec-reviewer.md
+    dst: ~/.claude/agents/python-spec-reviewer.md
+
+  claude_agent_python_form_reviewer:
+    src: claude/agents/python-form-reviewer.md
+    dst: ~/.claude/agents/python-form-reviewer.md
+
+  claude_agent_python_substance_reviewer:
+    src: claude/agents/python-substance-reviewer.md
+    dst: ~/.claude/agents/python-substance-reviewer.md
+
+  claude_agent_python_specifics_reviewer:
+    src: claude/agents/python-specifics-reviewer.md
+    dst: ~/.claude/agents/python-specifics-reviewer.md
+
+  claude_agent_claude_md_spec_reviewer:
+    src: claude/agents/claude-md-spec-reviewer.md
+    dst: ~/.claude/agents/claude-md-spec-reviewer.md
+
+  claude_agent_claude_md_form_reviewer:
+    src: claude/agents/claude-md-form-reviewer.md
+    dst: ~/.claude/agents/claude-md-form-reviewer.md
+
+  claude_agent_claude_md_substance_reviewer:
+    src: claude/agents/claude-md-substance-reviewer.md
+    dst: ~/.claude/agents/claude-md-substance-reviewer.md
+
+  claude_agent_claude_md_specifics_reviewer:
+    src: claude/agents/claude-md-specifics-reviewer.md
+    dst: ~/.claude/agents/claude-md-specifics-reviewer.md
+
+  claude_skill_reviewing_python_code:
+    src: claude/skills/reviewing-python-code/SKILL.md
+    dst: ~/.claude/skills/reviewing-python-code/SKILL.md
+
+  claude_skill_reviewing_claude_md:
+    src: claude/skills/reviewing-claude-md/SKILL.md
+    dst: ~/.claude/skills/reviewing-claude-md/SKILL.md
+
   vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -107,6 +147,16 @@ profiles:
       - claude_bd_skill
       - claude_challenge_skill
       - claude_wt_skill
+      - claude_agent_python_spec_reviewer
+      - claude_agent_python_form_reviewer
+      - claude_agent_python_substance_reviewer
+      - claude_agent_python_specifics_reviewer
+      - claude_agent_claude_md_spec_reviewer
+      - claude_agent_claude_md_form_reviewer
+      - claude_agent_claude_md_substance_reviewer
+      - claude_agent_claude_md_specifics_reviewer
+      - claude_skill_reviewing_python_code
+      - claude_skill_reviewing_claude_md
     claude_plugins:
       - superpowers
       - wiki
