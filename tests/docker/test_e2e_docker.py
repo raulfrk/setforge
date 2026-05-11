@@ -11,9 +11,9 @@ when ``docker`` is missing.
 Variants follow the spec layout (sections kept in test order for
 ease of cross-reference):
 
-- Install mechanism variants (B–L)
-- Sync + wizard variants (M–S1)
-- Lifecycle variants (T–W)
+- Install mechanism variants (B-L)
+- Sync + wizard variants (M-S1)
+- Lifecycle variants (T-W)
 
 Each test takes the form:
 
@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 import textwrap
 from collections.abc import Callable
-from pathlib import Path
 
 import pytest
 
@@ -54,39 +53,53 @@ _CONFIG = "tests/fixtures/e2e/my_setup.test.yaml"
 
 
 def _install(
-    container: "ContainerHandle",
+    container: ContainerHandle,
     profile: str,
     *,
     extra: list[str] | None = None,
-) -> "object":
+) -> object:
     """Run ``my-setup install`` inside the container; return CompletedProcess."""
-    cmd = ["uv", "run", "my-setup", "install", f"--profile={profile}", f"--config={_CONFIG}"]
+    cmd = [
+        "uv",
+        "run",
+        "my-setup",
+        "install",
+        f"--profile={profile}",
+        f"--config={_CONFIG}",
+    ]
     if extra:
         cmd.extend(extra)
     return container.exec(cmd)  # type: ignore[attr-defined]
 
 
 def _sync(
-    container: "ContainerHandle",
+    container: ContainerHandle,
     profile: str,
     *,
     extra: list[str] | None = None,
     check: bool = True,
-) -> "object":
+) -> object:
     """Run ``my-setup sync`` inside the container; return CompletedProcess."""
-    cmd = ["uv", "run", "my-setup", "sync", f"--profile={profile}", f"--config={_CONFIG}"]
+    cmd = [
+        "uv",
+        "run",
+        "my-setup",
+        "sync",
+        f"--profile={profile}",
+        f"--config={_CONFIG}",
+    ]
     if extra:
         cmd.extend(extra)
     return container.exec(cmd, check=check)  # type: ignore[attr-defined]
 
 
-def _read_live(container: "ContainerHandle", path: str) -> str:
+def _read_live(container: ContainerHandle, path: str) -> str:
     """Read a live (dst) file in the container's $HOME tree."""
     return container.read_text(f"/home/tester/{path}")  # type: ignore[attr-defined]
 
 
 # ===========================================================================
-# Section: Install mechanism variants (B–L)
+# Section: Install mechanism variants (B-L)
 # ===========================================================================
 
 
@@ -94,14 +107,13 @@ def _read_live(container: "ContainerHandle", path: str) -> str:
 
 
 def test_install_minimal_floor(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """B: plain-text byte copy lands at dst with matching content."""
     c = docker_container()
     _install(c, "test-minimal")
     assert (
-        _read_live(c, ".my_setup_e2e/minimal/text.txt")
-        == "hello from test-minimal\n"
+        _read_live(c, ".my_setup_e2e/minimal/text.txt") == "hello from test-minimal\n"
     )
 
 
@@ -109,7 +121,7 @@ def test_install_minimal_floor(
 
 
 def test_install_text_sections_no_live(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """C: preserve_user_sections=true, no live content → dst equals tracked."""
     c = docker_container()
@@ -125,7 +137,7 @@ def test_install_text_sections_no_live(
 
 
 def test_install_text_sections_preserve_user_content(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """D: pre-seed marker-bracketed live content; survives the next install."""
     c = docker_container()
@@ -157,7 +169,7 @@ def test_install_text_sections_preserve_user_content(
 
 
 def test_install_json_byte_copy(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """E: JSON dotfile byte-copies; parsed result matches tracked."""
     c = docker_container()
@@ -174,7 +186,7 @@ def test_install_json_byte_copy(
 
 
 def test_install_jsonc_shallow_no_live(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """F: JSONC byte copy + comments preserved when no preserve overlay applies."""
     c = docker_container()
@@ -189,7 +201,7 @@ def test_install_jsonc_shallow_no_live(
 
 
 def test_install_jsonc_shallow_preserve_overlay(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """G: pre-seed preserve keys only; live values overlaid into tracked.
 
@@ -230,7 +242,7 @@ def test_install_jsonc_shallow_preserve_overlay(
 
 
 def test_install_jsonc_deep_preserve_overlay(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """H: pre-seed live drift inside the deep preserve subtree only.
 
@@ -270,7 +282,7 @@ def test_install_jsonc_deep_preserve_overlay(
 
 
 def test_install_yaml_shallow_preserve_overlay(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """H1: shallow preserve for YAML — yaml_merge.py parity with jsonc.py.
 
@@ -301,7 +313,7 @@ def test_install_yaml_shallow_preserve_overlay(
 
 
 def test_install_yaml_deep_preserve_overlay(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """H2: deep preserve for YAML — yaml_merge.py deep-merge parity.
 
@@ -333,7 +345,7 @@ def test_install_yaml_deep_preserve_overlay(
 
 
 def test_install_directory_copy(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """I: directory tree copied recursively, nested files included."""
     c = docker_container()
@@ -350,7 +362,7 @@ def test_install_directory_copy(
 
 
 def test_install_template_dst_jinja2(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """J: template=true dst Jinja2-renders ``{{ vscode_user_dir }}``."""
     c = docker_container()
@@ -364,7 +376,9 @@ def test_install_template_dst_jinja2(
         ["find", "/home/tester", "-name", "my-setup-e2e-template.txt"],
     )
     matches = [line for line in proc.stdout.splitlines() if line.strip()]
-    assert matches, f"templated dst not found anywhere under /home/tester: {proc.stdout!r}"
+    assert matches, (
+        f"templated dst not found anywhere under /home/tester: {proc.stdout!r}"
+    )
     # And the content is the rendered file.
     content = c.read_text(matches[0])  # type: ignore[attr-defined]
     assert content == "templated file (dst path was Jinja2-rendered)\n"
@@ -374,7 +388,7 @@ def test_install_template_dst_jinja2(
 
 
 def test_install_chain_resolution_and_bootstrap(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """K: 3-level extends chain; parent-first dotfile dedup + bootstrap stubs."""
     c = docker_container()
@@ -395,7 +409,7 @@ def test_install_chain_resolution_and_bootstrap(
 
 
 def test_install_comprehensive_plugins_extensions(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """L: full sweep — dotfiles + marketplaces + plugins + extensions + bootstrap.
 
@@ -425,7 +439,7 @@ def test_install_comprehensive_plugins_extensions(
 
 
 # ===========================================================================
-# Section: Sync + wizard variants (M–S1)
+# Section: Sync + wizard variants (M-S1)
 # ===========================================================================
 
 
@@ -433,7 +447,7 @@ def test_install_comprehensive_plugins_extensions(
 
 
 def test_sync_no_drift_noop(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """M: install clean; sync reports no-op; tracked unchanged."""
     c = docker_container()
@@ -448,7 +462,7 @@ def test_sync_no_drift_noop(
 
 
 def test_sync_auto_use_live_silent_absorb(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """N: pre-seed drift, --auto=use-live absorbs live into tracked."""
     c = docker_container()
@@ -467,7 +481,7 @@ def test_sync_auto_use_live_silent_absorb(
 
 
 def test_sync_auto_keep_tracked_refuse_absorb(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """O: pre-seed drift on YAML deep; --auto=keep-tracked leaves tracked unchanged.
 
@@ -514,7 +528,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
 
 
 def test_sync_interactive_keep_via_pty(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., object],
 ) -> None:
     """P: docker exec -it + pexpect; send 'k' on YAML deep drift; tracked unchanged."""
@@ -536,7 +550,14 @@ def test_sync_interactive_keep_via_pty(
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -551,7 +572,7 @@ def test_sync_interactive_keep_via_pty(
 
 
 def test_sync_interactive_use_via_pty(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., object],
 ) -> None:
     """Q: pexpect; send 'u' on YAML deep drift; tracked absorbs live."""
@@ -572,7 +593,14 @@ def test_sync_interactive_use_via_pty(
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -586,7 +614,7 @@ def test_sync_interactive_use_via_pty(
 
 
 def test_sync_interactive_skip_via_pty(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., object],
 ) -> None:
     """R: pexpect; send 's' (save-as-preserved); my_setup.yaml gets the key added.
@@ -615,7 +643,14 @@ def test_sync_interactive_skip_via_pty(
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -633,7 +668,7 @@ def test_sync_interactive_skip_via_pty(
 
 
 def test_sync_interactive_merge_via_pty(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., object],
 ) -> None:
     """S: pexpect; send 'm' (manual edit) then 'n' (decline editor) → pending state.
@@ -663,7 +698,14 @@ def test_sync_interactive_merge_via_pty(
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -681,7 +723,7 @@ def test_sync_interactive_merge_via_pty(
 
 
 def test_sync_yaml_deep_interactive_use_via_pty(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., object],
 ) -> None:
     """S1: same shape as Q but on a YAML deep dotfile — yaml_merge round-trip."""
@@ -702,7 +744,14 @@ def test_sync_yaml_deep_interactive_use_via_pty(
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -715,7 +764,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
 
 
 # ===========================================================================
-# Section: Lifecycle variants (T–W)
+# Section: Lifecycle variants (T-W)
 # ===========================================================================
 
 
@@ -723,7 +772,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
 
 
 def test_compare_reports_drift_exit_nonzero(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """T: install, mutate live, compare --check --strict exits non-zero."""
     c = docker_container()
@@ -751,7 +800,7 @@ def test_compare_reports_drift_exit_nonzero(
 
 
 def test_install_then_revert_restores_state(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """U: install creates live file; revert removes it (no prior content)."""
     c = docker_container()
@@ -787,7 +836,7 @@ def test_install_then_revert_restores_state(
 
 
 def test_install_idempotent_second_run_noop(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """V: install twice; second run exits 0 with consistent dst state."""
     c = docker_container()
@@ -803,7 +852,7 @@ def test_install_idempotent_second_run_noop(
 
 
 def test_validate_clean_yaml_exit_zero(
-    docker_container: Callable[..., "ContainerHandle"],
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """W: validate --all against the fixture config exits 0."""
     c = docker_container()

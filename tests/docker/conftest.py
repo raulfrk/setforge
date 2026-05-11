@@ -23,14 +23,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import textwrap
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = REPO_ROOT / "tests" / "docker" / "Dockerfile"
@@ -74,9 +72,7 @@ def docker_image() -> str:
     )
     if proc.returncode != 0:
         pytest.fail(
-            "docker build failed:\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}",
+            f"docker build failed:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
             pytrace=False,
         )
     return IMAGE_TAG
@@ -101,7 +97,7 @@ class ContainerHandle:
         env: dict[str, str] | None = None,
         workdir: str | None = None,
         input_text: str | None = None,
-    ) -> "subprocess.CompletedProcess[str]":  # type: ignore[type-arg]
+    ) -> subprocess.CompletedProcess[str]:  # type: ignore[type-arg]
         """Run a command inside the container, return CompletedProcess.
 
         ``check=False`` lets tests assert on non-zero exits (e.g.
@@ -145,9 +141,7 @@ class ContainerHandle:
         """
         import tempfile
 
-        with tempfile.NamedTemporaryFile(
-            "w", delete=False, encoding="utf-8"
-        ) as fh:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as fh:
             fh.write(content)
             staging = fh.name
         try:
@@ -268,9 +262,7 @@ def docker_pty_session(
             for k, v in env.items():
                 argv += ["-e", f"{k}={v}"]
         argv += [container.cid, *cmd]
-        session = pexpect.spawn(
-            "docker", argv, encoding="utf-8", timeout=timeout
-        )
+        session = pexpect.spawn("docker", argv, encoding="utf-8", timeout=timeout)
         sessions.append(session)
         return session
 
