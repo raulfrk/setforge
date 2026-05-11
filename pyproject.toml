@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pexpect>=4.9",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.7",
@@ -60,3 +61,10 @@ ignore = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `my_setup.<module>.subprocess.run` to resolve correctly."
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
+]
+# Default run skips e2e_docker so plain `pytest` stays fast and docker-free.
+addopts = "-m 'not e2e_docker'"
