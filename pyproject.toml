@@ -43,7 +43,6 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ANN"]
 #   ANN401 → dotfiles-m6g (29 sites: Any usages)
 #   E501   → dotfiles-2du (26 sites: long lines)
 #   ANN003 → dotfiles-jbv (21 sites: **kwargs annotations)
-#   B904   → dotfiles-qlt (5 sites: chained-raise without `from`)
 #   ANN002, ANN201, B008, E402, PT011, RUF002 → dotfiles-0yh (8 misc singletons)
 ignore = [
     "ANN001",
@@ -53,7 +52,6 @@ ignore = [
     "ANN202",
     "ANN401",
     "B008",
-    "B904",
     "E402",
     "E501",
     "PT011",

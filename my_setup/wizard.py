@@ -198,9 +198,9 @@ def _read_one_choice(prompt: str, choices: set[str]) -> str:
         while True:
             ch = sys.stdin.read(1)
             if not ch:
-                raise EOFError("stdin closed")
+                raise EOFError("stdin closed") from None
             if ch == "\x03":
-                raise KeyboardInterrupt
+                raise KeyboardInterrupt from None
             ch_l = ch.lower()
             if ch_l in choices:
                 print(ch_l)

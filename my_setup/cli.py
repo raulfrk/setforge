@@ -358,7 +358,7 @@ def capture(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
@@ -397,7 +397,7 @@ def merge(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
 
 
 @app.command()
@@ -475,7 +475,7 @@ def sync(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
