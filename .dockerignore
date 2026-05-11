@@ -1,0 +1,19 @@
+# Docker build context filter for tests/docker/Dockerfile.
+# Built with the repo root as context so the Dockerfile can COPY in
+# pyproject.toml, uv.lock, and the my_setup/ source. This file keeps
+# the context lean and the cache stable.
+.git/
+.venv/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+__pycache__/
+*.pyc
+.beads/
+.claude/
+.github/
+node_modules/
+dist/
+build/
+htmlcov/
+.coverage
