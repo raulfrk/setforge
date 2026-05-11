@@ -1,0 +1,6 @@
+{
+  // tracked side comment for shallow-preserve JSONC fixture
+  "trackedKey": "tracked-value",
+  "userKeyA": "tracked-placeholder-A",
+  "userKeyB": "tracked-placeholder-B"
+}

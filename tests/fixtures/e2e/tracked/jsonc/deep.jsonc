@@ -1,0 +1,8 @@
+{
+  // deep-preserve JSONC fixture: settings.* nodes deep-merge from live.
+  "trackedKey": "tracked-value",
+  "settings": {
+    "trackedSub": "tracked-sub-value",
+    "userSub": "tracked-placeholder"
+  }
+}

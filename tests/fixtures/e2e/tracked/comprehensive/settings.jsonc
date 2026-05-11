@@ -1,0 +1,5 @@
+{
+  // comprehensive JSONC fixture — userKey is preserved on overlay.
+  "trackedKey": "comprehensive-tracked",
+  "userKey": "comprehensive-placeholder"
+}

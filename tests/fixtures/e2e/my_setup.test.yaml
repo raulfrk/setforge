@@ -1,0 +1,203 @@
+# Test-only my-setup config for E2E coverage (dotfiles-nen.9).
+#
+# This config is tool-generic — it never references production profiles
+# (vm-headless / -full / workstation), which will be extracted to a
+# separate config repo via dotfiles-2ba. Every profile here exercises
+# one well-defined mechanism so the matching variant in
+# tests/test_e2e_docker.py and tests/test_cli_e2e.py can assert against
+# a stable shape.
+#
+# Layout (tracked srcs):
+#   tests/fixtures/e2e/tracked/<area>/<file>
+# Live dst paths are intentionally placed under $HOME so docker
+# variants and tmp-path CliRunner variants both work cleanly.
+version: 1
+
+# ----------------------------------------------------------------------
+# Dotfiles. Each entry pairs a tracked src with a live dst plus optional
+# preserve / template / section directives. Keys are stable identifiers
+# referenced by profile.dotfiles lists below.
+# ----------------------------------------------------------------------
+dotfiles:
+  # Plain text — floor case, no overlays, byte copy.
+  minimal_text:
+    src: minimal/text.txt
+    dst: ~/.my_setup_e2e/minimal/text.txt
+
+  # Text dotfile with HTML-comment user-section markers (sections.py).
+  sections_md:
+    src: sections/marked.md
+    dst: ~/.my_setup_e2e/sections/marked.md
+    preserve_user_sections: true
+
+  # JSON dotfile — byte copy, no preserve mechanism.
+  json_settings:
+    src: json/settings.json
+    dst: ~/.my_setup_e2e/json/settings.json
+
+  # JSONC with shallow preserve_user_keys (dotted-name leaves).
+  jsonc_shallow:
+    src: jsonc/shallow.jsonc
+    dst: ~/.my_setup_e2e/jsonc/shallow.jsonc
+    preserve_user_keys:
+      - userKeyA
+      - userKeyB
+
+  # JSONC with deep preserve_user_keys_deep — drives JSONC wizard variants.
+  jsonc_deep:
+    src: jsonc/deep.jsonc
+    dst: ~/.my_setup_e2e/jsonc/deep.jsonc
+    preserve_user_keys_deep:
+      - settings
+
+  # YAML shallow — proves yaml_merge.py shallow parity with jsonc.py.
+  yaml_shallow:
+    src: yaml/shallow.yaml
+    dst: ~/.my_setup_e2e/yaml/shallow.yaml
+    preserve_user_keys:
+      - userKeyA
+      - userKeyB
+
+  # YAML deep — proves yaml_merge.py deep parity; drives YAML wizard variant.
+  yaml_deep:
+    src: yaml/deep.yaml
+    dst: ~/.my_setup_e2e/yaml/deep.yaml
+    preserve_user_keys_deep:
+      - settings
+
+  # Directory tree — recursive copy.
+  directory_tree:
+    src: directory
+    dst: ~/.my_setup_e2e/directory
+
+  # Template — Jinja2 dst rendered (template: true triggers render).
+  template_path:
+    src: template/template.txt
+    dst: "{{ vscode_user_dir }}/my-setup-e2e-template.txt"
+    template: true
+
+  # Three-level chain dotfiles (one per chain layer for distinguishable
+  # parent-first-dedup ordering in test_install_chain_resolution).
+  chain_grand:
+    src: chain/grand.txt
+    dst: ~/.my_setup_e2e/chain/grand.txt
+  chain_base:
+    src: chain/base.txt
+    dst: ~/.my_setup_e2e/chain/base.txt
+  chain_child:
+    src: chain/child.txt
+    dst: ~/.my_setup_e2e/chain/child.txt
+
+  # Comprehensive: plain + JSON + JSONC + YAML in one profile.
+  comprehensive_text:
+    src: comprehensive/notes.md
+    dst: ~/.my_setup_e2e/comprehensive/notes.md
+  comprehensive_json:
+    src: comprehensive/data.json
+    dst: ~/.my_setup_e2e/comprehensive/data.json
+  comprehensive_jsonc:
+    src: comprehensive/settings.jsonc
+    dst: ~/.my_setup_e2e/comprehensive/settings.jsonc
+    preserve_user_keys:
+      - userKey
+  comprehensive_yaml:
+    src: comprehensive/config.yaml
+    dst: ~/.my_setup_e2e/comprehensive/config.yaml
+
+# ----------------------------------------------------------------------
+# Marketplaces — referenced only by test-comprehensive. Test-comprehensive
+# uses a well-known stable plugin (superpowers from claude-plugins-official)
+# rather than hosting a fixture-plugin repo: avoids one more moving piece
+# and matches what real users install. See open question 4 resolution.
+# ----------------------------------------------------------------------
+marketplaces:
+  claude-plugins-official:
+    source: github
+    repo: anthropics/claude-plugins-official
+
+# ----------------------------------------------------------------------
+# Claude plugins — referenced only by test-comprehensive.
+# ----------------------------------------------------------------------
+claude_plugins:
+  superpowers:
+    marketplace: claude-plugins-official
+
+# ----------------------------------------------------------------------
+# Profiles. Test-only — never duplicate production profile names.
+# ----------------------------------------------------------------------
+profiles:
+  # ---- Single-mechanism profiles (10) ----------------------------------
+  test-minimal:
+    dotfiles:
+      - minimal_text
+
+  test-text-sections:
+    dotfiles:
+      - sections_md
+
+  test-json:
+    dotfiles:
+      - json_settings
+
+  test-jsonc-shallow:
+    dotfiles:
+      - jsonc_shallow
+
+  test-jsonc-deep:
+    dotfiles:
+      - jsonc_deep
+
+  test-yaml-shallow:
+    dotfiles:
+      - yaml_shallow
+
+  test-yaml-deep:
+    dotfiles:
+      - yaml_deep
+
+  test-directory:
+    dotfiles:
+      - directory_tree
+
+  test-template:
+    dotfiles:
+      - template_path
+
+  # ---- Chain profiles (3 entries: grandparent + base + child) ----------
+  # The chain ancestors are profile entries in their own right — they're
+  # referenced as `extends:` targets, never directly. Counted toward the
+  # 11+2 = 13 total per spec line 44.
+  test-chain-grandparent:
+    dotfiles:
+      - chain_grand
+    bootstrap:
+      - ~/.my_setup_e2e/chain/bootstrap-grand.txt
+
+  test-chain-base:
+    extends: test-chain-grandparent
+    dotfiles:
+      - chain_base
+    bootstrap:
+      - ~/.my_setup_e2e/chain/bootstrap-base.txt
+
+  test-chain-child:
+    extends: test-chain-base
+    dotfiles:
+      - chain_child
+    bootstrap:
+      - ~/.my_setup_e2e/chain/bootstrap-child.txt
+
+  # ---- Comprehensive — dotfiles + plugins + extensions + bootstrap ----
+  test-comprehensive:
+    dotfiles:
+      - comprehensive_text
+      - comprehensive_json
+      - comprehensive_jsonc
+      - comprehensive_yaml
+    claude_plugins:
+      - superpowers
+    extensions:
+      include:
+        - editorconfig.editorconfig
+    bootstrap:
+      - ~/.my_setup_e2e/comprehensive/bootstrap-stub.txt

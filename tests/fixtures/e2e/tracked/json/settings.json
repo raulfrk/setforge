@@ -1,0 +1,5 @@
+{
+  "settingA": "tracked-value-A",
+  "settingB": 42,
+  "settingC": ["alpha", "beta"]
+}

@@ -1,0 +1,4 @@
+# YAML shallow-preserve fixture.
+trackedKey: tracked-value
+userKeyA: tracked-placeholder-A
+userKeyB: tracked-placeholder-B
