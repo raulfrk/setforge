@@ -36,17 +36,19 @@ dotfiles:
     dst: ~/.my_setup_e2e/json/settings.json
 
   # JSONC with shallow preserve_user_keys (dotted-name leaves).
+  # NOTE: extension is `.json` because my_setup/jsonc.py:is_jsonc_file
+  # treats every `.json` as JSONC-capable (matches VSCode semantics).
   jsonc_shallow:
-    src: jsonc/shallow.jsonc
-    dst: ~/.my_setup_e2e/jsonc/shallow.jsonc
+    src: jsonc/shallow.json
+    dst: ~/.my_setup_e2e/jsonc/shallow.json
     preserve_user_keys:
       - userKeyA
       - userKeyB
 
   # JSONC with deep preserve_user_keys_deep — drives JSONC wizard variants.
   jsonc_deep:
-    src: jsonc/deep.jsonc
-    dst: ~/.my_setup_e2e/jsonc/deep.jsonc
+    src: jsonc/deep.json
+    dst: ~/.my_setup_e2e/jsonc/deep.json
     preserve_user_keys_deep:
       - settings
 
@@ -96,8 +98,8 @@ dotfiles:
     src: comprehensive/data.json
     dst: ~/.my_setup_e2e/comprehensive/data.json
   comprehensive_jsonc:
-    src: comprehensive/settings.jsonc
-    dst: ~/.my_setup_e2e/comprehensive/settings.jsonc
+    src: comprehensive/preserve-settings.json
+    dst: ~/.my_setup_e2e/comprehensive/preserve-settings.json
     preserve_user_keys:
       - userKey
   comprehensive_yaml:

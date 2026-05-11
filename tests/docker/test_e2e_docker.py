@@ -82,7 +82,7 @@ def _sync(
 
 def _read_live(container: "ContainerHandle", path: str) -> str:
     """Read a live (dst) file in the container's $HOME tree."""
-    return container.read_text(f"/root/{path}")  # type: ignore[attr-defined]
+    return container.read_text(f"/home/tester/{path}")  # type: ignore[attr-defined]
 
 
 # ===========================================================================
@@ -143,7 +143,7 @@ def test_install_text_sections_preserve_user_content(
         Trailing live content (not preserved on next install).
         """
     )
-    c.write_text("/root/.my_setup_e2e/sections/marked.md", pre_seeded)  # type: ignore[attr-defined]
+    c.write_text("/home/tester/.my_setup_e2e/sections/marked.md", pre_seeded)  # type: ignore[attr-defined]
 
     _install(c, "test-text-sections")
     live = _read_live(c, ".my_setup_e2e/sections/marked.md")
@@ -179,7 +179,7 @@ def test_install_jsonc_shallow_no_live(
     """F: JSONC byte copy + comments preserved when no preserve overlay applies."""
     c = docker_container()
     _install(c, "test-jsonc-shallow")
-    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.jsonc")
+    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.json")
     assert "// tracked side comment" in live
     assert "tracked-placeholder-A" in live
     assert "tracked-placeholder-B" in live
@@ -191,19 +191,25 @@ def test_install_jsonc_shallow_no_live(
 def test_install_jsonc_shallow_preserve_overlay(
     docker_container: Callable[..., "ContainerHandle"],
 ) -> None:
-    """G: pre-seed preserve keys; assert overlaid, tracked non-preserve updated."""
+    """G: pre-seed preserve keys only; live values overlaid into tracked.
+
+    Mutating non-preserve top-level keys would trigger the install
+    drift-gate (CompareStatus.DRIFTED with unexpected_drift_keys); the
+    variant under test is the overlay PATH, not the drift-gate path,
+    so the pre-seed only mutates preserve_user_keys entries.
+    """
     c = docker_container()
     # First install to produce baseline.
     _install(c, "test-jsonc-shallow")
-    # Mutate preserve_user_keys on the live side.
-    live_path = "/root/.my_setup_e2e/jsonc/shallow.jsonc"
+    # Mutate ONLY preserve_user_keys entries on the live side.
+    live_path = "/home/tester/.my_setup_e2e/jsonc/shallow.json"
     c.write_text(  # type: ignore[attr-defined]
         live_path,
         textwrap.dedent(
             """\
             {
-              // live side comment (NOT preserved)
-              "trackedKey": "live-mutation-NOT-preserved",
+              // tracked side comment for shallow-preserve JSONC fixture
+              "trackedKey": "tracked-value",
               "userKeyA": "live-A",
               "userKeyB": "live-B"
             }
@@ -211,8 +217,8 @@ def test_install_jsonc_shallow_preserve_overlay(
         ),
     )
     _install(c, "test-jsonc-shallow")
-    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.jsonc")
-    # userKeyA / userKeyB preserved from live; trackedKey reverted to tracked.
+    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.json")
+    # userKeyA / userKeyB preserved from live; trackedKey is the tracked value.
     assert "live-A" in live
     assert "live-B" in live
     assert "tracked-value" in live
@@ -226,18 +232,23 @@ def test_install_jsonc_shallow_preserve_overlay(
 def test_install_jsonc_deep_preserve_overlay(
     docker_container: Callable[..., "ContainerHandle"],
 ) -> None:
-    """H: pre-seed deep-nested live values; deep values intact, siblings updated."""
+    """H: pre-seed live drift inside the deep preserve subtree only.
+
+    `settings` is in preserve_user_keys_deep so ANY sub-key drift
+    beneath it is expected; mutating top-level non-preserve keys
+    would trigger the drift-gate. Pre-seed only inside `settings`.
+    """
     c = docker_container()
     _install(c, "test-jsonc-deep")
-    live_path = "/root/.my_setup_e2e/jsonc/deep.jsonc"
+    live_path = "/home/tester/.my_setup_e2e/jsonc/deep.json"
     c.write_text(  # type: ignore[attr-defined]
         live_path,
         textwrap.dedent(
             """\
             {
-              "trackedKey": "live-mutation",
+              "trackedKey": "tracked-value",
               "settings": {
-                "trackedSub": "live-sub-value",
+                "trackedSub": "tracked-sub-value",
                 "userSub": "live-user-value"
               }
             }
@@ -245,12 +256,13 @@ def test_install_jsonc_deep_preserve_overlay(
         ),
     )
     _install(c, "test-jsonc-deep")
-    live = _read_live(c, ".my_setup_e2e/jsonc/deep.jsonc")
-    # `settings` is preserve_user_keys_deep — sub-keys deep-merge.
-    # Live userSub survives; tracked trackedSub also present (tracked-only
-    # sub-keys keep their tracked value, live wins on overlap).
-    assert "live-user-value" in live  # live userSub kept
-    # Top-level non-preserve: trackedKey reverts to tracked-value.
+    live = _read_live(c, ".my_setup_e2e/jsonc/deep.json")
+    # Deep merge: live userSub survives; tracked trackedSub keeps its
+    # tracked value (deep-merge is parent-first union; live wins on
+    # overlap, tracked keeps tracked-only keys).
+    assert "live-user-value" in live
+    assert "tracked-sub-value" in live
+    # Top-level non-preserve: trackedKey is the tracked value.
     assert "tracked-value" in live
 
 
@@ -260,15 +272,19 @@ def test_install_jsonc_deep_preserve_overlay(
 def test_install_yaml_shallow_preserve_overlay(
     docker_container: Callable[..., "ContainerHandle"],
 ) -> None:
-    """H1: shallow preserve for YAML — yaml_merge.py parity with jsonc.py."""
+    """H1: shallow preserve for YAML — yaml_merge.py parity with jsonc.py.
+
+    Pre-seed only the preserve keys (mutating non-preserve top-level
+    keys would trigger the install drift-gate).
+    """
     c = docker_container()
     _install(c, "test-yaml-shallow")
-    live_path = "/root/.my_setup_e2e/yaml/shallow.yaml"
+    live_path = "/home/tester/.my_setup_e2e/yaml/shallow.yaml"
     c.write_text(  # type: ignore[attr-defined]
         live_path,
         textwrap.dedent(
             """\
-            trackedKey: live-mutation
+            trackedKey: tracked-value
             userKeyA: live-A
             userKeyB: live-B
             """
@@ -278,7 +294,7 @@ def test_install_yaml_shallow_preserve_overlay(
     live = _read_live(c, ".my_setup_e2e/yaml/shallow.yaml")
     assert "live-A" in live
     assert "live-B" in live
-    assert "tracked-value" in live  # trackedKey reverted
+    assert "tracked-value" in live  # trackedKey is the tracked value
 
 
 # --- Variant H2 -----------------------------------------------------------
@@ -287,17 +303,21 @@ def test_install_yaml_shallow_preserve_overlay(
 def test_install_yaml_deep_preserve_overlay(
     docker_container: Callable[..., "ContainerHandle"],
 ) -> None:
-    """H2: deep preserve for YAML — yaml_merge.py deep-merge parity."""
+    """H2: deep preserve for YAML — yaml_merge.py deep-merge parity.
+
+    Pre-seed drift inside the `settings` deep preserve subtree only;
+    keep top-level non-preserve keys at their tracked values.
+    """
     c = docker_container()
     _install(c, "test-yaml-deep")
-    live_path = "/root/.my_setup_e2e/yaml/deep.yaml"
+    live_path = "/home/tester/.my_setup_e2e/yaml/deep.yaml"
     c.write_text(  # type: ignore[attr-defined]
         live_path,
         textwrap.dedent(
             """\
-            trackedKey: live-mutation
+            trackedKey: tracked-value
             settings:
-              trackedSub: live-sub
+              trackedSub: tracked-sub-value
               userSub: live-user-value
             """
         ),
@@ -305,7 +325,8 @@ def test_install_yaml_deep_preserve_overlay(
     _install(c, "test-yaml-deep")
     live = _read_live(c, ".my_setup_e2e/yaml/deep.yaml")
     assert "live-user-value" in live  # live deep sub-key survives
-    assert "tracked-value" in live  # trackedKey reverted
+    assert "tracked-sub-value" in live  # tracked-only deep sub-key kept
+    assert "tracked-value" in live  # top-level untouched
 
 
 # --- Variant I ------------------------------------------------------------
@@ -335,15 +356,15 @@ def test_install_template_dst_jinja2(
     c = docker_container()
     _install(c, "test-template")
     # vscode_user_dir for Linux non-workstation ~ resolves under $HOME — verify
-    # the file lands somewhere under /root, not at the literal Jinja2 template.
+    # the file lands somewhere under /home/tester, not at the literal Jinja2 template.
     # We probe by `find` rather than computing the exact path here (paths.py
     # owns vscode_user_dir's resolution; the test asserts only that template
     # rendering happened, NOT the specific dst).
     proc = c.exec(  # type: ignore[attr-defined]
-        ["find", "/root", "-name", "my-setup-e2e-template.txt"],
+        ["find", "/home/tester", "-name", "my-setup-e2e-template.txt"],
     )
     matches = [line for line in proc.stdout.splitlines() if line.strip()]
-    assert matches, f"templated dst not found anywhere under /root: {proc.stdout!r}"
+    assert matches, f"templated dst not found anywhere under /home/tester: {proc.stdout!r}"
     # And the content is the rendered file.
     content = c.read_text(matches[0])  # type: ignore[attr-defined]
     assert content == "templated file (dst path was Jinja2-rendered)\n"
@@ -365,7 +386,7 @@ def test_install_chain_resolution_and_bootstrap(
     # Bootstrap stubs created at all three chain levels.
     for stub in ("bootstrap-grand.txt", "bootstrap-base.txt", "bootstrap-child.txt"):
         proc = c.exec(  # type: ignore[attr-defined]
-            ["test", "-f", f"/root/{root}/{stub}"], check=False
+            ["test", "-f", f"/home/tester/{root}/{stub}"], check=False
         )
         assert proc.returncode == 0, f"missing bootstrap stub: {stub}"
 
@@ -395,10 +416,10 @@ def test_install_comprehensive_plugins_extensions(
     assert json.loads(_read_live(c, f"{root}/data.json")) == {
         "key": "comprehensive-value"
     }
-    assert "comprehensive-tracked" in _read_live(c, f"{root}/settings.jsonc")
+    assert "comprehensive-tracked" in _read_live(c, f"{root}/preserve-settings.json")
     assert "comprehensive-tracked-yaml" in _read_live(c, f"{root}/config.yaml")
     proc = c.exec(  # type: ignore[attr-defined]
-        ["test", "-f", f"/root/{root}/bootstrap-stub.txt"], check=False
+        ["test", "-f", f"/home/tester/{root}/bootstrap-stub.txt"], check=False
     )
     assert proc.returncode == 0, "comprehensive bootstrap stub missing"
 
@@ -433,7 +454,7 @@ def test_sync_auto_use_live_silent_absorb(
     c = docker_container()
     _install(c, "test-minimal")
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/minimal/text.txt", "live-only-content\n"
+        "/home/tester/.my_setup_e2e/minimal/text.txt", "live-only-content\n"
     )
     _sync(c, "test-minimal", extra=["--auto=use-live"])
     tracked = c.read_text(  # type: ignore[attr-defined]
@@ -448,79 +469,80 @@ def test_sync_auto_use_live_silent_absorb(
 def test_sync_auto_keep_tracked_refuse_absorb(
     docker_container: Callable[..., "ContainerHandle"],
 ) -> None:
-    """O: pre-seed drift on a JSONC dotfile with deep preserve. --auto=keep-tracked
-    refuses to absorb the live drift; tracked is unchanged.
+    """O: pre-seed drift on YAML deep; --auto=keep-tracked leaves tracked unchanged.
 
-    Plain-text dotfiles bypass the wizard entirely (drift outside any
-    preserve surface is silently absorbed today). The wizard's
-    `keep-tracked` path only fires on preserve_user_keys_deep dotfiles
-    or non-preserve top-level drift in tracked files that declare any
-    preserve list — JSONC deep is the cleanest fit.
+    Uses YAML deep (not JSONC deep) because capture-time wizard
+    deep-merge walking is intentionally skipped for JSONC per
+    my_setup/capture_wizard.py:175 (deep_paths_to_walk = []
+    for JSONC). YAML deep is where the capture wizard's auto-accept
+    plumbing actually fires today.
     """
     c = docker_container()
-    _install(c, "test-jsonc-deep")
+    _install(c, "test-yaml-deep")
     pre = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc"
+        "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
     )
     # Pre-seed live drift inside the preserve_user_keys_deep `settings` subtree.
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/jsonc/deep.jsonc",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
-            {
-              "trackedKey": "tracked-value",
-              "settings": {
-                "trackedSub": "tracked-sub-value",
-                "userSub": "live-drift-value"
-              }
-            }
+            trackedKey: tracked-value
+            settings:
+              trackedSub: tracked-sub-value
+              userSub: live-drift-value
             """
         ),
     )
-    proc = _sync(c, "test-jsonc-deep", extra=["--auto=keep-tracked"], check=False)
+    _sync(c, "test-yaml-deep", extra=["--auto=keep-tracked"], check=False)
     # keep-tracked refuses absorb — tracked content unchanged.
     post = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc"
+        "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
     )
     assert pre == post
 
 
 # --- Variant P (interactive: pty + 'k') -----------------------------------
+#
+# Wizard surface note (verified against my_setup/capture_wizard.py:175):
+# the capture-time wizard's deep-merge walker SKIPS JSONC files
+# (deep_paths_to_walk = preserve_user_keys_deep if fmt != "jsonc"
+# else []). JSONC deep-merge per-sub-key drift is handled by deploy's
+# overlay, not the capture-time wizard. So PTY variants P/Q/R/S
+# target YAML deep (where the walker actually fires), not JSONC.
+# This is the empirical resolution of open question 8.
 
 
 def test_sync_interactive_keep_via_pty(
     docker_container: Callable[..., "ContainerHandle"],
     docker_pty_session: Callable[..., object],
 ) -> None:
-    """P: docker exec -it + pexpect; send 'k' on JSONC deep drift; tracked unchanged."""
+    """P: docker exec -it + pexpect; send 'k' on YAML deep drift; tracked unchanged."""
     import pexpect  # type: ignore[import-untyped]
 
     c = docker_container()
-    _install(c, "test-jsonc-deep")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc")  # type: ignore[attr-defined]
+    _install(c, "test-yaml-deep")
+    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/jsonc/deep.jsonc",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
-            {
-              "trackedKey": "tracked-value",
-              "settings": {
-                "trackedSub": "tracked-sub-value",
-                "userSub": "live-drift-value"
-              }
-            }
+            trackedKey: tracked-value
+            settings:
+              trackedSub: tracked-sub-value
+              userSub: live-drift-value
             """
         ),
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-jsonc-deep", f"--config={_CONFIG}"],
+        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
     session.send("k")  # type: ignore[attr-defined]
     session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc")  # type: ignore[attr-defined]
+    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     # k = keep tracked → tracked is unchanged after the sync.
     assert pre == post
 
@@ -532,34 +554,31 @@ def test_sync_interactive_use_via_pty(
     docker_container: Callable[..., "ContainerHandle"],
     docker_pty_session: Callable[..., object],
 ) -> None:
-    """Q: pexpect; send 'u' on JSONC deep drift; tracked absorbs live."""
+    """Q: pexpect; send 'u' on YAML deep drift; tracked absorbs live."""
     import pexpect  # type: ignore[import-untyped]
 
     c = docker_container()
-    _install(c, "test-jsonc-deep")
+    _install(c, "test-yaml-deep")
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/jsonc/deep.jsonc",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
-            {
-              "trackedKey": "tracked-value",
-              "settings": {
-                "trackedSub": "tracked-sub-value",
-                "userSub": "live-absorbed-value"
-              }
-            }
+            trackedKey: tracked-value
+            settings:
+              trackedSub: tracked-sub-value
+              userSub: live-absorbed-value
             """
         ),
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-jsonc-deep", f"--config={_CONFIG}"],
+        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
     session.send("u")  # type: ignore[attr-defined]
     session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc")  # type: ignore[attr-defined]
+    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     assert "live-absorbed-value" in post
 
 
@@ -581,33 +600,32 @@ def test_sync_interactive_skip_via_pty(
     import pexpect  # type: ignore[import-untyped]
 
     c = docker_container()
-    _install(c, "test-jsonc-deep")
+    _install(c, "test-yaml-deep")
     pre_yaml = c.read_text(f"/workspace/{_CONFIG}")  # type: ignore[attr-defined]
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/jsonc/deep.jsonc",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
-            {
-              "trackedKey": "tracked-value",
-              "settings": {
-                "trackedSub": "tracked-sub-value",
-                "userSub": "live-value-for-s"
-              }
-            }
+            trackedKey: tracked-value
+            settings:
+              trackedSub: tracked-sub-value
+              userSub: live-value-for-s
             """
         ),
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-jsonc-deep", f"--config={_CONFIG}"],
+        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
     session.send("s")  # type: ignore[attr-defined]
     session.expect(pexpect.EOF)  # type: ignore[attr-defined]
     post_yaml = c.read_text(f"/workspace/{_CONFIG}")  # type: ignore[attr-defined]
-    # YAML should have the preserve key path added under jsonc_deep.
-    assert "userSub" in post_yaml
+    # YAML should have the preserve key path added under yaml_deep.
+    # The action appends `settings.userSub` (the diverged key path) to
+    # preserve_user_keys list in the YAML.
+    assert "userSub" in post_yaml or "settings.userSub" in post_yaml
     assert pre_yaml != post_yaml
 
 
@@ -630,25 +648,22 @@ def test_sync_interactive_merge_via_pty(
     import pexpect  # type: ignore[import-untyped]
 
     c = docker_container()
-    _install(c, "test-jsonc-deep")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc")  # type: ignore[attr-defined]
+    _install(c, "test-yaml-deep")
+    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/jsonc/deep.jsonc",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
-            {
-              "trackedKey": "tracked-value",
-              "settings": {
-                "trackedSub": "tracked-sub-value",
-                "userSub": "live-value-for-m"
-              }
-            }
+            trackedKey: tracked-value
+            settings:
+              trackedSub: tracked-sub-value
+              userSub: live-value-for-m
             """
         ),
     )
     session = docker_pty_session(
         c,
-        ["uv", "run", "my-setup", "sync", "--profile=test-jsonc-deep", f"--config={_CONFIG}"],
+        ["uv", "run", "my-setup", "sync", "--profile=test-yaml-deep", f"--config={_CONFIG}"],
         timeout=120,
     )
     session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
@@ -657,7 +672,7 @@ def test_sync_interactive_merge_via_pty(
     session.expect(["y/n", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
     session.send("n")  # type: ignore[attr-defined]
     session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/jsonc/deep.jsonc")  # type: ignore[attr-defined]
+    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     # Manual edit declined → tracked unchanged (MANUAL_PENDING halts).
     assert pre == post
 
@@ -675,7 +690,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
     c = docker_container()
     _install(c, "test-yaml-deep")
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/yaml/deep.yaml",
+        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
             trackedKey: tracked-value
@@ -714,7 +729,7 @@ def test_compare_reports_drift_exit_nonzero(
     c = docker_container()
     _install(c, "test-minimal")
     c.write_text(  # type: ignore[attr-defined]
-        "/root/.my_setup_e2e/minimal/text.txt", "live-drift\n"
+        "/home/tester/.my_setup_e2e/minimal/text.txt", "live-drift\n"
     )
     proc = c.exec(  # type: ignore[attr-defined]
         [
@@ -744,7 +759,7 @@ def test_install_then_revert_restores_state(
     # Confirm the file exists post-install.
     assert (
         c.exec(  # type: ignore[attr-defined]
-            ["test", "-f", "/root/.my_setup_e2e/minimal/text.txt"], check=False
+            ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
         ).returncode
         == 0
     )
@@ -762,7 +777,7 @@ def test_install_then_revert_restores_state(
     # File is gone after revert (it was created from absence on install).
     assert (
         c.exec(  # type: ignore[attr-defined]
-            ["test", "-f", "/root/.my_setup_e2e/minimal/text.txt"], check=False
+            ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
         ).returncode
         != 0
     )
@@ -777,10 +792,10 @@ def test_install_idempotent_second_run_noop(
     """V: install twice; second run exits 0 with consistent dst state."""
     c = docker_container()
     _install(c, "test-minimal")
-    first = c.read_text("/root/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
+    first = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
     second = _install(c, "test-minimal")
     assert second.returncode == 0  # type: ignore[attr-defined]
-    after = c.read_text("/root/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
+    after = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
     assert first == after
 
 

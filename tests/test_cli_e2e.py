@@ -168,7 +168,7 @@ class TestInstall:
             ]
         )
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "jsonc" / "shallow.jsonc"
+        live = sandboxed_home / ".my_setup_e2e" / "jsonc" / "shallow.json"
         content = live.read_text()
         assert "// tracked side comment" in content
         assert "tracked-placeholder-A" in content
@@ -267,7 +267,7 @@ class TestInstall:
             "key": "comprehensive-value"
         }
         assert "comprehensive-tracked" in (
-            root / "settings.jsonc"
+            root / "preserve-settings.json"
         ).read_text()
         assert "comprehensive-tracked-yaml" in (
             root / "config.yaml"

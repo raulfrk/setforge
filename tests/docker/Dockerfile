@@ -14,26 +14,32 @@
 # don't invalidate the slow binary-install layers:
 #
 #   1. base image
-#   2. apt deps (curl, ca-certificates, gnupg)
-#   3. Microsoft repo + pinned `code` install
-#   4. nodejs + pinned `@anthropic-ai/claude-code`
-#   5. uv install
-#   6. pyproject + uv.lock → uv sync (Python deps)
-#   7. project source (COPY . .)
+#   2. apt deps + Microsoft repo + pinned `code` (root)
+#   3. nodejs + pinned `@anthropic-ai/claude-code` (root)
+#   4. create non-root user `tester` (open question 3 resolution —
+#      `code --list-extensions` refuses to run as root)
+#   5. uv install + managed Python 3.13 (as tester)
+#   6. pyproject + uv.lock → uv sync (Python deps; as tester)
+#   7. project source COPY + final uv sync (as tester)
 #
 # Pinned versions (open question 1 resolution):
 #   - claude-code:  pinned via `@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`
 #   - code:         pinned to ${VSCODE_VERSION}-stable from Microsoft's repo
-# Both can be bumped centrally here without touching test variants.
+#   - python:       uv-managed ${PYTHON_VERSION} (Debian 12 apt only
+#                   ships 3.11; my_setup uses PEP 695 generics so >= 3.12
+#                   is required).
 
 FROM debian:12-slim
 
 ARG VSCODE_VERSION=1.95.3
-ARG CLAUDE_CODE_VERSION=2.0.0
+# claude-code 2.1.x is required for the `claude plugin` subcommand
+# (which the comprehensive variant exercises). Pinned at the current
+# npm `stable` dist-tag at spec-writing time.
+ARG CLAUDE_CODE_VERSION=2.1.126
 ARG NODE_MAJOR=20
+ARG PYTHON_VERSION=3.13
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/root/.local/bin:${PATH}"
 
 # ----------------------------------------------------------------------
 # Layer 2: apt prerequisites (stable, rarely changes)
@@ -66,22 +72,38 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 # ----------------------------------------------------------------------
-# Layer 5: uv install (Astral installer pins itself via the script)
+# Create non-root user; everything from here on runs as `tester`.
 # ----------------------------------------------------------------------
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN useradd --create-home --shell /bin/bash tester \
+    && mkdir -p /workspace \
+    && chown tester:tester /workspace
+USER tester
+ENV HOME=/home/tester
+ENV PATH=/home/tester/.local/bin:${PATH}
+WORKDIR /workspace
 
 # ----------------------------------------------------------------------
-# Layer 6: Python deps (changes only when pyproject/uv.lock changes)
+# Layer 5: uv install + managed Python (as tester)
 # ----------------------------------------------------------------------
-WORKDIR /workspace
-COPY pyproject.toml uv.lock ./
-RUN uv sync --extra dev
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && /home/tester/.local/bin/uv python install ${PYTHON_VERSION}
+
+# ----------------------------------------------------------------------
+# Layer 6: Python deps (changes only when pyproject/uv.lock change).
+# Skips project install — `--no-install-project` avoids a wasted
+# re-install in the final layer that COPYs my_setup/ source.
+# ----------------------------------------------------------------------
+COPY --chown=tester:tester pyproject.toml uv.lock ./
+RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project
 
 # ----------------------------------------------------------------------
 # Layer 7: project source (most volatile — must be last)
 # ----------------------------------------------------------------------
-COPY . .
-RUN uv sync --extra dev
+COPY --chown=tester:tester . .
+# Drop any host-build .venv that survived .dockerignore (defense-in-depth)
+# and re-sync against the prepared dep tree.
+RUN rm -rf .venv \
+    && uv sync --extra dev --python ${PYTHON_VERSION}
 
 # Default to a no-op shell — tests `docker exec` everything they need.
 CMD ["sleep", "infinity"]
