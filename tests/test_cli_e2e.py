@@ -24,7 +24,6 @@ from typer.testing import CliRunner
 
 from my_setup.cli import app
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -51,9 +50,7 @@ def fixture_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sandboxed_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Path:
+def sandboxed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect ``$HOME`` to a tmp dir so dst ``~/.my_setup_e2e/...`` is sandboxed."""
     home = tmp_path / "home"
     home.mkdir()
@@ -73,14 +70,22 @@ def no_code_bin(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make ``claude`` CLI absent so plugin reconcile is warn-and-skipped."""
+    """Make ``claude`` CLI absent so plugin reconcile is warn-and-skipped.
+
+    Clears the module-level lru_cache on ``_get_claude_bin`` first so a
+    prior test (e.g. ``test_claude_plugins.py``) that cached a fake path
+    doesn't short-circuit our monkeypatched resolver.
+    """
+    from my_setup import claude_plugins as cp
+
+    cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
         "my_setup.claude_plugins.resolve_binary",
         lambda name: None,
     )
 
 
-def _invoke(args: list[str]) -> "subprocess.CompletedProcess[str]":  # type: ignore[type-arg]
+def _invoke(args: list[str]) -> subprocess.CompletedProcess[str]:  # type: ignore[type-arg]
     """Convenience wrapper — returns the typer.testing.Result via CliRunner."""
     return CliRunner().invoke(app, args)
 
@@ -140,9 +145,7 @@ class TestInstall:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        result = _invoke(
-            ["install", "--profile=test-json", f"--config={fixture_repo}"]
-        )
+        result = _invoke(["install", "--profile=test-json", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         live = sandboxed_home / ".my_setup_e2e" / "json" / "settings.json"
         payload = json.loads(live.read_text())
@@ -266,12 +269,8 @@ class TestInstall:
         assert json.loads((root / "data.json").read_text()) == {
             "key": "comprehensive-value"
         }
-        assert "comprehensive-tracked" in (
-            root / "preserve-settings.json"
-        ).read_text()
-        assert "comprehensive-tracked-yaml" in (
-            root / "config.yaml"
-        ).read_text()
+        assert "comprehensive-tracked" in (root / "preserve-settings.json").read_text()
+        assert "comprehensive-tracked-yaml" in (root / "config.yaml").read_text()
         assert (root / "bootstrap-stub.txt").exists()
 
 
@@ -298,9 +297,7 @@ class TestSync:
 
         tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
         before = tracked.read_bytes()
-        synced = _invoke(
-            ["sync", "--profile=test-minimal", f"--config={fixture_repo}"]
-        )
+        synced = _invoke(["sync", "--profile=test-minimal", f"--config={fixture_repo}"])
         assert synced.exit_code == 0, synced.output
         assert tracked.read_bytes() == before
 
@@ -312,15 +309,11 @@ class TestSync:
         no_claude_bin: None,
     ) -> None:
         """Plain-text drift outside preserve_user_* surfaces is silently absorbed."""
-        _invoke(
-            ["install", "--profile=test-minimal", f"--config={fixture_repo}"]
-        )
+        _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
         live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
         live.write_text("updated locally\n")
 
-        synced = _invoke(
-            ["sync", "--profile=test-minimal", f"--config={fixture_repo}"]
-        )
+        synced = _invoke(["sync", "--profile=test-minimal", f"--config={fixture_repo}"])
         assert synced.exit_code == 0, synced.output
         tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
         assert "updated locally" in tracked.read_text()
@@ -341,9 +334,7 @@ class TestCompare:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        _invoke(
-            ["install", "--profile=test-minimal", f"--config={fixture_repo}"]
-        )
+        _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
         result = _invoke(
             [
                 "compare",
@@ -361,9 +352,7 @@ class TestCompare:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        _invoke(
-            ["install", "--profile=test-minimal", f"--config={fixture_repo}"]
-        )
+        _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
         live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
         live.write_text("mutated\n")
 
@@ -424,12 +413,8 @@ class TestValidate:
     semantics end-to-end through the CliRunner.
     """
 
-    def test_validate_all_clean_exits_zero(
-        self, fixture_repo: Path
-    ) -> None:
-        result = _invoke(
-            ["validate", "--all", f"--config={fixture_repo}"]
-        )
+    def test_validate_all_clean_exits_zero(self, fixture_repo: Path) -> None:
+        result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "ok" in result.output
 
@@ -443,9 +428,7 @@ class TestValidate:
         )
         assert result.exit_code == 0, result.output
 
-    def test_validate_per_profile_chain_child(
-        self, fixture_repo: Path
-    ) -> None:
+    def test_validate_per_profile_chain_child(self, fixture_repo: Path) -> None:
         result = _invoke(
             [
                 "validate",
@@ -455,9 +438,7 @@ class TestValidate:
         )
         assert result.exit_code == 0, result.output
 
-    def test_validate_per_profile_comprehensive(
-        self, fixture_repo: Path
-    ) -> None:
+    def test_validate_per_profile_comprehensive(self, fixture_repo: Path) -> None:
         result = _invoke(
             [
                 "validate",
