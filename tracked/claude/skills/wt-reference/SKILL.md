@@ -13,7 +13,9 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - `wt switch <slug>` — switch to an existing worktree (auto-cd if shell integration is set up via `wt config shell install`).
 - `wt list` — list all worktrees and their status (clean / dirty / merged).
 - `wt remove [<slug>]` — remove the current worktree (or named one); auto-deletes the branch if merged.
-- `wt merge [<branch>]` — merge the current worktree's branch into target (default = main).
+- `wt merge [<branch>]` — merge the current worktree's branch into target (default = main). Defaults to squash. Two modes:
+  - Bare `wt merge` — squash the branch into one commit on target. Use only when squash is the intended shape (e.g., a noisy WIP history collapsed for a leaf feature).
+  - `wt merge --no-squash` — preserve the branch's commits on target. Required when the branch carries separate implementation + review-fix commits, so observation F (`Never squash review-fix commits into the implementation commit`) is satisfied operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
 - `wt step <name>` — run an individual operation (used when scripting partial flows).
 - `wt hook <name>` — run configured hooks (pre/post for switch/merge/remove).
 - `wt config` — manage user and project configs (locations, hooks, aliases). `wt config shell install` writes a PATH-guarded eval into `~/.zshrc` / `~/.bashrc` enabling auto-cd on `wt switch`.
@@ -34,8 +36,10 @@ When N sibling worktrees branch from a common parent (typical multi-bead batch s
 git fetch
 git rebase <parent-branch>
 # Resolve any conflicts surfaced by the rebase
-wt merge
+wt merge --no-squash
 ```
+
+`--no-squash` is mandatory here: each sibling typically carries its own implementation + review-fix commits, and squashing them at merge time would erase the review-fix audit trail (observation F / Phase 6).
 
 **Conflict-free condition:** the parent's review-fix file footprint does NOT overlap with any sibling's file footprint. When they overlap, expect manual conflict resolution during the rebase.
 
@@ -48,5 +52,6 @@ wt merge
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.
 - Don't create worktrees inside the repo — always use wt's `~/projects/worktrees/` location.
 - Don't `wt merge` without verifying tests pass and the bd issue's acceptance criteria are met.
+- Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.
 - Don't run multiple agents in the same worktree — the whole point is isolation.
