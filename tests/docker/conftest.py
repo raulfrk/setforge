@@ -21,18 +21,32 @@ helpers segregated from the inner-ring CliRunner tests.
 
 from __future__ import annotations
 
+import contextlib
+import posixpath
 import shutil
 import subprocess
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import pexpect  # type: ignore[import-untyped]
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DOCKERFILE = REPO_ROOT / "tests" / "docker" / "Dockerfile"
-IMAGE_TAG = "my-setup-e2e:test"
+REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
+IMAGE_TAG: str = "my-setup-e2e:test"
+
+
+def _env_args(env: dict[str, str] | None) -> list[str]:
+    """Return ``-e KEY=VAL`` argv chunks for a ``docker`` env mapping."""
+    if env is None:
+        return []
+    args: list[str] = []
+    for k, v in env.items():
+        args += ["-e", f"{k}={v}"]
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -49,9 +63,12 @@ def _docker_available() -> bool:
 def docker_image() -> str:
     """Build the E2E image once per session; return the image tag.
 
-    Skips every dependent test cleanly when ``docker`` is missing. On
-    build failure, captures stderr into the skip message so CI surfaces
-    the actual cause without burying it in a fixture-error stack.
+    Skips every dependent test cleanly when ``docker`` is missing on
+    PATH. A non-zero ``docker build`` exit is treated as a real bug
+    (it's the test infrastructure failing, not a transient daemon
+    blip) and surfaces via :func:`pytest.fail`, with stdout/stderr
+    captured into the failure message so CI shows the actual cause
+    without burying it in a fixture-error stack.
     """
     if not _docker_available():
         pytest.skip("docker binary not on PATH")
@@ -69,6 +86,7 @@ def docker_image() -> str:
         capture_output=True,
         text=True,
         check=False,
+        timeout=600,
     )
     if proc.returncode != 0:
         pytest.fail(
@@ -83,7 +101,7 @@ def docker_image() -> str:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class ContainerHandle:
     """Wrapper around a running container with the operations tests need."""
 
@@ -97,7 +115,7 @@ class ContainerHandle:
         env: dict[str, str] | None = None,
         workdir: str | None = None,
         input_text: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:  # type: ignore[type-arg]
+    ) -> subprocess.CompletedProcess[str]:
         """Run a command inside the container, return CompletedProcess.
 
         ``check=False`` lets tests assert on non-zero exits (e.g.
@@ -108,9 +126,7 @@ class ContainerHandle:
         argv: list[str] = ["docker", "exec"]
         if workdir is not None:
             argv += ["-w", workdir]
-        if env is not None:
-            for k, v in env.items():
-                argv += ["-e", f"{k}={v}"]
+        argv += _env_args(env)
         if input_text is not None:
             argv += ["-i"]
         argv += [self.cid, *cmd]
@@ -120,6 +136,7 @@ class ContainerHandle:
             capture_output=True,
             text=True,
             check=check,
+            timeout=60,
         )
 
     def copy_out(self, src_in_container: str, host_dst: Path) -> None:
@@ -130,6 +147,7 @@ class ContainerHandle:
             check=True,
             capture_output=True,
             text=True,
+            timeout=60,
         )
 
     def write_text(self, path_in_container: str, content: str) -> None:
@@ -139,20 +157,19 @@ class ContainerHandle:
         the host, then ``docker cp`` it in. Handles arbitrary content
         without shell-escaping headaches.
         """
-        import tempfile
-
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as fh:
             fh.write(content)
             staging = fh.name
         try:
             # Ensure parent dir exists in the container.
-            parent = path_in_container.rsplit("/", 1)[0] or "/"
+            parent = posixpath.dirname(path_in_container) or "/"
             self.exec(["mkdir", "-p", parent], check=True)
             subprocess.run(
                 ["docker", "cp", staging, f"{self.cid}:{path_in_container}"],
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=60,
             )
         finally:
             Path(staging).unlink(missing_ok=True)
@@ -193,9 +210,7 @@ def docker_container(
             "-w",
             "/workspace",
         ]
-        if env is not None:
-            for k, v in env.items():
-                argv += ["-e", f"{k}={v}"]
+        argv += _env_args(env)
         argv += [docker_image]
         if cmd is not None:
             argv += cmd
@@ -204,6 +219,7 @@ def docker_container(
             capture_output=True,
             text=True,
             check=True,
+            timeout=60,
         )
         cid = proc.stdout.strip()
         spawned.append(cid)
@@ -219,6 +235,7 @@ def docker_container(
             capture_output=True,
             text=True,
             check=False,
+            timeout=30,
         )
 
 
@@ -246,8 +263,6 @@ def docker_pty_session(
             pty.send("k")
             pty.expect(pexpect.EOF)
     """
-    import pexpect  # type: ignore[import-untyped]
-
     sessions: list[object] = []
 
     def open_pty(
@@ -258,9 +273,7 @@ def docker_pty_session(
         timeout: int = 60,
     ) -> object:
         argv = ["exec", "-it"]
-        if env is not None:
-            for k, v in env.items():
-                argv += ["-e", f"{k}={v}"]
+        argv += _env_args(env)
         argv += [container.cid, *cmd]
         session = pexpect.spawn("docker", argv, encoding="utf-8", timeout=timeout)
         sessions.append(session)
@@ -269,9 +282,7 @@ def docker_pty_session(
     yield open_pty
 
     for s in sessions:
-        try:
-            close = getattr(s, "close", None)
-            if close is not None:
+        close = getattr(s, "close", None)
+        if close is not None:
+            with contextlib.suppress(pexpect.ExceptionPexpect, OSError):
                 close(force=True)
-        except Exception:
-            pass
