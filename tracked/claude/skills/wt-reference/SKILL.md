@@ -29,7 +29,7 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 
 ## Sibling-from-parent rebase pattern
 
-When N sibling worktrees branch from a common parent (typical multi-bead batch shape) and the parent receives a review-fix commit during Phase 6 of the canonical flow (see `superpowers-prefs.md`), each sibling must rebase onto the updated parent before `wt merge`:
+When N sibling worktrees branch from a common parent (typical multi-bead batch shape) and the parent receives a review-fix commit during Phase 6 of the canonical flow (see `superpowers-prefs.md`), each sibling must rebase onto the updated parent before `wt merge --no-squash`:
 
 ```
 # In each sibling worktree:

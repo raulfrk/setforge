@@ -41,7 +41,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   3. `wt switch --create <slug>` — new worktree + branch (slug should include the bd id, e.g. `dotfiles-g20-py-rewrite`).
   4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
   5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review fan (`reviewing-X` skill) → address-findings+merge → post-merge cross-cutting review.
-  6. `wt merge` — merge the branch into target.
+  6. `wt merge --no-squash` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
 <!-- my-setup:user-section end workflow -->

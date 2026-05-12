@@ -87,11 +87,11 @@ Superpowers skills are designed to defer to.
    CLAUDE.md Commits section.)* Use `wt merge --no-squash` (or `git
    merge --ff-only` when not using wt) to preserve the separate
    commits at merge time.
-   - **Single-worktree merge**: ff-only into target (typically main).
+   - **Single-worktree merge**: `wt merge --no-squash` (ff-only) into target (typically main).
    - **Multi-worktree merge** (sibling rebase): when N sibling
      worktrees branch from a common parent and the parent gets a
      review-fix commit, rebase each sibling onto the updated parent
-     before ff-merge into main. Conflict-free when parent's review-fix
+     before `wt merge --no-squash` (ff-merge) into main. Conflict-free when parent's review-fix
      file footprint doesn't overlap with sibling worktrees; otherwise
      resolve manually. *(empirical observation G; cross-ref
      `wt-reference` skill.)*
