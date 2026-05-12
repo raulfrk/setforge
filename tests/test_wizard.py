@@ -69,7 +69,7 @@ def _make_my_setup_yaml(tmp_path: Path) -> Path:
 def test_run_wizard_loop_dispatches_per_item(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """run_wizard_loop applies the chosen action to each item and records one transition."""
+    """run_wizard_loop dispatches the chosen action per item; records one transition."""
     item1 = _make_item(tmp_path, "one")
     item2 = _make_item(tmp_path, "two")
     my_setup_yaml = _make_my_setup_yaml(tmp_path)
@@ -102,7 +102,7 @@ def test_run_wizard_loop_dispatches_per_item(
 def test_run_wizard_loop_breaks_on_manual_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """First MANUAL_PENDING halts the loop and the trigger-specific pending message is printed."""
+    """First MANUAL_PENDING halts the loop; prints the trigger-specific message."""
     item1 = _make_item(tmp_path, "one")
     item2 = _make_item(tmp_path, "two")
     my_setup_yaml = _make_my_setup_yaml(tmp_path)

@@ -537,7 +537,9 @@ def test_reconcile_prune_disables_extras(fake_claude) -> None:
 
 
 def test_reconcile_mixed_states_prune(fake_claude) -> None:
-    """declared={a,b}, enabled={a,c}, disabled={b,d} → install=[],enable=[b],disable=[c]."""
+    """declared={a,b}, enabled={a,c}, disabled={b,d} →
+    install=[],enable=[b],disable=[c].
+    """
     from my_setup.claude_plugins import reconcile
 
     fake = fake_claude(

@@ -42,12 +42,10 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ANN"]
 # corresponding bead closes:
 #   ANN001 → dotfiles-seu (85 sites: missing function-arg annotations)
 #   ANN401 → dotfiles-m6g (29 sites: Any usages)
-#   E501   → dotfiles-2du (26 sites: long lines)
 ignore = [
     "ANN001",
     "ANN202",
     "ANN401",
-    "E501",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]

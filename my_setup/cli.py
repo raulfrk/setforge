@@ -108,7 +108,8 @@ def install(
     # Mutual-exclusivity guard
     if auto_accept_tracked and auto_accept_live:
         typer.secho(
-            "error: --auto-accept-tracked and --auto-accept-live are mutually exclusive",
+            "error: --auto-accept-tracked and --auto-accept-live are"
+            " mutually exclusive",
             err=True,
             fg=typer.colors.RED,
         )
@@ -871,7 +872,10 @@ def plugin_list(
 def plugin_add(
     name: str = typer.Argument(
         ...,
-        help="Plugin name (in <name>@<marketplace> form or just <name> with --marketplace).",
+        help=(
+            "Plugin name (in <name>@<marketplace> form or just <name>"
+            " with --marketplace)."
+        ),
     ),
     from_: str = typer.Option(
         ...,
@@ -920,7 +924,8 @@ def plugin_add(
         source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
     else:
         typer.secho(
-            f"error: unrecognised --from format {from_!r}; use github:owner/repo or path:/dir",
+            f"error: unrecognised --from format {from_!r};"
+            " use github:owner/repo or path:/dir",
             err=True,
             fg=typer.colors.RED,
         )
@@ -1090,7 +1095,8 @@ def marketplace_add_cmd(
         source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
     else:
         typer.secho(
-            f"error: unrecognised --from format {from_!r}; use github:owner/repo or path:/dir",
+            f"error: unrecognised --from format {from_!r};"
+            " use github:owner/repo or path:/dir",
             err=True,
             fg=typer.colors.RED,
         )
@@ -1245,7 +1251,7 @@ def validate(
     ),
     config: Path = _CONFIG_OPTION,
 ) -> None:
-    """Config-shape validation. No filesystem comparison; no live target paths needed."""
+    """Config-shape validation; no filesystem comparison or live target paths."""
     if profile is not None and all_profiles:
         typer.secho(
             "error: --profile and --all are mutually exclusive",

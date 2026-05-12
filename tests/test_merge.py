@@ -8,7 +8,8 @@ Covers:
 - apply_action [s] — extends preserve_user_keys in my_setup.yaml (comments preserved)
 - apply_action [m]+y — launches $EDITOR and continues
 - apply_action [m]+n — returns ActionResult.MANUAL_PENDING
-- Snapshot context manager: snapshot dir created, restore reverts files, discard removes dir
+- Snapshot context manager: snapshot dir created, restore reverts files,
+  discard removes dir
 - Signal handlers: SIGINT/SIGTERM/SIGHUP restore snapshot, no transition recorded
 - Successful walk records exactly one merge-transition
 """
@@ -35,6 +36,20 @@ from my_setup.wizard import (
 # ---------------------------------------------------------------------------
 # Fixtures helpers
 # ---------------------------------------------------------------------------
+
+
+# Minimal my_setup.yaml body used by several wizard / snapshot tests below.
+_BASIC_YAML: str = (
+    "version: 1\n"
+    "dotfiles:\n"
+    "  x:\n"
+    "    src: x.yaml\n"
+    "    dst: /tmp/x.yaml\n"
+    "    preserve_user_keys: [a]\n"
+    "profiles:\n"
+    "  p:\n"
+    "    dotfiles: [x]\n"
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -310,7 +325,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
 
 
 def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
-    """[s] save-as-preserved: appends key_path to dotfile.preserve_user_keys in my_setup.yaml."""
+    """[s] save-as-preserved appends key_path to dotfile.preserve_user_keys."""
     my_setup_yaml = tmp_path / "my_setup.yaml"
     # Write a minimal my_setup.yaml with comments
     yaml_text = (
@@ -516,10 +531,7 @@ def test_snapshot_restore_on_sigint(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(
-        "version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: /tmp/x.yaml\n    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
-        encoding="utf-8",
-    )
+    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     # Simulate SIGINT via raising KeyboardInterrupt inside _read_one_choice
     snap_root = tmp_path / "snaps"
@@ -557,10 +569,7 @@ def test_successful_walk_records_one_transition(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(
-        "version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: /tmp/x.yaml\n    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
-        encoding="utf-8",
-    )
+    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     transition_calls: list[Any] = []
     monkeypatch.setattr(
@@ -607,10 +616,7 @@ def test_manual_pending_records_transition_for_applied(
     _write(tmp_path / "live" / "x.yaml", "a: 99\nb: 88\nc: 77\n")
 
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(
-        "version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: /tmp/x.yaml\n    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
-        encoding="utf-8",
-    )
+    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     # Report: 2 unexpected keys
     entry = FileCompare(
@@ -698,10 +704,7 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
 def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
     """After [s], comments in my_setup.yaml survive."""
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(
-        "# my config\nversion: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: /tmp/x.yaml\n    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
-        encoding="utf-8",
-    )
+    my_setup_yaml.write_text("# my config\n" + _BASIC_YAML, encoding="utf-8")
     _config, _repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 1\nb: 99\n", preserve=["a"]
     )

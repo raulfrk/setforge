@@ -298,7 +298,7 @@ def test_check_flag_clean_exits_0(tmp_path: Path) -> None:
 
 
 def test_check_flag_all_expected_drift_exits_0(tmp_path: Path) -> None:
-    """--check: when all drift is in preserve_user_keys, has_unexpected_drift is False."""
+    """--check: when drift sits in preserve_user_keys, has_unexpected_drift is False."""
     config, repo = _make_config_with_yaml(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 2\n", ["a"]
     )
@@ -316,7 +316,7 @@ def test_check_flag_unexpected_drift_exits_1(tmp_path: Path) -> None:
 
 
 def test_check_strict_all_expected_is_drifted(tmp_path: Path) -> None:
-    """--check --strict: even all-expected drift triggers 'has_any_drift' (DRIFTED entry)."""
+    """--check --strict: all-expected drift still triggers 'has_any_drift'."""
     config, repo = _make_config_with_yaml(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 2\n", ["a"]
     )
@@ -356,7 +356,8 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     _write(dst, "same\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    dotfiles: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -451,7 +452,8 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     _write(dst, "same\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    dotfiles: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -488,7 +490,8 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     _write(dst, "live\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    dotfiles: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()

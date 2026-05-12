@@ -1,4 +1,4 @@
-"""Generic wizard utilities shared by install-time merge and capture-time deep-merge resolution.
+"""Generic wizard utilities shared by install-time merge and capture-time deep-merge.
 
 These primitives originally lived in :mod:`my_setup.merge`. They were
 factored out so that the install-time wizard (`my_setup.merge.run_wizard`)
@@ -253,13 +253,16 @@ def prompt_one(item: DriftItem, console: Console) -> str:
 
     console.print("")
     console.print(
-        "   [bold][[k]][/bold] keep tracked       [dim](live overwritten on next deploy)[/dim]"
+        "   [bold][[k]][/bold] keep tracked       "
+        "[dim](live overwritten on next deploy)[/dim]"
     )
     console.print(
-        "   [bold][[u]][/bold] use live           [dim](write live value into tracked now)[/dim]"
+        "   [bold][[u]][/bold] use live           "
+        "[dim](write live value into tracked now)[/dim]"
     )
     console.print(
-        "   [bold][[s]][/bold] save-as-preserved  [dim](extend preserve_user_keys; live stays)[/dim]"
+        "   [bold][[s]][/bold] save-as-preserved  "
+        "[dim](extend preserve_user_keys; live stays)[/dim]"
     )
     console.print("   [bold][[m]][/bold] manual edit")
     console.print("")
@@ -284,7 +287,8 @@ def apply_action(
 
     - ``k`` — no-op (caller handles re-deploy).
     - ``u`` — write live value into tracked (YAML or JSONC round-trip).
-    - ``s`` — append ``item.key_path`` to ``preserve_user_keys`` in ``my_setup_yaml_path``.
+    - ``s`` — append ``item.key_path`` to ``preserve_user_keys`` in
+      ``my_setup_yaml_path``.
     - ``m`` — sub-prompt y/n; y launches ``$EDITOR``; n returns pending.
     """
     if choice == "k":
@@ -335,7 +339,7 @@ def _action_use_live(item: DriftItem) -> ActionResult:
 def _action_save_as_preserved(
     item: DriftItem, my_setup_yaml_path: Path
 ) -> ActionResult:
-    """Append ``item.key_path`` to the dotfile's ``preserve_user_keys`` in my_setup.yaml."""
+    """Append ``item.key_path`` to the dotfile's ``preserve_user_keys``."""
     y = YAML(typ="rt")
     with my_setup_yaml_path.open("r", encoding="utf-8") as fh:
         doc = y.load(fh)
@@ -517,7 +521,8 @@ def run_wizard_loop(
                 decisions.append((item, result))
 
                 if result == ActionResult.MANUAL_PENDING:
-                    # User declined the editor — stop the walk but record what was applied
+                    # User declined the editor — stop the walk but record what
+                    # was applied
                     console.print(pending_message.format(src_path=item.src_path))
                     break
 

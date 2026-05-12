@@ -18,7 +18,8 @@ ease of cross-reference):
 Each test takes the form:
 
   1. Spin a fresh container.
-  2. ``uv run my-setup <verb> --profile=test-<x> --config=tests/fixtures/e2e/my_setup.test.yaml``
+  2. ``uv run my-setup <verb> --profile=test-<x>
+     --config=tests/fixtures/e2e/my_setup.test.yaml``
   3. Read the resulting live file(s) and assert parsed/structured equality.
 
 See ``tests/docker/conftest.py`` for the ``docker_image``,
