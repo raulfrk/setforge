@@ -94,7 +94,7 @@ def test_delete_keys_skips_missing() -> None:
 
 
 def test_invalid_path_raises_value_error() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid path"):
         overlay({}, {}, [".bad"])
 
 

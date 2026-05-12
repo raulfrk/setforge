@@ -3,6 +3,7 @@
 import os
 import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -140,7 +141,7 @@ def test_tmp_cleaned_on_write_failure(
     src.write_text("data\n")
     dst = tmp_path / "dst"
 
-    def _boom(*args, **kwargs):
+    def _boom(*args: Any, **kwargs: Any) -> None:
         raise OSError("simulated")
 
     monkeypatch.setattr(os, "replace", _boom)

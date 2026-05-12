@@ -263,7 +263,7 @@ def reconcile(
     """Three-way reconcile per spec § Δ2.
 
     States:
-    - ``to_install`` = declared - (enabled ∪ disabled)   # genuinely absent
+    - ``to_install`` = declared - (enabled U disabled)   # genuinely absent
     - ``to_enable``  = declared ∩ disabled                # present but off
     - ``to_disable`` = enabled - declared  (PRUNE only)
 

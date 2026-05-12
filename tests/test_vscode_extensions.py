@@ -7,12 +7,13 @@ touching a real ``code`` CLI.
 """
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from my_setup.config import Extensions, ReconcilePolicy
-from my_setup.errors import ExtensionToolMissing
+from my_setup.errors import ExtensionToolMissing, ProfileNotFound
 from my_setup.vscode_extensions import (
     ReconcileReport,
     add_to_include,
@@ -57,7 +58,7 @@ class FakeCode:
 
 
 @pytest.fixture
-def fake_code(monkeypatch: pytest.MonkeyPatch):
+def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], FakeCode]:
     """Default fixture: ``code`` resolves and starts with no installed extensions."""
 
     def factory(installed: list[str]) -> FakeCode:
@@ -368,8 +369,6 @@ profiles:
 
 
 # ---- YAML-edit helpers ---------------------------------------------------
-
-from my_setup.errors import ProfileNotFound
 
 _FIXTURE_YAML = """\
 version: 1

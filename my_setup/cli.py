@@ -604,17 +604,21 @@ transitions_app = typer.Typer(
 app.add_typer(transitions_app, name="transitions")
 
 
+_TRANSITIONS_LIST_PROFILE_OPTION = typer.Option(
+    None,
+    "--profile",
+    "-p",
+    help="Filter to specified profile(s). Repeatable; OR-filter.",
+)
+_TRANSITIONS_LIST_REVERSE_OPTION = typer.Option(
+    False, "--reverse", help="Newest-first instead of oldest-first."
+)
+
+
 @transitions_app.command("list")
 def transitions_list(
-    profile: list[str] = typer.Option(
-        [],
-        "--profile",
-        "-p",
-        help="Filter to specified profile(s). Repeatable; OR-filter.",
-    ),
-    reverse: bool = typer.Option(
-        False, "--reverse", help="Newest-first instead of oldest-first."
-    ),
+    profile: list[str] | None = _TRANSITIONS_LIST_PROFILE_OPTION,
+    reverse: bool = _TRANSITIONS_LIST_REVERSE_OPTION,
 ) -> None:
     """List recorded transitions across all profiles."""
     listings = transitions.list_transitions(
@@ -1143,7 +1147,7 @@ def _check_profile(
     repo_root: Path,
     failures: list[str],
 ) -> None:
-    """Run checks 2–6 for a single profile, appending failures in-place."""
+    """Run checks 2-6 for a single profile, appending failures in-place."""
     from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
 
     from my_setup.compare import resolve_src

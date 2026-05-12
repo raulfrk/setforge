@@ -11,6 +11,7 @@ is "found" vs absent.
 """
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -166,7 +167,7 @@ class FakeClaude:
 
 
 @pytest.fixture
-def fake_claude(monkeypatch: pytest.MonkeyPatch):
+def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
     """Return a factory that wires FakeClaude into claude_plugins."""
 
     def factory(
