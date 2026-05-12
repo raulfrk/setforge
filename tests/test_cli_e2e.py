@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -153,7 +154,7 @@ class FakeCode:
         self._delegate: Any = None
         self._real_run: Any = None
 
-    def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Dispatch on the binary path basename: this fixture only owns
         # invocations of the ``code`` binary. ``claude`` argv goes to
         # the prior subprocess.run binding (the co-resident FakeClaude
@@ -199,7 +200,7 @@ class FakeCode:
 
 
 @pytest.fixture
-def fake_code(monkeypatch: pytest.MonkeyPatch):
+def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
     """Return a factory that wires :class:`FakeCode` into ``vscode_extensions``.
 
     Parallel to ``fake_claude``: monkeypatches both
@@ -461,10 +462,10 @@ class TestInstall:
         assert "anthropics/claude-plugins-official" in fc.mp_add_args()
         assert fc.install_args() == ["superpowers@claude-plugins-official"]
         assert fc.enable_args() == ["superpowers@claude-plugins-official"]
-        # FakeClaude._plugins is the in-memory analog of installed_plugins.json;
-        # after install + enable it should reflect the declared, enabled set.
-        plugins_state = {p["id"]: p for p in fc._plugins}
-        assert plugins_state == {
+        # ``FakeClaude.installed_state()`` is the in-memory analog of
+        # ``installed_plugins.json``; after install + enable it should
+        # reflect the declared, enabled set.
+        assert fc.installed_state() == {
             "superpowers@claude-plugins-official": {
                 "id": "superpowers@claude-plugins-official",
                 "enabled": True,

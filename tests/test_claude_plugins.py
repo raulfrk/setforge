@@ -161,6 +161,15 @@ class FakeClaude:
             if len(c) > 4 and c[1:4] == ["plugin", "marketplace", "add"]
         ]
 
+    def installed_state(self) -> dict[str, dict]:
+        """Snapshot of installed plugins keyed by plugin id.
+
+        In-memory analog of ``~/.claude/installed_plugins.json``. Tests
+        assert against this rather than reaching into the private
+        ``_plugins`` list.
+        """
+        return {p["id"]: dict(p) for p in self._plugins}
+
 
 # ---------------------------------------------------------------------------
 # P3.1 — Wrapper tests
