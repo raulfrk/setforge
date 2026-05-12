@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from my_setup.cli import app
@@ -85,7 +85,7 @@ def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _invoke(args: list[str]) -> subprocess.CompletedProcess[str]:  # type: ignore[type-arg]
+def _invoke(args: list[str]) -> Result:
     """Convenience wrapper — returns the typer.testing.Result via CliRunner."""
     return CliRunner().invoke(app, args)
 
