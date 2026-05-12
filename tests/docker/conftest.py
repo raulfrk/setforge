@@ -69,9 +69,23 @@ def docker_image() -> str:
     blip) and surfaces via :func:`pytest.fail`, with stdout/stderr
     captured into the failure message so CI shows the actual cause
     without burying it in a fixture-error stack.
+
+    Skips rebuild when the image tag already exists locally — keeps
+    GHA's ``docker/build-push-action@v5`` prebuild step (with cache)
+    from doubling as a second build in this fixture.
     """
     if not _docker_available():
         pytest.skip("docker binary not on PATH")
+
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", IMAGE_TAG],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if inspect.returncode == 0:
+        return IMAGE_TAG
 
     proc = subprocess.run(
         [
