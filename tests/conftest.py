@@ -9,8 +9,10 @@ import pytest
 # tripping ruff F811 (which fires on direct imports of a fixture name that
 # matches a test-parameter name). Placing the import here makes the fixture
 # discoverable via pytest's normal conftest mechanism instead of a same-file
-# rebinding.
-from tests.test_claude_plugins import fake_claude  # noqa: F401
+# rebinding. ``__all__`` silences ruff F401 without per-site noqa.
+from tests.test_claude_plugins import fake_claude
+
+__all__ = ["fake_claude"]
 
 
 @pytest.fixture(autouse=True)

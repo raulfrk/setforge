@@ -14,8 +14,10 @@ fixtures against real ``claude`` + ``code`` binaries.
 dotfiles-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
 in-memory driver fixtures so the inner ring also exercises the
 extension + plugin reconcile legs (not just the warn-and-skip path).
-``FakeClaude`` is re-imported from ``tests.test_claude_plugins`` to
-avoid duplication; ``FakeCode`` is defined inline below since
+``FakeClaude`` lives in ``tests.test_claude_plugins`` (its primary
+consumer); the ``fake_claude`` fixture is re-exported via
+``tests/conftest.py`` so this module can request it as a test
+parameter. ``FakeCode`` is defined inline below since
 ``test_cli_e2e.py`` is its only consumer today.
 """
 
@@ -33,13 +35,6 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from my_setup.cli import app
-
-# ``FakeClaude`` is re-imported here so this module's docstring + class
-# references stay self-explanatory; the ``fake_claude`` *fixture* is
-# re-exported from ``tests/conftest.py`` instead, which avoids ruff F811
-# (direct fixture import vs same-name test parameter). Imported but
-# otherwise unused — the type is implicit in test parameters.
-from tests.test_claude_plugins import FakeClaude  # noqa: F401
 
 # Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
 # fixture can forward non-code, non-claude invocations (e.g. the ``patch``
