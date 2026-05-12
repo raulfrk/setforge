@@ -28,18 +28,17 @@ See ``tests/docker/conftest.py`` for the ``docker_image``,
 from __future__ import annotations
 
 import json
+import subprocess
 import textwrap
 from collections.abc import Callable
 
+import pexpect  # type: ignore[import-untyped]
 import pytest
 
-# ``ContainerHandle`` is exported by the sibling conftest; we import
-# only for type hints. Avoid a hard ImportError when pytest collects
-# this file without the conftest having loaded yet.
-try:
-    from tests.docker.conftest import ContainerHandle  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover — collect-only path
-    ContainerHandle = object  # type: ignore[assignment,misc]
+# ``ContainerHandle`` is exported by the sibling conftest. Pytest loads
+# conftest.py before sibling test modules, so the import is always
+# satisfied at collection time.
+from tests.docker.conftest import ContainerHandle
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -57,8 +56,13 @@ def _install(
     profile: str,
     *,
     extra: list[str] | None = None,
-) -> object:
-    """Run ``my-setup install`` inside the container; return CompletedProcess."""
+) -> subprocess.CompletedProcess[str]:
+    """Run ``my-setup install`` inside the container; return CompletedProcess.
+
+    Uses ``check=False`` so callers can assert on returncode + stderr
+    explicitly; the buried ``CalledProcessError`` chain otherwise hides
+    the actual stderr in ``__cause__``.
+    """
     cmd = [
         "uv",
         "run",
@@ -69,7 +73,9 @@ def _install(
     ]
     if extra:
         cmd.extend(extra)
-    return container.exec(cmd)  # type: ignore[attr-defined]
+    result = container.exec(cmd, check=False)
+    assert result.returncode == 0, result.stderr
+    return result
 
 
 def _sync(
@@ -78,8 +84,12 @@ def _sync(
     *,
     extra: list[str] | None = None,
     check: bool = True,
-) -> object:
-    """Run ``my-setup sync`` inside the container; return CompletedProcess."""
+) -> subprocess.CompletedProcess[str]:
+    """Run ``my-setup sync`` inside the container; return CompletedProcess.
+
+    Asserts on ``returncode == 0`` when ``check=True`` (the default)
+    for the same readability reasons as :func:`_install`.
+    """
     cmd = [
         "uv",
         "run",
@@ -90,12 +100,82 @@ def _sync(
     ]
     if extra:
         cmd.extend(extra)
-    return container.exec(cmd, check=check)  # type: ignore[attr-defined]
+    result = container.exec(cmd, check=False)
+    if check:
+        assert result.returncode == 0, result.stderr
+    return result
 
 
 def _read_live(container: ContainerHandle, path: str) -> str:
     """Read a live (dst) file in the container's $HOME tree."""
-    return container.read_text(f"/home/tester/{path}")  # type: ignore[attr-defined]
+    return container.read_text(f"/home/tester/{path}")
+
+
+# --- PTY sync wizard helper -----------------------------------------------
+#
+# Variants P/Q/R/S/S1 share the same scaffold: install YAML deep, write
+# a drift body into the live file, drive ``sync`` via PTY through one
+# (or two) wizard prompts, then return pre/post snapshots of the target.
+
+_YAML_DEEP_LIVE = "/home/tester/.my_setup_e2e/yaml/deep.yaml"
+_YAML_DEEP_TRACKED = "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
+
+
+def _drive_pty_sync(
+    container: ContainerHandle,
+    docker_pty_session: Callable[..., pexpect.spawn],
+    *,
+    drift_body: str,
+    prompts: list[tuple[str, str]],
+    snapshot_path: str = _YAML_DEEP_TRACKED,
+) -> tuple[str, str]:
+    """Install YAML deep, seed live drift, drive ``sync`` through PTY prompts.
+
+    ``prompts`` is a list of ``(expected_prompt_regex, keypress)`` —
+    the helper asserts each prompt fires (``idx == 0`` against
+    ``[regex, EOF, TIMEOUT]``) and sends the keypress. After draining
+    EOF, returns ``(pre, post)`` content of ``snapshot_path``.
+
+    Asserting ``idx == 0`` is load-bearing: a bare three-alternative
+    ``expect()`` would accept ``EOF`` / ``TIMEOUT`` as a match, masking
+    cases where the wizard hung before prompting (e.g. test passes
+    vacuously because the keypress went into the void and tracked
+    legitimately didn't change).
+    """
+    _install(container, "test-yaml-deep")
+    pre = container.read_text(snapshot_path)
+    container.write_text(_YAML_DEEP_LIVE, drift_body)
+    session = docker_pty_session(
+        container,
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "sync",
+            "--profile=test-yaml-deep",
+            f"--config={_CONFIG}",
+        ],
+        timeout=120,
+    )
+    for regex, key in prompts:
+        idx = session.expect([regex, pexpect.EOF, pexpect.TIMEOUT], timeout=30)
+        assert idx == 0, (
+            f"wizard prompt {regex!r} never appeared; saw: {session.before!r}"
+        )
+        session.send(key)
+    session.expect(pexpect.EOF)
+    post = container.read_text(snapshot_path)
+    return pre, post
+
+
+_DRIFT_BODY_TEMPLATE = textwrap.dedent(
+    """\
+    trackedKey: tracked-value
+    settings:
+      trackedSub: tracked-sub-value
+      userSub: {user_sub}
+    """
+)
 
 
 # ===========================================================================
@@ -155,7 +235,7 @@ def test_install_text_sections_preserve_user_content(
         Trailing live content (not preserved on next install).
         """
     )
-    c.write_text("/home/tester/.my_setup_e2e/sections/marked.md", pre_seeded)  # type: ignore[attr-defined]
+    c.write_text("/home/tester/.my_setup_e2e/sections/marked.md", pre_seeded)
 
     _install(c, "test-text-sections")
     live = _read_live(c, ".my_setup_e2e/sections/marked.md")
@@ -215,7 +295,7 @@ def test_install_jsonc_shallow_preserve_overlay(
     _install(c, "test-jsonc-shallow")
     # Mutate ONLY preserve_user_keys entries on the live side.
     live_path = "/home/tester/.my_setup_e2e/jsonc/shallow.json"
-    c.write_text(  # type: ignore[attr-defined]
+    c.write_text(
         live_path,
         textwrap.dedent(
             """\
@@ -253,7 +333,7 @@ def test_install_jsonc_deep_preserve_overlay(
     c = docker_container()
     _install(c, "test-jsonc-deep")
     live_path = "/home/tester/.my_setup_e2e/jsonc/deep.json"
-    c.write_text(  # type: ignore[attr-defined]
+    c.write_text(
         live_path,
         textwrap.dedent(
             """\
@@ -292,7 +372,7 @@ def test_install_yaml_shallow_preserve_overlay(
     c = docker_container()
     _install(c, "test-yaml-shallow")
     live_path = "/home/tester/.my_setup_e2e/yaml/shallow.yaml"
-    c.write_text(  # type: ignore[attr-defined]
+    c.write_text(
         live_path,
         textwrap.dedent(
             """\
@@ -323,7 +403,7 @@ def test_install_yaml_deep_preserve_overlay(
     c = docker_container()
     _install(c, "test-yaml-deep")
     live_path = "/home/tester/.my_setup_e2e/yaml/deep.yaml"
-    c.write_text(  # type: ignore[attr-defined]
+    c.write_text(
         live_path,
         textwrap.dedent(
             """\
@@ -372,7 +452,7 @@ def test_install_template_dst_jinja2(
     # We probe by `find` rather than computing the exact path here (paths.py
     # owns vscode_user_dir's resolution; the test asserts only that template
     # rendering happened, NOT the specific dst).
-    proc = c.exec(  # type: ignore[attr-defined]
+    proc = c.exec(
         ["find", "/home/tester", "-name", "my-setup-e2e-template.txt"],
     )
     matches = [line for line in proc.stdout.splitlines() if line.strip()]
@@ -380,7 +460,7 @@ def test_install_template_dst_jinja2(
         f"templated dst not found anywhere under /home/tester: {proc.stdout!r}"
     )
     # And the content is the rendered file.
-    content = c.read_text(matches[0])  # type: ignore[attr-defined]
+    content = c.read_text(matches[0])
     assert content == "templated file (dst path was Jinja2-rendered)\n"
 
 
@@ -399,9 +479,7 @@ def test_install_chain_resolution_and_bootstrap(
     assert _read_live(c, f"{root}/child.txt") == "child-content\n"
     # Bootstrap stubs created at all three chain levels.
     for stub in ("bootstrap-grand.txt", "bootstrap-base.txt", "bootstrap-child.txt"):
-        proc = c.exec(  # type: ignore[attr-defined]
-            ["test", "-f", f"/home/tester/{root}/{stub}"], check=False
-        )
+        proc = c.exec(["test", "-f", f"/home/tester/{root}/{stub}"], check=False)
         assert proc.returncode == 0, f"missing bootstrap stub: {stub}"
 
 
@@ -421,10 +499,10 @@ def test_install_comprehensive_plugins_extensions(
     CI; failures there are surfaced via install's non-zero exit.
     """
     c = docker_container()
-    # Use --auto-accept-live for first-time install to avoid drift gating
-    # if any of the comprehensive dotfiles' dst paths already exist.
+    # First-time install: every dst is absent, so install bypasses the
+    # drift gate without needing --auto-accept-* flags.
     proc = _install(c, "test-comprehensive")
-    assert proc.returncode == 0, getattr(proc, "stderr", "")  # type: ignore[attr-defined]
+    assert proc.returncode == 0, proc.stderr
     root = ".my_setup_e2e/comprehensive"
     assert "comprehensive notes" in _read_live(c, f"{root}/notes.md")
     assert json.loads(_read_live(c, f"{root}/data.json")) == {
@@ -432,7 +510,7 @@ def test_install_comprehensive_plugins_extensions(
     }
     assert "comprehensive-tracked" in _read_live(c, f"{root}/preserve-settings.json")
     assert "comprehensive-tracked-yaml" in _read_live(c, f"{root}/config.yaml")
-    proc = c.exec(  # type: ignore[attr-defined]
+    proc = c.exec(
         ["test", "-f", f"/home/tester/{root}/bootstrap-stub.txt"], check=False
     )
     assert proc.returncode == 0, "comprehensive bootstrap stub missing"
@@ -452,9 +530,9 @@ def test_sync_no_drift_noop(
     """M: install clean; sync reports no-op; tracked unchanged."""
     c = docker_container()
     _install(c, "test-minimal")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")  # type: ignore[attr-defined]
+    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")
     _sync(c, "test-minimal")
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")  # type: ignore[attr-defined]
+    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")
     assert pre == post
 
 
@@ -467,13 +545,9 @@ def test_sync_auto_use_live_silent_absorb(
     """N: pre-seed drift, --auto=use-live absorbs live into tracked."""
     c = docker_container()
     _install(c, "test-minimal")
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/minimal/text.txt", "live-only-content\n"
-    )
+    c.write_text("/home/tester/.my_setup_e2e/minimal/text.txt", "live-only-content\n")
     _sync(c, "test-minimal", extra=["--auto=use-live"])
-    tracked = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    )
+    tracked = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")
     assert "live-only-content" in tracked
 
 
@@ -493,11 +567,9 @@ def test_sync_auto_keep_tracked_refuse_absorb(
     """
     c = docker_container()
     _install(c, "test-yaml-deep")
-    pre = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
-    )
+    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")
     # Pre-seed live drift inside the preserve_user_keys_deep `settings` subtree.
-    c.write_text(  # type: ignore[attr-defined]
+    c.write_text(
         "/home/tester/.my_setup_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
@@ -510,9 +582,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
     )
     _sync(c, "test-yaml-deep", extra=["--auto=keep-tracked"], check=False)
     # keep-tracked refuses absorb — tracked content unchanged.
-    post = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
-    )
+    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")
     assert pre == post
 
 
@@ -529,41 +599,16 @@ def test_sync_auto_keep_tracked_refuse_absorb(
 
 def test_sync_interactive_keep_via_pty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """P: docker exec -it + pexpect; send 'k' on YAML deep drift; tracked unchanged."""
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
-    _install(c, "test-yaml-deep")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-drift-value
-            """
-        ),
-    )
-    session = docker_pty_session(
+    pre, post = _drive_pty_sync(
         c,
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
-        ],
-        timeout=120,
+        docker_pty_session,
+        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-drift-value"),
+        prompts=[("Choice", "k")],
     )
-    session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("k")  # type: ignore[attr-defined]
-    session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     # k = keep tracked → tracked is unchanged after the sync.
     assert pre == post
 
@@ -573,40 +618,16 @@ def test_sync_interactive_keep_via_pty(
 
 def test_sync_interactive_use_via_pty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """Q: pexpect; send 'u' on YAML deep drift; tracked absorbs live."""
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
-    _install(c, "test-yaml-deep")
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-absorbed-value
-            """
-        ),
-    )
-    session = docker_pty_session(
+    _, post = _drive_pty_sync(
         c,
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
-        ],
-        timeout=120,
+        docker_pty_session,
+        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-absorbed-value"),
+        prompts=[("Choice", "u")],
     )
-    session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("u")  # type: ignore[attr-defined]
-    session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     assert "live-absorbed-value" in post
 
 
@@ -615,7 +636,7 @@ def test_sync_interactive_use_via_pty(
 
 def test_sync_interactive_skip_via_pty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """R: pexpect; send 's' (save-as-preserved); my_setup.yaml gets the key added.
 
@@ -625,43 +646,27 @@ def test_sync_interactive_skip_via_pty(
     my_setup.yaml. The tracked file is unchanged; only the YAML
     config gets the new preserve entry.
     """
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
-    _install(c, "test-yaml-deep")
-    pre_yaml = c.read_text(f"/workspace/{_CONFIG}")  # type: ignore[attr-defined]
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-value-for-s
-            """
-        ),
-    )
-    session = docker_pty_session(
+    # Snapshot the YAML config (the file that ``s`` mutates) rather than
+    # the tracked-deep yaml file (which ``s`` leaves alone).
+    pre_yaml, post_yaml = _drive_pty_sync(
         c,
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
-        ],
-        timeout=120,
+        docker_pty_session,
+        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-value-for-s"),
+        prompts=[("Choice", "s")],
+        snapshot_path=f"/workspace/{_CONFIG}",
     )
-    session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("s")  # type: ignore[attr-defined]
-    session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post_yaml = c.read_text(f"/workspace/{_CONFIG}")  # type: ignore[attr-defined]
-    # YAML should have the preserve key path added under yaml_deep.
     # The action appends `settings.userSub` (the diverged key path) to
-    # preserve_user_keys list in the YAML.
-    assert "userSub" in post_yaml or "settings.userSub" in post_yaml
+    # the dotfile's preserve_user_keys list in the YAML config. Diff
+    # pre vs post and assert the new preserve entry is in the diff —
+    # ``"userSub" in pre_yaml`` is already true (the fixture mentions
+    # it elsewhere), so a bare ``in post_yaml`` check is vacuous.
     assert pre_yaml != post_yaml
+    diff_lines = set(post_yaml.splitlines()) - set(pre_yaml.splitlines())
+    diff = "\n".join(diff_lines)
+    assert "settings.userSub" in diff or "userSub" in diff, (
+        f"preserve entry not in diff between pre/post YAML config:\n{diff}"
+    )
 
 
 # --- Variant S (interactive: pty + 'm') -----------------------------------
@@ -669,7 +674,7 @@ def test_sync_interactive_skip_via_pty(
 
 def test_sync_interactive_merge_via_pty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """S: pexpect; send 'm' (manual edit) then 'n' (decline editor) → pending state.
 
@@ -680,41 +685,13 @@ def test_sync_interactive_merge_via_pty(
     unchanged for this item — perfect for asserting in an automated
     test without a real interactive editor.
     """
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
-    _install(c, "test-yaml-deep")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-value-for-m
-            """
-        ),
-    )
-    session = docker_pty_session(
+    pre, post = _drive_pty_sync(
         c,
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
-        ],
-        timeout=120,
+        docker_pty_session,
+        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-value-for-m"),
+        prompts=[("Choice", "m"), ("y/n", "n")],
     )
-    session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("m")  # type: ignore[attr-defined]
-    # The 'm' branch prompts y/n on whether to open $EDITOR now.
-    session.expect(["y/n", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("n")  # type: ignore[attr-defined]
-    session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")  # type: ignore[attr-defined]
     # Manual edit declined → tracked unchanged (MANUAL_PENDING halts).
     assert pre == post
 
@@ -724,41 +701,15 @@ def test_sync_interactive_merge_via_pty(
 
 def test_sync_yaml_deep_interactive_use_via_pty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """S1: same shape as Q but on a YAML deep dotfile — yaml_merge round-trip."""
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
-    _install(c, "test-yaml-deep")
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-yaml-absorbed
-            """
-        ),
-    )
-    session = docker_pty_session(
+    _, post = _drive_pty_sync(
         c,
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
-        ],
-        timeout=120,
-    )
-    session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT])  # type: ignore[attr-defined]
-    session.send("u")  # type: ignore[attr-defined]
-    session.expect(pexpect.EOF)  # type: ignore[attr-defined]
-    post = c.read_text(  # type: ignore[attr-defined]
-        "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
+        docker_pty_session,
+        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-yaml-absorbed"),
+        prompts=[("Choice", "u")],
     )
     assert "live-yaml-absorbed" in post
 
@@ -777,10 +728,8 @@ def test_compare_reports_drift_exit_nonzero(
     """T: install, mutate live, compare --check --strict exits non-zero."""
     c = docker_container()
     _install(c, "test-minimal")
-    c.write_text(  # type: ignore[attr-defined]
-        "/home/tester/.my_setup_e2e/minimal/text.txt", "live-drift\n"
-    )
-    proc = c.exec(  # type: ignore[attr-defined]
+    c.write_text("/home/tester/.my_setup_e2e/minimal/text.txt", "live-drift\n")
+    proc = c.exec(
         [
             "uv",
             "run",
@@ -807,12 +756,12 @@ def test_install_then_revert_restores_state(
     _install(c, "test-minimal")
     # Confirm the file exists post-install.
     assert (
-        c.exec(  # type: ignore[attr-defined]
+        c.exec(
             ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
         ).returncode
         == 0
     )
-    revert = c.exec(  # type: ignore[attr-defined]
+    revert = c.exec(
         [
             "uv",
             "run",
@@ -822,10 +771,10 @@ def test_install_then_revert_restores_state(
             f"--config={_CONFIG}",
         ]
     )
-    assert revert.returncode == 0  # type: ignore[attr-defined]
+    assert revert.returncode == 0
     # File is gone after revert (it was created from absence on install).
     assert (
-        c.exec(  # type: ignore[attr-defined]
+        c.exec(
             ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
         ).returncode
         != 0
@@ -841,10 +790,10 @@ def test_install_idempotent_second_run_noop(
     """V: install twice; second run exits 0 with consistent dst state."""
     c = docker_container()
     _install(c, "test-minimal")
-    first = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
+    first = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")
     second = _install(c, "test-minimal")
-    assert second.returncode == 0  # type: ignore[attr-defined]
-    after = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")  # type: ignore[attr-defined]
+    assert second.returncode == 0
+    after = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")
     assert first == after
 
 
@@ -856,8 +805,6 @@ def test_validate_clean_yaml_exit_zero(
 ) -> None:
     """W: validate --all against the fixture config exits 0."""
     c = docker_container()
-    proc = c.exec(  # type: ignore[attr-defined]
-        ["uv", "run", "my-setup", "validate", "--all", f"--config={_CONFIG}"]
-    )
-    assert proc.returncode == 0  # type: ignore[attr-defined]
-    assert "ok" in proc.stdout  # type: ignore[attr-defined]
+    proc = c.exec(["uv", "run", "my-setup", "validate", "--all", f"--config={_CONFIG}"])
+    assert proc.returncode == 0
+    assert "ok" in proc.stdout

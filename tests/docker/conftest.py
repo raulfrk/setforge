@@ -247,7 +247,7 @@ def docker_container(
 @pytest.fixture
 def docker_pty_session(
     docker_container: Callable[..., ContainerHandle],
-) -> Iterator[Callable[..., object]]:
+) -> Iterator[Callable[..., pexpect.spawn]]:
     """Function-scoped factory that returns a :class:`pexpect.spawn`
     against ``docker exec -it``. Used by the interactive sync wizard
     variants (P/Q/R/S/S1).
@@ -263,7 +263,7 @@ def docker_pty_session(
             pty.send("k")
             pty.expect(pexpect.EOF)
     """
-    sessions: list[object] = []
+    sessions: list[pexpect.spawn] = []
 
     def open_pty(
         container: ContainerHandle,
@@ -271,7 +271,7 @@ def docker_pty_session(
         *,
         env: dict[str, str] | None = None,
         timeout: int = 60,
-    ) -> object:
+    ) -> pexpect.spawn:
         argv = ["exec", "-it"]
         argv += _env_args(env)
         argv += [container.cid, *cmd]
@@ -282,7 +282,5 @@ def docker_pty_session(
     yield open_pty
 
     for s in sessions:
-        close = getattr(s, "close", None)
-        if close is not None:
-            with contextlib.suppress(pexpect.ExceptionPexpect, OSError):
-                close(force=True)
+        with contextlib.suppress(pexpect.ExceptionPexpect, OSError):
+            s.close(force=True)
