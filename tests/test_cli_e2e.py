@@ -10,19 +10,42 @@ One test class per top-level CLI command (``install``, ``sync``,
 
 The Docker ring (``tests/test_e2e_docker.py``) exercises the same
 fixtures against real ``claude`` + ``code`` binaries.
+
+dotfiles-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
+in-memory driver fixtures so the inner ring also exercises the
+extension + plugin reconcile legs (not just the warn-and-skip path).
+``FakeClaude`` is re-imported from ``tests.test_claude_plugins`` to
+avoid duplication; ``FakeCode`` is defined inline below since
+``test_cli_e2e.py`` is its only consumer today.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
 from my_setup.cli import app
+
+# ``FakeClaude`` is re-imported here so this module's docstring + class
+# references stay self-explanatory; the ``fake_claude`` *fixture* is
+# re-exported from ``tests/conftest.py`` instead, which avoids ruff F811
+# (direct fixture import vs same-name test parameter). Imported but
+# otherwise unused — the type is implicit in test parameters.
+from tests.test_claude_plugins import FakeClaude  # noqa: F401
+
+# Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
+# fixture can forward non-code, non-claude invocations (e.g. the ``patch``
+# subprocess fired by ``transitions.apply_patch_reverse`` during revert)
+# through to the real implementation, even when both fakes have monkey-
+# patched ``subprocess.run`` away.
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -83,6 +106,133 @@ def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
         "my_setup.claude_plugins.resolve_binary",
         lambda name: None,
     )
+
+
+# ---------------------------------------------------------------------------
+# FakeCode — in-memory ``code`` driver for the extension reconcile leg.
+#
+# Mirrors the FakeClaude pattern from tests/test_claude_plugins.py but is
+# scoped to ``my_setup.vscode_extensions``. ``vscode_extensions`` invokes
+# ``subprocess.run`` with separate argv tokens (``[code, "--install-extension",
+# id]``) and has no ``lru_cache``'d resolver, so the fixture only needs to
+# monkeypatch ``resolve_binary`` + ``subprocess.run`` — no cache to clear.
+# ---------------------------------------------------------------------------
+
+
+class FakeCode:
+    """In-memory simulation of the ``code`` CLI extension surface.
+
+    Tracks installed extension IDs in ``self._installed`` and records
+    every invocation in ``self.calls`` so tests can assert both the
+    end-state and the exact subprocess sequence.
+
+    Recognized commands (matched on ``args[1:]``):
+    - ``--list-extensions`` → newline-joined sorted installed set.
+    - ``--install-extension <id>`` → adds ``<id>`` to the installed set.
+    - ``--uninstall-extension <id>`` → removes ``<id>`` (no-op if absent).
+
+    ``FakeCode.run`` only handles invocations whose argv[1] starts with
+    ``--`` (the ``code`` flag style). Other invocations (e.g. ``claude
+    plugin list``) are forwarded to ``_delegate`` — set by the
+    ``fake_code`` fixture to the previously-installed ``subprocess.run``
+    so a co-resident ``fake_claude`` continues to handle its own calls.
+    This is required because monkeypatching ``my_setup.foo.subprocess.run``
+    actually patches the global ``subprocess.run`` attribute (both
+    modules share the same ``subprocess`` module object), so the second
+    fixture would otherwise clobber the first.
+    """
+
+    def __init__(self, *, installed: set[str] | None = None) -> None:
+        self._installed: set[str] = set(installed or ())
+        self.calls: list[list[str]] = []
+        # Set by the fake_code fixture so non-code, non-claude invocations
+        # forward to the real subprocess.run (so transitions' patch /
+        # git calls still work). ``_delegate`` is the prior
+        # ``subprocess.run`` binding captured at fixture-setup time and
+        # is used only for ``claude`` argv.
+        self._delegate: Any = None
+        self._real_run: Any = None
+
+    def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        # Dispatch on the binary path basename: this fixture only owns
+        # invocations of the ``code`` binary. ``claude`` argv goes to
+        # the prior subprocess.run binding (the co-resident FakeClaude
+        # when fake_claude ran first); any other binary invocation
+        # (``patch`` / ``git`` etc. from the transitions layer) passes
+        # through to the real :func:`subprocess.run` via
+        # ``_real_run``.
+        if not args or Path(args[0]).name != "code":
+            basename = Path(args[0]).name if args else ""
+            if basename == "claude" and self._delegate is not None:
+                return self._delegate(args, **kwargs)
+            if self._real_run is not None:
+                return self._real_run(args, **kwargs)
+            raise AssertionError(f"unexpected code invocation: {args!r}")
+
+        self.calls.append(list(args))
+        cmd = args[1:]
+        if cmd == ["--list-extensions"]:
+            body = "\n".join(sorted(self._installed))
+            stdout = body + ("\n" if body else "")
+            return subprocess.CompletedProcess(args, 0, stdout, "")
+        if len(cmd) == 2 and cmd[0] == "--install-extension":
+            self._installed.add(cmd[1])
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) == 2 and cmd[0] == "--uninstall-extension":
+            self._installed.discard(cmd[1])
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(f"unexpected code invocation: {args!r}")
+
+    # Convenience query helpers parallel to FakeClaude's install_args / etc.
+    def install_args(self) -> list[str]:
+        return [
+            c[2] for c in self.calls if len(c) >= 3 and c[1] == "--install-extension"
+        ]
+
+    def uninstall_args(self) -> list[str]:
+        return [
+            c[2] for c in self.calls if len(c) >= 3 and c[1] == "--uninstall-extension"
+        ]
+
+    def installed_set(self) -> set[str]:
+        return set(self._installed)
+
+
+@pytest.fixture
+def fake_code(monkeypatch: pytest.MonkeyPatch):
+    """Return a factory that wires :class:`FakeCode` into ``vscode_extensions``.
+
+    Parallel to ``fake_claude``: monkeypatches both
+    ``my_setup.vscode_extensions.resolve_binary`` (so ``_ensure_code``
+    returns a non-None path) and ``subprocess.run`` (so reconcile
+    invokes the fake driver instead of the real ``code`` binary).
+
+    Captures the prior ``subprocess.run`` binding (whatever was active
+    before this factory ran — possibly ``fake_claude.run``) and stores
+    it on the FakeCode instance so non-code argv shapes forward through
+    instead of raising. Letting both fakes coexist requires this because
+    both ``my_setup.vscode_extensions.subprocess`` and
+    ``my_setup.claude_plugins.subprocess`` resolve to the same module
+    object — the second monkeypatch would otherwise clobber the first.
+    """
+
+    def factory(*, installed: set[str] | None = None) -> FakeCode:
+        fake = FakeCode(installed=installed)
+        # Capture whatever subprocess.run is bound to right now BEFORE
+        # we overwrite it (will be the FakeClaude.run when fake_claude
+        # ran first, otherwise the real subprocess.run). Used only for
+        # ``claude`` argv; everything else (e.g. ``patch`` from
+        # transitions) flows through ``_REAL_SUBPROCESS_RUN``.
+        fake._delegate = subprocess.run
+        fake._real_run = _REAL_SUBPROCESS_RUN
+        monkeypatch.setattr(
+            "my_setup.vscode_extensions.resolve_binary",
+            lambda name: Path("/usr/local/bin/code") if name == "code" else None,
+        )
+        monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake.run)
+        return fake
+
+    return factory
 
 
 def _invoke(args: list[str]) -> Result:
@@ -273,6 +423,63 @@ class TestInstall:
         assert "comprehensive-tracked-yaml" in (root / "config.yaml").read_text()
         assert (root / "bootstrap-stub.txt").exists()
 
+    def test_comprehensive_reconciles_plugins_and_extensions(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        fake_claude,
+        fake_code,
+    ) -> None:
+        """test-comprehensive with both fake drivers wired in.
+
+        Asserts the reconcile legs run (not warn-and-skipped):
+        - Plugin install lands ``superpowers@claude-plugins-official``;
+          ``FakeClaude``'s internal ``_plugins`` is the in-memory analog
+          of what real ``claude`` writes to ``installed_plugins.json``
+          (production matches: install adds to that JSON, enable flips
+          ``enabled: true``).
+        - Marketplace was registered before install.
+        - Extension reconcile installs ``editorconfig.editorconfig``;
+          the post-install ``code --list-extensions`` set matches the
+          profile's declared include list.
+        """
+        fc = fake_claude()
+        fk = fake_code()
+
+        result = _invoke(
+            [
+                "install",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Plugin reconcile leg: marketplace-add then install then enable.
+        # ``claude plugin marketplace add`` receives the source URL
+        # (``owner/repo`` for GitHub), not the marketplace name.
+        assert "anthropics/claude-plugins-official" in fc.mp_add_args()
+        assert fc.install_args() == ["superpowers@claude-plugins-official"]
+        assert fc.enable_args() == ["superpowers@claude-plugins-official"]
+        # FakeClaude._plugins is the in-memory analog of installed_plugins.json;
+        # after install + enable it should reflect the declared, enabled set.
+        plugins_state = {p["id"]: p for p in fc._plugins}
+        assert plugins_state == {
+            "superpowers@claude-plugins-official": {
+                "id": "superpowers@claude-plugins-official",
+                "enabled": True,
+                "scope": "user",
+            }
+        }
+
+        # Extension reconcile leg: declared include = {editorconfig.editorconfig}.
+        assert fk.install_args() == ["editorconfig.editorconfig"]
+        assert fk.installed_set() == {"editorconfig.editorconfig"}
+
+        # Dotfile leg still completed.
+        root = sandboxed_home / ".my_setup_e2e" / "comprehensive"
+        assert (root / "notes.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # sync — captures live → tracked
@@ -317,6 +524,45 @@ class TestSync:
         assert synced.exit_code == 0, synced.output
         tracked = fixture_repo.parent / "tracked" / "minimal" / "text.txt"
         assert "updated locally" in tracked.read_text()
+
+    def test_sync_captures_extensions_via_fake_code(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        fake_claude,
+        fake_code,
+    ) -> None:
+        """``sync`` calls ``capture_extensions`` → ``list_installed``.
+
+        Pre-seed FakeCode with an extra extension the user "installed by
+        hand" and confirm sync surveys the live installed set via the
+        fake (i.e., reconcile leg is exercised, not warn-and-skipped).
+        """
+        # Pre-seed with a user-added extension plus the declared one.
+        fake_claude()
+        fk = fake_code(installed={"editorconfig.editorconfig", "ms-python.python"})
+
+        # Install lands the declared set without uninstalling the extra
+        # (ADDITIVE policy by default).
+        installed = _invoke(
+            [
+                "install",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert installed.exit_code == 0, installed.output
+        assert fk.installed_set() == {"editorconfig.editorconfig", "ms-python.python"}
+
+        # Sync surveys current state via `code --list-extensions`.
+        # Track call count before sync so we can assert sync triggered a list.
+        list_calls_before = sum(1 for c in fk.calls if c[1:] == ["--list-extensions"])
+        synced = _invoke(
+            ["sync", "--profile=test-comprehensive", f"--config={fixture_repo}"]
+        )
+        assert synced.exit_code == 0, synced.output
+        list_calls_after = sum(1 for c in fk.calls if c[1:] == ["--list-extensions"])
+        assert list_calls_after > list_calls_before
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +613,49 @@ class TestCompare:
         )
         assert result.exit_code == 1, result.output
 
+    def test_compare_after_reconcile_install_no_subprocess_shells(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        fake_claude,
+        fake_code,
+    ) -> None:
+        """End-to-end on test-comprehensive: install (with reconcile legs
+        firing through fake drivers), then compare.
+
+        Locks the invariant that ``compare`` does NOT invoke either
+        reconcile leg — no additional ``claude`` or ``code`` subprocess
+        calls land on the fake drivers after the install loop has
+        completed. (Drift on ``preserve_user_keys`` placeholders is
+        expected on the comprehensive profile, so this test does not
+        gate on ``--check`` exit code.)
+        """
+        fc = fake_claude()
+        fk = fake_code()
+
+        installed = _invoke(
+            [
+                "install",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert installed.exit_code == 0, installed.output
+        claude_calls_after_install = len(fc.calls)
+        code_calls_after_install = len(fk.calls)
+
+        result = _invoke(
+            [
+                "compare",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert result.exit_code == 0, result.output
+        # compare doesn't shell out to claude or code.
+        assert len(fc.calls) == claude_calls_after_install
+        assert len(fk.calls) == code_calls_after_install
+
 
 # ---------------------------------------------------------------------------
 # revert — undoes most recent install/sync
@@ -398,6 +687,45 @@ class TestRevert:
         assert reverted.exit_code == 0, reverted.output
         # Revert removes the file (it was created from absence on install).
         assert not live.exists()
+
+    def test_revert_uninstalls_extension_via_fake_code(
+        self,
+        fixture_repo: Path,
+        sandboxed_home: Path,
+        fake_claude,
+        fake_code,
+    ) -> None:
+        """Install with fake drivers seeds an extension delta into the
+        transition; revert applies the inverse via ``uninstall_one``.
+
+        Confirms the revert leg actually drives ``code --uninstall-extension``
+        through ``FakeCode`` (not warn-and-skipped).
+        """
+        fake_claude()
+        fk = fake_code()  # starts empty — install will add editorconfig.
+
+        installed = _invoke(
+            [
+                "install",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert installed.exit_code == 0, installed.output
+        assert fk.installed_set() == {"editorconfig.editorconfig"}
+
+        reverted = _invoke(
+            [
+                "revert",
+                "--profile=test-comprehensive",
+                f"--config={fixture_repo}",
+            ]
+        )
+        assert reverted.exit_code == 0, reverted.output
+        # The install delta recorded `added: [editorconfig.editorconfig]`;
+        # revert inverts that into an uninstall call.
+        assert fk.uninstall_args() == ["editorconfig.editorconfig"]
+        assert fk.installed_set() == set()
 
 
 # ---------------------------------------------------------------------------

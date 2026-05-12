@@ -4,6 +4,14 @@ from pathlib import Path
 
 import pytest
 
+# Re-export the ``fake_claude`` fixture defined in tests/test_claude_plugins.py
+# so test_cli_e2e.py (dotfiles-181) can request it via parameter without
+# tripping ruff F811 (which fires on direct imports of a fixture name that
+# matches a test-parameter name). Placing the import here makes the fixture
+# discoverable via pytest's normal conftest mechanism instead of a same-file
+# rebinding.
+from tests.test_claude_plugins import fake_claude  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def _isolated_local_config(
