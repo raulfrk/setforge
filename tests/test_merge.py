@@ -412,7 +412,7 @@ def test_apply_action_m_y_launches_editor(
 
     calls: list[list[str]] = []
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         calls.append(list(args))
         return subprocess.CompletedProcess(args, 0)
 

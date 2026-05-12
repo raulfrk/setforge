@@ -9,6 +9,7 @@ touching a real ``code`` CLI.
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -31,7 +32,7 @@ class FakeCode:
         self.installed: list[str] = list(installed)
         self.calls: list[list[str]] = []
 
-    def run(self, args, **kwargs) -> subprocess.CompletedProcess:
+    def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
         if args[1] == "--list-extensions":
             stdout = "\n".join(self.installed) + ("\n" if self.installed else "")
@@ -209,7 +210,7 @@ def test_install_one_wraps_called_process_error(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
-    def boom(args, **kwargs):
+    def boom(args, **kwargs: Any):
         raise subprocess.CalledProcessError(
             1, args, output="", stderr="marketplace 404"
         )
@@ -227,7 +228,7 @@ def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
-    def boom(args, **kwargs):
+    def boom(args, **kwargs: Any):
         raise subprocess.TimeoutExpired(args, 30)
 
     monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
@@ -244,7 +245,7 @@ def test_list_installed_wraps_failure(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
-    def boom(args, **kwargs):
+    def boom(args, **kwargs: Any):
         raise subprocess.CalledProcessError(
             2, args, output="", stderr="connection refused"
         )
@@ -264,7 +265,7 @@ def test_reconcile_continues_after_install_failure(
 
     state = {"installed": ["existing.one"], "calls": []}
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         state["calls"].append(list(args))
         if args[1] == "--list-extensions":
             return subprocess.CompletedProcess(args, 0, "existing.one\n", "")

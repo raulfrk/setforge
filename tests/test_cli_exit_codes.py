@@ -48,7 +48,7 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     state = {"installed": []}
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         if args[1] == "--list-extensions":
             stdout = "\n".join(state["installed"]) + (
                 "\n" if state["installed"] else ""
@@ -150,7 +150,7 @@ def test_ext_reconcile_clean_state_exits_0(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         if args[1] == "--list-extensions":
             return subprocess.CompletedProcess(args, 0, "declared.one\n", "")
         return subprocess.CompletedProcess(args, 0, "", "")

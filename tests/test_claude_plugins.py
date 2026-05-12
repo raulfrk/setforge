@@ -13,6 +13,7 @@ is "found" vs absent.
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -79,7 +80,7 @@ class FakeClaude:
         self._plugins: list[dict] = list(plugins or [])
         self.calls: list[list[str]] = []
 
-    def run(self, args, **kwargs) -> subprocess.CompletedProcess:
+    def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
         # args[0] is the binary path (we normalise as str already)
         cmd = args[1:]  # ["plugin", "marketplace", "list", "--json"]
@@ -395,7 +396,7 @@ def test_reconcile_fresh_install_failure_skips_enable(
     fake = fake_claude()
     real_run = fake.run
 
-    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         cmd = list(args[1:])
         if cmd == ["plugin", "install", "bad@m1", "--scope=user"]:
             fake.calls.append(list(args))
@@ -444,7 +445,7 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
     fake = fake_claude()
     real_run = fake.run
 
-    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         cmd = list(args[1:])
         if cmd == ["plugin", "enable", "a@m1"]:
             fake.calls.append(list(args))
@@ -582,7 +583,7 @@ def test_reconcile_report_policy_runs_no_subprocesses(
 
     list_call_count = 0
 
-    def read_only_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def read_only_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         import json
 
         nonlocal list_call_count
@@ -621,7 +622,7 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
     )
 
-    def read_only_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def read_only_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         import json
 
         cmd = args[1:]
@@ -965,11 +966,16 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
     calls: list[dict] = []
     original_set_cli_overrides = binaries_mod.set_cli_overrides
 
-    def recording_set_cli_overrides(**kwargs):
-        calls.append(dict(kwargs))
+    def recording_set_cli_overrides(
+        *,
+        code: str | None = None,
+        claude: str | None = None,
+        patch: str | None = None,
+    ) -> None:
+        calls.append({"code": code, "claude": claude, "patch": patch})
         # Reset claude_bin cache after override change
         cp._get_claude_bin.cache_clear()
-        original_set_cli_overrides(**kwargs)
+        original_set_cli_overrides(code=code, claude=claude, patch=patch)
 
     # Patch the function on the binaries module itself so that
     # cli.py's `binaries.set_cli_overrides(...)` call goes through our recorder.
@@ -1001,7 +1007,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
     )
 
-    def read_only_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def read_only_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         import json
 
         cmd = args[1:]
@@ -1081,7 +1087,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
     fake = fake_claude()
     real_run = fake.run
 
-    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         cmd = list(args[1:])
         if cmd == ["plugin", "enable", "newp@existing-mp"]:
             fake.calls.append(list(args))
@@ -1132,7 +1138,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
     fake = fake_claude()
     real_run = fake.run
 
-    def failing_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         cmd = list(args[1:])
         if cmd[:2] == ["plugin", "install"]:
             fake.calls.append(list(args))
@@ -1177,7 +1183,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
     fake = fake_claude()
     real_run = fake.run
 
-    def timing_out_run(args, **kwargs) -> subprocess.CompletedProcess:
+    def timing_out_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
         cmd = list(args[1:])
         if cmd[:2] == ["plugin", "install"]:
             fake.calls.append(list(args))

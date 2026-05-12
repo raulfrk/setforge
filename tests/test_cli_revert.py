@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -212,7 +213,7 @@ def test_revert_restores_extension_state_to_pre_install(
     state = {"installed": []}
     real_run = subprocess.run
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         # Intercept only `code` invocations; let everything else (notably
         # `patch -R` from apply_patch_reverse) hit the real binary.
         if args[0] != "/usr/bin/code":
@@ -331,7 +332,7 @@ def test_revert_continues_after_extension_uninstall_failure(
     state_ext = {"installed": [], "fail_uninstall": set()}
     real_run = subprocess.run
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **kwargs: Any):
         if args[0] != "/usr/bin/code":
             return real_run(args, **kwargs)
         if args[1] == "--list-extensions":
