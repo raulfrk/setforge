@@ -31,6 +31,14 @@ uv run my-setup install --profile=<profile>
 
 `my-setup install` deploys tracked dotfiles to their live destinations and (P2/P3) reconciles VSCode extensions and Claude plugins.
 
+## Development setup
+
+The repo's [.pre-commit-config.yaml](.pre-commit-config.yaml) declares hooks (gitleaks, ruff, ruff-format) that only fire after `pre-commit install` registers the git hook in `.git/hooks/`. Run this once per fresh clone or worktree — otherwise commits sail past local quality gates and only fail on CI:
+
+```bash
+uv run pre-commit install
+```
+
 ## Profiles
 
 | Profile | Includes | Use on |
