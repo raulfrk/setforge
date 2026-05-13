@@ -19,6 +19,13 @@ _STRICT = ConfigDict(extra="forbid")
 
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
+_PRESERVE_PATH_SEPARATOR = " > "
+"""Segment separator for nested-path entries in ``Dotfile.preserve_user_keys``.
+
+Mirrors :data:`my_setup.jsonc.PATH_SEPARATOR` — re-declared here so the
+config schema does not depend on the JSONC module at import time.
+"""
+
 
 class ReconcilePolicy(StrEnum):
     ADDITIVE = "additive"
@@ -80,6 +87,18 @@ class Dotfile(BaseModel):
                 f"path(s) declared in both preserve_user_keys and "
                 f"preserve_user_keys_deep: {sorted(overlap)}"
             )
+        deep_heads = set(self.preserve_user_keys_deep)
+        for path in self.preserve_user_keys:
+            if _PRESERVE_PATH_SEPARATOR not in path:
+                continue
+            head = path.split(_PRESERVE_PATH_SEPARATOR, 1)[0]
+            if head in deep_heads:
+                raise ValueError(
+                    f"preserve_user_keys path {path!r} starts with "
+                    f"{head!r}, which is declared whole-subtree in "
+                    f"preserve_user_keys_deep; the two semantics conflict. "
+                    f"Drop one or rename the head."
+                )
         return self
 
     @field_validator("preserve_user_keys_deep")
@@ -92,6 +111,32 @@ class Dotfile(BaseModel):
                     f"list suffixes (got {path!r}); use preserve_user_keys "
                     f"for list-targeted paths."
                 )
+        return v
+
+    @field_validator("preserve_user_keys")
+    @classmethod
+    def _well_formed_preserve_paths(cls, v: list[str]) -> list[str]:
+        """Reject malformed nested paths in ``preserve_user_keys``.
+
+        Single-segment names (no ``" > "`` separator) are v1 literal
+        top-level keys — accepted as-is. Multi-segment paths split on
+        ``" > "`` and every segment must be non-empty and not
+        whitespace-only. The empty string is rejected outright.
+        """
+        for path in v:
+            if path == "":
+                raise ValueError("preserve_user_keys entry cannot be empty string")
+            if _PRESERVE_PATH_SEPARATOR not in path:
+                continue
+            segments = path.split(_PRESERVE_PATH_SEPARATOR)
+            for seg in segments:
+                if seg == "" or seg.strip() == "":
+                    raise ValueError(
+                        f"preserve_user_keys path {path!r} has an empty or "
+                        f"whitespace-only segment (no leading/trailing "
+                        f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
+                        f"separators)"
+                    )
         return v
 
     @field_validator("src", "dst", mode="before")
