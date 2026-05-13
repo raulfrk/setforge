@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from my_setup.config import ClaudeInstallMode
 from my_setup.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "my-setup" / "local.yaml"
@@ -45,36 +48,126 @@ _STUB_TEMPLATE: Final[str] = """\
 #   code: /custom/path/to/code
 #   claude: /opt/claude/bin/claude
 #   patch: /usr/local/bin/gpatch
+#
+# Claude-specific host-local knobs. Uncomment to opt into offline-capable
+# install via locally-cloned marketplaces:
+#
+# claude:
+#   install_mode: regular        # or "local-clone"
+#   # Future knobs (not yet implemented):
+#   # claude_log_level: info
+#   # cache_max_age_days: 30
 """
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeLocalConfig:
+    """Host-local Claude-specific knobs from ``local.yaml``'s ``claude:`` block.
+
+    Today carries a single field, ``install_mode``, that selects between
+    the network-fetched marketplace flow (``REGULAR``, default — current
+    behavior) and the locally-cloned mirror flow (``LOCAL_CLONE``).
+    Additional host-local knobs (log level, cache age) belong here when
+    they land in future beads.
+    """
+
+    install_mode: ClaudeInstallMode = ClaudeInstallMode.REGULAR
+
+
+@dataclass(frozen=True, slots=True)
+class HostLocalConfig:
+    """In-memory shape of ``~/.config/my-setup/local.yaml``.
+
+    Consolidates today's ad-hoc dict loaders into a typed value object.
+    ``binaries`` mirrors the legacy ``binaries:`` mapping; ``claude``
+    carries the nested ``claude:`` block. Both default to "no overrides"
+    so a missing ``local.yaml`` (or one without the relevant section)
+    yields :class:`HostLocalConfig()` with semantically-empty fields —
+    today's behavior is unchanged.
+    """
+
+    binaries: Mapping[str, str] = field(default_factory=dict)
+    claude: ClaudeLocalConfig = field(default_factory=ClaudeLocalConfig)
+
 
 _cli_overrides: dict[str, str] = {}
 
 
-def _load_local_config() -> dict[str, str]:
-    """Return the ``binaries:`` dict from ``LOCAL_CONFIG_PATH``.
+def load_host_local_config() -> HostLocalConfig:
+    """Parse ``LOCAL_CONFIG_PATH`` into a :class:`HostLocalConfig`.
 
-    Returns ``{}`` if the file is absent, empty, or has no ``binaries:``
-    key. Raises :class:`ConfigError` on YAML parse failure or when
-    ``binaries:`` is present but not a mapping. Values are coerced to
-    ``str`` for downstream uniformity.
+    Returns :class:`HostLocalConfig()` defaults if the file is absent,
+    empty, or has neither a ``binaries:`` nor a ``claude:`` block.
+    Raises :class:`ConfigError` on YAML parse failure, on a non-mapping
+    top level, or when an expected block has the wrong shape (e.g.
+    ``binaries:`` as a string, or ``claude.install_mode`` not one of
+    the :class:`ClaudeInstallMode` members).
     """
     if not LOCAL_CONFIG_PATH.exists():
-        return {}
+        return HostLocalConfig()
     yaml = YAML(typ="safe")
     try:
         data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
     except YAMLError as exc:
         raise ConfigError(f"malformed YAML in {LOCAL_CONFIG_PATH}: {exc}") from exc
     if data is None:
-        return {}
+        return HostLocalConfig()
     if not isinstance(data, dict):
         raise ConfigError(f"top-level of {LOCAL_CONFIG_PATH} must be a mapping")
-    binaries = data.get("binaries")
-    if binaries is None:
+    return HostLocalConfig(
+        binaries=_parse_binaries_block(data.get("binaries")),
+        claude=_parse_claude_block(data.get("claude")),
+    )
+
+
+def _parse_binaries_block(raw: object) -> dict[str, str]:
+    """Validate and coerce the raw ``binaries:`` block to ``dict[str, str]``.
+
+    ``None`` (absent) → ``{}``. Non-mapping → :class:`ConfigError`. Keys
+    and values are coerced to ``str`` for downstream uniformity (matches
+    the legacy loader's behavior).
+    """
+    if raw is None:
         return {}
-    if not isinstance(binaries, dict):
+    if not isinstance(raw, dict):
         raise ConfigError(f"'binaries:' in {LOCAL_CONFIG_PATH} must be a mapping")
-    return {str(k): str(v) for k, v in binaries.items()}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _parse_claude_block(raw: object) -> ClaudeLocalConfig:
+    """Validate and coerce the raw ``claude:`` block to :class:`ClaudeLocalConfig`.
+
+    ``None`` (absent) → defaults (``install_mode=REGULAR``). Non-mapping
+    or an ``install_mode`` outside :class:`ClaudeInstallMode` members
+    raises :class:`ConfigError` with a message that points at the file.
+    """
+    if raw is None:
+        return ClaudeLocalConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError(f"'claude:' in {LOCAL_CONFIG_PATH} must be a mapping")
+    install_mode_raw = raw.get("install_mode")
+    if install_mode_raw is None:
+        return ClaudeLocalConfig()
+    try:
+        install_mode = ClaudeInstallMode(install_mode_raw)
+    except ValueError as exc:
+        valid = ", ".join(repr(m.value) for m in ClaudeInstallMode)
+        raise ConfigError(
+            f"'claude.install_mode' in {LOCAL_CONFIG_PATH} must be one of "
+            f"{valid}; got {install_mode_raw!r}"
+        ) from exc
+    return ClaudeLocalConfig(install_mode=install_mode)
+
+
+def _load_local_config() -> dict[str, str]:
+    """Return the ``binaries:`` mapping from :func:`load_host_local_config`.
+
+    Thin shim over :func:`load_host_local_config` preserved for callers
+    that only need binary overrides. Returns a plain ``dict[str, str]``
+    so callers can ``.get(name)`` on it (the dataclass exposes a
+    ``Mapping`` for type-safety; the dict round-trip is harmless).
+    """
+    return dict(load_host_local_config().binaries)
 
 
 def _env_overrides() -> dict[str, str]:
