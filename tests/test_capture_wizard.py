@@ -29,12 +29,12 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from my_setup.capture import CaptureAction, capture_profile
+from my_setup.capture import CaptureAction, CaptureAuto, capture_profile
 from my_setup.capture_wizard import run_capture_wizard, walk_capture_drift
 from my_setup.config import Config, Dotfile, Profile
 from my_setup.errors import CaptureRequiresInteractive
 from my_setup.transitions import TransitionCommand
-from my_setup.wizard import ActionResult, DriftItem
+from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -124,10 +124,10 @@ def test_walker_yields_for_shared_different_subkey(tmp_path: Path) -> None:
     assert len(items) == 1
     item = items[0]
     assert item.key_path == "a.b"
-    assert item.mode == "deep"
+    assert item.mode is DriftMode.DEEP
     assert item.tracked_value == 1
     assert item.live_value == 99
-    assert item.file_format == "yaml"
+    assert item.file_format is FileFormat.YAML
 
 
 def test_walker_yields_for_live_only_subkey(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_walker_yields_for_live_only_subkey(tmp_path: Path) -> None:
     assert item.key_path == "a.c"
     assert item.tracked_value is None
     assert item.live_value == "new"
-    assert item.mode == "deep"
+    assert item.mode is DriftMode.DEEP
 
 
 def test_walker_silent_on_shared_identical_subkey(tmp_path: Path) -> None:
@@ -183,7 +183,7 @@ def test_walker_recurses_into_nested_dicts(tmp_path: Path) -> None:
     items = list(walk_capture_drift(config, "p", repo))
     assert len(items) == 1
     assert items[0].key_path == "root.mid.leaf"
-    assert items[0].mode == "deep"
+    assert items[0].mode is DriftMode.DEEP
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ def test_walker_yields_for_shared_different_top_level_non_preserve(
     assert len(items) == 1
     item = items[0]
     assert item.key_path == "editor"
-    assert item.mode == "shallow"
+    assert item.mode is DriftMode.SHALLOW
 
 
 def test_walker_yields_for_live_only_top_level(tmp_path: Path) -> None:
@@ -222,7 +222,7 @@ def test_walker_yields_for_live_only_top_level(tmp_path: Path) -> None:
     assert item.key_path == "extra_key"
     assert item.tracked_value is None
     assert item.live_value == "hello"
-    assert item.mode == "shallow"
+    assert item.mode is DriftMode.SHALLOW
 
 
 def test_walker_silent_on_tracked_only_top_level(tmp_path: Path) -> None:
@@ -265,7 +265,7 @@ def test_walker_silent_on_top_level_prefix_of_deep_path(
     # Only the deep-leaf drift; no shallow item for top-level "config".
     assert len(items) == 1
     assert items[0].key_path == "config.settings.a"
-    assert items[0].mode == "deep"
+    assert items[0].mode is DriftMode.DEEP
 
 
 def test_walker_skips_when_tracked_missing(tmp_path: Path) -> None:
@@ -360,8 +360,8 @@ def test_walker_jsonc_top_level_non_preserve_drift(tmp_path: Path) -> None:
     assert len(items) == 1
     item = items[0]
     assert item.key_path == "tabSize"
-    assert item.mode == "shallow"
-    assert item.file_format == "jsonc"
+    assert item.mode is DriftMode.SHALLOW
+    assert item.file_format is FileFormat.JSONC
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +499,7 @@ def test_capture_profile_auto_use_live_absorbs_all_drift(
         repo,
         my_setup_yaml_path=my_setup_yaml,
         interactive=False,
-        auto="use-live",
+        auto=CaptureAuto.USE_LIVE,
     )
 
     final = src.read_text()
@@ -544,7 +544,7 @@ def test_capture_profile_auto_keep_tracked_rejects_all_drift(
         repo,
         my_setup_yaml_path=my_setup_yaml,
         interactive=False,
-        auto="keep-tracked",
+        auto=CaptureAuto.KEEP_TRACKED,
     )
 
     # Content untouched at every drift item.

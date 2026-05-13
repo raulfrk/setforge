@@ -36,7 +36,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
 from rich.console import Console
 from rich.table import Table
@@ -48,6 +47,8 @@ from my_setup.transitions import TransitionCommand
 __all__ = [
     "ActionResult",
     "DriftItem",
+    "DriftMode",
+    "FileFormat",
     "Snapshot",
     "apply_action",
     "prompt_one",
@@ -63,6 +64,24 @@ class ActionResult(StrEnum):
     SAVE_AS_PRESERVED = "save_as_preserved"
     MANUAL_EDIT_DONE = "manual_edit_done"
     MANUAL_PENDING = "manual_pending"
+
+
+class FileFormat(StrEnum):
+    """Closed set of file formats handled by the merge wizard's overlay seam."""
+
+    YAML = "yaml"
+    JSONC = "jsonc"
+
+
+class DriftMode(StrEnum):
+    """Closed set of preserve-layer modes for a :class:`DriftItem`.
+
+    ``SHALLOW`` — key lives in ``preserve_user_keys`` (whole-leaf overlay).
+    ``DEEP`` — key lives in ``preserve_user_keys_deep`` (recursive deep-merge).
+    """
+
+    SHALLOW = "shallow"
+    DEEP = "deep"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,10 +111,10 @@ class DriftItem:
     live_value: object
     """Value at key_path in dst."""
 
-    file_format: Literal["yaml", "jsonc"]
+    file_format: FileFormat
     """Routes [u]se-live action to the correct write primitive."""
 
-    mode: Literal["shallow", "deep"] = "shallow"
+    mode: DriftMode = DriftMode.SHALLOW
     """Whether the key sits in ``preserve_user_keys`` (shallow whole-leaf
     overlay) or ``preserve_user_keys_deep`` (recursive deep-merge).
     Routes the [u]se-live action to the matching overlay variant.
@@ -318,7 +337,7 @@ def _action_use_live(item: DriftItem) -> ActionResult:
     leaves under deep-merge top-level paths, so shallow overlay is
     the right primitive at this seam.
     """
-    if item.file_format == "jsonc":
+    if item.file_format is FileFormat.JSONC:
         tracked_text = item.src_path.read_text(encoding="utf-8")
         live_text = item.dst_path.read_text(encoding="utf-8")
         result_text = jsonc.overlay_user_keys(tracked_text, live_text, [item.key_path])

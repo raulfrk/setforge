@@ -23,7 +23,6 @@ POSIX-only: the underlying single-keypress prompter uses ``tty`` +
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Literal
 
 from rich.console import Console
 from ruamel.yaml import YAML
@@ -31,7 +30,7 @@ from ruamel.yaml import YAML
 from my_setup import jsonc, transitions, wizard
 from my_setup.compare import CompareReport, CompareStatus
 from my_setup.config import Config
-from my_setup.wizard import ActionResult, DriftItem
+from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 # ---------------------------------------------------------------------------
 # Walker
@@ -81,11 +80,11 @@ def walk_unexpected_drift(
             dst = dst / rel
 
         if jsonc.is_jsonc_file(src):
-            fmt: Literal["yaml", "jsonc"] = "jsonc"
+            fmt: FileFormat = FileFormat.JSONC
             tracked_parsed = jsonc.parse_jsonc(src.read_text(encoding="utf-8"))
             live_parsed = jsonc.parse_jsonc(dst.read_text(encoding="utf-8"))
         else:
-            fmt = "yaml"
+            fmt = FileFormat.YAML
             y = YAML(typ="rt")
             tracked_parsed = y.load(src.read_text(encoding="utf-8"))
             live_parsed = y.load(dst.read_text(encoding="utf-8"))
@@ -94,9 +93,7 @@ def walk_unexpected_drift(
         for key_path in entry.unexpected_drift_keys:
             tracked_val = _get_value(tracked_parsed, key_path, fmt)
             live_val = _get_value(live_parsed, key_path, fmt)
-            mode: Literal["shallow", "deep"] = (
-                "deep" if key_path in deep_paths else "shallow"
-            )
+            mode = DriftMode.DEEP if key_path in deep_paths else DriftMode.SHALLOW
             yield DriftItem(
                 dotfile_name=dotfile_base,
                 src_path=src,
@@ -109,13 +106,13 @@ def walk_unexpected_drift(
             )
 
 
-def _get_value(doc: object, key_path: str, fmt: Literal["yaml", "jsonc"]) -> object:
+def _get_value(doc: object, key_path: str, fmt: FileFormat) -> object:
     """Extract a value from a parsed document at ``key_path``.
 
     JSONC: key_path is a literal top-level key name (flat, no nesting).
     YAML: key_path is a dotted path (e.g. ``"b.c"``).
     """
-    if fmt == "jsonc":
+    if fmt is FileFormat.JSONC:
         if isinstance(doc, dict):
             return doc.get(key_path)
         return None

@@ -23,6 +23,7 @@ from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import merge as merge_mod
+from my_setup.capture import CaptureAuto
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import (
     Config,
@@ -395,13 +396,19 @@ def capture(
     pass ``--auto={use-live, keep-tracked}`` for non-interactive
     contexts.
     """
-    if auto is not None and auto not in {"use-live", "keep-tracked"}:
-        typer.secho(
-            f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2)
+    auto_enum: CaptureAuto | None
+    if auto is None:
+        auto_enum = None
+    else:
+        try:
+            auto_enum = CaptureAuto(auto)
+        except ValueError:
+            typer.secho(
+                f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(2) from None
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
@@ -411,7 +418,7 @@ def capture(
             profile,
             repo_root,
             my_setup_yaml_path=config.resolve(),
-            auto=auto,  # type: ignore[arg-type]
+            auto=auto_enum,
         )
     except CaptureRequiresInteractive as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
@@ -496,13 +503,19 @@ def sync(
     behavior (e.g. for scripted runs) or ``--auto=keep-tracked`` to
     refuse to absorb drift.
     """
-    if auto is not None and auto not in {"use-live", "keep-tracked"}:
-        typer.secho(
-            f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2)
+    auto_enum: CaptureAuto | None
+    if auto is None:
+        auto_enum = None
+    else:
+        try:
+            auto_enum = CaptureAuto(auto)
+        except ValueError:
+            typer.secho(
+                f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(2) from None
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
@@ -528,7 +541,7 @@ def sync(
             profile,
             repo_root,
             my_setup_yaml_path=config.resolve(),
-            auto=auto,  # type: ignore[arg-type]
+            auto=auto_enum,
         )
     except CaptureRequiresInteractive as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)

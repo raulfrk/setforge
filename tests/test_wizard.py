@@ -18,6 +18,7 @@ from my_setup.transitions import TransitionCommand
 from my_setup.wizard import (
     ActionResult,
     DriftItem,
+    FileFormat,
     run_wizard_loop,
 )
 
@@ -40,7 +41,7 @@ def _make_item(tmp_path: Path, name: str) -> DriftItem:
         key_path="k",
         tracked_value=f"tracked_{name}",
         live_value=f"live_{name}",
-        file_format="yaml",
+        file_format=FileFormat.YAML,
     )
 
 

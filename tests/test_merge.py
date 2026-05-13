@@ -28,6 +28,8 @@ from my_setup.merge import walk_unexpected_drift
 from my_setup.wizard import (
     ActionResult,
     DriftItem,
+    DriftMode,
+    FileFormat,
     Snapshot,
     _read_one_choice,
     apply_action,
@@ -128,7 +130,7 @@ def test_walk_unexpected_drift_yaml(tmp_path: Path) -> None:
     assert len(items) == 1
     item = items[0]
     assert item.key_path == "b"
-    assert item.file_format == "yaml"
+    assert item.file_format is FileFormat.YAML
     assert item.tracked_value == 2
     assert item.live_value == 88
 
@@ -149,7 +151,7 @@ def test_walk_unexpected_drift_jsonc(tmp_path: Path) -> None:
     assert len(items) == 1
     item = items[0]
     assert item.key_path == "b"
-    assert item.file_format == "jsonc"
+    assert item.file_format is FileFormat.JSONC
     assert item.tracked_value == 2
     assert item.live_value == 88
 
@@ -251,8 +253,8 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     original_src_content = src.read_text()
@@ -276,8 +278,8 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
@@ -306,8 +308,8 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="jsonc",
-        mode="shallow",
+        file_format=FileFormat.JSONC,
+        mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
@@ -353,8 +355,8 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     result = apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.SAVE_AS_PRESERVED
@@ -396,8 +398,8 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     y = YAML(typ="rt")
@@ -420,8 +422,8 @@ def test_apply_action_m_y_launches_editor(
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
@@ -454,8 +456,8 @@ def test_apply_action_m_n_returns_manual_pending(
         key_path="b",
         tracked_value=2,
         live_value=88,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
@@ -670,8 +672,8 @@ def test_use_live_yaml_comments_survive(tmp_path: Path) -> None:
         key_path="baz",
         tracked_value=1,
         live_value=999,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
@@ -693,8 +695,8 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=99,
-        file_format="jsonc",
-        mode="shallow",
+        file_format=FileFormat.JSONC,
+        mode=DriftMode.SHALLOW,
     )
     apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
@@ -715,8 +717,8 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         key_path="b",
         tracked_value=2,
         live_value=99,
-        file_format="yaml",
-        mode="shallow",
+        file_format=FileFormat.YAML,
+        mode=DriftMode.SHALLOW,
     )
     apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
     assert "# my config" in my_setup_yaml.read_text()

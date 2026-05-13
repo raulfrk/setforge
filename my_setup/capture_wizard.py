@@ -43,7 +43,7 @@ The walker is silent on:
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from rich.console import Console
 from ruamel.yaml import YAML
@@ -152,7 +152,7 @@ def _walk_one_file(
     matches; everything else is YAML round-tripped.
     """
     if jsonc.is_jsonc_file(src):
-        fmt: Literal["yaml", "jsonc"] = "jsonc"
+        fmt: FileFormat = "jsonc"
         tracked = jsonc.parse_jsonc(src.read_text(encoding="utf-8"))
         live = jsonc.parse_jsonc(dst.read_text(encoding="utf-8"))
     else:
@@ -165,7 +165,7 @@ def _walk_one_file(
         return
 
     nested_path_heads: set[str] = (
-        _nested_path_heads(preserve_user_keys) if fmt == "jsonc" else set()
+        _nested_path_heads(preserve_user_keys) if fmt is FileFormat.JSONC else set()
     )
     yield from _walk_deep_phase(
         tracked=tracked,
@@ -198,7 +198,7 @@ def _walk_deep_phase(
     preserve_user_keys: list[str],
     preserve_user_keys_deep: list[str],
     nested_path_heads: set[str],
-    fmt: Literal["yaml", "jsonc"],
+    fmt: FileFormat,
     dotfile_name: str,
     src: Path,
     dst: Path,
@@ -227,7 +227,7 @@ def _walk_deep_phase(
             continue
         preserved_positions = (
             preserved_positions_for_top(deep_path, preserve_user_keys)
-            if fmt == "jsonc"
+            if fmt is FileFormat.JSONC
             else set()
         )
         yield from _walk_deep(
@@ -250,7 +250,7 @@ def _walk_shallow_top_phase(
     preserve_user_keys: list[str],
     preserve_user_keys_deep: list[str],
     nested_path_heads: set[str],
-    fmt: Literal["yaml", "jsonc"],
+    fmt: FileFormat,
     dotfile_name: str,
     src: Path,
     dst: Path,
@@ -307,7 +307,7 @@ def _walk_deep(
     dotfile_name: str,
     src: Path,
     dst: Path,
-    fmt: Literal["yaml", "jsonc"],
+    fmt: FileFormat,
     preserved_positions: set[tuple[str, ...]] | None = None,
     position: tuple[str, ...] = (),
 ) -> Iterator[DriftItem]:
@@ -375,7 +375,7 @@ def _walk_deep(
     # tracked-only sub-keys: silent (preserved at writeback).
 
 
-def _join(prefix: str, key: str, fmt: Literal["yaml", "jsonc"]) -> str:
+def _join(prefix: str, key: str, fmt: FileFormat) -> str:
     """Format-aware key-path separator.
 
     YAML continues to emit ``"a.b"`` (legacy ``preserve_user_keys_deep``
@@ -384,7 +384,7 @@ def _join(prefix: str, key: str, fmt: Literal["yaml", "jsonc"]) -> str:
     ``key_path`` to :func:`my_setup.jsonc.overlay_user_keys`, which
     parses on ``" > "``.
     """
-    if fmt == "jsonc":
+    if fmt is FileFormat.JSONC:
         return f"{prefix}{PATH_SEPARATOR}{key}"
     return f"{prefix}.{key}"
 
@@ -405,7 +405,7 @@ def _nested_path_heads(preserve_user_keys: list[str]) -> set[str]:
     return heads
 
 
-def _navigate(doc: Any, path: str, fmt: Literal["yaml", "jsonc"]) -> Any:
+def _navigate(doc: Any, path: str, fmt: FileFormat) -> Any:
     """Walk ``doc`` along a format-appropriate path. Returns ``None`` if
     any component is missing or a non-dict.
 
@@ -415,7 +415,7 @@ def _navigate(doc: Any, path: str, fmt: Literal["yaml", "jsonc"]) -> Any:
     symmetric across formats and ready for future deep-paths-with-
     separators support.
     """
-    parts = path.split(PATH_SEPARATOR) if fmt == "jsonc" else path.split(".")
+    parts = path.split(PATH_SEPARATOR) if fmt is FileFormat.JSONC else path.split(".")
     node = doc
     for part in parts:
         if not isinstance(node, dict) or part not in node:

@@ -29,7 +29,6 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
 from rich.console import Console
 from ruamel.yaml import YAML
@@ -45,6 +44,20 @@ class CaptureAction(StrEnum):
     UPDATED = "updated"
     NOOP = "noop"
     SKIPPED = "skipped"
+
+
+class CaptureAuto(StrEnum):
+    """Closed set of non-interactive resolutions for capture-time drift.
+
+    ``USE_LIVE`` — absorb all drift (reproduces pre-`nen.23` silent-absorb).
+    ``KEEP_TRACKED`` — refuse to absorb any drift.
+
+    ``None`` is the third valid value the CLI seam accepts (interactive mode);
+    it sits outside the enum because ``StrEnum`` members must be strings.
+    """
+
+    USE_LIVE = "use-live"
+    KEEP_TRACKED = "keep-tracked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +210,7 @@ def capture_profile(
     *,
     my_setup_yaml_path: Path,
     interactive: bool | None = None,
-    auto: Literal["use-live", "keep-tracked"] | None = None,
+    auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
     console: Console | None = None,
 ) -> list[CaptureResult]:
@@ -254,9 +267,9 @@ def capture_profile(
                 f"run interactively or pass --auto=use-live / "
                 f"--auto=keep-tracked."
             )
-        auto_accept_map: dict[str | None, str | None] = {
-            "use-live": "u",
-            "keep-tracked": "k",
+        auto_accept_map: dict[CaptureAuto | None, str | None] = {
+            CaptureAuto.USE_LIVE: "u",
+            CaptureAuto.KEEP_TRACKED: "k",
             None: None,
         }
         run_capture_wizard(
