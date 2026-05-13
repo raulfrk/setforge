@@ -134,6 +134,24 @@ def overlay_user_keys(
         return tracked_text
     tracked_top = _require_top_object(tracked_model)
     indent = _detect_indent(tracked_top)
+    _overlay_shallow_keys(tracked_top, live_value, key_names, indent)
+    _overlay_deep_keys(tracked_top, live_value, deep_key_names, indent)
+    return dumps(tracked_model, dumper=ModelDumper())
+
+
+def _overlay_shallow_keys(
+    tracked_top: JSONObject,
+    live_value: Mapping[str, Any],
+    key_names: list[str],
+    indent: str,
+) -> None:
+    """Apply the flat-key and nested-path branches of ``overlay_user_keys``.
+
+    For each name in ``key_names``: multi-segment paths dispatch to
+    :func:`_overlay_path`; single-segment names replace or append the
+    top-level entry. Lifted from :func:`overlay_user_keys` to keep that
+    function under the project's 40-line ceiling — behavior unchanged.
+    """
     for name in key_names:
         segments = _split_path(name)
         if len(segments) > 1:
@@ -153,6 +171,23 @@ def overlay_user_keys(
             new_key_node.wsc_before = [indent]
             tracked_top.keys.append(new_key_node)
             tracked_top.values.append(new_value_node)
+
+
+def _overlay_deep_keys(
+    tracked_top: JSONObject,
+    live_value: Mapping[str, Any],
+    deep_key_names: list[str],
+    indent: str,
+) -> None:
+    """Apply the deep-merge branch of ``overlay_user_keys``.
+
+    For each name in ``deep_key_names``: append a fresh node when
+    tracked lacks the key; otherwise dispatch by node-vs-mapping shape
+    to :func:`_deep_merge_jsonobject`, raise :class:`MergeTypeMismatch`
+    on dict-vs-non-dict mismatches, or fall back to whole-leaf replace
+    for scalar/list. Lifted from :func:`overlay_user_keys` to keep that
+    function under the 40-line ceiling — behavior unchanged.
+    """
     for name in deep_key_names:
         if name not in live_value:
             continue
@@ -189,7 +224,6 @@ def overlay_user_keys(
                 new_value_node = _python_to_node(live_sub)
                 new_value_node.wsc_before = getattr(src_value_node, "wsc_before", [" "])
                 tracked_top.values[idx] = new_value_node
-    return dumps(tracked_model, dumper=ModelDumper())
 
 
 def _deep_merge_jsonobject(
