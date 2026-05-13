@@ -146,8 +146,8 @@ class FakeCode:
         # git calls still work). ``_delegate`` is the prior
         # ``subprocess.run`` binding captured at fixture-setup time and
         # is used only for ``claude`` argv.
-        self._delegate: Any = None
-        self._real_run: Any = None
+        self._delegate: Callable[..., subprocess.CompletedProcess[str]] | None = None
+        self._real_run: Callable[..., subprocess.CompletedProcess[str]] | None = None
 
     def run(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Dispatch on the binary path basename: this fixture only owns
@@ -210,9 +210,20 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
     both ``my_setup.vscode_extensions.subprocess`` and
     ``my_setup.claude_plugins.subprocess`` resolve to the same module
     object — the second monkeypatch would otherwise clobber the first.
+
+    The fixture-order precondition (``fake_claude`` must be requested
+    before ``fake_code`` in the test signature so the delegate snapshot
+    captures ``FakeClaude.run``) is ENFORCED at factory-call time via
+    an assertion below — not merely documented.
     """
 
     def factory(*, installed: set[str] | None = None) -> FakeCode:
+        if subprocess.run is _REAL_SUBPROCESS_RUN:
+            raise AssertionError(
+                "fake_code requires fake_claude to be requested first; "
+                "request both fixtures in this order so the delegate "
+                "snapshot captures FakeClaude.run."
+            )
         fake = FakeCode(installed=installed)
         # Capture whatever subprocess.run is bound to right now BEFORE
         # we overwrite it (will be the FakeClaude.run when fake_claude
