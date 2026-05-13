@@ -52,6 +52,7 @@ from my_setup import jsonc, wizard
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, resolve_profile
 from my_setup.errors import CaptureRequiresInteractive
+from my_setup.jsonc import PATH_SEPARATOR
 from my_setup.transitions import TransitionCommand
 from my_setup.wizard import ActionResult, DriftItem
 
@@ -163,24 +164,33 @@ def _walk_one_file(
     if not isinstance(tracked, dict) or not isinstance(live, dict):
         return
 
-    # 1. Deep-merge sub-key drift — walk under each declared deep path.
-    # JSONC deep-merge sub-key walking is out of scope for `nen.23` v1
-    # because the wizard's [u] action uses
-    # :func:`my_setup.jsonc.overlay_user_keys`, which only handles
-    # top-level literal key names. Per-sub-key JSONC drift lands via
-    # `dotfiles-nen.19`. JSONC deep-merge top-level overlay still flows
-    # through the existing capture-on-deploy primitives (``overlay_user_keys``
-    # at deploy time) — capture-time wizard skips it for JSONC files.
-    deep_paths_to_walk = preserve_user_keys_deep if fmt != "jsonc" else []
+    # 1. Deep-merge sub-key drift — walk under each declared deep path,
+    # and (JSONC only) under each top-level head that is the start of a
+    # nested path in ``preserve_user_keys``. JSONC nested-path heads are
+    # walked even though they're not in ``preserve_user_keys_deep`` so
+    # the wizard can prompt on UNCOVERED sibling drift while remaining
+    # silent on path-preserved leaves (per `dotfiles-nen.19` spec).
+    deep_paths_to_walk = list(preserve_user_keys_deep)
+    nested_path_heads: set[str] = set()
+    if fmt == "jsonc":
+        nested_path_heads = _nested_path_heads(preserve_user_keys)
+        for head in sorted(nested_path_heads):
+            if head not in deep_paths_to_walk:
+                deep_paths_to_walk.append(head)
     for deep_path in deep_paths_to_walk:
-        tracked_at = _navigate(tracked, deep_path)
-        live_at = _navigate(live, deep_path)
+        tracked_at = _navigate(tracked, deep_path, fmt)
+        live_at = _navigate(live, deep_path, fmt)
         # If either side doesn't reach a dict at the deep path, the
         # wizard has nothing to merge per-sub-key. The whole-leaf
         # adoption is handled by deploy's overlay (with possible
         # MergeTypeMismatch). Nothing to yield from this pass.
         if not isinstance(tracked_at, dict) or not isinstance(live_at, dict):
             continue
+        preserved_positions = (
+            _preserved_positions_for_top(deep_path, preserve_user_keys)
+            if fmt == "jsonc"
+            else set()
+        )
         yield from _walk_deep(
             tracked_at,
             live_at,
@@ -189,26 +199,24 @@ def _walk_one_file(
             src=src,
             dst=dst,
             fmt=fmt,
+            preserved_positions=preserved_positions,
+            position=(),
         )
 
     # 2. Non-preserve top-level drift — symmetric with install's
     # walk_unexpected_drift. Top-level keys not covered by either
-    # preserve list (shallow exact OR top-level prefix of any deep
-    # path) get a single shallow drift item per shared-different /
-    # live-only top-level key. Note ``preserve_user_keys_deep`` (the
-    # original list) is consulted here regardless of format so JSONC
-    # deep-merge top-level keys are still skipped from non-preserve
-    # walking.
+    # preserve list (shallow exact OR top-level prefix of any deep path
+    # OR — JSONC only — head of a nested path) get a single shallow
+    # drift item per shared-different / live-only top-level key.
     shallow_set = set(preserve_user_keys)
     deep_top_prefixes = {p.split(".", 1)[0] for p in preserve_user_keys_deep}
+    skip_top_level = shallow_set | deep_top_prefixes | nested_path_heads
     seen_keys: set[str] = set()
     for top_key in list(live.keys()) + list(tracked.keys()):
         if top_key in seen_keys:
             continue
         seen_keys.add(top_key)
-        if top_key in shallow_set:
-            continue
-        if top_key in deep_top_prefixes:
+        if top_key in skip_top_level:
             continue
         in_live = top_key in live
         in_tracked = top_key in tracked
@@ -245,6 +253,8 @@ def _walk_deep(
     src: Path,
     dst: Path,
     fmt: Literal["yaml", "jsonc"],
+    preserved_positions: set[tuple[str, ...]] | None = None,
+    position: tuple[str, ...] = (),
 ) -> Iterator[DriftItem]:
     """Recursively walk two dicts side-by-side under ``prefix``.
 
@@ -254,11 +264,20 @@ def _walk_deep(
     preserve there). Tracked-only keys are silent (preserved at
     writeback by the wizard's no-touch).
 
+    JSONC nested-path filter: when ``preserved_positions`` contains the
+    current sub-key's position-tuple, the wizard skips emitting a
+    :class:`DriftItem` — the leaf is auto-applied by deploy's overlay
+    via :func:`my_setup.jsonc.overlay_user_keys` instead.
+
     When both sides have a dict at the same key, recurse one level
     deeper so the user's per-key decision lives at the leaf.
     """
+    preserved = preserved_positions or set()
     for key in live_dict:
-        sub_path = f"{prefix}.{key}"
+        sub_position = (*position, key)
+        if sub_position in preserved:
+            continue
+        sub_path = _join(prefix, key, fmt)
         live_value = live_dict[key]
         if key not in tracked_dict:
             yield DriftItem(
@@ -282,6 +301,8 @@ def _walk_deep(
                 src=src,
                 dst=dst,
                 fmt=fmt,
+                preserved_positions=preserved,
+                position=sub_position,
             )
             continue
         if _equal(tracked_value, live_value):
@@ -299,17 +320,70 @@ def _walk_deep(
     # tracked-only sub-keys: silent (preserved at writeback).
 
 
-def _navigate(doc: Any, dotted_path: str) -> Any:
-    """Walk ``doc`` along a dotted path. Returns ``None`` if any
-    component is missing or a non-dict. Used by the walker to descend
-    into deep paths declared in ``preserve_user_keys_deep``.
+def _join(prefix: str, key: str, fmt: Literal["yaml", "jsonc"]) -> str:
+    """Format-aware key-path separator.
 
-    JSONC's ``preserve_user_keys_deep`` paths are literal direct-children
-    of the top-level object per spec (v1); the dotted-path treatment
-    here is general but in practice a JSONC deep entry is a single key
-    name without dots."""
+    YAML continues to emit ``"a.b"`` (legacy ``preserve_user_keys_deep``
+    convention). JSONC emits ``"a > b"`` (nested-path syntax from
+    ``dotfiles-nen.19``) — the ``[u]se-live`` action forwards the
+    ``key_path`` to :func:`my_setup.jsonc.overlay_user_keys`, which
+    parses on ``" > "``.
+    """
+    if fmt == "jsonc":
+        return f"{prefix}{PATH_SEPARATOR}{key}"
+    return f"{prefix}.{key}"
+
+
+def _nested_path_heads(preserve_user_keys: list[str]) -> set[str]:
+    """Heads of every JSONC nested path in ``preserve_user_keys``.
+
+    Used by the JSONC walker to (a) extend the deep-walk set with
+    top-level keys whose interior has preserve coverage and (b) suppress
+    the top-level shallow walker for those same keys (handled per-leaf
+    by the deep walker).
+    """
+    heads: set[str] = set()
+    for name in preserve_user_keys:
+        if PATH_SEPARATOR not in name:
+            continue
+        heads.add(name.split(PATH_SEPARATOR, 1)[0])
+    return heads
+
+
+def _preserved_positions_for_top(
+    top_key: str, preserve_user_keys: list[str]
+) -> set[tuple[str, ...]]:
+    """Position-tuples (rooted under ``top_key``) covered by nested
+    paths in ``preserve_user_keys``.
+
+    A path ``"[python] > editor.fontSize"`` whose first segment matches
+    ``top_key`` contributes the tuple ``("editor.fontSize",)``. v1 flat
+    names contribute nothing — they're handled by the shallow walker.
+    """
+    positions: set[tuple[str, ...]] = set()
+    for name in preserve_user_keys:
+        if PATH_SEPARATOR not in name:
+            continue
+        segments = name.split(PATH_SEPARATOR)
+        if segments[0] != top_key:
+            continue
+        positions.add(tuple(segments[1:]))
+    return positions
+
+
+def _navigate(doc: Any, path: str, fmt: Literal["yaml", "jsonc"]) -> Any:
+    """Walk ``doc`` along a format-appropriate path. Returns ``None`` if
+    any component is missing or a non-dict.
+
+    YAML splits on ``.``; JSONC splits on ``" > "``. JSONC's
+    ``preserve_user_keys_deep`` entries are single literal keys per
+    spec, but routing through this helper keeps the path-walking
+    symmetric across formats and ready for future deep-paths-with-
+    separators support.
+    """
+    parts = path.split(PATH_SEPARATOR) if fmt == "jsonc" else path.split(".")
     node = doc
-    for part in dotted_path.split("."):
+    for part in parts:
         if not isinstance(node, dict) or part not in node:
             return None
         node = node[part]

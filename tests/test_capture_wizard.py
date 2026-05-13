@@ -650,3 +650,116 @@ def test_capture_wizard_cancel_restores_tracked(
     # in-progress edits).
     assert src.read_bytes() == src_pre
     assert my_setup_yaml.read_bytes() == yaml_pre
+
+
+# ---------------------------------------------------------------------------
+# JSONC nested-path walker (dotfiles-nen.19)
+# ---------------------------------------------------------------------------
+
+
+def _python_block_jsonc(extra_lines: str = "") -> str:
+    """Render a ``"[python]"`` JSONC block with optional extra sub-keys.
+
+    Centralizes the long string literals so nested-path tests don't trip
+    the ``E501`` ruff rule and stay readable.
+    """
+    body = '    "editor.defaultFormatter": "ruff"'
+    if extra_lines:
+        body = body + ",\n" + extra_lines
+    return '{\n  "[python]": {\n' + body + "\n  }\n}\n"
+
+
+def test_walker_jsonc_path_emits_arrow_separator_for_deep_drift(
+    tmp_path: Path,
+) -> None:
+    """Case C — JSONC deep-walk emits ` > ` paths for sub-key drift."""
+    config, repo, _src, _dst = _make_config(
+        tmp_path,
+        src_text=_python_block_jsonc(),
+        dst_text=_python_block_jsonc('    "editor.tabSize": 4'),
+        preserve_user_keys_deep=["[python]"],
+        is_json=True,
+    )
+    items = list(walk_capture_drift(config, "p", repo))
+    assert len(items) == 1
+    item = items[0]
+    assert item.key_path == "[python] > editor.tabSize"
+    assert item.file_format == "jsonc"
+    assert item.mode == "deep"
+    assert item.tracked_value is None
+    assert item.live_value == 4
+
+
+def test_walker_jsonc_nested_path_preserved_position_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """Case A — leaf covered by ``preserve_user_keys`` nested path is
+    SILENT during sync (wizard does not prompt). The path's head is
+    treated as a deep-walk anchor; the leaf is filtered out, and
+    no other sub-key drifts, so the walker yields nothing."""
+    config, repo, _src, _dst = _make_config(
+        tmp_path,
+        src_text=_python_block_jsonc(),
+        dst_text=_python_block_jsonc('    "editor.fontSize": 14'),
+        preserve_user_keys=["[python] > editor.fontSize"],
+        is_json=True,
+    )
+    items = list(walk_capture_drift(config, "p", repo))
+    assert items == []
+
+
+def test_walker_jsonc_nested_path_prompts_on_unspecified_sibling(
+    tmp_path: Path,
+) -> None:
+    """Nested path covers fontSize; tabSize is an unspecified sibling
+    under the same top-level. The path's head is treated as a deep
+    prefix so the top-level walker doesn't fire shallow; the deep
+    walker emits drift only on tabSize (fontSize is filtered)."""
+    config, repo, _src, _dst = _make_config(
+        tmp_path,
+        src_text=_python_block_jsonc(),
+        dst_text=_python_block_jsonc(
+            '    "editor.fontSize": 14,\n    "editor.tabSize": 4'
+        ),
+        preserve_user_keys=["[python] > editor.fontSize"],
+        is_json=True,
+    )
+    items = list(walk_capture_drift(config, "p", repo))
+    assert len(items) == 1
+    item = items[0]
+    assert item.key_path == "[python] > editor.tabSize"
+    assert item.mode == "deep"
+    assert item.live_value == 4
+
+
+def test_walker_jsonc_deep_prompts_on_unspecified_sibling(
+    tmp_path: Path,
+) -> None:
+    """Case C proper — `[python]` in `preserve_user_keys_deep`, no
+    nested preserve path; per-sub-key drift surfaces."""
+    config, repo, _src, _dst = _make_config(
+        tmp_path,
+        src_text=_python_block_jsonc(),
+        dst_text=_python_block_jsonc('    "editor.tabSize": 4'),
+        preserve_user_keys_deep=["[python]"],
+        is_json=True,
+    )
+    items = list(walk_capture_drift(config, "p", repo))
+    assert len(items) == 1
+    item = items[0]
+    assert item.key_path == "[python] > editor.tabSize"
+    assert item.mode == "deep"
+
+
+def test_walker_jsonc_yaml_separator_unchanged(tmp_path: Path) -> None:
+    """YAML deep-walk continues to use ``.`` separators after the
+    format-aware join helper is introduced."""
+    config, repo, _src, _dst = _make_config(
+        tmp_path,
+        src_text="root:\n  mid:\n    leaf: tracked\n",
+        dst_text="root:\n  mid:\n    leaf: live\n",
+        preserve_user_keys_deep=["root"],
+    )
+    items = list(walk_capture_drift(config, "p", repo))
+    assert len(items) == 1
+    assert items[0].key_path == "root.mid.leaf"
