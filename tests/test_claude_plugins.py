@@ -10,6 +10,7 @@ Binary resolution is also monkeypatched via
 is "found" vs absent.
 """
 
+import json
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -66,7 +67,16 @@ def _make_resolved(
 
 
 class FakeClaude:
-    """In-memory simulation of ``claude plugin`` commands."""
+    """In-memory simulation of ``claude plugin`` commands.
+
+    Non-claude argv (e.g. ``patch``, ``git``) is forwarded to a captured
+    ``_real_run`` so the transitions layer's reverse-patch step works
+    even when ``fake_claude`` is the only fixture wired in. The
+    ``fake_claude`` fixture captures ``subprocess.run`` BEFORE
+    monkeypatching it, mirroring the delegation pattern used by
+    :class:`tests.test_cli_e2e.FakeCode` for the co-resident fixture
+    case.
+    """
 
     def __init__(
         self,
@@ -79,10 +89,21 @@ class FakeClaude:
         # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
         self._plugins: list[dict] = list(plugins or [])
         self.calls: list[list[str]] = []
+        # Captured pre-monkeypatch ``subprocess.run`` for non-claude argv.
+        # ``None`` until the ``fake_claude`` fixture wires it; with the
+        # delegate unset, non-claude argv raises (today's behavior).
+        self._real_run: Any = None
 
     def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
+        # Forward non-claude invocations (patch / git etc.) to the
+        # captured real subprocess.run. Argv[0] is the binary path
+        # (str already at this point).
+        if args and Path(args[0]).name != "claude":
+            if self._real_run is not None:
+                return self._real_run(args, **kwargs)
+            raise AssertionError(f"unexpected non-claude invocation: {args!r}")
+
         self.calls.append(list(args))
-        # args[0] is the binary path (we normalise as str already)
         cmd = args[1:]  # ["plugin", "marketplace", "list", "--json"]
 
         if cmd == ["plugin", "marketplace", "list", "--json"]:
@@ -97,8 +118,16 @@ class FakeClaude:
             return subprocess.CompletedProcess(args, 0, json.dumps(self._plugins), "")
         if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "add":
             # claude plugin marketplace add <source-url>
+            # Production claude derives the marketplace name from the
+            # repo's marketplace.json. For test fidelity we derive name
+            # from the last path component of the source URL — matches
+            # the convention real marketplaces follow (the marketplace
+            # name == the repo basename). Necessary so a later
+            # ``marketplace remove <name>`` matches the entry recorded
+            # here (revert flow uses the declared YAML name).
             source_url = cmd[3]
-            self._marketplaces.append({"name": source_url, "source": source_url})
+            name = source_url.rsplit("/", 1)[-1]
+            self._marketplaces.append({"name": name, "source": source_url})
             return subprocess.CompletedProcess(args, 0, "", "")
         if (
             len(cmd) >= 3
@@ -142,6 +171,12 @@ class FakeClaude:
                 if p["id"] == name:
                     p["enabled"] = False
             return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "uninstall"]:
+            # Mirror production: `claude plugin uninstall <id>` removes
+            # the plugin entry from installed_plugins.json entirely.
+            name = cmd[2]
+            self._plugins = [p for p in self._plugins if p["id"] != name]
+            return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(f"unexpected claude invocation: {args!r}")
 
     # Convenience query helpers
@@ -153,6 +188,9 @@ class FakeClaude:
 
     def disable_args(self) -> list[str]:
         return [c[3] for c in self.calls if c[1:3] == ["plugin", "disable"]]
+
+    def uninstall_args(self) -> list[str]:
+        return [c[3] for c in self.calls if c[1:3] == ["plugin", "uninstall"]]
 
     def mp_add_args(self) -> list[str]:
         return [
@@ -186,6 +224,13 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         plugins: list[dict] | None = None,
     ) -> FakeClaude:
         fake = FakeClaude(marketplaces=marketplaces, plugins=plugins)
+        # Snapshot the pre-monkeypatch ``subprocess.run`` so FakeClaude
+        # can forward non-claude argv (patch / git etc. used by the
+        # transitions revert path) to the real function. Capturing
+        # ``subprocess.run`` here — before the ``monkeypatch.setattr``
+        # below — preserves the delegate even when the e2e test path
+        # exercises ``apply_patch_reverse``.
+        fake._real_run = subprocess.run
         monkeypatch.setattr(
             "my_setup.claude_plugins.resolve_binary",
             lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
@@ -256,6 +301,34 @@ def test_plugin_disable_synthesises_correct_command(fake_claude) -> None:
     fake = fake_claude(plugins=[{"id": "cline@anthropic", "enabled": True}])
     plugin_disable("cline@anthropic")
     assert fake.disable_args() == ["cline@anthropic"]
+
+
+def test_plugin_uninstall_argv(fake_claude) -> None:
+    """``plugin_uninstall`` issues ``claude plugin uninstall <id>``.
+
+    Mirrors :func:`test_plugin_install_passes_scope_user`'s shape: assert
+    the argv FakeClaude received and assert the plugin no longer appears
+    in ``installed_state()`` afterwards. This is the inverse primitive
+    used by ``my-setup revert`` to undo a ``PluginDelta.installed`` row.
+    """
+    from my_setup.claude_plugins import plugin_uninstall
+
+    fake = fake_claude(
+        plugins=[
+            {"id": "cline@anthropic", "enabled": True, "scope": "user"},
+            {"id": "ghost@anthropic", "enabled": False, "scope": "user"},
+        ]
+    )
+    plugin_uninstall("cline@anthropic")
+    # argv shape: [<claude>, "plugin", "uninstall", "cline@anthropic"]
+    uninstall_calls = [c for c in fake.calls if c[1:3] == ["plugin", "uninstall"]]
+    assert len(uninstall_calls) == 1
+    assert uninstall_calls[0][3] == "cline@anthropic"
+    assert fake.uninstall_args() == ["cline@anthropic"]
+    # In-memory analog of installed_plugins.json: cline removed, ghost stays.
+    assert fake.installed_state() == {
+        "ghost@anthropic": {"id": "ghost@anthropic", "enabled": False, "scope": "user"}
+    }
 
 
 def test_missing_claude_binary_raises_plugin_tool_missing(
@@ -1262,3 +1335,380 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     # No install success message, no enable.
     assert "installed plugin" not in result.output
     assert "enabled plugin" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-nen.13 — PluginDelta in transition records + revert inverse
+# ---------------------------------------------------------------------------
+#
+# These tests exercise the install → transition-record → revert round-trip
+# end-to-end via the CliRunner, asserting that:
+#
+# 1. ``install`` writes a ``plugins.json`` sidecar capturing the successful
+#    reconcile actions (installed / enabled / disabled + marketplace
+#    add/remove).
+# 2. ``revert`` reads that sidecar and applies the inverse via
+#    ``plugin_uninstall`` / ``plugin_disable`` / ``plugin_enable`` /
+#    ``marketplace_remove`` / ``marketplace_add``.
+# 3. Round-trip is total: FakeClaude's ``installed_state()`` after revert
+#    matches the pre-install state.
+#
+# Each test uses ``MY_SETUP_STATE_DIR`` to redirect the transition state
+# into ``tmp_path`` (per ``test_cli_e2e.py:77``) so the host's real
+# state dir is untouched.
+
+import shutil  # noqa: E402
+
+# E2E fixture mirrors the layout used by tests/test_cli_e2e.py — a copy
+# of the full fixture YAML + tracked tree under tmp_path so dotfile
+# srcs resolve.
+_E2E_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
+_E2E_FIXTURE_YAML = _E2E_FIXTURE_DIR / "my_setup.test.yaml"
+_E2E_FIXTURE_TRACKED = _E2E_FIXTURE_DIR / "tracked"
+
+
+def _copy_e2e_fixture(tmp_path: Path) -> Path:
+    """Materialize the e2e fixture inside ``tmp_path`` and return the
+    yaml path. Mirror of ``test_cli_e2e.fixture_repo``."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    shutil.copy2(_E2E_FIXTURE_YAML, target / "my_setup.test.yaml")
+    shutil.copytree(_E2E_FIXTURE_TRACKED, target / "tracked")
+    return target / "my_setup.test.yaml"
+
+
+def _sandbox_state_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """Redirect ``$HOME`` and ``$MY_SETUP_STATE_DIR`` for an install/revert
+    round-trip. Returns ``(home_dir, state_dir)``."""
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(state))
+    return home, state
+
+
+def _latest_transition(state_dir: Path) -> Path:
+    """Return the only transition directory under ``state_dir/transitions``."""
+    transitions_root = state_dir / "transitions"
+    candidates = sorted(
+        d
+        for d in transitions_root.iterdir()
+        if d.is_dir() and not d.name.startswith(".pending-")
+    )
+    assert candidates, f"expected at least one transition in {transitions_root}"
+    return candidates[-1]
+
+
+def test_install_records_plugin_delta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """``install`` writes ``plugins.json`` capturing the reconcile actions.
+
+    Fixture: ``test-comprehensive`` profile declares
+    ``superpowers@claude-plugins-official``; FakeClaude starts empty so
+    reconcile installs + enables the plugin AND registers the
+    marketplace. The resulting ``plugins.json`` payload should reflect
+    one install + one marketplace add (enable is the install-loop's
+    post-step, not a standalone enable transition).
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    fake_claude()  # empty marketplaces + empty installed_plugins
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert result.exit_code == 0, result.output
+
+    transition_dir = _latest_transition(state_dir)
+    plugins_file = transition_dir / "plugins.json"
+    assert plugins_file.exists(), (
+        f"expected plugins.json sidecar at {plugins_file}; transition dir "
+        f"contains: {sorted(p.name for p in transition_dir.iterdir())}"
+    )
+    payload = json.loads(plugins_file.read_text(encoding="utf-8"))
+    # Schema check: all five PluginDelta fields present as JSON arrays.
+    assert set(payload.keys()) == {
+        "installed",
+        "enabled",
+        "disabled",
+        "marketplaces_added",
+        "marketplaces_removed",
+    }
+    assert payload["installed"] == ["superpowers@claude-plugins-official"]
+    # The fresh-install enable is the install loop's post-step — it does
+    # NOT count as a standalone ``enabled`` transition. β2 semantics.
+    assert payload["enabled"] == []
+    assert payload["disabled"] == []
+    assert payload["marketplaces_added"] == ["claude-plugins-official"]
+    assert payload["marketplaces_removed"] == []
+
+
+def test_install_records_plugin_delta_with_enable_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """When a declared plugin is already installed-but-disabled,
+    reconcile flips it to enabled and ``plugins.json`` records the
+    enable transition (NOT install — the plugin was already installed).
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    # Pre-seed FakeClaude: marketplace already registered + plugin
+    # already installed but disabled.
+    fake_claude(
+        marketplaces=[
+            {
+                "name": "claude-plugins-official",
+                "source": "anthropics/claude-plugins-official",
+            }
+        ],
+        plugins=[
+            {
+                "id": "superpowers@claude-plugins-official",
+                "enabled": False,
+                "scope": "user",
+            }
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(
+        (_latest_transition(state_dir) / "plugins.json").read_text(encoding="utf-8")
+    )
+    assert payload["installed"] == []
+    assert payload["enabled"] == ["superpowers@claude-plugins-official"]
+    assert payload["disabled"] == []
+    # Marketplace already present → no add.
+    assert payload["marketplaces_added"] == []
+
+
+def test_revert_restores_plugin_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """install → revert: FakeClaude's installed_state matches pre-install
+    bytes (empty), and the marketplace registration is reversed.
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    _, _state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    fc = fake_claude()  # pre: empty marketplaces + empty plugins
+    pre_state = fc.installed_state()
+    pre_marketplaces = list(fc._marketplaces)
+
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert installed.exit_code == 0, installed.output
+    # Sanity: install actually mutated state.
+    assert "superpowers@claude-plugins-official" in fc.installed_state()
+
+    reverted = runner.invoke(
+        app,
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    # plugin uninstalled + marketplace removed.
+    assert fc.uninstall_args() == ["superpowers@claude-plugins-official"]
+    assert fc.installed_state() == pre_state
+    assert list(fc._marketplaces) == pre_marketplaces
+
+
+def test_revert_noop_when_no_plugin_delta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``plugins.json`` is absent (claude was warn-skipped on install),
+    revert is a no-op for plugins — file state still reverses.
+
+    Makes the claude binary unresolvable so install's plugin reconcile
+    leg is warn-and-skipped and no ``plugins.json`` sidecar lands.
+    Revert sees only ``changes.patch`` and reverses the file state
+    successfully. (Inline equivalent of ``test_cli_e2e``'s
+    ``no_claude_bin`` fixture, which isn't auto-discovered from this
+    module.)
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    cp._get_claude_bin.cache_clear()
+    monkeypatch.setattr(
+        "my_setup.claude_plugins.resolve_binary",
+        lambda _name: None,
+    )
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    home, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        ["install", "--profile=test-minimal", f"--config={fixture_yaml}"],
+    )
+    assert installed.exit_code == 0, installed.output
+
+    transition_dir = _latest_transition(state_dir)
+    assert not (transition_dir / "plugins.json").exists()
+    live = home / ".my_setup_e2e" / "minimal" / "text.txt"
+    assert live.exists()
+
+    reverted = runner.invoke(
+        app,
+        ["revert", "--profile=test-minimal", f"--config={fixture_yaml}"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    # File state reversed (file was created on install, so revert deletes it).
+    assert not live.exists()
+    # No plugins.json in the reverse transition either (no plugins touched).
+    new_transition = _latest_transition(state_dir)
+    assert not (new_transition / "plugins.json").exists()
+
+
+def test_revert_partial_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """When one inverse op fails (e.g. uninstall errors), the remaining
+    inverses still apply and the reverse_plugin_delta reflects only the
+    successes.
+
+    Strategy: install (lands plugin + marketplace), then monkeypatch
+    ``subprocess.run`` to fail on ``plugin uninstall`` only. Revert
+    should still succeed at ``marketplace remove`` and write a
+    ``plugins.json`` whose ``installed`` field is empty (uninstall
+    failed) but ``marketplaces_added`` contains the removed marketplace.
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    fc = fake_claude()
+    real_run = fc.run
+
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert installed.exit_code == 0, installed.output
+
+    # Now install ``failing_run`` that blows up on uninstall but lets
+    # everything else (marketplace remove, list, etc.) pass through.
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd[:2] == ["plugin", "uninstall"]:
+            fc.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="uninstall blew up"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    reverted = runner.invoke(
+        app,
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    # Revert still exits 0 — partial failure is warn-and-continue.
+    assert reverted.exit_code == 0, reverted.output
+
+    # The reverse transition records only what succeeded: marketplace
+    # was removed (the inverse of ``marketplaces_added``), but plugin
+    # uninstall failed so ``installed`` is empty in the reverse delta.
+    reverse_transition = _latest_transition(state_dir)
+    reverse_payload = json.loads(
+        (reverse_transition / "plugins.json").read_text(encoding="utf-8")
+    )
+    # Reverse delta semantics: ``installed`` lists plugins the reverse
+    # uninstalled. Empty here because the uninstall raised.
+    assert reverse_payload["installed"] == []
+    # ``marketplaces_added`` lists marketplaces the reverse removed
+    # (the inverse name for the forward direction). Marketplace remove
+    # succeeded.
+    assert reverse_payload["marketplaces_added"] == ["claude-plugins-official"]
+
+
+def test_roundtrip_file_and_plugin_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """Integration: after install→revert, file state AND FakeClaude state
+    both match the pre-install bytes.
+
+    This is the load-bearing acceptance: revert must converge full
+    external state, not just file content (the gap dotfiles-nen.13
+    closes).
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    home, _state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    fc = fake_claude()
+
+    # Pre-install snapshot: file state + plugin state.
+    live_root = home / ".my_setup_e2e" / "comprehensive"
+    assert not live_root.exists()
+    pre_plugin_state = fc.installed_state()
+    pre_marketplaces = list(fc._marketplaces)
+
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert installed.exit_code == 0, installed.output
+
+    # Sanity: install mutated both axes.
+    assert live_root.exists()
+    assert fc.installed_state() != pre_plugin_state
+
+    reverted = runner.invoke(
+        app,
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+
+    # File state reversed — the comprehensive dir was created from
+    # absence on install, so revert deletes its contents. (``revert``
+    # only reverses files it touched on install; bootstrap stubs may
+    # survive but the tracked dotfile content does not.)
+    notes = live_root / "notes.md"
+    assert not notes.exists() or notes.read_text() == ""
+    # Plugin state reversed.
+    assert fc.installed_state() == pre_plugin_state
+    assert list(fc._marketplaces) == pre_marketplaces

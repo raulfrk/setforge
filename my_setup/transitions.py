@@ -6,10 +6,13 @@ under ``~/.local/state/my-setup/transitions/`` containing:
 - ``meta.json`` — command, profile, UTC timestamp, host, my-setup version
 - ``changes.patch`` — unified diff of file changes (omitted if no edits)
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
+- ``plugins.json`` — installed / enabled / disabled plugin IDs plus
+  added / removed marketplaces (omitted if no plugin delta)
 
 A subsequent ``my-setup revert`` consumes the most recent transition for
 a profile, applies the patch in reverse via ``patch -R``, reverses the
-extension delta, and records its own reverse transition.
+extension delta, reverses the plugin delta, and records its own reverse
+transition.
 """
 
 import difflib
@@ -229,6 +232,47 @@ class ExtensionDelta:
         return not (self.added or self.removed)
 
 
+@dataclass(slots=True, frozen=True)
+class PluginDelta:
+    """Net successful changes to the Claude plugin / marketplace surface
+    during a state-changing command.
+
+    Five fields (vs. ``ExtensionDelta``'s two) because plugin state has
+    three independent reconciler actions (install, enable, disable)
+    whereas extension state has only two (install, uninstall):
+
+    - ``installed`` — plugin IDs (``"<name>@<marketplace>"``) that
+      transitioned from absent to present.
+    - ``enabled``   — plugin IDs that flipped ``enabled: False → True``.
+    - ``disabled``  — plugin IDs that flipped ``enabled: True → False``.
+    - ``marketplaces_added``   — marketplace names registered.
+    - ``marketplaces_removed`` — ``(name, source_repr)`` pairs where
+      ``source_repr`` is a dict with the :class:`MarketplaceSource`
+      fields (``source`` + exactly one of ``repo`` / ``path``). The
+      pair shape preserves enough info to rebuild a
+      :class:`MarketplaceSource` and call :func:`marketplace_add` at
+      revert time; flat names alone would not be invertible.
+
+    Failed plugin operations are excluded so revert never tries to
+    reverse a no-op, mirroring :class:`ExtensionDelta`'s contract.
+    """
+
+    installed: tuple[str, ...]
+    enabled: tuple[str, ...]
+    disabled: tuple[str, ...]
+    marketplaces_added: tuple[str, ...]
+    marketplaces_removed: tuple[tuple[str, dict[str, str]], ...]
+
+    def is_empty(self) -> bool:
+        return not (
+            self.installed
+            or self.enabled
+            or self.disabled
+            or self.marketplaces_added
+            or self.marketplaces_removed
+        )
+
+
 def _touched_paths(
     pre: Mapping[Path, str | None], post: Mapping[Path, str | None]
 ) -> list[Path]:
@@ -247,6 +291,7 @@ def write_transition(
     file_pre: Mapping[Path, str | None],
     file_post: Mapping[Path, str | None],
     ext_delta: ExtensionDelta | None,
+    plugin_delta: PluginDelta | None = None,
 ) -> Path:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -258,10 +303,11 @@ def write_transition(
     1. Create ``.pending-<dirname>/`` staging dir.
     2. Write ``changes.patch`` into staging (if non-empty).
     3. Write ``extensions.json`` into staging (if non-empty).
-    4. ``os.rename(pending, target)`` — atomic POSIX rename, same fs.
-    5. Write ``meta.json`` inside the now-real ``target/`` dir. ← commit point.
+    4. Write ``plugins.json`` into staging (if non-empty).
+    5. ``os.rename(pending, target)`` — atomic POSIX rename, same fs.
+    6. Write ``meta.json`` inside the now-real ``target/`` dir. ← commit point.
 
-    A crash before step 5 leaves either a ``.pending-<dirname>/`` (skipped by
+    A crash before step 6 leaves either a ``.pending-<dirname>/`` (skipped by
     :func:`load_latest` via the ``.pending-`` name guard) or a ``<dirname>/``
     with no ``meta.json`` (skipped by the existing meta.json filter).
 
@@ -270,6 +316,8 @@ def write_transition(
       every absolute path the transition touched.
     - ``changes.patch`` — present iff :func:`compute_patch` returned non-empty.
     - ``extensions.json`` — present iff ``ext_delta`` is non-None and
+      non-empty.
+    - ``plugins.json`` — present iff ``plugin_delta`` is non-None and
       non-empty.
 
     Returns the absolute path of the committed directory.
@@ -294,6 +342,29 @@ def write_transition(
             + "\n"
         )
         (pending / "extensions.json").write_text(payload, encoding="utf-8")
+
+    if plugin_delta is not None and not plugin_delta.is_empty():
+        # ``marketplaces_removed`` is ``tuple[tuple[name, source_dict], ...]``
+        # → serialized as ``[[name, source_dict], ...]`` so each entry
+        # round-trips through ``json.loads`` as a 2-element list (caller
+        # converts back to a tuple by position).
+        plugin_payload = (
+            json.dumps(
+                {
+                    "installed": list(plugin_delta.installed),
+                    "enabled": list(plugin_delta.enabled),
+                    "disabled": list(plugin_delta.disabled),
+                    "marketplaces_added": list(plugin_delta.marketplaces_added),
+                    "marketplaces_removed": [
+                        [name, dict(src)]
+                        for name, src in plugin_delta.marketplaces_removed
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (pending / "plugins.json").write_text(plugin_payload, encoding="utf-8")
 
     os.rename(pending, target)
 
@@ -416,8 +487,9 @@ def apply_patch_reverse(transition_dir: Path) -> None:
 @dataclass(frozen=True, slots=True)
 class TransitionListing:
     """One row of ``my-setup transitions list``. Decoded from a transition
-    directory's ``meta.json`` (canonical) plus an optional ``extensions.json``
-    sibling. Read-only — does not represent any in-flight state."""
+    directory's ``meta.json`` (canonical) plus optional ``extensions.json``
+    and ``plugins.json`` siblings. Read-only — does not represent any
+    in-flight state."""
 
     directory: Path
     timestamp: datetime
@@ -425,6 +497,7 @@ class TransitionListing:
     profile: str
     file_count: int
     ext_count: int
+    plugin_count: int = 0
 
 
 def _load_listing(transition_dir: Path) -> TransitionListing | None:
@@ -462,6 +535,24 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
         except (OSError, json.JSONDecodeError):
             ext_count = 0
 
+    plugin_file = transition_dir / "plugins.json"
+    plugin_count = 0
+    if plugin_file.exists():
+        try:
+            plugin_payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+            for key in (
+                "installed",
+                "enabled",
+                "disabled",
+                "marketplaces_added",
+                "marketplaces_removed",
+            ):
+                value = plugin_payload.get(key, [])
+                if isinstance(value, list):
+                    plugin_count += len(value)
+        except (OSError, json.JSONDecodeError):
+            plugin_count = 0
+
     return TransitionListing(
         directory=transition_dir,
         timestamp=timestamp,
@@ -469,6 +560,7 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
         profile=profile,
         file_count=file_count,
         ext_count=ext_count,
+        plugin_count=plugin_count,
     )
 
 

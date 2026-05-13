@@ -212,6 +212,23 @@ def plugin_install(name: str, marketplace: str) -> None:
     )
 
 
+def plugin_uninstall(plugin_id: str) -> None:
+    """Uninstall a plugin via ``claude plugin uninstall <id>``.
+
+    ``plugin_id`` should be in ``"<name>@<marketplace>"`` form. Used by
+    :func:`my_setup.cli.revert` as the inverse of :func:`plugin_install`
+    when reversing a transition's ``PluginDelta.installed`` list.
+    """
+    claude = str(_get_claude_bin())
+    subprocess.run(
+        [claude, "plugin", "uninstall", plugin_id],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=_TIMEOUT_S,
+    )
+
+
 def plugin_enable(plugin_id: str) -> None:
     """Re-activate a disabled plugin via ``claude plugin enable <id>``.
 

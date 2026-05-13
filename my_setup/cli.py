@@ -221,6 +221,7 @@ def install(
         )
 
     # Step 5: Claude plugin reconcile (warn-and-skip if claude absent).
+    plugin_delta: transitions.PluginDelta | None = None
     try:
         plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
     except PluginToolMissing as exc:
@@ -248,6 +249,39 @@ def install(
         if not plugin_report:
             typer.echo("plugins: nothing to reconcile")
 
+        # Build PluginDelta from the reconcile report, excluding failed
+        # ops so revert never tries to reverse a no-op (mirrors the
+        # ext_delta failed-exclusion logic above). Marketplace names that
+        # failed to add (e.g. transient network errors) are excluded too:
+        # ``report.failed`` keys may be either ``"<name>@<marketplace>"``
+        # plugin IDs OR bare marketplace names — they're disjoint in
+        # practice because marketplace names never contain ``@``.
+        installed_pids = tuple(
+            f"{name}@{mp}"
+            for name, mp in plugin_report.to_install
+            if f"{name}@{mp}" not in failed_plugin_ids
+        )
+        enabled_pids = tuple(
+            pid for pid in plugin_report.to_enable if pid not in failed_plugin_ids
+        )
+        disabled_pids = tuple(
+            pid for pid in plugin_report.to_disable if pid not in failed_plugin_ids
+        )
+        added_mps = tuple(
+            mp for mp in plugin_report.marketplaces_added if mp not in failed_plugin_ids
+        )
+        # ``marketplaces_removed`` is always empty for install today —
+        # reconcile never auto-evicts marketplaces (stale ones survive).
+        # The field exists so revert-of-install (which removes the
+        # added marketplaces) can record an invertible reverse_delta.
+        plugin_delta = transitions.PluginDelta(
+            installed=installed_pids,
+            enabled=enabled_pids,
+            disabled=disabled_pids,
+            marketplaces_added=added_mps,
+            marketplaces_removed=(),
+        )
+
     file_post = transitions.snapshot_paths(dst_paths)
 
     if not no_transition:
@@ -256,6 +290,7 @@ def install(
             file_pre,
             file_post,
             ext_delta,
+            plugin_delta=plugin_delta,
         )
         typer.echo(f"transition: {target}")
 
@@ -553,6 +588,147 @@ def _reverse_extensions(
     return reverse_added, reverse_removed, failed
 
 
+def _reverse_plugins(
+    delta: dict,
+) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
+    """Apply the inverse of a plugins.json delta.
+
+    Returns ``(reverse_delta, failed)``. ``reverse_delta`` reflects only
+    the inverse operations that succeeded — symmetrical to
+    :func:`_reverse_extensions`'s exclusion of failed extension ops, so
+    a revert-of-revert never tries to re-apply a no-op. ``failed``
+    records ``(id_or_name, error_msg)`` pairs for caller logging.
+
+    Inverse mapping (per PluginDelta field):
+    - ``installed`` → :func:`claude_plugins.plugin_uninstall`
+    - ``enabled``   → :func:`claude_plugins.plugin_disable`
+    - ``disabled``  → :func:`claude_plugins.plugin_enable`
+    - ``marketplaces_added``   → :func:`claude_plugins.marketplace_remove`
+    - ``marketplaces_removed`` → :func:`claude_plugins.marketplace_add`
+      (source reconstructed from the stored ``MarketplaceSource`` dict)
+
+    Per-op failures are caught (warn-and-continue) so the reverse
+    transition still gets written. A :class:`PluginToolMissing` from
+    any single op surfaces as a warning and skips that op; the loop
+    continues onto remaining ops (mirrors the extensions warn-and-skip
+    path).
+    """
+    from my_setup.config import MarketplaceSource
+
+    reverse_installed: list[str] = []
+    reverse_enabled: list[str] = []
+    reverse_disabled: list[str] = []
+    reverse_mps_added: list[str] = []
+    reverse_mps_removed: list[tuple[str, dict[str, str]]] = []
+    failed: list[tuple[str, str]] = []
+
+    def _record(item: str, exc: Exception, verb: str) -> None:
+        msg = str(exc)
+        failed.append((item, msg))
+        typer.secho(
+            f"FAILED plugin {verb} {item} — {msg}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+
+    # Inverse of ``installed``: uninstall each plugin. On success the
+    # reverse delta records it under ``installed`` so a subsequent
+    # revert (i.e. redo) re-installs.
+    for pid in delta.get("installed", []):
+        try:
+            claude_plugins_mod.plugin_uninstall(pid)
+            reverse_installed.append(pid)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping uninstall of plugin {pid} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            _record(pid, exc, "uninstall")
+
+    # Inverse of ``enabled``: disable each plugin.
+    for pid in delta.get("enabled", []):
+        try:
+            claude_plugins_mod.plugin_disable(pid)
+            reverse_enabled.append(pid)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping disable of plugin {pid} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            _record(pid, exc, "disable")
+
+    # Inverse of ``disabled``: re-enable each plugin.
+    for pid in delta.get("disabled", []):
+        try:
+            claude_plugins_mod.plugin_enable(pid)
+            reverse_disabled.append(pid)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping enable of plugin {pid} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            _record(pid, exc, "enable")
+
+    # Inverse of ``marketplaces_added``: remove each marketplace.
+    for mp_name in delta.get("marketplaces_added", []):
+        try:
+            claude_plugins_mod.marketplace_remove(mp_name)
+            reverse_mps_added.append(mp_name)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping marketplace remove of {mp_name} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            _record(mp_name, exc, "marketplace remove")
+
+    # Inverse of ``marketplaces_removed``: re-register each marketplace
+    # via ``marketplace_add(name, source)``. ``source_payload`` is the
+    # dict-form ``MarketplaceSource`` written by ``write_transition`` —
+    # validate it through the pydantic model so a corrupt payload fails
+    # loudly here rather than silently mis-registering the marketplace.
+    for entry in delta.get("marketplaces_removed", []):
+        # JSON round-trip: tuple → list. Reject malformed shapes early.
+        if not isinstance(entry, list) or len(entry) != 2:
+            failed.append(
+                (str(entry), f"malformed marketplaces_removed entry: {entry!r}")
+            )
+            continue
+        name, source_payload = entry
+        try:
+            source = MarketplaceSource(**source_payload)
+            claude_plugins_mod.marketplace_add(name, source)
+            reverse_mps_removed.append((name, dict(source_payload)))
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping marketplace add of {name} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            ValueError,
+        ) as exc:
+            _record(name, exc, "marketplace add")
+
+    reverse_delta = transitions.PluginDelta(
+        installed=tuple(reverse_installed),
+        enabled=tuple(reverse_enabled),
+        disabled=tuple(reverse_disabled),
+        marketplaces_added=tuple(reverse_mps_added),
+        marketplaces_removed=tuple(reverse_mps_removed),
+    )
+    return reverse_delta, failed
+
+
 @app.command()
 def revert(
     profile: str = _PROFILE_OPTION,
@@ -585,6 +761,14 @@ def revert(
         delta = json.loads(ext_file.read_text())
         reverse_added, reverse_removed, _ = _reverse_extensions(delta)
 
+    plugin_file = transition / "plugins.json"
+    reverse_plugin_delta: transitions.PluginDelta | None = None
+    if plugin_file.exists():
+        plugin_payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+        reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
+        if reverse_plugin_delta.is_empty():
+            reverse_plugin_delta = None
+
     file_post = transitions.snapshot_paths(touched_paths)
     reverse_meta = transitions.make_meta(transitions.TransitionCommand.REVERT, profile)
     reverse_delta: transitions.ExtensionDelta | None = None
@@ -593,7 +777,11 @@ def revert(
             added=reverse_added, removed=reverse_removed
         )
     target = transitions.write_transition(
-        reverse_meta, file_pre, file_post, reverse_delta
+        reverse_meta,
+        file_pre,
+        file_post,
+        reverse_delta,
+        plugin_delta=reverse_plugin_delta,
     )
     typer.echo(f"transition: {target}")
 
