@@ -263,8 +263,8 @@ def reconcile(
     """Three-way reconcile per spec § Δ2.
 
     States:
-    - ``to_install`` = declared - (enabled U disabled)   # genuinely absent
-    - ``to_enable``  = declared ∩ disabled                # present but off
+    - ``to_install`` = declared - (enabled union disabled)   # genuinely absent
+    - ``to_enable``  = declared intersect disabled                # present but off
     - ``to_disable`` = enabled - declared  (PRUNE only)
 
     Marketplaces (always-on, regardless of policy): each declared
@@ -345,7 +345,7 @@ def reconcile(
     # the plugin active, we route successful installs through the enable
     # loop via a separate working list, leaving the report's
     # `to_enable` field semantically clean (only the original
-    # `declared ∩ disabled` set, NOT freshly-installed plugins). Failed
+    # `declared intersect disabled` set, NOT freshly-installed plugins). Failed
     # installs are NOT enabled.
     runtime_to_enable: list[str] = list(to_enable)
 

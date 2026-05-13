@@ -370,7 +370,7 @@ def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     must be both installed AND enabled in a single reconcile run, even
     though `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
-    original `declared ∩ disabled` set, NOT freshly-installed plugins.
+    original `declared intersect disabled` set, NOT freshly-installed plugins.
     """
     from my_setup.claude_plugins import reconcile
 
@@ -447,7 +447,7 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
     on disk), pid is in `failed` with the enable-step stderr, pid is
     NOT added to `to_enable` in the report (clean β2 semantics). The
     next reconcile run will pick the plugin up via the existing
-    ``declared ∩ disabled`` path with no new code.
+    ``declared intersect disabled`` path with no new code.
     """
     from my_setup.claude_plugins import reconcile
 
