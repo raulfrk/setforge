@@ -164,19 +164,58 @@ def _walk_one_file(
     if not isinstance(tracked, dict) or not isinstance(live, dict):
         return
 
-    # 1. Deep-merge sub-key drift — walk under each declared deep path,
-    # and (JSONC only) under each top-level head that is the start of a
-    # nested path in ``preserve_user_keys``. JSONC nested-path heads are
-    # walked even though they're not in ``preserve_user_keys_deep`` so
-    # the wizard can prompt on UNCOVERED sibling drift while remaining
-    # silent on path-preserved leaves (per `dotfiles-nen.19` spec).
+    nested_path_heads: set[str] = (
+        _nested_path_heads(preserve_user_keys) if fmt == "jsonc" else set()
+    )
+    yield from _walk_deep_phase(
+        tracked=tracked,
+        live=live,
+        preserve_user_keys=preserve_user_keys,
+        preserve_user_keys_deep=preserve_user_keys_deep,
+        nested_path_heads=nested_path_heads,
+        fmt=fmt,
+        dotfile_name=dotfile_name,
+        src=src,
+        dst=dst,
+    )
+    yield from _walk_shallow_top_phase(
+        tracked=tracked,
+        live=live,
+        preserve_user_keys=preserve_user_keys,
+        preserve_user_keys_deep=preserve_user_keys_deep,
+        nested_path_heads=nested_path_heads,
+        fmt=fmt,
+        dotfile_name=dotfile_name,
+        src=src,
+        dst=dst,
+    )
+
+
+def _walk_deep_phase(
+    *,
+    tracked: dict,
+    live: dict,
+    preserve_user_keys: list[str],
+    preserve_user_keys_deep: list[str],
+    nested_path_heads: set[str],
+    fmt: Literal["yaml", "jsonc"],
+    dotfile_name: str,
+    src: Path,
+    dst: Path,
+) -> Iterator[DriftItem]:
+    """Phase 1 of ``_walk_one_file``: deep-merge sub-key drift.
+
+    Walks under each declared deep path, and (JSONC only) under each
+    nested-path head from ``preserve_user_keys`` — heads are walked
+    even though they're not in ``preserve_user_keys_deep`` so the
+    wizard can prompt on UNCOVERED sibling drift while remaining
+    silent on path-preserved leaves (per ``dotfiles-nen.19`` spec).
+    Behavior lifted verbatim from ``_walk_one_file``.
+    """
     deep_paths_to_walk = list(preserve_user_keys_deep)
-    nested_path_heads: set[str] = set()
-    if fmt == "jsonc":
-        nested_path_heads = _nested_path_heads(preserve_user_keys)
-        for head in sorted(nested_path_heads):
-            if head not in deep_paths_to_walk:
-                deep_paths_to_walk.append(head)
+    for head in sorted(nested_path_heads):
+        if head not in deep_paths_to_walk:
+            deep_paths_to_walk.append(head)
     for deep_path in deep_paths_to_walk:
         tracked_at = _navigate(tracked, deep_path, fmt)
         live_at = _navigate(live, deep_path, fmt)
@@ -203,11 +242,27 @@ def _walk_one_file(
             position=(),
         )
 
-    # 2. Non-preserve top-level drift — symmetric with install's
-    # walk_unexpected_drift. Top-level keys not covered by either
-    # preserve list (shallow exact OR top-level prefix of any deep path
-    # OR — JSONC only — head of a nested path) get a single shallow
-    # drift item per shared-different / live-only top-level key.
+
+def _walk_shallow_top_phase(
+    *,
+    tracked: dict,
+    live: dict,
+    preserve_user_keys: list[str],
+    preserve_user_keys_deep: list[str],
+    nested_path_heads: set[str],
+    fmt: Literal["yaml", "jsonc"],
+    dotfile_name: str,
+    src: Path,
+    dst: Path,
+) -> Iterator[DriftItem]:
+    """Phase 2 of ``_walk_one_file``: non-preserve top-level drift.
+
+    Symmetric with install's ``walk_unexpected_drift``. Top-level keys
+    not covered by either preserve list (shallow exact OR top-level
+    prefix of any deep path OR — JSONC only — head of a nested path)
+    get a single shallow drift item per shared-different / live-only
+    top-level key. Behavior lifted verbatim from ``_walk_one_file``.
+    """
     shallow_set = set(preserve_user_keys)
     deep_top_prefixes = {p.split(".", 1)[0] for p in preserve_user_keys_deep}
     skip_top_level = shallow_set | deep_top_prefixes | nested_path_heads
