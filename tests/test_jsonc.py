@@ -1,5 +1,7 @@
 """Tests for my_setup.jsonc — JSONC overlay / strip / drift classify."""
 
+from pathlib import Path
+
 import pytest
 
 from my_setup.errors import MergeTypeMismatch
@@ -412,7 +414,7 @@ def test_pydantic_rejects_empty_path_segment() -> None:
     from my_setup.config import Dotfile
 
     with pytest.raises(ValidationError):
-        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=[" > foo"])
+        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[" > foo"])
 
 
 def test_pydantic_rejects_trailing_separator() -> None:
@@ -422,7 +424,7 @@ def test_pydantic_rejects_trailing_separator() -> None:
     from my_setup.config import Dotfile
 
     with pytest.raises(ValidationError):
-        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=["foo > "])
+        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo > "])
 
 
 def test_pydantic_rejects_whitespace_only_segment() -> None:
@@ -432,7 +434,9 @@ def test_pydantic_rejects_whitespace_only_segment() -> None:
     from my_setup.config import Dotfile
 
     with pytest.raises(ValidationError):
-        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=["foo >    > bar"])
+        Dotfile(
+            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo >    > bar"]
+        )
 
 
 def test_pydantic_rejects_empty_string_path() -> None:
@@ -442,7 +446,7 @@ def test_pydantic_rejects_empty_string_path() -> None:
     from my_setup.config import Dotfile
 
     with pytest.raises(ValidationError):
-        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=[""])
+        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[""])
 
 
 def test_pydantic_rejects_head_collision_with_deep_list() -> None:
@@ -455,7 +459,7 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
 
     with pytest.raises(ValidationError):
         Dotfile(
-            src="a.json",
+            src=Path("a.json"),
             dst="/tmp/a.json",
             preserve_user_keys=["[python] > editor.fontSize"],
             preserve_user_keys_deep=["[python]"],
@@ -467,7 +471,7 @@ def test_pydantic_accepts_well_formed_nested_path() -> None:
     from my_setup.config import Dotfile
 
     dotfile = Dotfile(
-        src="a.json",
+        src=Path("a.json"),
         dst="/tmp/a.json",
         preserve_user_keys=["[python] > editor.fontSize"],
     )
@@ -479,7 +483,7 @@ def test_pydantic_accepts_flat_v1_paths() -> None:
     from my_setup.config import Dotfile
 
     dotfile = Dotfile(
-        src="a.json",
+        src=Path("a.json"),
         dst="/tmp/a.json",
         preserve_user_keys=["claudeCode.foo"],
     )

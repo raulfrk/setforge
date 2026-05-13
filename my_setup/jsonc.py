@@ -60,7 +60,7 @@ from json5.model import (
 
 from my_setup.errors import MergeTypeMismatch
 
-PATH_SEPARATOR = " > "
+PATH_SEPARATOR: str = " > "
 """Segment separator for nested-path entries in ``preserve_user_keys``.
 
 JSONC uses ``" > "`` (space-arrow-space) because VSCode's flat-with-dotted
@@ -359,7 +359,7 @@ def _drift_positions(src: Any, live: Any) -> set[tuple[str, ...]]:
 
 def _overlay_path(
     tracked_top: JSONObject,
-    live_value: Mapping,
+    live_value: Mapping[str, Any],
     segments: list[str],
     indent: str,
 ) -> None:
@@ -453,7 +453,7 @@ def _walk_jsonobject_path(
     return node
 
 
-def _walk_dict_path(value: Mapping, segments: list[str]) -> Any:
+def _walk_dict_path(value: Mapping[str, Any], segments: list[str]) -> Any:
     """Descend a plain Python mapping through ``segments``.
 
     Returns the value at the end of the walk, or ``None`` if any

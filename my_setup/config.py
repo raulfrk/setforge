@@ -19,7 +19,7 @@ _STRICT = ConfigDict(extra="forbid")
 
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
-_PRESERVE_PATH_SEPARATOR = " > "
+_PRESERVE_PATH_SEPARATOR: str = " > "
 """Segment separator for nested-path entries in ``Dotfile.preserve_user_keys``.
 
 Mirrors :data:`my_setup.jsonc.PATH_SEPARATOR` — re-declared here so the
