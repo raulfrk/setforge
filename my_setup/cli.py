@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 import sys
+from collections.abc import Callable, Iterable
 from datetime import UTC
 from pathlib import Path
 
@@ -23,7 +24,13 @@ from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import merge as merge_mod
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import Config, ReconcilePolicy, load_config, resolve_profile
+from my_setup.config import (
+    Config,
+    MarketplaceSource,
+    ReconcilePolicy,
+    load_config,
+    resolve_profile,
+)
 from my_setup.errors import (
     CaptureRequiresInteractive,
     ExtensionInstallFailed,
@@ -609,6 +616,44 @@ def _reverse_extensions(
     return reverse_added, reverse_removed, failed
 
 
+def _apply_inverse(
+    items: Iterable[str],
+    inverse_fn: Callable[[str], None],
+    verb: str,
+    success_list: list[str],
+    failed: list[tuple[str, str]],
+) -> None:
+    """Apply ``inverse_fn`` to each item; record success and failure.
+
+    Shared body for the four uniform inverse loops in
+    :func:`_reverse_plugins` (uninstall / disable / enable /
+    marketplace remove). ``verb`` is the operation name used in
+    warning + failure log lines. ``success_list`` is appended to on
+    success; ``failed`` is appended ``(item, error_msg)`` on
+    subprocess errors. :class:`PluginToolMissing` is treated as a
+    skip with a yellow warning (mirrors the extensions warn-and-skip
+    path).
+    """
+    for item in items:
+        try:
+            inverse_fn(item)
+            success_list.append(item)
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping {verb} of {item} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            msg = str(exc)
+            failed.append((item, msg))
+            typer.secho(
+                f"FAILED plugin {verb} {item} — {msg}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+
+
 def _reverse_plugins(
     delta: dict,
 ) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
@@ -634,8 +679,6 @@ def _reverse_plugins(
     continues onto remaining ops (mirrors the extensions warn-and-skip
     path).
     """
-    from my_setup.config import MarketplaceSource
-
     reverse_installed: list[str] = []
     reverse_enabled: list[str] = []
     reverse_disabled: list[str] = []
@@ -643,78 +686,41 @@ def _reverse_plugins(
     reverse_mps_removed: list[tuple[str, dict[str, str]]] = []
     failed: list[tuple[str, str]] = []
 
-    def _record(item: str, exc: Exception, verb: str) -> None:
-        msg = str(exc)
-        failed.append((item, msg))
-        typer.secho(
-            f"FAILED plugin {verb} {item} — {msg}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-
-    # Inverse of ``installed``: uninstall each plugin. On success the
-    # reverse delta records it under ``installed`` so a subsequent
-    # revert (i.e. redo) re-installs.
-    for pid in delta.get("installed", []):
-        try:
-            claude_plugins_mod.plugin_uninstall(pid)
-            reverse_installed.append(pid)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping uninstall of plugin {pid} — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            _record(pid, exc, "uninstall")
-
-    # Inverse of ``enabled``: disable each plugin.
-    for pid in delta.get("enabled", []):
-        try:
-            claude_plugins_mod.plugin_disable(pid)
-            reverse_enabled.append(pid)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping disable of plugin {pid} — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            _record(pid, exc, "disable")
-
-    # Inverse of ``disabled``: re-enable each plugin.
-    for pid in delta.get("disabled", []):
-        try:
-            claude_plugins_mod.plugin_enable(pid)
-            reverse_disabled.append(pid)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping enable of plugin {pid} — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            _record(pid, exc, "enable")
-
-    # Inverse of ``marketplaces_added``: remove each marketplace.
-    for mp_name in delta.get("marketplaces_added", []):
-        try:
-            claude_plugins_mod.marketplace_remove(mp_name)
-            reverse_mps_added.append(mp_name)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping marketplace remove of {mp_name} — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            _record(mp_name, exc, "marketplace remove")
+    _apply_inverse(
+        delta.get("installed", []),
+        claude_plugins_mod.plugin_uninstall,
+        "uninstall",
+        reverse_installed,
+        failed,
+    )
+    _apply_inverse(
+        delta.get("enabled", []),
+        claude_plugins_mod.plugin_disable,
+        "disable",
+        reverse_enabled,
+        failed,
+    )
+    _apply_inverse(
+        delta.get("disabled", []),
+        claude_plugins_mod.plugin_enable,
+        "enable",
+        reverse_disabled,
+        failed,
+    )
+    _apply_inverse(
+        delta.get("marketplaces_added", []),
+        claude_plugins_mod.marketplace_remove,
+        "marketplace remove",
+        reverse_mps_added,
+        failed,
+    )
 
     # Inverse of ``marketplaces_removed``: re-register each marketplace
-    # via ``marketplace_add(name, source)``. ``source_payload`` is the
-    # dict-form ``MarketplaceSource`` written by ``write_transition`` —
-    # validate it through the pydantic model so a corrupt payload fails
-    # loudly here rather than silently mis-registering the marketplace.
+    # via ``marketplace_add(name, source)``. Kept inline because the
+    # dispatch shape differs from the four loops above: each entry is a
+    # ``[name, source_payload]`` pair, the payload must be validated
+    # through the :class:`MarketplaceSource` pydantic model, and the
+    # success record is a ``(name, dict)`` tuple — not a bare string.
     for entry in delta.get("marketplaces_removed", []):
         # JSON round-trip: tuple → list. Reject malformed shapes early.
         if not isinstance(entry, list) or len(entry) != 2:
@@ -738,7 +744,13 @@ def _reverse_plugins(
             subprocess.TimeoutExpired,
             ValueError,
         ) as exc:
-            _record(name, exc, "marketplace add")
+            msg = str(exc)
+            failed.append((name, msg))
+            typer.secho(
+                f"FAILED plugin marketplace add {name} — {msg}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
 
     reverse_delta = transitions.PluginDelta(
         installed=tuple(reverse_installed),
