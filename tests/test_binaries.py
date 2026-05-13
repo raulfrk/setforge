@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from my_setup import binaries
+from my_setup.binaries import ClaudeLocalConfig, HostLocalConfig, load_host_local_config
+from my_setup.config import ClaudeInstallMode
 from my_setup.errors import BinaryOverrideInvalid, ConfigError
 
 
@@ -251,3 +253,117 @@ def test_stderr_of_falls_back_to_str_when_stderr_is_whitespace_only() -> None:
 def test_stderr_of_falls_back_to_str_for_generic_exception() -> None:
     exc = ValueError("plain error")
     assert binaries.stderr_of(exc) == "plain error"
+
+
+# ---------------------------------------------------------------------------
+# HostLocalConfig + ClaudeLocalConfig (nen.15)
+# ---------------------------------------------------------------------------
+
+
+def test_host_local_config_missing_returns_defaults() -> None:
+    """Missing local.yaml yields defaults — REGULAR install_mode, no binaries."""
+    cfg = load_host_local_config()
+    assert isinstance(cfg, HostLocalConfig)
+    assert dict(cfg.binaries) == {}
+    assert cfg.claude == ClaudeLocalConfig()
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_empty_file_returns_defaults() -> None:
+    """Empty YAML file is indistinguishable from a missing file."""
+    binaries.LOCAL_CONFIG_PATH.write_text("")
+    cfg = load_host_local_config()
+    assert dict(cfg.binaries) == {}
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_binaries_only_keeps_claude_defaults() -> None:
+    """Existing binaries-only files keep working — claude defaults fill in."""
+    binaries.LOCAL_CONFIG_PATH.write_text(
+        "binaries:\n  code: /custom/code\n  patch: /custom/patch\n"
+    )
+    cfg = load_host_local_config()
+    assert dict(cfg.binaries) == {"code": "/custom/code", "patch": "/custom/patch"}
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_claude_block_only_keeps_binaries_default() -> None:
+    """A claude-only block doesn't accidentally drop binaries' default."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: local-clone\n")
+    cfg = load_host_local_config()
+    assert dict(cfg.binaries) == {}
+    assert cfg.claude.install_mode is ClaudeInstallMode.LOCAL_CLONE
+
+
+def test_host_local_config_claude_install_mode_regular_explicit() -> None:
+    """Explicit ``install_mode: regular`` round-trips to the enum member."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: regular\n")
+    cfg = load_host_local_config()
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_claude_block_with_no_install_mode_defaults() -> None:
+    """A claude block without install_mode keeps the REGULAR default."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude: {}\n")
+    cfg = load_host_local_config()
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_claude_install_mode_bad_value_raises() -> None:
+    """A garbage install_mode value names the file and the valid members."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: garbage\n")
+    with pytest.raises(ConfigError, match=r"claude\.install_mode"):
+        load_host_local_config()
+
+
+def test_host_local_config_claude_block_not_mapping_raises() -> None:
+    """A scalar ``claude:`` block fails fast with a typed ConfigError."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude: not-a-mapping\n")
+    with pytest.raises(ConfigError, match=r"'claude:'"):
+        load_host_local_config()
+
+
+def test_host_local_config_both_blocks_parsed_together() -> None:
+    """Binaries + claude blocks coexist in one parse pass."""
+    binaries.LOCAL_CONFIG_PATH.write_text(
+        "binaries:\n  code: /x/code\nclaude:\n  install_mode: local-clone\n"
+    )
+    cfg = load_host_local_config()
+    assert dict(cfg.binaries) == {"code": "/x/code"}
+    assert cfg.claude.install_mode is ClaudeInstallMode.LOCAL_CLONE
+
+
+def test_host_local_config_malformed_yaml_raises() -> None:
+    """YAML parse failure surfaces as ConfigError, not a raw YAMLError."""
+    binaries.LOCAL_CONFIG_PATH.write_text("claude:\n  install_mode: [unterminated\n")
+    with pytest.raises(ConfigError, match="malformed YAML"):
+        load_host_local_config()
+
+
+def test_host_local_config_top_level_not_mapping_raises() -> None:
+    """List-typed YAML root is rejected before block parsing runs."""
+    binaries.LOCAL_CONFIG_PATH.write_text("- a\n- b\n")
+    with pytest.raises(ConfigError, match="top-level"):
+        load_host_local_config()
+
+
+def test_claude_local_config_default_install_mode_is_regular() -> None:
+    """ClaudeLocalConfig() with no args defaults to REGULAR install_mode."""
+    assert ClaudeLocalConfig().install_mode is ClaudeInstallMode.REGULAR
+
+
+def test_host_local_config_frozen_dataclass_rejects_mutation() -> None:
+    """HostLocalConfig is frozen — assigning to fields raises FrozenInstanceError."""
+    cfg = HostLocalConfig()
+    with pytest.raises(Exception, match=r"frozen|cannot assign"):
+        cfg.claude = ClaudeLocalConfig(install_mode=ClaudeInstallMode.LOCAL_CLONE)  # type: ignore[misc]
+
+
+def test_stub_template_documents_claude_install_mode() -> None:
+    """Stub template surfaces the install_mode knob so users can discover it."""
+    assert not binaries.LOCAL_CONFIG_PATH.exists()
+    binaries.ensure_local_config_stub()
+    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert "claude:" in text
+    assert "install_mode" in text
+    assert "local-clone" in text
