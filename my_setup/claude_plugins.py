@@ -282,6 +282,62 @@ def plugin_disable(plugin_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_git_or_raise() -> Path:
+    """Return the resolved ``git`` binary path or raise :class:`MarketplaceCacheMiss`.
+
+    Centralizes the git-on-PATH check and its remediation message.
+    Both :func:`_clone_marketplace` and :func:`_refresh_marketplace_cache`
+    rely on it; consolidating prevents message drift between call sites.
+    Returns a :class:`Path` for callers that want to pass it to
+    :func:`subprocess.run` (callers can ``str()`` if they need a string).
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise MarketplaceCacheMiss(
+            "'git' not on PATH; install git or set "
+            "claude.install_mode: regular in "
+            "~/.config/my-setup/local.yaml"
+        )
+    return Path(git)
+
+
+def _run_git(
+    *args: str,
+    cwd: Path | None = None,
+    timeout: int = _CLONE_TIMEOUT_S,
+) -> subprocess.CompletedProcess:
+    """Run ``git <args>`` with the project's locked subprocess hygiene.
+
+    ``check=True, text=True, capture_output=True``. ``cwd`` is passed
+    via ``git -C <cwd>`` rather than the subprocess ``cwd=`` kwarg so
+    monkeypatched ``subprocess.run`` fakes that key off argv shape
+    (e.g. :class:`FakeGit`) keep working without extra wiring.
+    Maps :class:`subprocess.CalledProcessError` and
+    :class:`subprocess.TimeoutExpired` to a generic
+    :class:`MarketplaceCacheMiss` carrying ``stderr_of(exc)``; callers
+    that want a more specific remediation message should catch and
+    re-raise with their own context. Raises before any subprocess
+    call if ``git`` is not on PATH (via :func:`_resolve_git_or_raise`).
+    """
+    git = _resolve_git_or_raise()
+    argv: list[str] = [str(git)]
+    if cwd is not None:
+        argv.extend(["-C", str(cwd)])
+    argv.extend(args)
+    try:
+        return subprocess.run(
+            argv,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise MarketplaceCacheMiss(
+            f"`git {' '.join(args)}` failed: {stderr_of(exc)}"
+        ) from exc
+
+
 def _safe_cache_dir(cache_root: Path, subdir_name: str) -> Path:
     """Return ``cache_root / subdir_name`` after rejecting path-traversal.
 
@@ -313,18 +369,14 @@ def _safe_cache_dir(cache_root: Path, subdir_name: str) -> Path:
 def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
 
-    Network is required. Resolves ``git`` via :func:`shutil.which`; a
-    missing binary or a non-zero/timeout ``git clone`` exit raises
-    :class:`MarketplaceCacheMiss` with a remediation message. ``check=True``
-    plus ``capture_output=True`` so test fixtures can assert on argv shape.
+    Network is required. Resolves ``git`` via :func:`_resolve_git_or_raise`
+    (raises :class:`MarketplaceCacheMiss` when missing). Argv carries the
+    ``--`` separator before ``source.repo`` per CRITICAL-2 (flag-injection
+    defense). On non-zero / timeout ``git clone`` exit, raises
+    :class:`MarketplaceCacheMiss` with the spec-locked remediation
+    message ("...likely offline; run sync-cache while online first").
     """
-    git = shutil.which("git")
-    if git is None:
-        raise MarketplaceCacheMiss(
-            f"marketplace {source.repo!r}: 'git' not on PATH; install git "
-            f"or set claude.install_mode: regular in "
-            f"~/.config/my-setup/local.yaml"
-        )
+    git = _resolve_git_or_raise()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         # `--` separates options from positional args. Defends against
@@ -334,7 +386,7 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         # subprocess hygiene already mandates list-form argv and no
         # shell=True; this is the defense-in-depth completion of that.
         subprocess.run(
-            [git, "clone", "--", source.repo or "", str(dest_path)],
+            [str(git), "clone", "--", source.repo or "", str(dest_path)],
             check=True,
             text=True,
             capture_output=True,
@@ -362,31 +414,12 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
     Raises :class:`MarketplaceCacheMiss` on git failure (network down,
     cache corrupted) with the same remediation as :func:`_clone_marketplace`.
     """
-    git = shutil.which("git")
-    if git is None:
-        raise MarketplaceCacheMiss(
-            f"marketplace {source.repo!r}: 'git' not on PATH; install git "
-            f"or set claude.install_mode: regular in "
-            f"~/.config/my-setup/local.yaml"
-        )
     try:
-        subprocess.run(
-            [git, "-C", str(cache_dir), "fetch", "origin"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_CLONE_TIMEOUT_S,
-        )
-        subprocess.run(
-            [git, "-C", str(cache_dir), "reset", "--hard", "origin/HEAD"],
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_S,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        _run_git("fetch", "origin", cwd=cache_dir, timeout=_CLONE_TIMEOUT_S)
+        _run_git("reset", "--hard", "origin/HEAD", cwd=cache_dir, timeout=_TIMEOUT_S)
+    except MarketplaceCacheMiss as exc:
         raise MarketplaceCacheMiss(
-            f"marketplace {source.repo!r}: refresh failed: {stderr_of(exc)}. "
+            f"marketplace {source.repo!r}: refresh failed ({exc}). "
             f"Delete {cache_dir} and re-run sync-cache while online."
         ) from exc
 
