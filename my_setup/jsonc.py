@@ -332,7 +332,7 @@ def classify_jsonc_drift(
         if key in deep_preserve or key in flat_preserve:
             expected.append(key)
             continue
-        preserved_positions = _preserved_positions_for_top(key, key_names)
+        preserved_positions = preserved_positions_for_top(key, key_names)
         if not preserved_positions:
             unexpected.append(key)
             continue
@@ -344,7 +344,7 @@ def classify_jsonc_drift(
     return expected, unexpected
 
 
-def _preserved_positions_for_top(
+def preserved_positions_for_top(
     top_key: str, key_names: list[str]
 ) -> set[tuple[str, ...]]:
     """Return the set of position-tuples rooted at ``top_key`` covered by
@@ -354,6 +354,11 @@ def _preserved_positions_for_top(
     ``[python]`` contributes the tuple ``("editor.fontSize",)``. v1 flat
     names contribute nothing; the caller handles those via the fast
     whole-key-expected branch.
+
+    Public within the package: shared between
+    :func:`classify_jsonc_drift` and :mod:`my_setup.capture_wizard`'s
+    deep-walk phase. Path-preserve coverage is inherently a JSONC-domain
+    concept, so the implementation lives here and consumers import it.
     """
     positions: set[tuple[str, ...]] = set()
     for name in key_names:

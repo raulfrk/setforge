@@ -52,7 +52,7 @@ from my_setup import jsonc, wizard
 from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import Config, resolve_profile
 from my_setup.errors import CaptureRequiresInteractive
-from my_setup.jsonc import PATH_SEPARATOR
+from my_setup.jsonc import PATH_SEPARATOR, preserved_positions_for_top
 from my_setup.transitions import TransitionCommand
 from my_setup.wizard import ActionResult, DriftItem
 
@@ -226,7 +226,7 @@ def _walk_deep_phase(
         if not isinstance(tracked_at, dict) or not isinstance(live_at, dict):
             continue
         preserved_positions = (
-            _preserved_positions_for_top(deep_path, preserve_user_keys)
+            preserved_positions_for_top(deep_path, preserve_user_keys)
             if fmt == "jsonc"
             else set()
         )
@@ -403,27 +403,6 @@ def _nested_path_heads(preserve_user_keys: list[str]) -> set[str]:
             continue
         heads.add(name.split(PATH_SEPARATOR, 1)[0])
     return heads
-
-
-def _preserved_positions_for_top(
-    top_key: str, preserve_user_keys: list[str]
-) -> set[tuple[str, ...]]:
-    """Position-tuples (rooted under ``top_key``) covered by nested
-    paths in ``preserve_user_keys``.
-
-    A path ``"[python] > editor.fontSize"`` whose first segment matches
-    ``top_key`` contributes the tuple ``("editor.fontSize",)``. v1 flat
-    names contribute nothing — they're handled by the shallow walker.
-    """
-    positions: set[tuple[str, ...]] = set()
-    for name in preserve_user_keys:
-        if PATH_SEPARATOR not in name:
-            continue
-        segments = name.split(PATH_SEPARATOR)
-        if segments[0] != top_key:
-            continue
-        positions.add(tuple(segments[1:]))
-    return positions
 
 
 def _navigate(doc: Any, path: str, fmt: Literal["yaml", "jsonc"]) -> Any:
