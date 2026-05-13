@@ -83,6 +83,10 @@ dotfiles:
     src: claude/skills/reviewing-claude-md/SKILL.md
     dst: ~/.claude/skills/reviewing-claude-md/SKILL.md
 
+  wt_config:
+    src: wt/config.toml
+    dst: ~/.config/worktrunk/config.toml
+
   vscode_serv_settings:
     src: vscode/vm/settings.json
     dst: ~/.vscode-server/data/Machine/settings.json
@@ -157,6 +161,7 @@ profiles:
       - claude_agent_claude_md_specifics_reviewer
       - claude_skill_reviewing_python_code
       - claude_skill_reviewing_claude_md
+      - wt_config
     claude_plugins:
       - superpowers
       - wiki

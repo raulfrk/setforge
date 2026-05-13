@@ -1,0 +1,12 @@
+# Worktrunk user config — deployed by my-setup.
+#
+# Default `wt merge` mode: --no-squash with fast-forward only.
+# Required by the canonical phase flow's observation F: review-fix
+# commits land as separate commits and must NOT be squashed into the
+# implementation commit. Without this, a bare `wt merge` would
+# silently violate observation F.
+# See tracked/claude/superpowers-prefs.md Phase 6 + Commits section.
+
+[merge]
+squash = false
+ff = true
