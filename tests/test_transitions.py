@@ -11,6 +11,7 @@ import pytest
 from my_setup.errors import MySetupError, RevertFailed
 from my_setup.transitions import (
     ExtensionDelta,
+    PluginDelta,
     TransitionCommand,
     TransitionListing,
     TransitionMeta,
@@ -342,6 +343,39 @@ def test_write_transition_omits_extension_delta_when_none(
         None,
     )
     assert not (out / "extensions.json").exists()
+
+
+def test_write_transition_rejects_non_str_marketplace_source_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``marketplaces_removed`` source dicts must contain only str values.
+
+    Locks in the JSON-primitive contract documented on
+    :class:`PluginDelta`. A caller that bypasses
+    ``MarketplaceSource.model_dump(mode="json")`` and passes raw enum
+    or :class:`pathlib.Path` values must hit a loud :class:`TypeError`
+    in :func:`write_transition`, not an opaque ``json.dumps`` failure
+    mid-serialization. Guards against a future trap (today's install
+    path hard-codes ``()`` so the field is empty in practice).
+    """
+    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    bad_delta = PluginDelta(
+        installed=(),
+        enabled=(),
+        disabled=(),
+        marketplaces_added=(),
+        marketplaces_removed=(
+            ("evil-mp", {"source": "github", "path": Path("/tmp/foo")}),  # type: ignore[dict-item]
+        ),
+    )
+    with pytest.raises(TypeError, match="non-str value for key 'path'"):
+        write_transition(
+            _make_meta(),
+            {tmp_path / "x": "a\n"},
+            {tmp_path / "x": "a\n"},
+            None,
+            plugin_delta=bad_delta,
+        )
 
 
 def test_load_latest_returns_none_when_root_missing(

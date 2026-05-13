@@ -253,6 +253,20 @@ class PluginDelta:
       :class:`MarketplaceSource` and call :func:`marketplace_add` at
       revert time; flat names alone would not be invertible.
 
+      **JSON-primitive contract.** The ``source_repr`` dict MUST
+      contain only JSON-safe primitive values (``str`` / ``int`` /
+      ``bool`` / ``None``). Callers populating this field from a
+      live :class:`my_setup.config.MarketplaceSource` MUST serialize
+      via ``MarketplaceSource.model_dump(mode="json")`` (or
+      equivalent) — the raw model has an enum ``source`` field and an
+      optional :class:`pathlib.Path` ``path`` field, neither of which
+      survives ``json.dumps``. The static annotation
+      ``dict[str, str]`` documents the string-value subset that
+      today's serialized shape produces (``source`` kind +
+      ``repo``/``path`` are all strings post-serialization), and
+      :func:`write_transition` raises :class:`TypeError` defensively
+      on any non-string value to surface contract violations loudly.
+
     Failed plugin operations are excluded so revert never tries to
     reverse a no-op, mirroring :class:`ExtensionDelta`'s contract.
     """
@@ -348,6 +362,24 @@ def write_transition(
         # → serialized as ``[[name, source_dict], ...]`` so each entry
         # round-trips through ``json.loads`` as a 2-element list (caller
         # converts back to a tuple by position).
+        #
+        # Defensive contract enforcement: per :class:`PluginDelta`'s
+        # JSON-primitive contract, every source-dict value must be a
+        # ``str``. Raise loudly here so a caller that bypasses
+        # ``MarketplaceSource.model_dump(mode="json")`` and passes raw
+        # enum/Path values gets an actionable error instead of an
+        # opaque ``json.dumps`` failure mid-serialization. Today's
+        # install path hard-codes ``()`` so this guard is dormant; it
+        # fires the moment a future caller starts populating the field.
+        for name, src in plugin_delta.marketplaces_removed:
+            for key, value in src.items():
+                if not isinstance(value, str):
+                    raise TypeError(
+                        f"marketplaces_removed source dict {name!r} has "
+                        f"non-str value for key {key!r}: {value!r} "
+                        f"({type(value).__name__}). Callers must serialize "
+                        "via MarketplaceSource.model_dump(mode='json')."
+                    )
         plugin_payload = (
             json.dumps(
                 {
