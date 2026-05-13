@@ -39,6 +39,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   1. `bd ready` — pick the next unblocked issue.
   2. `bd show <id>` — load the contract.
   3. `wt switch --create <slug>` — new worktree + branch (slug should include the bd id, e.g. `dotfiles-g20-py-rewrite`).
+     - For orchestrator-driven parallel dispatch, pre-create N sibling worktrees in a single message BEFORE dispatching subagents — each subagent operates inside one pre-created worktree (no `isolation: worktree`).
   4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
   5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review fan (`reviewing-X` skill) → address-findings+merge → post-merge cross-cutting review.
   6. `wt merge --no-squash` — merge the branch into target.

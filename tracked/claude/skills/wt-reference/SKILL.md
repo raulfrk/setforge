@@ -47,6 +47,29 @@ wt merge --no-squash
 
 *(empirical observation G from dotfiles-23k: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
 
+## Parallel dispatch via pre-prepared worktrees
+
+When dispatching N subagents in parallel for a bd-issue-per-worktree batch, the orchestrator pre-creates each worktree before dispatch and the subagents operate inside user-named paths (NOT inside `.claude/worktrees/agent-*`). This sidesteps two failure modes of the `Agent` tool's `isolation: worktree` parameter — stale-base auto-worktrees AND sandbox-locked agent-path subtrees.
+
+```
+# Orchestrator side (in main worktree)
+wt switch --create dotfiles-<id>-<slug>
+# → ~/my-setup.dotfiles-<id>-<slug> on fresh branch off current main
+# The "Cannot change directory — shell requires restart" warning is
+# benign for orchestration; the worktree IS created.
+
+# Dispatch (Agent tool, NO isolation parameter).
+# Subagent prompt template:
+#   cd /home/raul/my-setup.dotfiles-<id>-<slug>
+#   uv sync --all-extras       # fresh worktree's .venv is pristine
+#   bd update dotfiles-<id> --claim
+#   ... implementation ...
+```
+
+For multi-bead waves: run `wt switch --create` N times serially (avoids git index lock races), then dispatch the N subagents in a single message of parallel Agent calls.
+
+*(empirical 2026-05-12; see bd dotfiles-7gf)*
+
 ## Anti-patterns
 
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.
@@ -55,3 +78,4 @@ wt merge --no-squash
 - Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.
 - Don't run multiple agents in the same worktree — the whole point is isolation.
+- Don't use `Agent` tool's `isolation: worktree` parameter for parallel dispatch in this build — auto-worktrees branch from a stale base AND their sandboxes deny git ops + file edits (empirical 2026-05-12; see bd dotfiles-7gf).

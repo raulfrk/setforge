@@ -57,6 +57,16 @@ Superpowers skills are designed to defer to.
    issue per worktree; sibling branches off a common parent. TDD
    where it fits (`superpowers:test-driven-development`).
 
+   For orchestrator-driven parallel dispatch (Agent tool, not new
+   Claude sessions), pre-create N sibling worktrees with
+   `wt switch --create <slug>` BEFORE dispatching, then dispatch
+   subagents **without `isolation: worktree`**. The Agent tool's
+   `isolation: worktree` parameter is unreliable in this VM-headless
+   build: auto-worktrees at `.claude/worktrees/agent-*` paths branch
+   from a stale base AND their sandboxes deny git ops + file edits
+   *(empirical observation J, 2026-05-12 — see bd dotfiles-7gf for
+   full evidence)*.
+
 5. **Phase 5 — Review fan** — always parallel. Invoke the appropriate
    `reviewing-X` skill for the artifact:
    - `reviewing-python-code` for Python source / pyproject / CI / pre-commit.
