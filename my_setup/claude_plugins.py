@@ -282,6 +282,34 @@ def plugin_disable(plugin_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _safe_cache_dir(cache_root: Path, subdir_name: str) -> Path:
+    """Return ``cache_root / subdir_name`` after rejecting path-traversal.
+
+    ``subdir_name`` is derived from YAML-controlled
+    ``MarketplaceSource.repo`` via ``rsplit("/", 1)[-1]`` at the
+    call site. A repo string of shape ``"owner/repo/.."`` yields
+    basename ``".."``, which would escape ``cache_root``; a value
+    containing path separators or empty would similarly evade the
+    intended layout. Reject both shapes at the source and double-check
+    the resolved path stays inside ``cache_root``. Raises
+    :class:`MarketplaceCacheMiss` with a remediation message keyed to
+    the security concern, so the caller's existing
+    ``MarketplaceCacheMiss`` handler surfaces it consistently with
+    every other cache-side failure mode.
+    """
+    if subdir_name in ("", ".", "..") or "/" in subdir_name or "\\" in subdir_name:
+        raise MarketplaceCacheMiss(
+            f"invalid marketplace cache subdir name {subdir_name!r}; "
+            f"repo identifier must not be empty or contain path separators"
+        )
+    cache_dir = cache_root / subdir_name
+    if cache_dir.resolve().parent != cache_root.resolve():
+        raise MarketplaceCacheMiss(
+            f"cache_dir {cache_dir!r} escapes cache_root {cache_root!r}"
+        )
+    return cache_dir
+
+
 def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
 
@@ -411,7 +439,7 @@ def _resolve_marketplace_source(
             "GITHUB marketplace source missing 'repo' field; cannot resolve "
             "local-clone path"
         )
-    cache_dir = cache_root / source.repo.rsplit("/", 1)[-1]
+    cache_dir = _safe_cache_dir(cache_root, source.repo.rsplit("/", 1)[-1])
     if cache_dir.exists():
         current = _cache_origin_url(cache_dir)
         if (
@@ -498,7 +526,7 @@ def sync_marketplace_cache(
             continue
         if not source.repo:
             raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
-        cache_dir = root / source.repo.rsplit("/", 1)[-1]
+        cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
         if cache_dir.exists():
             LOGGER.info("sync-cache: refreshing %s at %s", mp_name, cache_dir)
             _refresh_marketplace_cache(source, cache_dir)

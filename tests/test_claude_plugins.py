@@ -2047,6 +2047,75 @@ def test_resolve_marketplace_source_url_drift_re_clones(
     assert fake.clone_count() == 1
 
 
+# --- _safe_cache_dir (path-traversal guard) ---
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "",
+        ".",
+        "..",
+        "with/slash",
+        "with\\backslash",
+        "foo/..",
+    ],
+)
+def test_safe_cache_dir_rejects_traversal_inputs(tmp_path: Path, bad_name: str) -> None:
+    """Empty/dot/double-dot/separator inputs raise MarketplaceCacheMiss."""
+    from my_setup.claude_plugins import _safe_cache_dir
+    from my_setup.errors import MarketplaceCacheMiss
+
+    with pytest.raises(MarketplaceCacheMiss):
+        _safe_cache_dir(tmp_path, bad_name)
+
+
+def test_safe_cache_dir_accepts_plain_basename(tmp_path: Path) -> None:
+    """A normal basename returns cache_root / name without raising."""
+    from my_setup.claude_plugins import _safe_cache_dir
+
+    out = _safe_cache_dir(tmp_path, "plug")
+    assert out == tmp_path / "plug"
+
+
+def test_resolve_marketplace_source_rejects_path_traversal_repo(
+    fake_git, tmp_path: Path
+) -> None:
+    """A repo of shape 'foo/..' (basename '..') is rejected pre-clone."""
+    from my_setup.claude_plugins import _resolve_marketplace_source
+    from my_setup.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos={"foo/.."})
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="foo/..")
+    with pytest.raises(MarketplaceCacheMiss, match="invalid marketplace cache subdir"):
+        _resolve_marketplace_source(
+            src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
+        )
+    # And: no rmtree, no clone, no I/O — assert nothing was executed.
+    assert fake.clone_count() == 0
+
+
+def test_sync_marketplace_cache_rejects_path_traversal_repo(
+    fake_git, tmp_path: Path
+) -> None:
+    """sync_marketplace_cache also guards the cache subdir derivation."""
+    from my_setup.claude_plugins import sync_marketplace_cache
+    from my_setup.errors import MarketplaceCacheMiss
+
+    fake_git(known_repos=set())
+    cfg = _make_config(
+        marketplaces={
+            "evil": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="foo/.."
+            )
+        },
+        claude_plugins={"a": ClaudePluginRef(marketplace="evil")},
+    )
+    profile = _make_resolved(claude_plugins=["a"])
+    with pytest.raises(MarketplaceCacheMiss, match="invalid marketplace cache subdir"):
+        sync_marketplace_cache(cfg, profile)
+
+
 # --- Integration: reconcile with install_mode dispatch ---
 
 
