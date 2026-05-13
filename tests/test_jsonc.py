@@ -1,5 +1,8 @@
 """Tests for my_setup.jsonc — JSONC overlay / strip / drift classify."""
 
+import pytest
+
+from my_setup.errors import MergeTypeMismatch
 from my_setup.jsonc import (
     classify_jsonc_drift,
     overlay_user_keys,
@@ -216,3 +219,268 @@ def test_classify_jsonc_drift_treats_deep_keys_as_expected() -> None:
     expected, unexpected = classify_jsonc_drift(src, live, [], deep_key_names=["x"])
     assert expected == ["x"]
     assert unexpected == []
+
+
+# ---------------------------------------------------------------------------
+# Nested-path preserve_user_keys (dotfiles-nen.19)
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_path_replaces_nested_leaf_in_tracked() -> None:
+    """``"[python] > editor.fontSize"`` rewrites tracked's nested leaf with
+    live's value while preserving sibling sub-keys and comments."""
+    tracked = """{
+  // python block
+  "[python]": {
+    "editor.defaultFormatter": "ruff",  // sibling preserved
+    "editor.fontSize": 12
+  }
+}
+"""
+    live = """{
+  "[python]": {
+    "editor.defaultFormatter": "ruff",
+    "editor.fontSize": 14
+  }
+}
+"""
+    out = overlay_user_keys(tracked, live, ["[python] > editor.fontSize"])
+    assert parse_jsonc(out) == {
+        "[python]": {"editor.defaultFormatter": "ruff", "editor.fontSize": 14}
+    }
+    assert "// python block" in out
+    assert "// sibling preserved" in out
+
+
+def test_overlay_path_appends_when_leaf_missing_in_tracked() -> None:
+    """Case A — live has the nested leaf, tracked's intermediate exists
+    but lacks the leaf: append a new KeyValuePair."""
+    tracked = '{\n  "[python]": {\n    "editor.defaultFormatter": "ruff"\n  }\n}\n'
+    live = (
+        '{\n  "[python]": {\n'
+        '    "editor.defaultFormatter": "ruff",\n'
+        '    "editor.fontSize": 14\n  }\n}\n'
+    )
+    out = overlay_user_keys(tracked, live, ["[python] > editor.fontSize"])
+    assert parse_jsonc(out) == {
+        "[python]": {"editor.defaultFormatter": "ruff", "editor.fontSize": 14}
+    }
+
+
+def test_overlay_path_silent_when_live_missing_intermediate() -> None:
+    """Live has no ``[python]`` block → overlay is a no-op for the path."""
+    tracked = '{\n  "[python]": {\n    "editor.fontSize": 12\n  }\n}\n'
+    live = '{"unrelated": 1}\n'
+    out = overlay_user_keys(tracked, live, ["[python] > editor.fontSize"])
+    # Tracked unchanged (parse-equal, since formatting may shift slightly).
+    assert parse_jsonc(out) == parse_jsonc(tracked)
+
+
+def test_overlay_path_silent_when_tracked_missing_intermediate() -> None:
+    """Tracked has no ``[python]`` block → overlay does NOT auto-materialize."""
+    tracked = '{"a": 1}\n'
+    live = '{"[python]": {"editor.fontSize": 14}}\n'
+    out = overlay_user_keys(tracked, live, ["[python] > editor.fontSize"])
+    parsed = parse_jsonc(out)
+    # No auto-materialize: tracked stays flat.
+    assert "[python]" not in parsed
+
+
+def test_overlay_path_raises_on_tracked_intermediate_type_mismatch() -> None:
+    """Tracked has ``[python]`` as a scalar string instead of an object →
+    MergeTypeMismatch with the path prefix in the message."""
+    tracked = '{"[python]": "not-an-object"}\n'
+    live = '{"[python]": {"editor.fontSize": 14}}\n'
+    with pytest.raises(MergeTypeMismatch) as excinfo:
+        overlay_user_keys(tracked, live, ["[python] > editor.fontSize"])
+    assert "[python]" in str(excinfo.value)
+
+
+def test_overlay_path_preserves_v1_flat_behavior_when_no_separator() -> None:
+    """A single-segment ``preserve_user_keys`` entry continues to mean
+    a literal top-level key (v1 behavior)."""
+    tracked = '{"claudeCode.foo": false}\n'
+    live = '{"claudeCode.foo": true}\n'
+    out = overlay_user_keys(tracked, live, ["claudeCode.foo"])
+    assert parse_jsonc(out) == {"claudeCode.foo": True}
+
+
+def test_strip_path_removes_nested_leaf() -> None:
+    """``"[python] > editor.fontSize"`` removes the leaf from tracked's
+    nested object, leaving siblings intact."""
+    tracked = """{
+  "[python]": {
+    "editor.defaultFormatter": "ruff",
+    "editor.fontSize": 12
+  }
+}
+"""
+    out = strip_user_keys(tracked, ["[python] > editor.fontSize"])
+    parsed = parse_jsonc(out)
+    assert parsed == {"[python]": {"editor.defaultFormatter": "ruff"}}
+
+
+def test_strip_path_leaves_empty_parent_intact() -> None:
+    """Stripping the only sub-key leaves an empty ``[python]: {}`` object;
+    pruning is out of scope."""
+    tracked = '{"[python]": {"editor.fontSize": 12}}\n'
+    out = strip_user_keys(tracked, ["[python] > editor.fontSize"])
+    parsed = parse_jsonc(out)
+    assert parsed == {"[python]": {}}
+
+
+def test_strip_path_silent_when_tracked_missing_intermediate() -> None:
+    """Tracked has no ``[python]`` → strip is a no-op for the path."""
+    tracked = '{"a": 1}\n'
+    out = strip_user_keys(tracked, ["[python] > editor.fontSize"])
+    assert parse_jsonc(out) == {"a": 1}
+
+
+def test_strip_path_silent_when_leaf_missing() -> None:
+    """Tracked has ``[python]`` but no ``editor.fontSize`` → no-op."""
+    tracked = '{"[python]": {"editor.defaultFormatter": "ruff"}}\n'
+    out = strip_user_keys(tracked, ["[python] > editor.fontSize"])
+    assert parse_jsonc(out) == {"[python]": {"editor.defaultFormatter": "ruff"}}
+
+
+def test_classify_path_position_precise_expected() -> None:
+    """Preserve path covers the only drift position → drift is expected."""
+    src = '{"[python]": {"editor.defaultFormatter": "ruff", "editor.fontSize": 12}}'
+    live = '{"[python]": {"editor.defaultFormatter": "ruff", "editor.fontSize": 14}}'
+    expected, unexpected = classify_jsonc_drift(
+        src, live, ["[python] > editor.fontSize"]
+    )
+    assert expected == ["[python]"]
+    assert unexpected == []
+
+
+def test_classify_path_position_precise_partial_overlap_is_unexpected() -> None:
+    """Preserve path covers one sub-key; another sub-key also drifts →
+    top-level is unexpected (position-precise; no silent absorb)."""
+    src = '{"[python]": {"editor.defaultFormatter": "ruff", "editor.fontSize": 12}}'
+    live = '{"[python]": {"editor.defaultFormatter": "black", "editor.fontSize": 14}}'
+    expected, unexpected = classify_jsonc_drift(
+        src, live, ["[python] > editor.fontSize"]
+    )
+    assert expected == []
+    assert unexpected == ["[python]"]
+
+
+def test_classify_path_position_precise_unrelated_top_level_drift() -> None:
+    """A preserve path under one top-level key does NOT make a different
+    top-level key's drift expected."""
+    src = '{"[python]": {"editor.fontSize": 12}, "other": 1}'
+    live = '{"[python]": {"editor.fontSize": 14}, "other": 99}'
+    expected, unexpected = classify_jsonc_drift(
+        src, live, ["[python] > editor.fontSize"]
+    )
+    assert "[python]" in expected
+    assert "other" in unexpected
+
+
+def test_classify_path_missing_in_live_treated_as_position_drift() -> None:
+    """When the preserve path's leaf is missing on one side, that's drift
+    at the leaf position — covered by the preserve set → expected."""
+    src = '{"[python]": {"editor.fontSize": 12}}'
+    live = '{"[python]": {}}'
+    expected, unexpected = classify_jsonc_drift(
+        src, live, ["[python] > editor.fontSize"]
+    )
+    assert expected == ["[python]"]
+    assert unexpected == []
+
+
+def test_overlay_path_v1_top_level_with_dot_in_name_still_literal() -> None:
+    """A v1-style literal name like ``claudeCode.foo`` (no ` > `) keeps
+    treating the dot as part of the key name — the path syntax only
+    splits on ` > ` (space-arrow-space)."""
+    tracked = '{"claudeCode.foo": false}\n'
+    live = '{"claudeCode.foo": true}\n'
+    out = overlay_user_keys(tracked, live, ["claudeCode.foo"])
+    assert parse_jsonc(out) == {"claudeCode.foo": True}
+
+
+# ---------------------------------------------------------------------------
+# Pydantic validator on preserve_user_keys (dotfiles-nen.19)
+# ---------------------------------------------------------------------------
+
+
+def test_pydantic_rejects_empty_path_segment() -> None:
+    """Leading ``" > "`` produces an empty first segment → reject."""
+    from pydantic import ValidationError
+
+    from my_setup.config import Dotfile
+
+    with pytest.raises(ValidationError):
+        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=[" > foo"])
+
+
+def test_pydantic_rejects_trailing_separator() -> None:
+    """Trailing ``" > "`` produces an empty last segment → reject."""
+    from pydantic import ValidationError
+
+    from my_setup.config import Dotfile
+
+    with pytest.raises(ValidationError):
+        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=["foo > "])
+
+
+def test_pydantic_rejects_whitespace_only_segment() -> None:
+    """A segment that's just whitespace is rejected as malformed."""
+    from pydantic import ValidationError
+
+    from my_setup.config import Dotfile
+
+    with pytest.raises(ValidationError):
+        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=["foo >    > bar"])
+
+
+def test_pydantic_rejects_empty_string_path() -> None:
+    """An empty path string is rejected."""
+    from pydantic import ValidationError
+
+    from my_setup.config import Dotfile
+
+    with pytest.raises(ValidationError):
+        Dotfile(src="a.json", dst="/tmp/a.json", preserve_user_keys=[""])
+
+
+def test_pydantic_rejects_head_collision_with_deep_list() -> None:
+    """A nested path whose head segment is also in
+    ``preserve_user_keys_deep`` is rejected (conflicting semantics:
+    whole-subtree vs leaf)."""
+    from pydantic import ValidationError
+
+    from my_setup.config import Dotfile
+
+    with pytest.raises(ValidationError):
+        Dotfile(
+            src="a.json",
+            dst="/tmp/a.json",
+            preserve_user_keys=["[python] > editor.fontSize"],
+            preserve_user_keys_deep=["[python]"],
+        )
+
+
+def test_pydantic_accepts_well_formed_nested_path() -> None:
+    """Sanity check: a clean two-segment path is accepted."""
+    from my_setup.config import Dotfile
+
+    dotfile = Dotfile(
+        src="a.json",
+        dst="/tmp/a.json",
+        preserve_user_keys=["[python] > editor.fontSize"],
+    )
+    assert dotfile.preserve_user_keys == ["[python] > editor.fontSize"]
+
+
+def test_pydantic_accepts_flat_v1_paths() -> None:
+    """Sanity check: single-segment names (no separator) still accepted."""
+    from my_setup.config import Dotfile
+
+    dotfile = Dotfile(
+        src="a.json",
+        dst="/tmp/a.json",
+        preserve_user_keys=["claudeCode.foo"],
+    )
+    assert dotfile.preserve_user_keys == ["claudeCode.foo"]
