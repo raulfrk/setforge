@@ -221,66 +221,87 @@ def install(
         )
 
     # Step 5: Claude plugin reconcile (warn-and-skip if claude absent).
+    # Snapshot disk state BEFORE reconcile so we can compute the delta
+    # from ground truth, not from a report that doesn't distinguish
+    # install-failures from enable-failures. A plugin whose install step
+    # succeeds but whose enable step fails is still on disk and MUST
+    # appear in PluginDelta.installed, or revert will orphan it.
     plugin_delta: transitions.PluginDelta | None = None
     try:
-        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+        pre_plugins = claude_plugins_mod.list_installed()
+        pre_marketplaces = claude_plugins_mod.list_marketplaces()
     except PluginToolMissing as exc:
+        # No ``claude`` binary available — skip reconcile entirely.
         typer.secho(
             f"warning: skipping claude plugin reconcile — {exc}",
             err=True,
             fg=typer.colors.YELLOW,
         )
     else:
-        failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
-        for name, mp in plugin_report.to_install:
-            pid = f"{name}@{mp}"
-            if pid not in failed_plugin_ids:
-                typer.echo(f"plugin installed  {pid}")
-        for pid in plugin_report.to_enable:
-            if pid not in failed_plugin_ids:
-                typer.echo(f"plugin enabled    {pid}")
-        for pid in plugin_report.to_disable:
-            if pid not in failed_plugin_ids:
-                typer.echo(f"plugin disabled   {pid}")
-        for pid, err in plugin_report.failed:
+        try:
+            plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+        except PluginToolMissing as exc:
             typer.secho(
-                f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW
+                f"warning: skipping claude plugin reconcile — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
             )
-        if not plugin_report:
-            typer.echo("plugins: nothing to reconcile")
+        else:
+            failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
+            for name, mp in plugin_report.to_install:
+                pid = f"{name}@{mp}"
+                if pid not in failed_plugin_ids:
+                    typer.echo(f"plugin installed  {pid}")
+            for pid in plugin_report.to_enable:
+                if pid not in failed_plugin_ids:
+                    typer.echo(f"plugin enabled    {pid}")
+            for pid in plugin_report.to_disable:
+                if pid not in failed_plugin_ids:
+                    typer.echo(f"plugin disabled   {pid}")
+            for pid, err in plugin_report.failed:
+                typer.secho(
+                    f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW
+                )
+            if not plugin_report:
+                typer.echo("plugins: nothing to reconcile")
 
-        # Build PluginDelta from the reconcile report, excluding failed
-        # ops so revert never tries to reverse a no-op (mirrors the
-        # ext_delta failed-exclusion logic above). Marketplace names that
-        # failed to add (e.g. transient network errors) are excluded too:
-        # ``report.failed`` keys may be either ``"<name>@<marketplace>"``
-        # plugin IDs OR bare marketplace names — they're disjoint in
-        # practice because marketplace names never contain ``@``.
-        installed_pids = tuple(
-            f"{name}@{mp}"
-            for name, mp in plugin_report.to_install
-            if f"{name}@{mp}" not in failed_plugin_ids
-        )
-        enabled_pids = tuple(
-            pid for pid in plugin_report.to_enable if pid not in failed_plugin_ids
-        )
-        disabled_pids = tuple(
-            pid for pid in plugin_report.to_disable if pid not in failed_plugin_ids
-        )
-        added_mps = tuple(
-            mp for mp in plugin_report.marketplaces_added if mp not in failed_plugin_ids
-        )
-        # ``marketplaces_removed`` is always empty for install today —
-        # reconcile never auto-evicts marketplaces (stale ones survive).
-        # The field exists so revert-of-install (which removes the
-        # added marketplaces) can record an invertible reverse_delta.
-        plugin_delta = transitions.PluginDelta(
-            installed=installed_pids,
-            enabled=enabled_pids,
-            disabled=disabled_pids,
-            marketplaces_added=added_mps,
-            marketplaces_removed=(),
-        )
+            # Build PluginDelta from pre/post disk-state diff. Disk
+            # state is ground truth: captures plugins that landed on
+            # disk regardless of whether their subsequent enable step
+            # succeeded. The old failed_plugin_ids filter collapsed
+            # install-failures and enable-failures into one set and
+            # excluded both — leaving install-then-enable-fail plugins
+            # orphaned at revert time. ``marketplaces_removed`` is
+            # always empty for install today (reconcile never auto-
+            # evicts marketplaces).
+            post_plugins = claude_plugins_mod.list_installed()
+            post_marketplaces = claude_plugins_mod.list_marketplaces()
+            installed_pids = tuple(sorted(set(post_plugins) - set(pre_plugins)))
+            common = set(pre_plugins) & set(post_plugins)
+            enabled_pids = tuple(
+                sorted(
+                    pid
+                    for pid in common
+                    if not pre_plugins[pid].get("enabled", True)
+                    and post_plugins[pid].get("enabled", True)
+                )
+            )
+            disabled_pids = tuple(
+                sorted(
+                    pid
+                    for pid in common
+                    if pre_plugins[pid].get("enabled", True)
+                    and not post_plugins[pid].get("enabled", True)
+                )
+            )
+            added_mps = tuple(sorted(set(post_marketplaces) - set(pre_marketplaces)))
+            plugin_delta = transitions.PluginDelta(
+                installed=installed_pids,
+                enabled=enabled_pids,
+                disabled=disabled_pids,
+                marketplaces_added=added_mps,
+                marketplaces_removed=(),
+            )
 
     file_post = transitions.snapshot_paths(dst_paths)
 

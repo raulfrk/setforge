@@ -1505,6 +1505,88 @@ def test_install_records_plugin_delta_with_enable_transition(
     assert payload["marketplaces_added"] == []
 
 
+def test_install_records_plugin_delta_with_enable_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_claude,
+) -> None:
+    """Install-succeeds-then-enable-fails MUST still record the pid in
+    PluginDelta.installed (disk state is ground truth) and revert MUST
+    uninstall it.
+
+    Regression test for the Phase 5 specifics-review finding: the old
+    ``failed_plugin_ids`` filter collapsed install-failures and enable-
+    failures into one set and excluded both — leaving a plugin on disk
+    but missing from ``PluginDelta.installed``, so revert orphaned it.
+    The disk-state pre/post snapshot approach captures the plugin
+    correctly because fake-claude's ``installed_state()`` reflects that
+    ``plugin_install`` succeeded (the entry is present, just disabled).
+    """
+    from typer.testing import CliRunner
+
+    from my_setup.cli import app
+
+    fixture_yaml = _copy_e2e_fixture(tmp_path)
+    _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
+    fc = fake_claude()
+    real_run = fc.run
+
+    # Fail ``plugin enable`` for the test-comprehensive plugin, letting
+    # install + marketplace add proceed normally. Mirrors
+    # test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure.
+    def failing_run(args, **kwargs: Any) -> subprocess.CompletedProcess:
+        cmd = list(args[1:])
+        if cmd == ["plugin", "enable", "superpowers@claude-plugins-official"]:
+            fc.calls.append(list(args))
+            raise subprocess.CalledProcessError(
+                1, list(args), output="", stderr="enable bombed"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+
+    runner = CliRunner()
+    installed = runner.invoke(
+        app,
+        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    # Install command exits 0 even when a reconcile step fails (warn-
+    # and-continue), so the transition still lands on disk.
+    assert installed.exit_code == 0, installed.output
+
+    # Plugin landed on disk per fake-claude (install succeeded).
+    assert "superpowers@claude-plugins-official" in fc.installed_state()
+    # But it stayed disabled because the enable step raised.
+    entry = fc.installed_state()["superpowers@claude-plugins-official"]
+    assert entry["enabled"] is False
+
+    payload = json.loads(
+        (_latest_transition(state_dir) / "plugins.json").read_text(encoding="utf-8")
+    )
+    # Disk-state ground truth: the pid IS recorded as installed even
+    # though its enable step failed. This is the invariant the fix
+    # establishes.
+    assert payload["installed"] == ["superpowers@claude-plugins-official"]
+    # Enable did not flip the bit (failed), so ``enabled`` is empty.
+    assert payload["enabled"] == []
+    assert payload["disabled"] == []
+    # Marketplace add succeeded so it appears in the delta.
+    assert payload["marketplaces_added"] == ["claude-plugins-official"]
+    assert payload["marketplaces_removed"] == []
+
+    # Round-trip: revert MUST uninstall the plugin (no orphan). Clear
+    # the failing-run override first so revert's uninstall succeeds.
+    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", real_run)
+    reverted = runner.invoke(
+        app,
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+    )
+    assert reverted.exit_code == 0, reverted.output
+    assert fc.uninstall_args() == ["superpowers@claude-plugins-official"]
+    # Plugin no longer on disk — orphan averted.
+    assert "superpowers@claude-plugins-official" not in fc.installed_state()
+
+
 def test_revert_restores_plugin_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
