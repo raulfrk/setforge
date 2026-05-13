@@ -1,0 +1,9 @@
+# Project-scope worktrunk hooks for my-setup.
+#
+# pre-start blocks `wt switch --create <name>` until complete. We
+# install dev extras here so a fresh worktree arrives ready for
+# `uv run pytest` / `uv run ruff check` / `uv run my-setup` without
+# the implementer (or a subagent) having to remember `uv sync` as
+# their first command. See dotfiles-rsw.
+[pre-start]
+deps = "uv sync --extra dev"
