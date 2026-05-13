@@ -26,6 +26,7 @@ from my_setup import merge as merge_mod
 from my_setup.capture import CaptureAuto
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import (
+    ClaudeInstallMode,
     Config,
     MarketplaceSource,
     ReconcilePolicy,
@@ -36,6 +37,7 @@ from my_setup.errors import (
     CaptureRequiresInteractive,
     ExtensionInstallFailed,
     ExtensionToolMissing,
+    MarketplaceCacheMiss,
     MySetupError,
     NoTransitionFound,
     PluginToolMissing,
@@ -1295,6 +1297,47 @@ def plugin_reconcile(
         typer.echo("plugins: nothing to reconcile")
     elif is_read_only:
         raise typer.Exit(code=1)
+
+
+@plugin_app.command("sync-cache")
+def sync_cache(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+) -> None:
+    """Clone/refresh marketplace caches for offline-capable install.
+
+    Required when ``~/.config/my-setup/local.yaml`` sets
+    ``claude.install_mode: local-clone``. Iterates every GitHub-backed
+    ``MarketplaceSource`` referenced by ``profile`` and either clones
+    it into ``~/.cache/my-setup/marketplaces/<name>`` (if absent) or
+    fetches + hard-resets it to ``origin/HEAD`` (if present). When
+    ``install_mode`` is ``regular``, prints a warning and exits 0
+    without touching the cache.
+    """
+    host_local = binaries.load_host_local_config()
+    if host_local.claude.install_mode is ClaudeInstallMode.REGULAR:
+        typer.secho(
+            "warning: claude.install_mode is 'regular'; sync-cache is only "
+            "useful when local-clone is active. Set claude.install_mode: "
+            "local-clone in ~/.config/my-setup/local.yaml to opt in.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    cfg = load_config(config)
+    resolved = resolve_profile(cfg, profile)
+    try:
+        refreshed = claude_plugins_mod.sync_marketplace_cache(cfg, resolved)
+    except MarketplaceCacheMiss as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    if not refreshed:
+        typer.echo("sync-cache: no GitHub-backed marketplaces in profile")
+        return
+    for mp in refreshed:
+        typer.echo(f"sync-cache: refreshed {mp}")
 
 
 # ---------------------------------------------------------------------------
