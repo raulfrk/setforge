@@ -24,15 +24,19 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
+import platformdirs
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from my_setup.binaries import resolve_binary, stderr_of
+from my_setup.binaries import load_host_local_config, resolve_binary, stderr_of
 from my_setup.config import (
+    ClaudeInstallMode,
     Config,
     MarketplaceSource,
     MarketplaceSourceKind,
@@ -40,12 +44,25 @@ from my_setup.config import (
     ResolvedProfile,
     load_config,
 )
-from my_setup.errors import ConfigError, PluginToolMissing, ProfileNotFound
+from my_setup.errors import (
+    ConfigError,
+    MarketplaceCacheMiss,
+    PluginToolMissing,
+    ProfileNotFound,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 _CLAUDE_BIN_NAME = "claude"
 _TIMEOUT_S = 30
+_CLONE_TIMEOUT_S = 120
+
+#: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
+#: clones into ``MARKETPLACE_CACHE_ROOT / <marketplace-name>``. Tests
+#: monkeypatch this module attribute to redirect into ``tmp_path``.
+MARKETPLACE_CACHE_ROOT: Final[Path] = (
+    Path(platformdirs.user_cache_dir("my-setup")) / "marketplaces"
+)
 
 
 @functools.lru_cache(maxsize=1)
@@ -261,6 +278,238 @@ def plugin_disable(plugin_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Local-clone install mode — marketplace cache helpers
+# ---------------------------------------------------------------------------
+
+
+def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
+    """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
+
+    Network is required. Resolves ``git`` via :func:`shutil.which`; a
+    missing binary or a non-zero/timeout ``git clone`` exit raises
+    :class:`MarketplaceCacheMiss` with a remediation message. ``check=True``
+    plus ``capture_output=True`` so test fixtures can assert on argv shape.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise MarketplaceCacheMiss(
+            f"marketplace {source.repo!r}: 'git' not on PATH; install git "
+            f"or set claude.install_mode: regular in "
+            f"~/.config/my-setup/local.yaml"
+        )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [git, "clone", source.repo or "", str(dest_path)],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_CLONE_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise MarketplaceCacheMiss(
+            f"marketplace {source.repo!r} not in local cache and `git clone` "
+            f"failed (likely offline): {stderr_of(exc)}. "
+            f"Run `my-setup plugin sync-cache --profile=<name>` while online "
+            f"first."
+        ) from exc
+
+
+def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> None:
+    """Refresh an existing marketplace cache via ``git fetch`` + hard reset.
+
+    Preconditions: ``cache_dir`` already exists and contains a git repo
+    whose ``origin`` matches ``source.repo``. The caller is responsible
+    for the URL-mismatch detect-and-reclone path; this helper assumes
+    the remote is correct and unconditionally fetches + resets to
+    ``origin/HEAD``. Hard reset (not ``git pull``) is intentional: the
+    cache must never carry local merges.
+
+    Raises :class:`MarketplaceCacheMiss` on git failure (network down,
+    cache corrupted) with the same remediation as :func:`_clone_marketplace`.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise MarketplaceCacheMiss(
+            f"marketplace {source.repo!r}: 'git' not on PATH; install git "
+            f"or set claude.install_mode: regular in "
+            f"~/.config/my-setup/local.yaml"
+        )
+    try:
+        subprocess.run(
+            [git, "-C", str(cache_dir), "fetch", "origin"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_CLONE_TIMEOUT_S,
+        )
+        subprocess.run(
+            [git, "-C", str(cache_dir), "reset", "--hard", "origin/HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise MarketplaceCacheMiss(
+            f"marketplace {source.repo!r}: refresh failed: {stderr_of(exc)}. "
+            f"Delete {cache_dir} and re-run sync-cache while online."
+        ) from exc
+
+
+def _cache_origin_url(cache_dir: Path) -> str | None:
+    """Return the cache's ``origin`` remote URL, or ``None`` on git failure.
+
+    Used by :func:`_resolve_marketplace_source` to detect a config-side
+    repo URL change after the cache was first created. A best-effort
+    probe — any git failure (no remote, dirty checkout, missing git
+    binary) yields ``None`` so the caller can fall through to a
+    re-clone instead of raising.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git, "-C", str(cache_dir), "remote", "get-url", "origin"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip()
+
+
+def _resolve_marketplace_source(
+    source: MarketplaceSource,
+    mode: ClaudeInstallMode,
+    cache_root: Path,
+) -> MarketplaceSource:
+    """Return the :class:`MarketplaceSource` that ``marketplace_add`` will see.
+
+    Pure transform (modulo the network-touching :func:`_clone_marketplace`
+    fallback): under :data:`ClaudeInstallMode.REGULAR`, returns
+    ``source`` unchanged. Under :data:`ClaudeInstallMode.LOCAL_CLONE`,
+    returns a PATH-kind :class:`MarketplaceSource` pointing at the
+    on-disk cache for the GitHub source, lazily cloning if the cache
+    is absent. PATH sources passthrough regardless of mode.
+
+    The cache directory derives its basename from ``source.repo`` —
+    the marketplace name (the caller's YAML-side key) is not threaded
+    here so the function stays pure with respect to source-level
+    state. ``source.repo`` for a GITHUB source has shape ``owner/repo``;
+    we take the trailing path component for the cache subdir.
+    """
+    if mode is ClaudeInstallMode.REGULAR:
+        return source
+    if source.source is MarketplaceSourceKind.PATH:
+        return source
+    if not source.repo:
+        raise MarketplaceCacheMiss(
+            "GITHUB marketplace source missing 'repo' field; cannot resolve "
+            "local-clone path"
+        )
+    cache_dir = cache_root / source.repo.rsplit("/", 1)[-1]
+    if cache_dir.exists():
+        current = _cache_origin_url(cache_dir)
+        if (
+            current is not None
+            and current != source.repo
+            and not _urls_equivalent(current, source.repo)
+        ):
+            shutil.rmtree(cache_dir)
+            _clone_marketplace(source, cache_dir)
+    else:
+        _clone_marketplace(source, cache_dir)
+    return MarketplaceSource(
+        source=MarketplaceSourceKind.PATH,
+        path=cache_dir,
+    )
+
+
+def _urls_equivalent(observed: str, declared: str) -> bool:
+    """Compare a git remote URL to a declared ``owner/repo`` ref.
+
+    ``declared`` is the ``MarketplaceSource.repo`` value — typically the
+    short ``owner/repo`` form Claude's marketplace accepts. ``observed``
+    is whatever the cache's ``git remote get-url origin`` reported,
+    which can be the full HTTPS URL git rewrote ``owner/repo`` into
+    (e.g. ``https://github.com/owner/repo.git``). The comparison
+    normalizes both to ``owner/repo`` form before checking equality so a
+    cache cloned via the shorthand isn't treated as URL-changed every
+    time.
+    """
+
+    def _normalize(url: str) -> str:
+        stripped = url.removesuffix(".git").rstrip("/")
+        for prefix in (
+            "https://github.com/",
+            "git@github.com:",
+            "ssh://git@github.com/",
+        ):
+            if stripped.startswith(prefix):
+                return stripped[len(prefix) :]
+        return stripped
+
+    return _normalize(observed) == _normalize(declared)
+
+
+def sync_marketplace_cache(
+    cfg: Config,
+    profile: ResolvedProfile,
+    *,
+    cache_root: Path | None = None,
+) -> list[str]:
+    """Refresh every GitHub marketplace declared by ``profile``.
+
+    For each declared marketplace whose source kind is GITHUB: clone
+    if absent, otherwise fetch + reset to ``origin/HEAD``. Returns the
+    list of marketplace *names* (YAML-side keys) that were refreshed
+    (or freshly cloned). PATH sources are skipped silently.
+
+    Profile-scoped (not config-scoped) because the spec mandates
+    ``--profile=<name>`` to match my-setup CLI convention; declared
+    marketplaces in non-active profiles are left alone. Raises
+    :class:`MarketplaceCacheMiss` on git failure for any marketplace.
+    """
+    root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
+    refreshed: list[str] = []
+    # The marketplaces referenced by a profile are those needed by its
+    # claude_plugins entries. Resolve plugin names -> marketplace names
+    # via the top-level claude_plugins registry, mirroring reconcile's
+    # logic.
+    referenced: set[str] = set()
+    for bare_name in profile.claude_plugins:
+        ref = cfg.claude_plugins.get(bare_name)
+        if ref is None:
+            raise ConfigError(
+                f"profile references undeclared plugin: {bare_name!r} "
+                f"(add it to top-level claude_plugins:)"
+            )
+        referenced.add(ref.marketplace)
+    for mp_name in sorted(referenced):
+        source = cfg.marketplaces.get(mp_name)
+        if source is None:
+            raise ConfigError(f"plugin references undeclared marketplace: {mp_name!r}")
+        if source.source is MarketplaceSourceKind.PATH:
+            LOGGER.info("sync-cache: %s is a PATH source, skipping", mp_name)
+            continue
+        if not source.repo:
+            raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
+        cache_dir = root / source.repo.rsplit("/", 1)[-1]
+        if cache_dir.exists():
+            LOGGER.info("sync-cache: refreshing %s at %s", mp_name, cache_dir)
+            _refresh_marketplace_cache(source, cache_dir)
+        else:
+            LOGGER.info("sync-cache: cloning %s into %s", mp_name, cache_dir)
+            _clone_marketplace(source, cache_dir)
+        refreshed.append(mp_name)
+    return refreshed
+
+
+# ---------------------------------------------------------------------------
 # Reconcile algorithm — three-way per spec Δ2
 # ---------------------------------------------------------------------------
 
@@ -347,10 +596,24 @@ def reconcile(
 
     failed: list[tuple[str, str]] = []
 
+    # Host-local install mode dispatch: under LOCAL_CLONE, swap each
+    # GitHub-backed MarketplaceSource for a PATH source pointing at the
+    # on-disk cache (cloning on first encounter). Under REGULAR, the
+    # transform is a no-op and today's behavior is unchanged.
+    install_mode = load_host_local_config().claude.install_mode
+
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)
         try:
-            marketplace_add(mp_name, cfg.marketplaces[mp_name])
+            effective_source = _resolve_marketplace_source(
+                cfg.marketplaces[mp_name],
+                install_mode,
+                MARKETPLACE_CACHE_ROOT,
+            )
+            marketplace_add(mp_name, effective_source)
+        except MarketplaceCacheMiss as exc:
+            LOGGER.warning("marketplace_add failed for %s: %s", mp_name, exc)
+            failed.append((mp_name, str(exc)))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             msg = stderr_of(exc)
             LOGGER.warning("marketplace_add failed for %s: %s", mp_name, msg)
