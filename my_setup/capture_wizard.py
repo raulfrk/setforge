@@ -54,7 +54,7 @@ from my_setup.config import Config, resolve_profile
 from my_setup.errors import CaptureRequiresInteractive
 from my_setup.jsonc import PATH_SEPARATOR, preserved_positions_for_top
 from my_setup.transitions import TransitionCommand
-from my_setup.wizard import ActionResult, DriftItem
+from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 __all__ = [
     "CaptureRequiresInteractive",
@@ -80,14 +80,14 @@ def walk_capture_drift(
        ``dotfile.preserve_user_keys_deep``, walk live's and tracked's
        sub-keys at the path. Yield for shared-different and live-only
        sub-keys; silent for shared-identical and tracked-only.
-       ``DriftItem.mode = "deep"``; ``key_path`` is the full dotted path
+       ``DriftItem.mode is DriftMode.DEEP``; ``key_path`` is the full dotted path
        (e.g. ``"settings.fontSize"`` for JSONC, ``"a.b.c"`` for YAML).
     2. **Non-preserve top-level drift** — for each top-level key present
        in either side that is NOT in ``preserve_user_keys`` (shallow
        exact-match) AND NOT a top-level prefix of any path in
        ``preserve_user_keys_deep`` (the deep walker covers it),
        classify as a single shallow item.
-       ``DriftItem.mode = "shallow"``; ``key_path`` is the top-level
+       ``DriftItem.mode is DriftMode.SHALLOW``; ``key_path`` is the top-level
        key.
 
     Both flavors share the same :class:`DriftItem` shape; ``mode`` is
@@ -152,11 +152,11 @@ def _walk_one_file(
     matches; everything else is YAML round-tripped.
     """
     if jsonc.is_jsonc_file(src):
-        fmt: FileFormat = "jsonc"
+        fmt: FileFormat = FileFormat.JSONC
         tracked = jsonc.parse_jsonc(src.read_text(encoding="utf-8"))
         live = jsonc.parse_jsonc(dst.read_text(encoding="utf-8"))
     else:
-        fmt = "yaml"
+        fmt = FileFormat.YAML
         y = YAML(typ="rt")
         tracked = y.load(src.read_text(encoding="utf-8"))
         live = y.load(dst.read_text(encoding="utf-8"))
@@ -295,7 +295,7 @@ def _walk_shallow_top_phase(
             tracked_value=tracked_value,
             live_value=live_value,
             file_format=fmt,
-            mode="shallow",
+            mode=DriftMode.SHALLOW,
         )
 
 
@@ -313,7 +313,7 @@ def _walk_deep(
 ) -> Iterator[DriftItem]:
     """Recursively walk two dicts side-by-side under ``prefix``.
 
-    Yields one :class:`DriftItem` (``mode='deep'``) per shared-different
+    Yields one :class:`DriftItem` (``mode is DriftMode.DEEP``) per shared-different
     *leaf* (scalar or list — anything that isn't a dict on both sides)
     and per live-only key (regardless of shape; tracked has no value to
     preserve there). Tracked-only keys are silent (preserved at
@@ -343,7 +343,7 @@ def _walk_deep(
                 tracked_value=None,
                 live_value=live_value,
                 file_format=fmt,
-                mode="deep",
+                mode=DriftMode.DEEP,
             )
             continue
         tracked_value = tracked_dict[key]
@@ -370,7 +370,7 @@ def _walk_deep(
             tracked_value=tracked_value,
             live_value=live_value,
             file_format=fmt,
-            mode="deep",
+            mode=DriftMode.DEEP,
         )
     # tracked-only sub-keys: silent (preserved at writeback).
 
