@@ -554,6 +554,40 @@ def _split_id(pid: str) -> tuple[str, str]:
     return name, mp
 
 
+def _add_declared_marketplaces(
+    cfg: Config,
+    mps_to_add: list[str],
+    install_mode: ClaudeInstallMode,
+    cache_root: Path,
+    failed: list[tuple[str, str]],
+) -> None:
+    """Run install-mode dispatch + ``marketplace_add`` for each name in ``mps_to_add``.
+
+    Side-effects ``failed`` in place on every per-marketplace failure
+    (cache miss or ``claude``-side subprocess failure). Extracted from
+    :func:`reconcile` so the host-local install-mode swap site is
+    isolated from the larger plugin-state reconcile loop. Pure
+    w.r.t. anything outside ``failed`` — the caller still owns the
+    surrounding state machine.
+    """
+    for mp_name in mps_to_add:
+        LOGGER.info("adding marketplace: %s", mp_name)
+        try:
+            effective_source = _resolve_marketplace_source(
+                cfg.marketplaces[mp_name],
+                install_mode,
+                cache_root,
+            )
+            marketplace_add(mp_name, effective_source)
+        except MarketplaceCacheMiss as exc:
+            LOGGER.warning("marketplace_add failed for %s: %s", mp_name, exc)
+            failed.append((mp_name, str(exc)))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            msg = stderr_of(exc)
+            LOGGER.warning("marketplace_add failed for %s: %s", mp_name, msg)
+            failed.append((mp_name, msg))
+
+
 def reconcile(
     cfg: Config,
     profile: ResolvedProfile,
@@ -635,23 +669,9 @@ def reconcile(
     # on-disk cache (cloning on first encounter). Under REGULAR, the
     # transform is a no-op and today's behavior is unchanged.
     install_mode = load_host_local_config().claude.install_mode
-
-    for mp_name in mps_to_add:
-        LOGGER.info("adding marketplace: %s", mp_name)
-        try:
-            effective_source = _resolve_marketplace_source(
-                cfg.marketplaces[mp_name],
-                install_mode,
-                MARKETPLACE_CACHE_ROOT,
-            )
-            marketplace_add(mp_name, effective_source)
-        except MarketplaceCacheMiss as exc:
-            LOGGER.warning("marketplace_add failed for %s: %s", mp_name, exc)
-            failed.append((mp_name, str(exc)))
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = stderr_of(exc)
-            LOGGER.warning("marketplace_add failed for %s: %s", mp_name, msg)
-            failed.append((mp_name, msg))
+    _add_declared_marketplaces(
+        cfg, mps_to_add, install_mode, MARKETPLACE_CACHE_ROOT, failed
+    )
 
     # Per spec § Algorithm β2 (dotfiles-l37): freshly-installed plugins
     # land disabled in installed_plugins.json — `claude plugin install`
