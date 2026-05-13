@@ -1839,10 +1839,12 @@ class FakeGit:
         self.calls.append(list(args))
         cmd = args[1:]
 
-        # git clone <repo> <dest>
-        if len(cmd) >= 3 and cmd[0] == "clone":
-            repo = cmd[1]
-            dest = Path(cmd[2])
+        # git clone -- <repo> <dest>
+        # Defense-in-depth: `_clone_marketplace` always passes the `--`
+        # separator before source.repo to prevent argv flag injection.
+        if len(cmd) >= 4 and cmd[0] == "clone" and cmd[1] == "--":
+            repo = cmd[2]
+            dest = Path(cmd[3])
             if self.known_repos is not None and repo not in self.known_repos:
                 raise subprocess.CalledProcessError(
                     128, args, stderr=f"fatal: repository '{repo}' not found"
@@ -2045,6 +2047,36 @@ def test_resolve_marketplace_source_url_drift_re_clones(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
     )
     assert fake.clone_count() == 1
+
+
+# --- _clone_marketplace argv hygiene (`--` separator) ---
+
+
+def test_clone_marketplace_argv_uses_dash_dash_separator(
+    fake_git, tmp_path: Path
+) -> None:
+    """`git clone` argv carries `--` immediately before source.repo.
+
+    Defends against argv flag injection if source.repo ever begins
+    with `-` (e.g. `-upload-pack=touch /tmp/pwn`): without `--`, git
+    would interpret it as a flag. The list-form argv hygiene already
+    prevents shell-level injection; this completes the defense at the
+    git-CLI argument-parsing layer.
+    """
+    from my_setup.claude_plugins import _resolve_marketplace_source
+
+    fake = fake_git(known_repos={"anthropic/plug"})
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
+    _resolve_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
+    )
+    clone_calls = [c for c in fake.calls if c[1:2] == ["clone"]]
+    assert len(clone_calls) == 1
+    argv = clone_calls[0]
+    # argv = [git, "clone", "--", repo, dest]
+    assert argv[1] == "clone"
+    assert argv[2] == "--"
+    assert argv[3] == "anthropic/plug"
 
 
 # --- _safe_cache_dir (path-traversal guard) ---

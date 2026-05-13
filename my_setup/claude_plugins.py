@@ -327,8 +327,14 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         )
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # `--` separates options from positional args. Defends against
+        # argv flag injection if source.repo ever starts with `-`
+        # (e.g. `-upload-pack=...`), which git would otherwise interpret
+        # as a flag rather than as the repo positional. CLAUDE.md
+        # subprocess hygiene already mandates list-form argv and no
+        # shell=True; this is the defense-in-depth completion of that.
         subprocess.run(
-            [git, "clone", source.repo or "", str(dest_path)],
+            [git, "clone", "--", source.repo or "", str(dest_path)],
             check=True,
             text=True,
             capture_output=True,
