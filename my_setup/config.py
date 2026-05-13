@@ -38,6 +38,23 @@ class MarketplaceSourceKind(StrEnum):
     PATH = "path"
 
 
+class ClaudeInstallMode(StrEnum):
+    """How ``my-setup install`` resolves Claude marketplaces.
+
+    ``REGULAR`` (default): pass marketplace sources to the ``claude`` CLI
+    as-is, which fetches GitHub repos over the network on first install.
+
+    ``LOCAL_CLONE``: swap each GitHub-backed ``MarketplaceSource`` to a
+    PATH source pointing at a local cache under
+    ``~/.cache/my-setup/marketplaces/<name>/`` before the
+    ``claude plugin marketplace add`` call. Enables offline operation on
+    hosts where Claude's marketplace fetch would fail.
+    """
+
+    REGULAR = "regular"
+    LOCAL_CLONE = "local-clone"
+
+
 class SectionMode(StrEnum):
     """How capture treats marker bodies in dotfiles with
     ``preserve_user_sections: true``.

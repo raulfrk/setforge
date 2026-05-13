@@ -85,6 +85,19 @@ class NoTransitionFound(MySetupError):
     for the requested profile."""
 
 
+class MarketplaceCacheMiss(MySetupError):
+    """Raised when local-clone install mode cannot resolve a marketplace
+    to a local cache directory.
+
+    Triggered by :func:`my_setup.claude_plugins._clone_marketplace` in
+    three cases: the ``git`` binary is missing from PATH, the on-demand
+    ``git clone`` failed (typically offline), or an existing cache's
+    ``origin`` remote no longer matches the configured source repo and
+    a re-clone failed. The message names the marketplace and the exact
+    remediation (``my-setup plugin sync-cache --profile=<name>`` while
+    online, or fall back to ``claude.install_mode: regular``)."""
+
+
 class BinaryOverrideInvalid(MySetupError):
     """Raised when a host-local binary override (CLI flag, env var, or
     ``~/.config/my-setup/local.yaml``) points at a path that does not
