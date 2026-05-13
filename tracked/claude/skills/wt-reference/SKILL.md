@@ -54,13 +54,13 @@ When dispatching N subagents in parallel for a bd-issue-per-worktree batch, the 
 ```
 # Orchestrator side (in main worktree)
 wt switch --create dotfiles-<id>-<slug>
-# → ~/my-setup.dotfiles-<id>-<slug> on fresh branch off current main
+# → worktree at <wt-path>; wt prints the path it created.
 # The "Cannot change directory — shell requires restart" warning is
 # benign for orchestration; the worktree IS created.
 
 # Dispatch (Agent tool, NO isolation parameter).
 # Subagent prompt template:
-#   cd /home/raul/my-setup.dotfiles-<id>-<slug>
+#   cd <wt-path>
 #   uv sync --all-extras       # fresh worktree's .venv is pristine
 #   bd update dotfiles-<id> --claim
 #   ... implementation ...
