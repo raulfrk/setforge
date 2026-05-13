@@ -453,6 +453,9 @@ def _resolve_marketplace_source(
     source: MarketplaceSource,
     mode: ClaudeInstallMode,
     cache_root: Path,
+    *,
+    mp_name: str | None = None,
+    auto: bool = False,
 ) -> MarketplaceSource:
     """Return the :class:`MarketplaceSource` that ``marketplace_add`` will see.
 
@@ -463,11 +466,19 @@ def _resolve_marketplace_source(
     on-disk cache for the GitHub source, lazily cloning if the cache
     is absent. PATH sources passthrough regardless of mode.
 
-    The cache directory derives its basename from ``source.repo`` —
-    the marketplace name (the caller's YAML-side key) is not threaded
-    here so the function stays pure with respect to source-level
-    state. ``source.repo`` for a GITHUB source has shape ``owner/repo``;
-    we take the trailing path component for the cache subdir.
+    The cache directory derives its basename from ``source.repo``;
+    ``mp_name`` (the YAML-side marketplace key) is threaded only
+    for the cache-collision wizard's prompt text. When ``mp_name`` is
+    ``None`` we fall back to ``source.repo`` for the prompt label —
+    callers in reconcile / sync paths supply it explicitly.
+
+    ``auto=True`` (e.g. from a ``--auto`` CLI flag) suppresses the
+    interactive cache-collision wizard and raises
+    :class:`MarketplaceCacheMiss` instead, per
+    :mod:`my_setup.marketplace_cache_wizard`'s spec-locked safe
+    default. Cache collision arises only on URL drift; the
+    happy-path (cache hit with matching origin, cache miss) is
+    unaffected.
     """
     if mode is ClaudeInstallMode.REGULAR:
         return source
@@ -486,13 +497,97 @@ def _resolve_marketplace_source(
             and current != source.repo
             and not _urls_equivalent(current, source.repo)
         ):
-            shutil.rmtree(cache_dir)
-            _clone_marketplace(source, cache_dir)
+            return _resolve_cache_collision(
+                source=source,
+                cache_dir=cache_dir,
+                cache_root=cache_root,
+                existing_origin=current,
+                mp_name=mp_name or source.repo,
+                auto=auto,
+            )
     else:
         _clone_marketplace(source, cache_dir)
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=cache_dir,
+    )
+
+
+def _resolve_cache_collision(
+    *,
+    source: MarketplaceSource,
+    cache_dir: Path,
+    cache_root: Path,
+    existing_origin: str,
+    mp_name: str,
+    auto: bool,
+) -> MarketplaceSource:
+    """Dispatch a URL-drift collision to the wizard and apply the choice.
+
+    Pulled out of :func:`_resolve_marketplace_source` so the swap-site
+    keeps its single-screen shape. The wizard returns a closed-set
+    :class:`CollisionAction`; this function maps each action to its
+    side effects:
+
+    - ``KEEP`` — return the existing cache_dir as-is and emit a clear
+      info log noting the new ``source.repo`` was NOT applied.
+    - ``UPDATE`` — rmtree the existing cache and re-clone (today's
+      pre-wizard behavior, now opt-in).
+    - ``BOTH`` — clone the new source into the wizard-supplied
+      ``new_cache_dir``; leave the existing cache_dir untouched.
+    - ``ABORT`` — the wizard raises :class:`typer.Abort` directly;
+      never reached here.
+    """
+    from my_setup.marketplace_cache_wizard import (
+        CollisionAction,
+        resolve_collision,
+    )
+
+    resolution = resolve_collision(
+        mp_name=mp_name,
+        cache_dir=cache_dir,
+        cache_root=cache_root,
+        existing_origin=existing_origin,
+        new_repo=source.repo or "",
+        auto=auto,
+    )
+    if resolution.action is CollisionAction.KEEP:
+        LOGGER.info(
+            "cache-collision: using existing cache %r for marketplace %r; "
+            "new source.repo %r NOT applied",
+            cache_dir,
+            mp_name,
+            source.repo,
+        )
+        return MarketplaceSource(
+            source=MarketplaceSourceKind.PATH,
+            path=cache_dir,
+        )
+    if resolution.action is CollisionAction.UPDATE:
+        LOGGER.info(
+            "cache-collision: re-cloning %r over existing %r",
+            source.repo,
+            cache_dir,
+        )
+        shutil.rmtree(cache_dir)
+        _clone_marketplace(source, cache_dir)
+        return MarketplaceSource(
+            source=MarketplaceSourceKind.PATH,
+            path=cache_dir,
+        )
+    # action is BOTH
+    new_dir = resolution.new_cache_dir
+    assert new_dir is not None, "wizard contract: BOTH carries new_cache_dir"
+    LOGGER.info(
+        "cache-collision: cloning %r into new cache %r (existing %r kept)",
+        source.repo,
+        new_dir,
+        cache_dir,
+    )
+    _clone_marketplace(source, new_dir)
+    return MarketplaceSource(
+        source=MarketplaceSourceKind.PATH,
+        path=new_dir,
     )
 
 
@@ -593,6 +688,8 @@ def _add_declared_marketplaces(
     install_mode: ClaudeInstallMode,
     cache_root: Path,
     failed: list[tuple[str, str]],
+    *,
+    auto: bool = False,
 ) -> None:
     """Run install-mode dispatch + ``marketplace_add`` for each name in ``mps_to_add``.
 
@@ -602,6 +699,11 @@ def _add_declared_marketplaces(
     isolated from the larger plugin-state reconcile loop. Pure
     w.r.t. anything outside ``failed`` — the caller still owns the
     surrounding state machine.
+
+    ``auto`` propagates to :func:`_resolve_marketplace_source` and
+    governs the cache-collision wizard. Default is interactive (the
+    wizard fires on URL drift); pass ``auto=True`` from a non-
+    interactive CLI path to refuse silent auto-resolution.
     """
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)
@@ -610,6 +712,8 @@ def _add_declared_marketplaces(
                 cfg.marketplaces[mp_name],
                 install_mode,
                 cache_root,
+                mp_name=mp_name,
+                auto=auto,
             )
             marketplace_add(mp_name, effective_source)
         except MarketplaceCacheMiss as exc:

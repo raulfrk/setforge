@@ -10,9 +10,9 @@ import pytest
 # matches a test-parameter name). Placing the import here makes the fixture
 # discoverable via pytest's normal conftest mechanism instead of a same-file
 # rebinding. ``__all__`` silences ruff F401 without per-site noqa.
-from tests.test_claude_plugins import fake_claude
+from tests.test_claude_plugins import fake_claude, fake_git
 
-__all__ = ["fake_claude"]
+__all__ = ["fake_claude", "fake_git"]
 
 
 @pytest.fixture(autouse=True)

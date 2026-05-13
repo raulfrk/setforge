@@ -2028,11 +2028,15 @@ def test_resolve_marketplace_source_existing_cache_no_clone(
     assert fake.clone_count() == 0
 
 
-def test_resolve_marketplace_source_url_drift_re_clones(
-    fake_git, tmp_path: Path
+def test_resolve_marketplace_source_url_drift_invokes_wizard(
+    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cache-origin URL drift triggers re-clone with the new repo."""
+    """Cache-origin URL drift dispatches the wizard; [u]pdate re-clones."""
     from my_setup.claude_plugins import _resolve_marketplace_source
+    from my_setup.marketplace_cache_wizard import (
+        CollisionAction,
+        CollisionResolution,
+    )
 
     fake = fake_git(known_repos={"anthropic/plug", "newowner/plug"})
     cache_root = tmp_path / "cache"
@@ -2043,10 +2047,39 @@ def test_resolve_marketplace_source_url_drift_re_clones(
     fake.cloned[cache_dir] = "anthropic/plug"
     # Source now declares a different owner.
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
+    # Wizard returns UPDATE — the pre-wizard silent behavior.
+    monkeypatch.setattr(
+        "my_setup.marketplace_cache_wizard.resolve_collision",
+        lambda **_: CollisionResolution(action=CollisionAction.UPDATE),
+    )
     _resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
     )
     assert fake.clone_count() == 1
+
+
+def test_resolve_marketplace_source_url_drift_non_tty_no_auto_raises(
+    fake_git, tmp_path: Path
+) -> None:
+    """Cache collision under non-TTY + no --auto raises MarketplaceCacheMiss."""
+    from my_setup.claude_plugins import _resolve_marketplace_source
+    from my_setup.errors import MarketplaceCacheMiss
+
+    fake = fake_git(known_repos={"anthropic/plug", "newowner/plug"})
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "plug"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / ".git").mkdir()
+    fake.cloned[cache_dir] = "anthropic/plug"
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
+    # pytest has no TTY → wizard refuses to silently auto-pick.
+    with pytest.raises(MarketplaceCacheMiss, match="cache collision"):
+        _resolve_marketplace_source(
+            src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+        )
+    # No destructive action — existing cache untouched, no clone.
+    assert cache_dir.exists()
+    assert fake.clone_count() == 0
 
 
 # --- _clone_marketplace argv hygiene (`--` separator) ---
