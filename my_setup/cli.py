@@ -669,6 +669,50 @@ def _apply_inverse(
             )
 
 
+def _apply_marketplace_re_add(
+    items: Iterable[list],
+    success_list: list[tuple[str, dict[str, str]]],
+    failed: list[tuple[str, str]],
+) -> None:
+    """Apply the inverse of ``marketplaces_removed``: re-register each marketplace.
+
+    Distinct from :func:`_apply_inverse` because each entry is a
+    ``[name, source_payload]`` pair (JSON round-trip of a tuple), the
+    payload must be validated through :class:`MarketplaceSource`, and
+    the success record is a ``(name, dict)`` tuple — not a bare string.
+    """
+    for entry in items:
+        # JSON round-trip: tuple → list. Reject malformed shapes early.
+        if not isinstance(entry, list) or len(entry) != 2:
+            failed.append(
+                (str(entry), f"malformed marketplaces_removed entry: {entry!r}")
+            )
+            continue
+        name, source_payload = entry
+        try:
+            source = MarketplaceSource(**source_payload)
+            claude_plugins_mod.marketplace_add(name, source)
+            success_list.append((name, dict(source_payload)))
+        except PluginToolMissing as exc:
+            typer.secho(
+                f"warning: skipping marketplace add of {name} — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            ValueError,
+        ) as exc:
+            msg = str(exc)
+            failed.append((name, msg))
+            typer.secho(
+                f"FAILED plugin marketplace add {name} — {msg}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+
+
 def _reverse_plugins(
     delta: dict,
 ) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
@@ -730,42 +774,11 @@ def _reverse_plugins(
         failed,
     )
 
-    # Inverse of ``marketplaces_removed``: re-register each marketplace
-    # via ``marketplace_add(name, source)``. Kept inline because the
-    # dispatch shape differs from the four loops above: each entry is a
-    # ``[name, source_payload]`` pair, the payload must be validated
-    # through the :class:`MarketplaceSource` pydantic model, and the
-    # success record is a ``(name, dict)`` tuple — not a bare string.
-    for entry in delta.get("marketplaces_removed", []):
-        # JSON round-trip: tuple → list. Reject malformed shapes early.
-        if not isinstance(entry, list) or len(entry) != 2:
-            failed.append(
-                (str(entry), f"malformed marketplaces_removed entry: {entry!r}")
-            )
-            continue
-        name, source_payload = entry
-        try:
-            source = MarketplaceSource(**source_payload)
-            claude_plugins_mod.marketplace_add(name, source)
-            reverse_mps_removed.append((name, dict(source_payload)))
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping marketplace add of {name} — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        except (
-            subprocess.CalledProcessError,
-            subprocess.TimeoutExpired,
-            ValueError,
-        ) as exc:
-            msg = str(exc)
-            failed.append((name, msg))
-            typer.secho(
-                f"FAILED plugin marketplace add {name} — {msg}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
+    _apply_marketplace_re_add(
+        delta.get("marketplaces_removed", []),
+        reverse_mps_removed,
+        failed,
+    )
 
     reverse_delta = transitions.PluginDelta(
         installed=tuple(reverse_installed),
