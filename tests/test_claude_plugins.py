@@ -11,6 +11,7 @@ is "found" vs absent.
 """
 
 import json
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -1357,8 +1358,6 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 # Each test uses ``MY_SETUP_STATE_DIR`` to redirect the transition state
 # into ``tmp_path`` (per ``test_cli_e2e.py:77``) so the host's real
 # state dir is untouched.
-
-import shutil  # noqa: E402
 
 # E2E fixture mirrors the layout used by tests/test_cli_e2e.py — a copy
 # of the full fixture YAML + tracked tree under tmp_path so dotfile
