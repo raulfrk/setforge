@@ -5,7 +5,7 @@ description: worktrunk (binary `wt`) command reference and Beads integration pat
 
 # worktrunk (`wt`) command reference
 
-worktrunk manages git worktrees for parallel agent workflows. Default location: `~/projects/worktrees/<slug>` — same convention bd uses for auto-discovery via git common-directory.
+worktrunk manages git worktrees for parallel agent workflows. Default location: `~/<repo>.<slug>` (sibling of repo, per wt's `worktree-path` template) — bd auto-discovers via git common-directory regardless of location.
 
 ## Commands
 
@@ -73,7 +73,7 @@ For multi-bead waves: run `wt switch --create` N times serially (avoids git inde
 ## Anti-patterns
 
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.
-- Don't create worktrees inside the repo — always use wt's `~/projects/worktrees/` location.
+- Don't create worktrees inside the repo — always use wt's sibling-of-repo location at `~/<repo>.<slug>`.
 - Don't `wt merge` without verifying tests pass and the bd issue's acceptance criteria are met.
 - Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.
