@@ -385,6 +385,9 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         # as a flag rather than as the repo positional. CLAUDE.md
         # subprocess hygiene already mandates list-form argv and no
         # shell=True; this is the defense-in-depth completion of that.
+        # `or ""` narrows source.repo (str | None) to str for mypy; the
+        # runtime guard upstream in _resolve_marketplace_source rejects
+        # empty repo for GITHUB sources before this site is reachable.
         subprocess.run(
             [str(git), "clone", "--", source.repo or "", str(dest_path)],
             check=True,
