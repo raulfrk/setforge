@@ -10,7 +10,7 @@ import json
 import logging
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC
 from pathlib import Path
 
@@ -286,31 +286,11 @@ def install(
             # evicts marketplaces).
             post_plugins = claude_plugins_mod.list_installed()
             post_marketplaces = claude_plugins_mod.list_marketplaces()
-            installed_pids = tuple(sorted(set(post_plugins) - set(pre_plugins)))
-            common = set(pre_plugins) & set(post_plugins)
-            enabled_pids = tuple(
-                sorted(
-                    pid
-                    for pid in common
-                    if not pre_plugins[pid].get("enabled", True)
-                    and post_plugins[pid].get("enabled", True)
-                )
-            )
-            disabled_pids = tuple(
-                sorted(
-                    pid
-                    for pid in common
-                    if pre_plugins[pid].get("enabled", True)
-                    and not post_plugins[pid].get("enabled", True)
-                )
-            )
-            added_mps = tuple(sorted(set(post_marketplaces) - set(pre_marketplaces)))
-            plugin_delta = transitions.PluginDelta(
-                installed=installed_pids,
-                enabled=enabled_pids,
-                disabled=disabled_pids,
-                marketplaces_added=added_mps,
-                marketplaces_removed=(),
+            plugin_delta = _compute_plugin_delta(
+                pre_plugins,
+                pre_marketplaces,
+                post_plugins,
+                post_marketplaces,
             )
 
     file_post = transitions.snapshot_paths(dst_paths)
@@ -579,6 +559,50 @@ def sync(
             None,  # sync's extension change is reflected in the YAML diff
         )
         typer.echo(f"transition: {target}")
+
+
+def _compute_plugin_delta(
+    pre_plugins: Mapping[str, dict],
+    pre_marketplaces: Mapping[str, dict],
+    post_plugins: Mapping[str, dict],
+    post_marketplaces: Mapping[str, dict],
+) -> transitions.PluginDelta:
+    """Diff pre/post claude-plugin disk state into a :class:`PluginDelta`.
+
+    Disk state is ground truth: captures plugins that landed on disk
+    regardless of whether their subsequent enable step succeeded. The
+    old ``failed_plugin_ids`` filter collapsed install-failures and
+    enable-failures into one set and excluded both — leaving
+    install-then-enable-fail plugins orphaned at revert time.
+    ``marketplaces_removed`` is always empty for install today
+    (reconcile never auto-evicts marketplaces).
+    """
+    installed_pids = tuple(sorted(set(post_plugins) - set(pre_plugins)))
+    common = set(pre_plugins) & set(post_plugins)
+    enabled_pids = tuple(
+        sorted(
+            pid
+            for pid in common
+            if not pre_plugins[pid].get("enabled", True)
+            and post_plugins[pid].get("enabled", True)
+        )
+    )
+    disabled_pids = tuple(
+        sorted(
+            pid
+            for pid in common
+            if pre_plugins[pid].get("enabled", True)
+            and not post_plugins[pid].get("enabled", True)
+        )
+    )
+    added_mps = tuple(sorted(set(post_marketplaces) - set(pre_marketplaces)))
+    return transitions.PluginDelta(
+        installed=installed_pids,
+        enabled=enabled_pids,
+        disabled=disabled_pids,
+        marketplaces_added=added_mps,
+        marketplaces_removed=(),
+    )
 
 
 def _reverse_extensions(
