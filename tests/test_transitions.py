@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.errors import MySetupError, RevertFailed
+from my_setup.errors import InvalidTransitionRecord, MySetupError, RevertFailed
 from my_setup.transitions import (
     ExtensionDelta,
     PluginDelta,
@@ -992,8 +992,6 @@ def test_plugin_delta_from_json_rejects_malformed_marketplaces_removed() -> None
     so revert aborts cleanly via the ``MySetupError`` handler instead
     of crashing mid-flight in
     :func:`_apply_marketplace_re_add`'s tuple unpack."""
-    from my_setup.errors import InvalidTransitionRecord
-
     with pytest.raises(InvalidTransitionRecord, match="malformed"):
         plugin_delta_from_json({"marketplaces_removed": [["just-one-item"]]})
     with pytest.raises(InvalidTransitionRecord, match="wrong types"):
@@ -1006,7 +1004,5 @@ def test_plugin_delta_from_json_rejects_non_list_marketplaces_removed() -> None:
     """Top-level ``marketplaces_removed`` must be a list; a bare dict
     or string surfaces an :class:`InvalidTransitionRecord` instead of
     a downstream ``TypeError`` from the per-entry iteration."""
-    from my_setup.errors import InvalidTransitionRecord
-
     with pytest.raises(InvalidTransitionRecord, match="must be a list"):
         plugin_delta_from_json({"marketplaces_removed": "bogus"})

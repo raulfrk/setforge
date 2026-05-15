@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 from my_setup import __version__
 from my_setup.binaries import resolve_binary
@@ -302,12 +303,13 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     With the guard, the failure is caught cleanly at the
     ``MySetupError`` boundary before any inverse op runs.
 
-    Field-level type ignores on the other fields: ``raw[k]`` is
+    Field-level :func:`typing.cast` on the other fields: ``raw[k]`` is
     ``object`` because :func:`json.loads` is untyped at the leaf and
     the caller (revert) treats the loaded record as a free-form
     mapping. The dataclass itself constrains shapes at write time via
     :func:`write_transition`'s string-value guard, so reads here
-    trust the file's structure for the simple list fields.
+    trust the file's structure for the simple list fields — the cast
+    makes that trust assertion explicit instead of suppressing.
     """
     marketplaces_removed_raw = raw.get("marketplaces_removed", [])
     if not isinstance(marketplaces_removed_raw, list):
@@ -330,10 +332,10 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
         validated_pairs.append((name, dict(payload)))
 
     return PluginDelta(
-        installed=tuple(raw.get("installed", [])),  # type: ignore[arg-type]
-        enabled=tuple(raw.get("enabled", [])),  # type: ignore[arg-type]
-        disabled=tuple(raw.get("disabled", [])),  # type: ignore[arg-type]
-        marketplaces_added=tuple(raw.get("marketplaces_added", [])),  # type: ignore[arg-type]
+        installed=tuple(cast(list[str], raw.get("installed", []))),
+        enabled=tuple(cast(list[str], raw.get("enabled", []))),
+        disabled=tuple(cast(list[str], raw.get("disabled", []))),
+        marketplaces_added=tuple(cast(list[str], raw.get("marketplaces_added", []))),
         marketplaces_removed=tuple(validated_pairs),
     )
 
@@ -344,8 +346,8 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     by :func:`write_transition`.
     """
     return ExtensionDelta(
-        added=list(raw.get("added", [])),  # type: ignore[call-overload]
-        removed=list(raw.get("removed", [])),  # type: ignore[call-overload]
+        added=list(cast(list[str], raw.get("added", []))),
+        removed=list(cast(list[str], raw.get("removed", []))),
     )
 
 
