@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -578,10 +579,10 @@ def _reconcile_plugins(
 
 
 def _compute_plugin_delta(
-    pre_plugins: Mapping[str, dict],
-    pre_marketplaces: Mapping[str, dict],
-    post_plugins: Mapping[str, dict],
-    post_marketplaces: Mapping[str, dict],
+    pre_plugins: Mapping[str, dict[str, Any]],
+    pre_marketplaces: Mapping[str, dict[str, Any]],
+    post_plugins: Mapping[str, dict[str, Any]],
+    post_marketplaces: Mapping[str, dict[str, Any]],
 ) -> transitions.PluginDelta:
     """Diff pre/post claude-plugin disk state into a :class:`PluginDelta`.
 
