@@ -449,6 +449,12 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
     probe — any git failure (no remote, dirty checkout, missing git
     binary) yields ``None`` so the caller can fall through to a
     re-clone instead of raising.
+
+    Silent-on-failure for callers (returns ``None`` instead of
+    raising), but emits the captured stdout/stderr at ``DEBUG`` level
+    for ``my-setup -v`` tracing. Per the m81/cqf convention: every
+    git invocation in this module logs its output at DEBUG level,
+    even silent-probe paths.
     """
     git = shutil.which("git")
     if git is None:
@@ -461,8 +467,19 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        LOGGER.debug(
+            "git remote get-url origin (cache %s) stderr: %s",
+            cache_dir,
+            stderr_of(exc),
+        )
         return None
+    if result.stdout:
+        LOGGER.debug(
+            "git remote get-url origin (cache %s) stdout: %s",
+            cache_dir,
+            result.stdout,
+        )
     return result.stdout.strip()
 
 
