@@ -729,9 +729,10 @@ def _apply_marketplace_re_add(
         try:
             # source_payload is the JSON-round-tripped form (all str values
             # per PluginDelta.marketplaces_removed contract); pydantic
-            # coerces them back into MarketplaceSourceKind / Path on
-            # construction.
-            source = MarketplaceSource(**source_payload)  # type: ignore[arg-type]
+            # coerces them back into MarketplaceSourceKind / Path through
+            # model_validate (accepts Any, runs full validation — avoids
+            # the # type: ignore[arg-type] the **-splat construction needed).
+            source = MarketplaceSource.model_validate(source_payload)
             claude_plugins_mod.marketplace_add(name, source)
             success_list.append((name, dict(source_payload)))
         except PluginToolMissing as exc:
