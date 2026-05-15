@@ -22,10 +22,7 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 
 ## Docker e2e tests
 
-A 25-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises
-`install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12
-container with real `claude` and `code` binaries. It is the strongest
-behavior-preservation gate in this project.
+A 25-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises `install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12 container with real `claude` and `code` binaries. It is the strongest behavior-preservation gate in this project.
 
 - **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v`
 - **Runtime:** ~5 min.
@@ -34,9 +31,7 @@ behavior-preservation gate in this project.
 - **Prerequisite:** `docker` on PATH; the suite skips when docker is missing
   (see `tests/docker/conftest.py`).
 
-The suite is gated by `pytest -m e2e_docker` AND excluded from the default
-`pytest` run via `pyproject.toml`'s `addopts = -m "not e2e_docker"`, so plain
-`uv run pytest` will not run it.
+The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pytest` run via `pyproject.toml`'s `addopts = "-m 'not e2e_docker'"`, so plain `uv run pytest` will not run it.
 
 ## Final checks (post-merge)
 
