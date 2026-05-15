@@ -178,6 +178,8 @@ def marketplace_add(name: str, source: MarketplaceSource) -> None:
     """
     claude = str(_get_claude_bin())
     if source.source is MarketplaceSourceKind.GITHUB:
+        # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
+        # by _resolve_marketplace_source for GITHUB sources
         source_arg = source.repo or ""
     else:
         source_arg = str(source.path or "")
@@ -385,9 +387,8 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         # as a flag rather than as the repo positional. CLAUDE.md
         # subprocess hygiene already mandates list-form argv and no
         # shell=True; this is the defense-in-depth completion of that.
-        # `or ""` narrows source.repo (str | None) to str for mypy; the
-        # runtime guard upstream in _resolve_marketplace_source rejects
-        # empty repo for GITHUB sources before this site is reachable.
+        # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
+        # by _resolve_marketplace_source for GITHUB sources
         subprocess.run(
             [str(git), "clone", "--", source.repo or "", str(dest_path)],
             check=True,
@@ -551,6 +552,8 @@ def _resolve_cache_collision(
         cache_dir=cache_dir,
         cache_root=cache_root,
         existing_origin=existing_origin,
+        # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
+        # by _resolve_marketplace_source for GITHUB sources
         new_repo=source.repo or "",
         auto=auto,
     )
