@@ -15,13 +15,13 @@ def test_dotted_path_overlay() -> None:
 
 def test_path_absent_in_live_keeps_src() -> None:
     src = {"a": {"b": 1}}
-    live = {"a": {}}
+    live: dict[str, dict[str, int]] = {"a": {}}
     merged = overlay(src, live, ["a.b"])
     assert merged == {"a": {"b": 1}}
 
 
 def test_path_absent_in_src_adds_live_key() -> None:
-    src = {"a": {}}
+    src: dict[str, dict[str, int]] = {"a": {}}
     live = {"a": {"b": 99}}
     merged = overlay(src, live, ["a.b"])
     assert merged == {"a": {"b": 99}}

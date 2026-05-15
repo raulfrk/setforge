@@ -518,7 +518,7 @@ def _stub_full_transition(
     through to TransitionListing.
     """
     target.mkdir(parents=True, exist_ok=True)
-    meta = {
+    meta: dict[str, str | list[str]] = {
         "command": command,
         "profile": profile,
         "timestamp": timestamp,
@@ -780,8 +780,8 @@ def _make_transition_args(
         host="h",
         version="0.1.0",
     )
-    pre = {target_file: "before\n"}
-    post = {target_file: "after\n"}
+    pre: dict[Path, str | None] = {target_file: "before\n"}
+    post: dict[Path, str | None] = {target_file: "after\n"}
     delta = ExtensionDelta(added=["a.x"], removed=[])
     return meta, pre, post, delta
 

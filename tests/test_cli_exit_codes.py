@@ -46,7 +46,7 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "tracked").mkdir()
     (tmp_path / "tracked" / "x").write_text("data\n")
 
-    state = {"installed": []}
+    state: dict[str, list[str]] = {"installed": []}
 
     def fake_run(args, **kwargs: Any):
         if args[1] == "--list-extensions":
@@ -274,9 +274,14 @@ def test_install_auto_accept_tracked_resolves_drift(
     (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
 
     transition_calls: list[Any] = []
+
+    def _fake_write_transition(*a: Any, **kw: Any) -> Path:
+        transition_calls.append(1)
+        return tmp_path / "fake"
+
     monkeypatch.setattr(
         "my_setup.transitions.write_transition",
-        lambda *a, **kw: transition_calls.append(1) or (tmp_path / "fake"),
+        _fake_write_transition,
     )
 
     runner = CliRunner()

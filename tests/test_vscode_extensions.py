@@ -9,7 +9,7 @@ touching a real ``code`` CLI.
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
@@ -23,6 +23,13 @@ from my_setup.vscode_extensions import (
     reconcile,
     remove_from_include,
 )
+
+
+class _FakeRunState(TypedDict):
+    """Mock-state shape for the in-test ``code`` CLI driver."""
+
+    installed: list[str]
+    calls: list[list[str]]
 
 
 class FakeCode:
@@ -263,7 +270,7 @@ def test_reconcile_continues_after_install_failure(
         "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
-    state = {"installed": ["existing.one"], "calls": []}
+    state: _FakeRunState = {"installed": ["existing.one"], "calls": []}
 
     def fake_run(args, **kwargs: Any):
         state["calls"].append(list(args))

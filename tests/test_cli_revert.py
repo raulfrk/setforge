@@ -8,12 +8,25 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 from typer.testing import CliRunner
 
 from my_setup.cli import app
+
+
+class _ExtState(TypedDict):
+    """In-test mutable mock state for VSCode extension reconcile.
+
+    ``installed`` is the running list of installed extension IDs;
+    ``fail_uninstall`` is the set of IDs whose uninstall should raise
+    :class:`subprocess.CalledProcessError` to simulate a failure.
+    """
+
+    installed: list[str]
+    fail_uninstall: set[str]
+
 
 _FIXTURE_YAML = """\
 version: 1
@@ -210,7 +223,7 @@ def test_revert_restores_extension_state_to_pre_install(
     )
     cfg.write_text(yaml, encoding="utf-8")
 
-    state = {"installed": []}
+    state: dict[str, list[str]] = {"installed": []}
     real_run = subprocess.run
 
     def fake_run(args, **kwargs: Any):
@@ -329,7 +342,7 @@ def test_revert_continues_after_extension_uninstall_failure(
     )
     cfg.write_text(yaml, encoding="utf-8")
 
-    state_ext = {"installed": [], "fail_uninstall": set()}
+    state_ext: _ExtState = {"installed": [], "fail_uninstall": set()}
     real_run = subprocess.run
 
     def fake_run(args, **kwargs: Any):

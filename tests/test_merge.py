@@ -577,9 +577,14 @@ def test_successful_walk_records_one_transition(
     my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     transition_calls: list[Any] = []
+
+    def _fake_write_transition_keep(*a: Any, **kw: Any) -> Path:
+        transition_calls.append(1)
+        return Path("/tmp/fake")
+
     monkeypatch.setattr(
         "my_setup.wizard.transitions.write_transition",
-        lambda *a, **kw: transition_calls.append(1) or Path("/tmp/fake"),
+        _fake_write_transition_keep,
     )
     # choose [k] for every prompt
     monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "k")
@@ -634,9 +639,14 @@ def test_manual_pending_records_transition_for_applied(
     report = CompareReport(entries=[entry], has_unexpected_drift=True)
 
     transition_calls: list[Any] = []
+
+    def _fake_write_transition_mixed(*a: Any, **kw: Any) -> Path:
+        transition_calls.append(1)
+        return Path("/tmp/fake")
+
     monkeypatch.setattr(
         "my_setup.wizard.transitions.write_transition",
-        lambda *a, **kw: transition_calls.append(1) or Path("/tmp/fake"),
+        _fake_write_transition_mixed,
     )
 
     choices = iter(["k", "m", "n"])

@@ -53,7 +53,10 @@ def test_reconcile_policy_parsed_as_enum() -> None:
 
 def test_unknown_reconcile_policy_rejected() -> None:
     with pytest.raises(ValidationError):
-        Extensions(reconcile="yolo")
+        # Intentional invalid value: this test asserts pydantic rejects
+        # arbitrary strings, so passing a non-ReconcilePolicy str is the
+        # whole point.
+        Extensions(reconcile="yolo")  # type: ignore[arg-type]
 
 
 def test_marketplace_source_requires_exactly_one() -> None:
@@ -157,21 +160,21 @@ def test_dotfile_rejects_tab_in_src() -> None:
     transitions; reject at config-load time with the offending byte
     surfaced as ``\\xNN`` for diagnosability."""
     with pytest.raises(ValidationError) as exc_info:
-        Dotfile(src="path/with\ttab", dst="~/x")
+        Dotfile(src=Path("path/with\ttab"), dst="~/x")
     assert "\\x09" in str(exc_info.value)
 
 
 def test_dotfile_rejects_newline_in_dst() -> None:
     """Same hazard via ``dst``; ensure both fields are guarded."""
     with pytest.raises(ValidationError) as exc_info:
-        Dotfile(src="ok", dst="bad\npath")
+        Dotfile(src=Path("ok"), dst="bad\npath")
     assert "\\x0a" in str(exc_info.value)
 
 
 def test_dotfile_accepts_paths_with_spaces_and_unicode() -> None:
     """Negative test guarding against over-rejection: spaces and
     non-ASCII (C1+) characters are valid in real paths."""
-    df = Dotfile(src="my path/with spaces.txt", dst="~/some/é-named/file")
+    df = Dotfile(src=Path("my path/with spaces.txt"), dst="~/some/é-named/file")
     assert df.dst == "~/some/é-named/file"
 
 

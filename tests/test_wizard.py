@@ -76,9 +76,14 @@ def test_run_wizard_loop_dispatches_per_item(
     my_setup_yaml = _make_my_setup_yaml(tmp_path)
 
     transition_calls: list[Any] = []
+
+    def _fake_write_transition(*a: Any, **kw: Any) -> Path:
+        transition_calls.append(1)
+        return Path("/tmp/fake")
+
     monkeypatch.setattr(
         "my_setup.wizard.transitions.write_transition",
-        lambda *a, **kw: transition_calls.append(1) or Path("/tmp/fake"),
+        _fake_write_transition,
     )
 
     console = Console(file=StringIO(), force_terminal=False, no_color=True)

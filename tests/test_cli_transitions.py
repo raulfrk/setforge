@@ -31,7 +31,7 @@ def _stub(
     tests don't import test-internal helpers across files."""
     target = root / dirname
     target.mkdir(parents=True, exist_ok=True)
-    meta = {
+    meta: dict[str, str | list[str]] = {
         "command": command,
         "profile": profile,
         "timestamp": timestamp,
