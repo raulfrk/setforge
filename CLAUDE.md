@@ -35,7 +35,40 @@ The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pyte
 
 ## Final checks (post-merge)
 
-After merging a non-trivial branch into `main`, run `pre-commit run --all-files` as the canonical post-merge verification. Catches issues that per-worktree reviewers cannot see — most importantly tool version skew between the pre-commit pinned versions and uv-resolved tooling (the cxj batch shipped a ruff version mismatch that only pre-commit caught on first push to main). This is the canonical Phase 7 (post-merge cross-cutting review) final-check command for this project. See `tracked/claude/superpowers-prefs.md` Phase 7.
+After merging a non-trivial branch into `main`, both of these must exit 0:
+
+```
+pre-commit run --all-files
+uv run pytest tests/docker/ -m e2e_docker -v
+```
+
+`pre-commit` catches tool-version skew that per-worktree reviewers cannot see
+— most importantly the ruff version mismatch the cxj batch only hit on first
+push to main. The Docker e2e suite catches integration-emergent install /
+sync / revert / plugin / extension behavior regressions that unit tests
+cannot exercise.
+
+This is the canonical Phase 7 (post-merge cross-cutting review) gate for
+this project. See `tracked/claude/superpowers-prefs.md` Phase 7.
+
+### Failure handling
+
+A Docker e2e failure on Phase 7 is CRITICAL: a behavior the suite asserted
+is now broken on `main`.
+
+Default action:
+
+1. `git revert <merge-commit>` — restore main to a known-good state.
+2. `git checkout <feature-branch>`.
+3. Reproduce locally, fix, push, re-PR, re-merge.
+4. Re-run Phase 7 on the new merge.
+
+Inline-fix on main (skip the revert) ONLY when both hold:
+- the diff is one file and obviously the cause, AND
+- the fix is narrowly scoped (one or two lines).
+
+Filing a new bead is appropriate for follow-up work but does NOT replace
+the revert-or-fix step. A red main is not OK.
 
 ## The four-tool stack
 

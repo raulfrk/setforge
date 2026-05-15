@@ -126,8 +126,10 @@ Superpowers skills are designed to defer to.
    tool version skew between pre-commit pin and uv-resolved). Mandatory
    for multi-worktree work; recommended for single-stream non-trivial
    work. See project-scope CLAUDE.md for the canonical final-check
-   command on each project (`pre-commit run --all-files` on this VM —
-   empirical observation E).
+   commands on each project (on this VM's my-setup project:
+   `pre-commit run --all-files` AND
+   `uv run pytest tests/docker/ -m e2e_docker -v` — empirical
+   observation E, with revert-by-default failure protocol).
 
 The **spec** rides through plan mode verbatim — no summary, no reflow.
 That is the user-facing review surface. The **plan** does NOT enter
