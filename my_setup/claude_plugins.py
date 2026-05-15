@@ -327,7 +327,7 @@ def _run_git(
         argv.extend(["-C", str(cwd)])
     argv.extend(args)
     try:
-        return subprocess.run(
+        result = subprocess.run(
             argv,
             check=True,
             text=True,
@@ -335,9 +335,13 @@ def _run_git(
             timeout=timeout,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        LOGGER.debug("git %s stderr: %s", args, stderr_of(exc))
         raise MarketplaceCacheMiss(
             f"`git {' '.join(args)}` failed: {stderr_of(exc)}"
         ) from exc
+    if result.stdout:
+        LOGGER.debug("git %s stdout: %s", args, result.stdout)
+    return result
 
 
 def _safe_cache_dir(cache_root: Path, subdir_name: str) -> Path:
@@ -389,7 +393,7 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         # shell=True; this is the defense-in-depth completion of that.
         # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
         # by _resolve_marketplace_source for GITHUB sources
-        subprocess.run(
+        result = subprocess.run(
             [str(git), "clone", "--", source.repo or "", str(dest_path)],
             check=True,
             text=True,
@@ -397,12 +401,15 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
             timeout=_CLONE_TIMEOUT_S,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        LOGGER.debug("git clone %r stderr: %s", source.repo, stderr_of(exc))
         raise MarketplaceCacheMiss(
             f"marketplace {source.repo!r} not in local cache and `git clone` "
             f"failed (likely offline): {stderr_of(exc)}. "
             f"Run `my-setup plugin sync-cache --profile=<name>` while online "
             f"first."
         ) from exc
+    if result.stdout:
+        LOGGER.debug("git clone %r stdout: %s", source.repo, result.stdout)
 
 
 def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> None:
