@@ -20,6 +20,24 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 - `uv run my-setup revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/my-setup/transitions/` (kept indefinitely; pruning is a future bead).
 - `uv run my-setup validate --profile=<name>` — config-shape check (schema + profile chain + Jinja2 + tracked srcs + claude_plugins references). No filesystem comparison; works offline. CI runs `validate --all`.
 
+## Docker e2e tests
+
+A 25-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises
+`install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12
+container with real `claude` and `code` binaries. It is the strongest
+behavior-preservation gate in this project.
+
+- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v`
+- **Runtime:** ~5 min.
+- **When to run:** required on every Phase 7 (post-merge cross-cutting
+  review). See `## Final checks (post-merge)` below.
+- **Prerequisite:** `docker` on PATH; the suite skips when docker is missing
+  (see `tests/docker/conftest.py`).
+
+The suite is gated by `pytest -m e2e_docker` AND excluded from the default
+`pytest` run via `pyproject.toml`'s `addopts = -m "not e2e_docker"`, so plain
+`uv run pytest` will not run it.
+
 ## Final checks (post-merge)
 
 After merging a non-trivial branch into `main`, run `pre-commit run --all-files` as the canonical post-merge verification. Catches issues that per-worktree reviewers cannot see — most importantly tool version skew between the pre-commit pinned versions and uv-resolved tooling (the cxj batch shipped a ruff version mismatch that only pre-commit caught on first push to main). This is the canonical Phase 7 (post-merge cross-cutting review) final-check command for this project. See `tracked/claude/superpowers-prefs.md` Phase 7.
