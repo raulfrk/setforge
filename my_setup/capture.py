@@ -73,7 +73,7 @@ def capture_dotfile(
     *,
     preserve_user_sections: bool,
     preserve_user_keys: list[str],
-    preserve_user_keys_deep: list[str] = (),
+    preserve_user_keys_deep: list[str] | None = None,
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS,
 ) -> CaptureResult:
     """Write a stripped version of ``dst`` (live) back to ``src`` (tracked).

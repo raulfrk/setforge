@@ -110,7 +110,7 @@ def overlay_user_keys(
     tracked_text: str,
     live_text: str,
     key_names: list[str],
-    deep_key_names: list[str] = (),
+    deep_key_names: list[str] | None = None,
 ) -> str:
     """Splice live's top-level user-key values into tracked.
 
@@ -135,7 +135,7 @@ def overlay_user_keys(
     tracked_top = _require_top_object(tracked_model)
     indent = _detect_indent(tracked_top)
     _overlay_shallow_keys(tracked_top, live_value, key_names, indent)
-    _overlay_deep_keys(tracked_top, live_value, deep_key_names, indent)
+    _overlay_deep_keys(tracked_top, live_value, deep_key_names or [], indent)
     return dumps(tracked_model, dumper=ModelDumper())
 
 
@@ -305,7 +305,7 @@ def classify_jsonc_drift(
     src_text: str,
     live_text: str,
     key_names: list[str],
-    deep_key_names: list[str] = (),
+    deep_key_names: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return ``(expected, unexpected)`` lists of top-level key names that
     differ between parsed ``src_text`` and ``live_text``.
@@ -322,7 +322,7 @@ def classify_jsonc_drift(
     live = parse_jsonc(live_text)
     if not isinstance(src, dict) or not isinstance(live, dict):
         return [], []
-    deep_preserve = set(deep_key_names)
+    deep_preserve = set(deep_key_names or [])
     flat_preserve = {n for n in key_names if PATH_SEPARATOR not in n}
     expected: list[str] = []
     unexpected: list[str] = []

@@ -131,7 +131,7 @@ def classify_yaml_drift(
     src: Path,
     dst: Path,
     preserve_user_keys: list[str],
-    preserve_user_keys_deep: list[str] = (),
+    preserve_user_keys_deep: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return ``(expected, unexpected)`` JSONPath-lite paths where ``src``
     and ``dst`` diverge.
@@ -151,7 +151,7 @@ def classify_yaml_drift(
 
     diverged_paths = _diff_paths(src_doc, live_doc)
     preserve_prefixes = [_to_prefix(p) for p in preserve_user_keys]
-    preserve_prefixes.extend(_to_prefix(p) for p in preserve_user_keys_deep)
+    preserve_prefixes.extend(_to_prefix(p) for p in preserve_user_keys_deep or [])
 
     expected: list[str] = []
     unexpected: list[str] = []

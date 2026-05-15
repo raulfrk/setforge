@@ -69,7 +69,7 @@ def overlay(
     src_doc: Any,
     live_doc: Any,
     key_paths: list[str],
-    deep_key_paths: list[str] = (),
+    deep_key_paths: list[str] | None = None,
 ) -> Any:
     """Return a deep copy of ``src_doc`` with ``live_doc``'s values overlaid
     at every JSONPath-lite path in ``key_paths``.
@@ -93,7 +93,7 @@ def overlay(
     for path in key_paths:
         tokens = _parse_path(path)
         _apply_overlay(result, live_doc, tokens, path)
-    for path in deep_key_paths:
+    for path in deep_key_paths or []:
         tokens = _parse_path(path)
         _apply_deep_overlay(result, live_doc, tokens, path)
     return result
