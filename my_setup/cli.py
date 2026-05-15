@@ -905,11 +905,20 @@ def transitions_list(
             entry.profile,
             str(entry.file_count),
             str(entry.ext_count),
+            str(entry.plugin_count),
             entry.directory.name,
         )
         for entry in listings
     ]
-    headers = ("TIMESTAMP", "COMMAND", "PROFILE", "FILES", "EXTS", "DIRECTORY")
+    headers = (
+        "TIMESTAMP",
+        "COMMAND",
+        "PROFILE",
+        "FILES",
+        "EXTS",
+        "PLUGINS",
+        "DIRECTORY",
+    )
     widths = [
         max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
         for i in range(len(headers))

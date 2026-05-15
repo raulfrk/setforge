@@ -91,7 +91,16 @@ def test_list_renders_columns_and_chronological_order(
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert any("TIMESTAMP" in line and "DIRECTORY" in line for line in lines)
+    header_line = next(
+        line for line in lines if "TIMESTAMP" in line and "DIRECTORY" in line
+    )
+    # PLUGINS column surfaces TransitionListing.plugin_count alongside
+    # FILES/EXTS so plugin-only transitions aren't silently invisible
+    # in the list view (the field was added by nen.13 but only wired
+    # into the renderer in xj8).
+    assert "FILES" in header_line
+    assert "EXTS" in header_line
+    assert "PLUGINS" in header_line
     install_idx = next(
         i for i, line in enumerate(lines) if "install" in line and "vmh" in line
     )
