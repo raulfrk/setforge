@@ -11,6 +11,7 @@ import logging
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -757,15 +758,37 @@ def _apply_marketplace_re_add(
             )
 
 
-# Dispatch table for the four uniform inverse ops on a PluginDelta.
-# Each entry is (delta_field_name, inverse_fn, verb-for-log). The
-# fifth field — marketplaces_removed — has a (name, dict) shape and
-# is handled outside this table by :func:`_apply_marketplace_re_add`.
-_REVERSE_PLUGIN_DISPATCH: tuple[tuple[str, Callable[[str], None], str], ...] = (
-    ("installed", claude_plugins_mod.plugin_uninstall, "uninstall"),
-    ("enabled", claude_plugins_mod.plugin_disable, "disable"),
-    ("disabled", claude_plugins_mod.plugin_enable, "enable"),
-    ("marketplaces_added", claude_plugins_mod.marketplace_remove, "marketplace remove"),
+@dataclass(frozen=True, slots=True)
+class _PluginReverseOp:
+    """One uniform inverse op on a :class:`PluginDelta`.
+
+    Bundles the delta field name (which doubles as the
+    :class:`PluginDelta` kwarg used to assemble the reverse delta), the
+    inverse function to call per item, and the verb shown in
+    warning / failure log lines. Replaces an earlier 3-tuple +
+    separate stringly-typed accumulator dict whose two key sets had
+    to be kept in lockstep — a typo on either side would surface as a
+    runtime ``KeyError``. With this dataclass the field name lives in
+    exactly one place per op.
+    """
+
+    delta_field: str
+    inverse_fn: Callable[[str], None]
+    verb: str
+
+
+# Dispatch table for the four uniform inverse ops on a PluginDelta. The
+# fifth field — marketplaces_removed — has a (name, dict) shape and is
+# handled outside this table by :func:`_apply_marketplace_re_add`.
+_REVERSE_PLUGIN_DISPATCH: tuple[_PluginReverseOp, ...] = (
+    _PluginReverseOp("installed", claude_plugins_mod.plugin_uninstall, "uninstall"),
+    _PluginReverseOp("enabled", claude_plugins_mod.plugin_disable, "disable"),
+    _PluginReverseOp("disabled", claude_plugins_mod.plugin_enable, "enable"),
+    _PluginReverseOp(
+        "marketplaces_added",
+        claude_plugins_mod.marketplace_remove,
+        "marketplace remove",
+    ),
 )
 
 
@@ -786,24 +809,24 @@ def _reverse_plugins(
     handled separately because its entries round-trip through
     :class:`MarketplaceSource`.
     """
+    # Accumulator dict keyed by the same field names the dispatch ops
+    # carry, so the reverse-delta construction below pulls from the
+    # same source of truth as the loop. A typo in ``_PluginReverseOp``'s
+    # ``delta_field`` would surface immediately at the getattr call.
     accumulators: dict[str, list[str]] = {
-        "installed": [],
-        "enabled": [],
-        "disabled": [],
-        "marketplaces_added": [],
+        op.delta_field: [] for op in _REVERSE_PLUGIN_DISPATCH
     }
     reverse_mps_removed: list[tuple[str, dict[str, str]]] = []
     failed: list[tuple[str, str]] = []
-    for field_name, inverse_fn, verb in _REVERSE_PLUGIN_DISPATCH:
-        items: Iterable[str] = getattr(delta, field_name)
-        _apply_inverse(items, inverse_fn, verb, accumulators[field_name], failed)
+    for op in _REVERSE_PLUGIN_DISPATCH:
+        items: Iterable[str] = getattr(delta, op.delta_field)
+        _apply_inverse(
+            items, op.inverse_fn, op.verb, accumulators[op.delta_field], failed
+        )
     _apply_marketplace_re_add(delta.marketplaces_removed, reverse_mps_removed, failed)
     reverse_delta = transitions.PluginDelta(
-        installed=tuple(accumulators["installed"]),
-        enabled=tuple(accumulators["enabled"]),
-        disabled=tuple(accumulators["disabled"]),
-        marketplaces_added=tuple(accumulators["marketplaces_added"]),
         marketplaces_removed=tuple(reverse_mps_removed),
+        **{field: tuple(items) for field, items in accumulators.items()},
     )
     return reverse_delta, failed
 
