@@ -606,7 +606,7 @@ def _compute_plugin_delta(
 
 
 def _reverse_extensions(
-    delta: dict,
+    delta: transitions.ExtensionDelta,
 ) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """Apply the inverse of an extensions.json delta.
 
@@ -618,7 +618,7 @@ def _reverse_extensions(
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
     failed: list[tuple[str, str]] = []
-    for ext_id in delta.get("added", []):
+    for ext_id in delta.added:
         try:
             vscode_extensions.uninstall_one(ext_id)
             reverse_removed.append(ext_id)
@@ -635,7 +635,7 @@ def _reverse_extensions(
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-    for ext_id in delta.get("removed", []):
+    for ext_id in delta.removed:
         try:
             vscode_extensions.install_one(ext_id)
             reverse_added.append(ext_id)
@@ -694,27 +694,27 @@ def _apply_inverse(
 
 
 def _apply_marketplace_re_add(
-    items: Iterable[list],
+    items: Iterable[tuple[str, dict[str, str]]],
     success_list: list[tuple[str, dict[str, str]]],
     failed: list[tuple[str, str]],
 ) -> None:
     """Apply the inverse of ``marketplaces_removed``: re-register each marketplace.
 
     Distinct from :func:`_apply_inverse` because each entry is a
-    ``[name, source_payload]`` pair (JSON round-trip of a tuple), the
-    payload must be validated through :class:`MarketplaceSource`, and
-    the success record is a ``(name, dict)`` tuple — not a bare string.
+    ``(name, source_payload)`` pair, the payload must be validated
+    through :class:`MarketplaceSource`, and the success record is a
+    ``(name, dict)`` tuple — not a bare string. The pair shape is
+    guaranteed by :attr:`transitions.PluginDelta.marketplaces_removed`,
+    so no runtime shape check is needed.
     """
     for entry in items:
-        # JSON round-trip: tuple → list. Reject malformed shapes early.
-        if not isinstance(entry, list) or len(entry) != 2:
-            failed.append(
-                (str(entry), f"malformed marketplaces_removed entry: {entry!r}")
-            )
-            continue
         name, source_payload = entry
         try:
-            source = MarketplaceSource(**source_payload)
+            # source_payload is the JSON-round-tripped form (all str values
+            # per PluginDelta.marketplaces_removed contract); pydantic
+            # coerces them back into MarketplaceSourceKind / Path on
+            # construction.
+            source = MarketplaceSource(**source_payload)  # type: ignore[arg-type]
             claude_plugins_mod.marketplace_add(name, source)
             success_list.append((name, dict(source_payload)))
         except PluginToolMissing as exc:
@@ -738,7 +738,7 @@ def _apply_marketplace_re_add(
 
 
 def _reverse_plugins(
-    delta: dict,
+    delta: transitions.PluginDelta,
 ) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
     """Apply the inverse of a plugins.json delta.
 
@@ -770,28 +770,28 @@ def _reverse_plugins(
     failed: list[tuple[str, str]] = []
 
     _apply_inverse(
-        delta.get("installed", []),
+        delta.installed,
         claude_plugins_mod.plugin_uninstall,
         "uninstall",
         reverse_installed,
         failed,
     )
     _apply_inverse(
-        delta.get("enabled", []),
+        delta.enabled,
         claude_plugins_mod.plugin_disable,
         "disable",
         reverse_enabled,
         failed,
     )
     _apply_inverse(
-        delta.get("disabled", []),
+        delta.disabled,
         claude_plugins_mod.plugin_enable,
         "enable",
         reverse_disabled,
         failed,
     )
     _apply_inverse(
-        delta.get("marketplaces_added", []),
+        delta.marketplaces_added,
         claude_plugins_mod.marketplace_remove,
         "marketplace remove",
         reverse_mps_added,
@@ -799,7 +799,7 @@ def _reverse_plugins(
     )
 
     _apply_marketplace_re_add(
-        delta.get("marketplaces_removed", []),
+        delta.marketplaces_removed,
         reverse_mps_removed,
         failed,
     )
@@ -843,13 +843,27 @@ def revert(
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
     if ext_file.exists():
-        delta = json.loads(ext_file.read_text())
-        reverse_added, reverse_removed, _ = _reverse_extensions(delta)
+        ext_raw = json.loads(ext_file.read_text())
+        ext_delta = transitions.ExtensionDelta(
+            added=list(ext_raw.get("added", [])),
+            removed=list(ext_raw.get("removed", [])),
+        )
+        reverse_added, reverse_removed, _ = _reverse_extensions(ext_delta)
 
     plugin_file = transition / "plugins.json"
     reverse_plugin_delta: transitions.PluginDelta | None = None
     if plugin_file.exists():
-        plugin_payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+        plugin_raw = json.loads(plugin_file.read_text(encoding="utf-8"))
+        plugin_payload = transitions.PluginDelta(
+            installed=tuple(plugin_raw.get("installed", [])),
+            enabled=tuple(plugin_raw.get("enabled", [])),
+            disabled=tuple(plugin_raw.get("disabled", [])),
+            marketplaces_added=tuple(plugin_raw.get("marketplaces_added", [])),
+            marketplaces_removed=tuple(
+                (name, dict(payload))
+                for name, payload in plugin_raw.get("marketplaces_removed", [])
+            ),
+        )
         reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
         if reverse_plugin_delta.is_empty():
             reverse_plugin_delta = None
