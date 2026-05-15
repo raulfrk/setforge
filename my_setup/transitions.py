@@ -287,6 +287,46 @@ class PluginDelta:
         )
 
 
+def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
+    """Reconstruct a :class:`PluginDelta` from a JSON-deserialized
+    ``plugins.json`` record. Inverse of the on-disk shape produced by
+    :func:`write_transition`.
+
+    Today this constructor reflects the JSON shape directly; shape
+    validation of ``marketplaces_removed`` entries lives in a sibling
+    bead (dotfiles-dtm) that raises :class:`InvalidTransitionRecord`
+    on corrupt records before the dataclass is constructed.
+
+    Field-level type ignores: ``raw[k]`` is ``object`` because
+    :func:`json.loads` is untyped at the leaf and the caller (revert)
+    treats the loaded record as a free-form mapping. The dataclass
+    itself constrains shapes at write time via
+    :func:`write_transition`'s string-value guard, so reads here trust
+    the file's structure.
+    """
+    return PluginDelta(
+        installed=tuple(raw.get("installed", [])),  # type: ignore[arg-type]
+        enabled=tuple(raw.get("enabled", [])),  # type: ignore[arg-type]
+        disabled=tuple(raw.get("disabled", [])),  # type: ignore[arg-type]
+        marketplaces_added=tuple(raw.get("marketplaces_added", [])),  # type: ignore[arg-type]
+        marketplaces_removed=tuple(
+            (name, dict(payload))
+            for name, payload in raw.get("marketplaces_removed", [])  # type: ignore[attr-defined]
+        ),
+    )
+
+
+def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
+    """Reconstruct an :class:`ExtensionDelta` from a JSON-deserialized
+    ``extensions.json`` record. Inverse of the on-disk shape produced
+    by :func:`write_transition`.
+    """
+    return ExtensionDelta(
+        added=list(raw.get("added", [])),  # type: ignore[call-overload]
+        removed=list(raw.get("removed", [])),  # type: ignore[call-overload]
+    )
+
+
 def _touched_paths(
     pre: Mapping[Path, str | None], post: Mapping[Path, str | None]
 ) -> list[Path]:

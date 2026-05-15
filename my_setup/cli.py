@@ -862,26 +862,14 @@ def revert(
     reverse_removed: list[str] = []
     if ext_file.exists():
         ext_raw = json.loads(ext_file.read_text())
-        ext_delta = transitions.ExtensionDelta(
-            added=list(ext_raw.get("added", [])),
-            removed=list(ext_raw.get("removed", [])),
-        )
+        ext_delta = transitions.extension_delta_from_json(ext_raw)
         reverse_added, reverse_removed, _ = _reverse_extensions(ext_delta)
 
     plugin_file = transition / "plugins.json"
     reverse_plugin_delta: transitions.PluginDelta | None = None
     if plugin_file.exists():
         plugin_raw = json.loads(plugin_file.read_text(encoding="utf-8"))
-        plugin_payload = transitions.PluginDelta(
-            installed=tuple(plugin_raw.get("installed", [])),
-            enabled=tuple(plugin_raw.get("enabled", [])),
-            disabled=tuple(plugin_raw.get("disabled", [])),
-            marketplaces_added=tuple(plugin_raw.get("marketplaces_added", [])),
-            marketplaces_removed=tuple(
-                (name, dict(payload))
-                for name, payload in plugin_raw.get("marketplaces_removed", [])
-            ),
-        )
+        plugin_payload = transitions.plugin_delta_from_json(plugin_raw)
         reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
         if reverse_plugin_delta.is_empty():
             reverse_plugin_delta = None

@@ -17,10 +17,12 @@ from my_setup.transitions import (
     TransitionMeta,
     apply_patch_reverse,
     compute_patch,
+    extension_delta_from_json,
     list_transitions,
     load_latest,
     make_meta,
     now_utc,
+    plugin_delta_from_json,
     resolve_transition_prefix,
     snapshot_paths,
     state_root,
@@ -910,3 +912,74 @@ def test_load_latest_skips_pending_dirs_as_candidates(
     )
 
     assert load_latest("vmh") is None
+
+
+def test_plugin_delta_from_json_round_trips_full_record() -> None:
+    """A populated :class:`PluginDelta` survives ``json.dumps`` +
+    ``json.loads`` + :func:`plugin_delta_from_json` unchanged.
+
+    Locks in the on-disk JSON contract: every field round-trips, and
+    ``marketplaces_removed`` tuples reassemble from the
+    ``[name, source_dict]`` list pairs that :func:`write_transition`
+    serializes.
+    """
+    original = PluginDelta(
+        installed=("foo@mp", "bar@mp"),
+        enabled=("baz@mp",),
+        disabled=("qux@mp",),
+        marketplaces_added=("mp-new",),
+        marketplaces_removed=(
+            ("mp-old", {"source": "github", "repo": "https://example.com/x.git"}),
+        ),
+    )
+    on_disk_shape = {
+        "installed": list(original.installed),
+        "enabled": list(original.enabled),
+        "disabled": list(original.disabled),
+        "marketplaces_added": list(original.marketplaces_added),
+        "marketplaces_removed": [
+            [name, dict(src)] for name, src in original.marketplaces_removed
+        ],
+    }
+    serialized = json.dumps(on_disk_shape)
+    raw = json.loads(serialized)
+
+    rebuilt = plugin_delta_from_json(raw)
+
+    assert rebuilt == original
+
+
+def test_plugin_delta_from_json_defaults_missing_fields_to_empty() -> None:
+    """Missing fields default to empty tuples — matches the on-disk
+    shape :func:`write_transition` produces for partial deltas."""
+    rebuilt = plugin_delta_from_json({})
+
+    assert rebuilt == PluginDelta(
+        installed=(),
+        enabled=(),
+        disabled=(),
+        marketplaces_added=(),
+        marketplaces_removed=(),
+    )
+
+
+def test_extension_delta_from_json_round_trips_full_record() -> None:
+    """An :class:`ExtensionDelta` survives ``json.dumps`` +
+    ``json.loads`` + :func:`extension_delta_from_json` unchanged."""
+    original = ExtensionDelta(
+        added=["pub.ext-a", "pub.ext-b"],
+        removed=["pub.ext-c"],
+    )
+    on_disk_shape = {"added": original.added, "removed": original.removed}
+    raw = json.loads(json.dumps(on_disk_shape))
+
+    rebuilt = extension_delta_from_json(raw)
+
+    assert rebuilt == original
+
+
+def test_extension_delta_from_json_defaults_missing_fields_to_empty() -> None:
+    """Missing fields default to empty lists."""
+    rebuilt = extension_delta_from_json({})
+
+    assert rebuilt == ExtensionDelta(added=[], removed=[])
