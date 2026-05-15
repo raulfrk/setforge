@@ -30,6 +30,7 @@ from my_setup.config import (
     Config,
     MarketplaceSource,
     ReconcilePolicy,
+    ResolvedProfile,
     load_config,
     resolve_profile,
 )
@@ -204,94 +205,8 @@ def install(
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
 
-    ext_delta: transitions.ExtensionDelta | None = None
-    try:
-        report = vscode_extensions.reconcile(resolved.extensions)
-    except ExtensionToolMissing as exc:
-        typer.secho(
-            f"warning: skipping extension reconcile — {exc}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        failed_ids = {ext_id for ext_id, _ in report.failed}
-        for ext_id in report.to_install:
-            if ext_id not in failed_ids:
-                typer.echo(f"installed  {ext_id}")
-        for ext_id in report.to_uninstall:
-            if ext_id not in failed_ids:
-                typer.echo(f"uninstalled  {ext_id}")
-        for ext_id, err in report.failed:
-            typer.secho(f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
-        if not report:
-            typer.echo("extensions: nothing to reconcile")
-        ext_delta = transitions.ExtensionDelta(
-            added=[i for i in report.to_install if i not in failed_ids],
-            removed=[i for i in report.to_uninstall if i not in failed_ids],
-        )
-
-    # Step 5: Claude plugin reconcile (warn-and-skip if claude absent).
-    # Snapshot disk state BEFORE reconcile so we can compute the delta
-    # from ground truth, not from a report that doesn't distinguish
-    # install-failures from enable-failures. A plugin whose install step
-    # succeeds but whose enable step fails is still on disk and MUST
-    # appear in PluginDelta.installed, or revert will orphan it.
-    plugin_delta: transitions.PluginDelta | None = None
-    try:
-        pre_plugins = claude_plugins_mod.list_installed()
-        pre_marketplaces = claude_plugins_mod.list_marketplaces()
-    except PluginToolMissing as exc:
-        # No ``claude`` binary available — skip reconcile entirely.
-        typer.secho(
-            f"warning: skipping claude plugin reconcile — {exc}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        try:
-            plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping claude plugin reconcile — {exc}",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        else:
-            failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
-            for name, mp in plugin_report.to_install:
-                pid = f"{name}@{mp}"
-                if pid not in failed_plugin_ids:
-                    typer.echo(f"plugin installed  {pid}")
-            for pid in plugin_report.to_enable:
-                if pid not in failed_plugin_ids:
-                    typer.echo(f"plugin enabled    {pid}")
-            for pid in plugin_report.to_disable:
-                if pid not in failed_plugin_ids:
-                    typer.echo(f"plugin disabled   {pid}")
-            for pid, err in plugin_report.failed:
-                typer.secho(
-                    f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW
-                )
-            if not plugin_report:
-                typer.echo("plugins: nothing to reconcile")
-
-            # Build PluginDelta from pre/post disk-state diff. Disk
-            # state is ground truth: captures plugins that landed on
-            # disk regardless of whether their subsequent enable step
-            # succeeded. The old failed_plugin_ids filter collapsed
-            # install-failures and enable-failures into one set and
-            # excluded both — leaving install-then-enable-fail plugins
-            # orphaned at revert time. ``marketplaces_removed`` is
-            # always empty for install today (reconcile never auto-
-            # evicts marketplaces).
-            post_plugins = claude_plugins_mod.list_installed()
-            post_marketplaces = claude_plugins_mod.list_marketplaces()
-            plugin_delta = _compute_plugin_delta(
-                pre_plugins,
-                pre_marketplaces,
-                post_plugins,
-                post_marketplaces,
-            )
+    ext_delta = _reconcile_extensions(resolved)
+    plugin_delta = _reconcile_plugins(cfg, resolved)
 
     file_post = transitions.snapshot_paths(dst_paths)
 
@@ -559,6 +474,107 @@ def sync(
             None,  # sync's extension change is reflected in the YAML diff
         )
         typer.echo(f"transition: {target}")
+
+
+def _reconcile_extensions(
+    resolved: ResolvedProfile,
+) -> transitions.ExtensionDelta | None:
+    """Reconcile VSCode extensions for ``resolved`` and emit progress lines.
+
+    Returns the :class:`ExtensionDelta` describing what landed on disk, or
+    ``None`` when the underlying tool is missing (warn-and-skip). Pure
+    data in/out so :func:`install` can stay a thin orchestrator.
+    """
+    try:
+        report = vscode_extensions.reconcile(resolved.extensions)
+    except ExtensionToolMissing as exc:
+        typer.secho(
+            f"warning: skipping extension reconcile — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return None
+    failed_ids = {ext_id for ext_id, _ in report.failed}
+    for ext_id in report.to_install:
+        if ext_id not in failed_ids:
+            typer.echo(f"installed  {ext_id}")
+    for ext_id in report.to_uninstall:
+        if ext_id not in failed_ids:
+            typer.echo(f"uninstalled  {ext_id}")
+    for ext_id, err in report.failed:
+        typer.secho(f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
+    if not report:
+        typer.echo("extensions: nothing to reconcile")
+    return transitions.ExtensionDelta(
+        added=[i for i in report.to_install if i not in failed_ids],
+        removed=[i for i in report.to_uninstall if i not in failed_ids],
+    )
+
+
+def _reconcile_plugins(
+    cfg: Config,
+    resolved: ResolvedProfile,
+) -> transitions.PluginDelta | None:
+    """Reconcile Claude plugins and compute the install-time :class:`PluginDelta`.
+
+    Snapshots disk state pre/post so the delta reflects ground truth:
+    plugins whose install step succeeds but whose enable step fails are
+    still on disk and MUST appear in :attr:`PluginDelta.installed`, or
+    revert orphans them. Returns ``None`` when the ``claude`` binary is
+    absent (warn-and-skip).
+    """
+    try:
+        pre_plugins = claude_plugins_mod.list_installed()
+        pre_marketplaces = claude_plugins_mod.list_marketplaces()
+    except PluginToolMissing as exc:
+        # No ``claude`` binary available — skip reconcile entirely.
+        typer.secho(
+            f"warning: skipping claude plugin reconcile — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return None
+    try:
+        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+    except PluginToolMissing as exc:
+        typer.secho(
+            f"warning: skipping claude plugin reconcile — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return None
+    failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
+    for name, mp in plugin_report.to_install:
+        pid = f"{name}@{mp}"
+        if pid not in failed_plugin_ids:
+            typer.echo(f"plugin installed  {pid}")
+    for pid in plugin_report.to_enable:
+        if pid not in failed_plugin_ids:
+            typer.echo(f"plugin enabled    {pid}")
+    for pid in plugin_report.to_disable:
+        if pid not in failed_plugin_ids:
+            typer.echo(f"plugin disabled   {pid}")
+    for pid, err in plugin_report.failed:
+        typer.secho(f"FAILED plugin  {pid} — {err}", err=True, fg=typer.colors.YELLOW)
+    if not plugin_report:
+        typer.echo("plugins: nothing to reconcile")
+
+    # Build PluginDelta from pre/post disk-state diff. Disk state is
+    # ground truth: captures plugins that landed on disk regardless of
+    # whether their subsequent enable step succeeded. The old
+    # ``failed_plugin_ids`` filter collapsed install-failures and
+    # enable-failures into one set and excluded both — leaving
+    # install-then-enable-fail plugins orphaned at revert time.
+    # ``marketplaces_removed`` is always empty for install today
+    # (reconcile never auto-evicts marketplaces).
+    post_plugins = claude_plugins_mod.list_installed()
+    post_marketplaces = claude_plugins_mod.list_marketplaces()
+    return _compute_plugin_delta(
+        pre_plugins,
+        pre_marketplaces,
+        post_plugins,
+        post_marketplaces,
+    )
 
 
 def _compute_plugin_delta(
