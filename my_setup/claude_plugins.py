@@ -463,8 +463,8 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
 def _resolve_marketplace_source(
     source: MarketplaceSource,
     mode: ClaudeInstallMode,
-    cache_root: Path,
     *,
+    cache_root: Path,
     mp_name: str | None = None,
     auto: bool = False,
 ) -> MarketplaceSource:
@@ -724,7 +724,7 @@ def _add_declared_marketplaces(
             effective_source = _resolve_marketplace_source(
                 cfg.marketplaces[mp_name],
                 install_mode,
-                cache_root,
+                cache_root=cache_root,
                 mp_name=mp_name,
                 auto=auto,
             )
