@@ -56,6 +56,7 @@ def _install(
     container: ContainerHandle,
     profile: str,
     *,
+    root_args: list[str] | None = None,
     extra: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``my-setup install`` inside the container; return CompletedProcess.
@@ -63,15 +64,15 @@ def _install(
     Uses ``check=False`` so callers can assert on returncode + stderr
     explicitly; the buried ``CalledProcessError`` chain otherwise hides
     the actual stderr in ``__cause__``.
+
+    ``root_args`` are typer root-callback flags (e.g. ``-v``) that must
+    precede the ``install`` subcommand. ``extra`` are subcommand-level
+    flags (e.g. ``--auto-accept-*``) that follow it.
     """
-    cmd = [
-        "uv",
-        "run",
-        "my-setup",
-        "install",
-        f"--profile={profile}",
-        f"--config={_CONFIG}",
-    ]
+    cmd = ["uv", "run", "my-setup"]
+    if root_args:
+        cmd.extend(root_args)
+    cmd.extend(["install", f"--profile={profile}", f"--config={_CONFIG}"])
     if extra:
         cmd.extend(extra)
     result = container.exec(cmd, check=False)
@@ -83,6 +84,7 @@ def _sync(
     container: ContainerHandle,
     profile: str,
     *,
+    root_args: list[str] | None = None,
     extra: list[str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
@@ -90,15 +92,15 @@ def _sync(
 
     Asserts on ``returncode == 0`` when ``check=True`` (the default)
     for the same readability reasons as :func:`_install`.
+
+    ``root_args`` are typer root-callback flags (e.g. ``-v``) that must
+    precede the ``sync`` subcommand. ``extra`` are subcommand-level
+    flags (e.g. ``--auto=...``) that follow it.
     """
-    cmd = [
-        "uv",
-        "run",
-        "my-setup",
-        "sync",
-        f"--profile={profile}",
-        f"--config={_CONFIG}",
-    ]
+    cmd = ["uv", "run", "my-setup"]
+    if root_args:
+        cmd.extend(root_args)
+    cmd.extend(["sync", f"--profile={profile}", f"--config={_CONFIG}"])
     if extra:
         cmd.extend(extra)
     result = container.exec(cmd, check=False)
@@ -523,53 +525,46 @@ def test_install_comprehensive_plugins_extensions(
 def test_install_verbose_emits_my_setup_debug(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``-v`` flag surfaces ``my_setup`` DEBUG lines from a real subprocess.
+    """``-v`` flag surfaces ``my_setup.claude_plugins`` DEBUG from a real subprocess.
 
     Closes the e2e scope gap left by the in-process CliRunner unit tests
     in :mod:`tests.test_cli_e2e` (which prove flag mechanics inside the
     test interpreter but not real-subprocess logging propagation). Runs
     the comprehensive profile under ``-v`` in a fresh Debian container
-    and asserts a ``my_setup`` DEBUG line lands on stderr — proving the
-    dotfiles-58x verbosity surface threads end-to-end through CLI startup,
-    ``logging.basicConfig(stream=sys.stderr)``, and the production
-    ``my_setup.cli`` / ``my_setup.claude_plugins`` LOGGER call sites.
+    and asserts a ``my_setup.claude_plugins DEBUG:`` line lands on
+    stderr — proving the dotfiles-58x verbosity surface threads
+    end-to-end through CLI startup, ``logging.basicConfig(stream=sys.stderr)``,
+    and the production ``my_setup.claude_plugins`` LOGGER call sites
+    (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``).
 
-    Assertion is broad (``my_setup.cli DEBUG:`` OR
-    ``my_setup.claude_plugins DEBUG:``) because under default
-    ``claude.install_mode: regular`` the ``claude_plugins.py`` git
-    helpers (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``)
-    are not exercised on the install path, and even in local-clone mode
-    those helpers only emit DEBUG when subprocess stdout is non-empty
-    (git typically writes progress to stderr). The unconditional
-    ``LOGGER.debug("logging configured at level %s", ...)`` in
-    ``my_setup.cli._root`` is the deterministic anchor — its presence
-    in container stderr proves the same verbosity wiring is live across
-    every ``my_setup`` LOGGER, including the claude_plugins call sites.
+    The ``claude.install_mode: local-clone`` opt-in via host-local
+    ``local.yaml`` is required: under default ``regular`` mode the git
+    helpers are never invoked (claude_plugins talks to the ``claude``
+    binary, not git). Under local-clone, ``_clone_marketplace`` clones
+    the marketplace repo from GitHub on first install, and git writes
+    its progress chatter (``Cloning into ...``, ``Resolving deltas``)
+    to stderr — captured and re-emitted at DEBUG by the success-path
+    stderr-DEBUG block added in the "also LOGGER.debug git stderr on
+    success path" follow-up. That block is the deterministic anchor
+    for this assertion.
     """
-    # ``-v`` is a flag on the ``_root`` Typer callback, so it must precede
-    # the ``install`` subcommand in argv. The ``_install`` helper appends
-    # ``extra`` AFTER ``install`` (for sub-flags like ``--auto-accept-*``),
-    # which would parse ``-v`` as an unknown option to ``install``. Build
-    # argv directly with ``-v`` slotted before the verb.
     c = docker_container()
-    result = c.exec(
-        [
-            "uv",
-            "run",
-            "my-setup",
-            "-v",
-            "install",
-            "--profile=test-comprehensive",
-            f"--config={_CONFIG}",
-        ],
-        check=False,
+    # Flip to local-clone install mode so the git helpers in
+    # claude_plugins (_run_git / _clone_marketplace / _cache_origin_url)
+    # are exercised on the install path; their success-path stderr-DEBUG
+    # blocks are what this test verifies.
+    c.write_text(
+        "/home/tester/.config/my-setup/local.yaml",
+        textwrap.dedent(
+            """\
+            claude:
+              install_mode: local-clone
+            """
+        ),
     )
-    assert result.returncode == 0, result.stderr
-    assert (
-        "my_setup.cli DEBUG:" in result.stderr
-        or "my_setup.claude_plugins DEBUG:" in result.stderr
-    ), (
-        f"expected at least one my_setup DEBUG line in stderr; "
+    result = _install(c, "test-comprehensive", root_args=["-v"])
+    assert "my_setup.claude_plugins DEBUG:" in result.stderr, (
+        f"expected 'my_setup.claude_plugins DEBUG:' in stderr; "
         f"first 800 chars: {result.stderr[:800]}"
     )
 
