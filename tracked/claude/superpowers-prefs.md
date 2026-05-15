@@ -115,7 +115,7 @@ Superpowers skills are designed to defer to.
    - **Multi-worktree merge** (sibling rebase): when N sibling
      worktrees branch from a common parent and the parent gets a
      review-fix commit, rebase each sibling onto the updated parent
-     before `wt merge --no-squash` (ff-merge) into main. Conflict-free when parent's review-fix
+     before `wt merge --no-squash` (ff-only) into main. Conflict-free when parent's review-fix
      file footprint doesn't overlap with sibling worktrees; otherwise
      resolve manually. *(empirical observation G; cross-ref
      `wt-reference` skill.)*

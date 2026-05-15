@@ -17,7 +17,7 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - `wt remove [<slug>]` — remove the current worktree (or named one); auto-deletes the branch if merged.
 - `wt merge [<branch>]` — merge the current worktree's branch into target (default = main). Defaults to squash. Two modes:
   - Bare `wt merge` — squash the branch into one commit on target. Use only when squash is the intended shape (e.g., a noisy WIP history collapsed for a leaf feature).
-  - `wt merge --no-squash` — preserve the branch's commits on target. Required when the branch carries separate implementation + review-fix commits, so observation F (`Never squash review-fix commits into the implementation commit`) is satisfied operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
+  - `wt merge --no-squash` — preserve the branch's commits on target. Required when the branch carries separate implementation + review-fix commits, so observation F (`Never squash review-fix commits into the implementation commit`) is satisfied operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6. `wt merge --no-squash` is ff-only by project convention (see `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `my-setup install`).
 - `wt step <name>` — run an individual operation (used when scripting partial flows).
 - `wt hook <name>` — run configured hooks (pre/post for switch/merge/remove).
 - `wt config` — manage user and project configs (locations, hooks, aliases). `wt config shell install` writes a PATH-guarded eval into `~/.zshrc` / `~/.bashrc` enabling auto-cd on `wt switch`.
