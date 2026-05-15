@@ -210,6 +210,17 @@ class FakeClaude:
         """
         return {p["id"]: dict(p) for p in self._plugins}
 
+    def marketplaces_state(self) -> list[dict]:
+        """Snapshot of registered marketplaces, in registration order.
+
+        In-memory analog of ``claude plugin marketplace list --json``
+        output. Returns shallow-copied entries so test mutations cannot
+        leak into the fake's internal ``_marketplaces`` list. Tests
+        assert against this rather than reaching into the private
+        attribute.
+        """
+        return [dict(m) for m in self._marketplaces]
+
 
 # ---------------------------------------------------------------------------
 # P3.1 — Wrapper tests
@@ -1603,7 +1614,7 @@ def test_revert_restores_plugin_state(
     _, _state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
     fc = fake_claude()  # pre: empty marketplaces + empty plugins
     pre_state = fc.installed_state()
-    pre_marketplaces = list(fc._marketplaces)
+    pre_marketplaces = fc.marketplaces_state()
 
     runner = CliRunner()
     installed = runner.invoke(
@@ -1622,7 +1633,7 @@ def test_revert_restores_plugin_state(
     # plugin uninstalled + marketplace removed.
     assert fc.uninstall_args() == ["superpowers@claude-plugins-official"]
     assert fc.installed_state() == pre_state
-    assert list(fc._marketplaces) == pre_marketplaces
+    assert fc.marketplaces_state() == pre_marketplaces
 
 
 def test_revert_noop_when_no_plugin_delta(
@@ -1766,7 +1777,7 @@ def test_roundtrip_file_and_plugin_state(
     live_root = home / ".my_setup_e2e" / "comprehensive"
     assert not live_root.exists()
     pre_plugin_state = fc.installed_state()
-    pre_marketplaces = list(fc._marketplaces)
+    pre_marketplaces = fc.marketplaces_state()
 
     runner = CliRunner()
     installed = runner.invoke(
@@ -1793,7 +1804,7 @@ def test_roundtrip_file_and_plugin_state(
     assert not notes.exists() or notes.read_text() == ""
     # Plugin state reversed.
     assert fc.installed_state() == pre_plugin_state
-    assert list(fc._marketplaces) == pre_marketplaces
+    assert fc.marketplaces_state() == pre_marketplaces
 
 
 # ---------------------------------------------------------------------------
@@ -2264,8 +2275,8 @@ def test_local_clone_repeat_install_is_offline(
     fake.calls.clear()
     # Reset claude state so reconcile sees the marketplace as already added.
     # FakeClaude already records that — second reconcile recomputes the diff.
-    # Recompute: marketplace `plug` is now in fc._marketplaces (FakeClaude
-    # derives the name from the URL basename; we used `/plug`).
+    # Recompute: marketplace `plug` is now in fc.marketplaces_state()
+    # (FakeClaude derives the name from the URL basename; we used `/plug`).
     # Skip the assertion on FakeClaude state — we only care that NO git
     # invocation runs.
     # We need to ensure the marketplace add path is short-circuited; the
