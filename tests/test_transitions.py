@@ -1008,7 +1008,7 @@ def test_plugin_delta_from_json_rejects_non_list_marketplaces_removed() -> None:
         plugin_delta_from_json({"marketplaces_removed": "bogus"})
 
 
-def test_extension_delta_from_json_rejects_malformed_added() -> None:
+def test_extension_delta_from_json_rejects_non_list_added() -> None:
     """Top-level ``added`` must be a list; a string surfaces an
     :class:`InvalidTransitionRecord` at the JSON boundary instead of a
     downstream ``TypeError`` from ``iter()``."""
@@ -1023,7 +1023,7 @@ def test_extension_delta_from_json_rejects_non_string_added_item() -> None:
         extension_delta_from_json({"added": [123], "removed": []})
 
 
-def test_extension_delta_from_json_rejects_malformed_removed() -> None:
+def test_extension_delta_from_json_rejects_non_list_removed() -> None:
     """Top-level ``removed`` must be a list; a bare dict surfaces an
     :class:`InvalidTransitionRecord` at the JSON boundary."""
     with pytest.raises(InvalidTransitionRecord, match="must be a list"):
