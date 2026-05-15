@@ -25,7 +25,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from rich.console import Console
-from ruamel.yaml import YAML
+
+# ruamel.yaml ships py.typed but no usable annotations; no types-ruamel.yaml
+# package on PyPI as of 2026-05.
+from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup import jsonc, transitions, wizard
 from my_setup.compare import CompareReport, CompareStatus

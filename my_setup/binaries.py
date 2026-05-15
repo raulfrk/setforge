@@ -27,8 +27,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
+# ruamel.yaml ships a py.typed marker but no inline annotations or .pyi
+# stubs that mypy can use, and no types-ruamel.yaml package exists on
+# PyPI as of 2026-05. Suppress the import-not-found error with a
+# specific code; revisit when upstream stubs land.
+from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
 
 from my_setup.config import ClaudeInstallMode
 from my_setup.errors import BinaryOverrideInvalid, ConfigError

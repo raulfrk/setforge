@@ -43,9 +43,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from json5.dumper import ModelDumper, dumps
-from json5.loader import ModelLoader, loads
-from json5.model import (
+# json5 (a.k.a. json-five on PyPI) ships a py.typed marker but no inline
+# annotations or .pyi stubs that mypy can resolve, and no types-json5
+# package exists on PyPI as of 2026-05. Suppress the import-not-found
+# error with a specific code; revisit when upstream stubs land.
+from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
+from json5.loader import ModelLoader, loads  # type: ignore[import-not-found]
+from json5.model import (  # type: ignore[import-not-found]
     BooleanLiteral,
     DoubleQuotedString,
     Float,

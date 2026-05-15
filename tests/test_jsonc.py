@@ -180,8 +180,9 @@ def test_overlay_user_keys_deep_unions_top_level_object() -> None:
 
 
 def test_python_to_node_supports_nested_object() -> None:
-    from json5.dumper import ModelDumper, dumps
-    from json5.model import JSONObject
+    # json5 has no upstream stubs as of 2026-05; see my_setup/jsonc.py.
+    from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
+    from json5.model import JSONObject  # type: ignore[import-not-found]
 
     from my_setup.jsonc import _python_to_node, parse_jsonc
 
@@ -193,8 +194,9 @@ def test_python_to_node_supports_nested_object() -> None:
 
 
 def test_python_to_node_supports_nested_array() -> None:
-    from json5.dumper import ModelDumper, dumps
-    from json5.model import JSONArray
+    # json5 has no upstream stubs as of 2026-05; see my_setup/jsonc.py.
+    from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
+    from json5.model import JSONArray  # type: ignore[import-not-found]
 
     from my_setup.jsonc import _python_to_node, parse_jsonc
 

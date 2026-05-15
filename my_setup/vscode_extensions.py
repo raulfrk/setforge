@@ -19,8 +19,13 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap, CommentedSeq
+# ruamel.yaml ships py.typed but no usable annotations; no types-ruamel.yaml
+# package on PyPI as of 2026-05.
+from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml.comments import (  # type: ignore[import-not-found]
+    CommentedMap,
+    CommentedSeq,
+)
 
 from my_setup.binaries import resolve_binary, stderr_of
 from my_setup.config import Extensions, ReconcilePolicy, load_config, resolve_profile

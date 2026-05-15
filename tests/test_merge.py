@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ruamel.yaml import YAML
+
+# ruamel.yaml has no upstream stubs as of 2026-05; see my_setup/compare.py.
+from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup.compare import CompareReport, CompareStatus, FileCompare
 from my_setup.config import Config, Dotfile, Profile
@@ -318,7 +320,8 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
     updated_text = src.read_text()
 
     # json5 can parse the result
-    from json5.loader import loads
+    # json5 has no upstream stubs as of 2026-05; see my_setup/jsonc.py.
+    from json5.loader import loads  # type: ignore[import-not-found]
 
     parsed = loads(updated_text)
     assert parsed["b"] == 88
