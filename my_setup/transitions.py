@@ -344,10 +344,44 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     """Reconstruct an :class:`ExtensionDelta` from a JSON-deserialized
     ``extensions.json`` record. Inverse of the on-disk shape produced
     by :func:`write_transition`.
+
+    Validates ``added`` and ``removed`` are lists of strings, raising
+    :class:`InvalidTransitionRecord` on any deviation. Mirrors the
+    boundary guard added to :func:`plugin_delta_from_json` in bead dtm.
+    Without this guard a corrupted extensions.json (hand-edit, partial
+    write, or a bug in a future writer) would surface as an opaque
+    :class:`TypeError` from a downstream ``iter()`` call rather than a
+    clean :class:`MySetupError` at the JSON boundary.
     """
+    added_raw = raw.get("added", [])
+    if not isinstance(added_raw, list):
+        raise InvalidTransitionRecord(
+            f"extensions.json: added must be a list, got {type(added_raw).__name__}"
+        )
+    validated_added: list[str] = []
+    for entry in added_raw:
+        if not isinstance(entry, str):
+            raise InvalidTransitionRecord(
+                f"extensions.json: added entry has wrong type: {type(entry).__name__}"
+            )
+        validated_added.append(entry)
+
+    removed_raw = raw.get("removed", [])
+    if not isinstance(removed_raw, list):
+        raise InvalidTransitionRecord(
+            f"extensions.json: removed must be a list, got {type(removed_raw).__name__}"
+        )
+    validated_removed: list[str] = []
+    for entry in removed_raw:
+        if not isinstance(entry, str):
+            raise InvalidTransitionRecord(
+                f"extensions.json: removed entry has wrong type: {type(entry).__name__}"
+            )
+        validated_removed.append(entry)
+
     return ExtensionDelta(
-        added=list(cast(list[str], raw.get("added", []))),
-        removed=list(cast(list[str], raw.get("removed", []))),
+        added=validated_added,
+        removed=validated_removed,
     )
 
 

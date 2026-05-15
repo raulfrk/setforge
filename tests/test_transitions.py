@@ -1006,3 +1006,44 @@ def test_plugin_delta_from_json_rejects_non_list_marketplaces_removed() -> None:
     a downstream ``TypeError`` from the per-entry iteration."""
     with pytest.raises(InvalidTransitionRecord, match="must be a list"):
         plugin_delta_from_json({"marketplaces_removed": "bogus"})
+
+
+def test_extension_delta_from_json_rejects_malformed_added() -> None:
+    """Top-level ``added`` must be a list; a string surfaces an
+    :class:`InvalidTransitionRecord` at the JSON boundary instead of a
+    downstream ``TypeError`` from ``iter()``."""
+    with pytest.raises(InvalidTransitionRecord, match="must be a list"):
+        extension_delta_from_json({"added": "not-a-list", "removed": []})
+
+
+def test_extension_delta_from_json_rejects_non_string_added_item() -> None:
+    """Each ``added`` entry must be a string; a non-string item raises
+    :class:`InvalidTransitionRecord` at the JSON boundary."""
+    with pytest.raises(InvalidTransitionRecord, match="wrong type"):
+        extension_delta_from_json({"added": [123], "removed": []})
+
+
+def test_extension_delta_from_json_rejects_malformed_removed() -> None:
+    """Top-level ``removed`` must be a list; a bare dict surfaces an
+    :class:`InvalidTransitionRecord` at the JSON boundary."""
+    with pytest.raises(InvalidTransitionRecord, match="must be a list"):
+        extension_delta_from_json({"added": [], "removed": {"not": "a-list"}})
+
+
+def test_extension_delta_from_json_rejects_non_string_removed_item() -> None:
+    """Each ``removed`` entry must be a string; a ``None`` item raises
+    :class:`InvalidTransitionRecord` at the JSON boundary."""
+    with pytest.raises(InvalidTransitionRecord, match="wrong type"):
+        extension_delta_from_json({"added": [], "removed": [None]})
+
+
+def test_extension_delta_from_json_accepts_valid() -> None:
+    """A valid record round-trips into :class:`ExtensionDelta` without
+    raising."""
+    rebuilt = extension_delta_from_json(
+        {"added": ["ms-python.python"], "removed": ["ms-other.thing"]}
+    )
+
+    assert rebuilt == ExtensionDelta(
+        added=["ms-python.python"], removed=["ms-other.thing"]
+    )
