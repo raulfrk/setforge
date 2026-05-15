@@ -37,7 +37,7 @@ The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pyte
 
 After merging a non-trivial branch into `main`, both of these must exit 0:
 
-```
+```sh
 pre-commit run --all-files
 uv run pytest tests/docker/ -m e2e_docker -v
 ```
@@ -68,7 +68,8 @@ Inline-fix on main (skip the revert) ONLY when both hold:
 - the fix is narrowly scoped (one or two lines).
 
 Filing a new bead is appropriate for follow-up work but does NOT replace
-the revert-or-fix step. A red main is not OK.
+the revert-or-fix step. A red main is not OK. Either path (revert-and-re-PR
+OR inline-fix) must Re-run Phase 7 to confirm main is green.
 
 ## The four-tool stack
 
