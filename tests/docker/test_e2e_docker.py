@@ -517,6 +517,63 @@ def test_install_comprehensive_plugins_extensions(
     assert proc.returncode == 0, "comprehensive bootstrap stub missing"
 
 
+# --- Variant L1 (dotfiles-58x verbosity surface) --------------------------
+
+
+def test_install_verbose_emits_my_setup_debug(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``-v`` flag surfaces ``my_setup`` DEBUG lines from a real subprocess.
+
+    Closes the e2e scope gap left by the in-process CliRunner unit tests
+    in :mod:`tests.test_cli_e2e` (which prove flag mechanics inside the
+    test interpreter but not real-subprocess logging propagation). Runs
+    the comprehensive profile under ``-v`` in a fresh Debian container
+    and asserts a ``my_setup`` DEBUG line lands on stderr — proving the
+    dotfiles-58x verbosity surface threads end-to-end through CLI startup,
+    ``logging.basicConfig(stream=sys.stderr)``, and the production
+    ``my_setup.cli`` / ``my_setup.claude_plugins`` LOGGER call sites.
+
+    Assertion is broad (``my_setup.cli DEBUG:`` OR
+    ``my_setup.claude_plugins DEBUG:``) because under default
+    ``claude.install_mode: regular`` the ``claude_plugins.py`` git
+    helpers (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``)
+    are not exercised on the install path, and even in local-clone mode
+    those helpers only emit DEBUG when subprocess stdout is non-empty
+    (git typically writes progress to stderr). The unconditional
+    ``LOGGER.debug("logging configured at level %s", ...)`` in
+    ``my_setup.cli._root`` is the deterministic anchor — its presence
+    in container stderr proves the same verbosity wiring is live across
+    every ``my_setup`` LOGGER, including the claude_plugins call sites.
+    """
+    # ``-v`` is a flag on the ``_root`` Typer callback, so it must precede
+    # the ``install`` subcommand in argv. The ``_install`` helper appends
+    # ``extra`` AFTER ``install`` (for sub-flags like ``--auto-accept-*``),
+    # which would parse ``-v`` as an unknown option to ``install``. Build
+    # argv directly with ``-v`` slotted before the verb.
+    c = docker_container()
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "-v",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={_CONFIG}",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "my_setup.cli DEBUG:" in result.stderr
+        or "my_setup.claude_plugins DEBUG:" in result.stderr
+    ), (
+        f"expected at least one my_setup DEBUG line in stderr; "
+        f"first 800 chars: {result.stderr[:800]}"
+    )
+
+
 # ===========================================================================
 # Section: Sync + wizard variants (M-S1)
 # ===========================================================================
