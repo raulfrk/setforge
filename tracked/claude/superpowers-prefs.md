@@ -24,9 +24,10 @@ Superpowers skills are designed to defer to.
      stopping for clarifying questions") on background-job spawn —
      meant for truly stepped-away contexts (cron, async dispatch).
      When a user turn has arrived mid-session, treat the user as
-     live and use `AskUserQuestion` (or plan mode for multi-option
-     shaping) freely for load-bearing design choices; the
-     background-mode override does not bind.
+     live: use `AskUserQuestion` for narrow load-bearing calls (one
+     decision, finite options) and plan mode for multi-option or
+     spec-shaping decisions; the background-mode override does not
+     bind.
      *(empirical observation K, 2026-05-13 — see bd dotfiles-uhb /
      dotfiles-ds9: a unilateral redesign call landed on a
      dotfiles-ds9 option (3) when bd only enumerated (a)/(b),
