@@ -29,7 +29,7 @@ from pathlib import Path
 
 from my_setup import __version__
 from my_setup.binaries import resolve_binary
-from my_setup.errors import MySetupError, RevertFailed
+from my_setup.errors import InvalidTransitionRecord, MySetupError, RevertFailed
 
 
 class TransitionCommand(StrEnum):
@@ -292,27 +292,49 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     ``plugins.json`` record. Inverse of the on-disk shape produced by
     :func:`write_transition`.
 
-    Today this constructor reflects the JSON shape directly; shape
-    validation of ``marketplaces_removed`` entries lives in a sibling
-    bead (dotfiles-dtm) that raises :class:`InvalidTransitionRecord`
-    on corrupt records before the dataclass is constructed.
+    Validates ``marketplaces_removed`` entries against the
+    ``[str, dict]`` pair shape :func:`write_transition` writes, raising
+    :class:`InvalidTransitionRecord` on any deviation. Without this
+    guard a corrupted plugins.json (hand-edit, partial write, or a
+    bug in a future writer) would surface as an opaque
+    :class:`ValueError` at the tuple-unpack in
+    :func:`_apply_marketplace_re_add`, aborting revert mid-flight.
+    With the guard, the failure is caught cleanly at the
+    ``MySetupError`` boundary before any inverse op runs.
 
-    Field-level type ignores: ``raw[k]`` is ``object`` because
-    :func:`json.loads` is untyped at the leaf and the caller (revert)
-    treats the loaded record as a free-form mapping. The dataclass
-    itself constrains shapes at write time via
-    :func:`write_transition`'s string-value guard, so reads here trust
-    the file's structure.
+    Field-level type ignores on the other fields: ``raw[k]`` is
+    ``object`` because :func:`json.loads` is untyped at the leaf and
+    the caller (revert) treats the loaded record as a free-form
+    mapping. The dataclass itself constrains shapes at write time via
+    :func:`write_transition`'s string-value guard, so reads here
+    trust the file's structure for the simple list fields.
     """
+    marketplaces_removed_raw = raw.get("marketplaces_removed", [])
+    if not isinstance(marketplaces_removed_raw, list):
+        raise InvalidTransitionRecord(
+            f"plugins.json: marketplaces_removed must be a list, got "
+            f"{type(marketplaces_removed_raw).__name__}"
+        )
+    validated_pairs: list[tuple[str, dict[str, str]]] = []
+    for entry in marketplaces_removed_raw:
+        if not (isinstance(entry, list) and len(entry) == 2):
+            raise InvalidTransitionRecord(
+                f"plugins.json: malformed marketplaces_removed entry: {entry!r}"
+            )
+        name, payload = entry
+        if not isinstance(name, str) or not isinstance(payload, dict):
+            raise InvalidTransitionRecord(
+                f"plugins.json: marketplaces_removed entry has wrong types: "
+                f"({type(name).__name__}, {type(payload).__name__})"
+            )
+        validated_pairs.append((name, dict(payload)))
+
     return PluginDelta(
         installed=tuple(raw.get("installed", [])),  # type: ignore[arg-type]
         enabled=tuple(raw.get("enabled", [])),  # type: ignore[arg-type]
         disabled=tuple(raw.get("disabled", [])),  # type: ignore[arg-type]
         marketplaces_added=tuple(raw.get("marketplaces_added", [])),  # type: ignore[arg-type]
-        marketplaces_removed=tuple(
-            (name, dict(payload))
-            for name, payload in raw.get("marketplaces_removed", [])  # type: ignore[attr-defined]
-        ),
+        marketplaces_removed=tuple(validated_pairs),
     )
 
 

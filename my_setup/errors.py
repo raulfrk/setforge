@@ -85,6 +85,19 @@ class NoTransitionFound(MySetupError):
     for the requested profile."""
 
 
+class InvalidTransitionRecord(MySetupError):
+    """Raised when an on-disk transition record (extensions.json /
+    plugins.json) has a corrupt shape.
+
+    Surfaced by :func:`my_setup.transitions.plugin_delta_from_json`
+    when a ``marketplaces_removed`` entry fails its (name, dict) shape
+    check — e.g. hand-edited plugins.json, partial-write damage, or a
+    bug in a future writer. Caught at the revert command boundary by
+    the existing :class:`MySetupError` handler so the user sees a
+    clean error instead of an opaque ``ValueError`` from a tuple
+    unpack mid-revert."""
+
+
 class MarketplaceCacheMiss(MySetupError):
     """Raised when local-clone install mode cannot resolve a marketplace
     to a local cache directory.

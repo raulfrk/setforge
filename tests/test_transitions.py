@@ -983,3 +983,30 @@ def test_extension_delta_from_json_defaults_missing_fields_to_empty() -> None:
     rebuilt = extension_delta_from_json({})
 
     assert rebuilt == ExtensionDelta(added=[], removed=[])
+
+
+def test_plugin_delta_from_json_rejects_malformed_marketplaces_removed() -> None:
+    """Shape-validate ``marketplaces_removed`` entries before constructing
+    :class:`PluginDelta`. A corrupted plugins.json (hand-edit, partial
+    write) raises :class:`InvalidTransitionRecord` at the JSON boundary
+    so revert aborts cleanly via the ``MySetupError`` handler instead
+    of crashing mid-flight in
+    :func:`_apply_marketplace_re_add`'s tuple unpack."""
+    from my_setup.errors import InvalidTransitionRecord
+
+    with pytest.raises(InvalidTransitionRecord, match="malformed"):
+        plugin_delta_from_json({"marketplaces_removed": [["just-one-item"]]})
+    with pytest.raises(InvalidTransitionRecord, match="wrong types"):
+        plugin_delta_from_json({"marketplaces_removed": [["name", "not-a-dict"]]})
+    with pytest.raises(InvalidTransitionRecord, match="wrong types"):
+        plugin_delta_from_json({"marketplaces_removed": [[42, {}]]})
+
+
+def test_plugin_delta_from_json_rejects_non_list_marketplaces_removed() -> None:
+    """Top-level ``marketplaces_removed`` must be a list; a bare dict
+    or string surfaces an :class:`InvalidTransitionRecord` instead of
+    a downstream ``TypeError`` from the per-entry iteration."""
+    from my_setup.errors import InvalidTransitionRecord
+
+    with pytest.raises(InvalidTransitionRecord, match="must be a list"):
+        plugin_delta_from_json({"marketplaces_removed": "bogus"})
