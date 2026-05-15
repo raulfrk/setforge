@@ -7,6 +7,8 @@ description: worktrunk (binary `wt`) command reference and Beads integration pat
 
 worktrunk manages git worktrees for parallel agent workflows. Default location: `~/<repo>.<slug>` (sibling of repo, per wt's `worktree-path` template) — bd auto-discovers via git common-directory regardless of location.
 
+> **Footnote on `<slug>`.** Throughout this doc, `<slug>` is the user-facing placeholder for the worktree-path suffix. wt's actual template variable is `{{ branch | sanitize }}` — the sanitized branch name. In practice the two collapse because `wt switch --create <slug>` creates a branch literally named `<slug>`, so `<slug>` == `branch` at worktree-creation time. They diverge only if you rename the branch after creation (e.g. `git branch -m`); the worktree path keeps the original sanitized branch name while the branch itself has the new name.
+
 ## Commands
 
 - `wt switch --create <slug>` — create a worktree + branch from current HEAD; switch to it.
