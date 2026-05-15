@@ -464,7 +464,7 @@ def _resolve_marketplace_source(
     source: MarketplaceSource,
     mode: ClaudeInstallMode,
     *,
-    cache_root: Path,
+    cache_root: Path | None = None,
     mp_name: str | None = None,
     auto: bool = False,
 ) -> MarketplaceSource:
@@ -491,6 +491,7 @@ def _resolve_marketplace_source(
     happy-path (cache hit with matching origin, cache miss) is
     unaffected.
     """
+    root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
     if mode is ClaudeInstallMode.REGULAR:
         return source
     if source.source is MarketplaceSourceKind.PATH:
@@ -500,7 +501,7 @@ def _resolve_marketplace_source(
             "GITHUB marketplace source missing 'repo' field; cannot resolve "
             "local-clone path"
         )
-    cache_dir = _safe_cache_dir(cache_root, source.repo.rsplit("/", 1)[-1])
+    cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
     if cache_dir.exists():
         current = _cache_origin_url(cache_dir)
         if (
@@ -511,7 +512,7 @@ def _resolve_marketplace_source(
             return _resolve_cache_collision(
                 source=source,
                 cache_dir=cache_dir,
-                cache_root=cache_root,
+                cache_root=root,
                 existing_origin=current,
                 mp_name=mp_name or source.repo,
                 auto=auto,
