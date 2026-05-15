@@ -28,11 +28,11 @@ Superpowers skills are designed to defer to.
      decision, finite options) and plan mode for multi-option or
      spec-shaping decisions; the background-mode override does not
      bind.
-     *(empirical observation K, 2026-05-13 — see bd dotfiles-uhb /
-     dotfiles-ds9: a unilateral redesign call landed on a
-     dotfiles-ds9 option (3) when bd only enumerated (a)/(b),
-     because the background-mode override was treated as binding
-     while the user was actively engaging.)*
+     *(empirical observation K, 2026-05-13 — see bd dotfiles-uhb
+     (the parent bead) / dotfiles-ds9 (the incident): a unilateral
+     redesign call landed on a dotfiles-ds9 option (3) when bd only
+     enumerated (a)/(b), because the background-mode override was
+     treated as binding while the user was actively engaging.)*
 
 2. **Phase 2 — Spec in plan mode** — write the spec verbatim into the plan body
    (no summary, no reflow). User reviews and annotates. On approval,
