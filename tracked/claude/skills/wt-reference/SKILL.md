@@ -15,9 +15,10 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - `wt switch <slug>` — switch to an existing worktree (auto-cd if shell integration is set up via `wt config shell install`).
 - `wt list` — list all worktrees and their status (clean / dirty / merged).
 - `wt remove [<slug>]` — remove the current worktree (or named one); auto-deletes the branch if merged.
-- `wt merge [<branch>]` — merge the current worktree's branch into target (default = main). Defaults to squash. Two modes:
-  - Bare `wt merge` — squash the branch into one commit on target. Use only when squash is the intended shape (e.g., a noisy WIP history collapsed for a leaf feature).
-  - `wt merge --no-squash` — preserve the branch's commits on target. Required when the branch carries separate implementation + review-fix commits, so observation F (`Never squash review-fix commits into the implementation commit`) is satisfied operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6. `wt merge --no-squash` is ff-only by project convention (see `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `my-setup install`).
+- `wt merge [<branch>]` — merge the current worktree's branch into target (default = main).
+  - **Deployed default on this VM**: `--no-squash --ff-only` (set by `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `my-setup install`). Bare `wt merge` runs this mode: preserves the branch's commits on target, fast-forward only. This is what satisfies observation F (`Never squash review-fix commits into the implementation commit`) operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
+  - **Upstream wt default**: `--squash` (collapse the branch into one commit on target). Reachable on this VM only by explicitly overriding the deployed config; use only when the branch's history is genuinely throwaway (e.g., a noisy WIP history collapsed for a leaf feature).
+  - `wt merge --no-squash` — explicit form of the deployed default. Identical to bare `wt merge` on this VM; spell it out when documenting flows so the intent (preserve separate commits) survives a config change.
 - `wt step <name>` — run an individual operation (used when scripting partial flows).
 - `wt hook <name>` — run configured hooks (pre/post for switch/merge/remove).
 - `wt config` — manage user and project configs (locations, hooks, aliases). `wt config shell install` writes a PATH-guarded eval into `~/.zshrc` / `~/.bashrc` enabling auto-cd on `wt switch`.
