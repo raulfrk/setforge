@@ -19,6 +19,19 @@ Superpowers skills are designed to defer to.
 1. **Phase 1 — Brainstorm** (`superpowers:brainstorming`) — explore
    intent, requirements, constraints. May produce or sharpen a bd
    issue. Always fires for non-trivial work.
+   - **Live user overrides background "no clarifying questions."**
+     The harness injects a background-mode reminder ("work without
+     stopping for clarifying questions") on background-job spawn —
+     meant for truly stepped-away contexts (cron, async dispatch).
+     When a user turn has arrived mid-session, treat the user as
+     live and use `AskUserQuestion` (or plan mode for multi-option
+     shaping) freely for load-bearing design choices; the
+     background-mode override does not bind.
+     *(empirical observation K, 2026-05-13 — see bd dotfiles-uhb /
+     dotfiles-ds9: a unilateral redesign call landed on a
+     dotfiles-ds9 option (3) when bd only enumerated (a)/(b),
+     because the background-mode override was treated as binding
+     while the user was actively engaging.)*
 
 2. **Phase 2 — Spec in plan mode** — write the spec verbatim into the plan body
    (no summary, no reflow). User reviews and annotates. On approval,
