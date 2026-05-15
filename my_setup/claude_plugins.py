@@ -347,6 +347,8 @@ def _run_git(
         ) from exc
     if result.stdout:
         LOGGER.debug("git %s stdout: %s", args, result.stdout)
+    if result.stderr:
+        LOGGER.debug("git %s stderr: %s", args, result.stderr)
     return result
 
 
@@ -416,6 +418,8 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         ) from exc
     if result.stdout:
         LOGGER.debug("git clone %r stdout: %s", source.repo, result.stdout)
+    if result.stderr:
+        LOGGER.debug("git clone %r stderr: %s", source.repo, result.stderr)
 
 
 def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> None:
@@ -479,6 +483,12 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
             "git remote get-url origin (cache %s) stdout: %s",
             cache_dir,
             result.stdout,
+        )
+    if result.stderr:
+        LOGGER.debug(
+            "git remote get-url origin (cache %s) stderr: %s",
+            cache_dir,
+            result.stderr,
         )
     return result.stdout.strip()
 
