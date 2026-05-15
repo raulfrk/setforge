@@ -513,7 +513,7 @@ def _reconcile_extensions(
     )
 
 
-def _emit_plugin_report_progress(
+def _emit_plugin_report(
     plugin_report: claude_plugins_mod.ReconcileReport,
 ) -> None:
     """Render per-plugin install/enable/disable progress lines from a
@@ -573,7 +573,7 @@ def _reconcile_plugins(
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
         return None
-    _emit_plugin_report_progress(plugin_report)
+    _emit_plugin_report(plugin_report)
     post_plugins = claude_plugins_mod.list_installed()
     post_marketplaces = claude_plugins_mod.list_marketplaces()
     return _compute_plugin_delta(
