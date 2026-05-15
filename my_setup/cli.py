@@ -512,38 +512,18 @@ def _reconcile_extensions(
     )
 
 
-def _reconcile_plugins(
-    cfg: Config,
-    resolved: ResolvedProfile,
-) -> transitions.PluginDelta | None:
-    """Reconcile Claude plugins and compute the install-time :class:`PluginDelta`.
+def _emit_plugin_report_progress(
+    plugin_report: claude_plugins_mod.ReconcileReport,
+) -> None:
+    """Render per-plugin install/enable/disable progress lines from a
+    reconcile report.
 
-    Snapshots disk state pre/post so the delta reflects ground truth:
-    plugins whose install step succeeds but whose enable step fails are
-    still on disk and MUST appear in :attr:`PluginDelta.installed`, or
-    revert orphans them. Returns ``None`` when the ``claude`` binary is
-    absent (warn-and-skip).
+    Skips plugins listed in ``plugin_report.failed`` so a successful
+    install line never appears for a plugin whose subsequent step
+    failed. Failed plugins surface as a separate ``FAILED plugin`` line
+    written to stderr. Emits a single ``plugins: nothing to reconcile``
+    line when the report is empty.
     """
-    try:
-        pre_plugins = claude_plugins_mod.list_installed()
-        pre_marketplaces = claude_plugins_mod.list_marketplaces()
-    except PluginToolMissing as exc:
-        # No ``claude`` binary available — skip reconcile entirely.
-        typer.secho(
-            f"warning: skipping claude plugin reconcile — {exc}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        return None
-    try:
-        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
-    except PluginToolMissing as exc:
-        typer.secho(
-            f"warning: skipping claude plugin reconcile — {exc}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        return None
     failed_plugin_ids = {pid for pid, _ in plugin_report.failed}
     for name, mp in plugin_report.to_install:
         pid = f"{name}@{mp}"
@@ -560,21 +540,43 @@ def _reconcile_plugins(
     if not plugin_report:
         typer.echo("plugins: nothing to reconcile")
 
-    # Build PluginDelta from pre/post disk-state diff. Disk state is
-    # ground truth: captures plugins that landed on disk regardless of
-    # whether their subsequent enable step succeeded. The old
-    # ``failed_plugin_ids`` filter collapsed install-failures and
-    # enable-failures into one set and excluded both — leaving
-    # install-then-enable-fail plugins orphaned at revert time.
-    # ``marketplaces_removed`` is always empty for install today
-    # (reconcile never auto-evicts marketplaces).
+
+def _warn_skip_reconcile(exc: PluginToolMissing) -> None:
+    """Yellow stderr warning when the ``claude`` binary is absent."""
+    typer.secho(
+        f"warning: skipping claude plugin reconcile — {exc}",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
+
+
+def _reconcile_plugins(
+    cfg: Config,
+    resolved: ResolvedProfile,
+) -> transitions.PluginDelta | None:
+    """Reconcile Claude plugins and compute the install-time :class:`PluginDelta`.
+
+    Snapshots disk state pre/post so the delta reflects ground truth:
+    install-then-enable-fail plugins still appear in
+    :attr:`PluginDelta.installed` and survive revert. Returns ``None``
+    when the ``claude`` binary is absent (warn-and-skip).
+    """
+    try:
+        pre_plugins = claude_plugins_mod.list_installed()
+        pre_marketplaces = claude_plugins_mod.list_marketplaces()
+    except PluginToolMissing as exc:
+        _warn_skip_reconcile(exc)
+        return None
+    try:
+        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+    except PluginToolMissing as exc:
+        _warn_skip_reconcile(exc)
+        return None
+    _emit_plugin_report_progress(plugin_report)
     post_plugins = claude_plugins_mod.list_installed()
     post_marketplaces = claude_plugins_mod.list_marketplaces()
     return _compute_plugin_delta(
-        pre_plugins,
-        pre_marketplaces,
-        post_plugins,
-        post_marketplaces,
+        pre_plugins, pre_marketplaces, post_plugins, post_marketplaces
     )
 
 
@@ -755,78 +757,52 @@ def _apply_marketplace_re_add(
             )
 
 
+# Dispatch table for the four uniform inverse ops on a PluginDelta.
+# Each entry is (delta_field_name, inverse_fn, verb-for-log). The
+# fifth field — marketplaces_removed — has a (name, dict) shape and
+# is handled outside this table by :func:`_apply_marketplace_re_add`.
+_REVERSE_PLUGIN_DISPATCH: tuple[tuple[str, Callable[[str], None], str], ...] = (
+    ("installed", claude_plugins_mod.plugin_uninstall, "uninstall"),
+    ("enabled", claude_plugins_mod.plugin_disable, "disable"),
+    ("disabled", claude_plugins_mod.plugin_enable, "enable"),
+    ("marketplaces_added", claude_plugins_mod.marketplace_remove, "marketplace remove"),
+)
+
+
 def _reverse_plugins(
     delta: transitions.PluginDelta,
 ) -> tuple[transitions.PluginDelta, list[tuple[str, str]]]:
     """Apply the inverse of a plugins.json delta.
 
     Returns ``(reverse_delta, failed)``. ``reverse_delta`` reflects only
-    the inverse operations that succeeded — symmetrical to
-    :func:`_reverse_extensions`'s exclusion of failed extension ops, so
-    a revert-of-revert never tries to re-apply a no-op. ``failed``
-    records ``(id_or_name, error_msg)`` pairs for caller logging.
+    the inverse operations that succeeded (mirrors
+    :func:`_reverse_extensions`'s exclusion of failed ops, so a
+    revert-of-revert never re-applies a no-op). Per-op
+    :class:`PluginToolMissing` surfaces as a warn-and-skip; subprocess
+    failures are caught and recorded so the loop continues.
 
-    Inverse mapping (per PluginDelta field):
-    - ``installed`` → :func:`claude_plugins.plugin_uninstall`
-    - ``enabled``   → :func:`claude_plugins.plugin_disable`
-    - ``disabled``  → :func:`claude_plugins.plugin_enable`
-    - ``marketplaces_added``   → :func:`claude_plugins.marketplace_remove`
-    - ``marketplaces_removed`` → :func:`claude_plugins.marketplace_add`
-      (source reconstructed from the stored ``MarketplaceSource`` dict)
-
-    Per-op failures are caught (warn-and-continue) so the reverse
-    transition still gets written. A :class:`PluginToolMissing` from
-    any single op surfaces as a warning and skips that op; the loop
-    continues onto remaining ops (mirrors the extensions warn-and-skip
-    path).
+    Four ops share the ``Iterable[str]`` shape and are driven by
+    :data:`_REVERSE_PLUGIN_DISPATCH`; ``marketplaces_removed`` is
+    handled separately because its entries round-trip through
+    :class:`MarketplaceSource`.
     """
-    reverse_installed: list[str] = []
-    reverse_enabled: list[str] = []
-    reverse_disabled: list[str] = []
-    reverse_mps_added: list[str] = []
+    accumulators: dict[str, list[str]] = {
+        "installed": [],
+        "enabled": [],
+        "disabled": [],
+        "marketplaces_added": [],
+    }
     reverse_mps_removed: list[tuple[str, dict[str, str]]] = []
     failed: list[tuple[str, str]] = []
-
-    _apply_inverse(
-        delta.installed,
-        claude_plugins_mod.plugin_uninstall,
-        "uninstall",
-        reverse_installed,
-        failed,
-    )
-    _apply_inverse(
-        delta.enabled,
-        claude_plugins_mod.plugin_disable,
-        "disable",
-        reverse_enabled,
-        failed,
-    )
-    _apply_inverse(
-        delta.disabled,
-        claude_plugins_mod.plugin_enable,
-        "enable",
-        reverse_disabled,
-        failed,
-    )
-    _apply_inverse(
-        delta.marketplaces_added,
-        claude_plugins_mod.marketplace_remove,
-        "marketplace remove",
-        reverse_mps_added,
-        failed,
-    )
-
-    _apply_marketplace_re_add(
-        delta.marketplaces_removed,
-        reverse_mps_removed,
-        failed,
-    )
-
+    for field_name, inverse_fn, verb in _REVERSE_PLUGIN_DISPATCH:
+        items: Iterable[str] = getattr(delta, field_name)
+        _apply_inverse(items, inverse_fn, verb, accumulators[field_name], failed)
+    _apply_marketplace_re_add(delta.marketplaces_removed, reverse_mps_removed, failed)
     reverse_delta = transitions.PluginDelta(
-        installed=tuple(reverse_installed),
-        enabled=tuple(reverse_enabled),
-        disabled=tuple(reverse_disabled),
-        marketplaces_added=tuple(reverse_mps_added),
+        installed=tuple(accumulators["installed"]),
+        enabled=tuple(accumulators["enabled"]),
+        disabled=tuple(accumulators["disabled"]),
+        marketplaces_added=tuple(accumulators["marketplaces_added"]),
         marketplaces_removed=tuple(reverse_mps_removed),
     )
     return reverse_delta, failed
