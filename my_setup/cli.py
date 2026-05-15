@@ -8,6 +8,7 @@ recent transition for a profile in reverse.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -90,8 +91,26 @@ def _root(
         help="Override path to the GNU 'patch' binary. "
         "Takes precedence over MY_SETUP_PATCH_BIN and ~/.config/my-setup/local.yaml.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Emit DEBUG-level logging to stderr.",
+    ),
 ) -> None:
-    """Wire host-local binary overrides and ensure the local config stub exists."""
+    """Wire host-local binary overrides, configure logging, ensure local stub exists."""
+    if verbose:
+        level = logging.DEBUG
+    else:
+        env_value = os.environ.get("MY_SETUP_LOG_LEVEL", "WARNING")
+        level = getattr(logging, env_value.upper(), logging.WARNING)
+    logging.basicConfig(
+        level=level,
+        stream=sys.stderr,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        force=True,
+    )
+    LOGGER.debug("logging configured at level %s", logging.getLevelName(level))
     binaries.set_cli_overrides(code=code_bin, claude=claude_bin, patch=patch_bin)
     binaries.ensure_local_config_stub()
 

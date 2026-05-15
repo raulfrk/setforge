@@ -782,3 +782,53 @@ class TestValidate:
             ]
         )
         assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# --verbose/-v flag + MY_SETUP_LOG_LEVEL env var (dotfiles-58x)
+# ---------------------------------------------------------------------------
+
+
+class TestVerbosity:
+    """``-v`` / ``--verbose`` and ``MY_SETUP_LOG_LEVEL`` wire the root logger.
+
+    Precedence: flag > env > WARNING default. Garbage env values fall back
+    to WARNING silently. The root ``_root`` callback calls
+    ``logging.basicConfig(force=True, ...)`` so each invocation
+    re-initializes the handlers cleanly across tests.
+    """
+
+    def test_root_v_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
+        result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        assert "DEBUG" in result.output
+
+    def test_env_var_enables_debug_when_flag_absent(
+        self,
+        fixture_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "DEBUG")
+        result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        assert "DEBUG" in result.output
+
+    def test_garbage_env_var_falls_back_to_warning(
+        self,
+        fixture_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "not-a-level")
+        result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        assert "DEBUG" not in result.output
+
+    def test_flag_overrides_env(
+        self,
+        fixture_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "WARNING")
+        result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        assert "DEBUG" in result.output
