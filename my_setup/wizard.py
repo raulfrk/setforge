@@ -32,10 +32,11 @@ import sys
 import termios
 import time
 import tty
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import FrameType
 
 from rich.console import Console
 from rich.table import Table
@@ -46,6 +47,13 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup import jsonc, transitions, yaml_merge
 from my_setup.transitions import TransitionCommand
+
+# Matches signal.signal's first-arg signature; aliased here so the
+# wizard's signal-handler save/restore typing is precise (mypy rejects
+# the wider `object` we previously used).
+_SignalHandler = (
+    Callable[[int, FrameType | None], object] | int | signal.Handlers | None
+)
 
 __all__ = [
     "ActionResult",
@@ -181,9 +189,9 @@ class Snapshot:
         """Remove the snapshot directory (call on successful completion)."""
         shutil.rmtree(self.snapshot_dir, ignore_errors=True)
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         """Do NOT auto-restore; caller owns success/failure decision."""
-        return False
+        return None
 
     def _snap_path(self, original: Path) -> Path:
         """Return the snapshot path for ``original``.
@@ -404,10 +412,12 @@ def _action_manual_edit(item: DriftItem) -> ActionResult:
 # ---------------------------------------------------------------------------
 
 
-def _make_signal_handler(snapshot: Snapshot, sig_name: str) -> object:
+def _make_signal_handler(
+    snapshot: Snapshot, sig_name: str
+) -> Callable[[int, FrameType | None], None]:
     """Return a signal handler that restores ``snapshot`` then re-raises the signal."""
 
-    def _handler(signum: int, frame: object) -> None:
+    def _handler(signum: int, frame: FrameType | None) -> None:
         n = snapshot.restore()
         print(
             f"\nmerge cancelled ({sig_name}); reverted {n} file(s)",
@@ -423,13 +433,13 @@ def _make_signal_handler(snapshot: Snapshot, sig_name: str) -> object:
 
 def _install_signal_handlers(
     snapshot: Snapshot,
-) -> dict[int, object]:
+) -> dict[int, _SignalHandler]:
     """Install SIGINT / SIGTERM / SIGHUP handlers for the wizard's lifetime.
 
     Returns the previous handlers so the caller can restore them when the
     wizard exits normally.
     """
-    prev: dict[int, object] = {}
+    prev: dict[int, _SignalHandler] = {}
     for sig, name in [
         (signal.SIGINT, "SIGINT"),
         (signal.SIGTERM, "SIGTERM"),
@@ -439,7 +449,7 @@ def _install_signal_handlers(
     return prev
 
 
-def _restore_signal_handlers(prev: dict[int, object]) -> None:
+def _restore_signal_handlers(prev: dict[int, _SignalHandler]) -> None:
     """Restore previously-saved signal handlers."""
     for sig, handler in prev.items():
         signal.signal(sig, handler)

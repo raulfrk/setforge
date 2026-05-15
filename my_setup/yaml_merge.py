@@ -181,7 +181,9 @@ def _apply_deep_overlay(
             src_node[key] = copy.deepcopy(live_value)
             return
         src_value = src_node[key]
-        if not (isinstance(src_value, Mapping) and isinstance(live_value, Mapping)):
+        if not (
+            isinstance(src_value, MutableMapping) and isinstance(live_value, Mapping)
+        ):
             raise MergeTypeMismatch(
                 f"deep-merge at {path!r} requires dict on both sides; "
                 f"got src={_shape(src_value)}, live={_shape(live_value)}"
@@ -212,7 +214,7 @@ def _deep_merge_dicts(
             continue
         src_value = src_dict[key]
         match (src_value, live_value):
-            case (Mapping(), Mapping()):
+            case (MutableMapping(), Mapping()):
                 _deep_merge_dicts(src_value, live_value, sub_path)
             case (list(), list()):
                 src_value.clear()
