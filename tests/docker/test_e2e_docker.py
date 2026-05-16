@@ -1136,3 +1136,80 @@ def test_revert_after_install_removes_new_agents_and_skill(
         ).returncode
         != 0
     ), "post-revert: reviewing-markdown SKILL.md should be absent"
+
+
+def test_merge_legacy_live_refuses_with_pointer_to_install(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """merge on a pre-9by live file refuses with the actionable error.
+
+    Pairs with the unit-level
+    ``test_merge_refuses_legacy_live_with_actionable_error`` in
+    ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
+    ``~/.claude/CLAUDE.md`` (no ``host-local``/``shared`` semantics keyword
+    on the start marker, no ``hash=<sha256>`` segment on the end marker) and
+    runs ``my-setup merge --profile=vm-headless``; asserts non-zero exit
+    AND that combined stdout+stderr names ``my-setup install`` as the next
+    step. Without the refusal guard, ``merge`` would proceed silently into
+    ``compare_profile`` instead of surfacing the actionable error.
+    """
+    c = docker_container()
+    c.write_text(
+        "/home/tester/.claude/CLAUDE.md",
+        "intro\n"
+        "<!-- my-setup:user-section start workflow -->\n"
+        "- body line\n"
+        "<!-- my-setup:user-section end workflow -->\n"
+        "outro\n",
+    )
+    result = c.exec(
+        ["uv", "run", "my-setup", "merge", "--profile=vm-headless"],
+        check=False,
+    )
+    assert result.returncode != 0, (
+        f"merge should refuse legacy live; "
+        f"got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "Run 'uv run my-setup install" in combined, (
+        f"expected 'Run 'uv run my-setup install' in output: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_sync_legacy_live_refuses_with_pointer_to_install(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """sync on a pre-9by live file refuses with the actionable error.
+
+    Pairs with the unit-level
+    ``test_sync_refuses_legacy_live_with_actionable_error`` in
+    ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
+    ``~/.claude/CLAUDE.md`` and runs ``my-setup sync --profile=vm-headless``;
+    asserts non-zero exit AND that combined stdout+stderr names
+    ``my-setup install`` as the next step.
+    """
+    c = docker_container()
+    c.write_text(
+        "/home/tester/.claude/CLAUDE.md",
+        "intro\n"
+        "<!-- my-setup:user-section start workflow -->\n"
+        "- body line\n"
+        "<!-- my-setup:user-section end workflow -->\n"
+        "outro\n",
+    )
+    result = c.exec(
+        ["uv", "run", "my-setup", "sync", "--profile=vm-headless"],
+        check=False,
+    )
+    assert result.returncode != 0, (
+        f"sync should refuse legacy live; "
+        f"got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "Run 'uv run my-setup install" in combined, (
+        f"expected 'Run 'uv run my-setup install' in output: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
