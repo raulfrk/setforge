@@ -71,6 +71,28 @@ def test_parse_dockerignore_missing_file(tmp_path: Path) -> None:
     assert filenames == set()
 
 
+def test_parse_dockerignore_rejects_bare_star(tmp_path: Path) -> None:
+    """A bare ``*`` line does not introduce an empty suffix.
+
+    Without this guard, ``line[1:]`` on ``*`` derives ``""`` which would
+    match every extensionless file via ``str.endswith("")``.
+    """
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text("*\n")
+    _dirs, suffixes, _files = docker_conftest._parse_dockerignore(dockerignore)
+    assert "" not in suffixes
+
+
+def test_parse_dockerignore_survives_malformed_utf8(tmp_path: Path) -> None:
+    """Invalid UTF-8 bytes return empty sets instead of raising at import."""
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_bytes(b"\xff\xfe")
+    dirs, suffixes, files = docker_conftest._parse_dockerignore(dockerignore)
+    assert dirs == set()
+    assert suffixes == set()
+    assert files == set()
+
+
 @pytest.fixture
 def hash_inputs_in_tmp(
     tmp_path: Path,

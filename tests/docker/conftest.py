@@ -75,14 +75,21 @@ def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
     filenames: set[str] = set()
     if not path.is_file():
         return dirs, suffixes, filenames
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return dirs, suffixes, filenames
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if line.endswith("/"):
             dirs.add(line.rstrip("/"))
         elif line.startswith("*"):
-            suffixes.add(line[1:])
+            suffix = line[1:]
+            if not suffix:
+                continue
+            suffixes.add(suffix)
         else:
             filenames.add(line)
     return dirs, suffixes, filenames
