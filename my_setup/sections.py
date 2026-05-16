@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from my_setup.errors import MarkerError
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _MARKER_RE = re.compile(
     r"^\s*<!--\s*my-setup:user-section\s+(start|end)"
