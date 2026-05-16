@@ -861,3 +861,140 @@ def test_validate_clean_yaml_exit_zero(
     proc = c.exec(["uv", "run", "my-setup", "validate", "--all", f"--config={_CONFIG}"])
     assert proc.returncode == 0
     assert "ok" in proc.stdout
+
+
+# ===========================================================================
+# Section: Prose-reviewer artifacts (dotfiles-h5k)
+# ===========================================================================
+#
+# The four variants below exercise the install / compare / revert
+# lifecycle on the three new prose-reviewer agent files and the new
+# reviewing-markdown skill. The fixture-tracked copies under
+# tests/fixtures/e2e/tracked/claude/{agents,skills}/ mirror the real
+# tracked content; install must produce byte-identical live files,
+# compare must report no drift, and revert must remove every deployed
+# artifact (each starts absent on a fresh container).
+#
+# Implicitly verifies (per dotfiles-h5k --notes): 9by's strict-tag
+# parser does not reject pure-tracked agent files that contain no
+# user-section markers.
+
+
+_PROSE_AGENT_BASENAMES = (
+    "python-prose-reviewer.md",
+    "claude-md-prose-reviewer.md",
+    "markdown-prose-reviewer.md",
+)
+_PROSE_AGENT_TRACKED_DIR = "/workspace/tests/fixtures/e2e/tracked/claude/agents"
+_PROSE_SKILL_TRACKED = (
+    "/workspace/tests/fixtures/e2e/tracked/claude/skills/reviewing-markdown/SKILL.md"
+)
+
+
+def test_install_deploys_three_new_prose_reviewer_agents(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Install deploys all 3 prose-reviewer agents byte-identical to tracked."""
+    c = docker_container()
+    _install(c, "test-prose-reviewers")
+    for basename in _PROSE_AGENT_BASENAMES:
+        live = c.read_text(f"/home/tester/.claude/agents/{basename}")
+        tracked = c.read_text(f"{_PROSE_AGENT_TRACKED_DIR}/{basename}")
+        assert live == tracked, f"deployed {basename} drifts from tracked"
+
+
+def test_install_deploys_new_reviewing_markdown_skill(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Install deploys reviewing-markdown SKILL.md byte-identical to tracked."""
+    c = docker_container()
+    _install(c, "test-prose-reviewers")
+    live = c.read_text("/home/tester/.claude/skills/reviewing-markdown/SKILL.md")
+    tracked = c.read_text(_PROSE_SKILL_TRACKED)
+    assert live == tracked
+
+
+def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """After clean install, compare --check --strict exits 0 (no drift)."""
+    c = docker_container()
+    _install(c, "test-prose-reviewers")
+    proc = c.exec(
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "compare",
+            "--profile=test-prose-reviewers",
+            f"--config={_CONFIG}",
+            "--check",
+            "--strict",
+        ],
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_revert_after_install_removes_new_agents_and_skill(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Revert after install removes all 3 prose agents + reviewing-markdown skill.
+
+    Each artifact starts absent on a fresh container, so revert's
+    `patch -R` equivalent removes them entirely (no prior content to
+    restore).
+    """
+    c = docker_container()
+    _install(c, "test-prose-reviewers")
+    # Sanity: all 4 artifacts exist post-install.
+    for basename in _PROSE_AGENT_BASENAMES:
+        assert (
+            c.exec(
+                ["test", "-f", f"/home/tester/.claude/agents/{basename}"], check=False
+            ).returncode
+            == 0
+        ), f"pre-revert sanity: {basename} should exist"
+    assert (
+        c.exec(
+            [
+                "test",
+                "-f",
+                "/home/tester/.claude/skills/reviewing-markdown/SKILL.md",
+            ],
+            check=False,
+        ).returncode
+        == 0
+    ), "pre-revert sanity: reviewing-markdown SKILL.md should exist"
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "my-setup",
+            "revert",
+            "--profile=test-prose-reviewers",
+            f"--config={_CONFIG}",
+        ]
+    )
+    assert revert.returncode == 0, revert.stderr
+
+    # All 4 artifacts gone post-revert.
+    for basename in _PROSE_AGENT_BASENAMES:
+        assert (
+            c.exec(
+                ["test", "-f", f"/home/tester/.claude/agents/{basename}"], check=False
+            ).returncode
+            != 0
+        ), f"post-revert: {basename} should be absent"
+    assert (
+        c.exec(
+            [
+                "test",
+                "-f",
+                "/home/tester/.claude/skills/reviewing-markdown/SKILL.md",
+            ],
+            check=False,
+        ).returncode
+        != 0
+    ), "post-revert: reviewing-markdown SKILL.md should be absent"

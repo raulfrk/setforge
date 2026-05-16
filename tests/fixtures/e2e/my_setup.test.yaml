@@ -106,6 +106,24 @@ dotfiles:
     src: comprehensive/config.yaml
     dst: ~/.my_setup_e2e/comprehensive/config.yaml
 
+  # Prose-reviewer agents + reviewing-markdown skill (dotfiles-h5k).
+  # Test-only mirror of the production wiring in /workspace/my_setup.yaml;
+  # used by the prose-reviewer Docker e2e variants to exercise install /
+  # compare / revert against new files that have no user-section markers
+  # (implicitly covers 9by's strict-tag parser).
+  prose_python_agent:
+    src: claude/agents/python-prose-reviewer.md
+    dst: ~/.claude/agents/python-prose-reviewer.md
+  prose_claude_md_agent:
+    src: claude/agents/claude-md-prose-reviewer.md
+    dst: ~/.claude/agents/claude-md-prose-reviewer.md
+  prose_markdown_agent:
+    src: claude/agents/markdown-prose-reviewer.md
+    dst: ~/.claude/agents/markdown-prose-reviewer.md
+  prose_reviewing_markdown_skill:
+    src: claude/skills/reviewing-markdown/SKILL.md
+    dst: ~/.claude/skills/reviewing-markdown/SKILL.md
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -203,3 +221,14 @@ profiles:
         - editorconfig.editorconfig
     bootstrap:
       - ~/.my_setup_e2e/comprehensive/bootstrap-stub.txt
+
+  # ---- Prose-reviewer artifacts (dotfiles-h5k) ------------------------
+  # Exercises install / compare / revert for the three new prose
+  # reviewer agents + the new reviewing-markdown skill, in isolation
+  # from plugin / extension reconciliation.
+  test-prose-reviewers:
+    dotfiles:
+      - prose_python_agent
+      - prose_claude_md_agent
+      - prose_markdown_agent
+      - prose_reviewing_markdown_skill
