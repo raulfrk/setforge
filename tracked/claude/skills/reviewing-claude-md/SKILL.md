@@ -1,11 +1,11 @@
 ---
 name: reviewing-claude-md
-description: 4-aspect parallel review fan for CLAUDE.md / workflow-doc changes (tracked/claude/CLAUDE.md, superpowers-prefs.md, header.md, bd-reference / wt-reference / new skill content, agent definitions, additional-content.md). Dispatches `claude-md-spec-reviewer`, `claude-md-form-reviewer`, `claude-md-substance-reviewer`, and `claude-md-specifics-reviewer` in parallel via a single message of Agent tool calls. Consolidates verdicts worst-of-four. Use after CLAUDE.md / workflow-doc implementation (Phase 5), and again post-merge (Phase 7).
+description: 5-aspect parallel review fan for CLAUDE.md / workflow-doc changes (tracked/claude/CLAUDE.md, superpowers-prefs.md, header.md, bd-reference / wt-reference / new skill content, agent definitions, additional-content.md). Dispatches `claude-md-spec-reviewer`, `claude-md-form-reviewer`, `claude-md-substance-reviewer`, `claude-md-specifics-reviewer`, and `claude-md-prose-reviewer` in parallel via a single message of Agent tool calls. Consolidates verdicts worst-of-five. Use after CLAUDE.md / workflow-doc implementation (Phase 5), and again post-merge (Phase 7).
 ---
 
 # Reviewing CLAUDE.md / workflow docs
 
-This skill orchestrates a 4-aspect parallel review fan for CLAUDE.md and related workflow-doc changes. Each aspect is a dedicated specialized agent under `~/.claude/agents/`; this skill dispatches all four in parallel via the `Agent` tool **in a single message**, then consolidates the four reports.
+This skill orchestrates a 5-aspect parallel review fan for CLAUDE.md and related workflow-doc changes. Each aspect is a dedicated specialized agent under `~/.claude/agents/`; this skill dispatches all five in parallel via the `Agent` tool **in a single message**, then consolidates the five reports.
 
 ## When to invoke
 
@@ -35,14 +35,15 @@ Compute (or accept as input):
 
 ## Parallel dispatch
 
-Send **a single message** containing 4 `Agent` tool calls, one per reviewer:
+Send **a single message** containing 5 `Agent` tool calls, one per reviewer:
 
 1. `subagent_type: claude-md-spec-reviewer` — spec-conformance, file placement, structural commitments.
 2. `subagent_type: claude-md-form-reviewer` — prose clarity, voice, links, header levels.
 3. `subagent_type: claude-md-substance-reviewer` — internal coherence, cross-file consistency, cross-ref accuracy.
 4. `subagent_type: claude-md-specifics-reviewer` — meta-twist, user-section markers, enforcement-layer correctness, observation coverage.
+5. `subagent_type: claude-md-prose-reviewer` — prose quality + factual correctness vs. referenced skill / tool surfaces.
 
-Use the same prompt template across all four:
+Use the same prompt template across all five:
 
 ```
 You are reviewing the diff in BASE_SHA..HEAD_SHA.
@@ -61,7 +62,7 @@ Return structured findings + DoD checklist + verdict line.
 
 ## Consolidation
 
-After all 4 agents return, produce a single report:
+After all 5 agents return, produce a single report:
 
 ```
 # CLAUDE.md review fan report (BASE_SHA..HEAD_SHA)
@@ -78,13 +79,17 @@ After all 4 agents return, produce a single report:
 ## claude-md-specifics-reviewer (purple)
 <sub-report verbatim>
 
+## claude-md-prose-reviewer (yellow)
+<sub-report verbatim>
+
 ## Overall
 - claude-md-spec: <verdict>
 - claude-md-form: <verdict>
 - claude-md-substance: <verdict>
 - claude-md-specifics: <verdict>
+- claude-md-prose: <verdict>
 
-Overall verdict: <worst-of-four — BLOCK > CONCERNS > PASS>
+Overall verdict: <worst-of-five — BLOCK > CONCERNS > PASS>
 ```
 
 ## After the report
@@ -95,7 +100,7 @@ Overall verdict: <worst-of-four — BLOCK > CONCERNS > PASS>
 
 ## Definition of done for the orchestrator
 
-- [ ] All 4 reviewer dispatches issued in a single message (true parallel).
-- [ ] All 4 agents returned a `Verdict: ...` line.
-- [ ] Consolidated report produced with all 4 sub-reports verbatim.
-- [ ] Worst-of-four overall verdict computed and stated explicitly.
+- [ ] All 5 reviewer dispatches issued in a single message (true parallel).
+- [ ] All 5 agents returned a `Verdict: ...` line.
+- [ ] Consolidated report produced with all 5 sub-reports verbatim.
+- [ ] Worst-of-five overall verdict computed and stated explicitly.
