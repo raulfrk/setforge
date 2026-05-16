@@ -107,6 +107,93 @@ class _EndMarker:
 _MarkerEvent = _BodyLine | _OutsideLine | _StartMarker | _EndMarker
 
 
+@dataclass(slots=True)
+class _WalkState:
+    """Mutable state machine accumulator for :func:`_walk_markers`.
+
+    Tracks the currently-open section (``None`` when no section is open)
+    and the next 0-based index to assign to an unnamed section. Mutated
+    in place by :func:`_handle_start_marker` and :func:`_handle_end_marker`.
+    """
+
+    in_section: bool = False
+    section_name: str | None = None
+    section_semantics: SectionSemantics | None = None
+    unnamed_index: int = 0
+
+
+def _handle_start_marker(
+    line: str,
+    lineno: int,
+    name: str | None,
+    semantics: SectionSemantics,
+    state: _WalkState,
+) -> _StartMarker:
+    """Validate a start marker, mutate ``state``, return the event.
+
+    Raises :class:`MarkerError` when a section is already open (nested
+    start). On success, marks ``state.in_section`` true and records the
+    new section's name and semantics.
+    """
+    if state.in_section:
+        raise MarkerError(
+            f"line {lineno}: nested user-section start (previous section still open)"
+        )
+    state.in_section = True
+    state.section_name = name
+    state.section_semantics = semantics
+    return _StartMarker(line, name, semantics)
+
+
+def _handle_end_marker(
+    line: str,
+    lineno: int,
+    name: str | None,
+    semantics: SectionSemantics,
+    embedded_hash: str | None,
+    allow_legacy: bool,
+    state: _WalkState,
+) -> _EndMarker:
+    """Validate an end marker, mutate ``state``, return the event.
+
+    Raises :class:`MarkerError` on end-without-start, name mismatch with
+    the open section, semantics mismatch with the open section, or
+    missing ``hash=<...>`` segment when ``allow_legacy`` is false. On
+    success, closes the open section and (for unnamed sections)
+    increments ``state.unnamed_index``.
+    """
+    if not state.in_section:
+        raise MarkerError(f"line {lineno}: user-section end without matching start")
+    if name != state.section_name:
+        raise MarkerError(
+            f"line {lineno}: user-section end name {name!r} does not "
+            f"match start name {state.section_name!r}"
+        )
+    if semantics is not state.section_semantics:
+        raise MarkerError(
+            f"line {lineno}: user-section end semantics {semantics.value!r} "
+            f"does not match start semantics "
+            f"{state.section_semantics.value if state.section_semantics else None!r}"
+        )
+    if embedded_hash is None and not allow_legacy:
+        raise MarkerError(
+            f"line {lineno}: user-section end marker missing required "
+            f"'hash=<sha256-hex>' segment"
+        )
+    key = (
+        state.section_name
+        if state.section_name is not None
+        else str(state.unnamed_index)
+    )
+    event = _EndMarker(line, state.section_name, key, semantics, embedded_hash)
+    if state.section_name is None:
+        state.unnamed_index += 1
+    state.in_section = False
+    state.section_name = None
+    state.section_semantics = None
+    return event
+
+
 def _parse_marker_line(
     line: str, lineno: int, *, allow_legacy: bool
 ) -> tuple[str, str, str | None, str | None] | None:
@@ -155,74 +242,36 @@ def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerE
     :func:`set_marker_hashes`, and :func:`section_semantics`: tracks
     open/closed section state, assigns unnamed-section indices, and
     raises :class:`MarkerError` on nested starts, ends-without-starts,
-    name mismatches, semantics-keyword mismatches, missing-keyword
-    markers, missing end-marker hashes, and unclosed sections.
+    name/semantics mismatches, missing-keyword markers, missing
+    end-marker hashes, and unclosed sections. Consumers receive
+    validated, fully-keyed events and only do their accumulator logic.
 
-    When ``allow_legacy`` is ``True`` (migration-only escape hatch used
-    by the install path on live-side reads), markers missing the
+    When ``allow_legacy`` is true (migration-only escape hatch used by
+    the install path on live-side reads), markers missing the
     ``host-local`` / ``shared`` keyword parse as
     :attr:`SectionSemantics.SHARED`, and end markers missing the
     ``hash=<...>`` segment yield ``embedded_hash=None`` instead of
-    raising. All other validation (nesting, name match, semantics
-    match, unclosed) is unaffected.
-
-    Consumers receive validated, fully-keyed events and only have to do
-    their own accumulator / output logic.
+    raising. All other validation is unaffected.
     """
-    in_section = False
-    section_name: str | None = None
-    section_semantics: SectionSemantics | None = None
-    unnamed_index = 0
-
+    state = _WalkState()
     for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
         parsed = _parse_marker_line(line, lineno, allow_legacy=allow_legacy)
         if parsed is None:
-            yield _BodyLine(line) if in_section else _OutsideLine(line)
+            yield _BodyLine(line) if state.in_section else _OutsideLine(line)
             continue
         kind, semantics_raw, name, embedded_hash = parsed
         semantics = SectionSemantics(semantics_raw)
         if kind == "start":
-            if in_section:
-                raise MarkerError(
-                    f"line {lineno}: nested user-section start "
-                    f"(previous section still open)"
-                )
-            in_section = True
-            section_name = name
-            section_semantics = semantics
-            yield _StartMarker(line, name, semantics)
+            yield _handle_start_marker(line, lineno, name, semantics, state)
         else:
-            if not in_section:
-                raise MarkerError(
-                    f"line {lineno}: user-section end without matching start"
-                )
-            if name != section_name:
-                raise MarkerError(
-                    f"line {lineno}: user-section end name {name!r} does not "
-                    f"match start name {section_name!r}"
-                )
-            if semantics is not section_semantics:
-                raise MarkerError(
-                    f"line {lineno}: user-section end semantics {semantics.value!r} "
-                    f"does not match start semantics "
-                    f"{section_semantics.value if section_semantics else None!r}"
-                )
-            if embedded_hash is None and not allow_legacy:
-                raise MarkerError(
-                    f"line {lineno}: user-section end marker missing required "
-                    f"'hash=<sha256-hex>' segment"
-                )
-            key = section_name if section_name is not None else str(unnamed_index)
-            yield _EndMarker(line, section_name, key, semantics, embedded_hash)
-            if section_name is None:
-                unnamed_index += 1
-            in_section = False
-            section_name = None
-            section_semantics = None
+            yield _handle_end_marker(
+                line, lineno, name, semantics, embedded_hash, allow_legacy, state
+            )
 
-    if in_section:
-        identifier = section_name if section_name is not None else str(unnamed_index)
-        raise MarkerError(f"unclosed user-section (started as {identifier!r})")
+    if state.in_section:
+        name = state.section_name
+        ident = name if name is not None else str(state.unnamed_index)
+        raise MarkerError(f"unclosed user-section (started as {ident!r})")
 
 
 def detect_legacy_markers(text: str) -> bool:
