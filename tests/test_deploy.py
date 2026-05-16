@@ -144,7 +144,7 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
     # --- Baseline: no precomputed dict; copy_atomic re-reads live. ---
     dst_a = _seed_dst("dst_a.md")
     live_text_a = dst_a.read_text(encoding="utf-8")
-    precomputed = sections.extract_sections(live_text_a)
+    precomputed = sections.extract_live_sections(live_text_a)
 
     original_read_text = Path.read_text
     counts = {"a": 0, "b": 0}
@@ -186,7 +186,7 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
 def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
     tmp_path: Path,
 ) -> None:
-    """Passing ``precomputed_live_sections=extract_sections(live_text)``
+    """Passing ``precomputed_live_sections=extract_live_sections(live_text)``
     must yield byte-identical output to the no-precompute path.
     """
     from my_setup import sections
@@ -217,7 +217,7 @@ def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
         src,
         dst_b,
         preserve_user_sections=True,
-        precomputed_live_sections=sections.extract_sections(live_text),
+        precomputed_live_sections=sections.extract_live_sections(live_text),
     )
 
     assert dst_a.read_bytes() == dst_b.read_bytes()
@@ -230,6 +230,8 @@ def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomp
     set, the override wins per-key (same precedence as the no-precompute
     path's `{**live_sections, **override}` merge).
     """
+    from my_setup import sections
+
     src_text = (
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
@@ -253,7 +255,7 @@ def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomp
         src,
         dst,
         preserve_user_sections=True,
-        precomputed_live_sections={"s": "LIVE BODY\n"},
+        precomputed_live_sections=sections.LiveSections({"s": "LIVE BODY\n"}),
         section_bodies_override={"s": "OVERRIDE BODY\n"},
     )
     final = dst.read_text()
