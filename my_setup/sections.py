@@ -22,6 +22,8 @@ names.
 import hashlib
 import logging
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 
 from my_setup.errors import MarkerError
 
@@ -35,29 +37,70 @@ _MARKER_RE = re.compile(
 )
 
 
-def extract_sections(text: str) -> dict[str, str]:
-    """Return the content between every marker pair in ``text``.
+@dataclass(slots=True, frozen=True)
+class _BodyLine:
+    """A line inside a section body (between a start and its end marker)."""
 
-    Named sections are keyed by their name; unnamed sections are keyed by
-    sequential string indices ("0", "1", ...). Section content includes any
-    trailing newline up to (but not including) the end-marker line.
+    line: str
 
-    Raises :class:`MarkerError` for nested sections, end-without-start,
-    name-mismatched pairs, or unclosed start markers.
+
+@dataclass(slots=True, frozen=True)
+class _OutsideLine:
+    """A line outside any section (no enclosing marker pair)."""
+
+    line: str
+
+
+@dataclass(slots=True, frozen=True)
+class _StartMarker:
+    """A validated user-section start-marker line."""
+
+    line: str
+    name: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class _EndMarker:
+    """A validated user-section end-marker line.
+
+    ``key`` is the section's canonical name (the start-marker name, or the
+    0-based string index assigned to unnamed sections in order of appearance).
+    ``name`` mirrors the start-marker's name (``None`` for unnamed sections).
+    ``embedded_hash`` is the ``hash=<...>`` segment value, or ``None`` if the
+    end marker omits it.
     """
-    sections: dict[str, str] = {}
+
+    line: str
+    name: str | None
+    key: str
+    embedded_hash: str | None
+
+
+_MarkerEvent = _BodyLine | _OutsideLine | _StartMarker | _EndMarker
+
+
+def _walk_markers(text: str) -> Iterator[_MarkerEvent]:
+    """Yield one event per line in ``text``, validating marker pairing.
+
+    Centralizes the state machine shared by :func:`extract_sections`,
+    :func:`merge_sections`, :func:`extract_marker_hashes`, and
+    :func:`set_marker_hashes`: tracks open/closed section state, assigns
+    unnamed-section indices, and raises :class:`MarkerError` on nested
+    starts, ends-without-starts, name mismatches, and unclosed sections.
+
+    Consumers receive validated, fully-keyed events and only have to do
+    their own accumulator / output logic.
+    """
     in_section = False
     section_name: str | None = None
-    section_lines: list[str] = []
     unnamed_index = 0
 
     for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
         match = _MARKER_RE.match(line)
         if match is None:
-            if in_section:
-                section_lines.append(line)
+            yield _BodyLine(line) if in_section else _OutsideLine(line)
             continue
-        kind, name = match.group(1), match.group(2)
+        kind, name, embedded_hash = match.group(1), match.group(2), match.group(3)
         if kind == "start":
             if in_section:
                 raise MarkerError(
@@ -66,7 +109,7 @@ def extract_sections(text: str) -> dict[str, str]:
                 )
             in_section = True
             section_name = name
-            section_lines = []
+            yield _StartMarker(line, name)
         else:
             if not in_section:
                 raise MarkerError(
@@ -78,17 +121,37 @@ def extract_sections(text: str) -> dict[str, str]:
                     f"match start name {section_name!r}"
                 )
             key = section_name if section_name is not None else str(unnamed_index)
-            sections[key] = "".join(section_lines)
+            yield _EndMarker(line, section_name, key, embedded_hash)
             if section_name is None:
                 unnamed_index += 1
             in_section = False
             section_name = None
-            section_lines = []
 
     if in_section:
         identifier = section_name if section_name is not None else str(unnamed_index)
         raise MarkerError(f"unclosed user-section (started as {identifier!r})")
 
+
+def extract_sections(text: str) -> dict[str, str]:
+    """Return the content between every marker pair in ``text``.
+
+    Named sections are keyed by their name; unnamed sections are keyed by
+    sequential string indices ("0", "1", ...). Section content includes any
+    trailing newline up to (but not including) the end-marker line.
+
+    Raises :class:`MarkerError` for nested sections, end-without-start,
+    name-mismatched pairs, or unclosed start markers.
+    """
+    sections: dict[str, str] = {}
+    section_lines: list[str] = []
+    for event in _walk_markers(text):
+        if isinstance(event, _BodyLine):
+            section_lines.append(event.line)
+        elif isinstance(event, _StartMarker):
+            section_lines = []
+        elif isinstance(event, _EndMarker):
+            sections[event.key] = "".join(section_lines)
+            section_lines = []
     return sections
 
 
@@ -104,41 +167,27 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
     dropped with a warning logged via :data:`LOGGER`.
     """
     out_lines: list[str] = []
-    in_section = False
-    section_name: str | None = None
     placeholder_lines: list[str] = []
-    unnamed_index = 0
     consumed: set[str] = set()
 
-    for line in tracked_text.splitlines(keepends=True):
-        match = _MARKER_RE.match(line)
-        if match is None:
-            if in_section:
-                placeholder_lines.append(line)
-            else:
-                out_lines.append(line)
-            continue
-        kind, name = match.group(1), match.group(2)
-        if kind == "start":
-            out_lines.append(line)
-            in_section = True
-            section_name = name
+    for event in _walk_markers(tracked_text):
+        if isinstance(event, _OutsideLine):
+            out_lines.append(event.line)
+        elif isinstance(event, _BodyLine):
+            placeholder_lines.append(event.line)
+        elif isinstance(event, _StartMarker):
+            out_lines.append(event.line)
             placeholder_lines = []
-        else:
-            key = section_name if section_name is not None else str(unnamed_index)
-            if key in live_sections:
-                content = live_sections[key]
+        else:  # _EndMarker
+            if event.key in live_sections:
+                content = live_sections[event.key]
                 if content and not content.endswith("\n"):
                     content += "\n"
                 out_lines.append(content)
-                consumed.add(key)
+                consumed.add(event.key)
             else:
                 out_lines.extend(placeholder_lines)
-            out_lines.append(line)
-            if section_name is None:
-                unnamed_index += 1
-            in_section = False
-            section_name = None
+            out_lines.append(event.line)
             placeholder_lines = []
 
     for key in sorted(set(live_sections) - consumed):
@@ -168,46 +217,11 @@ def extract_marker_hashes(text: str) -> dict[str, str | None]:
     pre-xyw form). Coverage-equivalent to :func:`extract_sections`; raises
     :class:`MarkerError` on the same malformed-marker inputs.
     """
-    hashes: dict[str, str | None] = {}
-    in_section = False
-    section_name: str | None = None
-    unnamed_index = 0
-
-    for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
-        match = _MARKER_RE.match(line)
-        if match is None:
-            continue
-        kind, name, embedded_hash = match.group(1), match.group(2), match.group(3)
-        if kind == "start":
-            if in_section:
-                raise MarkerError(
-                    f"line {lineno}: nested user-section start "
-                    f"(previous section still open)"
-                )
-            in_section = True
-            section_name = name
-        else:
-            if not in_section:
-                raise MarkerError(
-                    f"line {lineno}: user-section end without matching start"
-                )
-            if name != section_name:
-                raise MarkerError(
-                    f"line {lineno}: user-section end name {name!r} does not "
-                    f"match start name {section_name!r}"
-                )
-            key = section_name if section_name is not None else str(unnamed_index)
-            hashes[key] = embedded_hash
-            if section_name is None:
-                unnamed_index += 1
-            in_section = False
-            section_name = None
-
-    if in_section:
-        identifier = section_name if section_name is not None else str(unnamed_index)
-        raise MarkerError(f"unclosed user-section (started as {identifier!r})")
-
-    return hashes
+    return {
+        event.key: event.embedded_hash
+        for event in _walk_markers(text)
+        if isinstance(event, _EndMarker)
+    }
 
 
 def set_marker_hashes(text: str, hashes: dict[str, str]) -> str:
@@ -235,46 +249,13 @@ def set_marker_hashes(text: str, hashes: dict[str, str]) -> str:
         )
 
     out_lines: list[str] = []
-    in_section = False
-    section_name: str | None = None
-    unnamed_index = 0
-
-    for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
-        match = _MARKER_RE.match(line)
-        if match is None:
-            out_lines.append(line)
-            continue
-        kind, name, _embedded = match.group(1), match.group(2), match.group(3)
-        if kind == "start":
-            if in_section:
-                raise MarkerError(
-                    f"line {lineno}: nested user-section start "
-                    f"(previous section still open)"
-                )
-            out_lines.append(line)
-            in_section = True
-            section_name = name
+    for event in _walk_markers(text):
+        if isinstance(event, _EndMarker):
+            out_lines.append(
+                _format_end_marker(event.name, hashes.get(event.key), event.line)
+            )
         else:
-            if not in_section:
-                raise MarkerError(
-                    f"line {lineno}: user-section end without matching start"
-                )
-            if name != section_name:
-                raise MarkerError(
-                    f"line {lineno}: user-section end name {name!r} does not "
-                    f"match start name {section_name!r}"
-                )
-            key = section_name if section_name is not None else str(unnamed_index)
-            out_lines.append(_format_end_marker(section_name, hashes.get(key), line))
-            if section_name is None:
-                unnamed_index += 1
-            in_section = False
-            section_name = None
-
-    if in_section:
-        identifier = section_name if section_name is not None else str(unnamed_index)
-        raise MarkerError(f"unclosed user-section (started as {identifier!r})")
-
+            out_lines.append(event.line)
     return "".join(out_lines)
 
 
