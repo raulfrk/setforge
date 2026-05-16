@@ -53,7 +53,9 @@ from my_setup.errors import (
     NoTransitionFound,
     PluginToolMissing,
 )
+from my_setup.section_reconcile import SectionDriftState
 from my_setup.section_wizard import ReconcileAuto
+from my_setup.sections import SectionSemantics
 
 LOGGER = logging.getLogger(__name__)
 
@@ -462,9 +464,9 @@ def _print_section_reconcile_dry_run(
             any_emitted = True
             console.print(f"\n[bold]{sub_dst}[/bold]: {summary}")
             for sec_name, drift in drifts.items():
-                if drift.semantics.value != "shared":
+                if drift.semantics is not SectionSemantics.SHARED:
                     continue
-                if drift.state.value == "no_drift":
+                if drift.state is SectionDriftState.NO_DRIFT:
                     continue
                 console.print(
                     f"  three-way {drift.state.value} [cyan]{sec_name}[/cyan]"
