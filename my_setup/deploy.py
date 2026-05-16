@@ -57,6 +57,7 @@ def copy_atomic(
     preserve_user_sections: bool = False,
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
+    section_bodies_override: dict[str, str] | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -66,6 +67,15 @@ def copy_atomic(
 
     When the resulting content is byte-identical to the existing ``dst``,
     no write or backup is performed (action == :attr:`DeployAction.NOOP`).
+
+    When ``preserve_user_sections`` is True, the rendered content has
+    every end-marker's ``hash=<...>`` rewritten via
+    :func:`my_setup.section_reconcile.maintain_marker_hashes` so the
+    embedded hashes always match the body actually written
+    (post-install invariant). ``section_bodies_override`` lets callers
+    (the install path's wizard) supply a per-section body that overrides
+    what :func:`extract_sections` would pick up from the existing live
+    file — used for the ``take-tracked`` / edit actions.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -84,6 +94,7 @@ def copy_atomic(
         preserve_user_sections,
         preserve_user_keys,
         preserve_user_keys_deep,
+        section_bodies_override,
     )
 
     if dst_existed:
@@ -106,7 +117,14 @@ def _compute_content(
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
     preserve_user_keys_deep: list[str] | None = None,
+    section_bodies_override: dict[str, str] | None = None,
 ) -> str:
+    # Local import to break the deploy → section_reconcile → sections cycle
+    # at module load time; section_reconcile depends on deploy only at call
+    # time through the install path, but a top-level import would still be
+    # circular if section_reconcile ever imports from deploy.
+    from my_setup.section_reconcile import maintain_marker_hashes
+
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
     has_keys = bool(shallow or deep)
@@ -134,7 +152,17 @@ def _compute_content(
         if dst_existed:
             live_text = dst.read_text(encoding="utf-8")
             live_sections = sections.extract_sections(live_text)
+        if section_bodies_override:
+            # Per-section override from the install-time wizard: takes
+            # precedence over the live body for sections the wizard
+            # resolved (e.g. take-tracked, edit). Sections not in the
+            # override map fall through to live-as-is.
+            live_sections = {**live_sections, **section_bodies_override}
         content = sections.merge_sections(content, live_sections)
+        # Post-merge: rewrite every end-marker hash to match the body
+        # actually written. Idempotent + cheap; satisfies the post-install
+        # invariant extract_marker_hashes(content) == hash_sections(content).
+        content = maintain_marker_hashes(content)
 
     return content
 
