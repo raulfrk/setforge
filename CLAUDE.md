@@ -38,8 +38,9 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 
 A 25-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises `install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12 container with real `claude` and `code` binaries. It is the strongest behavior-preservation gate in this project.
 
-- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v`
-- **Runtime:** ~5 min.
+- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v` (unchanged; xdist auto-activates)
+- **Parallel execution:** `-m e2e_docker` auto-activates pytest-xdist with `-n auto`. Override with `-n 0` for serial-mode debugging or `-n N` for a specific worker count. Runtime drops from ~8-10 min to ~3-4 min on a 4-core machine.
+- **Runtime:** ~3-4 min on a 4-core machine (xdist parallel); ~8-10 min serial (`-n 0`).
 - **When to run:** required on every Phase 7 (post-merge cross-cutting
   review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH; the suite skips when docker is missing

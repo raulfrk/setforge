@@ -35,6 +35,25 @@ from pathlib import Path
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Auto-activate pytest-xdist when running with ``-m e2e_docker``.
+
+    Sets ``--numprocesses=auto`` only when:
+    - the markexpr contains ``e2e_docker`` (substring match — covers
+      compound expressions like ``-m "e2e_docker and not slow"``), AND
+    - ``-n``/``--numprocesses`` was not set explicitly on the CLI
+      (preserves user opt-out via ``-n 0`` for serial-mode debugging).
+    """
+    markexpr = config.getoption("markexpr", default="") or ""
+    if "e2e_docker" not in markexpr:
+        return
+    explicit = config.getoption("numprocesses", default=None)
+    if explicit is not None:
+        return
+    config.option.numprocesses = "auto"
+
+
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
 IMAGE_TAG_PREFIX: str = "my-setup-e2e:test"
