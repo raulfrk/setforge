@@ -35,7 +35,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Verification means more than "tools passed." Confirm: spec satisfied, nothing introduced outside the spec, tests assert the right thing.
 - When the contract isn't obvious, write tests first and treat them as the reviewable spec — names, asserts, what's NOT asserted, edge cases.
 - Keep changes small. A 200-line diff understood beats 1500 skimmed. Refuse scope creep within a change.
-- Worktree primitive: `wt switch --create <slug>` (worktrunk), not raw `git worktree add`. Worktrees land at `~/<repo>.<slug>` (sibling of repo) per wt's default template. See the `wt-reference` skill for the command surface.
+- Worktree primitive: `wt switch --create <slug>` (worktrunk), not raw `git worktree add`. Worktrees land at `~/projects/worktrees/<slug>` per wt's configured location (see `tracked/wt/config.toml`). See the `wt-reference` skill for the command surface.
 - Canonical parallel-work loop:
   1. `bd ready` — pick the next unblocked issue.
   2. `bd show <id>` — load the contract.
@@ -46,7 +46,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   6. `wt merge --no-squash` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
-<!-- my-setup:user-section end shared workflow hash=40897221f5e9f91c5a2bd408243ac72abe1e4ab07c68f5082feff570dc61b769 -->
+<!-- my-setup:user-section end shared workflow hash=cd85aed32cae280be5f7285ab3fba97a3492df4c8bcd45ba3ccc6b54c75d92eb -->
 
 ## Python
 
@@ -87,7 +87,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - `bd prime` gives live workflow context (auto-fired by SessionStart hook). `bd <cmd> --help` verifies a specific flag set on the installed binary when in doubt.
 - Persistence layers (pick the right one): **memory** (`bd remember`, cross-project), **issue notes** (`bd note <id>`, body field), **comments** (`bd comment <id>`, timestamped thread for handoffs), **structured fields** (`bd update --description/--design/--acceptance`).
 - Never use `bd edit` — it opens `$EDITOR` and blocks the agent. Use `bd update --notes/--design/...` or `bd note` / `bd comment`.
-- Worktrees: sibling of the repo at `~/<repo>.<slug>` (wt's default). `bd` auto-discovers via git common-directory.
+- Worktrees: under `~/projects/worktrees/<slug>` per this VM's wt config (`tracked/wt/config.toml`). `bd` auto-discovers via git common-directory.
 - Session close: `bd close <id1> <id2> ...` for completed; `bd comment <id> "next: ..."` for paused; file new issues for incomplete work surfaced this session. Never push to git remotes — I push when ready.
 
 @superpowers-prefs.md
