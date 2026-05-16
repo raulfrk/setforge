@@ -7,13 +7,10 @@
 # silently violate observation F.
 # See tracked/claude/superpowers-prefs.md Phase 6 + Commits section.
 
-# Worktree path: land new worktrees under ~/projects/worktrees/<slug>
-# matches the workflow convention documented in tracked/claude/CLAUDE.md.
-# Matches the convention documented in tracked/claude/CLAUDE.md
-# Workflow section ("Worktrees: always create under
-# ~/projects/worktrees/"), keeps the bd↔wt loop's slug = branch name
-# convention, and gives one canonical directory to ls / clean up.
-# See dotfiles-xxg.
+# Worktree path: land new worktrees under ~/projects/worktrees/<slug>,
+# matching the workflow convention documented in tracked/claude/CLAUDE.md.
+# Keeps the bd↔wt loop's slug = branch name convention and gives one
+# canonical directory to ls / clean up. See dotfiles-xxg.
 worktree-path = "~/projects/worktrees/{{ branch | sanitize }}"
 
 [merge]
