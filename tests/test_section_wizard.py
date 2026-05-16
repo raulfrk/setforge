@@ -397,3 +397,49 @@ def test_format_drift_summary_includes_legacy_and_inconsistent() -> None:
     summary = format_drift_summary(drifts)
     assert "legacy" in summary
     assert "inconsistent" in summary
+
+
+def test_format_drift_summary_iterates_enum_order() -> None:
+    """Summary fragments appear in ``SectionDriftState`` declaration order.
+
+    Locks in the new iteration contract: deleting
+    ``_DRIFT_SUMMARY_STATES`` made enum declaration order the de facto
+    summary order, so a future enum reorder would silently change
+    user-visible warning text. This test makes that order load-bearing.
+    """
+    drifts = [
+        _drift(
+            "i",
+            SectionSemantics.SHARED,
+            SectionDriftState.INCONSISTENT,
+            "t\n",
+            "l\n",
+        ),
+        _drift("c", SectionSemantics.SHARED, SectionDriftState.CONFLICT, "t\n", "l\n"),
+        _drift("le", SectionSemantics.SHARED, SectionDriftState.LEGACY, "t\n", "l\n"),
+        _drift(
+            "li",
+            SectionSemantics.SHARED,
+            SectionDriftState.LIVE_EDITED,
+            "t\n",
+            "l\n",
+        ),
+        _drift(
+            "p",
+            SectionSemantics.SHARED,
+            SectionDriftState.PENDING_TRACKED,
+            "t\n",
+            "l\n",
+        ),
+    ]
+    summary = format_drift_summary(drifts)
+    # Order must match SectionDriftState declaration order:
+    # NO_DRIFT (skipped), LEGACY, PENDING_TRACKED, LIVE_EDITED, CONFLICT,
+    # INCONSISTENT.
+    fragments_section = summary.split(": ", 1)[1]
+    legacy_idx = fragments_section.index("legacy")
+    pending_idx = fragments_section.index("pending tracked")
+    live_idx = fragments_section.index("live edit")
+    conflict_idx = fragments_section.index("three-way conflict")
+    inconsistent_idx = fragments_section.index("inconsistent")
+    assert legacy_idx < pending_idx < live_idx < conflict_idx < inconsistent_idx

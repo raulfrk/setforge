@@ -283,23 +283,16 @@ def _edit_body(drift: SectionDrift) -> str:
         tmp_path.unlink(missing_ok=True)
 
 
-# Iteration order here is the on-screen order of the summary
-# fragments; NO_DRIFT is intentionally absent (filtered upstream).
-_DRIFT_SUMMARY_STATES: tuple[SectionDriftState, ...] = (
-    SectionDriftState.PENDING_TRACKED,
-    SectionDriftState.LIVE_EDITED,
-    SectionDriftState.CONFLICT,
-    SectionDriftState.LEGACY,
-    SectionDriftState.INCONSISTENT,
-)
-
-
 def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
     """Render the bare-install aggregate warning line.
 
     Counts pending-tracked / live-edited / conflict / legacy /
     inconsistent across all shared sections. host-local sections and
     no-drift sections are excluded.
+
+    Iterates ``SectionDriftState`` enum order and emits a fragment per
+    non-empty group via :func:`_format_drift_group` (which suppresses
+    empty groups).
 
     Example:
       ``"3 shared sections drifted: 1 pending tracked, 1 live edits,
@@ -308,50 +301,59 @@ def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
     Empty string when nothing to warn about — caller suppresses the
     warning line entirely in that case.
     """
-    shared_drifts = [
-        d
-        for d in drifts
-        if d.semantics is SectionSemantics.SHARED
-        and d.state is not SectionDriftState.NO_DRIFT
-    ]
-    if not shared_drifts:
+    groups: dict[SectionDriftState, list[SectionDrift]] = {}
+    for d in drifts:
+        if d.semantics is not SectionSemantics.SHARED:
+            continue
+        if d.state is SectionDriftState.NO_DRIFT:
+            continue
+        groups.setdefault(d.state, []).append(d)
+    if not groups:
         return ""
     parts = [
         fragment
-        for state in _DRIFT_SUMMARY_STATES
-        if (fragment := _format_drift_group(state, shared_drifts))
+        for state in SectionDriftState
+        if (group_drifts := groups.get(state))
+        and (fragment := _format_drift_group(state, len(group_drifts), group_drifts))
     ]
-    total = len(shared_drifts)
+    total = sum(len(g) for g in groups.values())
     return f"{total} shared section{'s' if total != 1 else ''} drifted: " + ", ".join(
         parts
     )
 
 
 def _format_drift_group(
-    state: SectionDriftState, drifts: Iterable[SectionDrift]
+    state: SectionDriftState, count: int, drifts: Iterable[SectionDrift]
 ) -> str:
-    """Render the per-state group block (header + entry lines).
+    """Render the per-state summary fragment for ``state``.
+
+    Exhaustive dispatcher on :class:`SectionDriftState` — the
+    ``case _: assert_never(state)`` fall-through pairs with mypy's
+    closed-enum check so a newly-added enum member is a compile-time
+    AND runtime error rather than a silent drop from summary output.
 
     Returns the fragment ``"N <label>"`` for ``state`` (e.g.
-    ``"2 pending tracked updates"``) given the already-filtered
-    ``drifts``. Returns the empty string when no drift in ``drifts``
-    has ``state`` so callers can drop empty fragments. Pluralises the
-    pending / live-edited / conflict labels; legacy and inconsistent
-    use a fixed label.
+    ``"2 pending tracked updates"``). Pluralises the pending /
+    live-edited / conflict labels; legacy and inconsistent use a fixed
+    label. ``drifts`` is the pre-grouped entry list for ``state`` and
+    ``count`` is its length, precomputed by the caller.
     """
-    if state is SectionDriftState.NO_DRIFT:
-        return ""
-    count = sum(1 for d in drifts if d.state is state)
-    if count == 0:
-        return ""
-    if state is SectionDriftState.PENDING_TRACKED:
-        return f"{count} pending tracked update{'s' if count != 1 else ''}"
-    if state is SectionDriftState.LIVE_EDITED:
-        return f"{count} live edit{'s' if count != 1 else ''}"
-    if state is SectionDriftState.CONFLICT:
-        return f"{count} three-way conflict{'s' if count != 1 else ''}"
-    if state is SectionDriftState.LEGACY:
-        return f"{count} legacy (no embedded hash)"
-    if state is SectionDriftState.INCONSISTENT:
-        return f"{count} inconsistent"
-    assert_never(state)
+    del drifts  # entry list is reserved for future per-entry rendering
+    match state:
+        case SectionDriftState.NO_DRIFT:
+            # NO_DRIFT contributes no summary output. Caller pre-filters
+            # NO_DRIFT entries; this case stays as the dispatcher's
+            # explicit suppression contract (not dead code).
+            return ""
+        case SectionDriftState.PENDING_TRACKED:
+            return f"{count} pending tracked update{'s' if count != 1 else ''}"
+        case SectionDriftState.LIVE_EDITED:
+            return f"{count} live edit{'s' if count != 1 else ''}"
+        case SectionDriftState.CONFLICT:
+            return f"{count} three-way conflict{'s' if count != 1 else ''}"
+        case SectionDriftState.LEGACY:
+            return f"{count} legacy (no embedded hash)"
+        case SectionDriftState.INCONSISTENT:
+            return f"{count} inconsistent"
+        case _:
+            assert_never(state)
