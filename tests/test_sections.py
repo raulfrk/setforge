@@ -153,7 +153,7 @@ def test_extract_unnamed_indices_in_order() -> None:
 # dotfiles-xyw — marker regex extension: optional hash= segment on end markers
 # ---------------------------------------------------------------------------
 
-_HASH_HEX_64 = "a" * 64
+_HASH_HEX_64: str = "a" * 64
 
 
 def test_extract_sections_parses_end_marker_with_hash() -> None:
