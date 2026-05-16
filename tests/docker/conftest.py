@@ -39,6 +39,36 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
 IMAGE_TAG_PREFIX: str = "my-setup-e2e:test"
 
+
+def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
+    """Parse a .dockerignore file into (dirs, suffixes, filenames).
+
+    - ``#``/blank → skipped.
+    - trailing ``/`` → directory pattern.
+    - leading ``*`` → suffix pattern.
+    - other → filename pattern.
+
+    Glob metacharacters (``**``, ``?``, brace expansion) are not
+    supported; the current ``.dockerignore`` does not use them.
+    """
+    dirs: set[str] = set()
+    suffixes: set[str] = set()
+    filenames: set[str] = set()
+    if not path.is_file():
+        return dirs, suffixes, filenames
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("/"):
+            dirs.add(line.rstrip("/"))
+        elif line.startswith("*"):
+            suffixes.add(line[1:])
+        else:
+            filenames.add(line)
+    return dirs, suffixes, filenames
+
+
 # Inputs whose content determines the docker image identity. Anything baked
 # into the image (Dockerfile + sources copied in) or read by the e2e tests
 # from inside the image (fixture yaml + canonical my_setup.yaml) goes here.
@@ -56,6 +86,14 @@ _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tracked",
 )
 
+# Patterns harvested from .dockerignore so the hash exclusion list stays
+# aligned with what docker build actually filters out of the context. The
+# hardcoded baselines below are unioned with these so behavior is resilient
+# if .dockerignore is deleted.
+_DOCKERIGNORE_DIRS, _DOCKERIGNORE_SUFFIXES, _DOCKERIGNORE_FILES = _parse_dockerignore(
+    REPO_ROOT / ".dockerignore"
+)
+
 
 def _iter_hash_input_paths() -> Iterator[Path]:
     """Yield every file feeding the image-tag hash, in deterministic order.
@@ -66,11 +104,19 @@ def _iter_hash_input_paths() -> Iterator[Path]:
 
     Excludes anything Python or test tooling regenerates at runtime
     (``__pycache__`` bytecode, ``.pytest_cache``, ``.ruff_cache``,
-    editor swap files) — those would make the hash flap mid-session
-    and defeat the cache.
+    editor swap files) plus everything ``.dockerignore`` filters out
+    of the build context (``.coverage``, ``htmlcov/``, etc.). Without
+    the ``.dockerignore`` union the hash flaps when ephemerals land
+    under hash-input dirs even though docker build cache is unaffected.
     """
-    excluded_dirs = {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
-    excluded_suffixes = {".pyc", ".pyo", ".swp", ".swo"}
+    excluded_dirs = {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+    } | _DOCKERIGNORE_DIRS
+    excluded_suffixes = {".pyc", ".pyo", ".swp", ".swo"} | _DOCKERIGNORE_SUFFIXES
+    excluded_filenames = set(_DOCKERIGNORE_FILES)
     seen: set[Path] = set()
     for path in _HASH_INPUT_FILES:
         if path.is_file():
@@ -82,6 +128,8 @@ def _iter_hash_input_paths() -> Iterator[Path]:
             if not path.is_file():
                 continue
             if path.suffix in excluded_suffixes:
+                continue
+            if path.name in excluded_filenames:
                 continue
             if any(part in excluded_dirs for part in path.parts):
                 continue

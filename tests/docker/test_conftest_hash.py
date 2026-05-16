@@ -1,0 +1,115 @@
+"""Tests for the conftest hash-input filter (dotfiles-lyi).
+
+Covers :func:`tests.docker.conftest._parse_dockerignore` (pattern
+classification) plus the integration behavior that the parsed patterns
+keep the docker image-tag hash stable when ephemerals listed in
+``.dockerignore`` appear under hash-input dirs.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tests.docker import conftest as docker_conftest
+from tests.docker.conftest import (
+    _compute_inputs_hash,
+    _iter_hash_input_paths,
+    _parse_dockerignore,
+)
+
+
+def test_parse_dockerignore_directory_pattern(tmp_path: Path) -> None:
+    """Trailing ``/`` lines classify as directory patterns."""
+    di = tmp_path / ".dockerignore"
+    di.write_text("htmlcov/\nbuild/\n", encoding="utf-8")
+    dirs, suffixes, filenames = _parse_dockerignore(di)
+    assert dirs == {"htmlcov", "build"}
+    assert suffixes == set()
+    assert filenames == set()
+
+
+def test_parse_dockerignore_suffix_pattern(tmp_path: Path) -> None:
+    """Leading ``*`` lines classify as suffix patterns (with the ``*`` stripped)."""
+    di = tmp_path / ".dockerignore"
+    di.write_text("*.pyc\n*.log\n", encoding="utf-8")
+    dirs, suffixes, filenames = _parse_dockerignore(di)
+    assert dirs == set()
+    assert suffixes == {".pyc", ".log"}
+    assert filenames == set()
+
+
+def test_parse_dockerignore_filename_pattern(tmp_path: Path) -> None:
+    """Plain non-glob, non-dir lines classify as filename patterns."""
+    di = tmp_path / ".dockerignore"
+    di.write_text(".coverage\nTODO\n", encoding="utf-8")
+    dirs, suffixes, filenames = _parse_dockerignore(di)
+    assert dirs == set()
+    assert suffixes == set()
+    assert filenames == {".coverage", "TODO"}
+
+
+def test_parse_dockerignore_skips_comments_and_blank(tmp_path: Path) -> None:
+    """``#`` comment lines and blank/whitespace-only lines are skipped."""
+    di = tmp_path / ".dockerignore"
+    di.write_text(
+        "# leading comment\n\n   \n.coverage\n# another comment\nhtmlcov/\n",
+        encoding="utf-8",
+    )
+    dirs, suffixes, filenames = _parse_dockerignore(di)
+    assert dirs == {"htmlcov"}
+    assert suffixes == set()
+    assert filenames == {".coverage"}
+
+
+def test_parse_dockerignore_missing_file(tmp_path: Path) -> None:
+    """A missing .dockerignore returns three empty sets (no exception)."""
+    dirs, suffixes, filenames = _parse_dockerignore(tmp_path / "nope.ignore")
+    assert dirs == set()
+    assert suffixes == set()
+    assert filenames == set()
+
+
+@pytest.fixture
+def hash_inputs_in_tmp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Redirect the hash-input globals at a fresh tmp tree.
+
+    Creates a single hash-input directory ``tracked/`` under ``tmp_path``
+    with one real file (so the hash is non-empty), then returns the
+    ``tracked/`` path so tests can drop synthetic ephemerals into it.
+    The ``monkeypatch`` fixture handles teardown.
+    """
+    tracked = tmp_path / "tracked"
+    tracked.mkdir()
+    (tracked / "real.txt").write_text("payload\n", encoding="utf-8")
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (tracked,))
+    return tracked
+
+
+def test_iter_hash_input_paths_excludes_coverage_file(
+    hash_inputs_in_tmp: Path,
+) -> None:
+    """A ``.coverage`` file under a hash-input dir is NOT yielded."""
+    (hash_inputs_in_tmp / ".coverage").write_text("ephemeral", encoding="utf-8")
+    yielded = {p.name for p in _iter_hash_input_paths()}
+    assert "real.txt" in yielded
+    assert ".coverage" not in yielded
+
+
+def test_compute_inputs_hash_stable_against_coverage_file(
+    hash_inputs_in_tmp: Path,
+) -> None:
+    """Adding/removing a ``.coverage`` ephemeral does not flip the hash."""
+    before = _compute_inputs_hash()
+    coverage = hash_inputs_in_tmp / ".coverage"
+    coverage.write_text("ephemeral", encoding="utf-8")
+    after_add = _compute_inputs_hash()
+    coverage.unlink()
+    after_remove = _compute_inputs_hash()
+    assert before == after_add == after_remove
