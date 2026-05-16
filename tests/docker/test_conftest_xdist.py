@@ -15,14 +15,14 @@ from typing import Any
 from tests.docker.conftest import pytest_configure
 
 
-@dataclass
+@dataclass(slots=True)
 class _FakeOption:
     """Stand-in for ``pytest.Config.option`` — only ``numprocesses`` matters here."""
 
     numprocesses: Any = None
 
 
-@dataclass
+@dataclass(slots=True)
 class _FakeConfig:
     """Minimal fake of ``pytest.Config`` covering ``getoption`` + ``option``.
 
