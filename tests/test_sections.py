@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -754,8 +755,6 @@ def test_extract_marker_hashes_legacy_returns_none() -> None:
 
 def test_walk_markers_strict_rejects_pre_9by_fixture() -> None:
     """The on-disk pre-9by fixture is rejected by the strict parser."""
-    from pathlib import Path
-
     fixture_text = (Path(__file__).parent / "fixtures" / "pre_9by_CLAUDE.md").read_text(
         encoding="utf-8"
     )
@@ -766,8 +765,6 @@ def test_walk_markers_strict_rejects_pre_9by_fixture() -> None:
 def test_walk_markers_allow_legacy_accepts_pre_9by_fixture() -> None:
     """The on-disk pre-9by fixture parses under allow_legacy=True with two
     sections (workflow, commits) and all-None embedded hashes."""
-    from pathlib import Path
-
     fixture_text = (Path(__file__).parent / "fixtures" / "pre_9by_CLAUDE.md").read_text(
         encoding="utf-8"
     )

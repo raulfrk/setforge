@@ -1,5 +1,6 @@
 """Tests for the atomic deploy primitive."""
 
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -14,6 +15,11 @@ from my_setup.deploy import (
     copy_atomic,
 )
 from my_setup.errors import MergeTypeMismatch
+from my_setup.sections import (
+    detect_legacy_markers,
+    extract_marker_hashes,
+    hash_sections,
+)
 
 
 def test_fresh_deploy_creates_dst(tmp_path: Path) -> None:
@@ -394,8 +400,6 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
 
 
 def _sha256_hex(s: str) -> str:
-    import hashlib
-
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
@@ -426,8 +430,6 @@ def test_copy_atomic_legacy_live_body_preserved(tmp_path: Path) -> None:
     # Markers were re-tagged to match tracked's semantics + hash.
     assert "end shared notes hash=" in final
     # Untagged markers no longer present.
-    from my_setup.sections import detect_legacy_markers
-
     assert detect_legacy_markers(final) is False
 
 
@@ -464,8 +466,6 @@ def test_copy_atomic_post_install_invariant_holds_for_all_sections(
         "tail\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
-
-    from my_setup.sections import extract_marker_hashes, hash_sections
 
     result_text = dst.read_text()
     embedded = extract_marker_hashes(result_text)
