@@ -6,7 +6,12 @@ import logging
 import pytest
 
 from my_setup.errors import MarkerError
-from my_setup.sections import extract_sections, hash_sections, merge_sections
+from my_setup.sections import (
+    extract_marker_hashes,
+    extract_sections,
+    hash_sections,
+    merge_sections,
+)
 
 
 def test_no_markers_passthrough() -> None:
@@ -272,3 +277,56 @@ def test_hash_sections_propagates_marker_error() -> None:
     text = "<!-- my-setup:user-section end a -->\n"
     with pytest.raises(MarkerError, match="without matching start"):
         hash_sections(text)
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-xyw — extract_marker_hashes
+# ---------------------------------------------------------------------------
+
+
+def test_extract_marker_hashes_returns_hash_when_present() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end a hash={_HASH_HEX_64} -->\n"
+    )
+    assert extract_marker_hashes(text) == {"a": _HASH_HEX_64}
+
+
+def test_extract_marker_hashes_returns_none_for_legacy_hashless() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    assert extract_marker_hashes(text) == {"a": None}
+
+
+def test_extract_marker_hashes_mixed_file() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        f"<!-- my-setup:user-section end a hash={_HASH_HEX_64} -->\n"
+        "<!-- my-setup:user-section start b -->\n"
+        "beta\n"
+        "<!-- my-setup:user-section end b -->\n"
+    )
+    assert extract_marker_hashes(text) == {"a": _HASH_HEX_64, "b": None}
+
+
+def test_extract_marker_hashes_coverage_parity_with_extract_sections() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        "<!-- my-setup:user-section end a -->\n"
+        "<!-- my-setup:user-section start b -->\n"
+        "beta\n"
+        f"<!-- my-setup:user-section end b hash={_HASH_HEX_64} -->\n"
+    )
+    assert extract_marker_hashes(text).keys() == extract_sections(text).keys()
+
+
+def test_extract_marker_hashes_propagates_marker_error() -> None:
+    text = "<!-- my-setup:user-section start a -->\nbody\n"
+    with pytest.raises(MarkerError, match="unclosed"):
+        extract_marker_hashes(text)

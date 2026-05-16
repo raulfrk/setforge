@@ -161,6 +161,55 @@ def hash_sections(text: str) -> dict[str, str]:
     }
 
 
+def extract_marker_hashes(text: str) -> dict[str, str | None]:
+    """Return ``{section-name: embedded-hash-or-None}`` from end markers.
+
+    ``None`` for sections whose end marker omits ``hash=<...>`` (legacy
+    pre-xyw form). Coverage-equivalent to :func:`extract_sections`; raises
+    :class:`MarkerError` on the same malformed-marker inputs.
+    """
+    hashes: dict[str, str | None] = {}
+    in_section = False
+    section_name: str | None = None
+    unnamed_index = 0
+
+    for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
+        match = _MARKER_RE.match(line)
+        if match is None:
+            continue
+        kind, name, embedded_hash = match.group(1), match.group(2), match.group(3)
+        if kind == "start":
+            if in_section:
+                raise MarkerError(
+                    f"line {lineno}: nested user-section start "
+                    f"(previous section still open)"
+                )
+            in_section = True
+            section_name = name
+        else:
+            if not in_section:
+                raise MarkerError(
+                    f"line {lineno}: user-section end without matching start"
+                )
+            if name != section_name:
+                raise MarkerError(
+                    f"line {lineno}: user-section end name {name!r} does not "
+                    f"match start name {section_name!r}"
+                )
+            key = section_name if section_name is not None else str(unnamed_index)
+            hashes[key] = embedded_hash
+            if section_name is None:
+                unnamed_index += 1
+            in_section = False
+            section_name = None
+
+    if in_section:
+        identifier = section_name if section_name is not None else str(unnamed_index)
+        raise MarkerError(f"unclosed user-section (started as {identifier!r})")
+
+    return hashes
+
+
 def strip_section_content(text: str) -> str:
     """Return ``text`` with content between every user-section marker pair
     removed. Markers themselves are kept so the file remains a valid
