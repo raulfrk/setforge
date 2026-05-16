@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-# ruamel.yaml has no upstream stubs as of 2026-05; see my_setup/compare.py.
+# ruamel.yaml ships py.typed without resolvable annotations; see my_setup/compare.py.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup.compare import CompareReport, CompareStatus, FileCompare
@@ -319,8 +319,8 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
 
     updated_text = src.read_text()
 
-    # json5 can parse the result
-    # json5 has no upstream stubs as of 2026-05; see my_setup/jsonc.py.
+    # json5 can parse the result.
+    # json5 ships py.typed without resolvable annotations; see my_setup/jsonc.py.
     from json5.loader import loads  # type: ignore[import-not-found]
 
     parsed = loads(updated_text)

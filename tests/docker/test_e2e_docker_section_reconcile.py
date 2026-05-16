@@ -34,6 +34,7 @@ import hashlib
 import subprocess
 from collections.abc import Callable
 
+# pexpect ships no stubs; types-pexpect not added as a dev dep (per qzq scope).
 import pexpect  # type: ignore[import-untyped]
 import pytest
 

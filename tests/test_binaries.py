@@ -356,6 +356,7 @@ def test_host_local_config_frozen_dataclass_rejects_mutation() -> None:
     """HostLocalConfig is frozen — assigning to fields raises FrozenInstanceError."""
     cfg = HostLocalConfig()
     with pytest.raises(Exception, match=r"frozen|cannot assign"):
+        # Intentional read-only-property assignment to assert frozen behaviour.
         cfg.claude = ClaudeLocalConfig(install_mode=ClaudeInstallMode.LOCAL_CLONE)  # type: ignore[misc]
 
 

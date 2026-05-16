@@ -53,9 +53,7 @@ def test_reconcile_policy_parsed_as_enum() -> None:
 
 def test_unknown_reconcile_policy_rejected() -> None:
     with pytest.raises(ValidationError):
-        # Intentional invalid value: this test asserts pydantic rejects
-        # arbitrary strings, so passing a non-ReconcilePolicy str is the
-        # whole point.
+        # Intentional bad-string to assert pydantic rejects non-ReconcilePolicy values.
         Extensions(reconcile="yolo")  # type: ignore[arg-type]
 
 

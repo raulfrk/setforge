@@ -367,6 +367,7 @@ def test_write_transition_rejects_non_str_marketplace_source_value(
         disabled=(),
         marketplaces_added=(),
         marketplaces_removed=(
+            # Intentional bad-dict value to exercise runtime str-only validation.
             ("evil-mp", {"source": "github", "path": Path("/tmp/foo")}),  # type: ignore[dict-item]
         ),
     )
@@ -760,6 +761,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
         ext_count=0,
     )
     with pytest.raises(AttributeError):
+        # Intentional read-only-property assignment to assert frozen behaviour.
         listing.command = "sync"  # type: ignore[misc]
 
 
