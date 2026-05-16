@@ -6,7 +6,21 @@ Dotfiles + VSCode extensions, driven by a single Python CLI (`my-setup`) and a t
 
 `tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `my-setup install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `my-setup sync` first.
 
-User-section markers in tracked CLAUDE.md (HTML comments around section bodies) make those regions per-host: edits to live `~/.claude/CLAUDE.md` between markers survive a re-install.
+User-section markers in tracked CLAUDE.md (HTML comments around section bodies) make those regions per-host: edits to live `~/.claude/CLAUDE.md` between markers survive a re-install. The marker syntax requires a `host-local|shared` semantics keyword on both start and end markers:
+
+```
+<!-- my-setup:user-section start host-local NAME -->
+... live edits to this body always survive re-install (host-specific) ...
+<!-- my-setup:user-section end host-local NAME -->
+
+<!-- my-setup:user-section start shared NAME -->
+... live edits survive too, but tracked-side updates surface in the
+    `install --reconcile-user-sections` wizard (rules that should
+    propagate across hosts) ...
+<!-- my-setup:user-section end shared NAME -->
+```
+
+End markers may carry an optional `hash=<sha256-hex>` segment that records the body's baseline hash; `install` rewrites it on every run so the three-way reconciler can tell pending-tracked drift from live edits.
 
 ## Profiles — always pass --profile=
 
@@ -16,7 +30,7 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 
 - `uv run my-setup compare --profile=<name>` — read-only drift check (live vs tracked).
 - `uv run my-setup sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on `preserve_user_keys_deep` sub-keys or top-level non-preserve keys triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
-- `uv run my-setup install --profile=<name>` — deploy tracked → live.
+- `uv run my-setup install --profile=<name>` — deploy tracked → live. Drift inside `shared` user-section markers triggers the reconcile wizard interactively when `--reconcile-user-sections` is passed; for non-interactive use pass `--auto=use-tracked` (deploy tracked-side updates over the live body) or `--auto=keep-live` (silence the warning, keep live). `--reconcile-user-sections` and `--auto=` are mutually exclusive (exit 2). Bare `install` warns once per shared-drifted file and keeps live.
 - `uv run my-setup revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/my-setup/transitions/` (kept indefinitely; pruning is a future bead).
 - `uv run my-setup validate --profile=<name>` — config-shape check (schema + profile chain + Jinja2 + tracked srcs + claude_plugins references). No filesystem comparison; works offline. CI runs `validate --all`.
 
