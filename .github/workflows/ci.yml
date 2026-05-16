@@ -30,17 +30,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      # Compute the same content-hashed tag the fixture expects, so the
+      # prebuild image matches what `docker image inspect` looks for
+      # inside `docker_image` (see `_image_tag` in tests/docker/conftest.py
+      # — dotfiles-0ci). Without this, the prebuild would tag the image
+      # with a name the fixture never asks for, and the fixture would
+      # rebuild from scratch, defeating the GHA layer cache.
+      - name: Compute E2E image tag
+        id: tag
+        run: |
+          uv run python -c 'from tests.docker.conftest import _image_tag; print(f"image_tag={_image_tag()}")' >> "$GITHUB_OUTPUT"
       - name: Build E2E image (with GHA cache)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: tests/docker/Dockerfile
-          tags: my-setup-e2e:test
+          tags: ${{ steps.tag.outputs.image_tag }}
           load: true
           cache-from: type=gha,scope=e2e
           cache-to: type=gha,scope=e2e,mode=max
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --extra dev
       - name: Run E2E variants
         run: uv run pytest -m e2e_docker -v
 
