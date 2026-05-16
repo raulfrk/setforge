@@ -104,6 +104,12 @@ def hash_inputs_in_tmp(
     with one real file (so the hash is non-empty), then returns the
     ``tracked/`` path so tests can drop synthetic ephemerals into it.
     The ``monkeypatch`` fixture handles teardown.
+
+    Hermetic isolation: ``_DOCKERIGNORE_FILES`` is pinned to ``{".coverage"}``
+    so these tests do not depend on the real repo's ``.dockerignore``
+    continuing to list ``.coverage``. Other dockerignore-related constants
+    (``_DOCKERIGNORE_DIRS``, ``_DOCKERIGNORE_SUFFIXES``) are left untouched
+    because no test here exercises them.
     """
     tracked = tmp_path / "tracked"
     tracked.mkdir()
@@ -111,6 +117,7 @@ def hash_inputs_in_tmp(
     monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (tracked,))
+    monkeypatch.setattr(docker_conftest, "_DOCKERIGNORE_FILES", {".coverage"})
     return tracked
 
 
