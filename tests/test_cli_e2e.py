@@ -282,15 +282,7 @@ class TestInstall:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        """No pre-existing live file → live equals tracked with hashes maintained.
-
-        Post-9by, install always rewrites end-marker ``hash=<...>``
-        segments so the embedded hash matches the body actually written;
-        the post-install live byte-matches ``maintain_marker_hashes``
-        applied to tracked, not the raw tracked bytes.
-        """
-        from my_setup.section_reconcile import maintain_marker_hashes
-
+        """No pre-existing live file → live equals tracked verbatim."""
         result = _invoke(
             [
                 "install",
@@ -301,7 +293,7 @@ class TestInstall:
         assert result.exit_code == 0, result.output
         live = sandboxed_home / ".my_setup_e2e" / "sections" / "marked.md"
         tracked = fixture_repo.parent / "tracked" / "sections" / "marked.md"
-        assert live.read_text() == maintain_marker_hashes(tracked.read_text())
+        assert live.read_text() == tracked.read_text()
 
     def test_json_byte_copy(
         self,

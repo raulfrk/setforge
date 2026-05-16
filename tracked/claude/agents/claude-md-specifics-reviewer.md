@@ -23,7 +23,7 @@ Dispatch inputs:
 Your aspects to check:
 
 1. **Meta-twist compliance** — every doc edit goes to `tracked/claude/...`, NEVER to `~/.claude/...` directly. Edits to live files are CRITICAL (they'll be clobbered on next `my-setup install`).
-2. **User-section markers preserved** — when editing inside `user-section start KEYWORD NAME` / `user-section end KEYWORD NAME` HTML-comment markers (where `KEYWORD` is `host-local` or `shared`) in tracked CLAUDE.md, the markers must remain intact and well-formed. Both start and end MUST carry the `host-local|shared` semantics keyword and the same keyword on both sides (untagged or mismatched markers raise `MarkerError` at install). Broken markers are CRITICAL (host-local edits won't survive install; `shared` rules won't reconcile via the install wizard).
+2. **User-section markers preserved** — when editing inside `<!-- my-setup:user-section start X -->` / `<!-- my-setup:user-section end X -->` markers in tracked CLAUDE.md, the markers must remain intact and well-formed. Broken markers are CRITICAL (host-local edits won't survive install).
 3. **Enforcement-layer correctness** — a rule lands in the file whose enforcement properties match its scope:
    - Cross-project critical rules → `tracked/claude/CLAUDE.md` (OVERRIDE wrapper, always loaded).
    - Workflow-flow detail → `tracked/claude/superpowers-prefs.md` (OVERRIDE via @import).

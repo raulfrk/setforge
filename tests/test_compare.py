@@ -41,14 +41,13 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
     dst = tmp_path / "dst.md"
     _write(
         src,
-        "<!-- my-setup:user-section start host-local -->\n"
-        "<!-- my-setup:user-section end host-local -->\n",
+        "<!-- my-setup:user-section start -->\n<!-- my-setup:user-section end -->\n",
     )
     _write(
         dst,
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- my-setup:user-section start -->\n"
         "live content\n"
-        "<!-- my-setup:user-section end host-local -->\n",
+        "<!-- my-setup:user-section end -->\n",
     )
     assert diff_file(src, dst, preserve_user_sections=True) == ""
 
@@ -61,9 +60,9 @@ def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
     dst = tmp_path / "dst.md"
     same = (
         "shared header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section start s -->\n"
         "same body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        "<!-- my-setup:user-section end s -->\n"
         "shared footer\n"
     )
     _write(src, same)
@@ -82,17 +81,17 @@ def test_diff_file_hash_fast_path_falls_through_on_section_drift(
     _write(
         src,
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section start s -->\n"
         "tracked body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        "<!-- my-setup:user-section end s -->\n"
         "footer\n",
     )
     _write(
         dst,
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section start s -->\n"
         "live body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        "<!-- my-setup:user-section end s -->\n"
         "footer\n",
     )
     # preserve_user_sections=True splices live body into the tracked template
@@ -110,16 +109,16 @@ def test_diff_file_hash_fast_path_declines_on_template_drift(
     _write(
         src,
         "tracked header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section start s -->\n"
         "shared body\n"
-        "<!-- my-setup:user-section end host-local s -->\n",
+        "<!-- my-setup:user-section end s -->\n",
     )
     _write(
         dst,
         "live header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section start s -->\n"
         "shared body\n"
-        "<!-- my-setup:user-section end host-local s -->\n",
+        "<!-- my-setup:user-section end s -->\n",
     )
     diff = diff_file(src, dst, preserve_user_sections=True)
     assert "tracked header" in diff

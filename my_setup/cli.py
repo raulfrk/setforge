@@ -21,14 +21,7 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from my_setup import (
-    binaries,
-    deploy,
-    section_reconcile,
-    section_wizard,
-    transitions,
-    vscode_extensions,
-)
+from my_setup import binaries, deploy, transitions, vscode_extensions
 from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
@@ -53,9 +46,6 @@ from my_setup.errors import (
     NoTransitionFound,
     PluginToolMissing,
 )
-from my_setup.section_reconcile import SectionDriftState
-from my_setup.section_wizard import ReconcileAuto
-from my_setup.sections import SectionSemantics
 
 LOGGER = logging.getLogger(__name__)
 
@@ -125,88 +115,6 @@ def _root(
     binaries.ensure_local_config_stub()
 
 
-def _parse_section_auto(
-    auto_value: str | None, reconcile_user_sections: bool
-) -> ReconcileAuto | None:
-    """Validate and parse ``--auto=`` against ``--reconcile-user-sections``.
-
-    Raises :class:`typer.Exit(2)` for the mutual-exclusivity violation
-    and for unknown ``--auto`` values, matching the existing
-    ``sync --auto`` error pattern.
-    """
-    if reconcile_user_sections and auto_value is not None:
-        typer.secho(
-            "error: --reconcile-user-sections and --auto are mutually exclusive",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2)
-    if auto_value is None:
-        return None
-    try:
-        return ReconcileAuto(auto_value)
-    except ValueError:
-        typer.secho(
-            f"error: --auto must be 'use-tracked' or 'keep-live' (got {auto_value!r})",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(2) from None
-
-
-def _resolve_section_decisions(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    *,
-    section_auto: ReconcileAuto | None,
-    interactive: bool,
-) -> dict[Path, dict[str, str]]:
-    """Walk every dotfile with ``preserve_user_sections=True`` and run the
-    section reconcile wizard, returning a ``{dst_path: {section_name: body}}``
-    map the install loop forwards to :func:`deploy.copy_atomic`.
-
-    Renders one bare-install warning per dotfile that has any shared
-    drift; surfacing the warnings here keeps the deploy loop a thin
-    orchestrator. Dotfiles without ``preserve_user_sections`` are
-    silently skipped; their copy_atomic call gets an empty override.
-    """
-    decisions: dict[Path, dict[str, str]] = {}
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
-            continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists():
-                # First install for this file — no live to reconcile.
-                continue
-            tracked_text = sub_src.read_text(encoding="utf-8")
-            live_text = sub_dst.read_text(encoding="utf-8")
-            drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-            if not drifts:
-                continue
-            if (
-                section_auto is None
-                and not interactive
-                and section_reconcile.has_shared_drift(drifts)
-            ):
-                summary = section_wizard.format_drift_summary(drifts.values())
-                typer.secho(
-                    f"warning: {sub_dst}: {summary} "
-                    f"(re-run with --reconcile-user-sections "
-                    f"or --auto=use-tracked)",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
-            outcomes = section_wizard.reconcile_sections(
-                drifts, auto=section_auto, interactive=interactive
-            )
-            decisions[sub_dst] = {n: d.body for n, d in outcomes.items()}
-    return decisions
-
-
 @app.command()
 def install(
     profile: str = _PROFILE_OPTION,
@@ -227,27 +135,9 @@ def install(
         "--auto-accept-live",
         help="Non-interactively resolve unexpected drift by adopting live values.",
     ),
-    reconcile_user_sections: bool = typer.Option(
-        False,
-        "--reconcile-user-sections",
-        help=(
-            "Interactively reconcile drifted `shared` user-sections. "
-            "Mutually exclusive with --auto."
-        ),
-    ),
-    auto: str | None = typer.Option(
-        None,
-        "--auto",
-        help=(
-            "Non-interactive section reconciliation: 'use-tracked' "
-            "deploys tracked-side updates into every shared section; "
-            "'keep-live' silences shared-drift warnings and keeps live. "
-            "Mutually exclusive with --reconcile-user-sections."
-        ),
-    ),
 ) -> None:
     """Deploy tracked → live for every dotfile in the profile."""
-    # Mutual-exclusivity guard for the legacy unexpected-drift flags.
+    # Mutual-exclusivity guard
     if auto_accept_tracked and auto_accept_live:
         typer.secho(
             "error: --auto-accept-tracked and --auto-accept-live are"
@@ -256,9 +146,6 @@ def install(
             fg=typer.colors.RED,
         )
         raise typer.Exit(2)
-
-    # Mutual-exclusivity guard for the new section-reconcile flags.
-    section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
@@ -314,17 +201,6 @@ def install(
             )
             raise typer.Exit(1)
 
-    # Resolve user-section drift (shared sections) into per-dotfile
-    # decisions BEFORE the deploy loop so wizard prompts and the
-    # bare-install warning fire once, deterministically.
-    section_decisions = _resolve_section_decisions(
-        cfg,
-        resolved,
-        repo_root,
-        section_auto=section_auto,
-        interactive=reconcile_user_sections,
-    )
-
     dst_paths: list[Path] = []
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -341,14 +217,12 @@ def install(
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
         for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            override = section_decisions.get(sub_dst)
             result = deploy.copy_atomic(
                 sub_src,
                 sub_dst,
                 preserve_user_sections=dotfile.preserve_user_sections,
                 preserve_user_keys=dotfile.preserve_user_keys or None,
                 preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
-                section_bodies_override=override,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
 
@@ -386,14 +260,6 @@ def compare(
         "--strict",
         help="With --check: exit 1 on any drift (expected or unexpected).",
     ),
-    reconcile_user_sections: bool = typer.Option(
-        False,
-        "--reconcile-user-sections",
-        help=(
-            "Dry-run: print what 'install --reconcile-user-sections' "
-            "would prompt about. Read-only — no live mutation, no prompts."
-        ),
-    ),
 ) -> None:
     """Report drift between tracked and live for every dotfile in the profile."""
     cfg = load_config(config)
@@ -419,70 +285,12 @@ def compare(
             if entry.diff:
                 console.print(Syntax(entry.diff, "diff"))
 
-    if reconcile_user_sections:
-        _print_section_reconcile_dry_run(cfg, profile, repo_root, console)
-
     if check:
         if strict:
             if any(e.status == CompareStatus.DRIFTED for e in report.entries):
                 raise typer.Exit(code=1)
         elif report.has_unexpected_drift:
             raise typer.Exit(code=1)
-
-
-def _print_section_reconcile_dry_run(
-    cfg: Config, profile: str, repo_root: Path, console: Console
-) -> None:
-    """Render the ``compare --reconcile-user-sections`` dry-run output.
-
-    For every dotfile with ``preserve_user_sections=True`` that exists
-    on both sides, walks the section classifier and prints one line per
-    drifted shared section with its three-way state label, plus a
-    one-line aggregate per file. No prompts, no live mutation.
-
-    The output is structured for grep-based assertions in the Docker
-    e2e suite (variant 18) — each drifted-section line includes the
-    file path, section name, and state label.
-    """
-    resolved = resolve_profile(cfg, profile)
-    any_emitted = False
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
-            continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists() or not sub_src.exists():
-                continue
-            if _render_drift_file(sub_src, sub_dst, console):
-                any_emitted = True
-    if not any_emitted:
-        console.print("\nno shared user-section drift to reconcile.")
-
-
-def _render_drift_file(sub_src: Path, sub_dst: Path, console: Console) -> bool:
-    """Render the dry-run drift block for one (tracked, live) file pair.
-
-    Returns ``True`` when at least one drifted-section line was printed
-    for this file (i.e. the file contributed to the overall
-    ``any_emitted`` flag in :func:`_print_section_reconcile_dry_run`).
-    """
-    tracked_text = sub_src.read_text(encoding="utf-8")
-    live_text = sub_dst.read_text(encoding="utf-8")
-    drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-    summary = section_wizard.format_drift_summary(drifts.values())
-    if not summary:
-        return False
-    console.print(f"\n[bold]{sub_dst}[/bold]: {summary}")
-    for sec_name, drift in drifts.items():
-        if drift.semantics is not SectionSemantics.SHARED:
-            continue
-        if drift.state is SectionDriftState.NO_DRIFT:
-            continue
-        label = section_wizard.state_label(drift.state)
-        console.print(f"  three-way {label} [cyan]{sec_name}[/cyan]")
-    return True
 
 
 @app.command()
