@@ -18,7 +18,7 @@ Artifacts in scope:
 - `.pre-commit-config.yaml`.
 - `.github/workflows/*.yml`.
 
-For mixed-artifact PRs (Python + CLAUDE.md), invoke BOTH `reviewing-python-code` AND `reviewing-claude-md` in parallel via separate Skill invocations.
+For mixed-artifact PRs, invoke every applicable skill in parallel via separate Skill invocations: `reviewing-claude-md` when the diff also touches `.md` files under `tracked/claude/`, and `reviewing-markdown` when it touches generic `.md` files outside `tracked/claude/` (READMEs, project-level CLAUDE.md, docs/, CHANGELOG.md, ADRs).
 
 ## Dispatch inputs
 

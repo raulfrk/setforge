@@ -20,7 +20,7 @@ Artifacts in scope (ONLY `.md` files under `tracked/claude/`):
 
 Out of scope: project-level CLAUDE.md (the one at a project's root, NOT under `tracked/claude/`) and any other `.md` file outside `tracked/claude/` belong to `reviewing-markdown`.
 
-For mixed-artifact PRs (Python + CLAUDE.md), invoke BOTH `reviewing-claude-md` AND `reviewing-python-code` in parallel via separate Skill invocations.
+For mixed-artifact PRs, invoke every applicable skill in parallel via separate Skill invocations: `reviewing-python-code` when the diff also touches Python source / pyproject / pre-commit / CI workflow, and `reviewing-markdown` when it touches generic `.md` files outside `tracked/claude/` (READMEs, project-level CLAUDE.md, docs/, CHANGELOG.md, ADRs).
 
 ## Dispatch inputs
 
