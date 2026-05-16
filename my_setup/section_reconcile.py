@@ -130,23 +130,46 @@ def classify_section_drift(
     live_embedded = extract_marker_hashes(live_text)
     semantics_map = section_semantics(tracked_text)
 
-    out: dict[str, SectionDrift] = {}
-    for name in tracked_bodies:
-        if name not in live_bodies:
-            continue
-        a_t = tracked_hashes[name]
-        a_l = live_hashes[name]
-        e_t = tracked_embedded.get(name)
-        e_l = live_embedded.get(name)
-        state = _classify_one(a_t=a_t, a_l=a_l, e_t=e_t, e_l=e_l)
-        out[name] = SectionDrift(
+    return {
+        name: _classify_one_marker(
             name=name,
             semantics=semantics_map[name],
-            state=state,
             tracked_body=tracked_bodies[name],
             live_body=live_bodies[name],
+            a_t=tracked_hashes[name],
+            a_l=live_hashes[name],
+            e_t=tracked_embedded.get(name),
+            e_l=live_embedded.get(name),
         )
-    return out
+        for name in tracked_bodies
+        if name in live_bodies
+    }
+
+
+def _classify_one_marker(
+    *,
+    name: str,
+    semantics: SectionSemantics,
+    tracked_body: str,
+    live_body: str,
+    a_t: str,
+    a_l: str,
+    e_t: str | None,
+    e_l: str | None,
+) -> SectionDrift:
+    """Return the drift entry for a single section key.
+
+    Wraps :func:`_classify_one` with the :class:`SectionDrift`
+    construction so :func:`classify_section_drift` can stay a pure
+    dict comprehension.
+    """
+    return SectionDrift(
+        name=name,
+        semantics=semantics,
+        state=_classify_one(a_t=a_t, a_l=a_l, e_t=e_t, e_l=e_l),
+        tracked_body=tracked_body,
+        live_body=live_body,
+    )
 
 
 def _classify_one(

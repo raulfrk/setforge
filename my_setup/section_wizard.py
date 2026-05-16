@@ -124,30 +124,49 @@ def reconcile_sections(
     out: dict[str, SectionDecision] = {}
     quit_remaining = False
     for name, drift in drifts.items():
-        if drift.semantics is SectionSemantics.HOST_LOCAL:
-            out[name] = SectionDecision(name, drift.live_body, SectionAction.KEEP_LIVE)
-            continue
-        if drift.state is SectionDriftState.NO_DRIFT:
-            out[name] = SectionDecision(name, drift.live_body, SectionAction.KEEP_LIVE)
-            continue
-        if auto is ReconcileAuto.USE_TRACKED:
-            out[name] = SectionDecision(
-                name, drift.tracked_body, SectionAction.TAKE_TRACKED
-            )
-            continue
-        if auto is ReconcileAuto.KEEP_LIVE:
-            out[name] = SectionDecision(name, drift.live_body, SectionAction.KEEP_LIVE)
-            continue
-        if not interactive or quit_remaining:
-            # Bare install or post-quit: keep-live silently (install
-            # path emits the aggregate warning).
-            out[name] = SectionDecision(name, drift.live_body, SectionAction.KEEP_LIVE)
-            continue
-        decision = _prompt_one(drift, console)
+        decision = _resolve_one_drift(
+            drift,
+            auto=auto,
+            interactive=interactive,
+            quit_remaining=quit_remaining,
+            console=console,
+        )
         out[name] = decision
         if decision.action is SectionAction.QUIT_KEEP_REST:
             quit_remaining = True
     return out
+
+
+def _resolve_one_drift(
+    drift: SectionDrift,
+    *,
+    auto: ReconcileAuto | None,
+    interactive: bool,
+    quit_remaining: bool,
+    console: Console,
+) -> SectionDecision:
+    """Pick the outcome for one drift given auto/interactive mode.
+
+    Mirrors the precedence in :func:`reconcile_sections`: host-local
+    and no-drift always keep live; ``auto`` overrides interactive; a
+    prior ``QUIT_KEEP_REST`` or a non-interactive run falls through to
+    silent keep-live; otherwise prompt.
+    """
+    if drift.semantics is SectionSemantics.HOST_LOCAL:
+        return SectionDecision(drift.name, drift.live_body, SectionAction.KEEP_LIVE)
+    if drift.state is SectionDriftState.NO_DRIFT:
+        return SectionDecision(drift.name, drift.live_body, SectionAction.KEEP_LIVE)
+    if auto is ReconcileAuto.USE_TRACKED:
+        return SectionDecision(
+            drift.name, drift.tracked_body, SectionAction.TAKE_TRACKED
+        )
+    if auto is ReconcileAuto.KEEP_LIVE:
+        return SectionDecision(drift.name, drift.live_body, SectionAction.KEEP_LIVE)
+    if not interactive or quit_remaining:
+        # Bare install or post-quit: keep-live silently (install path
+        # emits the aggregate warning).
+        return SectionDecision(drift.name, drift.live_body, SectionAction.KEEP_LIVE)
+    return _prompt_one(drift, console)
 
 
 def _prompt_one(drift: SectionDrift, console: Console) -> SectionDecision:
@@ -264,6 +283,17 @@ def _edit_body(drift: SectionDrift) -> str:
         tmp_path.unlink(missing_ok=True)
 
 
+# Iteration order here is the on-screen order of the summary
+# fragments; NO_DRIFT is intentionally absent (filtered upstream).
+_DRIFT_SUMMARY_STATES: tuple[SectionDriftState, ...] = (
+    SectionDriftState.PENDING_TRACKED,
+    SectionDriftState.LIVE_EDITED,
+    SectionDriftState.CONFLICT,
+    SectionDriftState.LEGACY,
+    SectionDriftState.INCONSISTENT,
+)
+
+
 def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
     """Render the bare-install aggregate warning line.
 
@@ -278,42 +308,50 @@ def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
     Empty string when nothing to warn about — caller suppresses the
     warning line entirely in that case.
     """
-    pending = 0
-    live_edits = 0
-    conflicts = 0
-    legacy = 0
-    inconsistent = 0
-    for d in drifts:
-        if d.semantics is not SectionSemantics.SHARED:
-            continue
-        if d.state is SectionDriftState.NO_DRIFT:
-            continue
-        if d.state is SectionDriftState.PENDING_TRACKED:
-            pending += 1
-        elif d.state is SectionDriftState.LIVE_EDITED:
-            live_edits += 1
-        elif d.state is SectionDriftState.CONFLICT:
-            conflicts += 1
-        elif d.state is SectionDriftState.LEGACY:
-            legacy += 1
-        elif d.state is SectionDriftState.INCONSISTENT:
-            inconsistent += 1
-        else:
-            assert_never(d.state)
-    total = pending + live_edits + conflicts + legacy + inconsistent
-    if total == 0:
+    shared_drifts = [
+        d
+        for d in drifts
+        if d.semantics is SectionSemantics.SHARED
+        and d.state is not SectionDriftState.NO_DRIFT
+    ]
+    if not shared_drifts:
         return ""
-    parts: list[str] = []
-    if pending:
-        parts.append(f"{pending} pending tracked update{'s' if pending != 1 else ''}")
-    if live_edits:
-        parts.append(f"{live_edits} live edit{'s' if live_edits != 1 else ''}")
-    if conflicts:
-        parts.append(f"{conflicts} three-way conflict{'s' if conflicts != 1 else ''}")
-    if legacy:
-        parts.append(f"{legacy} legacy (no embedded hash)")
-    if inconsistent:
-        parts.append(f"{inconsistent} inconsistent")
+    parts = [
+        fragment
+        for state in _DRIFT_SUMMARY_STATES
+        if (fragment := _format_drift_group(state, shared_drifts))
+    ]
+    total = len(shared_drifts)
     return f"{total} shared section{'s' if total != 1 else ''} drifted: " + ", ".join(
         parts
     )
+
+
+def _format_drift_group(
+    state: SectionDriftState, drifts: Iterable[SectionDrift]
+) -> str:
+    """Render the per-state group block (header + entry lines).
+
+    Returns the fragment ``"N <label>"`` for ``state`` (e.g.
+    ``"2 pending tracked updates"``) given the already-filtered
+    ``drifts``. Returns the empty string when no drift in ``drifts``
+    has ``state`` so callers can drop empty fragments. Pluralises the
+    pending / live-edited / conflict labels; legacy and inconsistent
+    use a fixed label.
+    """
+    if state is SectionDriftState.NO_DRIFT:
+        return ""
+    count = sum(1 for d in drifts if d.state is state)
+    if count == 0:
+        return ""
+    if state is SectionDriftState.PENDING_TRACKED:
+        return f"{count} pending tracked update{'s' if count != 1 else ''}"
+    if state is SectionDriftState.LIVE_EDITED:
+        return f"{count} live edit{'s' if count != 1 else ''}"
+    if state is SectionDriftState.CONFLICT:
+        return f"{count} three-way conflict{'s' if count != 1 else ''}"
+    if state is SectionDriftState.LEGACY:
+        return f"{count} legacy (no embedded hash)"
+    if state is SectionDriftState.INCONSISTENT:
+        return f"{count} inconsistent"
+    assert_never(state)
