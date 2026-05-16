@@ -12,12 +12,13 @@ This skill orchestrates a 5-aspect parallel review fan for CLAUDE.md and related
 - **Phase 5** (review fan) after Phase 4 (Implement) completes and before Phase 6 (Address findings + merge), per the 7-phase flow in `superpowers-prefs.md`.
 - **Phase 7** (post-merge cross-cutting review) against the merged HEAD on the target branch.
 
-Artifacts in scope:
-- `tracked/claude/CLAUDE.md`, `superpowers-prefs.md`, `header.md`, `additional-content.md`.
+Artifacts in scope (ONLY `.md` files under `tracked/claude/`):
+- `tracked/claude/CLAUDE.md`, `tracked/claude/superpowers-prefs.md`, `tracked/claude/header.md`, `tracked/claude/additional-content.md`.
 - `tracked/claude/skills/<skill>/SKILL.md` (new or edited skills).
 - `tracked/claude/agents/<agent>.md` (new or edited agent definitions).
-- `my-setup/CLAUDE.md` (project-scope CLAUDE.md).
 - `my_setup.yaml` when the change touches deployment of any of the above.
+
+Out of scope: project-level CLAUDE.md (the one at a project's root, NOT under `tracked/claude/`) and any other `.md` file outside `tracked/claude/` belong to `reviewing-markdown`.
 
 For mixed-artifact PRs (Python + CLAUDE.md), invoke BOTH `reviewing-claude-md` AND `reviewing-python-code` in parallel via separate Skill invocations.
 
