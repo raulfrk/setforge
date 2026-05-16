@@ -1,11 +1,12 @@
 """Tests for user-section marker parsing and merging."""
 
+import hashlib
 import logging
 
 import pytest
 
 from my_setup.errors import MarkerError
-from my_setup.sections import extract_sections, merge_sections
+from my_setup.sections import extract_sections, hash_sections, merge_sections
 
 
 def test_no_markers_passthrough() -> None:
@@ -178,3 +179,96 @@ def test_extract_sections_legacy_hashless_end_marker_still_parses() -> None:
         "<!-- my-setup:user-section end a -->\n"
     )
     assert extract_sections(text) == {"a": "body\n"}
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-xyw — hash_sections primitive
+# ---------------------------------------------------------------------------
+
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def test_hash_sections_coverage_parity_with_extract_sections() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        "<!-- my-setup:user-section end a -->\n"
+        "<!-- my-setup:user-section start b -->\n"
+        "beta\n"
+        "<!-- my-setup:user-section end b -->\n"
+    )
+    assert hash_sections(text).keys() == extract_sections(text).keys()
+
+
+def test_hash_sections_identical_content_identical_hash() -> None:
+    body = "shared body\n"
+    t1 = (
+        "<!-- my-setup:user-section start a -->\n"
+        f"{body}"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    t2 = (
+        "different surrounding text\n"
+        "<!-- my-setup:user-section start a -->\n"
+        f"{body}"
+        "<!-- my-setup:user-section end a -->\n"
+        "more surrounding\n"
+    )
+    assert hash_sections(t1)["a"] == hash_sections(t2)["a"]
+
+
+def test_hash_sections_differing_content_differing_hash() -> None:
+    t1 = (
+        "<!-- my-setup:user-section start a -->\n"
+        "v1\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    t2 = (
+        "<!-- my-setup:user-section start a -->\n"
+        "v2\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    assert hash_sections(t1)["a"] != hash_sections(t2)["a"]
+
+
+def test_hash_sections_hex_digest_shape_64_lowercase() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    digest = hash_sections(text)["a"]
+    assert len(digest) == 64
+    assert digest == digest.lower()
+    assert all(c in "0123456789abcdef" for c in digest)
+
+
+def test_hash_sections_composition_invariant() -> None:
+    """hash_sections(t)[n] == sha256(extract_sections(t)[n]).hexdigest()."""
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    body = extract_sections(text)["a"]
+    assert hash_sections(text)["a"] == _sha256_hex(body)
+
+
+def test_hash_sections_unnamed_keying_mirrors_extract_sections() -> None:
+    text = (
+        "<!-- my-setup:user-section start -->\n"
+        "first\n"
+        "<!-- my-setup:user-section end -->\n"
+        "<!-- my-setup:user-section start -->\n"
+        "second\n"
+        "<!-- my-setup:user-section end -->\n"
+    )
+    assert set(hash_sections(text).keys()) == {"0", "1"}
+
+
+def test_hash_sections_propagates_marker_error() -> None:
+    text = "<!-- my-setup:user-section end a -->\n"
+    with pytest.raises(MarkerError, match="without matching start"):
+        hash_sections(text)

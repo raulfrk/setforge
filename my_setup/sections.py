@@ -19,6 +19,7 @@ Nested sections are not supported. End-marker names must match start-marker
 names.
 """
 
+import hashlib
 import logging
 import re
 
@@ -144,6 +145,20 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
         LOGGER.warning("live has user-section %r not present in tracked; dropping", key)
 
     return "".join(out_lines)
+
+
+def hash_sections(text: str) -> dict[str, str]:
+    """Return ``{section-name: sha256-hex-digest}`` for every marker pair.
+
+    Digest is computed over the section body as
+    :func:`extract_sections` returns it: 64 lowercase hex chars.
+    Coverage-equivalent to :func:`extract_sections`. Raises
+    :class:`MarkerError` on the same malformed-marker inputs.
+    """
+    return {
+        name: hashlib.sha256(body.encode("utf-8")).hexdigest()
+        for name, body in extract_sections(text).items()
+    }
 
 
 def strip_section_content(text: str) -> str:
