@@ -31,7 +31,6 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
 
 from my_setup.errors import MarkerError
 
@@ -44,10 +43,6 @@ class SectionSemantics(StrEnum):
     HOST_LOCAL = "host-local"
     SHARED = "shared"
 
-
-# Public alias for callers that prefer the ``Literal`` form over the enum
-# (e.g. dict[str, Literal["host-local", "shared"]] return shapes).
-type SectionSemanticsLiteral = Literal["host-local", "shared"]
 
 _SEMANTICS_KEYWORDS = "host-local|shared"
 
@@ -329,17 +324,17 @@ def _format_end_marker(
     return f"{body}{newline}"
 
 
-def section_semantics(text: str) -> dict[str, SectionSemanticsLiteral]:
-    """Return ``{section-name: "host-local" | "shared"}`` for every marker pair.
+def section_semantics(text: str) -> dict[str, SectionSemantics]:
+    """Return ``{section-name: SectionSemantics}`` for every marker pair.
 
     Coverage-equivalent to :func:`extract_sections`; raises
-    :class:`MarkerError` on the same malformed-marker inputs. The value
-    is the canonical lowercase string ("host-local" / "shared") so
-    callers can spell ``Literal["host-local", "shared"]`` annotations
-    without importing :class:`SectionSemantics`.
+    :class:`MarkerError` on the same malformed-marker inputs. Values
+    are :class:`SectionSemantics` enum members; since ``SectionSemantics``
+    is a :class:`StrEnum`, callers may compare against ``"host-local"`` /
+    ``"shared"`` directly (``SectionSemantics.SHARED == "shared"``).
     """
     return {
-        event.key: event.semantics.value  # type: ignore[misc]
+        event.key: event.semantics  # type: ignore[misc]
         for event in _walk_markers(text)
         if isinstance(event, _EndMarker)
     }

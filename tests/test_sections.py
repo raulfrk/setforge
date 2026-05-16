@@ -621,16 +621,14 @@ def test_set_marker_hashes_preserves_shared_keyword() -> None:
 
 
 def test_section_semantics_value_is_canonical_string() -> None:
-    """Values are 'host-local' / 'shared' (matching Literal annotation),
-    not SectionSemantics enum members."""
+    """Values are :class:`SectionSemantics` members; since it is a StrEnum,
+    they compare equal to and are instances of ``str``."""
     text = (
         "<!-- my-setup:user-section start shared workflow -->\n"
         "wf\n"
         "<!-- my-setup:user-section end shared workflow -->\n"
     )
     value = section_semantics(text)["workflow"]
+    assert value is SectionSemantics.SHARED
+    assert isinstance(value, str)  # StrEnum is-a str
     assert value == "shared"
-    assert isinstance(value, str)
-    # Sanity: the enum member is also "shared" but the API contract is the
-    # literal string, not the enum (callers can compare against a str safely).
-    assert value == SectionSemantics.SHARED.value
