@@ -172,14 +172,16 @@ def _drive_pty_sync(
     return pre, post
 
 
-_DRIFT_BODY_TEMPLATE = textwrap.dedent(
-    """\
-    trackedKey: tracked-value
-    settings:
-      trackedSub: tracked-sub-value
-      userSub: {user_sub}
-    """
-)
+def _drift_body(user_sub: str) -> str:
+    """Render the canonical drift YAML body with the given userSub value."""
+    return textwrap.dedent(
+        f"""\
+        trackedKey: tracked-value
+        settings:
+          trackedSub: tracked-sub-value
+          userSub: {user_sub}
+        """
+    )
 
 
 # ===========================================================================
@@ -668,7 +670,7 @@ def test_sync_interactive_keep_via_pty(
     pre, post = _drive_pty_sync(
         c,
         docker_pty_session,
-        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-drift-value"),
+        drift_body=_drift_body("live-drift-value"),
         prompts=[("Choice", "k")],
     )
     # k = keep tracked → tracked is unchanged after the sync.
@@ -687,7 +689,7 @@ def test_sync_interactive_use_via_pty(
     _, post = _drive_pty_sync(
         c,
         docker_pty_session,
-        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-absorbed-value"),
+        drift_body=_drift_body("live-absorbed-value"),
         prompts=[("Choice", "u")],
     )
     assert "live-absorbed-value" in post
@@ -714,7 +716,7 @@ def test_sync_interactive_skip_via_pty(
     pre_yaml, post_yaml = _drive_pty_sync(
         c,
         docker_pty_session,
-        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-value-for-s"),
+        drift_body=_drift_body("live-value-for-s"),
         prompts=[("Choice", "s")],
         snapshot_path=f"/workspace/{_CONFIG}",
     )
@@ -751,7 +753,7 @@ def test_sync_interactive_merge_via_pty(
     pre, post = _drive_pty_sync(
         c,
         docker_pty_session,
-        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-value-for-m"),
+        drift_body=_drift_body("live-value-for-m"),
         prompts=[("Choice", "m"), ("y/n", "n")],
     )
     # Manual edit declined → tracked unchanged (MANUAL_PENDING halts).
@@ -770,7 +772,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
     _, post = _drive_pty_sync(
         c,
         docker_pty_session,
-        drift_body=_DRIFT_BODY_TEMPLATE.format(user_sub="live-yaml-absorbed"),
+        drift_body=_drift_body("live-yaml-absorbed"),
         prompts=[("Choice", "u")],
     )
     assert "live-yaml-absorbed" in post
