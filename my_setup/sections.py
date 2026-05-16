@@ -2,21 +2,27 @@
 
 Marker syntax (HTML comments only)::
 
-    <!-- my-setup:user-section start [optional-name] -->
+    <!-- my-setup:user-section start <host-local|shared> NAME -->
     ... preserved content ...
-    <!-- my-setup:user-section end [optional-name] [hash=<sha256-hex>] -->
+    <!-- my-setup:user-section end <host-local|shared> NAME [hash=<sha256-hex>] -->
+
+The ``host-local|shared`` keyword is REQUIRED on both start and end
+markers as of dotfiles-9by. ``host-local`` sections are preserved
+unconditionally from live on install; ``shared`` sections participate in
+a three-way merge that can surface tracked-side updates via the
+``--reconcile-user-sections`` wizard. End markers may carry an optional
+``hash=<64-char-lowercase-hex>`` segment recording the sha256 of the
+section body — install rewrites these on every write to keep them
+aligned with the body actually written.
 
 Tracked files contain marker pairs (with optional placeholder content between
 them); on deploy, content from the live file at the corresponding markers is
 spliced in. ``merge_sections`` is the splice; ``extract_sections`` is the
 inverse used by ``capture`` and by ``compare`` to render a comparable view.
 
-End markers may carry an optional ``hash=<64-char-lowercase-hex>`` segment
-that records the sha256 of the section body. Legacy hashless end markers
-remain valid.
-
-Nested sections are not supported. End-marker names must match start-marker
-names.
+Untagged markers (no ``host-local``/``shared`` keyword) raise
+:class:`MarkerError`. Start and end keywords must match. Nested sections are
+not supported. End-marker names must match start-marker names.
 """
 
 import hashlib
@@ -24,13 +30,30 @@ import logging
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import Literal
 
 from my_setup.errors import MarkerError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
+
+class SectionSemantics(StrEnum):
+    """Closed set of user-section marker semantics keywords."""
+
+    HOST_LOCAL = "host-local"
+    SHARED = "shared"
+
+
+# Public alias for callers that prefer the ``Literal`` form over the enum
+# (e.g. dict[str, Literal["host-local", "shared"]] return shapes).
+type SectionSemanticsLiteral = Literal["host-local", "shared"]
+
+_SEMANTICS_KEYWORDS = "host-local|shared"
+
 _MARKER_RE = re.compile(
     r"^\s*<!--\s*my-setup:user-section\s+(start|end)"
+    rf"(?:\s+({_SEMANTICS_KEYWORDS}))?"
     r"(?:\s+(?!hash=)(\S+))?"
     r"(?:\s+hash=([0-9a-f]{64}))?"
     r"\s*-->\s*$"
@@ -57,6 +80,7 @@ class _StartMarker:
 
     line: str
     name: str | None
+    semantics: SectionSemantics
 
 
 @dataclass(slots=True, frozen=True)
@@ -66,6 +90,7 @@ class _EndMarker:
     ``key`` is the section's canonical name (the start-marker name, or the
     0-based string index assigned to unnamed sections in order of appearance).
     ``name`` mirrors the start-marker's name (``None`` for unnamed sections).
+    ``semantics`` mirrors the start-marker's semantics keyword.
     ``embedded_hash`` is the ``hash=<...>`` segment value, or ``None`` if the
     end marker omits it.
     """
@@ -73,6 +98,7 @@ class _EndMarker:
     line: str
     name: str | None
     key: str
+    semantics: SectionSemantics
     embedded_hash: str | None
 
 
@@ -83,16 +109,19 @@ def _walk_markers(text: str) -> Iterator[_MarkerEvent]:
     """Yield one event per line in ``text``, validating marker pairing.
 
     Centralizes the state machine shared by :func:`extract_sections`,
-    :func:`merge_sections`, :func:`extract_marker_hashes`, and
-    :func:`set_marker_hashes`: tracks open/closed section state, assigns
-    unnamed-section indices, and raises :class:`MarkerError` on nested
-    starts, ends-without-starts, name mismatches, and unclosed sections.
+    :func:`merge_sections`, :func:`extract_marker_hashes`,
+    :func:`set_marker_hashes`, and :func:`section_semantics`: tracks
+    open/closed section state, assigns unnamed-section indices, and
+    raises :class:`MarkerError` on nested starts, ends-without-starts,
+    name mismatches, semantics-keyword mismatches, missing-keyword
+    markers, and unclosed sections.
 
     Consumers receive validated, fully-keyed events and only have to do
     their own accumulator / output logic.
     """
     in_section = False
     section_name: str | None = None
+    section_semantics: SectionSemantics | None = None
     unnamed_index = 0
 
     for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
@@ -100,7 +129,16 @@ def _walk_markers(text: str) -> Iterator[_MarkerEvent]:
         if match is None:
             yield _BodyLine(line) if in_section else _OutsideLine(line)
             continue
-        kind, name, embedded_hash = match.group(1), match.group(2), match.group(3)
+        kind = match.group(1)
+        semantics_raw = match.group(2)
+        name = match.group(3)
+        embedded_hash = match.group(4)
+        if semantics_raw is None:
+            raise MarkerError(
+                f"line {lineno}: user-section {kind} marker missing required "
+                f"'host-local' or 'shared' keyword"
+            )
+        semantics = SectionSemantics(semantics_raw)
         if kind == "start":
             if in_section:
                 raise MarkerError(
@@ -109,7 +147,8 @@ def _walk_markers(text: str) -> Iterator[_MarkerEvent]:
                 )
             in_section = True
             section_name = name
-            yield _StartMarker(line, name)
+            section_semantics = semantics
+            yield _StartMarker(line, name, semantics)
         else:
             if not in_section:
                 raise MarkerError(
@@ -120,12 +159,19 @@ def _walk_markers(text: str) -> Iterator[_MarkerEvent]:
                     f"line {lineno}: user-section end name {name!r} does not "
                     f"match start name {section_name!r}"
                 )
+            if semantics is not section_semantics:
+                raise MarkerError(
+                    f"line {lineno}: user-section end semantics {semantics.value!r} "
+                    f"does not match start semantics "
+                    f"{section_semantics.value if section_semantics else None!r}"
+                )
             key = section_name if section_name is not None else str(unnamed_index)
-            yield _EndMarker(line, section_name, key, embedded_hash)
+            yield _EndMarker(line, section_name, key, semantics, embedded_hash)
             if section_name is None:
                 unnamed_index += 1
             in_section = False
             section_name = None
+            section_semantics = None
 
     if in_section:
         identifier = section_name if section_name is not None else str(unnamed_index)
@@ -252,7 +298,9 @@ def set_marker_hashes(text: str, hashes: dict[str, str]) -> str:
     for event in _walk_markers(text):
         if isinstance(event, _EndMarker):
             out_lines.append(
-                _format_end_marker(event.name, hashes.get(event.key), event.line)
+                _format_end_marker(
+                    event.name, event.semantics, hashes.get(event.key), event.line
+                )
             )
         else:
             out_lines.append(event.line)
@@ -260,14 +308,17 @@ def set_marker_hashes(text: str, hashes: dict[str, str]) -> str:
 
 
 def _format_end_marker(
-    name: str | None, embedded_hash: str | None, original_line: str
+    name: str | None,
+    semantics: SectionSemantics,
+    embedded_hash: str | None,
+    original_line: str,
 ) -> str:
     """Build the canonical end-marker line for ``name`` and ``embedded_hash``.
 
     Preserves the original line's trailing newline (or its absence) so
     ``set_marker_hashes`` is byte-preserving on file endings.
     """
-    parts = ["<!-- my-setup:user-section end"]
+    parts = ["<!-- my-setup:user-section end", semantics.value]
     if name is not None:
         parts.append(name)
     if embedded_hash is not None:
@@ -276,6 +327,22 @@ def _format_end_marker(
     body = " ".join(parts)
     newline = "\n" if original_line.endswith("\n") else ""
     return f"{body}{newline}"
+
+
+def section_semantics(text: str) -> dict[str, SectionSemanticsLiteral]:
+    """Return ``{section-name: "host-local" | "shared"}`` for every marker pair.
+
+    Coverage-equivalent to :func:`extract_sections`; raises
+    :class:`MarkerError` on the same malformed-marker inputs. The value
+    is the canonical lowercase string ("host-local" / "shared") so
+    callers can spell ``Literal["host-local", "shared"]`` annotations
+    without importing :class:`SectionSemantics`.
+    """
+    return {
+        event.key: event.semantics.value  # type: ignore[misc]
+        for event in _walk_markers(text)
+        if isinstance(event, _EndMarker)
+    }
 
 
 def strip_section_content(text: str) -> str:
