@@ -31,6 +31,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import assert_never
 
 from rich.console import Console
 from rich.syntax import Syntax
@@ -287,19 +288,18 @@ def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
             continue
         if d.state is SectionDriftState.NO_DRIFT:
             continue
-        match d.state:
-            case SectionDriftState.PENDING_TRACKED:
-                pending += 1
-            case SectionDriftState.LIVE_EDITED:
-                live_edits += 1
-            case SectionDriftState.CONFLICT:
-                conflicts += 1
-            case SectionDriftState.LEGACY:
-                legacy += 1
-            case SectionDriftState.INCONSISTENT:
-                inconsistent += 1
-            case _:
-                pass
+        if d.state is SectionDriftState.PENDING_TRACKED:
+            pending += 1
+        elif d.state is SectionDriftState.LIVE_EDITED:
+            live_edits += 1
+        elif d.state is SectionDriftState.CONFLICT:
+            conflicts += 1
+        elif d.state is SectionDriftState.LEGACY:
+            legacy += 1
+        elif d.state is SectionDriftState.INCONSISTENT:
+            inconsistent += 1
+        else:
+            assert_never(d.state)
     total = pending + live_edits + conflicts + legacy + inconsistent
     if total == 0:
         return ""
