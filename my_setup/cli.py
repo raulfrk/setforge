@@ -290,31 +290,30 @@ def _extract_live_sections_map(
     cfg: Config,
     resolved: ResolvedProfile,
     repo_root: Path,
-) -> dict[Path, dict[str, str]]:
+) -> dict[Path, sections_mod.LiveSections]:
     """Pre-extract live user-section bodies for every section-bearing dotfile.
 
     Walks ``resolved.dotfiles``, and for each entry whose dotfile has
     ``preserve_user_sections=True`` AND whose live file already exists,
-    reads the live file once and stores the result of
-    :func:`sections.extract_sections` keyed by the live ``sub_dst`` path.
+    reads the live file once and stores the
+    :class:`~sections_mod.LiveSections` produced by
+    :func:`sections_mod.extract_live_sections` keyed by the live
+    ``sub_dst`` path.
 
     The install loop passes the matching entry to ``deploy.copy_atomic``
     via ``precomputed_live_sections`` so ``_compute_content`` does not
-    re-read + re-parse the same live file a second time.
+    re-read + re-parse the same live file a second time. The factory
+    routes through ``allow_legacy=True`` so pre-9by live files (untagged
+    markers, no end-marker hash) flow through install's migration path;
+    install is the verb that re-tags + stamps. Compare / sync use the
+    strict parser and refuse legacy via :func:`_refuse_legacy_live_markers`.
     """
-    live_sections: dict[Path, dict[str, str]] = {}
+    live_sections: dict[Path, sections_mod.LiveSections] = {}
     for _, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
-        # allow_legacy=True so pre-9by live files (untagged markers,
-        # no end-marker hash) can flow through install's migration
-        # path; install is the verb that re-tags + stamps. Compare /
-        # sync use the strict parser and refuse legacy via
-        # _refuse_legacy_live_markers (cli.py).
-        live_sections[sub_dst] = sections_mod.extract_sections(
-            live_text, allow_legacy=True
-        )
+        live_sections[sub_dst] = sections_mod.extract_live_sections(live_text)
     return live_sections
 
 

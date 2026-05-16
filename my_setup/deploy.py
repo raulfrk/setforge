@@ -58,7 +58,7 @@ def copy_atomic(
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
-    precomputed_live_sections: dict[str, str] | None = None,
+    precomputed_live_sections: sections.LiveSections | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -81,11 +81,12 @@ def copy_atomic(
     ``precomputed_live_sections`` lets callers that already parsed the
     live file (e.g. the install loop, which classifies section drift
     before deploying) skip the re-read + re-parse inside
-    :func:`_compute_content`. Contract: the dict MUST equal
-    ``sections.extract_sections(dst.read_text(...))`` for the current
-    on-disk live file; behaviour is otherwise identical to the default
-    ``None`` code path. ``section_bodies_override`` still wins per-key
-    when both are supplied.
+    :func:`_compute_content`. The :class:`~sections.LiveSections` NewType
+    pins the contract that this value came from
+    :func:`sections.extract_live_sections` (i.e.  ``allow_legacy=True``)
+    for the current on-disk live file; behaviour is otherwise identical
+    to the default ``None`` code path. ``section_bodies_override`` still
+    wins per-key when both are supplied.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -130,7 +131,7 @@ def _compute_content(
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
     *,
-    precomputed_live_sections: dict[str, str] | None = None,
+    precomputed_live_sections: sections.LiveSections | None = None,
 ) -> str:
     """Render the bytes ``copy_atomic`` will write to ``dst``.
 
@@ -138,10 +139,12 @@ def _compute_content(
     ``dst`` and calls :func:`sections.extract_sections` to recover the
     live bodies. Callers that already extracted those sections (the
     install loop, which classifies drift before deploying) may pass
-    ``precomputed_live_sections`` to skip the re-read; the dict MUST
-    equal what :func:`sections.extract_sections` would have produced for
-    the current ``dst`` contents. ``section_bodies_override`` still
-    layers on top per-key, matching the no-precompute path.
+    ``precomputed_live_sections`` (a :class:`~sections.LiveSections`,
+    produced by :func:`sections.extract_live_sections`) to skip the
+    re-read; the NewType pins ``allow_legacy=True`` semantics so the
+    install-loop pre-extract and the in-deploy fallback stay in lockstep.
+    ``section_bodies_override`` still layers on top per-key, matching the
+    no-precompute path.
     """
     # Local import to break the deploy → section_reconcile → sections cycle
     # at module load time; section_reconcile depends on deploy only at call
