@@ -170,9 +170,10 @@ def _refuse_legacy_live_markers(
     message; this surfaces a single actionable error before any strict
     parse happens, pointing the user at ``my-setup install`` to migrate.
 
-    ``command`` is the user-facing command name (``compare`` / ``sync``)
-    used in the error message so the user sees which entry point refused.
-    Install must NOT call this — install's job is to migrate.
+    ``command`` is the user-facing command name (``compare`` / ``sync`` /
+    ``merge``) used in the error message so the user sees which entry
+    point refused. Install must NOT call this — install's job is to
+    migrate.
     """
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -653,6 +654,8 @@ def merge(
     """Interactively resolve unexpected drift for every dotfile in the profile."""
     cfg = load_config(config)
     repo_root = config.resolve().parent
+    resolved = resolve_profile(cfg, profile)
+    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="merge")
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
     if not report.has_unexpected_drift:

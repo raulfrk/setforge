@@ -514,6 +514,31 @@ def test_sync_refuses_legacy_live_with_actionable_error(
     assert "my-setup install" in combined
 
 
+def test_merge_refuses_legacy_live_with_actionable_error(
+    fixture: dict[str, Path],
+) -> None:
+    """``merge`` on a legacy live file exits 1 with the actionable error
+    that points the user at ``my-setup install``.
+
+    Without the ``_refuse_legacy_live_markers`` guard, ``merge`` would
+    silently proceed into ``compare_profile`` (which now passes
+    ``allow_legacy=True`` on live reads to support install's pre-flight)
+    instead of surfacing the actionable error before any drift work.
+    """
+    body = "rule A\n"
+    fixture["src"].write_text(
+        _make_section_text("workflow", "shared", body, _sha256(body))
+    )
+    fixture["dst"].write_text(_legacy_live_section_text("workflow", body))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["merge", "--profile=p", f"--config={fixture['cfg']}"])
+    assert result.exit_code == 1, result.output
+    combined = result.output + (str(result.exception) if result.exception else "")
+    assert "legacy" in combined.lower()
+    assert "my-setup install" in combined
+
+
 def test_install_succeeds_on_legacy_live_and_migrates(
     fixture: dict[str, Path],
 ) -> None:
