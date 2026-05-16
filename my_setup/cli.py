@@ -39,6 +39,7 @@ from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve
 from my_setup.config import (
     ClaudeInstallMode,
     Config,
+    Dotfile,
     MarketplaceSource,
     ReconcilePolicy,
     ResolvedProfile,
@@ -179,6 +180,28 @@ def _iter_section_dotfiles(
         dst = resolve_dst(dotfile)
         for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
             yield sub_src, sub_dst
+
+
+def _iter_all_dotfiles(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> Iterator[tuple[Dotfile, Path, Path]]:
+    """Yield ``(dotfile, sub_src, sub_dst)`` for every dotfile in ``resolved.dotfiles``.
+
+    Sibling of :func:`_iter_section_dotfiles` without the
+    ``preserve_user_sections`` filter; consolidates the unfiltered
+    resolve_src / resolve_dst / expand_dotfile walks that ``install``
+    (transition snapshot + copy_atomic loop) and ``sync`` (transition
+    snapshot) all duplicate today. Yields ``dotfile`` alongside the
+    pair because the install copy_atomic caller needs per-dotfile
+    ``preserve_user_*`` attributes; callers that only need a path
+    destructure as ``_, _, sub_dst`` or ``_, sub_src, _``.
+    """
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
+            yield dotfile, sub_src, sub_dst
 
 
 def _refuse_legacy_live_markers(
@@ -418,42 +441,34 @@ def install(
     # See `precomputed_live_sections` on copy_atomic.
     live_sections_map = _extract_live_sections_map(cfg, resolved, repo_root)
 
-    dst_paths: list[Path] = []
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, _, sub_dst in expand_dotfile(name, src, dst):
-            dst_paths.append(sub_dst)
+    dst_paths: list[Path] = [
+        sub_dst for _, _, sub_dst in _iter_all_dotfiles(cfg, resolved, repo_root)
+    ]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 
     file_pre = transitions.snapshot_paths(dst_paths)
 
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            override = section_decisions.get(sub_dst)
-            precomputed = live_sections_map.get(sub_dst)
-            result = deploy.copy_atomic(
-                sub_src,
-                sub_dst,
-                preserve_user_sections=dotfile.preserve_user_sections,
-                preserve_user_keys=dotfile.preserve_user_keys or None,
-                preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
-                section_bodies_override=override,
-                precomputed_live_sections=precomputed,
-            )
-            typer.echo(f"{result.action.value:>8}  {sub_dst}")
-            # After live write succeeds, stamp the tracked-side embedded
-            # hashes so the three-way classifier has a baseline (E_T) on
-            # subsequent installs. Only mutates the hash= segment in end
-            # markers — section BODIES stay byte-for-byte identical.
-            # Skipped when tracked already has aligned hashes (no spurious
-            # git diffs). See section_reconcile.stamp_tracked_baseline.
-            if dotfile.preserve_user_sections:
-                section_reconcile.stamp_tracked_baseline(sub_src)
+    for dotfile, sub_src, sub_dst in _iter_all_dotfiles(cfg, resolved, repo_root):
+        override = section_decisions.get(sub_dst)
+        precomputed = live_sections_map.get(sub_dst)
+        result = deploy.copy_atomic(
+            sub_src,
+            sub_dst,
+            preserve_user_sections=dotfile.preserve_user_sections,
+            preserve_user_keys=dotfile.preserve_user_keys or None,
+            preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
+            section_bodies_override=override,
+            precomputed_live_sections=precomputed,
+        )
+        typer.echo(f"{result.action.value:>8}  {sub_dst}")
+        # After live write succeeds, stamp the tracked-side embedded
+        # hashes so the three-way classifier has a baseline (E_T) on
+        # subsequent installs. Only mutates the hash= segment in end
+        # markers — section BODIES stay byte-for-byte identical.
+        # Skipped when tracked already has aligned hashes (no spurious
+        # git diffs). See section_reconcile.stamp_tracked_baseline.
+        if dotfile.preserve_user_sections:
+            section_reconcile.stamp_tracked_baseline(sub_src)
 
     ext_delta = _reconcile_extensions(resolved)
     plugin_delta = _reconcile_plugins(cfg, resolved)
@@ -736,13 +751,9 @@ def sync(
     if not no_transition:
         transitions.ensure_state_dir_writable()
 
-    src_paths: list[Path] = []
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, _ in expand_dotfile(name, src, dst):
-            src_paths.append(sub_src)
+    src_paths: list[Path] = [
+        sub_src for _, sub_src, _ in _iter_all_dotfiles(cfg, resolved, repo_root)
+    ]
     src_paths.append(config.resolve())
 
     file_pre = transitions.snapshot_paths(src_paths)
