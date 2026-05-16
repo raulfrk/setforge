@@ -46,6 +46,7 @@ __all__ = [
     "SectionAction",
     "SectionDecision",
     "reconcile_sections",
+    "state_label",
 ]
 
 
@@ -188,12 +189,12 @@ def _render_header(drift: SectionDrift, console: Console) -> None:
     console.print(
         f" [bold]section[/bold] [cyan]{drift.name}[/cyan]  "
         f"[dim]({drift.semantics.value})[/dim]  "
-        f"[yellow]{_state_label(drift.state)}[/yellow]"
+        f"[yellow]{state_label(drift.state)}[/yellow]"
     )
     console.print(f"[dim]{sep}[/dim]")
 
 
-def _state_label(state: SectionDriftState) -> str:
+def state_label(state: SectionDriftState) -> str:
     """Human-readable state label rendered in the prompt header.
 
     The exact label text is part of the contract — Docker e2e tests
