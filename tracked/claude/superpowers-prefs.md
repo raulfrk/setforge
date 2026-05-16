@@ -85,12 +85,18 @@ Superpowers skills are designed to defer to.
    `reviewing-X` skill for the artifact:
    - `reviewing-python-code` for Python source / pyproject / CI / pre-commit.
    - `reviewing-claude-md` for tracked/claude/ docs / skills / agents.
-   - Mixed-artifact: invoke both.
+   - `reviewing-markdown` for generic `.md` files outside
+     `tracked/claude/` (READMEs, project-level CLAUDE.md, docs/,
+     CHANGELOG.md, ADRs).
+   - Mixed-artifact: invoke every applicable skill.
 
-   The skill dispatches 4 aspect agents (spec / form / substance /
-   specifics) in a single message — true parallel. For multi-worktree:
-   the fan fires per worktree (4 × N reviewers total), all in one
-   message. Satisfies the `superpowers:requesting-code-review` gate.
+   The matrix skills (`reviewing-python-code`, `reviewing-claude-md`)
+   each dispatch 5 aspect agents (spec / form / substance / specifics / prose)
+   in a single message — true parallel. `reviewing-markdown` dispatches
+   a single prose-quality agent. For multi-worktree: the fan fires
+   per worktree (5 × N reviewers for matrix skills, 1 × N for
+   `reviewing-markdown`), all in one message. Satisfies the
+   `superpowers:requesting-code-review` gate.
    `superpowers:verification-before-completion` still applies for ALL
    completion claims (test results, tooling exit codes, deployment
    acks) — the review fan is one source of evidence, not a replacement.
@@ -182,9 +188,12 @@ N+1.
   spawn sibling worktrees via the bd ↔ wt loop. Single-stream when
   not. Not opt-in only — driven by the work shape.
 - **Review fan** (Phase 5): always-on for non-trivial work. Invokes
-  the appropriate `reviewing-X` skill (4 aspect agents in parallel) —
-  non-negotiable. Single-worktree work still gets the full 4-agent
-  fan; multi-worktree gets 4 × N.
+  the appropriate `reviewing-X` skill — non-negotiable. The matrix
+  skills (`reviewing-python-code`, `reviewing-claude-md`) fan out 5
+  aspect agents (spec / form / substance / specifics / prose) in
+  parallel; `reviewing-markdown` fans out a single prose agent.
+  Single-worktree work still gets the full fan; multi-worktree gets
+  5 × N for matrix skills and 1 × N for `reviewing-markdown`.
 - **Post-merge cross-cutting review** (Phase 7): mandatory for
   multi-worktree work; recommended for single-stream non-trivial
   work. Re-invokes the same `reviewing-X` skill against merged HEAD
