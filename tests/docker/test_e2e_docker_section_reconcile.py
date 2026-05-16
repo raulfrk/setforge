@@ -34,6 +34,7 @@ import hashlib
 import subprocess
 from collections.abc import Callable
 
+import pexpect  # type: ignore[import-untyped]
 import pytest
 
 from tests.docker.conftest import ContainerHandle
@@ -411,8 +412,9 @@ def test_install_reconcile_with_no_drift_exits_silently(
 
 def test_install_reconcile_interactive_keep_live(
     docker_container: Callable[..., ContainerHandle],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
-    """13: --reconcile-user-sections + piped 'k' keeps live.
+    """13: --reconcile-user-sections + PTY 'k' keeps live.
 
     LIVE_EDITED setup: baseline-install both sides, then mutate LIVE
     body to a host-edited form while keeping its end-marker hash at
@@ -421,6 +423,10 @@ def test_install_reconcile_interactive_keep_live(
     keeps the live body verbatim, so the assertion is that the
     tracked-only marker ``"rule B (new in tracked)"`` does NOT appear
     in live after the wizard.
+
+    Driven via PTY (matches the sync-wizard interactive tests in
+    ``test_e2e_docker.py``); the prompter uses ``termios`` raw mode,
+    which a piped stdin via ``docker exec -i`` cannot satisfy.
     """
     c = docker_container()
     _install(c, "test-reconcile-sections")
@@ -429,7 +435,8 @@ def test_install_reconcile_interactive_keep_live(
         _LIVE_SHARED,
         _shared_section(live_edited, _BASELINE_SHARED_HASH),
     )
-    result = c.exec(
+    session = docker_pty_session(
+        c,
         [
             "uv",
             "run",
@@ -439,10 +446,12 @@ def test_install_reconcile_interactive_keep_live(
             f"--config={_CONFIG}",
             "--reconcile-user-sections",
         ],
-        input_text="k\n",
-        check=False,
+        timeout=120,
     )
-    assert result.returncode == 0, result.stderr
+    idx = session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT], timeout=30)
+    assert idx == 0, f"reconcile wizard never prompted; saw: {session.before!r}"
+    session.send("k")
+    session.expect(pexpect.EOF)
     live_after = c.read_text(_LIVE_SHARED)
     assert "rule B (new in tracked)" not in live_after
     assert "rule LIVE-EDIT" in live_after
@@ -450,14 +459,18 @@ def test_install_reconcile_interactive_keep_live(
 
 def test_install_reconcile_interactive_take_tracked(
     docker_container: Callable[..., ContainerHandle],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
-    """14: --reconcile-user-sections + piped 't' takes tracked.
+    """14: --reconcile-user-sections + PTY 't' takes tracked.
 
     PENDING_TRACKED setup: baseline install, then mutate TRACKED body
     (a new rule C added on top of the existing tracked content),
     keep tracked's end-marker hash at the baseline. ``A_T != E_T``,
     ``A_L == E_L`` — PENDING_TRACKED. Pressing ``t`` adopts the
     tracked body into live; the new ``rule C`` marker must land.
+
+    Driven via PTY for the same reason as the keep-live variant —
+    the wizard prompter uses ``termios`` raw mode.
     """
     c = docker_container()
     _install(c, "test-reconcile-sections")
@@ -466,7 +479,8 @@ def test_install_reconcile_interactive_take_tracked(
         _TRACKED_SHARED,
         _shared_section(new_tracked, _BASELINE_SHARED_HASH),
     )
-    result = c.exec(
+    session = docker_pty_session(
+        c,
         [
             "uv",
             "run",
@@ -476,10 +490,12 @@ def test_install_reconcile_interactive_take_tracked(
             f"--config={_CONFIG}",
             "--reconcile-user-sections",
         ],
-        input_text="t\n",
-        check=False,
+        timeout=120,
     )
-    assert result.returncode == 0, result.stderr
+    idx = session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT], timeout=30)
+    assert idx == 0, f"reconcile wizard never prompted; saw: {session.before!r}"
+    session.send("t")
+    session.expect(pexpect.EOF)
     live_after = c.read_text(_LIVE_SHARED)
     assert "rule B (new in tracked)" in live_after
     assert "rule C (newer)" in live_after
@@ -487,8 +503,9 @@ def test_install_reconcile_interactive_take_tracked(
 
 def test_install_reconcile_interactive_skip_then_keep_live(
     docker_container: Callable[..., ContainerHandle],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
-    """15: --reconcile-user-sections + 2 drifted sections + 's\\nk\\n'.
+    """15: --reconcile-user-sections + 2 drifted sections + PTY 's' then 'k'.
 
     Two-section setup, one drift state per section:
 
@@ -500,6 +517,8 @@ def test_install_reconcile_interactive_skip_then_keep_live(
     Both outcomes keep live, so neither tracked-body marker
     (``"rule B (new in tracked)"`` for workflow, ``"commit rule X
     (tracked-only)"`` for commits) ends up in live afterward.
+
+    Driven via PTY; two ``Choice`` prompts are expected back-to-back.
     """
     c = docker_container()
     workflow_baseline = "- rule A\n- rule B (new in tracked)\n"
@@ -538,7 +557,8 @@ def test_install_reconcile_interactive_skip_then_keep_live(
         ),
     )
 
-    result = c.exec(
+    session = docker_pty_session(
+        c,
         [
             "uv",
             "run",
@@ -548,10 +568,15 @@ def test_install_reconcile_interactive_skip_then_keep_live(
             f"--config={_CONFIG}",
             "--reconcile-user-sections",
         ],
-        input_text="s\nk\n",
-        check=False,
+        timeout=120,
     )
-    assert result.returncode == 0, result.stderr
+    for keypress in ("s", "k"):
+        idx = session.expect(["Choice", pexpect.EOF, pexpect.TIMEOUT], timeout=30)
+        assert idx == 0, (
+            f"reconcile wizard never prompted ({keypress!r}); saw: {session.before!r}"
+        )
+        session.send(keypress)
+    session.expect(pexpect.EOF)
     live_after = c.read_text(_LIVE_SHARED)
     # workflow skipped → tracked-only "rule C" not in live.
     assert "rule C (tracked-only)" not in live_after
