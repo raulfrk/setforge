@@ -30,6 +30,13 @@ dotfiles:
     dst: ~/.my_setup_e2e/sections/marked.md
     preserve_user_sections: true
 
+  # Shared-semantics user-section markers — exercises the three-way
+  # reconcile wizard introduced in dotfiles-9by.
+  sections_shared_md:
+    src: sections/shared.md
+    dst: ~/.my_setup_e2e/sections/shared.md
+    preserve_user_sections: true
+
   # JSON dotfile — byte copy, no preserve mechanism.
   json_settings:
     src: json/settings.json
@@ -154,6 +161,10 @@ profiles:
   test-text-sections:
     dotfiles:
       - sections_md
+
+  test-reconcile-sections:
+    dotfiles:
+      - sections_shared_md
 
   test-json:
     dotfiles:
