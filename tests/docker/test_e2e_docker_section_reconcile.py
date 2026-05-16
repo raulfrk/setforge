@@ -531,8 +531,8 @@ def test_install_reconcile_interactive_skip_then_keep_live(
     c.write_text(
         _TRACKED_SHARED,
         _shared_two_section(
-            (workflow_baseline, None),
-            (commits_baseline, None),
+            (workflow_baseline, h_workflow),
+            (commits_baseline, h_commits),
         ),
     )
     _install(c, "test-reconcile-sections")
@@ -650,9 +650,9 @@ def test_compare_reconcile_dry_run_shows_three_way_state(
     c.write_text(
         _TRACKED_SHARED,
         _shared_three_section(
-            (workflow_baseline, None),
-            (commits_baseline, None),
-            (python_baseline, None),
+            (workflow_baseline, h_workflow),
+            (commits_baseline, h_commits),
+            (python_baseline, h_python),
         ),
     )
     _install(c, "test-reconcile-sections")
