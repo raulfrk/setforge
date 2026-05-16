@@ -75,6 +75,18 @@ dotfiles:
     src: claude/agents/claude-md-specifics-reviewer.md
     dst: ~/.claude/agents/claude-md-specifics-reviewer.md
 
+  claude_agent_python_prose_reviewer:
+    src: claude/agents/python-prose-reviewer.md
+    dst: ~/.claude/agents/python-prose-reviewer.md
+
+  claude_agent_claude_md_prose_reviewer:
+    src: claude/agents/claude-md-prose-reviewer.md
+    dst: ~/.claude/agents/claude-md-prose-reviewer.md
+
+  claude_agent_markdown_prose_reviewer:
+    src: claude/agents/markdown-prose-reviewer.md
+    dst: ~/.claude/agents/markdown-prose-reviewer.md
+
   claude_skill_reviewing_python_code:
     src: claude/skills/reviewing-python-code/SKILL.md
     dst: ~/.claude/skills/reviewing-python-code/SKILL.md
@@ -82,6 +94,10 @@ dotfiles:
   claude_skill_reviewing_claude_md:
     src: claude/skills/reviewing-claude-md/SKILL.md
     dst: ~/.claude/skills/reviewing-claude-md/SKILL.md
+
+  claude_skill_reviewing_markdown:
+    src: claude/skills/reviewing-markdown/SKILL.md
+    dst: ~/.claude/skills/reviewing-markdown/SKILL.md
 
   wt_config:
     src: wt/config.toml
@@ -162,8 +178,12 @@ profiles:
       - claude_agent_claude_md_form_reviewer
       - claude_agent_claude_md_substance_reviewer
       - claude_agent_claude_md_specifics_reviewer
+      - claude_agent_python_prose_reviewer
+      - claude_agent_claude_md_prose_reviewer
+      - claude_agent_markdown_prose_reviewer
       - claude_skill_reviewing_python_code
       - claude_skill_reviewing_claude_md
+      - claude_skill_reviewing_markdown
       - wt_config
     claude_plugins:
       - superpowers
