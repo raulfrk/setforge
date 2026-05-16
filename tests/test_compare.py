@@ -52,6 +52,79 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
     assert diff_file(src, dst, preserve_user_sections=True) == ""
 
 
+def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
+    """When section bodies hash-match AND non-section content is identical,
+    diff_file short-circuits to '' via the hash_sections fast path
+    (dotfiles-xyw)."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    same = (
+        "shared header\n"
+        "<!-- my-setup:user-section start s -->\n"
+        "same body\n"
+        "<!-- my-setup:user-section end s -->\n"
+        "shared footer\n"
+    )
+    _write(src, same)
+    _write(dst, same)
+    assert diff_file(src, dst, preserve_user_sections=True) == ""
+
+
+def test_diff_file_hash_fast_path_falls_through_on_section_drift(
+    tmp_path: Path,
+) -> None:
+    """When section bodies differ but the template matches, the fast path
+    declines (hashes mismatch) and the splice+diff path runs — yielding
+    '' because preserve_user_sections substitutes live into tracked."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    _write(
+        src,
+        "header\n"
+        "<!-- my-setup:user-section start s -->\n"
+        "tracked body\n"
+        "<!-- my-setup:user-section end s -->\n"
+        "footer\n",
+    )
+    _write(
+        dst,
+        "header\n"
+        "<!-- my-setup:user-section start s -->\n"
+        "live body\n"
+        "<!-- my-setup:user-section end s -->\n"
+        "footer\n",
+    )
+    # preserve_user_sections=True splices live body into the tracked template
+    # before diffing, so the diff comes out empty even though bodies differ.
+    assert diff_file(src, dst, preserve_user_sections=True) == ""
+
+
+def test_diff_file_hash_fast_path_declines_on_template_drift(
+    tmp_path: Path,
+) -> None:
+    """When section bodies match but template text differs, the fast path
+    declines and the diff surfaces the template drift."""
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    _write(
+        src,
+        "tracked header\n"
+        "<!-- my-setup:user-section start s -->\n"
+        "shared body\n"
+        "<!-- my-setup:user-section end s -->\n",
+    )
+    _write(
+        dst,
+        "live header\n"
+        "<!-- my-setup:user-section start s -->\n"
+        "shared body\n"
+        "<!-- my-setup:user-section end s -->\n",
+    )
+    diff = diff_file(src, dst, preserve_user_sections=True)
+    assert "tracked header" in diff
+    assert "live header" in diff
+
+
 def test_diff_file_yaml_keys_preserved_no_drift(tmp_path: Path) -> None:
     src = tmp_path / "src.yaml"
     dst = tmp_path / "dst.yaml"

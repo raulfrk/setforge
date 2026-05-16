@@ -76,9 +76,25 @@ def diff_file(
     When preservation is enabled the comparison renders the post-merge
     content (same merge sequence as :func:`my_setup.deploy.copy_atomic`)
     so preserved drift never shows in the diff body.
+
+    Fast path: with ``preserve_user_sections=True``, if every section's
+    sha256 matches between src and dst AND the non-section content is
+    byte-identical, the rendered merge would equal live — skip the
+    splice + diff and return ``""`` early.
     """
     if not dst.exists():
         return ""
+    if preserve_user_sections:
+        src_text = src.read_text(encoding="utf-8")
+        live_text = dst.read_text(encoding="utf-8")
+        bodies_match = sections.hash_sections(src_text) == sections.hash_sections(
+            live_text
+        )
+        template_matches = sections.strip_section_content(
+            src_text
+        ) == sections.strip_section_content(live_text)
+        if bodies_match and template_matches:
+            return ""
     rendered_src = _render_with_merges(
         src,
         dst,
