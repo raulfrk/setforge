@@ -1945,9 +1945,11 @@ def validate(
 
     repo_root = config.resolve().parent
 
-    profiles_to_check: list[str] = (
-        list(cfg.profiles) if all_profiles else [profile]  # type: ignore[list-item]
-    )
+    if all_profiles:
+        profiles_to_check: list[str] = list(cfg.profiles)
+    else:
+        assert profile is not None  # guarded above; narrow for mypy
+        profiles_to_check = [profile]
 
     for prof_name in profiles_to_check:
         _check_profile(cfg, prof_name, repo_root, failures)
