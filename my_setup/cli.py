@@ -455,23 +455,34 @@ def _print_section_reconcile_dry_run(
         for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
             if not sub_dst.exists() or not sub_src.exists():
                 continue
-            tracked_text = sub_src.read_text(encoding="utf-8")
-            live_text = sub_dst.read_text(encoding="utf-8")
-            drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-            summary = section_wizard.format_drift_summary(drifts.values())
-            if not summary:
-                continue
-            any_emitted = True
-            console.print(f"\n[bold]{sub_dst}[/bold]: {summary}")
-            for sec_name, drift in drifts.items():
-                if drift.semantics is not SectionSemantics.SHARED:
-                    continue
-                if drift.state is SectionDriftState.NO_DRIFT:
-                    continue
-                label = section_wizard.state_label(drift.state)
-                console.print(f"  three-way {label} [cyan]{sec_name}[/cyan]")
+            if _render_drift_file(sub_src, sub_dst, console):
+                any_emitted = True
     if not any_emitted:
         console.print("\nno shared user-section drift to reconcile.")
+
+
+def _render_drift_file(sub_src: Path, sub_dst: Path, console: Console) -> bool:
+    """Render the dry-run drift block for one (tracked, live) file pair.
+
+    Returns ``True`` when at least one drifted-section line was printed
+    for this file (i.e. the file contributed to the overall
+    ``any_emitted`` flag in :func:`_print_section_reconcile_dry_run`).
+    """
+    tracked_text = sub_src.read_text(encoding="utf-8")
+    live_text = sub_dst.read_text(encoding="utf-8")
+    drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
+    summary = section_wizard.format_drift_summary(drifts.values())
+    if not summary:
+        return False
+    console.print(f"\n[bold]{sub_dst}[/bold]: {summary}")
+    for sec_name, drift in drifts.items():
+        if drift.semantics is not SectionSemantics.SHARED:
+            continue
+        if drift.state is SectionDriftState.NO_DRIFT:
+            continue
+        label = section_wizard.state_label(drift.state)
+        console.print(f"  three-way {label} [cyan]{sec_name}[/cyan]")
+    return True
 
 
 @app.command()
