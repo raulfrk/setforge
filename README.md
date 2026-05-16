@@ -78,13 +78,20 @@ For non-interactive contexts (CI, scripted runs):
 
 ## User-section preservation
 
-Markdown dotfiles can opt into per-host preservation. Wrap any region in HTML-comment markers and the live content survives subsequent `install` runs:
+Markdown dotfiles can opt into per-host preservation. Wrap any region in HTML-comment markers and the live content survives subsequent `install` runs. Markers require a `host-local` or `shared` semantics keyword on both start and end (untagged markers raise `MarkerError`):
 
 ```markdown
-<!-- my-setup:user-section start optional-name -->
-... edit live; survives deploy ...
-<!-- my-setup:user-section end optional-name -->
+<!-- my-setup:user-section start host-local NAME -->
+... live edits to this body always survive re-install (host-specific) ...
+<!-- my-setup:user-section end host-local NAME -->
+
+<!-- my-setup:user-section start shared NAME -->
+... live edits survive, and tracked-side updates surface via
+    `install --reconcile-user-sections` ...
+<!-- my-setup:user-section end shared NAME -->
 ```
+
+See the project-root [CLAUDE.md](CLAUDE.md) marker-syntax section for the full grammar (including the `hash=<sha256-hex>` segment install rewrites on every run).
 
 YAML dotfiles can declare `preserve_user_keys: list[str]` per dotfile in `my_setup.yaml`. Live values at those JSONPath-lite paths overlay tracked content on every deploy and are stripped from tracked on every capture.
 
