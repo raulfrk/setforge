@@ -28,6 +28,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -71,25 +72,13 @@ class SectionAction(StrEnum):
 # the wizard took. ``body`` is what the install path should splice into
 # the rendered output for this section name; ``action`` is the audit
 # trail (informational; not persisted yet).
+@dataclass(slots=True, frozen=True)
 class SectionDecision:
-    """Result for one section after wizard resolution.
+    """Result for one section after wizard resolution."""
 
-    Not a dataclass to keep the constructor minimal and avoid
-    confusion with :class:`my_setup.section_reconcile.SectionDrift`.
-    """
-
-    __slots__ = ("action", "body", "name")
-
-    def __init__(self, name: str, body: str, action: SectionAction) -> None:
-        self.name = name
-        self.body = body
-        self.action = action
-
-    def __repr__(self) -> str:
-        return (
-            f"SectionDecision(name={self.name!r}, action={self.action.value!r}, "
-            f"body=<{len(self.body)} chars>)"
-        )
+    name: str
+    body: str
+    action: SectionAction
 
 
 def reconcile_sections(
