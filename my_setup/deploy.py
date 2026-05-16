@@ -122,6 +122,44 @@ def copy_atomic(
     return DeployResult(dst=real_dst, action=action, backup_path=backup_path)
 
 
+def _render_with_preserve_keys(
+    src: Path,
+    dst: Path,
+    *,
+    dst_existed: bool,
+    preserve_user_keys: list[str] | None,
+    preserve_user_keys_deep: list[str] | None,
+) -> str:
+    """Render ``src`` with ``dst``'s shallow + deep user keys overlaid.
+
+    Returns ``src`` verbatim when ``dst`` does not yet exist or no
+    preserve-keys are configured. Otherwise dispatches on suffix:
+    JSONC-family files go through :func:`jsonc.overlay_user_keys`;
+    everything else is treated as YAML and routed through
+    :func:`yaml_merge.overlay`. User-section merging is the next step in
+    :func:`_compute_content` and is upstream of this helper's concern.
+    """
+    shallow = preserve_user_keys or []
+    deep = preserve_user_keys_deep or []
+    if not (dst_existed and (shallow or deep)):
+        return src.read_text(encoding="utf-8")
+    if jsonc.is_jsonc_file(src):
+        tracked_text = src.read_text(encoding="utf-8")
+        live_text = dst.read_text(encoding="utf-8")
+        return jsonc.overlay_user_keys(
+            tracked_text, live_text, shallow, deep_key_names=deep
+        )
+    yaml = YAML(typ="rt")
+    with src.open("r", encoding="utf-8") as fh:
+        src_doc = yaml.load(fh)
+    with dst.open("r", encoding="utf-8") as fh:
+        live_doc = yaml.load(fh)
+    merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
+    buf = io.StringIO()
+    yaml.dump(merged, buf)
+    return buf.getvalue()
+
+
 def _compute_content(
     src: Path,
     dst: Path,
@@ -146,33 +184,16 @@ def _compute_content(
     ``section_bodies_override`` still layers on top per-key, matching the
     no-precompute path.
     """
-    # Local import to break the deploy → section_reconcile → sections cycle
-    # at module load time; section_reconcile depends on deploy only at call
-    # time through the install path, but a top-level import would still be
-    # circular if section_reconcile ever imports from deploy.
+    # Local import: breaks the deploy → section_reconcile → sections cycle.
     from my_setup.section_reconcile import maintain_marker_hashes
 
-    shallow = preserve_user_keys or []
-    deep = preserve_user_keys_deep or []
-    has_keys = bool(shallow or deep)
-    if has_keys and dst_existed and jsonc.is_jsonc_file(src):
-        tracked_text = src.read_text(encoding="utf-8")
-        live_text = dst.read_text(encoding="utf-8")
-        content = jsonc.overlay_user_keys(
-            tracked_text, live_text, shallow, deep_key_names=deep
-        )
-    elif has_keys and dst_existed:
-        yaml = YAML(typ="rt")
-        with src.open("r", encoding="utf-8") as fh:
-            src_doc = yaml.load(fh)
-        with dst.open("r", encoding="utf-8") as fh:
-            live_doc = yaml.load(fh)
-        merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
-        buf = io.StringIO()
-        yaml.dump(merged, buf)
-        content = buf.getvalue()
-    else:
-        content = src.read_text(encoding="utf-8")
+    content = _render_with_preserve_keys(
+        src,
+        dst,
+        dst_existed=dst_existed,
+        preserve_user_keys=preserve_user_keys,
+        preserve_user_keys_deep=preserve_user_keys_deep,
+    )
 
     if preserve_user_sections:
         live_sections: dict[str, str]
