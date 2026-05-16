@@ -43,10 +43,25 @@ pytestmark = pytest.mark.e2e_docker
 _CONFIG = "tests/fixtures/e2e/my_setup.test.yaml"
 _LIVE_SHARED = "/home/tester/.my_setup_e2e/sections/shared.md"
 _LIVE_HOST_LOCAL = "/home/tester/.my_setup_e2e/sections/marked.md"
+_TRACKED_SHARED = "/workspace/tests/fixtures/e2e/tracked/sections/shared.md"
+
+# The shared.md fixture body deployed by `_install`. ``_BASELINE_HASH`` is
+# the sha256 of this body — after the first install, BOTH live's and
+# tracked's end markers carry ``hash=_BASELINE_HASH`` (live via
+# ``maintain_marker_hashes``, tracked via ``stamp_tracked_baseline``).
+# The three-way reconcile tests below construct PENDING_TRACKED /
+# LIVE_EDITED / CONFLICT setups by mutating one or both BODIES while
+# keeping the embedded ``hash=`` at ``_BASELINE_HASH`` so the classifier
+# treats that side as "moved away from the baseline" or "still at
+# baseline" as needed.
 
 
 def _sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+_BASELINE_SHARED_BODY = "- rule A\n- rule B (new in tracked)\n"
+_BASELINE_SHARED_HASH = _sha256(_BASELINE_SHARED_BODY)
 
 
 def _shared_section(body: str, embed_hash: str | None) -> str:
@@ -58,6 +73,69 @@ def _shared_section(body: str, embed_hash: str | None) -> str:
         "<!-- my-setup:user-section start shared workflow -->\n"
         f"{body}"
         f"<!-- my-setup:user-section end shared workflow{hash_segment} -->\n\n"
+        "Trailing tracked content.\n"
+    )
+
+
+def _shared_two_section(
+    section_a: tuple[str, str | None], section_b: tuple[str, str | None]
+) -> str:
+    """Build a two-section shared dotfile body.
+
+    Each section is ``(body, embed_hash)``. Used by the
+    ``skip_then_keep_live`` test to construct two independently
+    classifiable shared sections in a single file. Section names are
+    ``workflow`` and ``commits``.
+    """
+    body_a, hash_a = section_a
+    body_b, hash_b = section_b
+    seg_a = f" hash={hash_a}" if hash_a is not None else ""
+    seg_b = f" hash={hash_b}" if hash_b is not None else ""
+    return (
+        "# test-reconcile-sections fixture (shared, two sections)\n\n"
+        "Global text above the markers.\n\n"
+        "<!-- my-setup:user-section start shared workflow -->\n"
+        f"{body_a}"
+        f"<!-- my-setup:user-section end shared workflow{seg_a} -->\n\n"
+        "Interstitial tracked content.\n\n"
+        "<!-- my-setup:user-section start shared commits -->\n"
+        f"{body_b}"
+        f"<!-- my-setup:user-section end shared commits{seg_b} -->\n\n"
+        "Trailing tracked content.\n"
+    )
+
+
+def _shared_three_section(
+    section_a: tuple[str, str | None],
+    section_b: tuple[str, str | None],
+    section_c: tuple[str, str | None],
+) -> str:
+    """Build a three-section shared dotfile body.
+
+    Section names: ``workflow``, ``commits``, ``python``. Used by the
+    compare dry-run test that needs all three drift states represented
+    simultaneously.
+    """
+    body_a, hash_a = section_a
+    body_b, hash_b = section_b
+    body_c, hash_c = section_c
+    seg_a = f" hash={hash_a}" if hash_a is not None else ""
+    seg_b = f" hash={hash_b}" if hash_b is not None else ""
+    seg_c = f" hash={hash_c}" if hash_c is not None else ""
+    return (
+        "# test-reconcile-sections fixture (shared, three sections)\n\n"
+        "Global text above the markers.\n\n"
+        "<!-- my-setup:user-section start shared workflow -->\n"
+        f"{body_a}"
+        f"<!-- my-setup:user-section end shared workflow{seg_a} -->\n\n"
+        "Interstitial 1.\n\n"
+        "<!-- my-setup:user-section start shared commits -->\n"
+        f"{body_b}"
+        f"<!-- my-setup:user-section end shared commits{seg_b} -->\n\n"
+        "Interstitial 2.\n\n"
+        "<!-- my-setup:user-section start shared python -->\n"
+        f"{body_c}"
+        f"<!-- my-setup:user-section end shared python{seg_c} -->\n\n"
         "Trailing tracked content.\n"
     )
 
@@ -128,16 +206,26 @@ def test_install_reconcile_use_tracked_deploys_shared_drift(
 def test_install_bare_warns_on_shared_drift_pending_tracked(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """2: Bare install + pending tracked drift → stderr warning."""
+    """2: Bare install + pending tracked drift → stderr warning.
+
+    PENDING_TRACKED setup: after the baseline install (both sides
+    stamped with ``hash=_BASELINE_SHARED_HASH``), mutate the TRACKED
+    body while keeping its end-marker hash at the baseline. That gives
+    ``A_T != E_T`` (tracked moved) and ``A_L == E_L`` (live pristine) —
+    the exact PENDING_TRACKED contract.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
-    old = "- rule A\n"
-    c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
+    new_tracked = "- rule A\n- rule B (new in tracked)\n- rule C (newer)\n"
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_section(new_tracked, _BASELINE_SHARED_HASH),
+    )
     result = _install(c, "test-reconcile-sections")
     combined = result.stdout + result.stderr
     assert "pending tracked update" in combined
-    # Live unchanged.
-    assert "rule B (new in tracked)" not in c.read_text(_LIVE_SHARED)
+    # Live unchanged (tracked-side update was NOT auto-deployed).
+    assert "rule C (newer)" not in c.read_text(_LIVE_SHARED)
 
 
 def test_install_bare_warns_on_conflict_when_both_edited(
@@ -324,11 +412,23 @@ def test_install_reconcile_with_no_drift_exits_silently(
 def test_install_reconcile_interactive_keep_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """13: --reconcile-user-sections + piped 'k' keeps live."""
+    """13: --reconcile-user-sections + piped 'k' keeps live.
+
+    LIVE_EDITED setup: baseline-install both sides, then mutate LIVE
+    body to a host-edited form while keeping its end-marker hash at
+    the baseline. ``A_L != E_L`` (live moved) AND ``A_T == E_T``
+    (tracked pristine) — the LIVE_EDITED contract. Pressing ``k``
+    keeps the live body verbatim, so the assertion is that the
+    tracked-only marker ``"rule B (new in tracked)"`` does NOT appear
+    in live after the wizard.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
-    old = "- rule A\n"
-    c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
+    live_edited = "- rule A\n- rule LIVE-EDIT\n"
+    c.write_text(
+        _LIVE_SHARED,
+        _shared_section(live_edited, _BASELINE_SHARED_HASH),
+    )
     result = c.exec(
         [
             "uv",
@@ -343,17 +443,29 @@ def test_install_reconcile_interactive_keep_live(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "rule B (new in tracked)" not in c.read_text(_LIVE_SHARED)
+    live_after = c.read_text(_LIVE_SHARED)
+    assert "rule B (new in tracked)" not in live_after
+    assert "rule LIVE-EDIT" in live_after
 
 
 def test_install_reconcile_interactive_take_tracked(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """14: --reconcile-user-sections + piped 't' takes tracked."""
+    """14: --reconcile-user-sections + piped 't' takes tracked.
+
+    PENDING_TRACKED setup: baseline install, then mutate TRACKED body
+    (a new rule C added on top of the existing tracked content),
+    keep tracked's end-marker hash at the baseline. ``A_T != E_T``,
+    ``A_L == E_L`` — PENDING_TRACKED. Pressing ``t`` adopts the
+    tracked body into live; the new ``rule C`` marker must land.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
-    old = "- rule A\n"
-    c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
+    new_tracked = "- rule A\n- rule B (new in tracked)\n- rule C (newer)\n"
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_section(new_tracked, _BASELINE_SHARED_HASH),
+    )
     result = c.exec(
         [
             "uv",
@@ -368,20 +480,64 @@ def test_install_reconcile_interactive_take_tracked(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "rule B (new in tracked)" in c.read_text(_LIVE_SHARED)
+    live_after = c.read_text(_LIVE_SHARED)
+    assert "rule B (new in tracked)" in live_after
+    assert "rule C (newer)" in live_after
 
 
 def test_install_reconcile_interactive_skip_then_keep_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """15: --reconcile-user-sections + 2 drifted sections + 's\\nk\\n'."""
+    """15: --reconcile-user-sections + 2 drifted sections + 's\\nk\\n'.
+
+    Two-section setup, one drift state per section:
+
+    * ``workflow`` — PENDING_TRACKED (mutated TRACKED body, E_T held
+      at baseline). Wizard prompt #1 → ``s`` (skip → keep live).
+    * ``commits`` — LIVE_EDITED (mutated LIVE body, E_L held at
+      baseline). Wizard prompt #2 → ``k`` (keep live).
+
+    Both outcomes keep live, so neither tracked-body marker
+    (``"rule B (new in tracked)"`` for workflow, ``"commit rule X
+    (tracked-only)"`` for commits) ends up in live afterward.
+    """
     c = docker_container()
-    # Set up a profile with 2 dotfiles, both with pending shared drift.
-    # We'll reuse the existing one; the fixture only has 1 shared file, so
-    # exercise skip-then-keep on the single section by piping 's'.
+    workflow_baseline = "- rule A\n- rule B (new in tracked)\n"
+    commits_baseline = "- commit rule X (tracked-only)\n"
+    h_workflow = _sha256(workflow_baseline)
+    h_commits = _sha256(commits_baseline)
+
+    # Replace the single-section tracked fixture with a two-section
+    # one (both sections pristine) BEFORE the baseline install.
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_two_section(
+            (workflow_baseline, None),
+            (commits_baseline, None),
+        ),
+    )
     _install(c, "test-reconcile-sections")
-    old = "- rule A\n"
-    c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
+
+    # Mutate TRACKED workflow body, leave its hash at h_workflow → PENDING_TRACKED.
+    # Mutate LIVE commits body, leave its hash at h_commits → LIVE_EDITED.
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_two_section(
+            (
+                "- rule A\n- rule B (new in tracked)\n- rule C (tracked-only)\n",
+                h_workflow,
+            ),
+            (commits_baseline, h_commits),
+        ),
+    )
+    c.write_text(
+        _LIVE_SHARED,
+        _shared_two_section(
+            (workflow_baseline, h_workflow),
+            ("- commit rule LIVE-EDITED\n", h_commits),
+        ),
+    )
+
     result = c.exec(
         [
             "uv",
@@ -392,12 +548,16 @@ def test_install_reconcile_interactive_skip_then_keep_live(
             f"--config={_CONFIG}",
             "--reconcile-user-sections",
         ],
-        input_text="s\n",
+        input_text="s\nk\n",
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    # Skip keeps live.
-    assert "rule B (new in tracked)" not in c.read_text(_LIVE_SHARED)
+    live_after = c.read_text(_LIVE_SHARED)
+    # workflow skipped → tracked-only "rule C" not in live.
+    assert "rule C (tracked-only)" not in live_after
+    # commits keep-live → live-edited marker preserved; tracked-only
+    # commit-rule body NOT injected (live wins on keep-live).
+    assert "commit rule LIVE-EDITED" in live_after
 
 
 def test_install_auto_use_tracked_overwrites_even_with_live_edits(
@@ -441,11 +601,55 @@ def test_install_auto_keep_live_silences_even_pending_tracked(
 def test_compare_reconcile_dry_run_shows_three_way_state(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """18: compare --reconcile-user-sections names the three-way state."""
+    """18: compare --reconcile-user-sections names the three-way state.
+
+    Three-section setup, one drift state each. ``compare`` is
+    read-only (does NOT stamp tracked-side hashes), so we use the
+    baseline-install step to lock both sides into a hash-aligned
+    starting point, then mutate bodies while holding the embedded
+    hashes at the per-section baselines to drive each classifier
+    outcome:
+
+    * ``workflow`` → PENDING_TRACKED (mutate tracked body).
+    * ``commits``  → LIVE_EDITED (mutate live body).
+    * ``python``   → CONFLICT (mutate BOTH bodies).
+    """
     c = docker_container()
+    workflow_baseline = "- rule A\n- rule B (new in tracked)\n"
+    commits_baseline = "- commit rule baseline\n"
+    python_baseline = "- python rule baseline\n"
+    h_workflow = _sha256(workflow_baseline)
+    h_commits = _sha256(commits_baseline)
+    h_python = _sha256(python_baseline)
+
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_three_section(
+            (workflow_baseline, None),
+            (commits_baseline, None),
+            (python_baseline, None),
+        ),
+    )
     _install(c, "test-reconcile-sections")
-    old = "- rule A\n"
-    c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
+
+    # Now construct one drift state per section.
+    c.write_text(
+        _TRACKED_SHARED,
+        _shared_three_section(
+            ("- rule A\n- rule B (new in tracked)\n- rule C (newer)\n", h_workflow),
+            (commits_baseline, h_commits),
+            ("- python rule TRACKED-MOVED\n", h_python),
+        ),
+    )
+    c.write_text(
+        _LIVE_SHARED,
+        _shared_three_section(
+            (workflow_baseline, h_workflow),
+            ("- commit rule LIVE-EDIT\n", h_commits),
+            ("- python rule LIVE-MOVED\n", h_python),
+        ),
+    )
+
     result = c.exec(
         [
             "uv",
@@ -460,8 +664,14 @@ def test_compare_reconcile_dry_run_shows_three_way_state(
     )
     assert result.returncode == 0, result.stderr
     combined = result.stdout + result.stderr
+    # All three state labels must appear.
     assert "pending tracked update" in combined
+    assert "live edits" in combined
+    assert "three-way conflict" in combined
+    # All three section names must appear.
     assert "workflow" in combined
+    assert "commits" in combined
+    assert "python" in combined
 
 
 def test_compare_reconcile_dry_run_no_prompt(
