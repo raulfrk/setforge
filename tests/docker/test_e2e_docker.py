@@ -211,9 +211,9 @@ def test_install_text_sections_no_live(
     _install(c, "test-text-sections")
     live = _read_live(c, ".my_setup_e2e/sections/marked.md")
     # Marker pair + default body all present verbatim.
-    assert "<!-- my-setup:user-section start notes -->" in live
+    assert "<!-- my-setup:user-section start host-local notes -->" in live
     assert "default notes (tracked side)" in live
-    assert "<!-- my-setup:user-section end notes -->" in live
+    assert "<!-- my-setup:user-section end host-local notes -->" in live
 
 
 # --- Variant D ------------------------------------------------------------
@@ -231,9 +231,9 @@ def test_install_text_sections_preserve_user_content(
         """\
         # local title overrides tracked title
 
-        <!-- my-setup:user-section start notes -->
+        <!-- my-setup:user-section start host-local notes -->
         host-local marker body content
-        <!-- my-setup:user-section end notes -->
+        <!-- my-setup:user-section end host-local notes -->
 
         Trailing live content (not preserved on next install).
         """

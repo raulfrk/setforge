@@ -77,16 +77,16 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
     src.write_text(
         "header\n"
-        "<!-- my-setup:user-section start -->\n"
-        "<!-- my-setup:user-section end -->\n"
+        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- my-setup:user-section end host-local -->\n"
         "footer\n"
     )
     dst = tmp_path / "dst.md"
     dst.write_text(
         "old header\n"
-        "<!-- my-setup:user-section start -->\n"
+        "<!-- my-setup:user-section start host-local -->\n"
         "USER CONTENT\n"
-        "<!-- my-setup:user-section end -->\n"
+        "<!-- my-setup:user-section end host-local -->\n"
         "old footer\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
