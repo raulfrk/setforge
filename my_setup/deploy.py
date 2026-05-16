@@ -185,9 +185,7 @@ def _compute_content(
                 # emits a fully-tagged, hash-stamped live file. The
                 # precomputed path is already legacy-tolerant because the
                 # install loop pre-extracts with allow_legacy=True too.
-                live_sections = sections.extract_sections(
-                    live_text, allow_legacy=True
-                )
+                live_sections = sections.extract_sections(live_text, allow_legacy=True)
         if section_bodies_override:
             # Per-section override from the install-time wizard: takes
             # precedence over the live body for sections the wizard
