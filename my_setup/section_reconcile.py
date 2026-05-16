@@ -21,6 +21,8 @@ updates.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -139,7 +141,7 @@ def classify_section_drift(
         state = _classify_one(a_t=a_t, a_l=a_l, e_t=e_t, e_l=e_l)
         out[name] = SectionDrift(
             name=name,
-            semantics=SectionSemantics(semantics_map[name]),
+            semantics=semantics_map[name],
             state=state,
             tracked_body=tracked_bodies[name],
             live_body=live_bodies[name],
@@ -231,8 +233,30 @@ def stamp_tracked_baseline(tracked_path: Path) -> bool:
     if all(embedded.get(name) == digest for name, digest in actual.items()):
         return False
     new_text = set_marker_hashes(text, actual)
-    tracked_path.write_text(new_text, encoding="utf-8")
+    _atomic_write_text(tracked_path, new_text)
     return True
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` via tempfile + ``os.replace``.
+
+    Honours the install-time atomic-writes-everywhere invariant the
+    project already enforces on the live side (see
+    :func:`my_setup.deploy._atomic_write`). A SIGTERM mid-write leaves
+    ``path`` intact rather than truncated; the temp file in the same
+    directory is unlinked on the exception path.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def has_shared_drift(drifts: Mapping[str, SectionDrift]) -> bool:
