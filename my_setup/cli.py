@@ -468,9 +468,8 @@ def _print_section_reconcile_dry_run(
                     continue
                 if drift.state is SectionDriftState.NO_DRIFT:
                     continue
-                console.print(
-                    f"  three-way {drift.state.value} [cyan]{sec_name}[/cyan]"
-                )
+                label = section_wizard.state_label(drift.state)
+                console.print(f"  three-way {label} [cyan]{sec_name}[/cyan]")
     if not any_emitted:
         console.print("\nno shared user-section drift to reconcile.")
 
