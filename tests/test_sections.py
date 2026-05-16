@@ -140,3 +140,41 @@ def test_extract_unnamed_indices_in_order() -> None:
         "<!-- my-setup:user-section end -->\n"
     )
     assert extract_sections(text) == {"0": "first\n", "1": "second\n"}
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-xyw — marker regex extension: optional hash= segment on end markers
+# ---------------------------------------------------------------------------
+
+_HASH_HEX_64 = "a" * 64
+
+
+def test_extract_sections_parses_end_marker_with_hash() -> None:
+    """End marker with hash= segment parses identically to one without —
+    name and body unchanged."""
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end a hash={_HASH_HEX_64} -->\n"
+    )
+    assert extract_sections(text) == {"a": "body\n"}
+
+
+def test_extract_sections_parses_unnamed_end_marker_with_hash() -> None:
+    """An unnamed end marker carrying only a hash= segment still parses."""
+    text = (
+        "<!-- my-setup:user-section start -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end hash={_HASH_HEX_64} -->\n"
+    )
+    assert extract_sections(text) == {"0": "body\n"}
+
+
+def test_extract_sections_legacy_hashless_end_marker_still_parses() -> None:
+    """Backward-compat: pre-xyw end markers (no hash=) remain valid."""
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    assert extract_sections(text) == {"a": "body\n"}

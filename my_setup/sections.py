@@ -4,12 +4,16 @@ Marker syntax (HTML comments only)::
 
     <!-- my-setup:user-section start [optional-name] -->
     ... preserved content ...
-    <!-- my-setup:user-section end [optional-name] -->
+    <!-- my-setup:user-section end [optional-name] [hash=<sha256-hex>] -->
 
 Tracked files contain marker pairs (with optional placeholder content between
 them); on deploy, content from the live file at the corresponding markers is
 spliced in. ``merge_sections`` is the splice; ``extract_sections`` is the
 inverse used by ``capture`` and by ``compare`` to render a comparable view.
+
+End markers may carry an optional ``hash=<64-char-lowercase-hex>`` segment
+that records the sha256 of the section body. Legacy hashless end markers
+remain valid.
 
 Nested sections are not supported. End-marker names must match start-marker
 names.
@@ -23,7 +27,10 @@ from my_setup.errors import MarkerError
 LOGGER = logging.getLogger(__name__)
 
 _MARKER_RE = re.compile(
-    r"^\s*<!--\s*my-setup:user-section\s+(start|end)(?:\s+(\S+))?\s*-->\s*$"
+    r"^\s*<!--\s*my-setup:user-section\s+(start|end)"
+    r"(?:\s+(?!hash=)(\S+))?"
+    r"(?:\s+hash=([0-9a-f]{64}))?"
+    r"\s*-->\s*$"
 )
 
 
