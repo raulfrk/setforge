@@ -33,6 +33,7 @@ from my_setup import capture as capture_mod
 from my_setup import claude_plugins as claude_plugins_mod
 from my_setup import compare as compare_mod
 from my_setup import merge as merge_mod
+from my_setup import sections as sections_mod
 from my_setup.capture import CaptureAuto
 from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
 from my_setup.config import (
@@ -207,6 +208,37 @@ def _resolve_section_decisions(
     return decisions
 
 
+def _extract_live_sections_map(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+) -> dict[Path, dict[str, str]]:
+    """Pre-extract live user-section bodies for every section-bearing dotfile.
+
+    Walks ``resolved.dotfiles``, and for each entry whose dotfile has
+    ``preserve_user_sections=True`` AND whose live file already exists,
+    reads the live file once and stores the result of
+    :func:`sections.extract_sections` keyed by the live ``sub_dst`` path.
+
+    The install loop passes the matching entry to ``deploy.copy_atomic``
+    via ``precomputed_live_sections`` so ``_compute_content`` does not
+    re-read + re-parse the same live file a second time.
+    """
+    live_sections: dict[Path, dict[str, str]] = {}
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        if not dotfile.preserve_user_sections:
+            continue
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, _, sub_dst in expand_dotfile(name, src, dst):
+            if not sub_dst.exists():
+                continue
+            live_text = sub_dst.read_text(encoding="utf-8")
+            live_sections[sub_dst] = sections_mod.extract_sections(live_text)
+    return live_sections
+
+
 @app.command()
 def install(
     profile: str = _PROFILE_OPTION,
@@ -325,6 +357,11 @@ def install(
         interactive=reconcile_user_sections,
     )
 
+    # Pre-extract live user-sections for every section-bearing dotfile
+    # so deploy.copy_atomic can skip its own re-read + re-parse pass.
+    # See `precomputed_live_sections` on copy_atomic.
+    live_sections_map = _extract_live_sections_map(cfg, resolved, repo_root)
+
     dst_paths: list[Path] = []
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -342,6 +379,7 @@ def install(
         dst = resolve_dst(dotfile)
         for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
             override = section_decisions.get(sub_dst)
+            precomputed = live_sections_map.get(sub_dst)
             result = deploy.copy_atomic(
                 sub_src,
                 sub_dst,
@@ -349,6 +387,7 @@ def install(
                 preserve_user_keys=dotfile.preserve_user_keys or None,
                 preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
                 section_bodies_override=override,
+                precomputed_live_sections=precomputed,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
             # After live write succeeds, stamp the tracked-side embedded

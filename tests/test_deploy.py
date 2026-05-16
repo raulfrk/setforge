@@ -96,6 +96,156 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     assert "footer\n" in final
 
 
+def test_copy_atomic_precomputed_live_sections_skips_reparse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ``precomputed_live_sections`` is supplied, ``_compute_content``
+    must NOT re-read the live file. We count ``Path.read_text`` calls on
+    the live destination across two equivalent invocations and assert
+    the precomputed-path call count is exactly one less than the
+    None-path call count.
+    """
+    from my_setup import sections
+
+    src = tmp_path / "src.md"
+    src.write_text(
+        "header\n"
+        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section end host-local s -->\n"
+        "footer\n"
+    )
+
+    def _seed_dst(name: str) -> Path:
+        d = tmp_path / name
+        d.write_text(
+            "old header\n"
+            "<!-- my-setup:user-section start host-local s -->\n"
+            "USER CONTENT\n"
+            "<!-- my-setup:user-section end host-local s -->\n"
+            "old footer\n"
+        )
+        return d
+
+    # --- Baseline: no precomputed dict; copy_atomic re-reads live. ---
+    dst_a = _seed_dst("dst_a.md")
+    live_text_a = dst_a.read_text(encoding="utf-8")
+    precomputed = sections.extract_sections(live_text_a)
+
+    original_read_text = Path.read_text
+    counts = {"a": 0, "b": 0}
+    target_a = dst_a.resolve()
+
+    def _counting_read_text_a(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.resolve() == target_a:
+            counts["a"] += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text_a)
+    copy_atomic(src, dst_a, preserve_user_sections=True)
+    monkeypatch.undo()
+
+    # --- Precomputed: copy_atomic must skip the live re-read. ---
+    dst_b = _seed_dst("dst_b.md")
+    target_b = dst_b.resolve()
+
+    def _counting_read_text_b(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.resolve() == target_b:
+            counts["b"] += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text_b)
+    copy_atomic(
+        src,
+        dst_b,
+        preserve_user_sections=True,
+        precomputed_live_sections=precomputed,
+    )
+    monkeypatch.undo()
+
+    # Baseline path reads live twice (once in _compute_content, once
+    # for the NOOP/UPDATED diff in copy_atomic). Precomputed path reads
+    # it only once (the diff check). Assert the gap is exactly one.
+    assert counts["a"] - counts["b"] == 1, counts
+
+
+def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
+    tmp_path: Path,
+) -> None:
+    """Passing ``precomputed_live_sections=extract_sections(live_text)``
+    must yield byte-identical output to the no-precompute path.
+    """
+    from my_setup import sections
+
+    src_text = (
+        "header\n"
+        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section end host-local s -->\n"
+        "footer\n"
+    )
+    live_text = (
+        "old header\n"
+        "<!-- my-setup:user-section start host-local s -->\n"
+        "USER BODY\n"
+        "<!-- my-setup:user-section end host-local s -->\n"
+        "old footer\n"
+    )
+
+    src = tmp_path / "src.md"
+    src.write_text(src_text)
+    dst_a = tmp_path / "dst_a.md"
+    dst_a.write_text(live_text)
+    dst_b = tmp_path / "dst_b.md"
+    dst_b.write_text(live_text)
+
+    copy_atomic(src, dst_a, preserve_user_sections=True)
+    copy_atomic(
+        src,
+        dst_b,
+        preserve_user_sections=True,
+        precomputed_live_sections=sections.extract_sections(live_text),
+    )
+
+    assert dst_a.read_bytes() == dst_b.read_bytes()
+
+
+def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomputed(
+    tmp_path: Path,
+) -> None:
+    """With both ``precomputed_live_sections`` and ``section_bodies_override``
+    set, the override wins per-key (same precedence as the no-precompute
+    path's `{**live_sections, **override}` merge).
+    """
+    src_text = (
+        "header\n"
+        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- my-setup:user-section end host-local s -->\n"
+        "footer\n"
+    )
+    live_text = (
+        "old header\n"
+        "<!-- my-setup:user-section start host-local s -->\n"
+        "LIVE BODY\n"
+        "<!-- my-setup:user-section end host-local s -->\n"
+        "old footer\n"
+    )
+
+    src = tmp_path / "src.md"
+    src.write_text(src_text)
+    dst = tmp_path / "dst.md"
+    dst.write_text(live_text)
+
+    copy_atomic(
+        src,
+        dst,
+        preserve_user_sections=True,
+        precomputed_live_sections={"s": "LIVE BODY\n"},
+        section_bodies_override={"s": "OVERRIDE BODY\n"},
+    )
+    final = dst.read_text()
+    assert "OVERRIDE BODY" in final
+    assert "LIVE BODY" not in final
+
+
 def test_yaml_user_keys_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.yaml"
     src.write_text("a: 1\nb: 2\nc: 3\n")

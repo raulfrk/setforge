@@ -58,6 +58,7 @@ def copy_atomic(
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
+    precomputed_live_sections: dict[str, str] | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -76,6 +77,15 @@ def copy_atomic(
     (the install path's wizard) supply a per-section body that overrides
     what :func:`extract_sections` would pick up from the existing live
     file — used for the ``take-tracked`` / edit actions.
+
+    ``precomputed_live_sections`` lets callers that already parsed the
+    live file (e.g. the install loop, which classifies section drift
+    before deploying) skip the re-read + re-parse inside
+    :func:`_compute_content`. Contract: the dict MUST equal
+    ``sections.extract_sections(dst.read_text(...))`` for the current
+    on-disk live file; behaviour is otherwise identical to the default
+    ``None`` code path. ``section_bodies_override`` still wins per-key
+    when both are supplied.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -95,6 +105,7 @@ def copy_atomic(
         preserve_user_keys,
         preserve_user_keys_deep,
         section_bodies_override,
+        precomputed_live_sections=precomputed_live_sections,
     )
 
     if dst_existed:
@@ -118,7 +129,20 @@ def _compute_content(
     preserve_user_keys: list[str] | None,
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
+    *,
+    precomputed_live_sections: dict[str, str] | None = None,
 ) -> str:
+    """Render the bytes ``copy_atomic`` will write to ``dst``.
+
+    When ``preserve_user_sections`` is True the function normally re-reads
+    ``dst`` and calls :func:`sections.extract_sections` to recover the
+    live bodies. Callers that already extracted those sections (the
+    install loop, which classifies drift before deploying) may pass
+    ``precomputed_live_sections`` to skip the re-read; the dict MUST
+    equal what :func:`sections.extract_sections` would have produced for
+    the current ``dst`` contents. ``section_bodies_override`` still
+    layers on top per-key, matching the no-precompute path.
+    """
     # Local import to break the deploy → section_reconcile → sections cycle
     # at module load time; section_reconcile depends on deploy only at call
     # time through the install path, but a top-level import would still be
@@ -148,10 +172,14 @@ def _compute_content(
         content = src.read_text(encoding="utf-8")
 
     if preserve_user_sections:
-        live_sections: dict[str, str] = {}
-        if dst_existed:
-            live_text = dst.read_text(encoding="utf-8")
-            live_sections = sections.extract_sections(live_text)
+        live_sections: dict[str, str]
+        if precomputed_live_sections is not None:
+            live_sections = dict(precomputed_live_sections)
+        else:
+            live_sections = {}
+            if dst_existed:
+                live_text = dst.read_text(encoding="utf-8")
+                live_sections = sections.extract_sections(live_text)
         if section_bodies_override:
             # Per-section override from the install-time wizard: takes
             # precedence over the live body for sections the wizard
