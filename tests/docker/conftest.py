@@ -47,10 +47,13 @@ IMAGE_TAG_PREFIX: str = "my-setup-e2e:test"
 _HASH_INPUT_FILES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "docker" / "Dockerfile",
     REPO_ROOT / "my_setup.yaml",
+    REPO_ROOT / "pyproject.toml",
+    REPO_ROOT / "uv.lock",
 )
 _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "fixtures" / "e2e",
     REPO_ROOT / "my_setup",
+    REPO_ROOT / "tracked",
 )
 
 
