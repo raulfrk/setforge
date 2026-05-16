@@ -499,7 +499,7 @@ def section_semantics(
     parse as :attr:`SectionSemantics.SHARED`).
     """
     return {
-        event.key: event.semantics  # type: ignore[misc]
+        event.key: event.semantics
         for event in _walk_markers(text, allow_legacy=allow_legacy)
         if isinstance(event, _EndMarker)
     }
