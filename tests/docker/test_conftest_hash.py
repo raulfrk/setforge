@@ -78,7 +78,7 @@ def test_parse_dockerignore_rejects_bare_star(tmp_path: Path) -> None:
     match every extensionless file via ``str.endswith("")``.
     """
     dockerignore = tmp_path / ".dockerignore"
-    dockerignore.write_text("*\n")
+    dockerignore.write_text("*\n", encoding="utf-8")
     _dirs, suffixes, _files = docker_conftest._parse_dockerignore(dockerignore)
     assert "" not in suffixes
 

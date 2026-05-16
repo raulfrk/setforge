@@ -112,10 +112,12 @@ _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tracked",
 )
 
-# Patterns harvested from .dockerignore so the hash exclusion list stays
-# aligned with what docker build actually filters out of the context. The
-# hardcoded baselines below are unioned with these so behavior is resilient
-# if .dockerignore is deleted.
+# Patterns harvested from .dockerignore at import time so the hash exclusion
+# list stays aligned with what docker build actually filters out of the
+# context. The hardcoded baselines below are unioned with these so behavior is
+# resilient if .dockerignore is deleted or unreadable: _parse_dockerignore
+# returns empty sets on UnicodeDecodeError rather than blocking test
+# collection at module load.
 _DOCKERIGNORE_DIRS, _DOCKERIGNORE_SUFFIXES, _DOCKERIGNORE_FILES = _parse_dockerignore(
     REPO_ROOT / ".dockerignore"
 )
