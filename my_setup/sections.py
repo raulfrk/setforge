@@ -38,10 +38,20 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import NewType
 
 from my_setup.errors import MarkerError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
+
+LiveSections = NewType("LiveSections", dict[str, str])
+"""Section bodies parsed from a live file with ``allow_legacy=True``.
+
+Construct via :func:`extract_live_sections`; the install path's pre-9by
+migration tolerance lives in that factory so consumer call sites (deploy,
+cli) cannot accidentally pass a strict-extract result that would refuse
+legacy markers a live file may still carry.
+"""
 
 
 class SectionSemantics(StrEnum):
@@ -323,6 +333,18 @@ def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]
             sections[event.key] = "".join(section_lines)
             section_lines = []
     return sections
+
+
+def extract_live_sections(text: str) -> LiveSections:
+    """Parse ``text`` into a :class:`LiveSections` using ``allow_legacy=True``.
+
+    The single legitimate constructor for :class:`LiveSections`. Install is
+    the verb that re-tags and stamps pre-9by markers in place, so the
+    install path's live-side parsing opts into the migration-only legacy
+    tolerance here; compare / sync remain strict by routing through
+    :func:`extract_sections` directly.
+    """
+    return LiveSections(extract_sections(text, allow_legacy=True))
 
 
 def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
