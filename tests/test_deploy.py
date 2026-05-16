@@ -95,7 +95,7 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
         "old header\n"
         "<!-- my-setup:user-section start host-local -->\n"
         "USER CONTENT\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
         "old footer\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
@@ -120,9 +120,15 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
     src.write_text(
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
+
+    # Placeholder hash; the strict parser only checks regex shape (64 hex
+    # chars), not body-content correctness. Drift classifier sees a hash
+    # mismatch which is fine — the test asserts read-count delta, not
+    # drift state.
+    _H = "a" * 64
 
     def _seed_dst(name: str) -> Path:
         d = tmp_path / name
@@ -130,7 +136,7 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
             "old header\n"
             "<!-- my-setup:user-section start host-local s -->\n"
             "USER CONTENT\n"
-            "<!-- my-setup:user-section end host-local s -->\n"
+            f"<!-- my-setup:user-section end host-local s hash={_H} -->\n"
             "old footer\n"
         )
         return d
@@ -188,14 +194,14 @@ def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
     src_text = (
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
     live_text = (
         "old header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "USER BODY\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n"
     )
 
@@ -227,14 +233,14 @@ def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomp
     src_text = (
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
     live_text = (
         "old header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "LIVE BODY\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n"
     )
 
@@ -458,11 +464,11 @@ def test_copy_atomic_post_install_invariant_holds_for_all_sections(
         "head\n"
         "<!-- my-setup:user-section start a -->\n"
         f"{body_a}"
-        "<!-- my-setup:user-section end a -->\n"
+        f"<!-- my-setup:user-section end a hash={'a' * 64} -->\n"
         "mid\n"
         "<!-- my-setup:user-section start b -->\n"
         f"{body_b}"
-        "<!-- my-setup:user-section end b -->\n"
+        f"<!-- my-setup:user-section end b hash={'a' * 64} -->\n"
         "tail\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
@@ -492,7 +498,7 @@ def test_copy_atomic_second_install_is_noop_after_legacy_retag(
     dst.write_text(
         "<!-- my-setup:user-section start notes -->\n"
         f"{body}"
-        "<!-- my-setup:user-section end notes -->\n"
+        f"<!-- my-setup:user-section end notes hash={'a' * 64} -->\n"
     )
     first = copy_atomic(src, dst, preserve_user_sections=True)
     assert first.action in {DeployAction.CREATED, DeployAction.UPDATED}

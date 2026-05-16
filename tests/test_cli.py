@@ -30,7 +30,7 @@ def test_install_passes_precomputed_live_sections_to_deploy(
     src.write_text(
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n",
         encoding="utf-8",
     )
@@ -40,7 +40,7 @@ def test_install_passes_precomputed_live_sections_to_deploy(
         "old header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "USER BODY\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n",
         encoding="utf-8",
     )
