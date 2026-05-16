@@ -29,6 +29,7 @@ See ``tests/docker/conftest.py`` for the ``docker_image``,
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import textwrap
 from collections.abc import Callable
@@ -206,14 +207,22 @@ def test_install_minimal_floor(
 def test_install_text_sections_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """C: preserve_user_sections=true, no live content → dst equals tracked."""
+    """C: preserve_user_sections=true, no live content → dst equals tracked.
+
+    install rewrites end markers with an embedded ``hash=<sha256>``
+    segment (post-9by: tracked is also stamped). The body is the
+    load-bearing assertion; the end marker may carry the new hash
+    segment or be the legacy untagged form.
+    """
     c = docker_container()
     _install(c, "test-text-sections")
     live = _read_live(c, ".my_setup_e2e/sections/marked.md")
-    # Marker pair + default body all present verbatim.
     assert "<!-- my-setup:user-section start host-local notes -->" in live
     assert "default notes (tracked side)" in live
-    assert "<!-- my-setup:user-section end host-local notes -->" in live
+    assert re.search(
+        r"<!-- my-setup:user-section end host-local notes( hash=[0-9a-f]{64})? -->",
+        live,
+    )
 
 
 # --- Variant D ------------------------------------------------------------
