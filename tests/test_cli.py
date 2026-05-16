@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
 import pytest
 from typer.testing import CliRunner
@@ -72,13 +71,13 @@ def test_install_passes_precomputed_live_sections_to_deploy(
         captured.update(kwargs)
         return DeployResult(dst=_dst, action=DeployAction.NOOP, backup_path=None)
 
-    with mock.patch.object(deploy, "copy_atomic", side_effect=_fake_copy_atomic):
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            ["install", "--profile=p", f"--config={cfg}"],
-        )
-        assert result.exit_code == 0, result.output
+    monkeypatch.setattr(deploy, "copy_atomic", _fake_copy_atomic)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=p", f"--config={cfg}"],
+    )
+    assert result.exit_code == 0, result.output
 
     precomputed = captured.get("precomputed_live_sections")
     assert precomputed is not None

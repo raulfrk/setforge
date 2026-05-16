@@ -5,16 +5,20 @@ import os
 import stat
 from pathlib import Path
 from typing import Any, NoReturn
+from unittest import mock
 
 import pytest
 
+from my_setup import sections
+from my_setup.config import Config, Dotfile, Profile, resolve_profile
 from my_setup.deploy import (
     DeployAction,
     DeployResult,
     bootstrap_local,
     copy_atomic,
+    validate_srcs_exist,
 )
-from my_setup.errors import MergeTypeMismatch
+from my_setup.errors import MergeTypeMismatch, MissingTrackedFile
 from my_setup.sections import (
     detect_legacy_markers,
     extract_marker_hashes,
@@ -106,16 +110,12 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
 
 
 def test_copy_atomic_precomputed_live_sections_skips_reparse(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """When ``precomputed_live_sections`` is supplied, ``_compute_content``
-    must NOT re-read the live file. We count ``Path.read_text`` calls on
-    the live destination across two equivalent invocations and assert
-    the precomputed-path call count is exactly one less than the
-    None-path call count.
+    must skip the re-read for content extraction; only the diff-check read
+    in ``copy_atomic`` remains.
     """
-    from my_setup import sections
-
     src = tmp_path / "src.md"
     src.write_text(
         "header\n"
@@ -155,9 +155,8 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
             counts["a"] += 1
         return original_read_text(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", _counting_read_text_a)
-    copy_atomic(src, dst_a, preserve_user_sections=True)
-    monkeypatch.undo()
+    with mock.patch.object(Path, "read_text", _counting_read_text_a):
+        copy_atomic(src, dst_a, preserve_user_sections=True)
 
     # --- Precomputed: copy_atomic must skip the live re-read. ---
     dst_b = _seed_dst("dst_b.md")
@@ -168,19 +167,22 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
             counts["b"] += 1
         return original_read_text(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", _counting_read_text_b)
-    copy_atomic(
-        src,
-        dst_b,
-        preserve_user_sections=True,
-        precomputed_live_sections=precomputed,
-    )
-    monkeypatch.undo()
+    with mock.patch.object(Path, "read_text", _counting_read_text_b):
+        copy_atomic(
+            src,
+            dst_b,
+            preserve_user_sections=True,
+            precomputed_live_sections=precomputed,
+        )
 
-    # Baseline path reads live twice (once in _compute_content, once
-    # for the NOOP/UPDATED diff in copy_atomic). Precomputed path reads
-    # it only once (the diff check). Assert the gap is exactly one.
-    assert counts["a"] - counts["b"] == 1, counts
+    # Precomputed path: only the diff-check read in copy_atomic remains.
+    # Baseline path: _compute_content re-read + diff-check = 2 reads.
+    assert counts["b"] == 1, (
+        "the diff-check read in copy_atomic should be the only read on path B"
+    )
+    assert counts["a"] == 2, (
+        "compute_content re-read + diff-check should be the only 2 reads on path A"
+    )
 
 
 def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
@@ -189,8 +191,6 @@ def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
     """Passing ``precomputed_live_sections=extract_live_sections(live_text)``
     must yield byte-identical output to the no-precompute path.
     """
-    from my_setup import sections
-
     src_text = (
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
@@ -319,8 +319,6 @@ def test_tmp_cleaned_on_write_failure(
 
 
 def test_missing_src_raises(tmp_path: Path) -> None:
-    from my_setup.errors import MissingTrackedFile
-
     with pytest.raises(MissingTrackedFile):
         copy_atomic(tmp_path / "ghost", tmp_path / "dst")
 
@@ -340,8 +338,6 @@ def test_bootstrap_local_idempotent(tmp_path: Path) -> None:
 
 
 def _build_profile(tmp_path: Path, present: list[str], missing: list[str]):
-    from my_setup.config import Config, Dotfile, Profile, resolve_profile
-
     repo = tmp_path / "repo"
     live = tmp_path / "live"
     for name in present:
@@ -358,25 +354,17 @@ def _build_profile(tmp_path: Path, present: list[str], missing: list[str]):
 
 
 def test_validate_srcs_exist_passes_when_all_present(tmp_path: Path) -> None:
-    from my_setup.deploy import validate_srcs_exist
-
     repo, _, cfg, resolved = _build_profile(tmp_path, ["a", "b"], [])
     validate_srcs_exist(cfg, resolved, repo)
 
 
 def test_validate_srcs_exist_raises_with_single_missing(tmp_path: Path) -> None:
-    from my_setup.deploy import validate_srcs_exist
-    from my_setup.errors import MissingTrackedFile
-
     repo, _, cfg, resolved = _build_profile(tmp_path, ["a"], ["ghost"])
     with pytest.raises(MissingTrackedFile, match="ghost"):
         validate_srcs_exist(cfg, resolved, repo)
 
 
 def test_validate_srcs_exist_lists_all_missing(tmp_path: Path) -> None:
-    from my_setup.deploy import validate_srcs_exist
-    from my_setup.errors import MissingTrackedFile
-
     repo, _, cfg, resolved = _build_profile(
         tmp_path, ["ok"], ["miss1", "miss2", "miss3"]
     )
@@ -392,9 +380,6 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
     """Pre-flight runs before any deploy, so a missing src must not
     leave any dotfile half-applied to live.
     """
-    from my_setup.deploy import validate_srcs_exist
-    from my_setup.errors import MissingTrackedFile
-
     repo, live, cfg, resolved = _build_profile(tmp_path, ["a"], ["ghost"])
     with pytest.raises(MissingTrackedFile):
         validate_srcs_exist(cfg, resolved, repo)
