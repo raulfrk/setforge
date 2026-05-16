@@ -10,7 +10,9 @@ spinning up a real pytest session.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
+
+import pytest
 
 from tests.docker.conftest import pytest_configure
 
@@ -42,7 +44,7 @@ def test_pytest_configure_activates_on_e2e_marker() -> None:
     """Bare ``-m e2e_docker`` and no explicit ``-n`` → ``numprocesses='auto'``."""
     config = _FakeConfig(_values={"markexpr": "e2e_docker", "numprocesses": None})
 
-    pytest_configure(config)  # type: ignore[arg-type]
+    pytest_configure(cast(pytest.Config, config))
 
     assert config.option.numprocesses == "auto"
 
@@ -54,7 +56,7 @@ def test_pytest_configure_respects_explicit_n() -> None:
         option=_FakeOption(numprocesses="0"),
     )
 
-    pytest_configure(config)  # type: ignore[arg-type]
+    pytest_configure(cast(pytest.Config, config))
 
     # Hook saw the explicit value via getoption and returned early —
     # option.numprocesses stays at the user-supplied "0".
@@ -65,13 +67,13 @@ def test_pytest_configure_no_op_for_non_e2e() -> None:
     """Markexprs without ``e2e_docker`` (or empty) must not flip xdist on."""
     config = _FakeConfig(_values={"markexpr": "", "numprocesses": None})
 
-    pytest_configure(config)  # type: ignore[arg-type]
+    pytest_configure(cast(pytest.Config, config))
 
     assert config.option.numprocesses is None
 
     config2 = _FakeConfig(_values={"markexpr": "unit", "numprocesses": None})
 
-    pytest_configure(config2)  # type: ignore[arg-type]
+    pytest_configure(cast(pytest.Config, config2))
 
     assert config2.option.numprocesses is None
 
@@ -82,6 +84,6 @@ def test_pytest_configure_compound_markexpr() -> None:
         _values={"markexpr": "e2e_docker and not slow", "numprocesses": None},
     )
 
-    pytest_configure(config)  # type: ignore[arg-type]
+    pytest_configure(cast(pytest.Config, config))
 
     assert config.option.numprocesses == "auto"
