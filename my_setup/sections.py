@@ -107,6 +107,46 @@ class _EndMarker:
 _MarkerEvent = _BodyLine | _OutsideLine | _StartMarker | _EndMarker
 
 
+def _parse_marker_line(
+    line: str, lineno: int, *, allow_legacy: bool
+) -> tuple[str, str, str | None, str | None] | None:
+    """Parse one line and return marker components or None for non-markers.
+
+    Returns ``(kind, semantics_value, name, embedded_hash)`` when
+    ``line`` matches ``_MARKER_RE``, where:
+    - ``kind`` is ``"start"`` or ``"end"``.
+    - ``semantics_value`` is the matched semantics keyword
+      (``"host-local"`` or ``"shared"``).
+    - ``name`` is the section name or ``None`` for unnamed sections.
+    - ``embedded_hash`` is the ``hash=<64-hex>`` value or ``None``.
+
+    Returns ``None`` when the line is not a marker line (body content
+    or outside-any-section content).
+
+    Raises :class:`MarkerError` on a marker line missing its semantics
+    keyword when ``allow_legacy=False``. When ``allow_legacy=True``, a
+    missing semantics is treated as ``"shared"``. The missing-hash
+    check on ``end`` markers is deferred to the state machine in
+    :func:`_walk_markers` so it fires AFTER name/semantics-mismatch
+    validation (preserving pre-extraction error ordering).
+    """
+    match = _MARKER_RE.match(line)
+    if match is None:
+        return None
+    kind = match.group(1)
+    semantics_raw = match.group(2)
+    name = match.group(3)
+    embedded_hash = match.group(4)
+    if semantics_raw is None:
+        if not allow_legacy:
+            raise MarkerError(
+                f"line {lineno}: user-section {kind} marker missing "
+                f"required 'host-local' or 'shared' keyword"
+            )
+        semantics_raw = SectionSemantics.SHARED.value
+    return kind, semantics_raw, name, embedded_hash
+
+
 def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerEvent]:
     """Yield one event per line in ``text``, validating marker pairing.
 
@@ -135,23 +175,12 @@ def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerE
     unnamed_index = 0
 
     for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
-        match = _MARKER_RE.match(line)
-        if match is None:
+        parsed = _parse_marker_line(line, lineno, allow_legacy=allow_legacy)
+        if parsed is None:
             yield _BodyLine(line) if in_section else _OutsideLine(line)
             continue
-        kind = match.group(1)
-        semantics_raw = match.group(2)
-        name = match.group(3)
-        embedded_hash = match.group(4)
-        if semantics_raw is None:
-            if not allow_legacy:
-                raise MarkerError(
-                    f"line {lineno}: user-section {kind} marker missing required "
-                    f"'host-local' or 'shared' keyword"
-                )
-            semantics = SectionSemantics.SHARED
-        else:
-            semantics = SectionSemantics(semantics_raw)
+        kind, semantics_raw, name, embedded_hash = parsed
+        semantics = SectionSemantics(semantics_raw)
         if kind == "start":
             if in_section:
                 raise MarkerError(
