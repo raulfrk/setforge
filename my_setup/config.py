@@ -12,8 +12,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-# ruamel.yaml ships py.typed but no usable annotations; no types-ruamel.yaml
-# package on PyPI as of 2026-05.
+# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup.errors import ConfigError, ProfileNotFound

@@ -43,10 +43,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-# json5 (a.k.a. json-five on PyPI) ships a py.typed marker but no inline
-# annotations or .pyi stubs that mypy can resolve, and no types-json5
-# package exists on PyPI as of 2026-05. Suppress the import-not-found
-# error with a specific code; revisit when upstream stubs land.
+# json5 (json-five on PyPI) ships py.typed without resolvable annotations; no stub pkg.
 from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
 from json5.loader import ModelLoader, loads  # type: ignore[import-not-found]
 from json5.model import (  # type: ignore[import-not-found]

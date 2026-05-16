@@ -47,8 +47,7 @@ from typing import Any
 
 from rich.console import Console
 
-# ruamel.yaml ships py.typed but no usable annotations; no types-ruamel.yaml
-# package on PyPI as of 2026-05.
+# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup import jsonc, wizard
