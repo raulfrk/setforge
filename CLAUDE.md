@@ -36,12 +36,12 @@ Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md).
 
 ## Docker e2e tests
 
-A 49-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises `install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12 container with real `claude` and `code` binaries. It is the strongest behavior-preservation gate in this project.
+A 49-test end-to-end suite at `tests/docker/test_e2e_docker.py` exercises `install`/`sync`/`compare`/`revert`/`validate` against a fresh Debian 12 container with real `claude` and `code` binaries — the canonical behavior-preservation gate for this project.
 
 - **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v` (unchanged; xdist auto-activates)
 - **Parallel execution:** `-m e2e_docker` auto-activates pytest-xdist with `-n auto`. Override with `-n 0` for serial-mode debugging or `-n N` for a specific worker count. Runtime drops from ~8-10 min to ~3-4 min on a 4+ core machine.
 - **Runtime:** ~3-4 min on a 4+ core machine (xdist parallel); ~8-10 min serial (`-n 0`).
-- **When to run:** required on every Phase 7 (post-merge cross-cutting
+- **When to run:** required whenever Phase 7 fires (post-merge cross-cutting
   review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH; the suite skips when docker is missing
   (see `tests/docker/conftest.py`).
@@ -57,11 +57,10 @@ pre-commit run --all-files
 uv run pytest tests/docker/ -m e2e_docker -v
 ```
 
-`pre-commit` catches tool-version skew that per-worktree reviewers cannot see
-— most importantly the ruff version mismatch the cxj batch only hit on first
-push to main. The Docker e2e suite catches integration-emergent install /
-sync / revert / plugin / extension behavior regressions that unit tests
-cannot exercise.
+`pre-commit` catches tool-version skew (e.g. the ruff mismatch the cxj batch
+only hit on first push to main); the Docker e2e suite catches
+integration-emergent install / sync / revert / plugin / extension regressions
+that unit tests cannot exercise.
 
 This is the canonical Phase 7 (post-merge cross-cutting review) gate for
 this project. See `tracked/claude/superpowers-prefs.md` Phase 7.
@@ -82,9 +81,9 @@ Inline-fix on main (skip the revert) ONLY when both hold:
 - the diff is one file and obviously the cause, AND
 - the fix is narrowly scoped (one or two lines).
 
-Filing a new bead is appropriate for follow-up work but does NOT replace
+Filing a new bead covers follow-up work but does NOT replace
 the revert-or-fix step. A red main is not OK. Either path (revert-and-re-PR
-OR inline-fix) must Re-run Phase 7 to confirm main is green.
+OR inline-fix) must re-run Phase 7 to confirm main is green.
 
 ## The four-tool stack
 
