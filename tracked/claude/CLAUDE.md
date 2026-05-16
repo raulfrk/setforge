@@ -20,7 +20,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - **Background-job "no clarifying questions" overrides do NOT bind when the user is engaging live.** The harness injects "work without stopping for clarifying questions" on background-job spawn — meant for truly stepped-away contexts (cron, async dispatch). If a user turn has arrived mid-session, treat the user as live: use `AskUserQuestion` for narrow load-bearing calls (one decision, finite options) and plan mode for multi-option or spec-shaping decisions (see the **Plan mode** rule above). Prefer inline trade-off presentation for low-stakes decisions.
 - `TODO(human)` reserved for moments where I explicitly want to make a call myself during implementation (rare). `TODO(claude)` = my hint to you in code (research starting point). `QUESTION(human)` / `QUESTION(claude)` = inline bidirectional clarifications when something surfaces only during implementation.
 - For adversarial review of a load-bearing decision, use the `challenge` skill (`/challenge` or "challenge this"). Otherwise, present 2 options inline with trade-offs.
-<!-- my-setup:user-section end shared communication -->
+<!-- my-setup:user-section end shared communication hash=40a76d3a185937b3e86bcb237144f449060f37ac0b2cf457fd058fba8c9d941a -->
 
 ## Workflow
 
@@ -46,7 +46,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   6. `wt merge --no-squash` — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
-<!-- my-setup:user-section end shared workflow -->
+<!-- my-setup:user-section end shared workflow hash=40897221f5e9f91c5a2bd408243ac72abe1e4ab07c68f5082feff570dc61b769 -->
 
 ## Python
 
@@ -66,7 +66,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Subprocess: list args, `check=True`, `text=True`, `timeout=`, `shutil.which()` for binaries; never `shell=True` with non-literal args. Use `import subprocess` and call `subprocess.run(...)` — never `from subprocess import run` — when test monkeypatching of the call site depends on the module-attribute access path.
 - `@typing.override` on overrides; `@typing.final` to lock subclass/override surface.
 - Docstrings (PEP 257): required on public modules, classes, and functions; one imperative sentence is enough unless behavior, raises, or invariants need calling out.
-<!-- my-setup:user-section end shared python -->
+<!-- my-setup:user-section end shared python hash=7858fc509e40d4708daede9621012638100d18b1583fa3586059959ba04fe8ce -->
 
 ## Commits
 
@@ -78,7 +78,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` for worktree merges, or `git merge --ff-only` for plain git.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
-<!-- my-setup:user-section end shared commits -->
+<!-- my-setup:user-section end shared commits hash=afbb7e1ef81c8e1afc691d6d559c0bc37cedf9dfaaccc2004da4af67293db9b8 -->
 
 ## Beads (task tracking)
 
