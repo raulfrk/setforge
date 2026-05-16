@@ -230,8 +230,6 @@ def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomp
     set, the override wins per-key (same precedence as the no-precompute
     path's `{**live_sections, **override}` merge).
     """
-    from my_setup import sections
-
     src_text = (
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
