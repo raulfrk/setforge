@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -39,6 +39,7 @@ from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve
 from my_setup.config import (
     ClaudeInstallMode,
     Config,
+    Dotfile,
     MarketplaceSource,
     ReconcilePolicy,
     ResolvedProfile,
@@ -155,6 +156,32 @@ def _parse_section_auto(
         raise typer.Exit(2) from None
 
 
+def _iter_section_dotfiles(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> Iterator[tuple[str, Dotfile, Path, Path]]:
+    """Yield ``(name, dotfile, sub_src, sub_dst)`` for every section-bearing dotfile.
+
+    Encapsulates the resolve_src / resolve_dst / expand_dotfile /
+    ``preserve_user_sections`` filter chain that
+    :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
+    and :func:`_extract_live_sections_map` all duplicate today. Pure walk
+    — no I/O; callers that need the live or tracked text read it
+    themselves so the generator's iteration cost stays O(N) in
+    dotfile-count regardless of file sizes.
+
+    Yields both ``sub_src`` and ``sub_dst`` so the three callers can pick
+    whichever paths they need without re-running ``expand_dotfile``.
+    """
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        if not dotfile.preserve_user_sections:
+            continue
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
+            yield name, dotfile, sub_src, sub_dst
+
+
 def _refuse_legacy_live_markers(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, command: str
 ) -> None:
@@ -175,25 +202,21 @@ def _refuse_legacy_live_markers(
     point refused. Install must NOT call this — install's job is to
     migrate.
     """
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
+    for _name, _dotfile, _sub_src, sub_dst in _iter_section_dotfiles(
+        cfg, resolved, repo_root
+    ):
+        if not sub_dst.exists():
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, _, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists():
-                continue
-            live_text = sub_dst.read_text(encoding="utf-8")
-            if detect_legacy_markers(live_text):
-                raise MySetupError(
-                    f"{sub_dst}: legacy user-section marker format detected "
-                    f"(pre-9by markers without 'host-local'/'shared' keyword "
-                    f"or 'hash=<sha256>' segment). 'my-setup {command}' is "
-                    f"strict on live-side markers. Run "
-                    f"'uv run my-setup install --profile=<name>' first to "
-                    f"migrate the file in place."
-                )
+        live_text = sub_dst.read_text(encoding="utf-8")
+        if detect_legacy_markers(live_text):
+            raise MySetupError(
+                f"{sub_dst}: legacy user-section marker format detected "
+                f"(pre-9by markers without 'host-local'/'shared' keyword "
+                f"or 'hash=<sha256>' segment). 'my-setup {command}' is "
+                f"strict on live-side markers. Run "
+                f"'uv run my-setup install --profile=<name>' first to "
+                f"migrate the file in place."
+            )
 
 
 def _resolve_section_decisions(
@@ -214,38 +237,34 @@ def _resolve_section_decisions(
     silently skipped; their copy_atomic call gets an empty override.
     """
     decisions: dict[Path, dict[str, str]] = {}
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
+    for _name, _dotfile, sub_src, sub_dst in _iter_section_dotfiles(
+        cfg, resolved, repo_root
+    ):
+        if not sub_dst.exists():
+            # First install for this file — no live to reconcile.
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists():
-                # First install for this file — no live to reconcile.
-                continue
-            tracked_text = sub_src.read_text(encoding="utf-8")
-            live_text = sub_dst.read_text(encoding="utf-8")
-            drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-            if not drifts:
-                continue
-            if (
-                section_auto is None
-                and not interactive
-                and section_reconcile.has_shared_drift(drifts)
-            ):
-                summary = section_wizard.format_drift_summary(drifts.values())
-                typer.secho(
-                    f"warning: {sub_dst}: {summary} "
-                    f"(re-run with --reconcile-user-sections "
-                    f"or --auto=use-tracked)",
-                    err=True,
-                    fg=typer.colors.YELLOW,
-                )
-            outcomes = section_wizard.reconcile_sections(
-                drifts, auto=section_auto, interactive=interactive
+        tracked_text = sub_src.read_text(encoding="utf-8")
+        live_text = sub_dst.read_text(encoding="utf-8")
+        drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
+        if not drifts:
+            continue
+        if (
+            section_auto is None
+            and not interactive
+            and section_reconcile.has_shared_drift(drifts)
+        ):
+            summary = section_wizard.format_drift_summary(drifts.values())
+            typer.secho(
+                f"warning: {sub_dst}: {summary} "
+                f"(re-run with --reconcile-user-sections "
+                f"or --auto=use-tracked)",
+                err=True,
+                fg=typer.colors.YELLOW,
             )
-            decisions[sub_dst] = {n: d.body for n, d in outcomes.items()}
+        outcomes = section_wizard.reconcile_sections(
+            drifts, auto=section_auto, interactive=interactive
+        )
+        decisions[sub_dst] = {n: d.body for n, d in outcomes.items()}
     return decisions
 
 
@@ -266,24 +285,20 @@ def _extract_live_sections_map(
     re-read + re-parse the same live file a second time.
     """
     live_sections: dict[Path, dict[str, str]] = {}
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
+    for _name, _dotfile, _sub_src, sub_dst in _iter_section_dotfiles(
+        cfg, resolved, repo_root
+    ):
+        if not sub_dst.exists():
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, _, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists():
-                continue
-            live_text = sub_dst.read_text(encoding="utf-8")
-            # allow_legacy=True so pre-9by live files (untagged markers,
-            # no end-marker hash) can flow through install's migration
-            # path; install is the verb that re-tags + stamps. Compare /
-            # sync use the strict parser and refuse legacy via
-            # _refuse_legacy_live_markers (cli.py).
-            live_sections[sub_dst] = sections_mod.extract_sections(
-                live_text, allow_legacy=True
-            )
+        live_text = sub_dst.read_text(encoding="utf-8")
+        # allow_legacy=True so pre-9by live files (untagged markers,
+        # no end-marker hash) can flow through install's migration
+        # path; install is the verb that re-tags + stamps. Compare /
+        # sync use the strict parser and refuse legacy via
+        # _refuse_legacy_live_markers (cli.py).
+        live_sections[sub_dst] = sections_mod.extract_sections(
+            live_text, allow_legacy=True
+        )
     return live_sections
 
 
