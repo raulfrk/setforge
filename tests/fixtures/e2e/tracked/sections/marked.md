@@ -2,8 +2,8 @@
 
 Global text that lives in tracked and overwrites the live copy on every install.
 
-<!-- my-setup:user-section start notes -->
+<!-- my-setup:user-section start host-local notes -->
 default notes (tracked side) — overwritten on first install when live is absent
-<!-- my-setup:user-section end notes -->
+<!-- my-setup:user-section end host-local notes -->
 
 Trailing tracked content.
