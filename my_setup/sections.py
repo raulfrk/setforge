@@ -210,6 +210,93 @@ def extract_marker_hashes(text: str) -> dict[str, str | None]:
     return hashes
 
 
+def set_marker_hashes(text: str, hashes: dict[str, str]) -> str:
+    """Rewrite end markers in ``text`` to embed the given hashes.
+
+    For each section whose name is a key in ``hashes``, the end marker is
+    rewritten to embed (or replace) its ``hash=<...>`` segment. Sections
+    present in ``text`` but absent from ``hashes`` have any existing
+    ``hash=<...>`` segment STRIPPED — explicit absence means "no hash for
+    this section." Section bodies, start markers, and all non-marker
+    content are preserved byte-for-byte.
+
+    Raises :class:`MarkerError` on malformed markers and :class:`ValueError`
+    when ``hashes`` contains a key that does not correspond to a section
+    present in ``text``.
+    """
+    # Validate keys up front so a typo fails loudly before any rewrite.
+    present = set(extract_sections(text).keys())
+    unknown = set(hashes) - present
+    if unknown:
+        unknown_str = ", ".join(sorted(repr(k) for k in unknown))
+        raise ValueError(
+            f"set_marker_hashes: hashes contains key(s) not present in text: "
+            f"{unknown_str}"
+        )
+
+    out_lines: list[str] = []
+    in_section = False
+    section_name: str | None = None
+    unnamed_index = 0
+
+    for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
+        match = _MARKER_RE.match(line)
+        if match is None:
+            out_lines.append(line)
+            continue
+        kind, name, _embedded = match.group(1), match.group(2), match.group(3)
+        if kind == "start":
+            if in_section:
+                raise MarkerError(
+                    f"line {lineno}: nested user-section start "
+                    f"(previous section still open)"
+                )
+            out_lines.append(line)
+            in_section = True
+            section_name = name
+        else:
+            if not in_section:
+                raise MarkerError(
+                    f"line {lineno}: user-section end without matching start"
+                )
+            if name != section_name:
+                raise MarkerError(
+                    f"line {lineno}: user-section end name {name!r} does not "
+                    f"match start name {section_name!r}"
+                )
+            key = section_name if section_name is not None else str(unnamed_index)
+            out_lines.append(_format_end_marker(section_name, hashes.get(key), line))
+            if section_name is None:
+                unnamed_index += 1
+            in_section = False
+            section_name = None
+
+    if in_section:
+        identifier = section_name if section_name is not None else str(unnamed_index)
+        raise MarkerError(f"unclosed user-section (started as {identifier!r})")
+
+    return "".join(out_lines)
+
+
+def _format_end_marker(
+    name: str | None, embedded_hash: str | None, original_line: str
+) -> str:
+    """Build the canonical end-marker line for ``name`` and ``embedded_hash``.
+
+    Preserves the original line's trailing newline (or its absence) so
+    ``set_marker_hashes`` is byte-preserving on file endings.
+    """
+    parts = ["<!-- my-setup:user-section end"]
+    if name is not None:
+        parts.append(name)
+    if embedded_hash is not None:
+        parts.append(f"hash={embedded_hash}")
+    parts.append("-->")
+    body = " ".join(parts)
+    newline = "\n" if original_line.endswith("\n") else ""
+    return f"{body}{newline}"
+
+
 def strip_section_content(text: str) -> str:
     """Return ``text`` with content between every user-section marker pair
     removed. Markers themselves are kept so the file remains a valid

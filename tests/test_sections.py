@@ -11,6 +11,7 @@ from my_setup.sections import (
     extract_sections,
     hash_sections,
     merge_sections,
+    set_marker_hashes,
 )
 
 
@@ -330,3 +331,131 @@ def test_extract_marker_hashes_propagates_marker_error() -> None:
     text = "<!-- my-setup:user-section start a -->\nbody\n"
     with pytest.raises(MarkerError, match="unclosed"):
         extract_marker_hashes(text)
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-xyw — set_marker_hashes
+# ---------------------------------------------------------------------------
+
+
+def test_set_marker_hashes_adds_hash_to_hashless_end_marker() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    digest = _sha256_hex("body\n")
+    result = set_marker_hashes(text, {"a": digest})
+    assert f"hash={digest}" in result
+    assert extract_marker_hashes(result) == {"a": digest}
+
+
+def test_set_marker_hashes_replaces_existing_hash() -> None:
+    old = _HASH_HEX_64
+    new = "b" * 64
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end a hash={old} -->\n"
+    )
+    result = set_marker_hashes(text, {"a": new})
+    assert f"hash={new}" in result
+    assert f"hash={old}" not in result
+    assert extract_marker_hashes(result) == {"a": new}
+
+
+def test_set_marker_hashes_strips_when_absent_from_dict() -> None:
+    """Sections present in text but absent from hashes dict have their
+    hash= segment removed."""
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end a hash={_HASH_HEX_64} -->\n"
+    )
+    result = set_marker_hashes(text, {})
+    assert "hash=" not in result
+    assert extract_marker_hashes(result) == {"a": None}
+
+
+def test_set_marker_hashes_byte_preserving_outside_markers() -> None:
+    body = "user body line 1\nuser body line 2\n"
+    text = (
+        "preamble line 1\n"
+        "preamble line 2\n"
+        "<!-- my-setup:user-section start a -->\n"
+        f"{body}"
+        "<!-- my-setup:user-section end a -->\n"
+        "epilogue\n"
+    )
+    result = set_marker_hashes(text, {"a": _sha256_hex(body)})
+    assert result.startswith("preamble line 1\npreamble line 2\n")
+    assert body in result
+    assert result.endswith("epilogue\n")
+
+
+def test_set_marker_hashes_round_trip_with_extract() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        "<!-- my-setup:user-section end a -->\n"
+        "<!-- my-setup:user-section start b -->\n"
+        "beta\n"
+        "<!-- my-setup:user-section end b -->\n"
+    )
+    hashes = {"a": _HASH_HEX_64, "b": "f" * 64}
+    assert extract_marker_hashes(set_marker_hashes(text, hashes)) == hashes
+
+
+def test_set_marker_hashes_round_trip_with_hash_sections() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "alpha\n"
+        "<!-- my-setup:user-section end a -->\n"
+        "<!-- my-setup:user-section start b -->\n"
+        "beta\n"
+        "<!-- my-setup:user-section end b -->\n"
+    )
+    hashes = hash_sections(text)
+    assert extract_marker_hashes(set_marker_hashes(text, hashes)) == hashes
+
+
+def test_set_marker_hashes_bad_key_raises_value_error() -> None:
+    text = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    with pytest.raises(ValueError, match="nonexistent"):
+        set_marker_hashes(text, {"nonexistent": _HASH_HEX_64})
+
+
+def test_set_marker_hashes_unnamed_section_by_index() -> None:
+    """Unnamed sections key by '0', '1', ... — set_marker_hashes accepts those."""
+    text = (
+        "<!-- my-setup:user-section start -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end -->\n"
+    )
+    digest = _sha256_hex("body\n")
+    result = set_marker_hashes(text, {"0": digest})
+    assert f"hash={digest}" in result
+    assert extract_marker_hashes(result) == {"0": digest}
+
+
+def test_set_marker_hashes_propagates_marker_error() -> None:
+    text = "<!-- my-setup:user-section end a -->\n"
+    with pytest.raises(MarkerError, match="without matching start"):
+        set_marker_hashes(text, {})
+
+
+def test_extract_marker_hashes_extracted_form_matches_writer() -> None:
+    """The hash extract_marker_hashes returns is exactly what
+    set_marker_hashes wrote."""
+    base = (
+        "<!-- my-setup:user-section start a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end a -->\n"
+    )
+    hashes = hash_sections(base)
+    written = set_marker_hashes(base, hashes)
+    assert extract_marker_hashes(written) == hashes
