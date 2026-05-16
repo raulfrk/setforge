@@ -26,7 +26,7 @@ Dispatch inputs:
 
 If no `.py` files appear in `changed_files`, return: `Verdict: PASS — no prose changes in scope, no findings.` and stop.
 
-Your aspects to check (CLAUDE.md "Tone and style" rules + Python docstring rules are the source of truth; fetched exemplars are advisory):
+Your aspects to check (CLAUDE.md's top-of-file pruning rule and the CLAUDE.md `## Python` docstring rule are the source of truth; fetched exemplars are advisory):
 
 1. **Factual correctness vs. code** — every claim in a docstring (return shape, raised exception, side effect, parameter semantics) must match the function body. Mismatches are CRITICAL.
 2. **Verbosity / bloat** — per CLAUDE.md Python docstring rule ("one imperative sentence is enough unless behavior, raises, or invariants need calling out"), flag multi-paragraph docstrings on simple helpers, restated argument types, or narration of obvious behavior. IMPORTANT.

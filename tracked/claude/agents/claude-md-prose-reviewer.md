@@ -26,7 +26,7 @@ Dispatch inputs:
 
 If no `.md` files under `tracked/claude/` appear in `changed_files`, return: `Verdict: PASS — no prose changes in scope, no findings.` and stop.
 
-Your aspects to check (CLAUDE.md "Tone and style" rules — terse, imperative, no narration, no hedging — are the source of truth; fetched exemplars are advisory):
+Your aspects to check (CLAUDE.md's top-of-file pruning rule — "would removing this cause Claude to make a mistake? If no, cut it." — and the imperative-voice convention enforced across the CLAUDE.md `## Communication` / `## Workflow` / `## Commits` sections are the source of truth; fetched exemplars are advisory):
 
 1. **Factual correctness vs. referenced artifact** — when prose claims "the X skill does Y" or "the Z tool's --flag does Q," read the referenced skill / agent / tool documentation and confirm the claim. False claims are CRITICAL.
 2. **Verbosity / bloat** — per CLAUDE.md ("for each line, ask 'would removing this cause Claude to make a mistake?' If no, cut it"), flag meandering narration, restated context, multi-clause hedging, or content that adds words without changing behavior. IMPORTANT.
