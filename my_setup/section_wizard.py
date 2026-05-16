@@ -27,6 +27,7 @@ import difflib
 import os
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -295,36 +296,32 @@ def format_drift_summary(drifts: Iterable[SectionDrift]) -> str:
     empty groups).
 
     Example:
-      ``"3 shared sections drifted: 1 pending tracked, 1 live edits,
-      1 conflicts"``
+      ``"4 shared sections drifted: 1 legacy (no embedded hash),
+      1 pending tracked update, 1 live edit, 1 three-way conflict"``
 
     Empty string when nothing to warn about — caller suppresses the
     warning line entirely in that case.
     """
-    groups: dict[SectionDriftState, list[SectionDrift]] = {}
-    for d in drifts:
-        if d.semantics is not SectionSemantics.SHARED:
-            continue
-        if d.state is SectionDriftState.NO_DRIFT:
-            continue
-        groups.setdefault(d.state, []).append(d)
-    if not groups:
+    counts: Counter[SectionDriftState] = Counter(
+        d.state
+        for d in drifts
+        if d.semantics is SectionSemantics.SHARED
+        and d.state is not SectionDriftState.NO_DRIFT
+    )
+    if not counts:
         return ""
     parts = [
         fragment
         for state in SectionDriftState
-        if (group_drifts := groups.get(state))
-        and (fragment := _format_drift_group(state, len(group_drifts), group_drifts))
+        if (count := counts[state]) and (fragment := _format_drift_group(state, count))
     ]
-    total = sum(len(g) for g in groups.values())
+    total = sum(counts.values())
     return f"{total} shared section{'s' if total != 1 else ''} drifted: " + ", ".join(
         parts
     )
 
 
-def _format_drift_group(
-    state: SectionDriftState, count: int, drifts: Iterable[SectionDrift]
-) -> str:
+def _format_drift_group(state: SectionDriftState, count: int) -> str:
     """Render the per-state summary fragment for ``state``.
 
     Exhaustive dispatcher on :class:`SectionDriftState` — the
@@ -335,10 +332,8 @@ def _format_drift_group(
     Returns the fragment ``"N <label>"`` for ``state`` (e.g.
     ``"2 pending tracked updates"``). Pluralises the pending /
     live-edited / conflict labels; legacy and inconsistent use a fixed
-    label. ``drifts`` is the pre-grouped entry list for ``state`` and
-    ``count`` is its length, precomputed by the caller.
+    label.
     """
-    del drifts  # entry list is reserved for future per-entry rendering
     match state:
         case SectionDriftState.NO_DRIFT:
             # NO_DRIFT contributes no summary output. Caller pre-filters

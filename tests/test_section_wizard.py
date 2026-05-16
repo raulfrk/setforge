@@ -437,9 +437,9 @@ def test_format_drift_summary_iterates_enum_order() -> None:
     # NO_DRIFT (skipped), LEGACY, PENDING_TRACKED, LIVE_EDITED, CONFLICT,
     # INCONSISTENT.
     fragments_section = summary.split(": ", 1)[1]
-    legacy_idx = fragments_section.index("legacy")
-    pending_idx = fragments_section.index("pending tracked")
-    live_idx = fragments_section.index("live edit")
-    conflict_idx = fragments_section.index("three-way conflict")
-    inconsistent_idx = fragments_section.index("inconsistent")
+    legacy_idx = fragments_section.index("1 legacy (no embedded hash)")
+    pending_idx = fragments_section.index("1 pending tracked update")
+    live_idx = fragments_section.index("1 live edit")
+    conflict_idx = fragments_section.index("1 three-way conflict")
+    inconsistent_idx = fragments_section.index("1 inconsistent")
     assert legacy_idx < pending_idx < live_idx < conflict_idx < inconsistent_idx
