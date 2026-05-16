@@ -8,7 +8,7 @@
 # See tracked/claude/superpowers-prefs.md Phase 6 + Commits section.
 
 # Worktree path: land new worktrees under ~/projects/worktrees/<slug>
-# instead of wt's default sibling-of-repo layout (~/<repo>.<slug>).
+# matches the workflow convention documented in tracked/claude/CLAUDE.md.
 # Matches the convention documented in tracked/claude/CLAUDE.md
 # Workflow section ("Worktrees: always create under
 # ~/projects/worktrees/"), keeps the bd↔wt loop's slug = branch name

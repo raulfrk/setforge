@@ -5,7 +5,7 @@ description: worktrunk (binary `wt`) command reference and Beads integration pat
 
 # worktrunk (`wt`) command reference
 
-worktrunk manages git worktrees for parallel agent workflows. Default location: `~/<repo>.<slug>` (sibling of repo, per wt's `worktree-path` template) — bd auto-discovers via git common-directory regardless of location.
+worktrunk manages git worktrees for parallel agent workflows. Default location: `~/projects/worktrees/<slug>` per wt's `worktree-path` template (see `tracked/wt/config.toml`) — bd auto-discovers via git common-directory regardless of location.
 
 *Footnote on `<slug>`: throughout this doc, `<slug>` is the user-facing placeholder for the worktree-path suffix. wt's actual template variable is `{{ branch | sanitize }}` — the sanitized branch name. In practice the two collapse because `wt switch --create <slug>` creates a branch literally named `<slug>`, so `<slug>` == `branch` at worktree-creation time. They diverge only if you rename the branch after creation (e.g. `git branch -m`); the worktree path keeps the original sanitized branch name while the branch itself has the new name.*
 
@@ -76,7 +76,7 @@ For multi-bead waves: run `wt switch --create` N times serially (avoids git inde
 ## Anti-patterns
 
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.
-- Don't create worktrees inside the repo — always use wt's sibling-of-repo location at `~/<repo>.<slug>`.
+- Don't create worktrees inside the repo — always use wt's configured location at `~/projects/worktrees/<slug>` (per `tracked/wt/config.toml`).
 - Don't `wt merge` without verifying tests pass and the bd issue's acceptance criteria are met.
 - Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.

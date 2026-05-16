@@ -7,7 +7,7 @@ description: Beads task-tracking command reference. Invoke at the first sign of 
 
 The beads home is at `~/.beads/` (set via `BEADS_DIR`); each project gets its own database inside it (`~/.beads/embeddeddolt/<project>/`), auto-created on first write, with the issue prefix derived from the repo name. Issues do NOT cross databases unless `bd repo add` (multi-repo hydration) or `bd federation` is configured. Memories are cross-project (separate storage from issues).
 
-All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect. `bd worktree list` shows the redirect state per worktree. Default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry; pass an explicit sibling-of-repo path like `~/<repo>.<name>` instead (matches wt's default template). `git worktree add ~/<repo>.<name>` also works and is auto-discovered.
+All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect. `bd worktree list` shows the redirect state per worktree. Default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry; prefer `wt switch --create <slug>` which lands the worktree at `~/projects/worktrees/<slug>` (the configured location for this VM; see `tracked/wt/config.toml`). `git worktree add ~/projects/worktrees/<slug>` also works and is auto-discovered.
 
 ## Starting work on an issue
 
