@@ -39,7 +39,6 @@ from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve
 from my_setup.config import (
     ClaudeInstallMode,
     Config,
-    Dotfile,
     MarketplaceSource,
     ReconcilePolicy,
     ResolvedProfile,
@@ -158,19 +157,19 @@ def _parse_section_auto(
 
 def _iter_section_dotfiles(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> Iterator[tuple[str, Dotfile, Path, Path]]:
-    """Yield ``(name, dotfile, sub_src, sub_dst)`` for every section-bearing dotfile.
+) -> Iterator[tuple[Path, Path]]:
+    """Yield ``(sub_src, sub_dst)`` for every section-bearing dotfile.
 
     Encapsulates the resolve_src / resolve_dst / expand_dotfile /
     ``preserve_user_sections`` filter chain that
     :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
-    and :func:`_extract_live_sections_map` all duplicate today. Pure walk
-    — no I/O; callers that need the live or tracked text read it
+    :func:`_extract_live_sections_map`, and
+    :func:`_print_section_reconcile_dry_run` all duplicate today. Pure
+    walk — no I/O; callers that need the live or tracked text read it
     themselves so the generator's iteration cost stays O(N) in
     dotfile-count regardless of file sizes.
 
-    Yields both ``sub_src`` and ``sub_dst`` so the three callers can pick
-    whichever paths they need without re-running ``expand_dotfile``.
+    Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
     for name in resolved.dotfiles:
         dotfile = cfg.dotfiles[name]
@@ -179,7 +178,7 @@ def _iter_section_dotfiles(
         src = resolve_src(dotfile, repo_root)
         dst = resolve_dst(dotfile)
         for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            yield name, dotfile, sub_src, sub_dst
+            yield sub_src, sub_dst
 
 
 def _refuse_legacy_live_markers(
@@ -202,9 +201,7 @@ def _refuse_legacy_live_markers(
     point refused. Install must NOT call this — install's job is to
     migrate.
     """
-    for _name, _dotfile, _sub_src, sub_dst in _iter_section_dotfiles(
-        cfg, resolved, repo_root
-    ):
+    for _, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -237,9 +234,7 @@ def _resolve_section_decisions(
     silently skipped; their copy_atomic call gets an empty override.
     """
     decisions: dict[Path, dict[str, str]] = {}
-    for _name, _dotfile, sub_src, sub_dst in _iter_section_dotfiles(
-        cfg, resolved, repo_root
-    ):
+    for sub_src, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
         if not sub_dst.exists():
             # First install for this file — no live to reconcile.
             continue
@@ -285,9 +280,7 @@ def _extract_live_sections_map(
     re-read + re-parse the same live file a second time.
     """
     live_sections: dict[Path, dict[str, str]] = {}
-    for _name, _dotfile, _sub_src, sub_dst in _iter_section_dotfiles(
-        cfg, resolved, repo_root
-    ):
+    for _, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -558,17 +551,11 @@ def _print_section_reconcile_dry_run(
     """
     resolved = resolve_profile(cfg, profile)
     any_emitted = False
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
+    for sub_src, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
+        if not sub_dst.exists() or not sub_src.exists():
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            if not sub_dst.exists() or not sub_src.exists():
-                continue
-            if _render_drift_file(sub_src, sub_dst, console):
-                any_emitted = True
+        if _render_drift_file(sub_src, sub_dst, console):
+            any_emitted = True
     if not any_emitted:
         console.print("\nno shared user-section drift to reconcile.")
 
