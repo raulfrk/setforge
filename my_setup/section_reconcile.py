@@ -122,12 +122,17 @@ def classify_section_drift(
     Raises :class:`my_setup.errors.MarkerError` via the section
     primitives on malformed markers.
     """
+    # Live side is parsed with allow_legacy=True so pre-9by user files
+    # (no semantics keyword, no end-marker hash) survive the migration
+    # install. Tracked side is strict — tracked content ships with proper
+    # markers and a parse failure there is a real bug, not a legacy
+    # artifact.
     tracked_bodies = extract_sections(tracked_text)
-    live_bodies = extract_sections(live_text)
+    live_bodies = extract_sections(live_text, allow_legacy=True)
     tracked_hashes = hash_sections(tracked_text)
-    live_hashes = hash_sections(live_text)
+    live_hashes = hash_sections(live_text, allow_legacy=True)
     tracked_embedded = extract_marker_hashes(tracked_text)
-    live_embedded = extract_marker_hashes(live_text)
+    live_embedded = extract_marker_hashes(live_text, allow_legacy=True)
     semantics_map = section_semantics(tracked_text)
 
     return {

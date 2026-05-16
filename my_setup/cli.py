@@ -56,7 +56,7 @@ from my_setup.errors import (
 )
 from my_setup.section_reconcile import SectionDriftState
 from my_setup.section_wizard import ReconcileAuto
-from my_setup.sections import SectionSemantics
+from my_setup.sections import SectionSemantics, detect_legacy_markers
 
 LOGGER = logging.getLogger(__name__)
 
@@ -155,6 +155,46 @@ def _parse_section_auto(
         raise typer.Exit(2) from None
 
 
+def _refuse_legacy_live_markers(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, command: str
+) -> None:
+    """Raise :class:`MySetupError` if any live ``preserve_user_sections``
+    file carries pre-9by markers.
+
+    Walks every dotfile in ``resolved`` whose tracked entry has
+    ``preserve_user_sections=True`` and runs
+    :func:`my_setup.sections.detect_legacy_markers` on the live file (when
+    it exists). The strict parser would otherwise raise
+    :class:`my_setup.errors.MarkerError` partway through the read-only /
+    capture flow with an opaque ``line N: missing required keyword``
+    message; this surfaces a single actionable error before any strict
+    parse happens, pointing the user at ``my-setup install`` to migrate.
+
+    ``command`` is the user-facing command name (``compare`` / ``sync``)
+    used in the error message so the user sees which entry point refused.
+    Install must NOT call this — install's job is to migrate.
+    """
+    for name in resolved.dotfiles:
+        dotfile = cfg.dotfiles[name]
+        if not dotfile.preserve_user_sections:
+            continue
+        src = resolve_src(dotfile, repo_root)
+        dst = resolve_dst(dotfile)
+        for _, _, sub_dst in expand_dotfile(name, src, dst):
+            if not sub_dst.exists():
+                continue
+            live_text = sub_dst.read_text(encoding="utf-8")
+            if detect_legacy_markers(live_text):
+                raise MySetupError(
+                    f"{sub_dst}: legacy user-section marker format detected "
+                    f"(pre-9by markers without 'host-local'/'shared' keyword "
+                    f"or 'hash=<sha256>' segment). 'my-setup {command}' is "
+                    f"strict on live-side markers. Run "
+                    f"'uv run my-setup install --profile=<name>' first to "
+                    f"migrate the file in place."
+                )
+
+
 def _resolve_section_decisions(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -235,7 +275,14 @@ def _extract_live_sections_map(
             if not sub_dst.exists():
                 continue
             live_text = sub_dst.read_text(encoding="utf-8")
-            live_sections[sub_dst] = sections_mod.extract_sections(live_text)
+            # allow_legacy=True so pre-9by live files (untagged markers,
+            # no end-marker hash) can flow through install's migration
+            # path; install is the verb that re-tags + stamps. Compare /
+            # sync use the strict parser and refuse legacy via
+            # _refuse_legacy_live_markers (cli.py).
+            live_sections[sub_dst] = sections_mod.extract_sections(
+                live_text, allow_legacy=True
+            )
     return live_sections
 
 
@@ -445,6 +492,8 @@ def compare(
     """Report drift between tracked and live for every dotfile in the profile."""
     cfg = load_config(config)
     repo_root = config.resolve().parent
+    resolved = resolve_profile(cfg, profile)
+    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="compare")
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
     console = Console()
@@ -677,6 +726,7 @@ def sync(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="sync")
 
     if not no_transition:
         transitions.ensure_state_dir_writable()

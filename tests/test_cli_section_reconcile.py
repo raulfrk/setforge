@@ -10,7 +10,11 @@ import pytest
 from typer.testing import CliRunner
 
 from my_setup.cli import app
-from my_setup.sections import extract_marker_hashes, hash_sections
+from my_setup.sections import (
+    detect_legacy_markers,
+    extract_marker_hashes,
+    hash_sections,
+)
 
 
 def _sha256(s: str) -> str:
@@ -191,7 +195,10 @@ def test_install_bare_no_warn_when_host_local_drift_only(
 def test_install_hash_maintained_on_host_local(fixture: dict[str, Path]) -> None:
     """Even for host-local sections, install rewrites the end-marker hash."""
     body = "host body\n"
-    fixture["src"].write_text(_make_section_text("notes", "host-local", body, None))
+    # Post-9ln: tracked must ship with a stamped end-marker hash.
+    fixture["src"].write_text(
+        _make_section_text("notes", "host-local", body, _sha256(body))
+    )
     # Live with stale embedded hash.
     fixture["dst"].write_text(
         _make_section_text(
@@ -217,8 +224,9 @@ def test_install_hash_maintained_on_host_local(fixture: dict[str, Path]) -> None
 def test_install_first_run_no_warning_when_no_live(fixture: dict[str, Path]) -> None:
     """First install (no live file yet) does NOT warn about shared drift —
     classify_section_drift only runs when both sides exist."""
+    body = "rule A\n"
     fixture["src"].write_text(
-        _make_section_text("workflow", "shared", "rule A\n", None)
+        _make_section_text("workflow", "shared", body, _sha256(body))
     )
     # No live file exists.
 
@@ -238,8 +246,9 @@ def test_install_idempotent_second_run_with_hash_alignment(
     fixture: dict[str, Path],
 ) -> None:
     """Run install twice; second run is a NOOP (hash-aligned live already)."""
+    body = "rule A\n"
     fixture["src"].write_text(
-        _make_section_text("workflow", "shared", "rule A\n", None)
+        _make_section_text("workflow", "shared", body, _sha256(body))
     )
     runner = CliRunner()
     result1 = runner.invoke(
@@ -446,3 +455,87 @@ def test_install_with_use_tracked_records_transition(
     assert result.exit_code == 0, result.output
     # write_transition got called — transition recorded.
     assert calls, "install must record a transition for revert to undo"
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-9ln — legacy live migration via install; compare/sync refuse
+# ---------------------------------------------------------------------------
+
+
+def _legacy_live_section_text(name: str, body: str) -> str:
+    """Build a pre-9by live file shape: untagged markers, no hash segment."""
+    return (
+        "preamble\n"
+        f"<!-- my-setup:user-section start {name} -->\n"
+        f"{body}"
+        f"<!-- my-setup:user-section end {name} -->\n"
+        "epilogue\n"
+    )
+
+
+def test_compare_refuses_legacy_live_with_actionable_error(
+    fixture: dict[str, Path],
+) -> None:
+    """``compare`` on a legacy live file exits 1 with the actionable error
+    that points the user at ``my-setup install`` instead of leaking the
+    raw ``MarkerError: line N: missing required keyword``."""
+    body = "rule A\n"
+    fixture["src"].write_text(
+        _make_section_text("workflow", "shared", body, _sha256(body))
+    )
+    fixture["dst"].write_text(_legacy_live_section_text("workflow", body))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={fixture['cfg']}"]
+    )
+    assert result.exit_code == 1, result.output
+    # Either captured by typer's CliRunner as result.exception or printed.
+    combined = result.output + (str(result.exception) if result.exception else "")
+    assert "legacy" in combined.lower()
+    assert "my-setup install" in combined
+
+
+def test_sync_refuses_legacy_live_with_actionable_error(
+    fixture: dict[str, Path],
+) -> None:
+    """``sync`` on a legacy live file exits 1 with the actionable error."""
+    body = "rule A\n"
+    fixture["src"].write_text(
+        _make_section_text("workflow", "shared", body, _sha256(body))
+    )
+    fixture["dst"].write_text(_legacy_live_section_text("workflow", body))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["sync", "--profile=p", f"--config={fixture['cfg']}"])
+    assert result.exit_code == 1, result.output
+    combined = result.output + (str(result.exception) if result.exception else "")
+    assert "legacy" in combined.lower()
+    assert "my-setup install" in combined
+
+
+def test_install_succeeds_on_legacy_live_and_migrates(
+    fixture: dict[str, Path],
+) -> None:
+    """``install`` on a legacy live file exits 0; the resulting live file
+    is fully strict-clean (proper semantics keyword + hash segment)."""
+    body = "rule A\n"
+    fixture["src"].write_text(
+        _make_section_text("workflow", "shared", body, _sha256(body))
+    )
+    fixture["dst"].write_text(_legacy_live_section_text("workflow", body))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["install", "--profile=p", f"--config={fixture['cfg']}"]
+    )
+    assert result.exit_code == 0, result.output
+    live_post = fixture["dst"].read_text()
+    # No legacy markers remain.
+    assert detect_legacy_markers(live_post) is False
+    # End marker carries the semantics keyword and a 64-hex hash.
+    assert "end shared workflow hash=" in live_post
+    # Body preserved.
+    assert "rule A\n" in live_post
+    # The hash matches the body actually written.
+    assert extract_marker_hashes(live_post) == hash_sections(live_post)

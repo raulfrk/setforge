@@ -74,7 +74,7 @@ def test_capture_keep_defaults_preserves_tracked_marker_bodies(
         "header\n"
         "<!-- my-setup:user-section start host-local -->\n"
         "tracked default bullet\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
         "footer\n",
     )
     _write(
@@ -82,7 +82,7 @@ def test_capture_keep_defaults_preserves_tracked_marker_bodies(
         "header\n"
         "<!-- my-setup:user-section start host-local -->\n"
         "live host-only edit\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
         "footer\n",
     )
     capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
@@ -103,7 +103,7 @@ def test_capture_keep_defaults_propagates_non_marker_edits(
         "old header\n"
         "<!-- my-setup:user-section start host-local -->\n"
         "tracked default\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
         "old footer\n",
     )
     _write(
@@ -111,7 +111,7 @@ def test_capture_keep_defaults_propagates_non_marker_edits(
         "new header\n"
         "<!-- my-setup:user-section start host-local -->\n"
         "live host edit\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
         "new footer\n",
     )
     capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])

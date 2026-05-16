@@ -87,8 +87,14 @@ def diff_file(
     if preserve_user_sections:
         src_text = src.read_text(encoding="utf-8")
         live_text = dst.read_text(encoding="utf-8")
+        # Live side is parsed with allow_legacy=True so install's
+        # pre-deploy compare step survives a pre-9by user file. The
+        # compare CLI command surfaces a user-actionable error via
+        # ``cli._refuse_legacy_live_markers`` BEFORE reaching here when
+        # invoked directly; this branch is reached only from install's
+        # drift gate, where lenience is correct.
         bodies_match = sections.hash_sections(src_text) == sections.hash_sections(
-            live_text
+            live_text, allow_legacy=True
         )
         template_matches = sections.strip_section_content(
             src_text
@@ -141,7 +147,10 @@ def _render_with_merges(
         content = src.read_text(encoding="utf-8")
 
     if preserve_user_sections:
-        live_sections = sections.extract_sections(dst.read_text(encoding="utf-8"))
+        # See ``diff_file`` above for the ``allow_legacy=True`` rationale.
+        live_sections = sections.extract_sections(
+            dst.read_text(encoding="utf-8"), allow_legacy=True
+        )
         content = sections.merge_sections(content, live_sections)
     return content
 

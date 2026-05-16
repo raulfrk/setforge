@@ -75,13 +75,16 @@ def test_identical_content_is_noop(tmp_path: Path) -> None:
 
 def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
+    # Tracked side ships with a hash-stamped end marker (post-9by canonical).
     src.write_text(
         "header\n"
         "<!-- my-setup:user-section start host-local -->\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
         "footer\n"
     )
     dst = tmp_path / "dst.md"
+    # Live side is hashless (legacy live); install's allow_legacy=True
+    # tolerates it and rewrites the marker on write.
     dst.write_text(
         "old header\n"
         "<!-- my-setup:user-section start host-local -->\n"
@@ -383,3 +386,115 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
         validate_srcs_exist(cfg, resolved, repo)
     assert not (live / "a").exists()
     assert not (live / "ghost").exists()
+
+
+# ---------------------------------------------------------------------------
+# dotfiles-9ln — install migrates legacy live; post-install invariant holds
+# ---------------------------------------------------------------------------
+
+
+def _sha256_hex(s: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def test_copy_atomic_legacy_live_body_preserved(tmp_path: Path) -> None:
+    """``copy_atomic`` onto a legacy live file preserves the body bytes
+    and re-tags the markers to match tracked (semantics keyword + hash)."""
+    body = "preserved live content\n"
+    src = tmp_path / "src.md"
+    src.write_text(
+        "header\n"
+        "<!-- my-setup:user-section start shared notes -->\n"
+        f"{body}"
+        f"<!-- my-setup:user-section end shared notes hash={_sha256_hex(body)} -->\n"
+        "footer\n"
+    )
+    dst = tmp_path / "dst.md"
+    # Live with pre-9by untagged markers and no hash segment.
+    dst.write_text(
+        "header\n"
+        "<!-- my-setup:user-section start notes -->\n"
+        f"{body}"
+        "<!-- my-setup:user-section end notes -->\n"
+        "footer\n"
+    )
+    copy_atomic(src, dst, preserve_user_sections=True)
+    final = dst.read_text()
+    assert body in final
+    # Markers were re-tagged to match tracked's semantics + hash.
+    assert "end shared notes hash=" in final
+    # Untagged markers no longer present.
+    from my_setup.sections import detect_legacy_markers
+
+    assert detect_legacy_markers(final) is False
+
+
+def test_copy_atomic_post_install_invariant_holds_for_all_sections(
+    tmp_path: Path,
+) -> None:
+    """Post-install invariant: every section's embedded hash equals
+    :func:`hash_sections` for the actual body written. Asserts no
+    ``None`` values remain and every section satisfies the equality."""
+    body_a = "section A body\n"
+    body_b = "section B body\n"
+    src = tmp_path / "src.md"
+    src.write_text(
+        "head\n"
+        "<!-- my-setup:user-section start shared a -->\n"
+        f"{body_a}"
+        f"<!-- my-setup:user-section end shared a hash={_sha256_hex(body_a)} -->\n"
+        "mid\n"
+        "<!-- my-setup:user-section start host-local b -->\n"
+        f"{body_b}"
+        f"<!-- my-setup:user-section end host-local b hash={_sha256_hex(body_b)} -->\n"
+        "tail\n"
+    )
+    dst = tmp_path / "dst.md"
+    dst.write_text(
+        "head\n"
+        "<!-- my-setup:user-section start a -->\n"
+        f"{body_a}"
+        "<!-- my-setup:user-section end a -->\n"
+        "mid\n"
+        "<!-- my-setup:user-section start b -->\n"
+        f"{body_b}"
+        "<!-- my-setup:user-section end b -->\n"
+        "tail\n"
+    )
+    copy_atomic(src, dst, preserve_user_sections=True)
+
+    from my_setup.sections import extract_marker_hashes, hash_sections
+
+    result_text = dst.read_text()
+    embedded = extract_marker_hashes(result_text)
+    computed = hash_sections(result_text)
+    assert embedded == computed
+    assert None not in embedded.values()
+
+
+def test_copy_atomic_second_install_is_noop_after_legacy_retag(
+    tmp_path: Path,
+) -> None:
+    """First install migrates legacy live to strict-clean. A second
+    install with no body changes yields :attr:`DeployAction.NOOP`,
+    proving the re-tagged file is a stable fixed point."""
+    body = "host body\n"
+    digest = _sha256_hex(body)
+    src = tmp_path / "src.md"
+    src.write_text(
+        "<!-- my-setup:user-section start host-local notes -->\n"
+        f"{body}"
+        f"<!-- my-setup:user-section end host-local notes hash={digest} -->\n"
+    )
+    dst = tmp_path / "dst.md"
+    dst.write_text(
+        "<!-- my-setup:user-section start notes -->\n"
+        f"{body}"
+        "<!-- my-setup:user-section end notes -->\n"
+    )
+    first = copy_atomic(src, dst, preserve_user_sections=True)
+    assert first.action in {DeployAction.CREATED, DeployAction.UPDATED}
+    second = copy_atomic(src, dst, preserve_user_sections=True)
+    assert second.action is DeployAction.NOOP

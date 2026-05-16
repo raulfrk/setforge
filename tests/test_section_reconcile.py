@@ -139,12 +139,20 @@ def test_classify_section_drift_conflict() -> None:
     assert result["workflow"].state is SectionDriftState.CONFLICT
 
 
-def test_classify_section_drift_legacy_when_tracked_hashless() -> None:
+def test_classify_section_drift_strict_tracked_rejects_hashless_tracked() -> None:
+    """Post-9ln, the classifier parses tracked strictly — hashless tracked
+    is unreachable in steady state and surfaces as :class:`MarkerError`.
+
+    The LEGACY drift state is preserved (see
+    ``test_classify_section_drift_legacy_when_live_hashless``) but it now
+    originates only from the install path's legacy-live migration, never
+    from tracked-side gaps.
+    """
     body = "rule A\n"
     tracked_text = _make_text("workflow", "shared", body, None)
     live_text = _make_text("workflow", "shared", body + "live edit\n", _sha256(body))
-    result = classify_section_drift(tracked_text, live_text)
-    assert result["workflow"].state is SectionDriftState.LEGACY
+    with pytest.raises(MarkerError, match="missing required 'hash="):
+        classify_section_drift(tracked_text, live_text)
 
 
 def test_classify_section_drift_legacy_when_live_hashless() -> None:
@@ -195,14 +203,37 @@ def test_classify_section_drift_propagates_marker_error() -> None:
         classify_section_drift(tracked, live)
 
 
+def test_classify_section_drift_legacy_live_returns_LEGACY_state() -> None:
+    """Migration scenario (dotfiles-9ln): pre-9by live (no semantics
+    keyword, no end-marker hash) + stamped tracked passes through the
+    classifier's ``allow_legacy=True`` live-side path and yields the
+    :attr:`SectionDriftState.LEGACY` state for every section. The
+    state stays reachable so the wizard's two-way keep-live fallback
+    still fires on first install."""
+    body = "rule A\n"
+    tracked_text = _make_text("workflow", "shared", body, _sha256(body))
+    live_text = (
+        "<!-- my-setup:user-section start workflow -->\n"
+        f"{body}live edit\n"
+        "<!-- my-setup:user-section end workflow -->\n"
+    )
+    result = classify_section_drift(tracked_text, live_text)
+    assert result["workflow"].state is SectionDriftState.LEGACY
+    # Live semantics were untagged — classifier reports tracked's semantics.
+    assert result["workflow"].semantics is SectionSemantics.SHARED
+
+
 # ---------------------------------------------------------------------------
 # maintain_marker_hashes — invariant
 # ---------------------------------------------------------------------------
 
 
 def test_maintain_marker_hashes_writes_body_hashes_into_markers() -> None:
+    """Post-9ln, ``maintain_marker_hashes`` runs over output of
+    :func:`merge_sections`, which copies tracked's hash-stamped markers
+    verbatim. A stale or placeholder hash is the legitimate input shape."""
     body = "rule A\nrule B\n"
-    text = _make_text("workflow", "shared", body, None)
+    text = _make_text("workflow", "shared", body, "0" * 64)
     result = maintain_marker_hashes(text)
     assert extract_marker_hashes(result) == {"workflow": _sha256(body)}
 
@@ -216,7 +247,7 @@ def test_maintain_marker_hashes_replaces_stale_hash() -> None:
 
 def test_maintain_marker_hashes_idempotent() -> None:
     body = "rule A\n"
-    text = _make_text("workflow", "shared", body, None)
+    text = _make_text("workflow", "shared", body, "0" * 64)
     once = maintain_marker_hashes(text)
     twice = maintain_marker_hashes(once)
     assert once == twice
@@ -224,7 +255,7 @@ def test_maintain_marker_hashes_idempotent() -> None:
 
 def test_maintain_marker_hashes_invariant_extracted_equals_computed() -> None:
     """Post-install invariant: extract_marker_hashes == hash_sections."""
-    text = _make_text("workflow", "shared", "body\n", None) + _make_text(
+    text = _make_text("workflow", "shared", "body\n", "0" * 64) + _make_text(
         "notes", "host-local", "host body\n", "1" * 64
     )
     result = maintain_marker_hashes(text)
@@ -312,8 +343,15 @@ def test_round_trip_set_marker_hashes_then_classify_no_drift() -> None:
     """After ``set_marker_hashes(t, hash_sections(t))`` on both sides with
     matching bodies, the classifier reports no drift."""
     body = "rule A\nrule B\n"
+    # Start from a hashless legacy base, but plumb allow_legacy=True since
+    # set_marker_hashes is what stamps the proper hashes — the post-stamp
+    # round-trip below goes through the strict path.
     base = _make_text("workflow", "shared", body, None)
-    tracked = set_marker_hashes(base, hash_sections(base))
-    live = set_marker_hashes(base, hash_sections(base))
+    tracked = set_marker_hashes(
+        base, hash_sections(base, allow_legacy=True), allow_legacy=True
+    )
+    live = set_marker_hashes(
+        base, hash_sections(base, allow_legacy=True), allow_legacy=True
+    )
     result = classify_section_drift(tracked, live)
     assert result["workflow"].state is SectionDriftState.NO_DRIFT

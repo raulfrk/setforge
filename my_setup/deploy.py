@@ -179,7 +179,15 @@ def _compute_content(
             live_sections = {}
             if dst_existed:
                 live_text = dst.read_text(encoding="utf-8")
-                live_sections = sections.extract_sections(live_text)
+                # allow_legacy=True so pre-9by live files (untagged markers,
+                # no end-marker hash) migrate in place on first install: the
+                # subsequent merge_sections + maintain_marker_hashes pipeline
+                # emits a fully-tagged, hash-stamped live file. The
+                # precomputed path is already legacy-tolerant because the
+                # install loop pre-extracts with allow_legacy=True too.
+                live_sections = sections.extract_sections(
+                    live_text, allow_legacy=True
+                )
         if section_bodies_override:
             # Per-section override from the install-time wizard: takes
             # precedence over the live body for sections the wizard

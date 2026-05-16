@@ -39,16 +39,21 @@ def test_diff_file_basic_drift(tmp_path: Path) -> None:
 def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
+    # Both end markers carry the same (placeholder) hash so the
+    # ``strip_section_content`` template comparison treats them as
+    # byte-identical — the splice path then renders an empty diff
+    # because preserve_user_sections substitutes live body into tracked.
+    same_hash = "a" * 64
     _write(
         src,
         "<!-- my-setup:user-section start host-local -->\n"
-        "<!-- my-setup:user-section end host-local -->\n",
+        f"<!-- my-setup:user-section end host-local hash={same_hash} -->\n",
     )
     _write(
         dst,
         "<!-- my-setup:user-section start host-local -->\n"
         "live content\n"
-        "<!-- my-setup:user-section end host-local -->\n",
+        f"<!-- my-setup:user-section end host-local hash={same_hash} -->\n",
     )
     assert diff_file(src, dst, preserve_user_sections=True) == ""
 
@@ -63,7 +68,7 @@ def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
         "shared header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "same body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
         "shared footer\n"
     )
     _write(src, same)
@@ -79,12 +84,13 @@ def test_diff_file_hash_fast_path_falls_through_on_section_drift(
     '' because preserve_user_sections substitutes live into tracked."""
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
+    same_hash = "a" * 64
     _write(
         src,
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "tracked body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n"
         "footer\n",
     )
     _write(
@@ -92,7 +98,7 @@ def test_diff_file_hash_fast_path_falls_through_on_section_drift(
         "header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "live body\n"
-        "<!-- my-setup:user-section end host-local s -->\n"
+        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n"
         "footer\n",
     )
     # preserve_user_sections=True splices live body into the tracked template
@@ -107,19 +113,20 @@ def test_diff_file_hash_fast_path_declines_on_template_drift(
     declines and the diff surfaces the template drift."""
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
+    same_hash = "a" * 64
     _write(
         src,
         "tracked header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "shared body\n"
-        "<!-- my-setup:user-section end host-local s -->\n",
+        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n",
     )
     _write(
         dst,
         "live header\n"
         "<!-- my-setup:user-section start host-local s -->\n"
         "shared body\n"
-        "<!-- my-setup:user-section end host-local s -->\n",
+        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n",
     )
     diff = diff_file(src, dst, preserve_user_sections=True)
     assert "tracked header" in diff
