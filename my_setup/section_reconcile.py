@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from my_setup.sections import (
     SectionSemantics,
@@ -39,6 +40,7 @@ __all__ = [
     "SectionDriftState",
     "classify_section_drift",
     "maintain_marker_hashes",
+    "stamp_tracked_baseline",
 ]
 
 
@@ -191,6 +193,46 @@ def maintain_marker_hashes(text: str) -> str:
     Raises :class:`my_setup.errors.MarkerError` on malformed markers.
     """
     return set_marker_hashes(text, hash_sections(text))
+
+
+def stamp_tracked_baseline(tracked_path: Path) -> bool:
+    """Rewrite ``tracked_path`` so every end marker carries ``hash=A_T``.
+
+    The three-way classifier needs an embedded baseline hash on BOTH
+    tracked and live to discriminate ``PENDING_TRACKED`` /
+    ``LIVE_EDITED`` / ``CONFLICT``. The live side is stamped on every
+    successful ``copy_atomic`` via :func:`maintain_marker_hashes`; this
+    helper does the symmetric job for the tracked side so the next
+    install can reason about drift.
+
+    Behavior:
+
+    - If every section's embedded hash already matches its body
+      (``extract_marker_hashes(text) == hash_sections(text)`` and no
+      ``None`` entries), returns ``False`` and performs no write —
+      avoids spurious ``git diff`` noise in CI on already-aligned
+      tracked files.
+    - Otherwise, rewrites ``tracked_path`` with
+      ``set_marker_hashes(text, hash_sections(text))`` so post-install
+      ``E_T == A_T`` for every section, and returns ``True``.
+
+    Install MUTATES tracked content here, but only the ``hash=`` metadata
+    in end markers — the section BODY and all other content stay
+    byte-for-byte identical. ``my-setup compare`` stays fully read-only
+    on tracked (it does NOT call this); compare may therefore report
+    ``LEGACY`` for sections without a prior baseline. The next ``install``
+    fixes that.
+
+    Raises :class:`my_setup.errors.MarkerError` on malformed markers.
+    """
+    text = tracked_path.read_text(encoding="utf-8")
+    actual = hash_sections(text)
+    embedded = extract_marker_hashes(text)
+    if all(embedded.get(name) == digest for name, digest in actual.items()):
+        return False
+    new_text = set_marker_hashes(text, actual)
+    tracked_path.write_text(new_text, encoding="utf-8")
+    return True
 
 
 def has_shared_drift(drifts: Mapping[str, SectionDrift]) -> bool:

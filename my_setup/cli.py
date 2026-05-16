@@ -351,6 +351,14 @@ def install(
                 section_bodies_override=override,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
+            # After live write succeeds, stamp the tracked-side embedded
+            # hashes so the three-way classifier has a baseline (E_T) on
+            # subsequent installs. Only mutates the hash= segment in end
+            # markers — section BODIES stay byte-for-byte identical.
+            # Skipped when tracked already has aligned hashes (no spurious
+            # git diffs). See section_reconcile.stamp_tracked_baseline.
+            if dotfile.preserve_user_sections:
+                section_reconcile.stamp_tracked_baseline(sub_src)
 
     ext_delta = _reconcile_extensions(resolved)
     plugin_delta = _reconcile_plugins(cfg, resolved)
