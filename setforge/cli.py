@@ -2,7 +2,7 @@
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
 Pillar 2 adds extension reconcile inside ``install``. Claude plugin
-reconcile lands in Pillar 3. ``revert`` (dotfiles-19n) replays the most
+reconcile lands in Pillar 3. ``revert`` (tracked_files-19n) replays the most
 recent transition for a profile in reverse.
 """
 
@@ -35,7 +35,12 @@ from setforge import compare as compare_mod
 from setforge import merge as merge_mod
 from setforge import sections as sections_mod
 from setforge.capture import CaptureAuto
-from setforge.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
+from setforge.compare import (
+    CompareStatus,
+    expand_tracked_file,
+    resolve_dst,
+    resolve_src,
+)
 from setforge.config import (
     ClaudeInstallMode,
     Config,
@@ -62,7 +67,7 @@ from setforge.sections import SectionSemantics, detect_legacy_markers
 LOGGER = logging.getLogger(__name__)
 
 app = typer.Typer(
-    help="my-setup: dotfile + extension + Claude-plugin orchestration.",
+    help="my-setup: tracked_file + extension + Claude-plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -167,52 +172,52 @@ def _parse_section_auto(
         raise typer.Exit(2) from None
 
 
-def _iter_section_dotfiles(
+def _iter_section_tracked_files(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> Iterator[tuple[Path, Path]]:
-    """Yield ``(sub_src, sub_dst)`` for every section-bearing dotfile.
+    """Yield ``(sub_src, sub_dst)`` for every section-bearing tracked_file.
 
-    Encapsulates the resolve_src / resolve_dst / expand_dotfile /
+    Encapsulates the resolve_src / resolve_dst / expand_tracked_file /
     ``preserve_user_sections`` filter chain that
     :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
     :func:`_extract_live_sections_map`, and
     :func:`_print_section_reconcile_dry_run` all duplicate today. Pure
     walk — no I/O; callers that need the live or tracked text read it
     themselves so the generator's iteration cost stays O(N) in
-    dotfile-count regardless of file sizes.
+    tracked_file-count regardless of file sizes.
 
     Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        if not dotfile.preserve_user_sections:
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        if not tracked_file.preserve_user_sections:
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             yield sub_src, sub_dst
 
 
-def _iter_all_dotfiles(
+def _iter_all_tracked_files(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> Iterator[tuple[TrackedFile, Path, Path]]:
-    """Yield ``(dotfile, sub_src, sub_dst)`` for every dotfile in ``resolved.dotfiles``.
+    """Yield ``(tracked_file, sub_src, sub_dst)`` for every resolved entry.
 
-    Sibling of :func:`_iter_section_dotfiles` without the
+    Sibling of :func:`_iter_section_tracked_files` without the
     ``preserve_user_sections`` filter; consolidates the unfiltered
-    resolve_src / resolve_dst / expand_dotfile walks that ``install``
+    resolve_src / resolve_dst / expand_tracked_file walks that ``install``
     (transition snapshot + copy_atomic loop) and ``sync`` (transition
-    snapshot) all duplicate today. Yields ``dotfile`` alongside the
-    pair because the install copy_atomic caller needs per-dotfile
+    snapshot) all duplicate today. Yields ``tracked_file`` alongside the
+    pair because the install copy_atomic caller needs per-tracked_file
     ``preserve_user_*`` attributes; callers that only need a path
     destructure as ``_, _, sub_dst`` or ``_, sub_src, _``.
     """
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            yield dotfile, sub_src, sub_dst
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            yield tracked_file, sub_src, sub_dst
 
 
 def _refuse_legacy_live_markers(
@@ -221,7 +226,7 @@ def _refuse_legacy_live_markers(
     """Raise :class:`MySetupError` if any live ``preserve_user_sections``
     file carries pre-9by markers.
 
-    Walks every dotfile in ``resolved`` whose tracked entry has
+    Walks every tracked_file in ``resolved`` whose tracked entry has
     ``preserve_user_sections=True`` and runs
     :func:`setforge.sections.detect_legacy_markers` on the live file (when
     it exists). The strict parser would otherwise raise
@@ -235,7 +240,7 @@ def _refuse_legacy_live_markers(
     point refused. Install must NOT call this — install's job is to
     migrate.
     """
-    for _, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
+    for _, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -251,7 +256,7 @@ def _refuse_legacy_live_markers(
 
 
 def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> None:
-    """Emit the bare-install drift warning for one dotfile.
+    """Emit the bare-install drift warning for one tracked_file.
 
     Routes by worst state present across the file's ``shared`` sections:
 
@@ -304,17 +309,17 @@ def _resolve_section_decisions(
     section_auto: ReconcileAuto | None,
     interactive: bool,
 ) -> dict[Path, dict[str, str]]:
-    """Walk every dotfile with ``preserve_user_sections=True`` and run the
+    """Walk every tracked_file with ``preserve_user_sections=True`` and run the
     section reconcile wizard, returning a ``{dst_path: {section_name: body}}``
     map the install loop forwards to :func:`deploy.copy_atomic`.
 
-    Renders one bare-install warning per dotfile that has any shared
+    Renders one bare-install warning per tracked_file that has any shared
     drift; surfacing the warnings here keeps the deploy loop a thin
     orchestrator. Dotfiles without ``preserve_user_sections`` are
     silently skipped; their copy_atomic call gets an empty override.
     """
     decisions: dict[Path, dict[str, str]] = {}
-    for sub_src, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
+    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
         if not sub_dst.exists():
             # First install for this file — no live to reconcile.
             continue
@@ -343,9 +348,9 @@ def _extract_live_sections_map(
     resolved: ResolvedProfile,
     repo_root: Path,
 ) -> dict[Path, sections_mod.LiveSections]:
-    """Pre-extract live user-section bodies for every section-bearing dotfile.
+    """Pre-extract live user-section bodies for every section-bearing tracked_file.
 
-    Walks ``resolved.dotfiles``, and for each entry whose dotfile has
+    Walks ``resolved.tracked_files``, and for each entry whose tracked_file has
     ``preserve_user_sections=True`` AND whose live file already exists,
     reads the live file once and stores the
     :class:`~sections_mod.LiveSections` produced by
@@ -361,7 +366,7 @@ def _extract_live_sections_map(
     strict parser and refuse legacy via :func:`_refuse_legacy_live_markers`.
     """
     live_sections: dict[Path, sections_mod.LiveSections] = {}
-    for _, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
+    for _, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -408,7 +413,7 @@ def install(
         ),
     ),
 ) -> None:
-    """Deploy tracked → live for every dotfile in the profile."""
+    """Deploy tracked → live for every tracked_file in the profile."""
     # Mutual-exclusivity guard for the legacy unexpected-drift flags.
     if auto_accept_tracked and auto_accept_live:
         typer.secho(
@@ -476,7 +481,7 @@ def install(
             )
             raise typer.Exit(1)
 
-    # Resolve user-section drift (shared sections) into per-dotfile
+    # Resolve user-section drift (shared sections) into per-tracked_file
     # decisions BEFORE the deploy loop so wizard prompts and the
     # bare-install warning fire once, deterministically.
     section_decisions = _resolve_section_decisions(
@@ -487,27 +492,29 @@ def install(
         interactive=reconcile_user_sections,
     )
 
-    # Pre-extract live user-sections for every section-bearing dotfile
+    # Pre-extract live user-sections for every section-bearing tracked_file
     # so deploy.copy_atomic can skip its own re-read + re-parse pass.
     # See `precomputed_live_sections` on copy_atomic.
     live_sections_map = _extract_live_sections_map(cfg, resolved, repo_root)
 
     dst_paths: list[Path] = [
-        sub_dst for _, _, sub_dst in _iter_all_dotfiles(cfg, resolved, repo_root)
+        sub_dst for _, _, sub_dst in _iter_all_tracked_files(cfg, resolved, repo_root)
     ]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 
     file_pre = transitions.snapshot_paths(dst_paths)
 
-    for dotfile, sub_src, sub_dst in _iter_all_dotfiles(cfg, resolved, repo_root):
+    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
+        cfg, resolved, repo_root
+    ):
         override = section_decisions.get(sub_dst)
         precomputed = live_sections_map.get(sub_dst)
         result = deploy.copy_atomic(
             sub_src,
             sub_dst,
-            preserve_user_sections=dotfile.preserve_user_sections,
-            preserve_user_keys=dotfile.preserve_user_keys or None,
-            preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
+            preserve_user_sections=tracked_file.preserve_user_sections,
+            preserve_user_keys=tracked_file.preserve_user_keys or None,
+            preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
             section_bodies_override=override,
             precomputed_live_sections=precomputed,
         )
@@ -518,7 +525,7 @@ def install(
         # markers — section BODIES stay byte-for-byte identical.
         # Skipped when tracked already has aligned hashes (no spurious
         # git diffs). See section_reconcile.stamp_tracked_baseline.
-        if dotfile.preserve_user_sections:
+        if tracked_file.preserve_user_sections:
             section_reconcile.stamp_tracked_baseline(sub_src)
 
     ext_delta = _reconcile_extensions(resolved)
@@ -564,7 +571,7 @@ def compare(
         ),
     ),
 ) -> None:
-    """Report drift between tracked and live for every dotfile in the profile."""
+    """Report drift between tracked and live for every tracked_file in the profile."""
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -606,7 +613,7 @@ def _print_section_reconcile_dry_run(
 ) -> None:
     """Render the ``compare --reconcile-user-sections`` dry-run output.
 
-    For every dotfile with ``preserve_user_sections=True`` that exists
+    For every tracked_file with ``preserve_user_sections=True`` that exists
     on both sides, walks the section classifier and prints one line per
     drifted shared section with its three-way state label, plus a
     one-line aggregate per file. No prompts, no live mutation.
@@ -617,7 +624,7 @@ def _print_section_reconcile_dry_run(
     """
     resolved = resolve_profile(cfg, profile)
     any_emitted = False
-    for sub_src, sub_dst in _iter_section_dotfiles(cfg, resolved, repo_root):
+    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
         if not sub_dst.exists() or not sub_src.exists():
             continue
         if _render_drift_file(sub_src, sub_dst, console):
@@ -664,7 +671,7 @@ def capture(
         ),
     ),
 ) -> None:
-    """Capture live → tracked for every dotfile in the profile.
+    """Capture live → tracked for every tracked_file in the profile.
 
     When tracked declares ``preserve_user_keys_deep`` or carries
     non-preserve top-level drift, the merge wizard fires interactively;
@@ -713,13 +720,13 @@ def capture(
 def merge(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
-    dotfile: str | None = typer.Option(
+    tracked_file: str | None = typer.Option(
         None,
-        "--dotfile",
-        help="Narrow the walk to one dotfile entry key.",
+        "--tracked_file",
+        help="Narrow the walk to one tracked_file entry key.",
     ),
 ) -> None:
-    """Interactively resolve unexpected drift for every dotfile in the profile."""
+    """Interactively resolve unexpected drift for every tracked_file in the profile."""
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -737,7 +744,7 @@ def merge(
             repo_root,
             my_setup_yaml_path=config.resolve(),
             profile=profile,
-            dotfile_filter=dotfile,
+            tracked_file_filter=tracked_file,
         )
     except KeyboardInterrupt:
         typer.secho(
@@ -770,7 +777,7 @@ def sync(
         ),
     ),
 ) -> None:
-    """Capture live → tracked for dotfiles and extensions.
+    """Capture live → tracked for tracked_files and extensions.
 
     When tracked declares ``preserve_user_keys_deep`` or carries
     non-preserve top-level drift, the merge wizard fires interactively
@@ -803,7 +810,7 @@ def sync(
         transitions.ensure_state_dir_writable()
 
     src_paths: list[Path] = [
-        sub_src for _, sub_src, _ in _iter_all_dotfiles(cfg, resolved, repo_root)
+        sub_src for _, sub_src, _ in _iter_all_tracked_files(cfg, resolved, repo_root)
     ]
     src_paths.append(config.resolve())
 
@@ -1644,11 +1651,11 @@ def plugin_add(
     # required because `claude plugin install` writes
     # ``installed_plugins.json`` without flipping ``enabledPlugins`` —
     # without this second call the plugin lands disabled (see
-    # dotfiles-l37). Strict failure on enable matches the interactive
+    # tracked_files-l37). Strict failure on enable matches the interactive
     # single-plugin shape of `plugin add`: a silent warning would be a
     # footgun. The install half retains today's pattern; latent
     # subprocess-error handling on install is tracked separately as
-    # dotfiles-oyv.
+    # tracked_files-oyv.
     if not no_install:
         try:
             claude_plugins_mod.plugin_install(plugin_name, mp_name)
@@ -1895,14 +1902,14 @@ def _check_profile(
         failures.append(f"{ctx}: {exc}")
         return
 
-    for dotfile_name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[dotfile_name]
-        dot_ctx = f"{ctx}: dotfile {dotfile_name!r}"
+    for tracked_file_name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[tracked_file_name]
+        dot_ctx = f"{ctx}: tracked_file {tracked_file_name!r}"
 
         # Check 3: Jinja2 dst template renderability (StrictUndefined catches typos).
-        if dotfile.template:
+        if tracked_file.template:
             try:
-                Template(dotfile.dst, undefined=StrictUndefined).render(
+                Template(tracked_file.dst, undefined=StrictUndefined).render(
                     **template_context()
                 )
             except (TemplateSyntaxError, UndefinedError) as exc:
@@ -1910,9 +1917,9 @@ def _check_profile(
                 continue
 
         # Check 4: tracked src exists on disk.
-        src = resolve_src(dotfile, repo_root)
+        src = resolve_src(tracked_file, repo_root)
         if not src.exists():
-            failures.append(f"{dot_ctx}: src {dotfile.src} does not exist")
+            failures.append(f"{dot_ctx}: src {tracked_file.src} does not exist")
 
     # Check 5: extension include list — non-empty IDs, no duplicates.
     # Check the raw profile (before extends-merging) so duplicates that

@@ -58,7 +58,7 @@ class ClaudeInstallMode(StrEnum):
 
 
 class SectionMode(StrEnum):
-    """How capture treats marker bodies in dotfiles with
+    """How capture treats marker bodies in tracked_files with
     ``preserve_user_sections: true``.
 
     ``keep_defaults`` (default, non-destructive): capture re-splices the
@@ -210,7 +210,7 @@ class Profile(BaseModel):
     model_config = _STRICT
 
     extends: str | None = None
-    dotfiles: list[str] = []
+    tracked_files: list[str] = []
     extensions: Extensions = Extensions()
     claude_plugins: list[str] = []
     plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
@@ -228,7 +228,7 @@ class ResolvedProfile(BaseModel):
     model_config = _STRICT
 
     extends: None = None
-    dotfiles: list[str] = []
+    tracked_files: list[str] = []
     extensions: Extensions = Extensions()
     claude_plugins: list[str] = []
     plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
@@ -239,7 +239,7 @@ class Config(BaseModel):
     model_config = _STRICT
 
     version: int = 1
-    dotfiles: dict[str, TrackedFile]
+    tracked_files: dict[str, TrackedFile]
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
     profiles: dict[str, Profile]
@@ -293,7 +293,7 @@ def _resolve_chain(config: Config, name: str) -> list[Profile]:
 def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     """Walk the ``extends:`` chain and produce a fully-merged profile.
 
-    - List fields (``dotfiles``, ``claude_plugins``, ``bootstrap``,
+    - List fields (``tracked_files``, ``claude_plugins``, ``bootstrap``,
       ``extensions.include``, ``extensions.exclude``) are concatenated
       parent-first and deduplicated, preserving first occurrence.
     - Scalar fields (``plugins_reconcile``, ``extensions.reconcile``)
@@ -310,7 +310,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     for profile in chain:
         fields_set = profile.model_fields_set
         resolved = ResolvedProfile(
-            dotfiles=_merge_list(resolved.dotfiles, profile.dotfiles),
+            tracked_files=_merge_list(resolved.tracked_files, profile.tracked_files),
             claude_plugins=_merge_list(resolved.claude_plugins, profile.claude_plugins),
             bootstrap=_merge_list(resolved.bootstrap, profile.bootstrap),
             extensions=_merge_extensions(resolved.extensions, profile.extensions),

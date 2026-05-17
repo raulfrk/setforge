@@ -1,6 +1,6 @@
 version: 1
 
-dotfiles:
+tracked_files:
   claude_md:
     src: claude/CLAUDE.md
     dst: ~/.claude/CLAUDE.md
@@ -29,7 +29,7 @@ claude_plugins:
 
 profiles:
   base:
-    dotfiles:
+    tracked_files:
       - claude_md
     extensions:
       include:
@@ -42,7 +42,7 @@ profiles:
 
   child:
     extends: base
-    dotfiles:
+    tracked_files:
       - vscode_settings
     extensions:
       include:

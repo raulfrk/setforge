@@ -35,7 +35,7 @@ def _make_item(tmp_path: Path, name: str) -> DriftItem:
     _write(src, f"k: tracked_{name}\n")
     _write(dst, f"k: live_{name}\n")
     return DriftItem(
-        dotfile_name=name,
+        tracked_file_name=name,
         src_path=src,
         dst_path=dst,
         key_path="k",
@@ -50,7 +50,7 @@ def _make_my_setup_yaml(tmp_path: Path) -> Path:
     path = tmp_path / "my_setup.yaml"
     path.write_text(
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  one:\n"
         "    src: one.yaml\n"
         "    dst: /tmp/one.yaml\n"
@@ -61,7 +61,7 @@ def _make_my_setup_yaml(tmp_path: Path) -> Path:
         "    preserve_user_keys: []\n"
         "profiles:\n"
         "  p:\n"
-        "    dotfiles: [one, two]\n",
+        "    tracked_files: [one, two]\n",
         encoding="utf-8",
     )
     return path

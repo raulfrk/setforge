@@ -16,9 +16,9 @@ version: 1
 # ----------------------------------------------------------------------
 # Dotfiles. Each entry pairs a tracked src with a live dst plus optional
 # preserve / template / section directives. Keys are stable identifiers
-# referenced by profile.dotfiles lists below.
+# referenced by profile.tracked_files lists below.
 # ----------------------------------------------------------------------
-dotfiles:
+tracked_files:
   # Plain text — floor case, no overlays, byte copy.
   minimal_text:
     src: minimal/text.txt
@@ -155,43 +155,43 @@ claude_plugins:
 profiles:
   # ---- Single-mechanism profiles (10) ----------------------------------
   test-minimal:
-    dotfiles:
+    tracked_files:
       - minimal_text
 
   test-text-sections:
-    dotfiles:
+    tracked_files:
       - sections_md
 
   test-reconcile-sections:
-    dotfiles:
+    tracked_files:
       - sections_shared_md
 
   test-json:
-    dotfiles:
+    tracked_files:
       - json_settings
 
   test-jsonc-shallow:
-    dotfiles:
+    tracked_files:
       - jsonc_shallow
 
   test-jsonc-deep:
-    dotfiles:
+    tracked_files:
       - jsonc_deep
 
   test-yaml-shallow:
-    dotfiles:
+    tracked_files:
       - yaml_shallow
 
   test-yaml-deep:
-    dotfiles:
+    tracked_files:
       - yaml_deep
 
   test-directory:
-    dotfiles:
+    tracked_files:
       - directory_tree
 
   test-template:
-    dotfiles:
+    tracked_files:
       - template_path
 
   # ---- Chain profiles (3 entries: grandparent + base + child) ----------
@@ -199,28 +199,28 @@ profiles:
   # referenced as `extends:` targets, never directly. Counted toward the
   # 11+2 = 13 total per spec line 44.
   test-chain-grandparent:
-    dotfiles:
+    tracked_files:
       - chain_grand
     bootstrap:
       - ~/.my_setup_e2e/chain/bootstrap-grand.txt
 
   test-chain-base:
     extends: test-chain-grandparent
-    dotfiles:
+    tracked_files:
       - chain_base
     bootstrap:
       - ~/.my_setup_e2e/chain/bootstrap-base.txt
 
   test-chain-child:
     extends: test-chain-base
-    dotfiles:
+    tracked_files:
       - chain_child
     bootstrap:
       - ~/.my_setup_e2e/chain/bootstrap-child.txt
 
   # ---- Comprehensive — dotfiles + plugins + extensions + bootstrap ----
   test-comprehensive:
-    dotfiles:
+    tracked_files:
       - comprehensive_text
       - comprehensive_json
       - comprehensive_jsonc
@@ -238,7 +238,7 @@ profiles:
   # reviewer agents + the new reviewing-markdown skill, in isolation
   # from plugin / extension reconciliation.
   test-prose-reviewers:
-    dotfiles:
+    tracked_files:
       - prose_python_agent
       - prose_claude_md_agent
       - prose_markdown_agent

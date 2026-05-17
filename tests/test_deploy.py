@@ -342,11 +342,11 @@ def _build_profile(tmp_path: Path, present: list[str], missing: list[str]):
         (repo / "tracked" / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / "tracked" / name).write_text("data\n")
     cfg = Config(
-        dotfiles={
+        tracked_files={
             name: TrackedFile(src=Path(name), dst=str(live / name))
             for name in (*present, *missing)
         },
-        profiles={"p": Profile(dotfiles=[*present, *missing])},
+        profiles={"p": Profile(tracked_files=[*present, *missing])},
     )
     return repo, live, cfg, resolve_profile(cfg, "p")
 
@@ -376,7 +376,7 @@ def test_validate_srcs_exist_lists_all_missing(tmp_path: Path) -> None:
 
 def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> None:
     """Pre-flight runs before any deploy, so a missing src must not
-    leave any dotfile half-applied to live.
+    leave any tracked_file half-applied to live.
     """
     repo, live, cfg, resolved = _build_profile(tmp_path, ["a"], ["ghost"])
     with pytest.raises(MissingTrackedFile):
@@ -386,7 +386,7 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-9ln — install migrates legacy live; post-install invariant holds
+# tracked_files-9ln — install migrates legacy live; post-install invariant holds
 # ---------------------------------------------------------------------------
 
 

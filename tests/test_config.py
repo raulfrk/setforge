@@ -26,13 +26,13 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_load_sample_config() -> None:
     cfg = load_config(FIXTURES / "sample_config.yaml")
     assert cfg.version == 1
-    assert set(cfg.dotfiles) == {"claude_md", "vscode_settings"}
-    assert cfg.dotfiles["claude_md"].preserve_user_sections is True
-    assert cfg.dotfiles["vscode_settings"].preserve_user_keys == [
+    assert set(cfg.tracked_files) == {"claude_md", "vscode_settings"}
+    assert cfg.tracked_files["claude_md"].preserve_user_sections is True
+    assert cfg.tracked_files["vscode_settings"].preserve_user_keys == [
         "editor.fontSize",
         "workbench.colorTheme",
     ]
-    assert cfg.dotfiles["vscode_settings"].template is True
+    assert cfg.tracked_files["vscode_settings"].template is True
     assert set(cfg.profiles) == {"base", "child"}
     assert cfg.profiles["child"].extends == "base"
 
@@ -88,7 +88,7 @@ def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None
     config_path.write_text(
         """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: x
     dst: y
@@ -101,7 +101,7 @@ claude_plugins:
     marketplace: official
 profiles:
   base:
-    dotfiles:
+    tracked_files:
       - d
     claude_plugins:
       - declared-plugin
@@ -124,17 +124,17 @@ def test_load_config_collects_multiple_undeclared_plugin_references(
     config_path.write_text(
         """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: x
     dst: y
 profiles:
   alpha:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins:
       - ghost-a
   beta:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins:
       - ghost-b
 """
@@ -146,14 +146,14 @@ profiles:
     assert "ghost-b" in msg
 
 
-def test_dotfile_defaults() -> None:
+def test_tracked_file_defaults() -> None:
     df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
     assert df.preserve_user_sections is False
     assert df.preserve_user_keys == []
 
 
-def test_dotfile_rejects_tab_in_src() -> None:
+def test_tracked_file_rejects_tab_in_src() -> None:
     """Tab in src would corrupt the unified-diff format used by
     transitions; reject at config-load time with the offending byte
     surfaced as ``\\xNN`` for diagnosability."""
@@ -162,14 +162,14 @@ def test_dotfile_rejects_tab_in_src() -> None:
     assert "\\x09" in str(exc_info.value)
 
 
-def test_dotfile_rejects_newline_in_dst() -> None:
+def test_tracked_file_rejects_newline_in_dst() -> None:
     """Same hazard via ``dst``; ensure both fields are guarded."""
     with pytest.raises(ValidationError) as exc_info:
         TrackedFile(src=Path("ok"), dst="bad\npath")
     assert "\\x0a" in str(exc_info.value)
 
 
-def test_dotfile_accepts_paths_with_spaces_and_unicode() -> None:
+def test_tracked_file_accepts_paths_with_spaces_and_unicode() -> None:
     """Negative test guarding against over-rejection: spaces and
     non-ASCII (C1+) characters are valid in real paths."""
     df = TrackedFile(src=Path("my path/with spaces.txt"), dst="~/some/é-named/file")
@@ -179,7 +179,7 @@ def test_dotfile_accepts_paths_with_spaces_and_unicode() -> None:
 def test_profile_defaults() -> None:
     p = Profile()
     assert p.extends is None
-    assert p.dotfiles == []
+    assert p.tracked_files == []
     assert p.extensions == Extensions()
     assert p.claude_plugins == []
     assert p.plugins_reconcile is ReconcilePolicy.ADDITIVE
@@ -200,16 +200,16 @@ def test_config_round_trip_via_model() -> None:
 
 def _cfg(profiles: dict[str, Profile]) -> Config:
     return Config(
-        dotfiles={"d": TrackedFile(src=Path("a"), dst="b")},
+        tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
         profiles=profiles,
     )
 
 
 def test_resolve_single_profile() -> None:
-    cfg = _cfg({"only": Profile(dotfiles=["x", "y"])})
+    cfg = _cfg({"only": Profile(tracked_files=["x", "y"])})
     resolved = resolve_profile(cfg, "only")
     assert isinstance(resolved, ResolvedProfile)
-    assert resolved.dotfiles == ["x", "y"]
+    assert resolved.tracked_files == ["x", "y"]
     assert resolved.extends is None
 
 
@@ -217,21 +217,21 @@ def test_resolve_two_level_chain_lists_and_scalars() -> None:
     cfg = _cfg(
         {
             "parent": Profile(
-                dotfiles=["a", "b"],
+                tracked_files=["a", "b"],
                 claude_plugins=["p1"],
                 extensions=Extensions(include=["e1"], reconcile=ReconcilePolicy.PRUNE),
                 plugins_reconcile=ReconcilePolicy.PRUNE,
             ),
             "child": Profile(
                 extends="parent",
-                dotfiles=["b", "c"],
+                tracked_files=["b", "c"],
                 claude_plugins=["p2"],
                 extensions=Extensions(include=["e2"]),
             ),
         }
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.dotfiles == ["a", "b", "c"]
+    assert resolved.tracked_files == ["a", "b", "c"]
     assert resolved.claude_plugins == ["p1", "p2"]
     assert resolved.extensions.include == ["e1", "e2"]
     assert resolved.extensions.reconcile is ReconcilePolicy.PRUNE
@@ -241,24 +241,24 @@ def test_resolve_two_level_chain_lists_and_scalars() -> None:
 def test_resolve_three_level_chain() -> None:
     cfg = _cfg(
         {
-            "grand": Profile(dotfiles=["g"]),
-            "parent": Profile(extends="grand", dotfiles=["p"]),
-            "child": Profile(extends="parent", dotfiles=["c"]),
+            "grand": Profile(tracked_files=["g"]),
+            "parent": Profile(extends="grand", tracked_files=["p"]),
+            "child": Profile(extends="parent", tracked_files=["c"]),
         }
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.dotfiles == ["g", "p", "c"]
+    assert resolved.tracked_files == ["g", "p", "c"]
 
 
 def test_resolve_dedup_preserves_first_occurrence() -> None:
     cfg = _cfg(
         {
-            "parent": Profile(dotfiles=["a", "b"]),
-            "child": Profile(extends="parent", dotfiles=["a", "c", "b"]),
+            "parent": Profile(tracked_files=["a", "b"]),
+            "child": Profile(extends="parent", tracked_files=["a", "c", "b"]),
         }
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.dotfiles == ["a", "b", "c"]
+    assert resolved.tracked_files == ["a", "b", "c"]
 
 
 def test_resolve_scalar_inherits_when_child_unset() -> None:
@@ -323,7 +323,7 @@ def test_resolve_unknown_parent_raises() -> None:
         resolve_profile(cfg, "child")
 
 
-def test_dotfile_rejects_unknown_field() -> None:
+def test_tracked_file_rejects_unknown_field() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         TrackedFile.model_validate({"src": "a", "dst": "b", "typo": True})
 
@@ -359,29 +359,29 @@ def test_config_rejects_unknown_top_level_field() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         Config.model_validate(
             {
-                "dotfiles": {"a": {"src": "x", "dst": "y"}},
+                "tracked_files": {"a": {"src": "x", "dst": "y"}},
                 "profiles": {"p": {}},
                 "stray_top_level": 1,
             }
         )
 
 
-def test_config_rejects_unknown_field_in_nested_dotfile() -> None:
+def test_config_rejects_unknown_field_in_nested_tracked_file() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         Config.model_validate(
             {
-                "dotfiles": {"a": {"src": "x", "dst": "y", "tipo": True}},
+                "tracked_files": {"a": {"src": "x", "dst": "y", "tipo": True}},
                 "profiles": {"p": {}},
             }
         )
 
 
 # ---------------------------------------------------------------------------
-# preserve_user_keys_deep validators (dotfiles-nen.21)
+# preserve_user_keys_deep validators (tracked_files-nen.21)
 # ---------------------------------------------------------------------------
 
 
-def test_dotfile_rejects_path_in_both_preserve_lists() -> None:
+def test_tracked_file_rejects_path_in_both_preserve_lists() -> None:
     with pytest.raises(ValidationError, match="declared in both"):
         TrackedFile(
             src=Path("a"),
@@ -392,7 +392,7 @@ def test_dotfile_rejects_path_in_both_preserve_lists() -> None:
 
 
 @pytest.mark.parametrize("path", ["a[*]", "a[]"])
-def test_dotfile_rejects_list_suffix_in_preserve_user_keys_deep(path: str) -> None:
+def test_tracked_file_rejects_list_suffix_in_preserve_user_keys_deep(path: str) -> None:
     with pytest.raises(ValidationError, match="does not support"):
         TrackedFile(
             src=Path("a"),

@@ -267,7 +267,7 @@ def _edit_body(drift: SectionDrift) -> str:
     """Open ``$EDITOR`` on a tmpfile pre-seeded with the live body.
 
     Returns the edited text. Suffix ``.md`` so editors pick up Markdown
-    syntax highlighting — every user-section dotfile that ships today
+    syntax highlighting — every user-section tracked_file that ships today
     is Markdown.
     """
     with tempfile.NamedTemporaryFile(

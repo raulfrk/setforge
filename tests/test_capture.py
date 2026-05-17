@@ -4,8 +4,8 @@ from pathlib import Path
 
 from setforge.capture import (
     CaptureAction,
-    capture_dotfile,
     capture_profile,
+    capture_tracked_file,
 )
 from setforge.config import Config, Profile, SectionMode, TrackedFile
 
@@ -19,7 +19,7 @@ def test_capture_plain_copy(tmp_path: Path) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     _write(dst, "live content\n")
-    result = capture_dotfile(
+    result = capture_tracked_file(
         src, dst, preserve_user_sections=False, preserve_user_keys=[]
     )
     assert result.action is CaptureAction.UPDATED
@@ -31,7 +31,7 @@ def test_capture_noop_when_unchanged(tmp_path: Path) -> None:
     dst = tmp_path / "dst"
     _write(src, "same\n")
     _write(dst, "same\n")
-    result = capture_dotfile(
+    result = capture_tracked_file(
         src, dst, preserve_user_sections=False, preserve_user_keys=[]
     )
     assert result.action is CaptureAction.NOOP
@@ -52,7 +52,7 @@ def test_capture_strips_user_sections_when_no_tracked_exists(
         "<!-- my-setup:user-section end host-local -->\n"
         "footer\n",
     )
-    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
+    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "host-specific stuff" not in text
     assert "<!-- my-setup:user-section start host-local -->" in text
@@ -85,7 +85,7 @@ def test_capture_keep_defaults_preserves_tracked_marker_bodies(
         f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
         "footer\n",
     )
-    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
+    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "tracked default bullet" in text
     assert "live host-only edit" not in text
@@ -114,7 +114,7 @@ def test_capture_keep_defaults_propagates_non_marker_edits(
         f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
         "new footer\n",
     )
-    capture_dotfile(src, dst, preserve_user_sections=True, preserve_user_keys=[])
+    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "new header" in text
     assert "new footer" in text
@@ -143,7 +143,7 @@ def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
         "<!-- my-setup:user-section end host-local -->\n"
         "footer\n",
     )
-    capture_dotfile(
+    capture_tracked_file(
         src,
         dst,
         preserve_user_sections=True,
@@ -156,7 +156,7 @@ def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
     assert "<!-- my-setup:user-section start host-local -->" in text
 
 
-def test_dotfile_default_section_mode_is_keep_defaults() -> None:
+def test_tracked_file_default_section_mode_is_keep_defaults() -> None:
     """Schema default protects users from accidental destruction. If this
     flips, every existing yaml with `preserve_user_sections: true` would
     silently start stripping global defaults on sync."""
@@ -169,7 +169,7 @@ def test_capture_strips_yaml_keys(tmp_path: Path) -> None:
     src = tmp_path / "src.yaml"
     dst = tmp_path / "dst.yaml"
     _write(dst, "a: 1\nb: 2\nc: 3\n")
-    capture_dotfile(
+    capture_tracked_file(
         src, dst, preserve_user_sections=False, preserve_user_keys=["a", "c"]
     )
     text = src.read_text()
@@ -185,7 +185,9 @@ def test_capture_yaml_preserves_comments(tmp_path: Path) -> None:
         dst,
         "# leading comment\na: 1  # inline a\nb: 2  # inline b\n# trailing comment\n",
     )
-    capture_dotfile(src, dst, preserve_user_sections=False, preserve_user_keys=["a"])
+    capture_tracked_file(
+        src, dst, preserve_user_sections=False, preserve_user_keys=["a"]
+    )
     text = src.read_text()
     assert "# leading comment" in text
     assert "# inline b" in text
@@ -195,14 +197,14 @@ def test_capture_yaml_preserves_comments(tmp_path: Path) -> None:
 def test_capture_skips_missing_dst(tmp_path: Path) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "missing"
-    result = capture_dotfile(
+    result = capture_tracked_file(
         src, dst, preserve_user_sections=False, preserve_user_keys=[]
     )
     assert result.action is CaptureAction.SKIPPED
     assert not src.exists()
 
 
-def test_capture_profile_iterates_dotfiles(tmp_path: Path) -> None:
+def test_capture_profile_iterates_tracked_files(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     src1 = repo / "tracked" / "x"
     src2 = repo / "tracked" / "y"
@@ -212,11 +214,11 @@ def test_capture_profile_iterates_dotfiles(tmp_path: Path) -> None:
     _write(dst2, "y-live\n")
 
     config = Config(
-        dotfiles={
+        tracked_files={
             "x": TrackedFile(src=Path("x"), dst=str(dst1)),
             "y": TrackedFile(src=Path("y"), dst=str(dst2)),
         },
-        profiles={"p": Profile(dotfiles=["x", "y"])},
+        profiles={"p": Profile(tracked_files=["x", "y"])},
     )
     # Fresh capture: tracked doesn't exist yet; the walker yields no
     # items, so my_setup_yaml_path is required by signature only —

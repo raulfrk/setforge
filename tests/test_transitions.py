@@ -85,7 +85,7 @@ def test_transition_dirname_zero_microseconds_zero_padded() -> None:
 def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
     """Two timestamps in the same wall-clock second but different microseconds
     must produce distinct dirnames — this is the collision the format change
-    eliminates (dotfiles-nen.16)."""
+    eliminates (tracked_files-nen.16)."""
     a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=UTC)
     b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=UTC)
     assert transition_dirname(a, "install", "vmh") != transition_dirname(
@@ -613,7 +613,7 @@ def test_list_transitions_skips_corrupted_dirs(
 ) -> None:
     """Half-written or unreadable dirs are silently skipped — graceful
     degradation matters here because partial writes are real (issue
-    dotfiles-nen.16/.17 track atomic writes)."""
+    tracked_files-nen.16/.17 track atomic writes)."""
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
@@ -766,7 +766,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic write (dotfiles-nen.17) — staging dir + os.rename commit marker
+# Atomic write (tracked_files-nen.17) — staging dir + os.rename commit marker
 # ---------------------------------------------------------------------------
 
 

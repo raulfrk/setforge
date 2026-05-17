@@ -1,6 +1,6 @@
 """Install-side three-way reconciliation for `shared` user-sections.
 
-Closes the gap surfaced by dotfiles-23k: when tracked content INSIDE a
+Closes the gap surfaced by tracked_files-23k: when tracked content INSIDE a
 ``<!-- my-setup:user-section start shared X -->`` region is updated
 (e.g., a new bullet in the Workflow rules), today's install preserves
 the live body unconditionally and the new tracked content never lands.

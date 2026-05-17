@@ -27,21 +27,21 @@ from setforge.cli import app
 
 _CLEAN_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
 """
 
 _CLEAN_WITH_PLUGIN_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 marketplaces:
   my-market:
     source: github
@@ -51,7 +51,7 @@ claude_plugins:
     marketplace: my-market
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins: [myplugin]
 """
 
@@ -95,17 +95,17 @@ def test_validate_all_clean_exits_0(tmp_path: Path) -> None:
 
 
 def test_validate_schema_error_exits_1(tmp_path: Path) -> None:
-    """Pydantic schema error (extra field on dotfile) → exit 1."""
+    """Pydantic schema error (extra field on tracked_file) → exit 1."""
     bad_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
     not_a_real_field: true
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
 """
     cfg = _write_config(tmp_path, bad_yaml)
     result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
@@ -139,17 +139,17 @@ def test_validate_profile_cycle_exits_1(tmp_path: Path) -> None:
     """Profile cycle (a extends b, b extends a) → exit 1."""
     cyclic_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 profiles:
   a:
     extends: b
-    dotfiles: [d]
+    tracked_files: [d]
   b:
     extends: a
-    dotfiles: [d]
+    tracked_files: [d]
 """
     cfg = _write_config(tmp_path, cyclic_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=a", f"--config={cfg}"])
@@ -164,7 +164,7 @@ profiles:
 
 
 def test_validate_missing_src_exits_1(tmp_path: Path) -> None:
-    """A dotfile whose src does not exist on disk → exit 1."""
+    """A tracked_file whose src does not exist on disk → exit 1."""
     # create_src=False so tracked_file.txt is absent
     cfg = _write_config(tmp_path, _CLEAN_YAML, create_src=False)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
@@ -182,14 +182,14 @@ def test_validate_unrenderable_template_exits_1(tmp_path: Path) -> None:
     """A Jinja2 syntax error in a template dst → exit 1."""
     broken_template_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
     dst: "{% for x in %}broken"
     template: true
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
 """
     cfg = _write_config(tmp_path, broken_template_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
@@ -206,17 +206,17 @@ def test_validate_unknown_marketplace_exits_1(tmp_path: Path) -> None:
     """A plugin whose marketplace is absent from the marketplaces block → exit 1."""
     bad_mp_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 marketplaces: {}
 claude_plugins:
   myplugin:
     marketplace: ghost-market
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins: [myplugin]
 """
     cfg = _write_config(tmp_path, bad_mp_yaml)
@@ -235,13 +235,13 @@ def test_validate_ext_include_empty_id_exits_1(tmp_path: Path) -> None:
     """An empty string in extensions.include → exit 1, message names the profile."""
     ext_empty_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include: ["valid.ext", ""]
 """
@@ -265,13 +265,13 @@ def test_validate_ext_include_duplicate_exits_1(tmp_path: Path) -> None:
     """
     ext_dup_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include: ["foo.bar", "foo.bar"]
 """
@@ -291,19 +291,19 @@ def test_validate_undefined_template_variable_exits_1(tmp_path: Path) -> None:
     """A dst template referencing an undefined variable → exit 1 (StrictUndefined)."""
     undef_var_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
     dst: "{{ undefined_var }}/x.json"
     template: true
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
 """
     cfg = _write_config(tmp_path, undef_var_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    # Message must identify the offending dotfile and the undefined variable name
+    # Message must identify the offending tracked_file and the undefined variable name
     assert "d" in result.output
     assert "undefined_var" in result.output
 
@@ -338,7 +338,7 @@ def test_validate_aggregates_failures(tmp_path: Path) -> None:
     """Two profiles each with a missing src should both appear in output."""
     two_profile_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d1:
     src: missing1.txt
     dst: ~/.d1
@@ -347,9 +347,9 @@ dotfiles:
     dst: ~/.d2
 profiles:
   pa:
-    dotfiles: [d1]
+    tracked_files: [d1]
   pb:
-    dotfiles: [d2]
+    tracked_files: [d2]
 """
     cfg = _write_config(tmp_path, two_profile_yaml, create_src=False)
     result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
@@ -368,13 +368,13 @@ def test_validate_empty_plugin_ref_exits_1(tmp_path: Path) -> None:
     """An empty string in claude_plugins → exit 1, message names the profile."""
     empty_plugin_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins: [""]
 """
     cfg = _write_config(tmp_path, empty_plugin_yaml)
@@ -397,10 +397,10 @@ def test_validate_duplicate_plugin_ref_exits_1(tmp_path: Path) -> None:
     """
     dup_plugin_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 marketplaces:
   my-market:
     source: github
@@ -410,7 +410,7 @@ claude_plugins:
     marketplace: my-market
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     claude_plugins: ["myplugin", "myplugin"]
 """
     cfg = _write_config(tmp_path, dup_plugin_yaml)
@@ -428,10 +428,10 @@ def test_validate_double_empty_emits_single_message_per_field(tmp_path: Path) ->
     """
     double_empty_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 marketplaces:
   my-market:
     source: github
@@ -441,7 +441,7 @@ claude_plugins:
     marketplace: my-market
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include: ["", ""]
     claude_plugins: ["", ""]
@@ -464,10 +464,10 @@ def test_validate_triple_duplicate_emits_single_message_per_value(
     """
     triple_dup_yaml = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: tracked_file.txt
-    dst: ~/.some-dotfile
+    dst: ~/.some-tracked_file
 marketplaces:
   my-market:
     source: github
@@ -477,7 +477,7 @@ claude_plugins:
     marketplace: my-market
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include: ["foo.bar", "foo.bar", "foo.bar"]
     claude_plugins: ["myplugin", "myplugin", "myplugin"]

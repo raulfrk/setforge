@@ -1,4 +1,4 @@
-"""Load-bearing end-to-end gate for JSONC support (dotfiles-nen.6).
+"""Load-bearing end-to-end gate for JSONC support (tracked_files-nen.6).
 
 If this fails, the json-five-based design is invalid and we'd fall back
 to hand-rolled textual surgery. Every other JSONC test in the suite
@@ -51,7 +51,7 @@ _LIVE_FIXTURE = """\
 
 _FIXTURE_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   vscode_settings:
     src: settings.json
     dst: {dst}
@@ -60,7 +60,7 @@ dotfiles:
       - claudeCode.initialPermissionMode
 profiles:
   vmh:
-    dotfiles: [vscode_settings]
+    tracked_files: [vscode_settings]
 """
 
 
@@ -114,7 +114,7 @@ def test_install_then_capture_round_trips_tracked_byte_identical(
     If this fails, the json-five-backed design is invalid and we fall
     back to hand-rolled textual surgery. The check is byte-equality
     (``==``), not "approximately equal" — drift here is unacceptable for
-    daily-driver dotfile management.
+    daily-driver tracked_file management.
     """
     cfg, _dst = _setup_repo(tmp_path)
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))

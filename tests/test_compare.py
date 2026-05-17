@@ -61,7 +61,7 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
 def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
     """When section bodies hash-match AND non-section content is identical,
     diff_file short-circuits to '' via the hash_sections fast path
-    (dotfiles-xyw)."""
+    (tracked_files-xyw)."""
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
     same = (
@@ -201,9 +201,9 @@ def test_classify_yaml_drift_list_whole(tmp_path: Path) -> None:
     assert unexpected == []
 
 
-def _make_config(profile: Profile, dotfile: TrackedFile, key: str) -> Config:
+def _make_config(profile: Profile, tracked_file: TrackedFile, key: str) -> Config:
     return Config(
-        dotfiles={key: dotfile},
+        tracked_files={key: tracked_file},
         profiles={"p": profile},
     )
 
@@ -216,7 +216,7 @@ def test_compare_profile_unchanged(tmp_path: Path) -> None:
     _write(dst, "same\n")
 
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
@@ -234,7 +234,7 @@ def test_compare_profile_drifted_markdown_unexpected(tmp_path: Path) -> None:
     _write(dst, "live\n")
 
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x.md"), dst=str(dst)),
         "x",
     )
@@ -251,7 +251,7 @@ def test_compare_profile_yaml_all_expected(tmp_path: Path) -> None:
     _write(dst, "a: 99\nb: 2\n")
 
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
         "x",
     )
@@ -271,7 +271,7 @@ def test_compare_profile_yaml_mixed_drift(tmp_path: Path) -> None:
     _write(dst, "a: 99\nb: 88\n")
 
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
         "x",
     )
@@ -290,7 +290,7 @@ def test_compare_profile_missing_dst(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x"
 
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
@@ -314,7 +314,7 @@ def _make_config_with_yaml(
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, dst_text)
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=preserve),
         "x",
     )
@@ -330,7 +330,7 @@ def test_compare_summary_table_renders_headers(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, "a: 1\n")
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x.yaml"), dst=str(dst)),
         "x",
     )
@@ -357,7 +357,7 @@ def test_compare_summary_table_drifted_row(tmp_path: Path) -> None:
     console = Console(file=buf, highlight=False, markup=False, no_color=True)
     console.print(table)
     output = buf.getvalue()
-    assert "x" in output  # dotfile name appears as a row
+    assert "x" in output  # tracked_file name appears as a row
 
 
 def test_check_flag_clean_exits_0(tmp_path: Path) -> None:
@@ -368,7 +368,7 @@ def test_check_flag_clean_exits_0(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x"
     _write(dst, "same\n")
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
@@ -415,7 +415,7 @@ def test_check_strict_clean_is_not_drifted(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x"
     _write(dst, "same\n")
     config = _make_config(
-        Profile(dotfiles=["x"]),
+        Profile(tracked_files=["x"]),
         TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
@@ -437,8 +437,8 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     _write(dst, "same\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
-        "profiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -461,8 +461,8 @@ def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     _write(dst, "a: 99\nb: 88\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -485,8 +485,8 @@ def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
     _write(dst, "a: 99\nb: 2\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -509,8 +509,8 @@ def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None
     _write(dst, "a: 99\nb: 2\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -533,8 +533,8 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     _write(dst, "same\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
-        "profiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -571,8 +571,8 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     _write(dst, "live\n")
     cfg_path = repo / "my_setup.yaml"
     cfg_path.write_text(
-        f"version: 1\ndotfiles:\n  x:\n    src: x\n    dst: {dst}\n"
-        "profiles:\n  p:\n    dotfiles: [x]\n",
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     runner = CliRunner()

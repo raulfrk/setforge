@@ -40,7 +40,7 @@ def _make_section_text(
 
 @pytest.fixture
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """Build a one-dotfile profile (markdown with preserve_user_sections).
+    """Build a one-tracked_file profile (markdown with preserve_user_sections).
 
     Returns a dict with ``cfg``, ``src``, ``dst`` so each test can pre-seed
     or read those paths.
@@ -52,14 +52,14 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  d:\n"
         "    src: section.md\n"
         f"    dst: {dst}\n"
         "    preserve_user_sections: true\n"
         "profiles:\n"
         "  p:\n"
-        "    dotfiles: [d]\n",
+        "    tracked_files: [d]\n",
         encoding="utf-8",
     )
 
@@ -488,7 +488,7 @@ def test_install_reconciles_profile_extend_resolved_set(
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  base:\n"
         f"    src: base.md\n    dst: {base_dst}\n"
         "    preserve_user_sections: true\n"
@@ -497,10 +497,10 @@ def test_install_reconciles_profile_extend_resolved_set(
         "    preserve_user_sections: true\n"
         "profiles:\n"
         "  base-p:\n"
-        "    dotfiles: [base]\n"
+        "    tracked_files: [base]\n"
         "  child-p:\n"
         "    extends: base-p\n"
-        "    dotfiles: [child]\n",
+        "    tracked_files: [child]\n",
         encoding="utf-8",
     )
 
@@ -565,7 +565,7 @@ def test_install_with_use_tracked_records_transition(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-9ln — legacy live migration via install; compare/sync refuse
+# tracked_files-9ln — legacy live migration via install; compare/sync refuse
 # ---------------------------------------------------------------------------
 
 

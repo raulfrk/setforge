@@ -1,6 +1,6 @@
-"""Interactive merge wizard for unexpected dotfile drift — Pillar 4.
+"""Interactive merge wizard for unexpected tracked_file drift — Pillar 4.
 
-Walks every unexpected drift key across YAML and JSONC dotfiles,
+Walks every unexpected drift key across YAML and JSONC tracked_files,
 presents a rich-rendered per-drift block, reads a single-keypress
 action choice, and applies the selected action atomically with full
 snapshot/restore semantics.
@@ -43,12 +43,12 @@ def walk_unexpected_drift(
     report: CompareReport,
     config: Config,
     repo_root: Path,
-    dotfile_filter: str | None = None,
+    tracked_file_filter: str | None = None,
 ) -> Iterator[DriftItem]:
     """Yield one :class:`DriftItem` per unexpected drift key in ``report``.
 
     Iterates over every ``DRIFTED`` entry that has unexpected keys.
-    When ``dotfile_filter`` is set, entries whose dotfile name does not match
+    When ``tracked_file_filter`` is set, entries whose tracked_file name does not match
     are skipped. Values are resolved from the live/tracked files at yield time.
 
     The ``mode`` field on each yielded item reflects whether the key sits
@@ -63,19 +63,19 @@ def walk_unexpected_drift(
         if not entry.unexpected_drift_keys:
             continue
 
-        # entry.name may be "x" or "x/relpath" for directory dotfiles
-        dotfile_base = entry.name.split("/")[0]
-        if dotfile_filter is not None and dotfile_base != dotfile_filter:
+        # entry.name may be "x" or "x/relpath" for directory tracked_files
+        tracked_file_base = entry.name.split("/")[0]
+        if tracked_file_filter is not None and tracked_file_base != tracked_file_filter:
             continue
 
-        if dotfile_base not in config.dotfiles:
+        if tracked_file_base not in config.tracked_files:
             continue
 
-        dotfile = config.dotfiles[dotfile_base]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
+        tracked_file = config.tracked_files[tracked_file_base]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
 
-        # Handle sub-file names for directory dotfiles
+        # Handle sub-file names for directory tracked_files
         if "/" in entry.name:
             rel = entry.name.split("/", 1)[1]
             src = src / rel
@@ -91,13 +91,13 @@ def walk_unexpected_drift(
             tracked_parsed = y.load(src.read_text(encoding="utf-8"))
             live_parsed = y.load(dst.read_text(encoding="utf-8"))
 
-        deep_paths = set(dotfile.preserve_user_keys_deep)
+        deep_paths = set(tracked_file.preserve_user_keys_deep)
         for key_path in entry.unexpected_drift_keys:
             tracked_val = _get_value(tracked_parsed, key_path, fmt)
             live_val = _get_value(live_parsed, key_path, fmt)
             mode = DriftMode.DEEP if key_path in deep_paths else DriftMode.SHALLOW
             yield DriftItem(
-                dotfile_name=dotfile_base,
+                tracked_file_name=tracked_file_base,
                 src_path=src,
                 dst_path=dst,
                 key_path=key_path,
@@ -144,7 +144,7 @@ def run_wizard(
     my_setup_yaml_path: Path,
     snapshot_base: Path | None = None,
     profile: str = "unknown",
-    dotfile_filter: str | None = None,
+    tracked_file_filter: str | None = None,
     console: Console | None = None,
     auto_accept: str | None = None,
 ) -> list[tuple[DriftItem, ActionResult]]:
@@ -168,8 +168,8 @@ def run_wizard(
         ``~/.local/state/my-setup/merge-snapshots``.
     profile:
         Profile name (used in the merge-transition meta).
-    dotfile_filter:
-        If set, only walk drift for the named dotfile.
+    tracked_file_filter:
+        If set, only walk drift for the named tracked_file.
     console:
         Rich Console to use (defaults to a new ``Console()``).
     auto_accept:
@@ -194,7 +194,7 @@ def run_wizard(
         console = Console()
 
     items = walk_unexpected_drift(
-        report, config, repo_root, dotfile_filter=dotfile_filter
+        report, config, repo_root, tracked_file_filter=tracked_file_filter
     )
     pending_message = (
         f"[yellow]pending manual edit in {{src_path}}; "

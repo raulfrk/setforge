@@ -30,13 +30,13 @@ class _ExtState(TypedDict):
 
 _FIXTURE_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   greeting:
     src: greeting.md
     dst: {dst}
 profiles:
   vmh:
-    dotfiles: [greeting]
+    tracked_files: [greeting]
 """
 
 
@@ -214,8 +214,8 @@ def test_revert_restores_extension_state_to_pre_install(
     # Patch the fixture YAML to declare an extension include list.
     yaml = cfg.read_text(encoding="utf-8")
     yaml = yaml.replace(
-        "    dotfiles: [greeting]\n",
-        "    dotfiles: [greeting]\n"
+        "    tracked_files: [greeting]\n",
+        "    tracked_files: [greeting]\n"
         "    extensions:\n"
         "      include:\n"
         "        - example.ext-a\n"
@@ -333,8 +333,8 @@ def test_revert_continues_after_extension_uninstall_failure(
 
     yaml = cfg.read_text(encoding="utf-8")
     yaml = yaml.replace(
-        "    dotfiles: [greeting]\n",
-        "    dotfiles: [greeting]\n"
+        "    tracked_files: [greeting]\n",
+        "    tracked_files: [greeting]\n"
         "    extensions:\n"
         "      include:\n"
         "        - good.one\n"

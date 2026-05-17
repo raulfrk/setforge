@@ -51,50 +51,50 @@ def _make_config(
     *,
     src_text: str | None,
     dst_text: str,
-    dotfile_name: str = "x",
+    tracked_file_name: str = "x",
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
     is_json: bool = False,
 ) -> tuple[Config, Path, Path, Path]:
-    """Build a (Config, repo_root, src, dst) tuple with one dotfile.
+    """Build a (Config, repo_root, src, dst) tuple with one tracked_file.
 
     When ``src_text`` is None the tracked file is not created (fresh
     capture path).
     """
     ext = ".json" if is_json else ".yaml"
     repo = tmp_path / "repo"
-    src = repo / "tracked" / f"{dotfile_name}{ext}"
+    src = repo / "tracked" / f"{tracked_file_name}{ext}"
     if src_text is not None:
         _write(src, src_text)
-    dst = tmp_path / "live" / f"{dotfile_name}{ext}"
+    dst = tmp_path / "live" / f"{tracked_file_name}{ext}"
     _write(dst, dst_text)
     config = Config(
-        dotfiles={
-            dotfile_name: TrackedFile(
-                src=Path(f"{dotfile_name}{ext}"),
+        tracked_files={
+            tracked_file_name: TrackedFile(
+                src=Path(f"{tracked_file_name}{ext}"),
                 dst=str(dst),
                 preserve_user_keys=preserve_user_keys or [],
                 preserve_user_keys_deep=preserve_user_keys_deep or [],
             )
         },
-        profiles={"p": Profile(dotfiles=[dotfile_name])},
+        profiles={"p": Profile(tracked_files=[tracked_file_name])},
     )
     return config, repo, src, dst
 
 
-def _make_my_setup_yaml(tmp_path: Path, *, dotfile_name: str = "x") -> Path:
-    """Write a minimal valid my_setup.yaml referencing the test dotfile."""
+def _make_my_setup_yaml(tmp_path: Path, *, tracked_file_name: str = "x") -> Path:
+    """Write a minimal valid my_setup.yaml referencing the test tracked_file."""
     path = tmp_path / "my_setup.yaml"
     path.write_text(
         f"version: 1\n"
-        f"dotfiles:\n"
-        f"  {dotfile_name}:\n"
-        f"    src: {dotfile_name}.yaml\n"
-        f"    dst: /tmp/{dotfile_name}.yaml\n"
+        f"tracked_files:\n"
+        f"  {tracked_file_name}:\n"
+        f"    src: {tracked_file_name}.yaml\n"
+        f"    dst: /tmp/{tracked_file_name}.yaml\n"
         f"    preserve_user_keys: []\n"
         f"profiles:\n"
         f"  p:\n"
-        f"    dotfiles: [{dotfile_name}]\n",
+        f"    tracked_files: [{tracked_file_name}]\n",
         encoding="utf-8",
     )
     return path
@@ -280,22 +280,22 @@ def test_walker_skips_when_tracked_missing(tmp_path: Path) -> None:
 
 
 def test_walker_skips_when_live_missing(tmp_path: Path) -> None:
-    """No live file → walker yields nothing for that dotfile."""
+    """No live file → walker yields nothing for that tracked_file."""
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
     _write(src, "a: 1\n")
     dst = tmp_path / "live" / "x.yaml"
     # Don't create dst.
     config = Config(
-        dotfiles={"x": TrackedFile(src=Path("x.yaml"), dst=str(dst))},
-        profiles={"p": Profile(dotfiles=["x"])},
+        tracked_files={"x": TrackedFile(src=Path("x.yaml"), dst=str(dst))},
+        profiles={"p": Profile(tracked_files=["x"])},
     )
     items = list(walk_capture_drift(config, "p", repo))
     assert items == []
 
 
-def test_walker_honors_dotfile_filter(tmp_path: Path) -> None:
-    """dotfile_filter narrows to the named dotfile."""
+def test_walker_honors_tracked_file_filter(tmp_path: Path) -> None:
+    """tracked_file_filter narrows to the named tracked_file."""
     repo = tmp_path / "repo"
     src1 = repo / "tracked" / "x.yaml"
     src2 = repo / "tracked" / "y.yaml"
@@ -306,23 +306,23 @@ def test_walker_honors_dotfile_filter(tmp_path: Path) -> None:
     _write(dst1, "a: 99\n")
     _write(dst2, "a: 99\n")
     config = Config(
-        dotfiles={
+        tracked_files={
             "x": TrackedFile(src=Path("x.yaml"), dst=str(dst1)),
             "y": TrackedFile(src=Path("y.yaml"), dst=str(dst2)),
         },
-        profiles={"p": Profile(dotfiles=["x", "y"])},
+        profiles={"p": Profile(tracked_files=["x", "y"])},
     )
     all_items = list(walk_capture_drift(config, "p", repo))
-    only_x = list(walk_capture_drift(config, "p", repo, dotfile_filter="x"))
-    only_z = list(walk_capture_drift(config, "p", repo, dotfile_filter="z"))
+    only_x = list(walk_capture_drift(config, "p", repo, tracked_file_filter="x"))
+    only_z = list(walk_capture_drift(config, "p", repo, tracked_file_filter="z"))
     assert len(all_items) == 2
     assert len(only_x) == 1
-    assert only_x[0].dotfile_name == "x"
+    assert only_x[0].tracked_file_name == "x"
     assert only_z == []
 
 
-def test_walker_skips_section_dotfiles(tmp_path: Path) -> None:
-    """Markdown dotfiles using preserve_user_sections aren't walked
+def test_walker_skips_section_tracked_files(tmp_path: Path) -> None:
+    """Markdown tracked_files using preserve_user_sections aren't walked
     (capture's section handling stays as today)."""
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.md"
@@ -330,14 +330,14 @@ def test_walker_skips_section_dotfiles(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x.md"
     _write(dst, "# live\n")
     config = Config(
-        dotfiles={
+        tracked_files={
             "x": TrackedFile(
                 src=Path("x.md"),
                 dst=str(dst),
                 preserve_user_sections=True,
             )
         },
-        profiles={"p": Profile(dotfiles=["x"])},
+        profiles={"p": Profile(tracked_files=["x"])},
     )
     items = list(walk_capture_drift(config, "p", repo))
     assert items == []
@@ -349,7 +349,7 @@ def test_walker_jsonc_top_level_non_preserve_drift(tmp_path: Path) -> None:
     for nen.23 v1; the wizard's [u] action uses
     :func:`setforge.jsonc.overlay_user_keys` which only handles
     top-level literal key names. Per-sub-key JSONC drift lands via
-    `dotfiles-nen.19`.)"""
+    `tracked_files-nen.19`.)"""
     config, repo, _src, _dst = _make_config(
         tmp_path,
         src_text='{\n  "tabSize": 2\n}\n',
@@ -604,7 +604,7 @@ def test_capture_profile_interactive_mixed_decisions(
     assert "k_use: live_use" in final  # [u] absorbed live
 
     yaml_text = my_setup_yaml.read_text()
-    # [s] appended save_top to the dotfile's preserve_user_keys
+    # [s] appended save_top to the tracked_file's preserve_user_keys
     assert "save_top" in yaml_text
 
 
@@ -653,7 +653,7 @@ def test_capture_wizard_cancel_restores_tracked(
 
 
 # ---------------------------------------------------------------------------
-# JSONC nested-path walker (dotfiles-nen.19)
+# JSONC nested-path walker (tracked_files-nen.19)
 # ---------------------------------------------------------------------------
 
 

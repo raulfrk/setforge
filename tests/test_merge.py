@@ -2,7 +2,7 @@
 
 Covers:
 - Walker yields DriftItem items for YAML and JSONC drift
-- dotfile_filter narrows walker output
+- tracked_file_filter narrows walker output
 - read_one_choice: valid key, invalid key (bell + re-read), Ctrl-C
 - apply_action [k], [u] YAML (comments preserved), [u] JSONC (comments preserved)
 - apply_action [s] — extends preserve_user_keys in my_setup.yaml (comments preserved)
@@ -45,14 +45,14 @@ from setforge.wizard import (
 # Minimal my_setup.yaml body used by several wizard / snapshot tests below.
 _BASIC_YAML: str = (
     "version: 1\n"
-    "dotfiles:\n"
+    "tracked_files:\n"
     "  x:\n"
     "    src: x.yaml\n"
     "    dst: /tmp/x.yaml\n"
     "    preserve_user_keys: [a]\n"
     "profiles:\n"
     "  p:\n"
-    "    dotfiles: [x]\n"
+    "    tracked_files: [x]\n"
 )
 
 
@@ -90,26 +90,26 @@ def _make_config(
     tmp_path: Path,
     src_text: str,
     dst_text: str,
-    dotfile_name: str = "x",
+    tracked_file_name: str = "x",
     preserve: list[str] | None = None,
     is_json: bool = False,
 ) -> tuple[Config, Path, Path, Path]:
     """Return (Config, repo_root, src_path, dst_path)."""
     ext = ".json" if is_json else ".yaml"
     repo = tmp_path / "repo"
-    src = repo / "tracked" / f"{dotfile_name}{ext}"
+    src = repo / "tracked" / f"{tracked_file_name}{ext}"
     _write(src, src_text)
-    dst = tmp_path / "live" / f"{dotfile_name}{ext}"
+    dst = tmp_path / "live" / f"{tracked_file_name}{ext}"
     _write(dst, dst_text)
     config = Config(
-        dotfiles={
-            dotfile_name: TrackedFile(
-                src=Path(f"{dotfile_name}{ext}"),
+        tracked_files={
+            tracked_file_name: TrackedFile(
+                src=Path(f"{tracked_file_name}{ext}"),
                 dst=str(dst),
                 preserve_user_keys=preserve or [],
             )
         },
-        profiles={"p": Profile(dotfiles=[dotfile_name])},
+        profiles={"p": Profile(tracked_files=[tracked_file_name])},
     )
     return config, repo, src, dst
 
@@ -158,15 +158,17 @@ def test_walk_unexpected_drift_jsonc(tmp_path: Path) -> None:
     assert item.live_value == 88
 
 
-def test_walk_dotfile_filter(tmp_path: Path) -> None:
-    """dotfile_filter narrows walker to the specified dotfile name."""
+def test_walk_tracked_file_filter(tmp_path: Path) -> None:
+    """tracked_file_filter narrows walker to the specified tracked_file name."""
     config, repo, _src, _dst = _make_config(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
-    items_all = list(walk_unexpected_drift(report, config, repo, dotfile_filter=None))
-    items_x = list(walk_unexpected_drift(report, config, repo, dotfile_filter="x"))
-    items_y = list(walk_unexpected_drift(report, config, repo, dotfile_filter="y"))
+    items_all = list(
+        walk_unexpected_drift(report, config, repo, tracked_file_filter=None)
+    )
+    items_x = list(walk_unexpected_drift(report, config, repo, tracked_file_filter="x"))
+    items_y = list(walk_unexpected_drift(report, config, repo, tracked_file_filter="y"))
     assert len(items_all) == 1
     assert len(items_x) == 1
     assert len(items_y) == 0
@@ -273,7 +275,7 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -298,7 +300,7 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
         tmp_path, tracked_yaml, live_yaml, preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -328,7 +330,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
         tmp_path, tracked_json, live_json, preserve=["a"], is_json=True
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -354,13 +356,13 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
 
 
 def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
-    """[s] save-as-preserved appends key_path to dotfile.preserve_user_keys."""
+    """[s] save-as-preserved appends key_path to tracked_file.preserve_user_keys."""
     my_setup_yaml = tmp_path / "my_setup.yaml"
     # Write a minimal my_setup.yaml with comments
     yaml_text = (
         "# my-setup config\n"
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  x:\n"
         "    src: x.yaml\n"
         "    dst: /tmp/x.yaml\n"
@@ -368,7 +370,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         "      - a\n"
         "profiles:\n"
         "  p:\n"
-        "    dotfiles: [x]\n"
+        "    tracked_files: [x]\n"
     )
     my_setup_yaml.write_text(yaml_text, encoding="utf-8")
 
@@ -376,7 +378,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -391,7 +393,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
     # Reload and verify
     y = YAML(typ="rt")
     updated = y.load(my_setup_yaml.read_text())
-    assert "b" in updated["dotfiles"]["x"]["preserve_user_keys"]
+    assert "b" in updated["tracked_files"]["x"]["preserve_user_keys"]
 
     # Comment preserved
     assert "# my-setup config" in my_setup_yaml.read_text()
@@ -402,7 +404,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
     my_setup_yaml = tmp_path / "my_setup.yaml"
     yaml_text = (
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  x:\n"
         "    src: x.yaml\n"
         "    dst: /tmp/x.yaml\n"
@@ -411,7 +413,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         "      - b\n"
         "profiles:\n"
         "  p:\n"
-        "    dotfiles: [x]\n"
+        "    tracked_files: [x]\n"
     )
     my_setup_yaml.write_text(yaml_text, encoding="utf-8")
 
@@ -419,7 +421,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a", "b"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -432,7 +434,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
     y = YAML(typ="rt")
     updated = y.load(my_setup_yaml.read_text())
     # b should appear exactly once
-    assert updated["dotfiles"]["x"]["preserve_user_keys"].count("b") == 1
+    assert updated["tracked_files"]["x"]["preserve_user_keys"].count("b") == 1
 
 
 def test_apply_action_m_y_launches_editor(
@@ -443,7 +445,7 @@ def test_apply_action_m_y_launches_editor(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -480,7 +482,7 @@ def test_apply_action_m_n_returns_manual_pending(
         tmp_path, "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -638,14 +640,14 @@ def test_manual_pending_records_transition_for_applied(
 
     # Two drift keys: first -> [k], second -> [m]+n
     config = Config(
-        dotfiles={
+        tracked_files={
             "x": TrackedFile(
                 src=Path("x.yaml"),
                 dst=str(tmp_path / "live" / "x.yaml"),
                 preserve_user_keys=["a"],
             )
         },
-        profiles={"p": Profile(dotfiles=["x"])},
+        profiles={"p": Profile(tracked_files=["x"])},
     )
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
@@ -706,7 +708,7 @@ def test_use_live_yaml_comments_survive(tmp_path: Path) -> None:
         tmp_path, tracked_yaml, live_yaml, preserve=["foo"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="baz",
@@ -729,7 +731,7 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
         tmp_path, tracked_json, live_json, preserve=["a"], is_json=True
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",
@@ -751,7 +753,7 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 1\nb: 99\n", preserve=["a"]
     )
     uk = DriftItem(
-        dotfile_name="x",
+        tracked_file_name="x",
         src_path=src,
         dst_path=dst,
         key_path="b",

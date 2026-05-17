@@ -325,17 +325,17 @@ def test_remove_from_include_errors_when_only_in_parent(tmp_path: Path) -> None:
 
     fixture = """\
 version: 1
-dotfiles:
+tracked_files:
   d: {src: x, dst: y}
 profiles:
   parent:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include:
         - inherited.one
   child:
     extends: parent
-    dotfiles: [d]
+    tracked_files: [d]
 """
     p = tmp_path / "my_setup.yaml"
     p.write_text(fixture, encoding="utf-8")
@@ -349,17 +349,17 @@ def test_remove_from_include_with_exclude_flag_overrides_parent(
     """--exclude should let the user override an inherited declaration."""
     fixture = """\
 version: 1
-dotfiles:
+tracked_files:
   d: {src: x, dst: y}
 profiles:
   parent:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include:
         - inherited.one
   child:
     extends: parent
-    dotfiles: [d]
+    tracked_files: [d]
 """
     p = tmp_path / "my_setup.yaml"
     p.write_text(fixture, encoding="utf-8")
@@ -382,7 +382,7 @@ _FIXTURE_YAML = """\
 version: 1
 
 # Top-level comment.
-dotfiles:
+tracked_files:
   d:
     src: x
     dst: y
@@ -390,7 +390,7 @@ dotfiles:
 profiles:
   base:
     # Base profile comment.
-    dotfiles:
+    tracked_files:
       - d
     extensions:
       include:
@@ -399,7 +399,7 @@ profiles:
       exclude:
         - drop.me
   bare:
-    dotfiles:
+    tracked_files:
       - d
 """
 

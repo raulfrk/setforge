@@ -47,17 +47,17 @@ class CompareReport:
     has_unexpected_drift: bool
 
 
-def resolve_src(dotfile: TrackedFile, repo_root: Path) -> Path:
-    """Resolve a dotfile's ``src`` (relative to ``tracked/``) to an
+def resolve_src(tracked_file: TrackedFile, repo_root: Path) -> Path:
+    """Resolve a tracked_file's ``src`` (relative to ``tracked/``) to an
     absolute path inside the repo."""
-    return repo_root / "tracked" / dotfile.src
+    return repo_root / "tracked" / tracked_file.src
 
 
-def resolve_dst(dotfile: TrackedFile) -> Path:
-    """Resolve a dotfile's ``dst`` template (if any) to an absolute path
+def resolve_dst(tracked_file: TrackedFile) -> Path:
+    """Resolve a tracked_file's ``dst`` template (if any) to an absolute path
     via Jinja2 + ``~`` expansion."""
-    raw = dotfile.dst
-    if dotfile.template:
+    raw = tracked_file.dst
+    if tracked_file.template:
         raw = Template(raw).render(**template_context())
     return Path(raw).expanduser()
 
@@ -256,8 +256,10 @@ def _format_path(path: tuple) -> str:
     return "".join(out) or "<root>"
 
 
-def expand_dotfile(name: str, src: Path, dst: Path) -> list[tuple[str, Path, Path]]:
-    """Expand a dotfile into ``(name, src_file, dst_file)`` triples.
+def expand_tracked_file(
+    name: str, src: Path, dst: Path
+) -> list[tuple[str, Path, Path]]:
+    """Expand a tracked_file into ``(name, src_file, dst_file)`` triples.
 
     Plain files yield a single triple; directories yield one triple per
     contained file with a ``name/relpath`` synthetic name.
@@ -277,18 +279,20 @@ def compare_profile(
     profile_name: str,
     repo_root: Path,
 ) -> CompareReport:
-    """Build a :class:`CompareReport` for every dotfile in the resolved profile."""
+    """Build a :class:`CompareReport` for every tracked_file in the resolved profile."""
     resolved = resolve_profile(config, profile_name)
     entries: list[FileCompare] = []
     has_unexpected = False
 
-    for name in resolved.dotfiles:
-        dotfile = config.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
+    for name in resolved.tracked_files:
+        tracked_file = config.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
 
-        for sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            entry, sub_unexpected = _compare_one(sub_name, sub_src, sub_dst, dotfile)
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            entry, sub_unexpected = _compare_one(
+                sub_name, sub_src, sub_dst, tracked_file
+            )
             entries.append(entry)
             if sub_unexpected:
                 has_unexpected = True
@@ -297,7 +301,7 @@ def compare_profile(
 
 
 def _compare_one(
-    name: str, src: Path, dst: Path, dotfile: TrackedFile
+    name: str, src: Path, dst: Path, tracked_file: TrackedFile
 ) -> tuple[FileCompare, bool]:
     if not dst.exists():
         return (
@@ -314,27 +318,27 @@ def _compare_one(
     diff = diff_file(
         src,
         dst,
-        preserve_user_sections=dotfile.preserve_user_sections,
-        preserve_user_keys=dotfile.preserve_user_keys or None,
-        preserve_user_keys_deep=dotfile.preserve_user_keys_deep or None,
+        preserve_user_sections=tracked_file.preserve_user_sections,
+        preserve_user_keys=tracked_file.preserve_user_keys or None,
+        preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
     )
 
     expected_keys: list[str] = []
     unexpected_keys: list[str] = []
-    if dotfile.preserve_user_keys or dotfile.preserve_user_keys_deep:
+    if tracked_file.preserve_user_keys or tracked_file.preserve_user_keys_deep:
         if jsonc.is_jsonc_file(src):
             expected_keys, unexpected_keys = jsonc.classify_jsonc_drift(
                 src.read_text(encoding="utf-8"),
                 dst.read_text(encoding="utf-8"),
-                dotfile.preserve_user_keys,
-                deep_key_names=dotfile.preserve_user_keys_deep,
+                tracked_file.preserve_user_keys,
+                deep_key_names=tracked_file.preserve_user_keys_deep,
             )
         else:
             expected_keys, unexpected_keys = classify_yaml_drift(
                 src,
                 dst,
-                dotfile.preserve_user_keys,
-                preserve_user_keys_deep=dotfile.preserve_user_keys_deep,
+                tracked_file.preserve_user_keys,
+                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
             )
 
     is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)

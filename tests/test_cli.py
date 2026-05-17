@@ -16,11 +16,11 @@ from setforge.deploy import DeployAction, DeployResult
 def test_install_passes_precomputed_live_sections_to_deploy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``install`` must pre-extract live user-sections per dotfile and
+    """``install`` must pre-extract live user-sections per tracked_file and
     forward them to every ``deploy.copy_atomic`` call via
     ``precomputed_live_sections``.
 
-    Seeds a single-dotfile profile with ``preserve_user_sections=True``
+    Seeds a single-tracked_file profile with ``preserve_user_sections=True``
     plus an existing live file that contains one host-local section,
     then patches ``deploy.copy_atomic`` to capture the kwargs.
     """
@@ -47,14 +47,14 @@ def test_install_passes_precomputed_live_sections_to_deploy(
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(
         "version: 1\n"
-        "dotfiles:\n"
+        "tracked_files:\n"
         "  d:\n"
         "    src: section.md\n"
         f"    dst: {dst}\n"
         "    preserve_user_sections: true\n"
         "profiles:\n"
         "  p:\n"
-        "    dotfiles: [d]\n",
+        "    tracked_files: [d]\n",
         encoding="utf-8",
     )
 

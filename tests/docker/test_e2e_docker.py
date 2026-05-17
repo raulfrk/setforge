@@ -1,4 +1,4 @@
-"""Docker E2E test ring for ``my-setup`` (dotfiles-nen.9 outer ring).
+"""Docker E2E test ring for ``my-setup`` (tracked_files-nen.9 outer ring).
 
 Every test runs inside a fresh Debian 12 container with real
 ``claude`` + ``code`` binaries, exercising the actual install / sync
@@ -263,7 +263,7 @@ def test_install_text_sections_preserve_user_content(
 def test_install_json_byte_copy(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """E: JSON dotfile byte-copies; parsed result matches tracked."""
+    """E: JSON tracked_file byte-copies; parsed result matches tracked."""
     c = docker_container()
     _install(c, "test-json")
     payload = json.loads(_read_live(c, ".my_setup_e2e/json/settings.json"))
@@ -482,7 +482,7 @@ def test_install_template_dst_jinja2(
 def test_install_chain_resolution_and_bootstrap(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """K: 3-level extends chain; parent-first dotfile dedup + bootstrap stubs."""
+    """K: 3-level extends chain; parent-first tracked_file dedup + bootstrap stubs."""
     c = docker_container()
     _install(c, "test-chain-child")
     root = ".my_setup_e2e/chain"
@@ -501,11 +501,11 @@ def test_install_chain_resolution_and_bootstrap(
 def test_install_comprehensive_plugins_extensions(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """L: full sweep — dotfiles + marketplaces + plugins + extensions + bootstrap.
+    """L: full sweep — tracked_files + marketplaces + plugins + extensions + bootstrap.
 
-    Asserts the dotfile leg lands cleanly. The plugin + extension legs hit
+    Asserts the tracked_file leg lands cleanly. The plugin + extension legs hit
     real ``claude`` and ``code`` binaries; this test verifies install
-    exits 0 (= reconcile completed without raising) and the dotfile
+    exits 0 (= reconcile completed without raising) and the tracked_file
     layer is materialised. Plugin / extension state cross-checks are
     asserted by the bound list commands when claude/code are usable in
     CI; failures there are surfaced via install's non-zero exit.
@@ -528,7 +528,7 @@ def test_install_comprehensive_plugins_extensions(
     assert proc.returncode == 0, "comprehensive bootstrap stub missing"
 
 
-# --- Variant L1 (dotfiles-58x verbosity surface) --------------------------
+# --- Variant L1 (tracked_files-58x verbosity surface) --------------------------
 
 
 def test_install_verbose_emits_my_setup_debug(
@@ -541,7 +541,7 @@ def test_install_verbose_emits_my_setup_debug(
     test interpreter but not real-subprocess logging propagation). Runs
     the comprehensive profile under ``-v`` in a fresh Debian container
     and asserts a ``setforge.claude_plugins DEBUG:`` line lands on
-    stderr — proving the dotfiles-58x verbosity surface threads
+    stderr — proving the tracked_files-58x verbosity surface threads
     end-to-end through CLI startup, ``logging.basicConfig(stream=sys.stderr)``,
     and the production ``setforge.claude_plugins`` LOGGER call sites
     (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``).
@@ -704,7 +704,7 @@ def test_sync_interactive_skip_via_pty(
 
     Per ``setforge/wizard.py`` _action_save_as_preserved (verified
     against wizard source per open question 8): ``s`` appends
-    ``item.key_path`` to the dotfile's ``preserve_user_keys`` list in
+    ``item.key_path`` to the tracked_file's ``preserve_user_keys`` list in
     my_setup.yaml. The tracked file is unchanged; only the YAML
     config gets the new preserve entry.
     """
@@ -719,7 +719,7 @@ def test_sync_interactive_skip_via_pty(
         snapshot_path=f"/workspace/{CONFIG_FIXTURE}",
     )
     # The action appends `settings.userSub` (the diverged key path) to
-    # the dotfile's preserve_user_keys list in the YAML config. Diff
+    # the tracked_file's preserve_user_keys list in the YAML config. Diff
     # pre vs post and assert the new preserve entry is in the diff —
     # ``"userSub" in pre_yaml`` is already true (the fixture mentions
     # it elsewhere), so a bare ``in post_yaml`` check is vacuous.
@@ -765,7 +765,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
-    """S1: same shape as Q but on a YAML deep dotfile — yaml_merge round-trip."""
+    """S1: same shape as Q but on a YAML deep tracked_file — yaml_merge round-trip."""
     c = docker_container()
     _, post = _drive_pty_sync(
         c,
@@ -875,7 +875,7 @@ def test_validate_clean_yaml_exit_zero(
 
 
 # ===========================================================================
-# Section: Legacy (pre-9by) marker migration (dotfiles-9ln)
+# Section: Legacy (pre-9by) marker migration (tracked_files-9ln)
 # ===========================================================================
 #
 # These variants exercise the install / compare flow against a live
@@ -1004,7 +1004,7 @@ def test_compare_after_legacy_install_is_clean(
 
 
 # ===========================================================================
-# Section: Prose-reviewer artifacts (dotfiles-h5k)
+# Section: Prose-reviewer artifacts (tracked_files-h5k)
 # ===========================================================================
 #
 # The four variants below exercise the install / compare / revert
@@ -1015,7 +1015,7 @@ def test_compare_after_legacy_install_is_clean(
 # compare must report no drift, and revert must remove every deployed
 # artifact (each starts absent on a fresh container).
 #
-# Implicitly verifies (per dotfiles-h5k --notes): 9by's strict-tag
+# Implicitly verifies (per tracked_files-h5k --notes): 9by's strict-tag
 # parser does not reject pure-tracked agent files that contain no
 # user-section markers.
 

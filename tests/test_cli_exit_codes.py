@@ -1,6 +1,6 @@
 """Focused CLI tests for exit-code contracts.
 
-Broader CLI integration coverage lives under dotfiles-nen.9 (Docker
+Broader CLI integration coverage lives under tracked_files-nen.9 (Docker
 e2e). This file pins the narrow exit-code behaviors that are only
 observable through the Typer surface — chiefly that ``ext reconcile``
 exits non-zero in read-only modes when drift exists, and that
@@ -19,19 +19,19 @@ from setforge.cli import app
 
 _FIXTURE_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
     src: x
     dst: y
 profiles:
   vmh:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include:
         - declared.one
       reconcile: report
   prune:
-    dotfiles: [d]
+    tracked_files: [d]
     extensions:
       include:
         - declared.one
@@ -170,13 +170,13 @@ def test_ext_reconcile_clean_state_exits_0(
 
 _INSTALL_FIXTURE_YAML = """\
 version: 1
-dotfiles:
+tracked_files:
   d:
-    src: dotfile.txt
+    src: tracked_file.txt
     dst: {dst}
 profiles:
   p:
-    dotfiles: [d]
+    tracked_files: [d]
 """
 
 
@@ -187,14 +187,14 @@ def _setup_install_fixture(
     dst_text: str = "tracked\n",
 ) -> Path:
     """Write a minimal my_setup.yaml + tracked file + live destination."""
-    dst = tmp_path / "live" / "dotfile.txt"
+    dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(dst_text, encoding="utf-8")
 
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(_INSTALL_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "dotfile.txt").write_text(src_text, encoding="utf-8")
+    (tmp_path / "tracked" / "tracked_file.txt").write_text(src_text, encoding="utf-8")
 
     # Disable extension reconcile (no code binary)
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
@@ -222,24 +222,26 @@ def test_install_unexpected_drift_exits_1_with_message(
 ) -> None:
     """install exits 1 with the canonical message when unexpected drift exists.
 
-    Uses a YAML dotfile with a non-preserved key that diverges between
+    Uses a YAML tracked_file with a non-preserved key that diverges between
     tracked and live — this produces a non-empty unexpected_drift_keys list
     which is what the install gate checks.
     """
-    # Set up a YAML dotfile: tracked has a=1,b=2, live has a=99,b=88.
+    # Set up a YAML tracked_file: tracked has a=1,b=2, live has a=99,b=88.
     # preserve_user_keys=[a] → b is unexpected drift.
-    dst = tmp_path / "live" / "dotfile.txt"
+    dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("a: 99\nb: 88\n", encoding="utf-8")
 
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(
-        f"version: 1\ndotfiles:\n  d:\n    src: dotfile.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [d]\n",
+        f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
     (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
+    (tmp_path / "tracked" / "tracked_file.txt").write_text(
+        "a: 1\nb: 2\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
@@ -263,15 +265,17 @@ def test_install_auto_accept_tracked_resolves_drift(
     cfg = _setup_install_fixture(
         tmp_path, monkeypatch, src_text="a: 1\nb: 2\n", dst_text="a: 1\nb: 99\n"
     )
-    # Make it a YAML dotfile with preserve_user_keys so it creates unexpected drift
+    # Make it a YAML tracked_file with preserve_user_keys so it creates unexpected drift
     # We need to update the config to use yaml and set preserve_user_keys
-    dst = tmp_path / "live" / "dotfile.txt"
+    dst = tmp_path / "live" / "tracked_file.txt"
     cfg.write_text(
-        f"version: 1\ndotfiles:\n  d:\n    src: dotfile.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [d]\n",
+        f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
-    (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
+    (tmp_path / "tracked" / "tracked_file.txt").write_text(
+        "a: 1\nb: 2\n", encoding="utf-8"
+    )
 
     transition_calls: list[Any] = []
 
@@ -296,17 +300,19 @@ def test_install_auto_accept_live_resolves_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """--auto-accept-live proceeds non-interactively; exit 0."""
-    dst = tmp_path / "live" / "dotfile.txt"
+    dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("a: 1\nb: 99\n", encoding="utf-8")
     cfg = tmp_path / "my_setup.yaml"
     cfg.write_text(
-        f"version: 1\ndotfiles:\n  d:\n    src: dotfile.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    dotfiles: [d]\n",
+        f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
+        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
     (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
+    (tmp_path / "tracked" / "tracked_file.txt").write_text(
+        "a: 1\nb: 2\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
@@ -343,7 +349,7 @@ def test_install_both_flags_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-9by — section reconcile flag matrix
+# tracked_files-9by — section reconcile flag matrix
 # ---------------------------------------------------------------------------
 
 

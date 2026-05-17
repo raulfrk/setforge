@@ -108,14 +108,14 @@ class DriftItem:
     the merge wizard.
     """
 
-    dotfile_name: str
-    """The ``my_setup.yaml`` ``dotfiles.<key>`` identifier."""
+    tracked_file_name: str
+    """The ``my_setup.yaml`` ``tracked_files.<key>`` identifier."""
 
     src_path: Path
     """Tracked path (under tracked/)."""
 
     dst_path: Path
-    """Live path (resolved from dotfile.dst)."""
+    """Live path (resolved from tracked_file.dst)."""
 
     key_path: str
     """The JSONPath-lite or literal-key path that diverged."""
@@ -135,7 +135,7 @@ class DriftItem:
     Routes the [u]se-live action to the matching overlay variant.
     Defaults to ``"shallow"`` for back-compat with callers that
     construct :class:`DriftItem` without the field; trigger-specific
-    walkers populate it from the dotfile's two preserve lists."""
+    walkers populate it from the tracked_file's two preserve lists."""
 
 
 @dataclass
@@ -374,23 +374,23 @@ def _action_use_live(item: DriftItem) -> ActionResult:
 def _action_save_as_preserved(
     item: DriftItem, my_setup_yaml_path: Path
 ) -> ActionResult:
-    """Append ``item.key_path`` to the dotfile's ``preserve_user_keys``."""
+    """Append ``item.key_path`` to the tracked_file's ``preserve_user_keys``."""
     y = YAML(typ="rt")
     with my_setup_yaml_path.open("r", encoding="utf-8") as fh:
         doc = y.load(fh)
 
-    # Navigate: dotfiles -> <name> -> preserve_user_keys
-    dotfiles_node = doc.get("dotfiles") if isinstance(doc, dict) else None
-    if dotfiles_node is None:
+    # Navigate: tracked_files -> <name> -> preserve_user_keys
+    tracked_files_node = doc.get("tracked_files") if isinstance(doc, dict) else None
+    if tracked_files_node is None:
         return ActionResult.SAVE_AS_PRESERVED
 
-    dotfile_node = dotfiles_node.get(item.dotfile_name)
-    if dotfile_node is None:
+    tracked_file_node = tracked_files_node.get(item.tracked_file_name)
+    if tracked_file_node is None:
         return ActionResult.SAVE_AS_PRESERVED
 
-    puk = dotfile_node.get("preserve_user_keys")
+    puk = tracked_file_node.get("preserve_user_keys")
     if puk is None:
-        dotfile_node["preserve_user_keys"] = [item.key_path]
+        tracked_file_node["preserve_user_keys"] = [item.key_path]
     else:
         if item.key_path not in puk:
             puk.append(item.key_path)

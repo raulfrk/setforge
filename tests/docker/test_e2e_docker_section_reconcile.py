@@ -1,6 +1,6 @@
-"""Docker E2E tests for dotfiles-9by section reconcile wizard.
+"""Docker E2E tests for tracked_files-9by section reconcile wizard.
 
-19 cases per the bd dotfiles-9by --notes:
+19 cases per the bd tracked_files-9by --notes:
 
 Original behavior + flag matrix (1-10):
 - 1: --auto=use-tracked deploys shared drift + hash assertion.
@@ -66,7 +66,7 @@ _BASELINE_SHARED_HASH = _sha256(_BASELINE_SHARED_BODY)
 
 
 def _shared_section(body: str, embed_hash: str | None) -> str:
-    """Build the shared-section dotfile body the e2e fixture deploys."""
+    """Build the shared-section tracked_file body the e2e fixture deploys."""
     hash_segment = f" hash={embed_hash}" if embed_hash is not None else ""
     return (
         "# test-reconcile-sections fixture (shared)\n\n"
@@ -81,7 +81,7 @@ def _shared_section(body: str, embed_hash: str | None) -> str:
 def _shared_two_section(
     section_a: tuple[str, str | None], section_b: tuple[str, str | None]
 ) -> str:
-    """Build a two-section shared dotfile body.
+    """Build a two-section shared tracked_file body.
 
     Each section is ``(body, embed_hash)``. Used by the
     ``skip_then_keep_live`` test to construct two independently
@@ -111,7 +111,7 @@ def _shared_three_section(
     section_b: tuple[str, str | None],
     section_c: tuple[str, str | None],
 ) -> str:
-    """Build a three-section shared dotfile body.
+    """Build a three-section shared tracked_file body.
 
     Section names: ``workflow``, ``commits``, ``python``. Used by the
     compare dry-run test that needs all three drift states represented
@@ -142,7 +142,7 @@ def _shared_three_section(
 
 
 def _host_local_section(body: str, embed_hash: str | None) -> str:
-    """Build the host-local-section dotfile body."""
+    """Build the host-local-section tracked_file body."""
     hash_segment = f" hash={embed_hash}" if embed_hash is not None else ""
     return (
         "# test-text-sections fixture\n\n"

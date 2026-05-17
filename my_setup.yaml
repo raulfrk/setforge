@@ -5,7 +5,7 @@ version: 1
 # resolved relative to `tracked/`; `dst` may use Jinja2 templating when
 # `template: true` (only `{{ vscode_user_dir }}` is exposed today).
 # ============================================================================
-dotfiles:
+tracked_files:
   claude_md:
     src: claude/CLAUDE.md
     dst: ~/.claude/CLAUDE.md
@@ -162,7 +162,7 @@ claude_plugins:
 # ============================================================================
 profiles:
   shared-base:
-    dotfiles:
+    tracked_files:
       - claude_md
       - claude_settings
       - claude_output_styles
@@ -197,7 +197,7 @@ profiles:
 
   vm-headless:
     extends: shared-base
-    dotfiles:
+    tracked_files:
       - vscode_serv_settings
     extensions:
       include:
@@ -217,12 +217,12 @@ profiles:
 
   vm-headless-full:
     extends: vm-headless
-    dotfiles:
+    tracked_files:
       - claude_additional_md
       - claude_header_md
 
   vm-headless-vscode:
-    dotfiles:
+    tracked_files:
       - vscode_serv_settings
     extensions:
       include:
@@ -242,7 +242,7 @@ profiles:
 
   workstation:
     extends: shared-base
-    dotfiles:
+    tracked_files:
       - vscode_workstation_settings
     extensions:
       include: []

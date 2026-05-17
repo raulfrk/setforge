@@ -653,7 +653,7 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
     record the canonical URL into a sidecar file at clone time and
     reduce this helper to a single byte-equal comparison — that path
     also picks up SSH variants and arbitrary hosts the prefix list
-    cannot enumerate. Follow-up issue: ``dotfiles-msc``.
+    cannot enumerate. Follow-up issue: ``tracked_files-msc``.
     """
 
     def _normalize(url: str) -> str:
@@ -862,7 +862,7 @@ def reconcile(
         cfg, mps_to_add, install_mode, MARKETPLACE_CACHE_ROOT, failed
     )
 
-    # Per spec § Algorithm β2 (dotfiles-l37): freshly-installed plugins
+    # Per spec § Algorithm β2 (tracked_files-l37): freshly-installed plugins
     # land disabled in installed_plugins.json — `claude plugin install`
     # never touches enabledPlugins. To make a single reconcile run land
     # the plugin active, we route successful installs through the enable

@@ -45,10 +45,10 @@ def _make_config(
 ) -> Config:
     """Build a minimal Config for reconcile tests."""
     return Config(
-        dotfiles={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
+        tracked_files={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
         marketplaces=marketplaces or {},
         claude_plugins=claude_plugins or {},
-        profiles={"default": Profile(dotfiles=["d"])},
+        profiles={"default": Profile(tracked_files=["d"])},
     )
 
 
@@ -452,7 +452,7 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
 def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     """Fresh install must trigger an enable so the plugin lands active.
 
-    Primary acceptance gate for dotfiles-l37: a freshly-declared plugin
+    Primary acceptance gate for tracked_files-l37: a freshly-declared plugin
     must be both installed AND enabled in a single reconcile run, even
     though `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
@@ -888,7 +888,7 @@ _YAML_FIXTURE = """\
 version: 1
 
 # Top-level comment.
-dotfiles:
+tracked_files:
   d:
     src: x
     dst: y
@@ -907,12 +907,12 @@ claude_plugins:
 profiles:
   myprofile:
     # Profile comment.
-    dotfiles:
+    tracked_files:
       - d
     claude_plugins:
       - existing-plugin
   bare:
-    dotfiles:
+    tracked_files:
       - d
 """
 
@@ -1131,7 +1131,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-l37 — `plugin add` strict enable behavior
+# tracked_files-l37 — `plugin add` strict enable behavior
 # ---------------------------------------------------------------------------
 
 
@@ -1216,7 +1216,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-oyv — `plugin add` install subprocess error handling
+# tracked_files-oyv — `plugin add` install subprocess error handling
 # ---------------------------------------------------------------------------
 
 
@@ -1351,7 +1351,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-nen.13 — PluginDelta in transition records + revert inverse
+# tracked_files-nen.13 — PluginDelta in transition records + revert inverse
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the install → transition-record → revert round-trip
@@ -1371,7 +1371,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 # state dir is untouched.
 
 # E2E fixture mirrors the layout used by tests/test_cli_e2e.py — a copy
-# of the full fixture YAML + tracked tree under tmp_path so dotfile
+# of the full fixture YAML + tracked tree under tmp_path so tracked_file
 # srcs resolve.
 _E2E_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
 _E2E_FIXTURE_YAML = _E2E_FIXTURE_DIR / "my_setup.test.yaml"
@@ -1762,7 +1762,7 @@ def test_roundtrip_file_and_plugin_state(
     both match the pre-install bytes.
 
     This is the load-bearing acceptance: revert must converge full
-    external state, not just file content (the gap dotfiles-nen.13
+    external state, not just file content (the gap tracked_files-nen.13
     closes).
     """
     from typer.testing import CliRunner
@@ -1799,7 +1799,7 @@ def test_roundtrip_file_and_plugin_state(
     # File state reversed — the comprehensive dir was created from
     # absence on install, so revert deletes its contents. (``revert``
     # only reverses files it touched on install; bootstrap stubs may
-    # survive but the tracked dotfile content does not.)
+    # survive but the tracked tracked_file content does not.)
     notes = live_root / "notes.md"
     assert not notes.exists() or notes.read_text() == ""
     # Plugin state reversed.

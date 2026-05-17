@@ -10,7 +10,7 @@ preservation modes:
 - ``preserve_user_keys``: declarative JSONPath-lite list (YAML).
 
 These compose: a single deploy may run YAML overlay first, then merge live
-markdown sections into the result, though in practice a given dotfile is
+markdown sections into the result, though in practice a given tracked_file is
 either YAML or markdown.
 """
 
@@ -64,7 +64,7 @@ def copy_atomic(
 
     When ``dst`` is a symlink the operation resolves to its target so the
     symlink itself is preserved (matches the legacy Makefile's behavior
-    with ``link_dotfile_default: nolink``).
+    with ``link_tracked_file_default: nolink``).
 
     When the resulting content is byte-identical to the existing ``dst``,
     no write or backup is performed (action == :attr:`DeployAction.NOOP`).
@@ -294,9 +294,9 @@ def validate_srcs_exist(
     from setforge.compare import resolve_src
 
     missing: list[str] = []
-    for name in resolved.dotfiles:
-        dotfile = cfg.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
         if not src.exists():
             missing.append(f"{name}: {src}")
     if missing:

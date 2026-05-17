@@ -1,6 +1,6 @@
 """Capture: live → tracked.
 
-The inverse of ``deploy.copy_atomic``. Reads each profile dotfile's
+The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
 ``dst`` (the live copy) and writes a stripped version back to ``src``
 (the tracked copy):
 
@@ -9,12 +9,12 @@ The inverse of ``deploy.copy_atomic``. Reads each profile dotfile's
 - ``preserve_user_keys`` files have those YAML keys removed (so live
   values stay host-local and never bake into the repo).
 
-Since `dotfiles-nen.23`, capture is no longer a silent absorb. When a
-dotfile declares ``preserve_user_keys_deep`` or carries non-preserve
+Since `tracked_files-nen.23`, capture is no longer a silent absorb. When a
+tracked_file declares ``preserve_user_keys_deep`` or carries non-preserve
 top-level drift between tracked and live, the capture-time merge
 wizard fires (interactive by default; non-interactive via
 ``--auto={use-live, keep-tracked}``). The wizard mutates tracked
-in-place at every drifted key path — capture's per-dotfile writeback
+in-place at every drifted key path — capture's per-tracked_file writeback
 then reads the post-wizard tracked, defensively strips shallow-preserve
 content, and applies ``preserve_user_sections`` handling.
 
@@ -37,7 +37,7 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, sections, yaml_merge
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
-from setforge.compare import expand_dotfile, resolve_dst, resolve_src
+from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 
@@ -69,7 +69,7 @@ class CaptureResult:
     reason: str = ""
 
 
-def capture_dotfile(
+def capture_tracked_file(
     src: Path,
     dst: Path,
     *,
@@ -89,7 +89,7 @@ def capture_dotfile(
     (``STRIP``). KEEP_DEFAULTS falls back to STRIP semantics when src
     doesn't yet exist — no defaults to preserve.
 
-    ``preserve_user_keys_deep`` (since `dotfiles-nen.23`) signals that
+    ``preserve_user_keys_deep`` (since `tracked_files-nen.23`) signals that
     tracked-only sub-keys at those paths must survive the live → tracked
     overlay. The capture-time wizard (fired by :func:`capture_profile`
     upstream) mutates tracked in place at the per-sub-key level before
@@ -106,7 +106,7 @@ def capture_dotfile(
 
     # Markdown / preserve_user_sections path: capture's section
     # handling is unchanged from pre-`nen.23` (the capture-time wizard
-    # does not fire for these dotfiles). Read live, optionally strip
+    # does not fire for these tracked_files). Read live, optionally strip
     # shallow keys, merge tracked sections.
     if preserve_user_sections:
         if preserve_user_keys and jsonc.is_jsonc_file(dst):
@@ -159,7 +159,7 @@ def capture_dotfile(
     has_structured_preserve = bool(preserve_user_keys) or bool(preserve_user_keys_deep)
 
     if not has_structured_preserve:
-        # No preserve declarations on this dotfile — capture's
+        # No preserve declarations on this tracked_file — capture's
         # contract for unstructured files (plain text, markdown
         # without sections, list-only YAML) is unchanged from
         # pre-`nen.23`: wholesale live → tracked. The capture-time
@@ -216,10 +216,10 @@ def capture_profile(
     snapshot_base: Path | None = None,
     console: Console | None = None,
 ) -> list[CaptureResult]:
-    """Capture every dotfile in the resolved profile from live → tracked.
+    """Capture every tracked_file in the resolved profile from live → tracked.
 
     Orchestrates the capture-time wizard (fires when there is drift the
-    walker yields) and the per-dotfile writeback that runs against
+    walker yields) and the per-tracked_file writeback that runs against
     post-wizard tracked.
 
     Parameters
@@ -284,22 +284,22 @@ def capture_profile(
             auto_accept=auto_accept_map[auto],
         )
 
-    # Post-wizard writeback: per-dotfile, against the tracked content
+    # Post-wizard writeback: per-tracked_file, against the tracked content
     # the wizard left behind (or unchanged tracked if no drift).
     results: list[CaptureResult] = []
     resolved = resolve_profile(config, profile_name)
-    for name in resolved.dotfiles:
-        dotfile = config.dotfiles[name]
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
-            result = capture_dotfile(
+    for name in resolved.tracked_files:
+        tracked_file = config.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            result = capture_tracked_file(
                 sub_src,
                 sub_dst,
-                preserve_user_sections=dotfile.preserve_user_sections,
-                preserve_user_keys=dotfile.preserve_user_keys,
-                preserve_user_keys_deep=dotfile.preserve_user_keys_deep,
-                preserve_user_sections_mode=dotfile.preserve_user_sections_mode,
+                preserve_user_sections=tracked_file.preserve_user_sections,
+                preserve_user_keys=tracked_file.preserve_user_keys,
+                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
+                preserve_user_sections_mode=tracked_file.preserve_user_sections_mode,
             )
             results.append(
                 CaptureResult(name=sub_name, action=result.action, reason=result.reason)

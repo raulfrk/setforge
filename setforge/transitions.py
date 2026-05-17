@@ -159,7 +159,7 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
 
     Returns a dict so callers can pass it directly to :func:`compute_patch`.
     Reads as text/UTF-8; binary file deploys are out of scope for v1
-    (the deploy primitive itself only handles text dotfiles today).
+    (the deploy primitive itself only handles text tracked_files today).
     """
     out: dict[Path, str | None] = {}
     for p in paths:

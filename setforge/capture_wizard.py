@@ -34,10 +34,10 @@ The walker is silent on:
 - tracked-only sub-keys / top-level keys (preserved at writeback by the
   wizard's no-touch and by capture's post-wizard read of tracked),
 - shallow-preserve top-level keys (capture strips them as today; no
-  per-key decision is meaningful when the dotfile declares the strip),
-- markdown dotfiles with ``preserve_user_sections=True`` (capture's
+  per-key decision is meaningful when the tracked_file declares the strip),
+- markdown tracked_files with ``preserve_user_sections=True`` (capture's
   section handling stays as today),
-- dotfiles whose tracked or live file is missing (fresh capture or
+- tracked_files whose tracked or live file is missing (fresh capture or
   not-yet-deployed).
 """
 
@@ -51,7 +51,7 @@ from rich.console import Console
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, wizard
-from setforge.compare import expand_dotfile, resolve_dst, resolve_src
+from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.jsonc import PATH_SEPARATOR, preserved_positions_for_top
@@ -74,12 +74,12 @@ def walk_capture_drift(
     config: Config,
     profile_name: str,
     repo_root: Path,
-    dotfile_filter: str | None = None,
+    tracked_file_filter: str | None = None,
 ) -> Iterator[DriftItem]:
     """Yield :class:`DriftItem` records for both flavors of capture-time drift.
 
     1. **Deep-merge sub-key drift** — for every path in
-       ``dotfile.preserve_user_keys_deep``, walk live's and tracked's
+       ``tracked_file.preserve_user_keys_deep``, walk live's and tracked's
        sub-keys at the path. Yield for shared-different and live-only
        sub-keys; silent for shared-identical and tracked-only.
        ``DriftItem.mode is DriftMode.DEEP``; ``key_path`` is the full dotted path
@@ -98,11 +98,11 @@ def walk_capture_drift(
 
     Skipped (silent):
 
-    - dotfiles with ``preserve_user_sections=True`` (markdown — section
+    - tracked_files with ``preserve_user_sections=True`` (markdown — section
       handling stays as today),
-    - dotfiles whose tracked or live file is missing (fresh capture /
+    - tracked_files whose tracked or live file is missing (fresh capture /
       not-yet-deployed),
-    - sub-files inside directory dotfiles whose tracked or live copy is
+    - sub-files inside directory tracked_files whose tracked or live copy is
       missing.
 
     Parameters
@@ -113,36 +113,36 @@ def walk_capture_drift(
         Profile to walk; profiles inherit from ``extends:`` chains.
     repo_root:
         Repo root used for ``resolve_src``.
-    dotfile_filter:
-        If set, only walk drift for the named dotfile (top-level key in
-        ``config.dotfiles``).
+    tracked_file_filter:
+        If set, only walk drift for the named tracked_file (top-level key in
+        ``config.tracked_files``).
     """
     resolved = resolve_profile(config, profile_name)
-    for name in resolved.dotfiles:
-        if dotfile_filter is not None and name != dotfile_filter:
+    for name in resolved.tracked_files:
+        if tracked_file_filter is not None and name != tracked_file_filter:
             continue
-        dotfile = config.dotfiles[name]
-        if dotfile.preserve_user_sections:
-            # Markdown / section dotfiles — capture's section handling
+        tracked_file = config.tracked_files[name]
+        if tracked_file.preserve_user_sections:
+            # Markdown / section tracked_files — capture's section handling
             # stays as today; not part of the wizard's contract.
             continue
-        src = resolve_src(dotfile, repo_root)
-        dst = resolve_dst(dotfile)
-        for _sub_name, sub_src, sub_dst in expand_dotfile(name, src, dst):
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for _sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if not sub_src.exists() or not sub_dst.exists():
                 continue
             yield from _walk_one_file(
-                dotfile_name=name,
+                tracked_file_name=name,
                 src=sub_src,
                 dst=sub_dst,
-                preserve_user_keys=list(dotfile.preserve_user_keys),
-                preserve_user_keys_deep=list(dotfile.preserve_user_keys_deep),
+                preserve_user_keys=list(tracked_file.preserve_user_keys),
+                preserve_user_keys_deep=list(tracked_file.preserve_user_keys_deep),
             )
 
 
 def _walk_one_file(
     *,
-    dotfile_name: str,
+    tracked_file_name: str,
     src: Path,
     dst: Path,
     preserve_user_keys: list[str],
@@ -176,7 +176,7 @@ def _walk_one_file(
         preserve_user_keys_deep=preserve_user_keys_deep,
         nested_path_heads=nested_path_heads,
         fmt=fmt,
-        dotfile_name=dotfile_name,
+        tracked_file_name=tracked_file_name,
         src=src,
         dst=dst,
     )
@@ -187,7 +187,7 @@ def _walk_one_file(
         preserve_user_keys_deep=preserve_user_keys_deep,
         nested_path_heads=nested_path_heads,
         fmt=fmt,
-        dotfile_name=dotfile_name,
+        tracked_file_name=tracked_file_name,
         src=src,
         dst=dst,
     )
@@ -201,7 +201,7 @@ def _walk_deep_phase(
     preserve_user_keys_deep: list[str],
     nested_path_heads: set[str],
     fmt: FileFormat,
-    dotfile_name: str,
+    tracked_file_name: str,
     src: Path,
     dst: Path,
 ) -> Iterator[DriftItem]:
@@ -211,7 +211,7 @@ def _walk_deep_phase(
     nested-path head from ``preserve_user_keys`` — heads are walked
     even though they're not in ``preserve_user_keys_deep`` so the
     wizard can prompt on UNCOVERED sibling drift while remaining
-    silent on path-preserved leaves (per ``dotfiles-nen.19`` spec).
+    silent on path-preserved leaves (per ``tracked_files-nen.19`` spec).
     Behavior lifted verbatim from ``_walk_one_file``.
     """
     deep_paths_to_walk = list(preserve_user_keys_deep)
@@ -236,7 +236,7 @@ def _walk_deep_phase(
             tracked_at,
             live_at,
             prefix=deep_path,
-            dotfile_name=dotfile_name,
+            tracked_file_name=tracked_file_name,
             src=src,
             dst=dst,
             fmt=fmt,
@@ -253,7 +253,7 @@ def _walk_shallow_top_phase(
     preserve_user_keys_deep: list[str],
     nested_path_heads: set[str],
     fmt: FileFormat,
-    dotfile_name: str,
+    tracked_file_name: str,
     src: Path,
     dst: Path,
 ) -> Iterator[DriftItem]:
@@ -290,7 +290,7 @@ def _walk_shallow_top_phase(
             # Tracked-only → silent (preserved at writeback).
             continue
         yield DriftItem(
-            dotfile_name=dotfile_name,
+            tracked_file_name=tracked_file_name,
             src_path=src,
             dst_path=dst,
             key_path=top_key,
@@ -306,7 +306,7 @@ def _walk_deep(
     live_dict: dict,
     *,
     prefix: str,
-    dotfile_name: str,
+    tracked_file_name: str,
     src: Path,
     dst: Path,
     fmt: FileFormat,
@@ -338,7 +338,7 @@ def _walk_deep(
         live_value = live_dict[key]
         if key not in tracked_dict:
             yield DriftItem(
-                dotfile_name=dotfile_name,
+                tracked_file_name=tracked_file_name,
                 src_path=src,
                 dst_path=dst,
                 key_path=sub_path,
@@ -354,7 +354,7 @@ def _walk_deep(
                 tracked_value,
                 live_value,
                 prefix=sub_path,
-                dotfile_name=dotfile_name,
+                tracked_file_name=tracked_file_name,
                 src=src,
                 dst=dst,
                 fmt=fmt,
@@ -365,7 +365,7 @@ def _walk_deep(
         if _equal(tracked_value, live_value):
             continue
         yield DriftItem(
-            dotfile_name=dotfile_name,
+            tracked_file_name=tracked_file_name,
             src_path=src,
             dst_path=dst,
             key_path=sub_path,
@@ -382,7 +382,7 @@ def _join(prefix: str, key: str, fmt: FileFormat) -> str:
 
     YAML continues to emit ``"a.b"`` (legacy ``preserve_user_keys_deep``
     convention). JSONC emits ``"a > b"`` (nested-path syntax from
-    ``dotfiles-nen.19``) — the ``[u]se-live`` action forwards the
+    ``tracked_files-nen.19``) — the ``[u]se-live`` action forwards the
     ``key_path`` to :func:`setforge.jsonc.overlay_user_keys`, which
     parses on ``" > "``.
     """
@@ -450,7 +450,7 @@ def run_capture_wizard(
     snapshot_base: Path | None = None,
     console: Console | None = None,
     auto_accept: str | None = None,
-    dotfile_filter: str | None = None,
+    tracked_file_filter: str | None = None,
 ) -> list[tuple[DriftItem, ActionResult]]:
     """Fire the merge wizard at capture time.
 
@@ -478,8 +478,8 @@ def run_capture_wizard(
     auto_accept:
         ``"k"`` or ``"u"`` for non-interactive runs (sync gating).
         ``None`` enables interactive prompts and signal handlers.
-    dotfile_filter:
-        If set, only walk drift for the named dotfile.
+    tracked_file_filter:
+        If set, only walk drift for the named tracked_file.
 
     Returns
     -------
@@ -500,7 +500,7 @@ def run_capture_wizard(
         console = Console()
 
     items = walk_capture_drift(
-        config, profile_name, repo_root, dotfile_filter=dotfile_filter
+        config, profile_name, repo_root, tracked_file_filter=tracked_file_filter
     )
     pending_message = (
         f"[yellow]pending manual edit in {{src_path}}; "
