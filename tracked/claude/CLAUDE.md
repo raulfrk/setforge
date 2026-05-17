@@ -57,7 +57,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
      - For orchestrator-driven parallel dispatch, pre-create N sibling worktrees serially BEFORE dispatching subagents in a single parallel message — each subagent operates inside one pre-created worktree (no `isolation: worktree`).
   4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
   5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review fan (`reviewing-X` skill) → address-findings+merge → post-merge cross-cutting review.
-  6. `wt merge --no-squash` — merge the branch into target.
+  6. `wt merge --no-squash` (ff-only) — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
 <!-- my-setup:user-section end shared workflow hash=cd85aed32cae280be5f7285ab3fba97a3492df4c8bcd45ba3ccc6b54c75d92eb -->
