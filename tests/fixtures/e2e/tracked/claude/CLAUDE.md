@@ -57,7 +57,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
      - For orchestrator-driven parallel dispatch, pre-create N sibling worktrees serially BEFORE dispatching subagents in a single parallel message — each subagent operates inside one pre-created worktree (no `isolation: worktree`).
   4. `bd update <id> --claim` — mark in_progress immediately, before any code or research work.
   5. Run the phase flow inside the worktree: brainstorm → spec (plan-mode review) → plan → implement → review fan (`reviewing-X` skill) → address-findings+merge → post-merge cross-cutting review.
-  6. `wt merge --no-squash` — merge the branch into target.
+  6. `wt merge --no-squash` (ff-only) — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
 <!-- my-setup:user-section end shared workflow hash=cd85aed32cae280be5f7285ab3fba97a3492df4c8bcd45ba3ccc6b54c75d92eb -->
@@ -89,7 +89,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Body required only when the diff is not self-evident: state the problem and the user-visible consequence, not diff narration. Skip body for renames, formatting, trivial fixes.
 - Wrap body at 72; one blank line between subject and body.
 - One logical change per commit — if the subject needs "and", split it.
-- Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` for worktree merges, or `git merge --ff-only` for plain git.
+- Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` (ff-only) for worktree merges, or `git merge --ff-only` for plain git.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
 <!-- my-setup:user-section end shared commits hash=afbb7e1ef81c8e1afc691d6d559c0bc37cedf9dfaaccc2004da4af67293db9b8 -->
