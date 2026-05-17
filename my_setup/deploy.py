@@ -183,6 +183,16 @@ def _compute_content(
     install-loop pre-extract and the in-deploy fallback stay in lockstep.
     ``section_bodies_override`` still layers on top per-key, matching the
     no-precompute path.
+
+    Cache shape: takes ``precomputed_live_sections`` as a typed
+    pre-extracted :class:`~sections.LiveSections` (not raw bytes)
+    because deploy has no upstream need for raw live text — it only
+    splices live bodies into tracked content and stamps end-marker
+    hashes. The symmetric compare-side helper
+    (:func:`my_setup.compare._render_with_merges`) caches raw
+    ``dst_text`` instead because compare's strip-template comparison
+    needs the bytes; see that function's docstring for the symmetric
+    rationale.
     """
     content = _render_with_preserve_keys(
         src,
