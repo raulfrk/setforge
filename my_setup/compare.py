@@ -83,9 +83,10 @@ def diff_file(
     """
     if not dst.exists():
         return ""
+
+    dst_text = dst.read_text(encoding="utf-8")
     if preserve_user_sections:
         src_text = src.read_text(encoding="utf-8")
-        live_text = dst.read_text(encoding="utf-8")
         # Live side is parsed with allow_legacy=True so install's
         # pre-deploy compare step survives a pre-9by user file. The
         # compare CLI command surfaces a user-actionable error via
@@ -93,23 +94,24 @@ def diff_file(
         # invoked directly; this branch is reached only from install's
         # drift gate, where lenience is correct.
         bodies_match = sections.hash_sections(src_text) == sections.hash_sections(
-            live_text, allow_legacy=True
+            dst_text, allow_legacy=True
         )
         template_matches = sections.strip_section_content(
             src_text
-        ) == sections.strip_section_content(live_text)
+        ) == sections.strip_section_content(dst_text)
         if bodies_match and template_matches:
             return ""
+
     rendered_src = _render_with_merges(
         src,
         dst,
         preserve_user_sections,
         preserve_user_keys,
         preserve_user_keys_deep,
+        dst_text=dst_text,
     )
-    live_text = dst.read_text(encoding="utf-8")
     diff_lines = difflib.unified_diff(
-        live_text.splitlines(keepends=True),
+        dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),
         fromfile=str(dst),
         tofile=str(src),
@@ -123,6 +125,8 @@ def _render_with_merges(
     preserve_user_sections: bool,
     preserve_user_keys: list[str] | None,
     preserve_user_keys_deep: list[str] | None = None,
+    *,
+    dst_text: str | None = None,
 ) -> str:
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
@@ -147,9 +151,10 @@ def _render_with_merges(
 
     if preserve_user_sections:
         # See ``diff_file`` above for the ``allow_legacy=True`` rationale.
-        live_sections = sections.extract_sections(
-            dst.read_text(encoding="utf-8"), allow_legacy=True
+        text_for_extract = (
+            dst_text if dst_text is not None else dst.read_text(encoding="utf-8")
         )
+        live_sections = sections.extract_sections(text_for_extract, allow_legacy=True)
         content = sections.merge_sections(content, live_sections)
     return content
 
