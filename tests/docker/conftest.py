@@ -22,6 +22,7 @@ helpers segregated from the inner-ring CliRunner tests.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import posixpath
 import shutil
@@ -184,16 +185,10 @@ def _compute_inputs_hash() -> str:
     return digest.hexdigest()[:12]
 
 
-# Cache the per-session tag so we hash inputs at most once per pytest run.
-_IMAGE_TAG_CACHE: str | None = None
-
-
+@functools.cache
 def _image_tag() -> str:
     """Return the per-session content-hashed image tag (cached)."""
-    global _IMAGE_TAG_CACHE
-    if _IMAGE_TAG_CACHE is None:
-        _IMAGE_TAG_CACHE = f"{IMAGE_TAG_PREFIX}-{_compute_inputs_hash()}"
-    return _IMAGE_TAG_CACHE
+    return f"{IMAGE_TAG_PREFIX}-{_compute_inputs_hash()}"
 
 
 def _env_args(env: dict[str, str] | None) -> list[str]:
