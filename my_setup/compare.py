@@ -97,8 +97,8 @@ def diff_file(
             dst_text, allow_legacy=True
         )
         template_matches = sections.strip_section_content(
-            src_text
-        ) == sections.strip_section_content(dst_text)
+            src_text, allow_legacy=True
+        ) == sections.strip_section_content(dst_text, allow_legacy=True)
         if bodies_match and template_matches:
             return ""
 

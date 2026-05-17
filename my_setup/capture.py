@@ -127,7 +127,7 @@ def capture_dotfile(
             tracked_sections = sections.extract_sections(tracked_text)
             content = sections.merge_sections(content, tracked_sections)
         else:
-            content = sections.strip_section_content(content)
+            content = sections.strip_section_content(content, allow_legacy=True)
         src.parent.mkdir(parents=True, exist_ok=True)
         if src.exists() and src.read_text(encoding="utf-8") == content:
             return CaptureResult(name=src.name, action=CaptureAction.NOOP)

@@ -516,12 +516,18 @@ def section_semantics(
     }
 
 
-def strip_section_content(text: str) -> str:
+def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
     """Return ``text`` with content between every user-section marker pair
     removed. Markers themselves are kept so the file remains a valid
-    template for re-merging on a future deploy."""
+    template for re-merging on a future deploy.
+
+    ``allow_legacy`` defaults to ``True`` because the historical callers
+    (compare's drift gate, capture's strip path) both consume live-side
+    text that may contain pre-9by markers. Pass ``allow_legacy=False``
+    explicitly for strict-mode parsing on canonical (tracked-side) input.
+    """
     out_lines: list[str] = []
-    for event in _walk_markers(text, allow_legacy=True):
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
         match event:
             case _BodyLine():
                 pass
