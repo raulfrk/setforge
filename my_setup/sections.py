@@ -21,10 +21,12 @@ spliced in. ``merge_sections`` is the splice; ``extract_sections`` is the
 inverse used by ``capture`` and by ``compare`` to render a comparable view.
 
 The strict parser (``allow_legacy=False``, the default) raises
-:class:`MarkerError` for any marker missing the semantics keyword OR any
-end marker missing the ``hash=<...>`` segment. The migration-only escape
-hatch ``allow_legacy=True`` tolerates both: missing semantics parses as
-:attr:`SectionSemantics.SHARED`; missing hash yields ``embedded_hash=None``.
+:class:`MarkerError` for any marker missing the semantics keyword, any
+end marker missing the ``hash=<...>`` segment, OR any ``hash=`` segment
+whose value is not exactly 64 lowercase hex chars. The migration-only
+escape hatch ``allow_legacy=True`` tolerates all three: missing semantics
+parses as :attr:`SectionSemantics.SHARED`; missing or malformed hash
+yields ``embedded_hash=None``.
 Only the install path's live-side parsing opts in via ``allow_legacy=True``
 so pre-9by user files can be migrated in place on first install; compare /
 sync remain strict and surface a user-actionable error before the raw
@@ -67,9 +69,11 @@ _MARKER_RE = re.compile(
     r"^\s*<!--\s*my-setup:user-section\s+(start|end)"
     rf"(?:\s+({_SEMANTICS_KEYWORDS}))?"
     r"(?:\s+(?!hash=)(\S+))?"
-    r"(?:\s+hash=([0-9a-f]{64}))?"
+    r"(?:\s+hash=(\S+))?"
     r"\s*-->\s*$"
 )
+
+_HASH_VALUE_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(slots=True, frozen=True)
@@ -226,6 +230,13 @@ def _parse_marker_line(
     check on ``end`` markers is deferred to the state machine in
     :func:`_walk_markers` so it fires AFTER name/semantics-mismatch
     validation (preserving pre-extraction error ordering).
+
+    Also raises :class:`MarkerError` when the captured ``hash=`` segment
+    is present but not exactly 64 lowercase hex chars and
+    ``allow_legacy=False``; under ``allow_legacy=True`` a malformed
+    ``hash=`` is treated as if the segment were absent
+    (``embedded_hash=None``), tolerating pre-9by files that may carry
+    garbled hash values.
     """
     match = _MARKER_RE.match(line)
     if match is None:
@@ -234,6 +245,13 @@ def _parse_marker_line(
     semantics_raw = match.group(2)
     name = match.group(3)
     embedded_hash = match.group(4)
+    if embedded_hash is not None and not _HASH_VALUE_RE.fullmatch(embedded_hash):
+        if not allow_legacy:
+            raise MarkerError(
+                f"line {lineno}: malformed hash= segment {embedded_hash!r}; "
+                f"expected 64 lowercase hex chars"
+            )
+        embedded_hash = None
     if semantics_raw is None:
         if not allow_legacy:
             raise MarkerError(

@@ -816,3 +816,35 @@ def test_detect_legacy_markers_returns_true_when_any_marker_is_legacy() -> None:
         "<!-- my-setup:user-section end workflow -->\n"
     )
     assert detect_legacy_markers(text) is True
+
+
+def test_malformed_hash_segment_raises_in_strict_mode() -> None:
+    """A non-64-hex ``hash=`` value is rejected with a clear MarkerError."""
+    text = (
+        "<!-- my-setup:user-section start shared FOO -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end shared FOO hash=NOTHEX -->\n"
+    )
+    with pytest.raises(MarkerError, match="malformed hash"):
+        extract_sections(text)
+
+
+def test_malformed_hash_segment_treated_as_absent_under_allow_legacy() -> None:
+    """``allow_legacy=True`` tolerates a malformed hash as if it were absent."""
+    text = (
+        "<!-- my-setup:user-section start shared FOO -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end shared FOO hash=NOTHEX -->\n"
+    )
+    assert extract_sections(text, allow_legacy=True) == {"FOO": "body\n"}
+
+
+def test_valid_64_hex_hash_still_parses() -> None:
+    """A well-formed 64-hex hash continues to parse cleanly under strict mode."""
+    valid = "a" * 64
+    text = (
+        "<!-- my-setup:user-section start shared FOO -->\n"
+        "body\n"
+        f"<!-- my-setup:user-section end shared FOO hash={valid} -->\n"
+    )
+    extract_sections(text)
