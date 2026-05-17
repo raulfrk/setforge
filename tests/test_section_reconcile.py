@@ -1,6 +1,7 @@
 """Tests for the install-side three-way section reconciler."""
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -391,7 +392,7 @@ def test_classify_section_drift_yields_inconsistent_on_each_side_pristine() -> N
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_tracked_baseline_returns_false_when_aligned(tmp_path) -> None:
+def test_stamp_tracked_baseline_returns_false_when_aligned(tmp_path: Path) -> None:
     """Already-stamped tracked file: no-op (returns False, byte-identical)."""
     body = "BODY_BYTES\n"
     aligned = (
@@ -405,7 +406,7 @@ def test_stamp_tracked_baseline_returns_false_when_aligned(tmp_path) -> None:
     assert path.read_text(encoding="utf-8") == aligned
 
 
-def test_stamp_tracked_baseline_returns_true_when_unaligned(tmp_path) -> None:
+def test_stamp_tracked_baseline_returns_true_when_unaligned(tmp_path: Path) -> None:
     """Stale-hash tracked: rewrites file, returns True, hash matches body.
 
     ``stamp_tracked_baseline`` parses tracked strictly (no
@@ -424,7 +425,7 @@ def test_stamp_tracked_baseline_returns_true_when_unaligned(tmp_path) -> None:
 
 
 def test_stamp_tracked_baseline_preserves_body_bytes_outside_end_marker(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """Only end-marker hash= changes; body + non-section content byte-preserved."""
     body = "PRESERVED_BODY\n"
