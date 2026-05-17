@@ -12,6 +12,9 @@ What lives here:
   produced by trigger-specific walkers, consumed by the wizard.
 - :class:`Snapshot` — context manager that snapshots affected files for
   cancel-atomic semantics.
+- :func:`read_one_choice` — POSIX single-keypress prompter; falls back to
+  line-buffered read on non-tty stdin. Shared by :func:`prompt_one` and
+  the section-reconcile wizard.
 - :func:`prompt_one` — render the per-drift block and read one keypress.
 - :func:`apply_action` — dispatch the chosen action (k/u/s/m).
 - :func:`run_wizard_loop` — the parameterized orchestrator that snapshots,
@@ -63,6 +66,7 @@ __all__ = [
     "Snapshot",
     "apply_action",
     "prompt_one",
+    "read_one_choice",
     "run_wizard_loop",
 ]
 
