@@ -25,6 +25,19 @@ class MissingTrackedFile(SetforgeError):
     at deploy time."""
 
 
+class NoSourceConfigured(SetforgeError):
+    """Raised when ``setforge.source.resolve_source`` walks all four
+    precedence layers (CLI flag, env var, host-local ``local.yaml``,
+    CWD fallback) and none produces a source. The message lists each
+    layer so the user knows where to configure."""
+
+
+class SourceNotCloned(SetforgeError):
+    """Raised when a :class:`setforge.source.GitSource`'s expected
+    ``clone_dest`` directory does not exist on disk. The user must run
+    ``setforge fetch`` to clone the source before any read command."""
+
+
 class BackupCollision(SetforgeError):
     """Reserved for backup-path collisions that cannot be safely overwritten.
 

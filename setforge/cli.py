@@ -34,6 +34,7 @@ from setforge import claude_plugins as claude_plugins_mod
 from setforge import compare as compare_mod
 from setforge import merge as merge_mod
 from setforge import sections as sections_mod
+from setforge import source as source_mod
 from setforge.capture import CaptureAuto
 from setforge.compare import (
     CompareStatus,
@@ -86,6 +87,16 @@ _PROFILE_OPTION = typer.Option(
     "-p",
     help="Profile name from my_setup.yaml.",
 )
+_SOURCE_OPTION = typer.Option(
+    None,
+    "--source",
+    help="Path to a config source directory (containing my_setup.yaml). "
+    "Takes precedence over SETFORGE_SOURCE and "
+    "~/.config/setforge/local.yaml `source:` block. Paths only — git "
+    "sources live in local.yaml. Per-command --config flag still works "
+    "and overrides any source-layer resolution (legacy path; will be "
+    "removed in a follow-up bead).",
+)
 
 
 @app.callback()
@@ -108,6 +119,7 @@ def _root(
         help="Override path to the GNU 'patch' binary. "
         "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/setforge/local.yaml.",
     ),
+    source: Path | None = _SOURCE_OPTION,
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -141,6 +153,7 @@ def _root(
     LOGGER.debug("logging configured at level %s", logging.getLevelName(level))
     binaries.set_cli_overrides(code=code_bin, claude=claude_bin, patch=patch_bin)
     binaries.ensure_local_config_stub()
+    source_mod.set_cli_source(source)
 
 
 def _parse_section_auto(
