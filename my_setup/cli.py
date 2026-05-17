@@ -56,7 +56,7 @@ from my_setup.errors import (
     PluginToolMissing,
 )
 from my_setup.section_reconcile import SectionDriftState
-from my_setup.section_wizard import ReconcileAuto
+from my_setup.section_wizard import ReconcileAuto, SectionAction
 from my_setup.sections import SectionSemantics, detect_legacy_markers
 
 LOGGER = logging.getLogger(__name__)
@@ -282,7 +282,11 @@ def _resolve_section_decisions(
         outcomes = section_wizard.reconcile_sections(
             drifts, auto=section_auto, interactive=interactive
         )
-        decisions[sub_dst] = {n: d.body for n, d in outcomes.items()}
+        decisions[sub_dst] = {
+            n: d.body
+            for n, d in outcomes.items()
+            if d.action in (SectionAction.TAKE_TRACKED, SectionAction.EDIT)
+        }
     return decisions
 
 

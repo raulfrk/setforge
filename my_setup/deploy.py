@@ -31,6 +31,7 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from my_setup import jsonc, sections, yaml_merge
 from my_setup.config import Config, ResolvedProfile
 from my_setup.errors import MissingTrackedFile
+from my_setup.section_reconcile import maintain_marker_hashes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -183,9 +184,6 @@ def _compute_content(
     ``section_bodies_override`` still layers on top per-key, matching the
     no-precompute path.
     """
-    # Local import: breaks the deploy → section_reconcile → sections cycle.
-    from my_setup.section_reconcile import maintain_marker_hashes
-
     content = _render_with_preserve_keys(
         src,
         dst,
