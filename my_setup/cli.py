@@ -115,8 +115,11 @@ def _root(
         level = logging.DEBUG
     else:
         env_value = os.environ.get("MY_SETUP_LOG_LEVEL", "WARNING")
+        # `getattr(logging, "Logger", None)` returns the Logger class, not None;
+        # restrict to known int level constants so a non-level module attribute
+        # falls back to WARNING instead of crashing inside basicConfig.
         resolved = getattr(logging, env_value.upper(), None)
-        if resolved is None:
+        if not isinstance(resolved, int):
             sys.stderr.write(
                 f"my-setup: unknown MY_SETUP_LOG_LEVEL={env_value!r}; "
                 f"defaulting to WARNING\n"

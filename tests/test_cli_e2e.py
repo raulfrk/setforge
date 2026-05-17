@@ -851,3 +851,22 @@ class TestVerbosity:
         assert result.exit_code == 0, result.output
         assert "unknown MY_SETUP_LOG_LEVEL='DEBGU'" in result.stderr
         assert "defaulting to WARNING" in result.stderr
+
+    def test_garbage_my_setup_log_level_with_non_level_module_attr_warns(
+        self,
+        fixture_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``MY_SETUP_LOG_LEVEL=BASIC_FORMAT`` resolves to a ``logging`` str attr.
+
+        A bare ``getattr(logging, env_value.upper(), None) is None`` check
+        accepts ``logging.BASIC_FORMAT`` (a non-None string) and then
+        ``basicConfig(level=<str>)`` interprets the format string as a
+        level name and crashes opaquely. The ``isinstance(resolved, int)``
+        guard surfaces the same friendly stderr warning the typo path emits.
+        """
+        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "BASIC_FORMAT")
+        result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        assert "unknown MY_SETUP_LOG_LEVEL='BASIC_FORMAT'" in result.stderr
+        assert "defaulting to WARNING" in result.stderr
