@@ -49,11 +49,13 @@ Superpowers skills are designed to defer to.
      false negatives during Phase 5 review. Avoid `rg -A1 PATTERN`
      ranges (truncate before predicates that sit 3+ lines below a
      multi-line opener) and `awk '/PAT/,/PAT2/'` with `[^a-z]` bounds
-     (over-span when most adjacent defs start with underscore). Prefer:
+     (skip lowercase-prefixed defs; over-span until the next
+     non-lowercase def). Prefer:
      (i) `python -c '<ast snippet>'` for structural assertions,
-     (ii) `rg -A4+ ... | rg -q ...` with wider context windows,
-     (iii) `awk '/^def NAME/,/^def \w/'` with `\w` bounding the next
-     function. *(empirical observation L from dotfiles-6aj.)*
+     (ii) `rg -A N with N>=4 ... | rg -q ...` with wider context windows,
+     (iii) `awk '/^def NAME/,/^def \w/'` with `\w` (gawk; POSIX uses
+     `[[:alpha:]_]`) bounding the next function.
+     *(empirical observation L from dotfiles-6aj.)*
    - **Spec is snapshot; bd is contract.** The archived spec file is
      a historical record of what was agreed at brainstorm time. The
      bd issue's `--design` / `--acceptance` / `--notes` is the
