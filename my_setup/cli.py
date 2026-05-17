@@ -1160,6 +1160,46 @@ def _reverse_plugins(
     return reverse_delta, failed
 
 
+def _write_reverse_transition(
+    transition: Path,
+    profile: str,
+    touched_paths: list[Path],
+    file_pre: Mapping[Path, str | None],
+) -> Path:
+    """Reverse plugin/extension deltas from ``transition`` and write the redo record."""
+    ext_file = transition / "extensions.json"
+    reverse_added: list[str] = []
+    reverse_removed: list[str] = []
+    if ext_file.exists():
+        ext_raw = json.loads(ext_file.read_text())
+        ext_delta = transitions.extension_delta_from_json(ext_raw)
+        reverse_added, reverse_removed, _ = _reverse_extensions(ext_delta)
+
+    plugin_file = transition / "plugins.json"
+    reverse_plugin_delta: transitions.PluginDelta | None = None
+    if plugin_file.exists():
+        plugin_raw = json.loads(plugin_file.read_text(encoding="utf-8"))
+        plugin_payload = transitions.plugin_delta_from_json(plugin_raw)
+        reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
+        if reverse_plugin_delta.is_empty():
+            reverse_plugin_delta = None
+
+    file_post = transitions.snapshot_paths(touched_paths)
+    reverse_meta = transitions.make_meta(transitions.TransitionCommand.REVERT, profile)
+    reverse_delta: transitions.ExtensionDelta | None = None
+    if reverse_added or reverse_removed:
+        reverse_delta = transitions.ExtensionDelta(
+            added=reverse_added, removed=reverse_removed
+        )
+    return transitions.write_transition(
+        reverse_meta,
+        file_pre,
+        file_post,
+        reverse_delta,
+        plugin_delta=reverse_plugin_delta,
+    )
+
+
 @app.command()
 def revert(
     profile: str = _PROFILE_OPTION,
@@ -1185,37 +1225,7 @@ def revert(
 
     transitions.apply_patch_reverse(transition)
 
-    ext_file = transition / "extensions.json"
-    reverse_added: list[str] = []
-    reverse_removed: list[str] = []
-    if ext_file.exists():
-        ext_raw = json.loads(ext_file.read_text())
-        ext_delta = transitions.extension_delta_from_json(ext_raw)
-        reverse_added, reverse_removed, _ = _reverse_extensions(ext_delta)
-
-    plugin_file = transition / "plugins.json"
-    reverse_plugin_delta: transitions.PluginDelta | None = None
-    if plugin_file.exists():
-        plugin_raw = json.loads(plugin_file.read_text(encoding="utf-8"))
-        plugin_payload = transitions.plugin_delta_from_json(plugin_raw)
-        reverse_plugin_delta, _ = _reverse_plugins(plugin_payload)
-        if reverse_plugin_delta.is_empty():
-            reverse_plugin_delta = None
-
-    file_post = transitions.snapshot_paths(touched_paths)
-    reverse_meta = transitions.make_meta(transitions.TransitionCommand.REVERT, profile)
-    reverse_delta: transitions.ExtensionDelta | None = None
-    if reverse_added or reverse_removed:
-        reverse_delta = transitions.ExtensionDelta(
-            added=reverse_added, removed=reverse_removed
-        )
-    target = transitions.write_transition(
-        reverse_meta,
-        file_pre,
-        file_post,
-        reverse_delta,
-        plugin_delta=reverse_plugin_delta,
-    )
+    target = _write_reverse_transition(transition, profile, touched_paths, file_pre)
     typer.echo(f"transition: {target}")
 
 
