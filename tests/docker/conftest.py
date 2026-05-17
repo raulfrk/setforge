@@ -56,6 +56,9 @@ def pytest_configure(config: pytest.Config) -> None:
     config.option.numprocesses = "auto"
 
 
+CONFIG_FIXTURE: str = "tests/fixtures/e2e/my_setup.test.yaml"
+"""Shared fixture path for the my_setup test config used by every Docker e2e test."""
+
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
 IMAGE_TAG_PREFIX: str = "my-setup-e2e:test"

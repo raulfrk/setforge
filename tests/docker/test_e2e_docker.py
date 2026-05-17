@@ -41,7 +41,7 @@ import pytest
 # ``ContainerHandle`` is exported by the sibling conftest. Pytest loads
 # conftest.py before sibling test modules, so the import is always
 # satisfied at collection time.
-from tests.docker.conftest import ContainerHandle
+from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -49,9 +49,6 @@ pytestmark = pytest.mark.e2e_docker
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-
-_CONFIG = "tests/fixtures/e2e/my_setup.test.yaml"
 
 
 def _install(
@@ -74,7 +71,7 @@ def _install(
     cmd = ["uv", "run", "my-setup"]
     if root_args:
         cmd.extend(root_args)
-    cmd.extend(["install", f"--profile={profile}", f"--config={_CONFIG}"])
+    cmd.extend(["install", f"--profile={profile}", f"--config={CONFIG_FIXTURE}"])
     if extra:
         cmd.extend(extra)
     result = container.exec(cmd, check=False)
@@ -102,7 +99,7 @@ def _sync(
     cmd = ["uv", "run", "my-setup"]
     if root_args:
         cmd.extend(root_args)
-    cmd.extend(["sync", f"--profile={profile}", f"--config={_CONFIG}"])
+    cmd.extend(["sync", f"--profile={profile}", f"--config={CONFIG_FIXTURE}"])
     if extra:
         cmd.extend(extra)
     result = container.exec(cmd, check=False)
@@ -158,7 +155,7 @@ def _drive_pty_sync(
             "my-setup",
             "sync",
             "--profile=test-yaml-deep",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ],
         timeout=120,
     )
@@ -719,7 +716,7 @@ def test_sync_interactive_skip_via_pty(
         docker_pty_session,
         drift_body=_drift_body("live-value-for-s"),
         prompts=[("Choice", "s")],
-        snapshot_path=f"/workspace/{_CONFIG}",
+        snapshot_path=f"/workspace/{CONFIG_FIXTURE}",
     )
     # The action appends `settings.userSub` (the diverged key path) to
     # the dotfile's preserve_user_keys list in the YAML config. Diff
@@ -801,7 +798,7 @@ def test_compare_reports_drift_exit_nonzero(
             "my-setup",
             "compare",
             "--profile=test-minimal",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--check",
             "--strict",
         ],
@@ -833,7 +830,7 @@ def test_install_then_revert_restores_state(
             "my-setup",
             "revert",
             "--profile=test-minimal",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ]
     )
     assert revert.returncode == 0
@@ -870,7 +867,9 @@ def test_validate_clean_yaml_exit_zero(
 ) -> None:
     """W: validate --all against the fixture config exits 0."""
     c = docker_container()
-    proc = c.exec(["uv", "run", "my-setup", "validate", "--all", f"--config={_CONFIG}"])
+    proc = c.exec(
+        ["uv", "run", "my-setup", "validate", "--all", f"--config={CONFIG_FIXTURE}"]
+    )
     assert proc.returncode == 0
     assert "ok" in proc.stdout
 
@@ -924,7 +923,7 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
             "my-setup",
             "compare",
             "--profile=test-text-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
     )
@@ -994,7 +993,7 @@ def test_compare_after_legacy_install_is_clean(
             "my-setup",
             "compare",
             "--profile=test-text-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
     )
@@ -1068,7 +1067,7 @@ def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
             "my-setup",
             "compare",
             "--profile=test-prose-reviewers",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--check",
             "--strict",
         ],
@@ -1115,7 +1114,7 @@ def test_revert_after_install_removes_new_agents_and_skill(
             "my-setup",
             "revert",
             "--profile=test-prose-reviewers",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ]
     )
     assert revert.returncode == 0, revert.stderr

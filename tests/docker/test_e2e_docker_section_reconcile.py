@@ -38,11 +38,10 @@ from collections.abc import Callable
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
-from tests.docker.conftest import ContainerHandle
+from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
 
 pytestmark = pytest.mark.e2e_docker
 
-_CONFIG = "tests/fixtures/e2e/my_setup.test.yaml"
 _LIVE_SHARED = "/home/tester/.my_setup_e2e/sections/shared.md"
 _LIVE_HOST_LOCAL = "/home/tester/.my_setup_e2e/sections/marked.md"
 _TRACKED_SHARED = "/workspace/tests/fixtures/e2e/tracked/sections/shared.md"
@@ -170,7 +169,7 @@ def _install(
         "my-setup",
         "install",
         f"--profile={profile}",
-        f"--config={_CONFIG}",
+        f"--config={CONFIG_FIXTURE}",
     ]
     if extra:
         cmd.extend(extra)
@@ -308,7 +307,7 @@ def test_install_reconcile_use_tracked_then_revert_restores_live(
             "my-setup",
             "revert",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
     )
@@ -444,7 +443,7 @@ def test_install_reconcile_interactive_keep_live(
             "my-setup",
             "install",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
         ],
         timeout=120,
@@ -488,7 +487,7 @@ def test_install_reconcile_interactive_take_tracked(
             "my-setup",
             "install",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
         ],
         timeout=120,
@@ -566,7 +565,7 @@ def test_install_reconcile_interactive_skip_then_keep_live(
             "my-setup",
             "install",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
         ],
         timeout=120,
@@ -683,7 +682,7 @@ def test_compare_reconcile_dry_run_shows_three_way_state(
             "my-setup",
             "compare",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
         ],
         check=False,
@@ -718,7 +717,7 @@ def test_compare_reconcile_dry_run_no_prompt(
             "my-setup",
             "compare",
             "--profile=test-reconcile-sections",
-            f"--config={_CONFIG}",
+            f"--config={CONFIG_FIXTURE}",
             "--reconcile-user-sections",
         ],
         check=False,
