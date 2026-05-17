@@ -437,7 +437,10 @@ def test_apply_action_m_y_launches_editor(
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setenv("EDITOR", "myfakeeditor")
-    monkeypatch.setattr("my_setup.wizard.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "my_setup._editor.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    monkeypatch.setattr("my_setup._editor.subprocess.run", fake_run)
     monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "y")
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
@@ -468,7 +471,7 @@ def test_apply_action_m_n_returns_manual_pending(
 
     run_called = []
     monkeypatch.setattr(
-        "my_setup.wizard.subprocess.run", lambda *a, **kw: run_called.append(a)
+        "my_setup._editor.subprocess.run", lambda *a, **kw: run_called.append(a)
     )
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)

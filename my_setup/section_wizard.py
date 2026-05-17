@@ -24,8 +24,6 @@ to the existing install / sync wizards.
 from __future__ import annotations
 
 import difflib
-import os
-import subprocess
 import tempfile
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -37,6 +35,7 @@ from typing import assert_never
 from rich.console import Console
 from rich.syntax import Syntax
 
+from my_setup._editor import run_editor
 from my_setup.section_reconcile import (
     SectionDrift,
     SectionDriftState,
@@ -271,14 +270,13 @@ def _edit_body(drift: SectionDrift) -> str:
     syntax highlighting — every user-section dotfile that ships today
     is Markdown.
     """
-    editor = os.environ.get("EDITOR", "vi")
     with tempfile.NamedTemporaryFile(
         "w", delete=False, suffix=".md", encoding="utf-8"
     ) as fh:
         fh.write(drift.live_body)
         tmp_path = Path(fh.name)
     try:
-        subprocess.run([editor, str(tmp_path)], check=True)
+        run_editor(tmp_path)
         return tmp_path.read_text(encoding="utf-8")
     finally:
         tmp_path.unlink(missing_ok=True)

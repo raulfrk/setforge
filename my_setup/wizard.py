@@ -27,7 +27,6 @@ import io
 import os
 import shutil
 import signal
-import subprocess
 import sys
 import termios
 import time
@@ -45,6 +44,7 @@ from rich.table import Table
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from my_setup import jsonc, transitions, yaml_merge
+from my_setup._editor import run_editor
 from my_setup.transitions import TransitionCommand
 
 # Matches signal.signal's first-arg signature; aliased here so the
@@ -400,8 +400,7 @@ def _action_manual_edit(item: DriftItem) -> ActionResult:
     file_display = item.src_path
     yn = _read_one_choice(f"   Open $EDITOR on {file_display} now? (y/n): ", {"y", "n"})
     if yn == "y":
-        editor = os.environ.get("EDITOR", "vi")
-        subprocess.run([editor, str(item.src_path)], check=True)
+        run_editor(item.src_path)
         return ActionResult.MANUAL_EDIT_DONE
     return ActionResult.MANUAL_PENDING
 
