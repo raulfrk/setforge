@@ -309,15 +309,11 @@ def _resolve_git_or_raise() -> Path:
 
 
 def _debug_git_output(prefix: str, result: subprocess.CompletedProcess[str]) -> None:
-    """Emit DEBUG logs for a git invocation's stdout/stderr (success-path doublet).
+    """Emit DEBUG logs for a git invocation's success-path stdout/stderr doublet.
 
     Skips empty streams. ``prefix`` is the caller-formatted invocation
-    label (e.g. ``"git clone 'owner/repo'"``); the stream name and
-    payload are passed as ``%s`` args per LOGGER lazy-formatting
-    convention. Used by the success paths of the git wrappers below;
-    the corresponding except-path ``LOGGER.debug`` calls in those
-    wrappers operate on ``stderr_of(exc)`` (no
-    :class:`subprocess.CompletedProcess`) and stay inline by design.
+    label; the stream name and payload pass as ``%s`` args per LOGGER
+    lazy-formatting convention.
     """
     if result.stdout:
         LOGGER.debug("%s stdout: %s", prefix, result.stdout)
