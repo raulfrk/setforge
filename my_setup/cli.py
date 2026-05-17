@@ -282,11 +282,13 @@ def _resolve_section_decisions(
         outcomes = section_wizard.reconcile_sections(
             drifts, auto=section_auto, interactive=interactive
         )
-        decisions[sub_dst] = {
+        sparse = {
             n: d.body
             for n, d in outcomes.items()
             if d.action in (SectionAction.TAKE_TRACKED, SectionAction.EDIT)
         }
+        if sparse:
+            decisions[sub_dst] = sparse
     return decisions
 
 
