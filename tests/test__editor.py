@@ -17,7 +17,6 @@ def test_missing_editor_raises_mysetuperror(
 ) -> None:
     monkeypatch.setenv("EDITOR", "nonexistent-binary-xyz-987")
     target = tmp_path / "file.md"
-    target.write_text("body", encoding="utf-8")
     with pytest.raises(MySetupError, match=r"not found on PATH"):
         run_editor(target)
 
@@ -27,7 +26,6 @@ def test_empty_editor_raises_mysetuperror(
 ) -> None:
     monkeypatch.setenv("EDITOR", "")
     target = tmp_path / "file.md"
-    target.write_text("body", encoding="utf-8")
     with pytest.raises(MySetupError, match=r"\$EDITOR is empty"):
         run_editor(target)
 
