@@ -23,7 +23,10 @@ def run_editor(target: Path) -> None:
     decides whether that's an error — e.g. user :q!ing vim).
     """
     editor = os.environ.get("EDITOR", "vi")
-    argv = shlex.split(editor)
+    try:
+        argv = shlex.split(editor)
+    except ValueError as exc:
+        raise MySetupError(f"$EDITOR={editor!r} has malformed quoting: {exc}") from exc
     if not argv:
         raise MySetupError("$EDITOR is empty; set EDITOR=<editor-binary> and retry.")
     if shutil.which(argv[0]) is None:

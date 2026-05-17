@@ -48,6 +48,16 @@ def test_multitoken_editor_passes_to_subprocess(
     assert captured["argv"] == ["echo", "--wait", str(target)]
 
 
+def test_run_editor_wraps_shlex_split_value_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EDITOR", "vi 'unclosed")
+    target = tmp_path / "f.txt"
+    target.touch()
+    with pytest.raises(MySetupError, match="malformed quoting"):
+        run_editor(target)
+
+
 def test_default_to_vi_when_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
