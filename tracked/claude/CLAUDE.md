@@ -27,7 +27,21 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 <!-- my-setup:user-section start shared workflow -->
 - Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (the multi-phase flow applied within an issue). See `superpowers-prefs.md` for the canonical phase flow and hard-gate posture.
 - Default phase flow on non-trivial work: **brainstorm → spec → plan → implement → review fan → address-findings+merge → post-merge review**. The **spec** is written verbatim into plan mode for user approval; the **plan** is a normal response. For parallel work that produces multiple specs, run them sequentially through plan mode or batch them into one plan-mode session — never skip plan-mode review of a spec. Escape hatch is narrow — single-file mechanical edits only.
-- After implementation, invoke the appropriate `reviewing-X` skill for the artifact: `reviewing-python-code` for Python source / pyproject / CI workflow / pre-commit-config; `reviewing-claude-md` for tracked/claude/ docs / skills / agents; `reviewing-markdown` for generic `.md` files outside `tracked/claude/` (READMEs, project-level CLAUDE.md, docs/, CHANGELOG.md, ADRs). The matrix skills (`reviewing-python-code`, `reviewing-claude-md`) each fire a parallel review fan of 5 aspect agents (spec / form / substance / specifics / prose) before merge, and again post-merge against merged HEAD; `reviewing-markdown` fires a 1-agent prose review. Mixed-artifact diffs invoke each applicable skill.
+- After implementation, invoke the appropriate `reviewing-X` skill
+  for the artifact:
+  - `reviewing-python-code` — Python source / pyproject / CI
+    workflow / pre-commit-config.
+  - `reviewing-claude-md` — tracked/claude/ docs / skills / agents.
+  - `reviewing-markdown` — generic `.md` files outside
+    `tracked/claude/` (READMEs, project-level CLAUDE.md, docs/,
+    CHANGELOG.md, ADRs).
+
+  The matrix skills (`reviewing-python-code`, `reviewing-claude-md`)
+  each fire a parallel review fan of 5 aspect agents
+  (spec / form / substance / specifics / prose) before merge, and
+  again post-merge against merged HEAD. `reviewing-markdown` fires
+  a 1-agent prose review. Mixed-artifact diffs invoke each
+  applicable skill.
 - bd issue = the contract. Read with `bd show <id>` at session start. The plan-mode spec session sharpens it; once accepted, code review is verification against the spec, not discovery.
 - Default: one issue per session. When no issue is named, `bd ready` picks the next unblocked leaf.
 - Out-of-scope findings during review → new `bd create` issue with a dep link, NEVER inline-fix into the current change. This keeps diffs small.
