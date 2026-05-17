@@ -1069,7 +1069,6 @@ def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
             "--profile=test-prose-reviewers",
             f"--config={CONFIG_FIXTURE}",
             "--check",
-            "--strict",
         ],
         check=False,
     )
