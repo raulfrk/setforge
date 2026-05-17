@@ -115,7 +115,15 @@ def _root(
         level = logging.DEBUG
     else:
         env_value = os.environ.get("MY_SETUP_LOG_LEVEL", "WARNING")
-        level = getattr(logging, env_value.upper(), logging.WARNING)
+        resolved = getattr(logging, env_value.upper(), None)
+        if resolved is None:
+            sys.stderr.write(
+                f"my-setup: unknown MY_SETUP_LOG_LEVEL={env_value!r}; "
+                f"defaulting to WARNING\n"
+            )
+            level = logging.WARNING
+        else:
+            level = resolved
     logging.basicConfig(
         level=level,
         stream=sys.stderr,
