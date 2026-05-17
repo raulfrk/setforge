@@ -1,7 +1,7 @@
 """Capture-time merge wizard for deep-merge sub-key drift and symmetric
 non-preserve top-level drift.
 
-Today's ``my-setup sync`` (capture) is a silent absorb: read live, strip
+Today's ``setforge sync`` (capture) is a silent absorb: read live, strip
 ``preserve_user_keys`` subtrees, write to tracked. Two gaps this module
 addresses:
 
@@ -457,7 +457,7 @@ def run_capture_wizard(
     Thin wrapper around :func:`setforge.wizard.run_wizard_loop` that
     supplies the capture-trigger walker, transition command, and
     pending-edit message. Snapshot base defaults to
-    ``~/.local/state/my-setup/sync-snapshots`` (parallel to merge's
+    ``~/.local/state/setforge/sync-snapshots`` (parallel to merge's
     ``merge-snapshots``).
 
     Parameters
@@ -472,7 +472,7 @@ def run_capture_wizard(
         Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir. Defaults to
-        ``~/.local/state/my-setup/sync-snapshots``.
+        ``~/.local/state/setforge/sync-snapshots``.
     console:
         Rich Console (defaults to a fresh ``Console()``).
     auto_accept:
@@ -495,7 +495,7 @@ def run_capture_wizard(
         code 130.
     """
     if snapshot_base is None:
-        snapshot_base = Path.home() / ".local" / "state" / "my-setup" / "sync-snapshots"
+        snapshot_base = Path.home() / ".local" / "state" / "setforge" / "sync-snapshots"
     if console is None:
         console = Console()
 
@@ -504,7 +504,7 @@ def run_capture_wizard(
     )
     pending_message = (
         f"[yellow]pending manual edit in {{src_path}}; "
-        f"resume with: my-setup sync --profile={profile_name}[/yellow]"
+        f"resume with: setforge sync --profile={profile_name}[/yellow]"
     )
     return wizard.run_wizard_loop(
         items,

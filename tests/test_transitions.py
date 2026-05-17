@@ -37,7 +37,7 @@ from setforge.transitions import (
 def test_state_root_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SETFORGE_STATE_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/test")))
-    assert state_root() == Path("/home/test/.local/state/my-setup")
+    assert state_root() == Path("/home/test/.local/state/setforge")
 
 
 def test_state_root_env_override(
@@ -107,7 +107,7 @@ def test_ensure_state_dir_writable_creates_dir(
     ensure_state_dir_writable()
     assert (tmp_path / "fresh" / "transitions").is_dir()
     # No probe file should be left.
-    assert not (tmp_path / "fresh" / "transitions" / ".my-setup-write-probe").exists()
+    assert not (tmp_path / "fresh" / "transitions" / ".setforge-write-probe").exists()
 
 
 def test_ensure_state_dir_writable_raises_on_unwritable(

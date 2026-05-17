@@ -1,12 +1,12 @@
 """Install-side three-way reconciliation for `shared` user-sections.
 
 Closes the gap surfaced by dotfiles-23k: when tracked content INSIDE a
-``<!-- my-setup:user-section start shared X -->`` region is updated
+``<!-- setforge:user-section start shared X -->`` region is updated
 (e.g., a new bullet in the Workflow rules), today's install preserves
 the live body unconditionally and the new tracked content never lands.
 This module supplies the per-section state classifier and the install
 hash-maintenance write helper that bring tracked-side updates into the
-fold without surprising the user on bare ``my-setup install`` runs.
+fold without surprising the user on bare ``setforge install`` runs.
 
 The classifier is pure: given (tracked text, live text), it returns a
 deterministic state per shared section, derived from
@@ -248,7 +248,7 @@ def stamp_tracked_baseline(tracked_path: Path) -> bool:
 
     Install MUTATES tracked content here, but only the ``hash=`` metadata
     in end markers — the section BODY and all other content stay
-    byte-for-byte identical. ``my-setup compare`` stays fully read-only
+    byte-for-byte identical. ``setforge compare`` stays fully read-only
     on tracked (it does NOT call this); compare may therefore report
     ``LEGACY`` for sections without a prior baseline. The next ``install``
     fixes that.

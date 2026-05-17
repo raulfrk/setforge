@@ -244,7 +244,7 @@ def capture_profile(
         interactive prompts.
     snapshot_base:
         Override for the wizard's snapshot directory; defaults to
-        ``~/.local/state/my-setup/sync-snapshots``.
+        ``~/.local/state/setforge/sync-snapshots``.
     console:
         Rich Console for the wizard (defaults to a fresh
         ``Console()``).

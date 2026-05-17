@@ -73,7 +73,7 @@ def _ensure_code() -> str:
             f"{_CODE_BIN!r} CLI not found on PATH; install VSCode "
             "or open a terminal in a VSCode session. "
             f"Tip: set 'binaries.{_CODE_BIN}' in "
-            "~/.config/my-setup/local.yaml to override."
+            "~/.config/setforge/local.yaml to override."
         )
     return str(path)
 
@@ -307,7 +307,7 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
 
     Per locked decision (spec § Locked implementation decisions #7):
     capture only ever edits ``include``. ``exclude`` is never auto-touched
-    — to remove something from the declared set, use ``my-setup ext remove``.
+    — to remove something from the declared set, use ``setforge ext remove``.
 
     Returns ``True`` iff the YAML changed. Comments and key order survive
     via ruamel.yaml round-trip.

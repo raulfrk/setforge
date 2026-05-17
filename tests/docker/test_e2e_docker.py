@@ -1,4 +1,4 @@
-"""Docker E2E test ring for ``my-setup`` (dotfiles-nen.9 outer ring).
+"""Docker E2E test ring for ``setforge`` (dotfiles-nen.9 outer ring).
 
 Every test runs inside a fresh Debian 12 container with real
 ``claude`` + ``code`` binaries, exercising the actual install / sync
@@ -18,7 +18,7 @@ ease of cross-reference):
 Each test takes the form:
 
   1. Spin a fresh container.
-  2. ``uv run my-setup <verb> --profile=test-<x>
+  2. ``uv run setforge <verb> --profile=test-<x>
      --config=tests/fixtures/e2e/my_setup.test.yaml``
   3. Read the resulting live file(s) and assert parsed/structured equality.
 
@@ -58,7 +58,7 @@ def _install(
     root_args: list[str] | None = None,
     extra: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``my-setup install`` inside the container; return CompletedProcess.
+    """Run ``setforge install`` inside the container; return CompletedProcess.
 
     Uses ``check=False`` so callers can assert on returncode + stderr
     explicitly; the buried ``CalledProcessError`` chain otherwise hides
@@ -68,7 +68,7 @@ def _install(
     precede the ``install`` subcommand. ``extra`` are subcommand-level
     flags (e.g. ``--auto-accept-*``) that follow it.
     """
-    cmd = ["uv", "run", "my-setup"]
+    cmd = ["uv", "run", "setforge"]
     if root_args:
         cmd.extend(root_args)
     cmd.extend(["install", f"--profile={profile}", f"--config={CONFIG_FIXTURE}"])
@@ -87,7 +87,7 @@ def _sync(
     extra: list[str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``my-setup sync`` inside the container; return CompletedProcess.
+    """Run ``setforge sync`` inside the container; return CompletedProcess.
 
     Asserts on ``returncode == 0`` when ``check=True`` (the default)
     for the same readability reasons as :func:`_install`.
@@ -96,7 +96,7 @@ def _sync(
     precede the ``sync`` subcommand. ``extra`` are subcommand-level
     flags (e.g. ``--auto=...``) that follow it.
     """
-    cmd = ["uv", "run", "my-setup"]
+    cmd = ["uv", "run", "setforge"]
     if root_args:
         cmd.extend(root_args)
     cmd.extend(["sync", f"--profile={profile}", f"--config={CONFIG_FIXTURE}"])
@@ -152,7 +152,7 @@ def _drive_pty_sync(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "sync",
             "--profile=test-yaml-deep",
             f"--config={CONFIG_FIXTURE}",
@@ -217,10 +217,10 @@ def test_install_text_sections_no_live(
     c = docker_container()
     _install(c, "test-text-sections")
     live = _read_live(c, ".my_setup_e2e/sections/marked.md")
-    assert "<!-- my-setup:user-section start host-local notes -->" in live
+    assert "<!-- setforge:user-section start host-local notes -->" in live
     assert "default notes (tracked side)" in live
     assert re.search(
-        r"<!-- my-setup:user-section end host-local notes( hash=[0-9a-f]{64})? -->",
+        r"<!-- setforge:user-section end host-local notes( hash=[0-9a-f]{64})? -->",
         live,
     )
 
@@ -240,9 +240,9 @@ def test_install_text_sections_preserve_user_content(
         """\
         # local title overrides tracked title
 
-        <!-- my-setup:user-section start host-local notes -->
+        <!-- setforge:user-section start host-local notes -->
         host-local marker body content
-        <!-- my-setup:user-section end host-local notes -->
+        <!-- setforge:user-section end host-local notes -->
 
         Trailing live content (not preserved on next install).
         """
@@ -465,7 +465,7 @@ def test_install_template_dst_jinja2(
     # owns vscode_user_dir's resolution; the test asserts only that template
     # rendering happened, NOT the specific dst).
     proc = c.exec(
-        ["find", "/home/tester", "-name", "my-setup-e2e-template.txt"],
+        ["find", "/home/tester", "-name", "setforge-e2e-template.txt"],
     )
     matches = [line for line in proc.stdout.splitlines() if line.strip()]
     assert matches, (
@@ -563,7 +563,7 @@ def test_install_verbose_emits_my_setup_debug(
     # are exercised on the install path; their success-path stderr-DEBUG
     # blocks are what this test verifies.
     c.write_text(
-        "/home/tester/.config/my-setup/local.yaml",
+        "/home/tester/.config/setforge/local.yaml",
         textwrap.dedent(
             """\
             claude:
@@ -795,7 +795,7 @@ def test_compare_reports_drift_exit_nonzero(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
@@ -827,7 +827,7 @@ def test_install_then_revert_restores_state(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "revert",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
@@ -868,7 +868,7 @@ def test_validate_clean_yaml_exit_zero(
     """W: validate --all against the fixture config exits 0."""
     c = docker_container()
     proc = c.exec(
-        ["uv", "run", "my-setup", "validate", "--all", f"--config={CONFIG_FIXTURE}"]
+        ["uv", "run", "setforge", "validate", "--all", f"--config={CONFIG_FIXTURE}"]
     )
     assert proc.returncode == 0
     assert "ok" in proc.stdout
@@ -891,9 +891,9 @@ _LEGACY_BODY = "host-local body content that must survive migration\n"
 _LEGACY_LIVE_TEXT = (
     "# local title overrides tracked title\n"
     "\n"
-    "<!-- my-setup:user-section start notes -->\n"
+    "<!-- setforge:user-section start notes -->\n"
     f"{_LEGACY_BODY}"
-    "<!-- my-setup:user-section end notes -->\n"
+    "<!-- setforge:user-section end notes -->\n"
     "\n"
     "Trailing live content.\n"
 )
@@ -905,8 +905,8 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
     """compare refuses legacy live markers with actionable MySetupError.
 
     Seeds a pre-9by-shaped live ``marked.md`` (untagged markers, no
-    hash segment) and runs ``my-setup compare``; asserts non-zero
-    exit AND that the combined stdout+stderr names ``my-setup
+    hash segment) and runs ``setforge compare``; asserts non-zero
+    exit AND that the combined stdout+stderr names ``setforge
     install`` as the next step. Without the refusal guard, the
     strict parser would leak an opaque ``MarkerError: line N: missing
     required keyword`` instead.
@@ -920,7 +920,7 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-text-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -933,8 +933,8 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
     )
     combined = (proc.stdout + proc.stderr).lower()
     assert "legacy" in combined, f"expected 'legacy' in output: {combined!r}"
-    assert "my-setup install" in proc.stdout + proc.stderr, (
-        f"expected 'my-setup install' in output: "
+    assert "setforge install" in proc.stdout + proc.stderr, (
+        f"expected 'setforge install' in output: "
         f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
 
@@ -959,15 +959,15 @@ def test_install_legacy_live_markers_preserves_body_and_retags(
     )
     # Every end marker carries the new tagged shape: semantics + hash=64hex.
     match = re.search(
-        r"<!-- my-setup:user-section end host-local notes hash=([0-9a-f]{64}) -->",
+        r"<!-- setforge:user-section end host-local notes hash=([0-9a-f]{64}) -->",
         live_post,
     )
     assert match is not None, (
         f"expected end marker with semantics + hash=64hex; got: {live_post!r}"
     )
     # No legacy untagged markers remain.
-    assert "<!-- my-setup:user-section start notes -->" not in live_post
-    assert "<!-- my-setup:user-section end notes -->" not in live_post
+    assert "<!-- setforge:user-section start notes -->" not in live_post
+    assert "<!-- setforge:user-section end notes -->" not in live_post
 
 
 def test_compare_after_legacy_install_is_clean(
@@ -990,7 +990,7 @@ def test_compare_after_legacy_install_is_clean(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-text-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -1064,7 +1064,7 @@ def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-prose-reviewers",
             f"--config={CONFIG_FIXTURE}",
@@ -1110,7 +1110,7 @@ def test_revert_after_install_removes_new_agents_and_skill(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "revert",
             "--profile=test-prose-reviewers",
             f"--config={CONFIG_FIXTURE}",
@@ -1149,8 +1149,8 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
     ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
     ``~/.claude/CLAUDE.md`` (no ``host-local``/``shared`` semantics keyword
     on the start marker, no ``hash=<sha256>`` segment on the end marker) and
-    runs ``my-setup merge --profile=vm-headless``; asserts non-zero exit
-    AND that combined stdout+stderr names ``my-setup install`` as the next
+    runs ``setforge merge --profile=vm-headless``; asserts non-zero exit
+    AND that combined stdout+stderr names ``setforge install`` as the next
     step. Without the refusal guard, ``merge`` would proceed silently into
     ``compare_profile`` instead of surfacing the actionable error.
     """
@@ -1158,13 +1158,13 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
     c.write_text(
         "/home/tester/.claude/CLAUDE.md",
         "intro\n"
-        "<!-- my-setup:user-section start workflow -->\n"
+        "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
-        "<!-- my-setup:user-section end workflow -->\n"
+        "<!-- setforge:user-section end workflow -->\n"
         "outro\n",
     )
     result = c.exec(
-        ["uv", "run", "my-setup", "merge", "--profile=vm-headless"],
+        ["uv", "run", "setforge", "merge", "--profile=vm-headless"],
         check=False,
     )
     assert result.returncode != 0, (
@@ -1173,8 +1173,8 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
         f"stdout:{result.stdout}\nstderr:{result.stderr}"
     )
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "Run 'uv run my-setup install" in combined, (
-        f"expected 'Run 'uv run my-setup install' in output: "
+    assert "Run 'uv run setforge install" in combined, (
+        f"expected 'Run 'uv run setforge install' in output: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
 
@@ -1187,21 +1187,21 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
     Pairs with the unit-level
     ``test_sync_refuses_legacy_live_with_actionable_error`` in
     ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
-    ``~/.claude/CLAUDE.md`` and runs ``my-setup sync --profile=vm-headless``;
+    ``~/.claude/CLAUDE.md`` and runs ``setforge sync --profile=vm-headless``;
     asserts non-zero exit AND that combined stdout+stderr names
-    ``my-setup install`` as the next step.
+    ``setforge install`` as the next step.
     """
     c = docker_container()
     c.write_text(
         "/home/tester/.claude/CLAUDE.md",
         "intro\n"
-        "<!-- my-setup:user-section start workflow -->\n"
+        "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
-        "<!-- my-setup:user-section end workflow -->\n"
+        "<!-- setforge:user-section end workflow -->\n"
         "outro\n",
     )
     result = c.exec(
-        ["uv", "run", "my-setup", "sync", "--profile=vm-headless"],
+        ["uv", "run", "setforge", "sync", "--profile=vm-headless"],
         check=False,
     )
     assert result.returncode != 0, (
@@ -1210,7 +1210,7 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
         f"stdout:{result.stdout}\nstderr:{result.stderr}"
     )
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "Run 'uv run my-setup install" in combined, (
-        f"expected 'Run 'uv run my-setup install' in output: "
+    assert "Run 'uv run setforge install" in combined, (
+        f"expected 'Run 'uv run setforge install' in output: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )

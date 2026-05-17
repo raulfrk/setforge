@@ -408,7 +408,7 @@ def test_run_capture_wizard_delegates_to_loop(
     assert call["transition_command"] is TransitionCommand.SYNC
     assert call["profile"] == "p"
     assert call["auto_accept"] == "k"
-    assert "my-setup sync --profile=p" in call["pending_message"]
+    assert "setforge sync --profile=p" in call["pending_message"]
     # Two items walked: a (shared-different) and b (shared-different)
     assert len(call["items"]) == 2
     assert all(d[1] == ActionResult.KEEP_TRACKED for d in decisions)

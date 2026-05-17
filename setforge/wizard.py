@@ -510,7 +510,7 @@ def run_wizard_loop(
         offending file path. Example::
 
             "[yellow]pending manual edit in {src_path}; "
-            "resume with: my-setup merge --profile=p[/yellow]"
+            "resume with: setforge merge --profile=p[/yellow]"
 
     Returns
     -------

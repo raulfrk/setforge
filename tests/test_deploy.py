@@ -88,8 +88,8 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     # Tracked side ships with a hash-stamped end marker (post-9by canonical).
     src.write_text(
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
-        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
+        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
         "footer\n"
     )
     dst = tmp_path / "dst.md"
@@ -97,9 +97,9 @@ def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     # tolerates it and rewrites the marker on write.
     dst.write_text(
         "old header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "USER CONTENT\n"
-        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
         "old footer\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
@@ -119,8 +119,8 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
     src = tmp_path / "src.md"
     src.write_text(
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
 
@@ -134,9 +134,9 @@ def test_copy_atomic_precomputed_live_sections_skips_reparse(
         d = tmp_path / name
         d.write_text(
             "old header\n"
-            "<!-- my-setup:user-section start host-local s -->\n"
+            "<!-- setforge:user-section start host-local s -->\n"
             "USER CONTENT\n"
-            f"<!-- my-setup:user-section end host-local s hash={_H} -->\n"
+            f"<!-- setforge:user-section end host-local s hash={_H} -->\n"
             "old footer\n"
         )
         return d
@@ -193,15 +193,15 @@ def test_copy_atomic_precomputed_live_sections_matches_fresh_read(
     """
     src_text = (
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
     live_text = (
         "old header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "USER BODY\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n"
     )
 
@@ -232,15 +232,15 @@ def test_copy_atomic_section_bodies_override_still_takes_precedence_with_precomp
     """
     src_text = (
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n"
     )
     live_text = (
         "old header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "LIVE BODY\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n"
     )
 
@@ -401,18 +401,18 @@ def test_copy_atomic_legacy_live_body_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
     src.write_text(
         "header\n"
-        "<!-- my-setup:user-section start shared notes -->\n"
+        "<!-- setforge:user-section start shared notes -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end shared notes hash={_sha256_hex(body)} -->\n"
+        f"<!-- setforge:user-section end shared notes hash={_sha256_hex(body)} -->\n"
         "footer\n"
     )
     dst = tmp_path / "dst.md"
     # Live with pre-9by untagged markers and no hash segment.
     dst.write_text(
         "header\n"
-        "<!-- my-setup:user-section start notes -->\n"
+        "<!-- setforge:user-section start notes -->\n"
         f"{body}"
-        "<!-- my-setup:user-section end notes -->\n"
+        "<!-- setforge:user-section end notes -->\n"
         "footer\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
@@ -435,25 +435,25 @@ def test_copy_atomic_post_install_invariant_holds_for_all_sections(
     src = tmp_path / "src.md"
     src.write_text(
         "head\n"
-        "<!-- my-setup:user-section start shared a -->\n"
+        "<!-- setforge:user-section start shared a -->\n"
         f"{body_a}"
-        f"<!-- my-setup:user-section end shared a hash={_sha256_hex(body_a)} -->\n"
+        f"<!-- setforge:user-section end shared a hash={_sha256_hex(body_a)} -->\n"
         "mid\n"
-        "<!-- my-setup:user-section start host-local b -->\n"
+        "<!-- setforge:user-section start host-local b -->\n"
         f"{body_b}"
-        f"<!-- my-setup:user-section end host-local b hash={_sha256_hex(body_b)} -->\n"
+        f"<!-- setforge:user-section end host-local b hash={_sha256_hex(body_b)} -->\n"
         "tail\n"
     )
     dst = tmp_path / "dst.md"
     dst.write_text(
         "head\n"
-        "<!-- my-setup:user-section start a -->\n"
+        "<!-- setforge:user-section start a -->\n"
         f"{body_a}"
-        f"<!-- my-setup:user-section end a hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end a hash={'a' * 64} -->\n"
         "mid\n"
-        "<!-- my-setup:user-section start b -->\n"
+        "<!-- setforge:user-section start b -->\n"
         f"{body_b}"
-        f"<!-- my-setup:user-section end b hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end b hash={'a' * 64} -->\n"
         "tail\n"
     )
     copy_atomic(src, dst, preserve_user_sections=True)
@@ -475,15 +475,15 @@ def test_copy_atomic_second_install_is_noop_after_legacy_retag(
     digest = _sha256_hex(body)
     src = tmp_path / "src.md"
     src.write_text(
-        "<!-- my-setup:user-section start host-local notes -->\n"
+        "<!-- setforge:user-section start host-local notes -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end host-local notes hash={digest} -->\n"
+        f"<!-- setforge:user-section end host-local notes hash={digest} -->\n"
     )
     dst = tmp_path / "dst.md"
     dst.write_text(
-        "<!-- my-setup:user-section start notes -->\n"
+        "<!-- setforge:user-section start notes -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end notes hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end notes hash={'a' * 64} -->\n"
     )
     first = copy_atomic(src, dst, preserve_user_sections=True)
     assert first.action in {DeployAction.CREATED, DeployAction.UPDATED}

@@ -71,9 +71,9 @@ def _shared_section(body: str, embed_hash: str | None) -> str:
     return (
         "# test-reconcile-sections fixture (shared)\n\n"
         "Global text above the marker.\n\n"
-        "<!-- my-setup:user-section start shared workflow -->\n"
+        "<!-- setforge:user-section start shared workflow -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end shared workflow{hash_segment} -->\n\n"
+        f"<!-- setforge:user-section end shared workflow{hash_segment} -->\n\n"
         "Trailing tracked content.\n"
     )
 
@@ -95,13 +95,13 @@ def _shared_two_section(
     return (
         "# test-reconcile-sections fixture (shared, two sections)\n\n"
         "Global text above the markers.\n\n"
-        "<!-- my-setup:user-section start shared workflow -->\n"
+        "<!-- setforge:user-section start shared workflow -->\n"
         f"{body_a}"
-        f"<!-- my-setup:user-section end shared workflow{seg_a} -->\n\n"
+        f"<!-- setforge:user-section end shared workflow{seg_a} -->\n\n"
         "Interstitial tracked content.\n\n"
-        "<!-- my-setup:user-section start shared commits -->\n"
+        "<!-- setforge:user-section start shared commits -->\n"
         f"{body_b}"
-        f"<!-- my-setup:user-section end shared commits{seg_b} -->\n\n"
+        f"<!-- setforge:user-section end shared commits{seg_b} -->\n\n"
         "Trailing tracked content.\n"
     )
 
@@ -126,17 +126,17 @@ def _shared_three_section(
     return (
         "# test-reconcile-sections fixture (shared, three sections)\n\n"
         "Global text above the markers.\n\n"
-        "<!-- my-setup:user-section start shared workflow -->\n"
+        "<!-- setforge:user-section start shared workflow -->\n"
         f"{body_a}"
-        f"<!-- my-setup:user-section end shared workflow{seg_a} -->\n\n"
+        f"<!-- setforge:user-section end shared workflow{seg_a} -->\n\n"
         "Interstitial 1.\n\n"
-        "<!-- my-setup:user-section start shared commits -->\n"
+        "<!-- setforge:user-section start shared commits -->\n"
         f"{body_b}"
-        f"<!-- my-setup:user-section end shared commits{seg_b} -->\n\n"
+        f"<!-- setforge:user-section end shared commits{seg_b} -->\n\n"
         "Interstitial 2.\n\n"
-        "<!-- my-setup:user-section start shared python -->\n"
+        "<!-- setforge:user-section start shared python -->\n"
         f"{body_c}"
-        f"<!-- my-setup:user-section end shared python{seg_c} -->\n\n"
+        f"<!-- setforge:user-section end shared python{seg_c} -->\n\n"
         "Trailing tracked content.\n"
     )
 
@@ -148,9 +148,9 @@ def _host_local_section(body: str, embed_hash: str | None) -> str:
         "# test-text-sections fixture\n\n"
         "Global text that lives in tracked and overwrites the "
         "live copy on every install.\n\n"
-        "<!-- my-setup:user-section start host-local notes -->\n"
+        "<!-- setforge:user-section start host-local notes -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end host-local notes{hash_segment} -->\n\n"
+        f"<!-- setforge:user-section end host-local notes{hash_segment} -->\n\n"
         "Trailing tracked content.\n"
     )
 
@@ -166,7 +166,7 @@ def _install(
     cmd = [
         "uv",
         "run",
-        "my-setup",
+        "setforge",
         "install",
         f"--profile={profile}",
         f"--config={CONFIG_FIXTURE}",
@@ -304,7 +304,7 @@ def test_install_reconcile_use_tracked_then_revert_restores_live(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "revert",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -338,8 +338,8 @@ def test_install_untagged_marker_raises_marker_error(
     # Plant an untagged marker into tracked.
     c.write_text(
         "/workspace/tests/fixtures/e2e/tracked/sections/shared.md",
-        "<!-- my-setup:user-section start workflow -->\nbody\n"
-        "<!-- my-setup:user-section end workflow -->\n",
+        "<!-- setforge:user-section start workflow -->\nbody\n"
+        "<!-- setforge:user-section end workflow -->\n",
     )
     result = _install(c, "test-reconcile-sections", check=False)
     assert result.returncode != 0
@@ -440,7 +440,7 @@ def test_install_reconcile_interactive_keep_live(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "install",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -484,7 +484,7 @@ def test_install_reconcile_interactive_take_tracked(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "install",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -562,7 +562,7 @@ def test_install_reconcile_interactive_skip_then_keep_live(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "install",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -679,7 +679,7 @@ def test_compare_reconcile_dry_run_shows_three_way_state(
         [
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
@@ -714,7 +714,7 @@ def test_compare_reconcile_dry_run_no_prompt(
             "10",
             "uv",
             "run",
-            "my-setup",
+            "setforge",
             "compare",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",

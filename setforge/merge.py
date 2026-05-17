@@ -7,7 +7,7 @@ snapshot/restore semantics.
 
 Signal handlers for SIGINT (130), SIGTERM (143), SIGHUP (129) restore
 all affected files from the snapshot taken at wizard start. Successful
-completion records exactly one MERGE transition so ``my-setup revert``
+completion records exactly one MERGE transition so ``setforge revert``
 can undo the whole session uniformly.
 
 Generic wizard mechanics (snapshot, prompt, action dispatch, signal
@@ -158,14 +158,14 @@ def run_wizard(
     report:
         Compare report to walk.
     config:
-        Loaded my-setup config.
+        Loaded setforge config.
     repo_root:
         Repo root used for ``resolve_src``.
     my_setup_yaml_path:
         Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir. Defaults to
-        ``~/.local/state/my-setup/merge-snapshots``.
+        ``~/.local/state/setforge/merge-snapshots``.
     profile:
         Profile name (used in the merge-transition meta).
     tracked_file_filter:
@@ -188,7 +188,7 @@ def run_wizard(
     """
     if snapshot_base is None:
         snapshot_base = (
-            Path.home() / ".local" / "state" / "my-setup" / "merge-snapshots"
+            Path.home() / ".local" / "state" / "setforge" / "merge-snapshots"
         )
     if console is None:
         console = Console()
@@ -198,7 +198,7 @@ def run_wizard(
     )
     pending_message = (
         f"[yellow]pending manual edit in {{src_path}}; "
-        f"resume with: my-setup merge --profile={profile}[/yellow]"
+        f"resume with: setforge merge --profile={profile}[/yellow]"
     )
     return wizard.run_wizard_loop(
         items,

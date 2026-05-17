@@ -2,9 +2,9 @@
 
 Marker syntax (HTML comments only)::
 
-    <!-- my-setup:user-section start <host-local|shared> NAME -->
+    <!-- setforge:user-section start <host-local|shared> NAME -->
     ... preserved content ...
-    <!-- my-setup:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
+    <!-- setforge:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
 
 The ``host-local|shared`` keyword is REQUIRED on both start and end
 markers as of dotfiles-9by. ``host-local`` sections are preserved
@@ -66,7 +66,7 @@ class SectionSemantics(StrEnum):
 _SEMANTICS_KEYWORDS = "host-local|shared"
 
 _MARKER_RE = re.compile(
-    r"^\s*<!--\s*my-setup:user-section\s+(start|end)"
+    r"^\s*<!--\s*setforge:user-section\s+(start|end)"
     rf"(?:\s+({_SEMANTICS_KEYWORDS}))?"
     r"(?:\s+(?!hash=)(\S+))?"
     r"(?:\s+hash=(\S+))?"
@@ -79,7 +79,7 @@ _MARKER_RE = re.compile(
 # latter surfaces a precise :class:`MarkerError` instead of being silently
 # dropped as outside-content. Captures (kind, rest-before-`-->`).
 _MARKER_PREFIX_RE = re.compile(
-    r"^\s*<!--\s*my-setup:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
+    r"^\s*<!--\s*setforge:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
 )
 
 _HASH_VALUE_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -223,7 +223,7 @@ def _raise_if_malformed_marker(line: str, lineno: int) -> None:
 
     Called by :func:`_parse_marker_line` after the strict ``_MARKER_RE`` has
     failed. Without this gate, a marker like
-    ``<!-- my-setup:user-section start fish-tacos NAME -->`` would be
+    ``<!-- setforge:user-section start fish-tacos NAME -->`` would be
     silently treated as outside-content; the user would see no error or
     an opaque downstream "end-without-start" instead of the precise
     "unknown semantics keyword" with line context.
@@ -558,7 +558,7 @@ def _format_end_marker(
     Preserves the original line's trailing newline (or its absence) so
     ``set_marker_hashes`` is byte-preserving on file endings.
     """
-    parts = ["<!-- my-setup:user-section end", semantics.value]
+    parts = ["<!-- setforge:user-section end", semantics.value]
     if name is not None:
         parts.append(name)
     if embedded_hash is not None:

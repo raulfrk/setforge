@@ -5,7 +5,7 @@
 # Build with the repo root as the context (so COPY can pull in
 # pyproject.toml / uv.lock / my_setup/ / tracked/):
 #
-#   docker build -t my-setup-e2e:test-<inputs-hash> -f tests/docker/Dockerfile .
+#   docker build -t setforge-e2e:test-<inputs-hash> -f tests/docker/Dockerfile .
 #
 # A repo-root .dockerignore keeps the context lean. The conftest
 # `docker_image` fixture invokes the same form; the `-<inputs-hash>`

@@ -28,8 +28,8 @@ def test_install_passes_precomputed_live_sections_to_deploy(
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "footer\n",
         encoding="utf-8",
     )
@@ -37,9 +37,9 @@ def test_install_passes_precomputed_live_sections_to_deploy(
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(
         "old header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "USER BODY\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "old footer\n",
         encoding="utf-8",
     )

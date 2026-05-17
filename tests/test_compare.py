@@ -46,14 +46,14 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
     same_hash = "a" * 64
     _write(
         src,
-        "<!-- my-setup:user-section start host-local -->\n"
-        f"<!-- my-setup:user-section end host-local hash={same_hash} -->\n",
+        "<!-- setforge:user-section start host-local -->\n"
+        f"<!-- setforge:user-section end host-local hash={same_hash} -->\n",
     )
     _write(
         dst,
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "live content\n"
-        f"<!-- my-setup:user-section end host-local hash={same_hash} -->\n",
+        f"<!-- setforge:user-section end host-local hash={same_hash} -->\n",
     )
     assert diff_file(src, dst, preserve_user_sections=True) == ""
 
@@ -66,9 +66,9 @@ def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
     dst = tmp_path / "dst.md"
     same = (
         "shared header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "same body\n"
-        f"<!-- my-setup:user-section end host-local s hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={'a' * 64} -->\n"
         "shared footer\n"
     )
     _write(src, same)
@@ -88,17 +88,17 @@ def test_diff_file_hash_fast_path_falls_through_on_section_drift(
     _write(
         src,
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "tracked body\n"
-        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={same_hash} -->\n"
         "footer\n",
     )
     _write(
         dst,
         "header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "live body\n"
-        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n"
+        f"<!-- setforge:user-section end host-local s hash={same_hash} -->\n"
         "footer\n",
     )
     # preserve_user_sections=True splices live body into the tracked template
@@ -117,16 +117,16 @@ def test_diff_file_hash_fast_path_declines_on_template_drift(
     _write(
         src,
         "tracked header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "shared body\n"
-        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n",
+        f"<!-- setforge:user-section end host-local s hash={same_hash} -->\n",
     )
     _write(
         dst,
         "live header\n"
-        "<!-- my-setup:user-section start host-local s -->\n"
+        "<!-- setforge:user-section start host-local s -->\n"
         "shared body\n"
-        f"<!-- my-setup:user-section end host-local s hash={same_hash} -->\n",
+        f"<!-- setforge:user-section end host-local s hash={same_hash} -->\n",
     )
     diff = diff_file(src, dst, preserve_user_sections=True)
     assert "tracked header" in diff

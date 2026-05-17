@@ -47,16 +47,16 @@ def test_capture_strips_user_sections_when_no_tracked_exists(
     _write(
         dst,
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "host-specific stuff\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        "<!-- setforge:user-section end host-local -->\n"
         "footer\n",
     )
     capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
     text = src.read_text()
     assert "host-specific stuff" not in text
-    assert "<!-- my-setup:user-section start host-local -->" in text
-    assert "<!-- my-setup:user-section end host-local -->" in text
+    assert "<!-- setforge:user-section start host-local -->" in text
+    assert "<!-- setforge:user-section end host-local -->" in text
     assert "header\n" in text
     assert "footer\n" in text
 
@@ -72,17 +72,17 @@ def test_capture_keep_defaults_preserves_tracked_marker_bodies(
     _write(
         src,
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "tracked default bullet\n"
-        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
         "footer\n",
     )
     _write(
         dst,
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "live host-only edit\n"
-        f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local hash={'b' * 64} -->\n"
         "footer\n",
     )
     capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
@@ -101,17 +101,17 @@ def test_capture_keep_defaults_propagates_non_marker_edits(
     _write(
         src,
         "old header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "tracked default\n"
-        f"<!-- my-setup:user-section end host-local hash={'a' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
         "old footer\n",
     )
     _write(
         dst,
         "new header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "live host edit\n"
-        f"<!-- my-setup:user-section end host-local hash={'b' * 64} -->\n"
+        f"<!-- setforge:user-section end host-local hash={'b' * 64} -->\n"
         "new footer\n",
     )
     capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
@@ -130,17 +130,17 @@ def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
     _write(
         src,
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "tracked content\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        "<!-- setforge:user-section end host-local -->\n"
         "footer\n",
     )
     _write(
         dst,
         "header\n"
-        "<!-- my-setup:user-section start host-local -->\n"
+        "<!-- setforge:user-section start host-local -->\n"
         "live content\n"
-        "<!-- my-setup:user-section end host-local -->\n"
+        "<!-- setforge:user-section end host-local -->\n"
         "footer\n",
     )
     capture_tracked_file(
@@ -153,7 +153,7 @@ def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
     text = src.read_text()
     assert "tracked content" not in text
     assert "live content" not in text
-    assert "<!-- my-setup:user-section start host-local -->" in text
+    assert "<!-- setforge:user-section start host-local -->" in text
 
 
 def test_tracked_file_default_section_mode_is_keep_defaults() -> None:

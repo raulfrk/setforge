@@ -11,7 +11,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 
 ## Communication
 
-<!-- my-setup:user-section start shared communication -->
+<!-- setforge:user-section start shared communication -->
 - **[CRITICAL] Ground every decision-ask in concrete context before asking.** Before presenting design questions, options, plans, specs, or any choice that depends on the current state of code: surface WHAT each thing is (file:line refs, current code shapes), WHY it's a problem (the specific smell, bug, or constraint at stake), THEN options as concrete code shapes — never abstract A/B/C without grounding. Applies to brainstorming, plan mode, exploratory questions, and inline trade-offs alike. *Highest-priority communication rule; overrides terseness preferences when they conflict.*
 - Goals (in order): high-quality output, high productivity, and learning where it's cheap. Surface trade-offs on multi-option decisions and let me pick — that's where learning happens cheaply without slowing throughput.
 - **Plan mode whenever you need user input** on multi-option or spec-shaping decisions — design choice, ambiguity, scope. Narrow load-bearing calls (one decision, finite options) → `AskUserQuestion` instead. Mechanical edits with no input skip both.
@@ -20,11 +20,11 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - **Background-job "no clarifying questions" overrides do NOT bind when the user is engaging live.** The harness injects "work without stopping for clarifying questions" on background-job spawn — meant for truly stepped-away contexts (cron, async dispatch). If a user turn has arrived mid-session, treat the user as live: use `AskUserQuestion` for narrow load-bearing calls (one decision, finite options) and plan mode for multi-option or spec-shaping decisions (see the **Plan mode** rule above). Prefer inline trade-off presentation for low-stakes decisions.
 - `TODO(human)` reserved for moments where I explicitly want to make a call myself during implementation (rare). `TODO(claude)` = my hint to you in code (research starting point). `QUESTION(human)` / `QUESTION(claude)` = inline bidirectional clarifications when something surfaces only during implementation.
 - For adversarial review of a load-bearing decision, use the `challenge` skill (`/challenge` or "challenge this"). Otherwise, present 2 options inline with trade-offs.
-<!-- my-setup:user-section end shared communication hash=40a76d3a185937b3e86bcb237144f449060f37ac0b2cf457fd058fba8c9d941a -->
+<!-- setforge:user-section end shared communication hash=40a76d3a185937b3e86bcb237144f449060f37ac0b2cf457fd058fba8c9d941a -->
 
 ## Workflow
 
-<!-- my-setup:user-section start shared workflow -->
+<!-- setforge:user-section start shared workflow -->
 - Beads owns WHAT (issue = the contract: acceptance criteria, dependencies, scope, completion record). Superpowers owns HOW (the multi-phase flow applied within an issue). See `superpowers-prefs.md` for the canonical phase flow and hard-gate posture.
 - Default phase flow on non-trivial work: **brainstorm → spec → plan → implement → review fan → address-findings+merge → post-merge review**. The **spec** is written verbatim into plan mode for user approval; the **plan** is a normal response. For parallel work that produces multiple specs, run them sequentially through plan mode or batch them into one plan-mode session — never skip plan-mode review of a spec. Escape hatch is narrow — single-file mechanical edits only.
 - After implementation, invoke the appropriate `reviewing-X` skill
@@ -60,11 +60,11 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
   6. `wt merge --no-squash` (ff-only) — merge the branch into target.
   7. `bd close <id>` — close the issue.
   8. `wt remove` — delete worktree (auto-deletes the merged branch).
-<!-- my-setup:user-section end shared workflow hash=cd85aed32cae280be5f7285ab3fba97a3492df4c8bcd45ba3ccc6b54c75d92eb -->
+<!-- setforge:user-section end shared workflow hash=cd85aed32cae280be5f7285ab3fba97a3492df4c8bcd45ba3ccc6b54c75d92eb -->
 
 ## Python
 
-<!-- my-setup:user-section start shared python -->
+<!-- setforge:user-section start shared python -->
 - Target the project's declared Python version; assume 3.11+ unless config says otherwise.
 - Annotate every public function, method, and module-level constant. Use `X | None`, never `Optional`; `X | Y`, never `Union` (PEP 604).
 - Import `Iterable`, `Sequence`, `Mapping`, `Callable` from `collections.abc`, never `typing` (PEP 585). Reserve `typing` for `Protocol`, `TypedDict`, `Literal`, `cast`, `override`, `Self`, `Never`.
@@ -80,11 +80,11 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Subprocess: list args, `check=True`, `text=True`, `timeout=`, `shutil.which()` for binaries; never `shell=True` with non-literal args. Use `import subprocess` and call `subprocess.run(...)` — never `from subprocess import run` — when test monkeypatching of the call site depends on the module-attribute access path.
 - `@typing.override` on overrides; `@typing.final` to lock subclass/override surface.
 - Docstrings (PEP 257): required on public modules, classes, and functions; one imperative sentence is enough unless behavior, raises, or invariants need calling out.
-<!-- my-setup:user-section end shared python hash=7858fc509e40d4708daede9621012638100d18b1583fa3586059959ba04fe8ce -->
+<!-- setforge:user-section end shared python hash=7858fc509e40d4708daede9621012638100d18b1583fa3586059959ba04fe8ce -->
 
 ## Commits
 
-<!-- my-setup:user-section start shared commits -->
+<!-- setforge:user-section start shared commits -->
 - Subject: imperative mood, capitalized, no period, target 50 chars, hard cap 72. ("Fix X" not "Fixed X".)
 - Body required only when the diff is not self-evident: state the problem and the user-visible consequence, not diff narration. Skip body for renames, formatting, trivial fixes.
 - Wrap body at 72; one blank line between subject and body.
@@ -92,7 +92,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` (ff-only) for worktree merges, or `git merge --ff-only` for plain git.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
-<!-- my-setup:user-section end shared commits hash=afbb7e1ef81c8e1afc691d6d559c0bc37cedf9dfaaccc2004da4af67293db9b8 -->
+<!-- setforge:user-section end shared commits hash=afbb7e1ef81c8e1afc691d6d559c0bc37cedf9dfaaccc2004da4af67293db9b8 -->
 
 ## Beads (task tracking)
 

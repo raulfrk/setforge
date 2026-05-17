@@ -92,9 +92,9 @@ def _make_text(name: str, semantics: str, body: str, embed_hash: str | None) -> 
     """Build a tiny section text. ``embed_hash`` None → hashless end marker."""
     hash_segment = f" hash={embed_hash}" if embed_hash is not None else ""
     return (
-        f"<!-- my-setup:user-section start {semantics} {name} -->\n"
+        f"<!-- setforge:user-section start {semantics} {name} -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end {semantics} {name}{hash_segment} -->\n"
+        f"<!-- setforge:user-section end {semantics} {name}{hash_segment} -->\n"
     )
 
 
@@ -199,7 +199,7 @@ def test_classify_section_drift_skips_section_not_in_live() -> None:
 
 
 def test_classify_section_drift_propagates_marker_error() -> None:
-    tracked = "<!-- my-setup:user-section start workflow -->\nbody\n"
+    tracked = "<!-- setforge:user-section start workflow -->\nbody\n"
     live = ""
     with pytest.raises(MarkerError):
         classify_section_drift(tracked, live)
@@ -215,9 +215,9 @@ def test_classify_section_drift_legacy_live_returns_LEGACY_state() -> None:
     body = "rule A\n"
     tracked_text = _make_text("workflow", "shared", body, _sha256(body))
     live_text = (
-        "<!-- my-setup:user-section start workflow -->\n"
+        "<!-- setforge:user-section start workflow -->\n"
         f"{body}live edit\n"
-        "<!-- my-setup:user-section end workflow -->\n"
+        "<!-- setforge:user-section end workflow -->\n"
     )
     result = classify_section_drift(tracked_text, live_text)
     assert result["workflow"].state is SectionDriftState.LEGACY

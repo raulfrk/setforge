@@ -9,7 +9,7 @@ precedence:
    Typer ``@app.callback()`` invokes once at startup.
 2. Environment variables ``SETFORGE_CODE_BIN`` / ``CLAUDE_BIN`` /
    ``PATCH_BIN``.
-3. Host-local config file ``~/.config/my-setup/local.yaml`` with shape
+3. Host-local config file ``~/.config/setforge/local.yaml`` with shape
    ``binaries: {code: /p, claude: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).
 
@@ -34,13 +34,13 @@ from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
 from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
 
-LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "my-setup" / "local.yaml"
+LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("code", "claude", "patch")
 _ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
 
 _STUB_TEMPLATE: Final[str] = """\
-# my-setup host-local config — never tracked in git.
+# setforge host-local config — never tracked in git.
 #
 # Override binary paths here when the defaults on PATH are wrong or absent.
 # Uncomment and edit:
@@ -77,7 +77,7 @@ class ClaudeLocalConfig:
 
 @dataclass(frozen=True, slots=True)
 class HostLocalConfig:
-    """In-memory shape of ``~/.config/my-setup/local.yaml``.
+    """In-memory shape of ``~/.config/setforge/local.yaml``.
 
     Consolidates today's ad-hoc dict loaders into a typed value object.
     ``binaries`` mirrors the legacy ``binaries:`` mapping; ``claude``

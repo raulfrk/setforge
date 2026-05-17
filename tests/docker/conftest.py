@@ -61,7 +61,7 @@ CONFIG_FIXTURE: str = "tests/fixtures/e2e/my_setup.test.yaml"
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
-IMAGE_TAG_PREFIX: str = "my-setup-e2e:test"
+IMAGE_TAG_PREFIX: str = "setforge-e2e:test"
 
 
 def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
@@ -248,7 +248,7 @@ def docker_image() -> str:
     byte-equivalent because the inputs hash matches, but the second build
     is wasted work. Currently mitigated by CI being single-stream; if a
     matrix is added, wrap the inspect+build sequence in ``flock`` against a
-    tag-keyed lockfile (e.g. ``flock /tmp/my-setup-build-${tag}.lock``).
+    tag-keyed lockfile (e.g. ``flock /tmp/setforge-build-${tag}.lock``).
     """
     if not _docker_available():
         pytest.skip("docker binary not on PATH")
@@ -381,7 +381,7 @@ def docker_container(
 
         def test_x(docker_container):
             c = docker_container()
-            c.exec(["uv", "run", "my-setup", "validate", "--all"])
+            c.exec(["uv", "run", "setforge", "validate", "--all"])
     """
     spawned: list[str] = []
 
@@ -390,7 +390,7 @@ def docker_container(
         cmd: list[str] | None = None,
         env: dict[str, str] | None = None,
     ) -> ContainerHandle:
-        name = f"my-setup-e2e-{uuid.uuid4().hex[:10]}"
+        name = f"setforge-e2e-{uuid.uuid4().hex[:10]}"
         argv: list[str] = [
             "docker",
             "run",
@@ -447,7 +447,7 @@ def docker_pty_session(
 
         def test_pty(docker_pty_session, docker_container):
             c = docker_container()
-            pty = docker_pty_session(c, ["uv", "run", "my-setup", "sync",
+            pty = docker_pty_session(c, ["uv", "run", "setforge", "sync",
                                           "--profile=test-jsonc-deep",
                                           "--config=..."])
             pty.expect("Choice")

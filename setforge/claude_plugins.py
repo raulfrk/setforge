@@ -66,7 +66,7 @@ _CLONE_TIMEOUT_S = 120
 #: clones into ``MARKETPLACE_CACHE_ROOT / <marketplace-name>``. Tests
 #: monkeypatch this module attribute to redirect into ``tmp_path``.
 MARKETPLACE_CACHE_ROOT: Final[Path] = (
-    Path(platformdirs.user_cache_dir("my-setup")) / "marketplaces"
+    Path(platformdirs.user_cache_dir("setforge")) / "marketplaces"
 )
 
 
@@ -303,7 +303,7 @@ def _resolve_git_or_raise() -> Path:
         raise MarketplaceCacheMiss(
             "'git' not on PATH; install git or set "
             "claude.install_mode: regular in "
-            "~/.config/my-setup/local.yaml"
+            "~/.config/setforge/local.yaml"
         )
     return Path(git)
 
@@ -422,7 +422,7 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         raise MarketplaceCacheMiss(
             f"marketplace {source.repo!r} not in local cache and `git clone` "
             f"failed (likely offline): {stderr_of(exc)}. "
-            f"Run `my-setup plugin sync-cache --profile=<name>` while online "
+            f"Run `setforge plugin sync-cache --profile=<name>` while online "
             f"first."
         ) from exc
     _debug_git_output(f"git clone {source.repo!r}", result)
@@ -462,7 +462,7 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
 
     Silent-on-failure for callers (returns ``None`` instead of
     raising), but emits the captured stdout/stderr at ``DEBUG`` level
-    for ``my-setup -v`` tracing. Per the m81/cqf convention: every
+    for ``setforge -v`` tracing. Per the m81/cqf convention: every
     git invocation in this module logs its output at DEBUG level,
     even silent-probe paths.
     """
@@ -684,7 +684,7 @@ def sync_marketplace_cache(
     (or freshly cloned). PATH sources are skipped silently.
 
     Profile-scoped (not config-scoped) because the spec mandates
-    ``--profile=<name>`` to match my-setup CLI convention; declared
+    ``--profile=<name>`` to match setforge CLI convention; declared
     marketplaces in non-active profiles are left alone. Raises
     :class:`MarketplaceCacheMiss` on git failure for any marketplace.
     """

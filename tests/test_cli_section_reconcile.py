@@ -31,9 +31,9 @@ def _make_section_text(
     hash_segment = f" hash={embed_hash}" if embed_hash is not None else ""
     return (
         "preamble\n"
-        f"<!-- my-setup:user-section start {semantics} {name} -->\n"
+        f"<!-- setforge:user-section start {semantics} {name} -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end {semantics} {name}{hash_segment} -->\n"
+        f"<!-- setforge:user-section end {semantics} {name}{hash_segment} -->\n"
         "epilogue\n"
     )
 
@@ -194,13 +194,13 @@ def test_install_warns_loudly_on_section_conflict(
     def _two_section(a_body: str, a_hash: str, b_body: str, b_hash: str) -> str:
         return (
             "preamble\n"
-            "<!-- my-setup:user-section start shared alpha -->\n"
+            "<!-- setforge:user-section start shared alpha -->\n"
             f"{a_body}"
-            f"<!-- my-setup:user-section end shared alpha hash={a_hash} -->\n"
+            f"<!-- setforge:user-section end shared alpha hash={a_hash} -->\n"
             "middle\n"
-            "<!-- my-setup:user-section start shared beta -->\n"
+            "<!-- setforge:user-section start shared beta -->\n"
             f"{b_body}"
-            f"<!-- my-setup:user-section end shared beta hash={b_hash} -->\n"
+            f"<!-- setforge:user-section end shared beta hash={b_hash} -->\n"
             "epilogue\n"
         )
 
@@ -573,9 +573,9 @@ def _legacy_live_section_text(name: str, body: str) -> str:
     """Build a pre-9by live file shape: untagged markers, no hash segment."""
     return (
         "preamble\n"
-        f"<!-- my-setup:user-section start {name} -->\n"
+        f"<!-- setforge:user-section start {name} -->\n"
         f"{body}"
-        f"<!-- my-setup:user-section end {name} -->\n"
+        f"<!-- setforge:user-section end {name} -->\n"
         "epilogue\n"
     )
 
@@ -584,7 +584,7 @@ def test_compare_refuses_legacy_live_with_actionable_error(
     fixture: dict[str, Path],
 ) -> None:
     """``compare`` on a legacy live file exits 1 with the actionable error
-    that points the user at ``my-setup install`` instead of leaking the
+    that points the user at ``setforge install`` instead of leaking the
     raw ``MarkerError: line N: missing required keyword``."""
     body = "rule A\n"
     fixture["src"].write_text(
@@ -600,7 +600,7 @@ def test_compare_refuses_legacy_live_with_actionable_error(
     # Either captured by typer's CliRunner as result.exception or printed.
     combined = result.output + (str(result.exception) if result.exception else "")
     assert "legacy" in combined.lower()
-    assert "my-setup install" in combined
+    assert "setforge install" in combined
 
 
 def test_sync_refuses_legacy_live_with_actionable_error(
@@ -618,14 +618,14 @@ def test_sync_refuses_legacy_live_with_actionable_error(
     assert result.exit_code == 1, result.output
     combined = result.output + (str(result.exception) if result.exception else "")
     assert "legacy" in combined.lower()
-    assert "my-setup install" in combined
+    assert "setforge install" in combined
 
 
 def test_merge_refuses_legacy_live_with_actionable_error(
     fixture: dict[str, Path],
 ) -> None:
     """``merge`` on a legacy live file exits 1 with the actionable error
-    that points the user at ``my-setup install``.
+    that points the user at ``setforge install``.
 
     Without the ``_refuse_legacy_live_markers`` guard, ``merge`` would
     silently proceed into ``compare_profile`` (which now passes
@@ -643,7 +643,7 @@ def test_merge_refuses_legacy_live_with_actionable_error(
     assert result.exit_code == 1, result.output
     combined = result.output + (str(result.exception) if result.exception else "")
     assert "legacy" in combined.lower()
-    assert "my-setup install" in combined
+    assert "setforge install" in combined
 
 
 def test_install_succeeds_on_legacy_live_and_migrates(

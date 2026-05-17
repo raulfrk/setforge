@@ -210,7 +210,7 @@ def test_ensure_stub_creates_file_when_absent() -> None:
     assert binaries.LOCAL_CONFIG_PATH.exists()
     text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
     assert "binaries:" in text
-    assert text.startswith("# my-setup host-local config")
+    assert text.startswith("# setforge host-local config")
 
 
 def test_ensure_stub_creates_parent_directories(monkeypatch, tmp_path) -> None:

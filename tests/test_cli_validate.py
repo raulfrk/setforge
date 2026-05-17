@@ -1,4 +1,4 @@
-"""Tests for ``my-setup validate`` subcommand.
+"""Tests for ``setforge validate`` subcommand.
 
 Covers each of the six failure modes plus a clean-run baseline:
 1. Clean run → exit 0.

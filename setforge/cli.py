@@ -1,4 +1,4 @@
-"""Typer CLI entry point for ``my-setup``.
+"""Typer CLI entry point for ``setforge``.
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
 Pillar 2 adds extension reconcile inside ``install``. Claude plugin
@@ -67,7 +67,7 @@ from setforge.sections import SectionSemantics, detect_legacy_markers
 LOGGER = logging.getLogger(__name__)
 
 app = typer.Typer(
-    help="my-setup: tracked_file + extension + Claude-plugin orchestration.",
+    help="setforge: tracked_file + extension + Claude-plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -94,19 +94,19 @@ def _root(
         None,
         "--code-bin",
         help="Override path to the 'code' (VSCode) binary. "
-        "Takes precedence over SETFORGE_CODE_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_CODE_BIN and ~/.config/setforge/local.yaml.",
     ),
     claude_bin: str | None = typer.Option(
         None,
         "--claude-bin",
         help="Override path to the 'claude' binary. "
-        "Takes precedence over SETFORGE_CLAUDE_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_CLAUDE_BIN and ~/.config/setforge/local.yaml.",
     ),
     patch_bin: str | None = typer.Option(
         None,
         "--patch-bin",
         help="Override path to the GNU 'patch' binary. "
-        "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/setforge/local.yaml.",
     ),
     verbose: bool = typer.Option(
         False,
@@ -126,7 +126,7 @@ def _root(
         resolved = getattr(logging, env_value.upper(), None)
         if not isinstance(resolved, int):
             sys.stderr.write(
-                f"my-setup: unknown SETFORGE_LOG_LEVEL={env_value!r}; "
+                f"setforge: unknown SETFORGE_LOG_LEVEL={env_value!r}; "
                 f"defaulting to WARNING\n"
             )
             level = logging.WARNING
@@ -233,7 +233,7 @@ def _refuse_legacy_live_markers(
     :class:`setforge.errors.MarkerError` partway through the read-only /
     capture flow with an opaque ``line N: missing required keyword``
     message; this surfaces a single actionable error before any strict
-    parse happens, pointing the user at ``my-setup install`` to migrate.
+    parse happens, pointing the user at ``setforge install`` to migrate.
 
     ``command`` is the user-facing command name (``compare`` / ``sync`` /
     ``merge``) used in the error message so the user sees which entry
@@ -248,9 +248,9 @@ def _refuse_legacy_live_markers(
             raise MySetupError(
                 f"{sub_dst}: legacy user-section marker format detected "
                 f"(pre-9by markers without 'host-local'/'shared' keyword "
-                f"or 'hash=<sha256>' segment). 'my-setup {command}' is "
+                f"or 'hash=<sha256>' segment). 'setforge {command}' is "
                 f"strict on live-side markers. Run "
-                f"'uv run my-setup install --profile=<name>' first to "
+                f"'uv run setforge install --profile=<name>' first to "
                 f"migrate the file in place."
             )
 
@@ -474,7 +474,7 @@ def install(
         else:
             typer.secho(
                 f"unexpected drift in {unexpected_count} file(s): "
-                f"run 'my-setup merge --profile={profile}' to resolve, "
+                f"run 'setforge merge --profile={profile}' to resolve, "
                 f"or pass --auto-accept-tracked or --auto-accept-live",
                 err=True,
                 fg=typer.colors.RED,
@@ -782,7 +782,7 @@ def sync(
     When tracked declares ``preserve_user_keys_deep`` or carries
     non-preserve top-level drift, the merge wizard fires interactively
     so you can review each diverged sub-key / top-level key; this
-    behavior is symmetric with ``my-setup install``'s drift gate. Pass
+    behavior is symmetric with ``setforge install``'s drift gate. Pass
     ``--auto=use-live`` to reproduce the pre-`nen.23` silent-absorb
     behavior (e.g. for scripted runs) or ``--auto=keep-tracked`` to
     refuse to absorb drift.
@@ -1763,10 +1763,10 @@ def sync_cache(
 ) -> None:
     """Clone/refresh marketplace caches for offline-capable install.
 
-    Required when ``~/.config/my-setup/local.yaml`` sets
+    Required when ``~/.config/setforge/local.yaml`` sets
     ``claude.install_mode: local-clone``. Iterates every GitHub-backed
     ``MarketplaceSource`` referenced by ``profile`` and either clones
-    it into ``~/.cache/my-setup/marketplaces/<name>`` (if absent) or
+    it into ``~/.cache/setforge/marketplaces/<name>`` (if absent) or
     fetches + hard-resets it to ``origin/HEAD`` (if present). When
     ``install_mode`` is ``regular``, prints a warning and exits 0
     without touching the cache.
@@ -1776,7 +1776,7 @@ def sync_cache(
         typer.secho(
             "warning: claude.install_mode is 'regular'; sync-cache is only "
             "useful when local-clone is active. Set claude.install_mode: "
-            "local-clone in ~/.config/my-setup/local.yaml to opt in.",
+            "local-clone in ~/.config/setforge/local.yaml to opt in.",
             err=True,
             fg=typer.colors.YELLOW,
         )

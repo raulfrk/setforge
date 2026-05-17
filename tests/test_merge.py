@@ -360,7 +360,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
     my_setup_yaml = tmp_path / "my_setup.yaml"
     # Write a minimal my_setup.yaml with comments
     yaml_text = (
-        "# my-setup config\n"
+        "# setforge config\n"
         "version: 1\n"
         "tracked_files:\n"
         "  x:\n"
@@ -396,7 +396,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
     assert "b" in updated["tracked_files"]["x"]["preserve_user_keys"]
 
     # Comment preserved
-    assert "# my-setup config" in my_setup_yaml.read_text()
+    assert "# setforge config" in my_setup_yaml.read_text()
 
 
 def test_apply_action_s_idempotent(tmp_path: Path) -> None:

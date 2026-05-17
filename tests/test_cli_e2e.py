@@ -1,4 +1,4 @@
-"""CliRunner ring for the ``my-setup`` CLI (dotfiles-nen.9 inner ring).
+"""CliRunner ring for the ``setforge`` CLI (dotfiles-nen.9 inner ring).
 
 Drives the real Typer surface against ``tests/fixtures/e2e/my_setup.test.yaml``,
 sandboxing the live tree under ``tmp_path`` via ``$HOME`` redirection and
@@ -253,7 +253,7 @@ def _invoke(args: list[str]) -> Result:
 
 
 class TestInstall:
-    """``my-setup install`` against fixture profiles.
+    """``setforge install`` against fixture profiles.
 
     Mocks ``code`` and ``claude`` as absent so the tracked_file leg is the
     only side-effect under test. The Docker ring picks up the
@@ -502,7 +502,7 @@ class TestInstall:
 
 
 class TestSync:
-    """``my-setup sync`` against fixture profiles."""
+    """``setforge sync`` against fixture profiles."""
 
     def test_sync_no_drift_noop(
         self,
@@ -586,7 +586,7 @@ class TestSync:
 
 
 class TestCompare:
-    """``my-setup compare`` against fixture profiles."""
+    """``setforge compare`` against fixture profiles."""
 
     def test_compare_clean_after_install_exits_zero_with_check(
         self,
@@ -678,7 +678,7 @@ class TestCompare:
 
 
 class TestRevert:
-    """``my-setup revert`` against fixture profiles."""
+    """``setforge revert`` against fixture profiles."""
 
     def test_install_then_revert_restores_state(
         self,
@@ -749,9 +749,9 @@ class TestRevert:
 
 
 class TestValidate:
-    """``my-setup validate`` against the fixture YAML.
+    """``setforge validate`` against the fixture YAML.
 
-    The fixture YAML is itself validated in CI by ``my-setup validate
+    The fixture YAML is itself validated in CI by ``setforge validate
     --all`` (acceptance bullet). This class pins per-profile validate
     semantics end-to-end through the CliRunner.
     """

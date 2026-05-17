@@ -1,4 +1,4 @@
-"""End-to-end tests for the ``my-setup transitions`` sub-app.
+"""End-to-end tests for the ``setforge transitions`` sub-app.
 
 Drives the real CLI via Typer's CliRunner against fixture transition
 directories under a tmp ``SETFORGE_STATE_DIR``. Read-only — no install

@@ -322,7 +322,7 @@ def test_plugin_uninstall_argv(fake_claude) -> None:
     Mirrors :func:`test_plugin_install_passes_scope_user`'s shape: assert
     the argv FakeClaude received and assert the plugin no longer appears
     in ``installed_state()`` afterwards. This is the inverse primitive
-    used by ``my-setup revert`` to undo a ``PluginDelta.installed`` row.
+    used by ``setforge revert`` to undo a ``PluginDelta.installed`` row.
     """
     from setforge.claude_plugins import plugin_uninstall
 

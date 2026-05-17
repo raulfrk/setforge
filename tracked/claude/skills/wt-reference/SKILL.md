@@ -16,7 +16,7 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - `wt list` — list all worktrees and their status (clean / dirty / merged).
 - `wt remove [<slug>]` — remove the current worktree (or named one); auto-deletes the branch if merged.
 - `wt merge [<branch>]` — merge the current worktree's branch into target (default = main).
-  - **Deployed default on this VM**: `--no-squash --ff-only` (set by `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `my-setup install`). Bare `wt merge` runs this mode: preserves the branch's commits on target, fast-forward only. This is what satisfies observation F (`Never squash review-fix commits into the implementation commit`) operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
+  - **Deployed default on this VM**: `--no-squash --ff-only` (set by `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `setforge install`). Bare `wt merge` runs this mode: preserves the branch's commits on target, fast-forward only. This is what satisfies observation F (`Never squash review-fix commits into the implementation commit`) operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
   - **Upstream wt default**: `--squash` (collapse the branch into one commit on target). Reachable on this VM only by explicitly overriding the deployed config; use only when the branch's history is genuinely throwaway (e.g., a noisy WIP history collapsed for a leaf feature).
   - `wt merge --no-squash` — explicit form of the deployed default. Identical to bare `wt merge` on this VM; spell it out when documenting flows so the intent (preserve separate commits) survives a config change.
 - `wt step <name>` — run an individual operation (used when scripting partial flows).
@@ -56,7 +56,7 @@ When dispatching N subagents in parallel for a bd-issue-per-worktree batch, the 
 
 ```
 # Orchestrator side (in main worktree)
-wt switch --create dotfiles-<id>-<slug>
+wt switch --create tracked files-<id>-<slug>
 # → worktree at <wt-path>; wt prints the path it created.
 # The "Cannot change directory — shell requires restart" warning is
 # benign for orchestration; the worktree IS created.
@@ -65,7 +65,7 @@ wt switch --create dotfiles-<id>-<slug>
 # Subagent prompt template:
 #   cd <wt-path>
 #   uv sync --all-extras       # fresh worktree's .venv is pristine
-#   bd update dotfiles-<id> --claim
+#   bd update tracked files-<id> --claim
 #   ... implementation ...
 ```
 

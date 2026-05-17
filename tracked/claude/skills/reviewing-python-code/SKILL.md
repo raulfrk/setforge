@@ -39,7 +39,7 @@ Send **a single message** containing 5 `Agent` tool calls, one per reviewer:
 1. `subagent_type: python-spec-reviewer` — spec/contract conformance.
 2. `subagent_type: python-form-reviewer` — ruff/mypy/PEP cleanliness.
 3. `subagent_type: python-substance-reviewer` — design, error model, security.
-4. `subagent_type: python-specifics-reviewer` — CLAUDE.md Python rules + my-setup conventions.
+4. `subagent_type: python-specifics-reviewer` — CLAUDE.md Python rules + setforge conventions.
 5. `subagent_type: python-prose-reviewer` — docstring prose quality + factual correctness vs. function body.
 
 Use the same prompt template across all five:

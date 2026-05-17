@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the my-setup test suite."""
+"""Shared pytest fixtures for the setforge test suite."""
 
 from pathlib import Path
 
@@ -24,7 +24,7 @@ def _isolated_local_config(
 
     ``binaries.ensure_local_config_stub()`` runs in the typer ``@app.callback()``
     on every ``CliRunner.invoke(app, ...)``. Without this fixture, every CLI
-    test would write ``~/.config/my-setup/local.yaml`` on the dev host (or CI
+    test would write ``~/.config/setforge/local.yaml`` on the dev host (or CI
     runner). Pure test hygiene; no production effect.
     """
     monkeypatch.setattr(

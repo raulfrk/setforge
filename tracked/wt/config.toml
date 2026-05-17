@@ -1,4 +1,4 @@
-# Worktrunk user config — deployed by my-setup.
+# Worktrunk user config — deployed by setforge.
 #
 # Default `wt merge` mode: --no-squash with fast-forward only.
 # Required by the canonical phase flow's observation F: review-fix

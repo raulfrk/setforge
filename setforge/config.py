@@ -1,4 +1,4 @@
-"""Typed configuration schema for my-setup.
+"""Typed configuration schema for setforge.
 
 Pydantic models validate ``my_setup.yaml`` and provide the in-memory
 contract used by every subcommand. YAML is loaded via ruamel.yaml in
@@ -41,14 +41,14 @@ class MarketplaceSourceKind(StrEnum):
 
 
 class ClaudeInstallMode(StrEnum):
-    """How ``my-setup install`` resolves Claude marketplaces.
+    """How ``setforge install`` resolves Claude marketplaces.
 
     ``REGULAR`` (default): pass marketplace sources to the ``claude`` CLI
     as-is, which fetches GitHub repos over the network on first install.
 
     ``LOCAL_CLONE``: swap each GitHub-backed ``MarketplaceSource`` to a
     PATH source pointing at a local cache under
-    ``~/.cache/my-setup/marketplaces/<name>/`` before the
+    ``~/.cache/setforge/marketplaces/<name>/`` before the
     ``claude plugin marketplace add`` call. Enables offline operation on
     hosts where Claude's marketplace fetch would fail.
     """

@@ -1,4 +1,4 @@
-"""Exception hierarchy for my-setup.
+"""Exception hierarchy for setforge.
 
 All recoverable failures inherit from MySetupError so the CLI top-level
 handler can render them as ``error: <message>`` and exit 1, while
@@ -7,7 +7,7 @@ unexpected exceptions bubble with a traceback.
 
 
 class MySetupError(Exception):
-    """Base class for all my-setup recoverable failures."""
+    """Base class for all setforge recoverable failures."""
 
 
 class ConfigError(MySetupError):
@@ -62,14 +62,14 @@ class ExtensionInstallFailed(MySetupError):
 
 
 class RevertFailed(MySetupError):
-    """Raised by ``my-setup revert`` when ``patch -R`` rejects the diff
+    """Raised by ``setforge revert`` when ``patch -R`` rejects the diff
     (drifted files), when the ``patch`` binary isn't on PATH, or when
     an extension reverse install/uninstall fails. Message includes the
     captured stderr or the conflicting paths."""
 
 
 class CaptureRequiresInteractive(MySetupError):
-    """Raised when ``my-setup sync`` would need wizard prompts but no
+    """Raised when ``setforge sync`` would need wizard prompts but no
     TTY is available and ``--auto`` wasn't passed.
 
     Triggered by :func:`setforge.capture.capture_profile` when the
@@ -81,7 +81,7 @@ class CaptureRequiresInteractive(MySetupError):
 
 
 class NoTransitionFound(MySetupError):
-    """Raised by ``my-setup revert`` when no transition history exists
+    """Raised by ``setforge revert`` when no transition history exists
     for the requested profile."""
 
 
@@ -107,13 +107,13 @@ class MarketplaceCacheMiss(MySetupError):
     ``git clone`` failed (typically offline), or an existing cache's
     ``origin`` remote no longer matches the configured source repo and
     a re-clone failed. The message names the marketplace and the exact
-    remediation (``my-setup plugin sync-cache --profile=<name>`` while
+    remediation (``setforge plugin sync-cache --profile=<name>`` while
     online, or fall back to ``claude.install_mode: regular``)."""
 
 
 class BinaryOverrideInvalid(MySetupError):
     """Raised when a host-local binary override (CLI flag, env var, or
-    ``~/.config/my-setup/local.yaml``) points at a path that does not
+    ``~/.config/setforge/local.yaml``) points at a path that does not
     exist or is not executable. Carries the layer, binary name, path,
     and reason as structured fields so callers can render or test
     against them precisely."""
@@ -125,5 +125,5 @@ class BinaryOverrideInvalid(MySetupError):
         self.reason = reason
         super().__init__(
             f"{layer} override for {binary!r} → {path!r}: {reason}. "
-            f"Edit ~/.config/my-setup/local.yaml or unset the override."
+            f"Edit ~/.config/setforge/local.yaml or unset the override."
         )

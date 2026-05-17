@@ -1,4 +1,4 @@
-# Test-only my-setup config for E2E coverage (dotfiles-nen.9).
+# Test-only setforge config for E2E coverage (dotfiles-nen.9).
 #
 # This config is tool-generic — it never references production profiles
 # (vm-headless / -full / workstation), which will be extracted to a
@@ -82,7 +82,7 @@ tracked_files:
   # Template — Jinja2 dst rendered (template: true triggers render).
   template_path:
     src: template/template.txt
-    dst: "{{ vscode_user_dir }}/my-setup-e2e-template.txt"
+    dst: "{{ vscode_user_dir }}/setforge-e2e-template.txt"
     template: true
 
   # Three-level chain dotfiles (one per chain layer for distinguishable

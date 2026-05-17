@@ -145,7 +145,7 @@ Superpowers skills are designed to defer to.
    tool version skew between pre-commit pin and uv-resolved). Mandatory
    for multi-worktree work; recommended for single-stream non-trivial
    work. See project-scope CLAUDE.md for the canonical final-check
-   commands on each project (on this VM's my-setup project:
+   commands on each project (on this VM's setforge project:
    `pre-commit run --all-files` AND
    `uv run pytest tests/docker/ -m e2e_docker -v` — empirical
    observation E, with revert-by-default failure protocol).
@@ -175,7 +175,7 @@ N+1.
 - Specs → `~/.claude/projects/{cwd-slug}/specs/<YYYY-MM-DD>-<topic>.md`
 - Plans → `~/.claude/projects/{cwd-slug}/plans/<YYYY-MM-DD>-<feature>.md`
 - `{cwd-slug}` matches the auto-memory convention — cwd with `/` → `-`
-  (e.g. `-home-raul-my-setup`).
+  (e.g. `-home-raul-setforge`).
 
 ## Hard-gate posture
 

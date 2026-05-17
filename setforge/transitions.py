@@ -1,15 +1,15 @@
 """Transition records: per-invocation undo support for install/sync.
 
 Each state-changing command (install, sync, revert) writes a directory
-under ``~/.local/state/my-setup/transitions/`` containing:
+under ``~/.local/state/setforge/transitions/`` containing:
 
-- ``meta.json`` — command, profile, UTC timestamp, host, my-setup version
+- ``meta.json`` — command, profile, UTC timestamp, host, setforge version
 - ``changes.patch`` — unified diff of file changes (omitted if no edits)
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
   added / removed marketplaces (omitted if no plugin delta)
 
-A subsequent ``my-setup revert`` consumes the most recent transition for
+A subsequent ``setforge revert`` consumes the most recent transition for
 a profile, applies the patch in reverse via ``patch -R``, reverses the
 extension delta, reverses the plugin delta, and records its own reverse
 transition.
@@ -42,15 +42,15 @@ class TransitionCommand(StrEnum):
 
 
 _STATE_ENV = "SETFORGE_STATE_DIR"
-_DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
+_DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "setforge")
 _STALE_PENDING_AGE = timedelta(hours=24)
 
 
 def state_root() -> Path:
-    """Resolve the my-setup state dir.
+    """Resolve the setforge state dir.
 
     Honors the ``SETFORGE_STATE_DIR`` env var (used by tests and by
-    operators relocating state). Falls back to ``~/.local/state/my-setup``.
+    operators relocating state). Falls back to ``~/.local/state/setforge``.
     """
     override = os.environ.get(_STATE_ENV)
     if override:
@@ -75,7 +75,7 @@ def ensure_state_dir_writable() -> None:
     root = transitions_root()
     try:
         root.mkdir(parents=True, exist_ok=True)
-        probe = root / ".my-setup-write-probe"
+        probe = root / ".setforge-write-probe"
         probe.touch()
         probe.unlink()
     except OSError as exc:
@@ -577,7 +577,7 @@ def apply_patch_reverse(transition_dir: Path) -> None:
     if patch_bin is None:
         raise RevertFailed(
             "`patch` binary not on PATH; revert cannot apply file diffs. "
-            "Tip: set 'binaries.patch' in ~/.config/my-setup/local.yaml "
+            "Tip: set 'binaries.patch' in ~/.config/setforge/local.yaml "
             "to override."
         )
     # Run with cwd=/ and -p0 so root-relative paths in the diff
@@ -620,7 +620,7 @@ def apply_patch_reverse(transition_dir: Path) -> None:
 
 @dataclass(frozen=True, slots=True)
 class TransitionListing:
-    """One row of ``my-setup transitions list``. Decoded from a transition
+    """One row of ``setforge transitions list``. Decoded from a transition
     directory's ``meta.json`` (canonical) plus optional ``extensions.json``
     and ``plugins.json`` siblings. Read-only — does not represent any
     in-flight state."""
@@ -748,7 +748,7 @@ def resolve_transition_prefix(prefix: str) -> Path:
     5. Multiple matches → raise :class:`MySetupError` listing every candidate
        sorted ascending so the user can disambiguate.
 
-    Used by ``my-setup transitions show <prefix>``. Read-only.
+    Used by ``setforge transitions show <prefix>``. Read-only.
     """
     root = transitions_root()
     if not root.exists():
