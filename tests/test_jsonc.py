@@ -164,7 +164,7 @@ def test_classify_drift_treats_missing_key_as_drift() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deep-merge mode + lifted scalar restriction (tracked_files-nen.21)
+# Deep-merge mode + lifted scalar restriction (dotfiles-nen.21)
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ def test_classify_jsonc_drift_treats_deep_keys_as_expected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Nested-path preserve_user_keys (tracked_files-nen.19)
+# Nested-path preserve_user_keys (dotfiles-nen.19)
 # ---------------------------------------------------------------------------
 
 
@@ -405,7 +405,7 @@ def test_overlay_path_v1_top_level_with_dot_in_name_still_literal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic validator on preserve_user_keys (tracked_files-nen.19)
+# Pydantic validator on preserve_user_keys (dotfiles-nen.19)
 # ---------------------------------------------------------------------------
 
 

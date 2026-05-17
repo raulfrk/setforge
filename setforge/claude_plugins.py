@@ -85,7 +85,7 @@ def _get_claude_bin() -> Path:
     if path is None:
         raise PluginToolMissing(
             "claude binary not found; install Claude CLI or set "
-            "--claude-bin / MY_SETUP_CLAUDE_BIN / local.yaml"
+            "--claude-bin / SETFORGE_CLAUDE_BIN / local.yaml"
         )
     return path
 
@@ -653,7 +653,7 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
     record the canonical URL into a sidecar file at clone time and
     reduce this helper to a single byte-equal comparison — that path
     also picks up SSH variants and arbitrary hosts the prefix list
-    cannot enumerate. Follow-up issue: ``tracked_files-msc``.
+    cannot enumerate. Follow-up issue: ``dotfiles-msc``.
     """
 
     def _normalize(url: str) -> str:
@@ -862,7 +862,7 @@ def reconcile(
         cfg, mps_to_add, install_mode, MARKETPLACE_CACHE_ROOT, failed
     )
 
-    # Per spec § Algorithm β2 (tracked_files-l37): freshly-installed plugins
+    # Per spec § Algorithm β2 (dotfiles-l37): freshly-installed plugins
     # land disabled in installed_plugins.json — `claude plugin install`
     # never touches enabledPlugins. To make a single reconcile run land
     # the plugin active, we route successful installs through the enable

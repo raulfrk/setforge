@@ -162,7 +162,7 @@ def test_extract_unnamed_indices_in_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-xyw — marker regex extension: optional hash= segment on end markers
+# dotfiles-xyw — marker regex extension: optional hash= segment on end markers
 # ---------------------------------------------------------------------------
 
 _HASH_HEX_64: str = "a" * 64
@@ -201,7 +201,7 @@ def test_extract_sections_hashless_end_marker_under_allow_legacy_parses() -> Non
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-xyw — hash_sections primitive
+# dotfiles-xyw — hash_sections primitive
 # ---------------------------------------------------------------------------
 
 
@@ -303,7 +303,7 @@ def test_hash_sections_propagates_marker_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-xyw — extract_marker_hashes
+# dotfiles-xyw — extract_marker_hashes
 # ---------------------------------------------------------------------------
 
 
@@ -362,7 +362,7 @@ def test_extract_marker_hashes_propagates_marker_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-xyw — set_marker_hashes
+# dotfiles-xyw — set_marker_hashes
 # ---------------------------------------------------------------------------
 
 
@@ -498,7 +498,7 @@ def test_extract_marker_hashes_extracted_form_matches_writer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-9by — required host-local|shared keyword
+# dotfiles-9by — required host-local|shared keyword
 # ---------------------------------------------------------------------------
 
 
@@ -676,7 +676,7 @@ def test_section_semantics_value_is_canonical_string() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-9ln — strict parser + allow_legacy migration mode
+# dotfiles-9ln — strict parser + allow_legacy migration mode
 # ---------------------------------------------------------------------------
 
 
@@ -780,7 +780,7 @@ def test_walk_markers_allow_legacy_accepts_pre_9by_fixture() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-9ln — detect_legacy_markers helper
+# dotfiles-9ln — detect_legacy_markers helper
 # ---------------------------------------------------------------------------
 
 

@@ -35,7 +35,7 @@ from setforge.transitions import (
 
 
 def test_state_root_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MY_SETUP_STATE_DIR", raising=False)
+    monkeypatch.delenv("SETFORGE_STATE_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/test")))
     assert state_root() == Path("/home/test/.local/state/my-setup")
 
@@ -43,7 +43,7 @@ def test_state_root_default(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_state_root_env_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     assert state_root() == tmp_path
     assert transitions_root() == tmp_path / "transitions"
 
@@ -85,7 +85,7 @@ def test_transition_dirname_zero_microseconds_zero_padded() -> None:
 def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
     """Two timestamps in the same wall-clock second but different microseconds
     must produce distinct dirnames — this is the collision the format change
-    eliminates (tracked_files-nen.16)."""
+    eliminates (dotfiles-nen.16)."""
     a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=UTC)
     b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=UTC)
     assert transition_dirname(a, "install", "vmh") != transition_dirname(
@@ -103,7 +103,7 @@ def test_ensure_state_dir_writable_creates_dir(
 ) -> None:
     from setforge.transitions import ensure_state_dir_writable
 
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "fresh"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "fresh"))
     ensure_state_dir_writable()
     assert (tmp_path / "fresh" / "transitions").is_dir()
     # No probe file should be left.
@@ -119,7 +119,7 @@ def test_ensure_state_dir_writable_raises_on_unwritable(
     target = tmp_path / "ro" / "transitions"
     target.mkdir(parents=True)
     target.chmod(0o500)  # read+execute only, no write
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ro"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ro"))
     try:
         with pytest.raises(MySetupError, match="not writable"):
             ensure_state_dir_writable()
@@ -267,7 +267,7 @@ def test_extension_delta_is_empty() -> None:
 def test_write_transition_full_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     target_file = tmp_path / "live.txt"
     pre = {target_file: "before\n"}
     post = {target_file: "after\n"}
@@ -293,7 +293,7 @@ def test_write_transition_meta_paths_omits_unchanged(
 ) -> None:
     """A path with identical pre/post is unchanged and should NOT appear
     in meta.json's `paths` list."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     a = tmp_path / "changed.txt"
     b = tmp_path / "unchanged.txt"
     out = write_transition(
@@ -309,7 +309,7 @@ def test_write_transition_meta_paths_omits_unchanged(
 def test_write_transition_omits_empty_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     same = {tmp_path / "x": "same\n"}
     out = write_transition(
         _make_meta(), same, same, ExtensionDelta(added=["a.x"], removed=[])
@@ -322,7 +322,7 @@ def test_write_transition_omits_empty_patch(
 def test_write_transition_omits_empty_extension_delta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     target_file = tmp_path / "live.txt"
     out = write_transition(
         _make_meta(),
@@ -337,7 +337,7 @@ def test_write_transition_omits_empty_extension_delta(
 def test_write_transition_omits_extension_delta_when_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     out = write_transition(
         _make_meta(),
         {tmp_path / "x": "a\n"},
@@ -360,7 +360,7 @@ def test_write_transition_rejects_non_str_marketplace_source_value(
     mid-serialization. Guards against a future trap (today's install
     path hard-codes ``()`` so the field is empty in practice).
     """
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     bad_delta = PluginDelta(
         installed=(),
         enabled=(),
@@ -384,7 +384,7 @@ def test_write_transition_rejects_non_str_marketplace_source_value(
 def test_load_latest_returns_none_when_root_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ghost"))
     assert load_latest("vmh") is None
 
 
@@ -399,7 +399,7 @@ def _stub_transition(target: Path, profile: str) -> None:
 def test_load_latest_returns_none_when_no_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     _stub_transition(
         tmp_path / "transitions" / "20260507T120000000000Z-install-other",
         profile="other",
@@ -410,7 +410,7 @@ def test_load_latest_returns_none_when_no_match(
 def test_load_latest_picks_most_recent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     older = root / "20260507T090000000000Z-install-vmh"
@@ -425,7 +425,7 @@ def test_load_latest_does_not_match_profile_substring(
 ) -> None:
     """`endswith('-vmh')` would match 'vm-headless-vmh'; the meta.json
     profile field must be an exact match."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     # Note dirname suffix is '-headless' but meta.json says 'vm-headless'.
@@ -548,14 +548,14 @@ def _stub_full_transition(
 def test_list_transitions_empty_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ghost"))
     assert list_transitions() == []
 
 
 def test_list_transitions_returns_chronological_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(
@@ -578,7 +578,7 @@ def test_list_transitions_returns_chronological_default(
 def test_list_transitions_reverse_flips_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(root / "20260507T090000000000Z-install-vmh", profile="vmh")
@@ -594,7 +594,7 @@ def test_list_transitions_reverse_flips_order(
 def test_list_transitions_profile_filter_or_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(root / "20260507T090000000000Z-install-vmh", profile="vmh")
@@ -613,8 +613,8 @@ def test_list_transitions_skips_corrupted_dirs(
 ) -> None:
     """Half-written or unreadable dirs are silently skipped — graceful
     degradation matters here because partial writes are real (issue
-    tracked_files-nen.16/.17 track atomic writes)."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    dotfiles-nen.16/.17 track atomic writes)."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     # No meta.json at all.
@@ -635,7 +635,7 @@ def test_list_transitions_skips_corrupted_dirs(
 def test_list_transitions_file_count_and_ext_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(
@@ -655,7 +655,7 @@ def test_list_transitions_file_count_and_ext_count(
 def test_resolve_transition_prefix_exact_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     target = root / "20260507T120000000000Z-install-vmh"
@@ -667,7 +667,7 @@ def test_resolve_transition_prefix_exact_match(
 def test_resolve_transition_prefix_unique_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     target = root / "20260507T120000000000Z-install-vmh"
@@ -679,7 +679,7 @@ def test_resolve_transition_prefix_unique_prefix(
 def test_resolve_transition_prefix_zero_match_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub_full_transition(root / "20260507T120000000000Z-install-vmh", profile="vmh")
@@ -691,7 +691,7 @@ def test_resolve_transition_prefix_zero_match_raises(
 def test_resolve_transition_prefix_ambiguous_lists_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     a = root / "20260507T120000000000Z-install-vmh"
@@ -713,7 +713,7 @@ def test_resolve_transition_prefix_root_missing(
 ) -> None:
     """No state dir at all → same not-found error path; don't crash on
     ``.iterdir()`` of a missing directory."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ghost"))
 
     with pytest.raises(MySetupError, match="no transition matching prefix"):
         resolve_transition_prefix("anything")
@@ -766,7 +766,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic write (tracked_files-nen.17) — staging dir + os.rename commit marker
+# Atomic write (dotfiles-nen.17) — staging dir + os.rename commit marker
 # ---------------------------------------------------------------------------
 
 
@@ -794,7 +794,7 @@ def test_write_transition_clean_run_no_pending_siblings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Clean run: target dir exists with meta.json; no .pending-* siblings remain."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     meta, pre, post, delta = _make_transition_args(tmp_path)
 
     out = write_transition(meta, pre, post, delta)
@@ -813,7 +813,7 @@ def test_write_transition_crash_before_rename_leaves_pending_not_visible(
     - No entry is visible to load_latest.
     - The orphan .pending-* dir exists on disk.
     """
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     meta, pre, post, delta = _make_transition_args(tmp_path)
 
     def _raise_on_rename(src: str | Path, dst: str | Path) -> None:
@@ -839,7 +839,7 @@ def test_write_transition_crash_after_rename_before_meta_not_visible(
     """Simulated crash (write_meta raises) after rename but before meta.json write:
     - load_latest returns None (no meta.json in the committed target dir).
     """
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     meta, pre, post, delta = _make_transition_args(tmp_path)
 
     def _raise_on_write_meta(
@@ -861,7 +861,7 @@ def test_load_latest_sweeps_stale_pending_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A .pending-* dir with mtime > 24h old is removed by load_latest."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
 
@@ -879,7 +879,7 @@ def test_load_latest_preserves_fresh_pending_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A .pending-* dir with mtime < 24h is preserved (might be an in-flight write)."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
 
@@ -898,7 +898,7 @@ def test_load_latest_skips_pending_dirs_as_candidates(
 ) -> None:
     """A .pending-* dir with a meta.json inside is NOT returned by load_latest
     (name guard must apply before the meta.json check)."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
 

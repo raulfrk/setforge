@@ -103,7 +103,7 @@ def _make_my_setup_yaml(tmp_path: Path, *, tracked_file_name: str = "x") -> Path
 @pytest.fixture(autouse=True)
 def _isolate_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect transition state to ``tmp_path`` so tests never touch ~."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ def test_walker_jsonc_top_level_non_preserve_drift(tmp_path: Path) -> None:
     for nen.23 v1; the wizard's [u] action uses
     :func:`setforge.jsonc.overlay_user_keys` which only handles
     top-level literal key names. Per-sub-key JSONC drift lands via
-    `tracked_files-nen.19`.)"""
+    `dotfiles-nen.19`.)"""
     config, repo, _src, _dst = _make_config(
         tmp_path,
         src_text='{\n  "tabSize": 2\n}\n',
@@ -373,7 +373,7 @@ def test_run_capture_wizard_delegates_to_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """run_capture_wizard auto_accept='k' walks 2 items and records one
-    SYNC transition under MY_SETUP_STATE_DIR."""
+    SYNC transition under SETFORGE_STATE_DIR."""
     config, repo, _src, _dst = _make_config(
         tmp_path,
         src_text="a: 1\nb: 2\n",
@@ -653,7 +653,7 @@ def test_capture_wizard_cancel_restores_tracked(
 
 
 # ---------------------------------------------------------------------------
-# JSONC nested-path walker (tracked_files-nen.19)
+# JSONC nested-path walker (dotfiles-nen.19)
 # ---------------------------------------------------------------------------
 
 

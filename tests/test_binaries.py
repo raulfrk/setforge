@@ -78,14 +78,14 @@ def test_env_overrides_none_set_returns_empty() -> None:
 
 
 def test_env_overrides_one_set(monkeypatch) -> None:
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", "/env/code")
+    monkeypatch.setenv("SETFORGE_CODE_BIN", "/env/code")
     assert binaries._env_overrides() == {"code": "/env/code"}
 
 
 def test_env_overrides_all_three_set(monkeypatch) -> None:
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", "/env/code")
-    monkeypatch.setenv("MY_SETUP_CLAUDE_BIN", "/env/claude")
-    monkeypatch.setenv("MY_SETUP_PATCH_BIN", "/env/patch")
+    monkeypatch.setenv("SETFORGE_CODE_BIN", "/env/code")
+    monkeypatch.setenv("SETFORGE_CLAUDE_BIN", "/env/claude")
+    monkeypatch.setenv("SETFORGE_PATCH_BIN", "/env/patch")
     assert binaries._env_overrides() == {
         "code": "/env/code",
         "claude": "/env/claude",
@@ -94,7 +94,7 @@ def test_env_overrides_all_three_set(monkeypatch) -> None:
 
 
 def test_env_overrides_empty_string_treated_as_unset(monkeypatch) -> None:
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", "")
+    monkeypatch.setenv("SETFORGE_CODE_BIN", "")
     assert binaries._env_overrides() == {}
 
 
@@ -169,7 +169,7 @@ def test_resolve_env_overrides_config(monkeypatch, tmp_path) -> None:
     cfg_bin = _make_executable(tmp_path / "cfg-code")
     env_bin = _make_executable(tmp_path / "env-code")
     binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(env_bin))
+    monkeypatch.setenv("SETFORGE_CODE_BIN", str(env_bin))
     assert binaries.resolve_binary("code") == env_bin
 
 
@@ -178,7 +178,7 @@ def test_resolve_cli_overrides_env_and_config(monkeypatch, tmp_path) -> None:
     env_bin = _make_executable(tmp_path / "env-code")
     cli_bin = _make_executable(tmp_path / "cli-code")
     binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  code: {cfg_bin}\n")
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(env_bin))
+    monkeypatch.setenv("SETFORGE_CODE_BIN", str(env_bin))
     binaries.set_cli_overrides(code=str(cli_bin))
     assert binaries.resolve_binary("code") == cli_bin
 
@@ -191,7 +191,7 @@ def test_resolve_invalid_cli_override_raises(tmp_path) -> None:
 
 
 def test_resolve_invalid_env_override_raises(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("MY_SETUP_CODE_BIN", str(tmp_path / "nope"))
+    monkeypatch.setenv("SETFORGE_CODE_BIN", str(tmp_path / "nope"))
     with pytest.raises(BinaryOverrideInvalid) as excinfo:
         binaries.resolve_binary("code")
     assert excinfo.value.layer == "env"

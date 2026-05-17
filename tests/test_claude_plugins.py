@@ -452,7 +452,7 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
 def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     """Fresh install must trigger an enable so the plugin lands active.
 
-    Primary acceptance gate for tracked_files-l37: a freshly-declared plugin
+    Primary acceptance gate for dotfiles-l37: a freshly-declared plugin
     must be both installed AND enabled in a single reconcile run, even
     though `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
@@ -1131,7 +1131,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-l37 — `plugin add` strict enable behavior
+# dotfiles-l37 — `plugin add` strict enable behavior
 # ---------------------------------------------------------------------------
 
 
@@ -1216,7 +1216,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-oyv — `plugin add` install subprocess error handling
+# dotfiles-oyv — `plugin add` install subprocess error handling
 # ---------------------------------------------------------------------------
 
 
@@ -1351,7 +1351,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-nen.13 — PluginDelta in transition records + revert inverse
+# dotfiles-nen.13 — PluginDelta in transition records + revert inverse
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the install → transition-record → revert round-trip
@@ -1366,7 +1366,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 # 3. Round-trip is total: FakeClaude's ``installed_state()`` after revert
 #    matches the pre-install state.
 #
-# Each test uses ``MY_SETUP_STATE_DIR`` to redirect the transition state
+# Each test uses ``SETFORGE_STATE_DIR`` to redirect the transition state
 # into ``tmp_path`` (per ``test_cli_e2e.py:77``) so the host's real
 # state dir is untouched.
 
@@ -1391,13 +1391,13 @@ def _copy_e2e_fixture(tmp_path: Path) -> Path:
 def _sandbox_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, Path]:
-    """Redirect ``$HOME`` and ``$MY_SETUP_STATE_DIR`` for an install/revert
+    """Redirect ``$HOME`` and ``$SETFORGE_STATE_DIR`` for an install/revert
     round-trip. Returns ``(home_dir, state_dir)``."""
     home = tmp_path / "home"
     home.mkdir()
     state = tmp_path / "state"
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(state))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
     return home, state
 
 
@@ -1762,7 +1762,7 @@ def test_roundtrip_file_and_plugin_state(
     both match the pre-install bytes.
 
     This is the load-bearing acceptance: revert must converge full
-    external state, not just file content (the gap tracked_files-nen.13
+    external state, not just file content (the gap dotfiles-nen.13
     closes).
     """
     from typer.testing import CliRunner

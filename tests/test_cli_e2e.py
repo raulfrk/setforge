@@ -1,4 +1,4 @@
-"""CliRunner ring for the ``my-setup`` CLI (tracked_files-nen.9 inner ring).
+"""CliRunner ring for the ``my-setup`` CLI (dotfiles-nen.9 inner ring).
 
 Drives the real Typer surface against ``tests/fixtures/e2e/my_setup.test.yaml``,
 sandboxing the live tree under ``tmp_path`` via ``$HOME`` redirection and
@@ -11,7 +11,7 @@ One test class per top-level CLI command (``install``, ``sync``,
 The Docker ring (``tests/test_e2e_docker.py``) exercises the same
 fixtures against real ``claude`` + ``code`` binaries.
 
-tracked_files-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
+dotfiles-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
 in-memory driver fixtures so the inner ring also exercises the
 extension + plugin reconcile legs (not just the warn-and-skip path).
 ``FakeClaude`` lives in ``tests.test_claude_plugins`` (its primary
@@ -74,7 +74,7 @@ def sandboxed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     return home
 
 
@@ -793,12 +793,12 @@ class TestValidate:
 
 
 # ---------------------------------------------------------------------------
-# --verbose/-v flag + MY_SETUP_LOG_LEVEL env var (tracked_files-58x)
+# --verbose/-v flag + SETFORGE_LOG_LEVEL env var (dotfiles-58x)
 # ---------------------------------------------------------------------------
 
 
 class TestVerbosity:
-    """``-v`` / ``--verbose`` and ``MY_SETUP_LOG_LEVEL`` wire the root logger.
+    """``-v`` / ``--verbose`` and ``SETFORGE_LOG_LEVEL`` wire the root logger.
 
     Precedence: flag > env > WARNING default. Garbage env values fall back
     to WARNING silently. The root ``_root`` callback calls
@@ -816,7 +816,7 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("SETFORGE_LOG_LEVEL", "DEBUG")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr
@@ -826,7 +826,7 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "not-a-level")
+        monkeypatch.setenv("SETFORGE_LOG_LEVEL", "not-a-level")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" not in result.stderr
@@ -836,7 +836,7 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "WARNING")
+        monkeypatch.setenv("SETFORGE_LOG_LEVEL", "WARNING")
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr
@@ -846,10 +846,10 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "DEBGU")
+        monkeypatch.setenv("SETFORGE_LOG_LEVEL", "DEBGU")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "unknown MY_SETUP_LOG_LEVEL='DEBGU'" in result.stderr
+        assert "unknown SETFORGE_LOG_LEVEL='DEBGU'" in result.stderr
         assert "defaulting to WARNING" in result.stderr
 
     def test_garbage_my_setup_log_level_with_non_level_module_attr_warns(
@@ -857,7 +857,7 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``MY_SETUP_LOG_LEVEL=BASIC_FORMAT`` resolves to a ``logging`` str attr.
+        """``SETFORGE_LOG_LEVEL=BASIC_FORMAT`` resolves to a ``logging`` str attr.
 
         A bare ``getattr(logging, env_value.upper(), None) is None`` check
         accepts ``logging.BASIC_FORMAT`` (a non-None string) and then
@@ -865,8 +865,8 @@ class TestVerbosity:
         level name and crashes opaquely. The ``isinstance(resolved, int)``
         guard surfaces the same friendly stderr warning the typo path emits.
         """
-        monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "BASIC_FORMAT")
+        monkeypatch.setenv("SETFORGE_LOG_LEVEL", "BASIC_FORMAT")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "unknown MY_SETUP_LOG_LEVEL='BASIC_FORMAT'" in result.stderr
+        assert "unknown SETFORGE_LOG_LEVEL='BASIC_FORMAT'" in result.stderr
         assert "defaulting to WARNING" in result.stderr

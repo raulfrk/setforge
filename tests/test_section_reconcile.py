@@ -206,7 +206,7 @@ def test_classify_section_drift_propagates_marker_error() -> None:
 
 
 def test_classify_section_drift_legacy_live_returns_LEGACY_state() -> None:
-    """Migration scenario (tracked_files-9ln): pre-9by live (no semantics
+    """Migration scenario (dotfiles-9ln): pre-9by live (no semantics
     keyword, no end-marker hash) + stamped tracked passes through the
     classifier's ``allow_legacy=True`` live-side path and yields the
     :attr:`SectionDriftState.LEGACY` state for every section. The

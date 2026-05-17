@@ -41,7 +41,7 @@ class TransitionCommand(StrEnum):
     MERGE = "merge"
 
 
-_STATE_ENV = "MY_SETUP_STATE_DIR"
+_STATE_ENV = "SETFORGE_STATE_DIR"
 _DEFAULT_STATE_ROOT_SUFFIX = (".local", "state", "my-setup")
 _STALE_PENDING_AGE = timedelta(hours=24)
 
@@ -49,7 +49,7 @@ _STALE_PENDING_AGE = timedelta(hours=24)
 def state_root() -> Path:
     """Resolve the my-setup state dir.
 
-    Honors the ``MY_SETUP_STATE_DIR`` env var (used by tests and by
+    Honors the ``SETFORGE_STATE_DIR`` env var (used by tests and by
     operators relocating state). Falls back to ``~/.local/state/my-setup``.
     """
     override = os.environ.get(_STATE_ENV)

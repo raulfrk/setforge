@@ -565,7 +565,7 @@ def test_install_with_use_tracked_records_transition(
 
 
 # ---------------------------------------------------------------------------
-# tracked_files-9ln — legacy live migration via install; compare/sync refuse
+# dotfiles-9ln — legacy live migration via install; compare/sync refuse
 # ---------------------------------------------------------------------------
 
 

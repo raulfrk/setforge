@@ -1,4 +1,4 @@
-"""Load-bearing end-to-end gate for JSONC support (tracked_files-nen.6).
+"""Load-bearing end-to-end gate for JSONC support (dotfiles-nen.6).
 
 If this fails, the json-five-based design is invalid and we'd fall back
 to hand-rolled textual surgery. Every other JSONC test in the suite
@@ -89,7 +89,7 @@ def test_install_preserves_tracked_comments_and_keeps_user_keys(
     """Post-install live = tracked text + live's user-key values, with
     every tracked comment intact."""
     cfg, dst = _setup_repo(tmp_path)
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
 
     result = CliRunner().invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
@@ -117,7 +117,7 @@ def test_install_then_capture_round_trips_tracked_byte_identical(
     daily-driver tracked_file management.
     """
     cfg, _dst = _setup_repo(tmp_path)
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
     runner = CliRunner()
 
@@ -139,7 +139,7 @@ def test_compare_classifies_user_key_drift_as_expected(
     """``compare`` on a JSONC file with diverging user-keys reports
     expected drift (non-zero count) and zero unexpected drift."""
     cfg, _dst = _setup_repo(tmp_path)
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     _no_code(monkeypatch)
 
     result = CliRunner().invoke(app, ["compare", "--profile=vmh", f"--config={cfg}"])

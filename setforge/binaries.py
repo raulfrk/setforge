@@ -7,7 +7,7 @@ precedence:
 1. CLI flags (``--code-bin``, ``--claude-bin``, ``--patch-bin``) —
    stored in module-level state by :func:`set_cli_overrides`, which the
    Typer ``@app.callback()`` invokes once at startup.
-2. Environment variables ``MY_SETUP_CODE_BIN`` / ``CLAUDE_BIN`` /
+2. Environment variables ``SETFORGE_CODE_BIN`` / ``CLAUDE_BIN`` /
    ``PATCH_BIN``.
 3. Host-local config file ``~/.config/my-setup/local.yaml`` with shape
    ``binaries: {code: /p, claude: /p, patch: /p}``.
@@ -36,7 +36,7 @@ from setforge.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "my-setup" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("code", "claude", "patch")
-_ENV_VAR_PREFIX: Final[str] = "MY_SETUP_"
+_ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
 
 _STUB_TEMPLATE: Final[str] = """\
@@ -174,7 +174,7 @@ def _load_local_config() -> dict[str, str]:
 def _env_overrides() -> dict[str, str]:
     """Return env-var overrides for the supported binaries.
 
-    Reads ``MY_SETUP_<NAME>_BIN`` for each name in
+    Reads ``SETFORGE_<NAME>_BIN`` for each name in
     :data:`SUPPORTED_BINARIES`. Empty-string values are treated as
     unset (avoids surprising the user when a wrapper sets the var
     blank).

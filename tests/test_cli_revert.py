@@ -54,7 +54,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
 
 def _state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state = tmp_path / "state"
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(state))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
     return state
 
 

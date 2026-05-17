@@ -2,7 +2,7 @@
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
 Pillar 2 adds extension reconcile inside ``install``. Claude plugin
-reconcile lands in Pillar 3. ``revert`` (tracked_files-19n) replays the most
+reconcile lands in Pillar 3. ``revert`` (dotfiles-19n) replays the most
 recent transition for a profile in reverse.
 """
 
@@ -94,19 +94,19 @@ def _root(
         None,
         "--code-bin",
         help="Override path to the 'code' (VSCode) binary. "
-        "Takes precedence over MY_SETUP_CODE_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_CODE_BIN and ~/.config/my-setup/local.yaml.",
     ),
     claude_bin: str | None = typer.Option(
         None,
         "--claude-bin",
         help="Override path to the 'claude' binary. "
-        "Takes precedence over MY_SETUP_CLAUDE_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_CLAUDE_BIN and ~/.config/my-setup/local.yaml.",
     ),
     patch_bin: str | None = typer.Option(
         None,
         "--patch-bin",
         help="Override path to the GNU 'patch' binary. "
-        "Takes precedence over MY_SETUP_PATCH_BIN and ~/.config/my-setup/local.yaml.",
+        "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/my-setup/local.yaml.",
     ),
     verbose: bool = typer.Option(
         False,
@@ -119,14 +119,14 @@ def _root(
     if verbose:
         level = logging.DEBUG
     else:
-        env_value = os.environ.get("MY_SETUP_LOG_LEVEL", "WARNING")
+        env_value = os.environ.get("SETFORGE_LOG_LEVEL", "WARNING")
         # `getattr(logging, "Logger", None)` returns the Logger class, not None;
         # restrict to known int level constants so a non-level module attribute
         # falls back to WARNING instead of crashing inside basicConfig.
         resolved = getattr(logging, env_value.upper(), None)
         if not isinstance(resolved, int):
             sys.stderr.write(
-                f"my-setup: unknown MY_SETUP_LOG_LEVEL={env_value!r}; "
+                f"my-setup: unknown SETFORGE_LOG_LEVEL={env_value!r}; "
                 f"defaulting to WARNING\n"
             )
             level = logging.WARNING
@@ -184,7 +184,7 @@ def _iter_section_tracked_files(
     :func:`_print_section_reconcile_dry_run` all duplicate today. Pure
     walk — no I/O; callers that need the live or tracked text read it
     themselves so the generator's iteration cost stays O(N) in
-    tracked_file-count regardless of file sizes.
+    the tracked-file count regardless of file sizes.
 
     Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
@@ -1651,11 +1651,11 @@ def plugin_add(
     # required because `claude plugin install` writes
     # ``installed_plugins.json`` without flipping ``enabledPlugins`` —
     # without this second call the plugin lands disabled (see
-    # tracked_files-l37). Strict failure on enable matches the interactive
+    # dotfiles-l37). Strict failure on enable matches the interactive
     # single-plugin shape of `plugin add`: a silent warning would be a
     # footgun. The install half retains today's pattern; latent
     # subprocess-error handling on install is tracked separately as
-    # tracked_files-oyv.
+    # dotfiles-oyv.
     if not no_install:
         try:
             claude_plugins_mod.plugin_install(plugin_name, mp_name)

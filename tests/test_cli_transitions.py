@@ -1,7 +1,7 @@
 """End-to-end tests for the ``my-setup transitions`` sub-app.
 
 Drives the real CLI via Typer's CliRunner against fixture transition
-directories under a tmp ``MY_SETUP_STATE_DIR``. Read-only — no install
+directories under a tmp ``SETFORGE_STATE_DIR``. Read-only — no install
 or sync invocation needed.
 """
 
@@ -59,7 +59,7 @@ def _stub(
 def test_list_empty_history_prints_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "ghost"))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ghost"))
 
     result = CliRunner().invoke(app, ["transitions", "list"])
 
@@ -70,7 +70,7 @@ def test_list_empty_history_prints_marker(
 def test_list_renders_columns_and_chronological_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(
@@ -113,7 +113,7 @@ def test_list_renders_columns_and_chronological_order(
 def test_list_reverse_flips_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(root, dirname="20260507T090000000000Z-install-vmh", profile="vmh")
@@ -140,7 +140,7 @@ def test_list_reverse_flips_order(
 def test_list_profile_filter_repeatable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(root, dirname="20260507T090000000000Z-install-vmh", profile="vmh")
@@ -160,7 +160,7 @@ def test_list_profile_filter_repeatable(
 def test_show_resolves_unique_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(
@@ -191,7 +191,7 @@ def test_show_resolves_unique_prefix(
 def test_show_ambiguous_prefix_lists_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
@@ -217,7 +217,7 @@ def test_show_ambiguous_prefix_lists_candidates(
 def test_show_zero_match_prefix_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
@@ -235,7 +235,7 @@ def test_show_omits_files_section_when_no_patch(
 ) -> None:
     """Extension-only transitions have no changes.patch; the FILES block
     is suppressed entirely (no empty section)."""
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(
@@ -256,7 +256,7 @@ def test_show_omits_files_section_when_no_patch(
 def test_show_omits_extensions_section_when_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
     _stub(
