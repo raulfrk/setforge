@@ -1,7 +1,7 @@
 [project]
-name = "my-setup"
+name = "setforge"
 version = "0.1.0"
-description = "Dotfile + VSCode + Claude plugin orchestration CLI"
+description = "Tracked-file + VSCode + Claude plugin orchestration CLI"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
@@ -23,14 +23,14 @@ dev = [
 ]
 
 [project.scripts]
-my-setup = "my_setup.cli:main"
+setforge = "setforge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["my_setup"]
+packages = ["setforge"]
 
 [tool.ruff]
 target-version = "py312"
@@ -50,7 +50,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `my_setup.<module>.subprocess.run` to resolve correctly."
+"subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
 
 [tool.pytest.ini_options]
 markers = [

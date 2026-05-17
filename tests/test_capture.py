@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from my_setup.capture import (
+from setforge.capture import (
     CaptureAction,
     capture_dotfile,
     capture_profile,
 )
-from my_setup.config import Config, Dotfile, Profile, SectionMode
+from setforge.config import Config, Dotfile, Profile, SectionMode
 
 
 def _write(path: Path, content: str) -> None:

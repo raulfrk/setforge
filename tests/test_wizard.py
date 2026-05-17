@@ -1,4 +1,4 @@
-"""Tests for the generic merge-wizard orchestrator — :mod:`my_setup.wizard`.
+"""Tests for the generic merge-wizard orchestrator — :mod:`setforge.wizard`.
 
 These tests target :func:`run_wizard_loop` in isolation. The mechanics it
 delegates to (snapshot, prompt, action handlers) are already covered by
@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from my_setup.transitions import TransitionCommand
-from my_setup.wizard import (
+from setforge.transitions import TransitionCommand
+from setforge.wizard import (
     ActionResult,
     DriftItem,
     FileFormat,
@@ -82,7 +82,7 @@ def test_run_wizard_loop_dispatches_per_item(
         return Path("/tmp/fake")
 
     monkeypatch.setattr(
-        "my_setup.wizard.transitions.write_transition",
+        "setforge.wizard.transitions.write_transition",
         _fake_write_transition,
     )
 
@@ -119,10 +119,10 @@ def test_run_wizard_loop_breaks_on_manual_pending(
         apply_call_count["n"] += 1
         return ActionResult.MANUAL_PENDING
 
-    monkeypatch.setattr("my_setup.wizard.apply_action", fake_apply_action)
+    monkeypatch.setattr("setforge.wizard.apply_action", fake_apply_action)
     # Stub write_transition so the test does not touch real state dirs.
     monkeypatch.setattr(
-        "my_setup.wizard.transitions.write_transition",
+        "setforge.wizard.transitions.write_transition",
         lambda *a, **kw: Path("/tmp/fake"),
     )
 

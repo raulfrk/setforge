@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from my_setup.cli import app
+from setforge.cli import app
 
 
 def _stub(
@@ -202,7 +202,7 @@ def test_show_ambiguous_prefix_lists_candidates(
         command="sync",
     )
 
-    from my_setup.errors import MySetupError
+    from setforge.errors import MySetupError
 
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1"])
 
@@ -222,7 +222,7 @@ def test_show_zero_match_prefix_errors(
     root.mkdir()
     _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
 
-    from my_setup.errors import MySetupError
+    from setforge.errors import MySetupError
 
     result = CliRunner().invoke(app, ["transitions", "show", "19990101"])
 

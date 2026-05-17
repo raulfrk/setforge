@@ -72,11 +72,11 @@ class CaptureRequiresInteractive(MySetupError):
     """Raised when ``my-setup sync`` would need wizard prompts but no
     TTY is available and ``--auto`` wasn't passed.
 
-    Triggered by :func:`my_setup.capture.capture_profile` when the
+    Triggered by :func:`setforge.capture.capture_profile` when the
     capture-time wizard would surface drift (deep-merge sub-key drift or
     top-level non-preserve drift) and the caller cannot prompt. The
     escape hatch is the ``--auto={use-live, keep-tracked}`` CLI flag,
-    which routes through :func:`my_setup.wizard.run_wizard_loop`'s
+    which routes through :func:`setforge.wizard.run_wizard_loop`'s
     ``auto_accept`` parameter."""
 
 
@@ -89,7 +89,7 @@ class InvalidTransitionRecord(MySetupError):
     """Raised when an on-disk transition record (extensions.json /
     plugins.json) has a corrupt shape.
 
-    Surfaced by :func:`my_setup.transitions.plugin_delta_from_json`
+    Surfaced by :func:`setforge.transitions.plugin_delta_from_json`
     when a ``marketplaces_removed`` entry fails its (name, dict) shape
     check — e.g. hand-edited plugins.json, partial-write damage, or a
     bug in a future writer. Caught at the revert command boundary by
@@ -102,7 +102,7 @@ class MarketplaceCacheMiss(MySetupError):
     """Raised when local-clone install mode cannot resolve a marketplace
     to a local cache directory.
 
-    Triggered by :func:`my_setup.claude_plugins._clone_marketplace` in
+    Triggered by :func:`setforge.claude_plugins._clone_marketplace` in
     three cases: the ``git`` binary is missing from PATH, the on-demand
     ``git clone`` failed (typically offline), or an existing cache's
     ``origin`` remote no longer matches the configured source repo and

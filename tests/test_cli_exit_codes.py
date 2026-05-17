@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from my_setup import claude_plugins as cp
-from my_setup.cli import app
+from setforge import claude_plugins as cp
+from setforge.cli import app
 
 _FIXTURE_YAML = """\
 version: 1
@@ -64,9 +64,9 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_run)
     return cfg
 
 
@@ -121,7 +121,7 @@ def test_install_warns_and_exits_0_when_claude_absent(
 
     # Claude binary is absent.
     cp._get_claude_bin.cache_clear()
-    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
 
     # CliRunner merges stdout + stderr into result.output by default.
     runner = CliRunner()
@@ -147,7 +147,7 @@ def test_ext_reconcile_clean_state_exits_0(
     cfg = _setup_fixture(tmp_path, monkeypatch)
     # Pre-install the declared extension so there's no drift.
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def fake_run(args, **kwargs: Any):
@@ -155,7 +155,7 @@ def test_ext_reconcile_clean_state_exits_0(
             return subprocess.CompletedProcess(args, 0, "declared.one\n", "")
         return subprocess.CompletedProcess(args, 0, "", "")
 
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_run)
     runner = CliRunner()
     result = runner.invoke(
         app, ["ext", "reconcile", "--profile=vmh", f"--config={cfg}"]
@@ -197,11 +197,11 @@ def _setup_install_fixture(
     (tmp_path / "tracked" / "dotfile.txt").write_text(src_text, encoding="utf-8")
 
     # Disable extension reconcile (no code binary)
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     # Disable transition writes for most tests
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition",
+        "setforge.transitions.write_transition",
         lambda *a, **kw: tmp_path / "fake_transition",
     )
     return cfg
@@ -241,10 +241,10 @@ def test_install_unexpected_drift_exits_1_with_message(
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
 
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition",
+        "setforge.transitions.write_transition",
         lambda *a, **kw: tmp_path / "fake",
     )
 
@@ -280,7 +280,7 @@ def test_install_auto_accept_tracked_resolves_drift(
         return tmp_path / "fake"
 
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition",
+        "setforge.transitions.write_transition",
         _fake_write_transition,
     )
 
@@ -308,10 +308,10 @@ def test_install_auto_accept_live_resolves_drift(
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "dotfile.txt").write_text("a: 1\nb: 2\n", encoding="utf-8")
 
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition",
+        "setforge.transitions.write_transition",
         lambda *a, **kw: tmp_path / "fake",
     )
 

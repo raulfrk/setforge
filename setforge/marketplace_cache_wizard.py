@@ -16,7 +16,7 @@ This module replaces the silent path with a four-option prompt:
 - ``[b]oth``           — keep the existing cache AND create a new
   cache under a name the user supplies, for this invocation only.
   Name is validated against the same path-traversal guard as
-  :func:`my_setup.claude_plugins._safe_cache_dir`.
+  :func:`setforge.claude_plugins._safe_cache_dir`.
 - ``[a]bort``          — raise :class:`typer.Abort`.
 
 Non-interactive entry (``auto=True`` or non-TTY stdin) refuses to
@@ -40,7 +40,7 @@ from pathlib import Path
 
 import typer
 
-from my_setup.errors import MarketplaceCacheMiss
+from setforge.errors import MarketplaceCacheMiss
 
 #: Default name-input prompt for the ``[b]oth`` branch. Module-level so
 #: tests can monkeypatch it cleanly without altering the function
@@ -86,7 +86,7 @@ class CollisionResolution:
 def _is_valid_subdir_name(name: str) -> bool:
     """Return ``True`` if ``name`` is safe to use as a cache subdir.
 
-    Mirrors :func:`my_setup.claude_plugins._safe_cache_dir`'s rejection
+    Mirrors :func:`setforge.claude_plugins._safe_cache_dir`'s rejection
     rules without the resolved-path check (which the caller still does).
     Accepts alphanumeric + ``-`` + ``_`` only — no dots, no separators,
     no empty strings.
@@ -232,7 +232,7 @@ def _resolve_both(
     Caps retries at 3 (validation failures) before bailing to
     :class:`MarketplaceCacheMiss` — prevents an infinite loop when the
     user can't type a valid name. The check matches
-    :func:`my_setup.claude_plugins._safe_cache_dir` rejection rules:
+    :func:`setforge.claude_plugins._safe_cache_dir` rejection rules:
     rejects empty, ``.``, ``..``, anything containing ``/`` or ``\\``,
     and anything outside ``[A-Za-z0-9_-]``. Also rejects a name that
     already resolves to an existing entry under ``cache_root`` (any

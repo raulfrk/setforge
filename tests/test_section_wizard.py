@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.section_reconcile import SectionDrift, SectionDriftState
-from my_setup.section_wizard import (
+from setforge.section_reconcile import SectionDrift, SectionDriftState
+from setforge.section_wizard import (
     ReconcileAuto,
     SectionAction,
     format_drift_summary,
     reconcile_sections,
 )
-from my_setup.sections import SectionSemantics
+from setforge.sections import SectionSemantics
 
 
 def _drift(
@@ -161,7 +161,7 @@ class _StdinPipe:
     """Replace sys.stdin with a StringIO that lacks fileno().
 
     Triggers the non-tty fallback in
-    :func:`my_setup.wizard.read_one_choice`.
+    :func:`setforge.wizard.read_one_choice`.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, text: str) -> None:

@@ -35,11 +35,11 @@ from rich.console import Console
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, sections, yaml_merge
-from my_setup.capture_wizard import run_capture_wizard, walk_capture_drift
-from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import Config, SectionMode, resolve_profile
-from my_setup.errors import CaptureRequiresInteractive
+from setforge import jsonc, sections, yaml_merge
+from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
+from setforge.compare import expand_dotfile, resolve_dst, resolve_src
+from setforge.config import Config, SectionMode, resolve_profile
+from setforge.errors import CaptureRequiresInteractive
 
 
 class CaptureAction(StrEnum):
@@ -225,7 +225,7 @@ def capture_profile(
     Parameters
     ----------
     config:
-        Loaded :class:`my_setup.config.Config`.
+        Loaded :class:`setforge.config.Config`.
     profile_name:
         Profile to capture.
     repo_root:

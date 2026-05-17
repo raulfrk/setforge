@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from my_setup.config import (
+from setforge.config import (
     ClaudePluginRef,
     Config,
     Dotfile,
@@ -18,7 +18,7 @@ from my_setup.config import (
     load_config,
     resolve_profile,
 )
-from my_setup.errors import ConfigError, ProfileNotFound
+from setforge.errors import ConfigError, ProfileNotFound
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

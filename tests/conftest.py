@@ -28,6 +28,6 @@ def _isolated_local_config(
     runner). Pure test hygiene; no production effect.
     """
     monkeypatch.setattr(
-        "my_setup.binaries.LOCAL_CONFIG_PATH",
+        "setforge.binaries.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )

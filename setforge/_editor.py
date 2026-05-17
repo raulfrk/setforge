@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from my_setup.errors import MySetupError
+from setforge.errors import MySetupError
 
 
 def run_editor(target: Path) -> None:

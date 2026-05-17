@@ -21,7 +21,7 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from my_setup import (
+from setforge import (
     binaries,
     deploy,
     section_reconcile,
@@ -29,14 +29,14 @@ from my_setup import (
     transitions,
     vscode_extensions,
 )
-from my_setup import capture as capture_mod
-from my_setup import claude_plugins as claude_plugins_mod
-from my_setup import compare as compare_mod
-from my_setup import merge as merge_mod
-from my_setup import sections as sections_mod
-from my_setup.capture import CaptureAuto
-from my_setup.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import (
+from setforge import capture as capture_mod
+from setforge import claude_plugins as claude_plugins_mod
+from setforge import compare as compare_mod
+from setforge import merge as merge_mod
+from setforge import sections as sections_mod
+from setforge.capture import CaptureAuto
+from setforge.compare import CompareStatus, expand_dotfile, resolve_dst, resolve_src
+from setforge.config import (
     ClaudeInstallMode,
     Config,
     Dotfile,
@@ -46,7 +46,7 @@ from my_setup.config import (
     load_config,
     resolve_profile,
 )
-from my_setup.errors import (
+from setforge.errors import (
     CaptureRequiresInteractive,
     ExtensionInstallFailed,
     ExtensionToolMissing,
@@ -55,9 +55,9 @@ from my_setup.errors import (
     NoTransitionFound,
     PluginToolMissing,
 )
-from my_setup.section_reconcile import SectionDrift, SectionDriftState
-from my_setup.section_wizard import ReconcileAuto, SectionAction
-from my_setup.sections import SectionSemantics, detect_legacy_markers
+from setforge.section_reconcile import SectionDrift, SectionDriftState
+from setforge.section_wizard import ReconcileAuto, SectionAction
+from setforge.sections import SectionSemantics, detect_legacy_markers
 
 LOGGER = logging.getLogger(__name__)
 
@@ -223,9 +223,9 @@ def _refuse_legacy_live_markers(
 
     Walks every dotfile in ``resolved`` whose tracked entry has
     ``preserve_user_sections=True`` and runs
-    :func:`my_setup.sections.detect_legacy_markers` on the live file (when
+    :func:`setforge.sections.detect_legacy_markers` on the live file (when
     it exists). The strict parser would otherwise raise
-    :class:`my_setup.errors.MarkerError` partway through the read-only /
+    :class:`setforge.errors.MarkerError` partway through the read-only /
     capture flow with an opaque ``line N: missing required keyword``
     message; this surfaces a single actionable error before any strict
     parse happens, pointing the user at ``my-setup install`` to migrate.
@@ -1600,7 +1600,7 @@ def plugin_add(
     load_config(config)
 
     # Parse --from into a MarketplaceSource
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
+    from setforge.config import MarketplaceSource, MarketplaceSourceKind
 
     if from_.startswith("github:"):
         repo = from_[len("github:") :]
@@ -1812,7 +1812,7 @@ def marketplace_add_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Register a marketplace in YAML and run claude plugin marketplace add."""
-    from my_setup.config import MarketplaceSource, MarketplaceSourceKind
+    from setforge.config import MarketplaceSource, MarketplaceSourceKind
 
     if from_.startswith("github:"):
         repo = from_[len("github:") :]
@@ -1883,8 +1883,8 @@ def _check_profile(
     """Run checks 2-6 for a single profile, appending failures in-place."""
     from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
 
-    from my_setup.compare import resolve_src
-    from my_setup.paths import template_context
+    from setforge.compare import resolve_src
+    from setforge.paths import template_context
 
     ctx = f"profile {prof_name!r}"
 

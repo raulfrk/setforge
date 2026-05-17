@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.errors import InvalidTransitionRecord, MySetupError, RevertFailed
-from my_setup.transitions import (
+from setforge.errors import InvalidTransitionRecord, MySetupError, RevertFailed
+from setforge.transitions import (
     ExtensionDelta,
     PluginDelta,
     TransitionCommand,
@@ -101,7 +101,7 @@ def test_now_utc_is_aware() -> None:
 def test_ensure_state_dir_writable_creates_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from my_setup.transitions import ensure_state_dir_writable
+    from setforge.transitions import ensure_state_dir_writable
 
     monkeypatch.setenv("MY_SETUP_STATE_DIR", str(tmp_path / "fresh"))
     ensure_state_dir_writable()
@@ -113,8 +113,8 @@ def test_ensure_state_dir_writable_creates_dir(
 def test_ensure_state_dir_writable_raises_on_unwritable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from my_setup.errors import MySetupError
-    from my_setup.transitions import ensure_state_dir_writable
+    from setforge.errors import MySetupError
+    from setforge.transitions import ensure_state_dir_writable
 
     target = tmp_path / "ro" / "transitions"
     target.mkdir(parents=True)
@@ -819,7 +819,7 @@ def test_write_transition_crash_before_rename_leaves_pending_not_visible(
     def _raise_on_rename(src: str | Path, dst: str | Path) -> None:
         raise SystemExit("simulated crash before rename")
 
-    monkeypatch.setattr("my_setup.transitions.os.rename", _raise_on_rename)
+    monkeypatch.setattr("setforge.transitions.os.rename", _raise_on_rename)
 
     with pytest.raises(SystemExit):
         write_transition(meta, pre, post, delta)
@@ -849,7 +849,7 @@ def test_write_transition_crash_after_rename_before_meta_not_visible(
     ) -> None:
         raise SystemExit("simulated crash before meta.json")
 
-    monkeypatch.setattr("my_setup.transitions.write_meta", _raise_on_write_meta)
+    monkeypatch.setattr("setforge.transitions.write_meta", _raise_on_write_meta)
 
     with pytest.raises(SystemExit):
         write_transition(meta, pre, post, delta)

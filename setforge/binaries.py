@@ -31,8 +31,8 @@ from typing import Final
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
 
-from my_setup.config import ClaudeInstallMode
-from my_setup.errors import BinaryOverrideInvalid, ConfigError
+from setforge.config import ClaudeInstallMode
+from setforge.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "my-setup" / "local.yaml"
 SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("code", "claude", "patch")

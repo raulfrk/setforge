@@ -1,7 +1,7 @@
 """Claude plugin & marketplace reconcile, driven by the ``claude`` CLI.
 
 All subprocess invocations honor the locked hygiene rules: the ``claude``
-binary is resolved via :func:`my_setup.binaries.resolve_binary` (which
+binary is resolved via :func:`setforge.binaries.resolve_binary` (which
 walks CLI flag → env var → host-local config → PATH), raising
 :class:`PluginToolMissing` if every layer comes up empty.
 ``subprocess.run`` always uses ``check=True, text=True,
@@ -39,8 +39,8 @@ from ruamel.yaml.comments import (  # type: ignore[import-not-found]
     CommentedSeq,
 )
 
-from my_setup.binaries import load_host_local_config, resolve_binary, stderr_of
-from my_setup.config import (
+from setforge.binaries import load_host_local_config, resolve_binary, stderr_of
+from setforge.config import (
     ClaudeInstallMode,
     Config,
     MarketplaceSource,
@@ -49,7 +49,7 @@ from my_setup.config import (
     ResolvedProfile,
     load_config,
 )
-from my_setup.errors import (
+from setforge.errors import (
     ConfigError,
     MarketplaceCacheMiss,
     PluginToolMissing,
@@ -240,7 +240,7 @@ def plugin_uninstall(plugin_id: str) -> None:
     """Uninstall a plugin via ``claude plugin uninstall <id>``.
 
     ``plugin_id`` should be in ``"<name>@<marketplace>"`` form. Used by
-    :func:`my_setup.cli.revert` as the inverse of :func:`plugin_install`
+    :func:`setforge.cli.revert` as the inverse of :func:`plugin_install`
     when reversing a transition's ``PluginDelta.installed`` list.
     """
     claude = str(_get_claude_bin())
@@ -514,7 +514,7 @@ def _resolve_marketplace_source(
     ``auto=True`` (e.g. from a ``--auto`` CLI flag) suppresses the
     interactive cache-collision wizard and raises
     :class:`MarketplaceCacheMiss` instead, per
-    :mod:`my_setup.marketplace_cache_wizard`'s spec-locked safe
+    :mod:`setforge.marketplace_cache_wizard`'s spec-locked safe
     default. Cache collision arises only on URL drift; the
     happy-path (cache hit with matching origin, cache miss) is
     unaffected.
@@ -578,7 +578,7 @@ def _resolve_cache_collision(
     - ``ABORT`` — the wizard raises :class:`typer.Abort` directly;
       never reached here.
     """
-    from my_setup.marketplace_cache_wizard import (
+    from setforge.marketplace_cache_wizard import (
         CollisionAction,
         resolve_collision,
     )

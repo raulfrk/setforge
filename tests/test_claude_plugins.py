@@ -6,7 +6,7 @@ assert on the exact sequence of install/enable/disable invocations
 without requiring a real ``claude`` CLI.
 
 Binary resolution is also monkeypatched via
-``my_setup.claude_plugins.resolve_binary`` to control when the binary
+``setforge.claude_plugins.resolve_binary`` to control when the binary
 is "found" vs absent.
 """
 
@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from my_setup import claude_plugins as cp
-from my_setup.config import (
+from setforge import claude_plugins as cp
+from setforge.config import (
     ClaudeInstallMode,
     ClaudePluginRef,
     Config,
@@ -31,7 +31,7 @@ from my_setup.config import (
     ReconcilePolicy,
     ResolvedProfile,
 )
-from my_setup.errors import ConfigError, PluginToolMissing
+from setforge.errors import ConfigError, PluginToolMissing
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -245,10 +245,10 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
         # exercises ``apply_patch_reverse``.
         fake._real_run = subprocess.run
         monkeypatch.setattr(
-            "my_setup.claude_plugins.resolve_binary",
+            "setforge.claude_plugins.resolve_binary",
             lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
         )
-        monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", fake.run)
+        monkeypatch.setattr("setforge.claude_plugins.subprocess.run", fake.run)
         cp._get_claude_bin.cache_clear()
         return fake
 
@@ -256,7 +256,7 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
 
 
 def test_list_marketplaces_returns_dict_keyed_by_name(fake_claude) -> None:
-    from my_setup.claude_plugins import list_marketplaces
+    from setforge.claude_plugins import list_marketplaces
 
     fake_claude(
         marketplaces=[
@@ -272,7 +272,7 @@ def test_list_marketplaces_returns_dict_keyed_by_name(fake_claude) -> None:
 def test_list_installed_returns_dict_keyed_by_id_with_enabled_field(
     fake_claude,
 ) -> None:
-    from my_setup.claude_plugins import list_installed
+    from setforge.claude_plugins import list_installed
 
     fake_claude(
         plugins=[
@@ -289,7 +289,7 @@ def test_list_installed_returns_dict_keyed_by_id_with_enabled_field(
 
 
 def test_plugin_install_passes_scope_user(fake_claude) -> None:
-    from my_setup.claude_plugins import plugin_install
+    from setforge.claude_plugins import plugin_install
 
     fake = fake_claude()
     plugin_install("cline", "anthropic")
@@ -301,7 +301,7 @@ def test_plugin_install_passes_scope_user(fake_claude) -> None:
 
 
 def test_plugin_enable_synthesises_correct_command(fake_claude) -> None:
-    from my_setup.claude_plugins import plugin_enable
+    from setforge.claude_plugins import plugin_enable
 
     fake = fake_claude(plugins=[{"id": "cline@anthropic", "enabled": False}])
     plugin_enable("cline@anthropic")
@@ -309,7 +309,7 @@ def test_plugin_enable_synthesises_correct_command(fake_claude) -> None:
 
 
 def test_plugin_disable_synthesises_correct_command(fake_claude) -> None:
-    from my_setup.claude_plugins import plugin_disable
+    from setforge.claude_plugins import plugin_disable
 
     fake = fake_claude(plugins=[{"id": "cline@anthropic", "enabled": True}])
     plugin_disable("cline@anthropic")
@@ -324,7 +324,7 @@ def test_plugin_uninstall_argv(fake_claude) -> None:
     in ``installed_state()`` afterwards. This is the inverse primitive
     used by ``my-setup revert`` to undo a ``PluginDelta.installed`` row.
     """
-    from my_setup.claude_plugins import plugin_uninstall
+    from setforge.claude_plugins import plugin_uninstall
 
     fake = fake_claude(
         plugins=[
@@ -347,14 +347,14 @@ def test_plugin_uninstall_argv(fake_claude) -> None:
 def test_missing_claude_binary_raises_plugin_tool_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.claude_plugins import (
+    from setforge.claude_plugins import (
         list_installed,
         list_marketplaces,
         plugin_install,
     )
 
     cp._get_claude_bin.cache_clear()
-    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
     with pytest.raises(PluginToolMissing, match="claude"):
         list_installed()
     with pytest.raises(PluginToolMissing, match="claude"):
@@ -376,14 +376,14 @@ def test_get_claude_bin_consults_resolve_binary(
     # Reset cache BEFORE setting the new resolver so the next call
     # actually hits the resolver (not the cached path).
     cp._get_claude_bin.cache_clear()
-    monkeypatch.setattr("my_setup.claude_plugins.resolve_binary", recording_resolver)
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", recording_resolver)
     path = cp._get_claude_bin()
     assert "claude" in calls
     assert str(path) == "/custom/claude"
 
 
 def test_marketplace_add_calls_correct_args(fake_claude) -> None:
-    from my_setup.claude_plugins import marketplace_add
+    from setforge.claude_plugins import marketplace_add
 
     fake = fake_claude()
     src = MarketplaceSource(
@@ -397,7 +397,7 @@ def test_marketplace_add_calls_correct_args(fake_claude) -> None:
 
 
 def test_marketplace_remove_calls_correct_args(fake_claude) -> None:
-    from my_setup.claude_plugins import marketplace_remove
+    from setforge.claude_plugins import marketplace_remove
 
     fake = fake_claude(
         marketplaces=[{"name": "anthropic", "source": "github:anthropics/plugins"}]
@@ -411,7 +411,7 @@ def test_marketplace_remove_calls_correct_args(fake_claude) -> None:
 
 
 def test_marketplace_update_calls_correct_args(fake_claude) -> None:
-    from my_setup.claude_plugins import marketplace_update
+    from setforge.claude_plugins import marketplace_update
 
     fake = fake_claude()
     marketplace_update("anthropic")
@@ -428,7 +428,7 @@ def test_marketplace_update_calls_correct_args(fake_claude) -> None:
 
 def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
     """declared = {a@m1, b@m1}, installed = {} → to_install both; install called."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     cfg = _make_config(
@@ -458,7 +458,7 @@ def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     `to_enable` in the report keeps clean β2 semantics: only the
     original `declared intersect disabled` set, NOT freshly-installed plugins.
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
@@ -486,7 +486,7 @@ def test_reconcile_fresh_install_failure_skips_enable(
     runtime enable working list, so a failed install never feeds an
     enable attempt.
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     real_run = fake.run
@@ -500,7 +500,7 @@ def test_reconcile_fresh_install_failure_skips_enable(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     cfg = _make_config(
         claude_plugins={
@@ -535,7 +535,7 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
     next reconcile run will pick the plugin up via the existing
     ``declared intersect disabled`` path with no new code.
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     real_run = fake.run
@@ -549,7 +549,7 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
@@ -574,7 +574,7 @@ def test_reconcile_declared_but_disabled_enables_not_reinstalls(
     fake_claude,
 ) -> None:
     """declared = {a@m1}, installed = {a@m1: disabled} → enable only."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(plugins=[{"id": "a@m1", "enabled": False}])
     cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
@@ -593,7 +593,7 @@ def test_reconcile_declared_but_disabled_enables_not_reinstalls(
 
 def test_reconcile_additive_does_not_disable_extras(fake_claude) -> None:
     """ADDITIVE: installed has extras → to_disable=[] regardless."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(
         plugins=[
@@ -613,7 +613,7 @@ def test_reconcile_additive_does_not_disable_extras(fake_claude) -> None:
 
 def test_reconcile_prune_disables_extras(fake_claude) -> None:
     """PRUNE: extras are disabled."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(
         plugins=[
@@ -635,7 +635,7 @@ def test_reconcile_mixed_states_prune(fake_claude) -> None:
     """declared={a,b}, enabled={a,c}, disabled={b,d} →
     install=[],enable=[b],disable=[c].
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(
         plugins=[
@@ -669,12 +669,12 @@ def test_reconcile_report_policy_runs_no_subprocesses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """REPORT: all three diffs computed, zero subprocess writes."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     cp._get_claude_bin.cache_clear()
     # Monkeypatch resolve_binary to return a valid path
     monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary",
+        "setforge.claude_plugins.resolve_binary",
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
     )
 
@@ -695,7 +695,7 @@ def test_reconcile_report_policy_runs_no_subprocesses(
         # Any write command must NOT be called
         raise AssertionError(f"REPORT mode must not invoke write command: {args!r}")
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", read_only_run)
     cfg = _make_config(claude_plugins={"declared": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["declared"],
@@ -711,11 +711,11 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """dry_run=True: zero subprocess writes, regardless of policy."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary",
+        "setforge.claude_plugins.resolve_binary",
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
     )
 
@@ -731,7 +731,7 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
             return subprocess.CompletedProcess(args, 0, json.dumps([]), "")
         raise AssertionError(f"dry_run must not invoke write command: {args!r}")
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", read_only_run)
     cfg = _make_config(claude_plugins={"declared": ClaudePluginRef(marketplace="m1")})
     profile = _make_resolved(
         claude_plugins=["declared"],
@@ -745,7 +745,7 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
 
 def test_reconcile_marketplaces_always_added(fake_claude) -> None:
     """Declared marketplace not in list_marketplaces() → marketplace_add."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(marketplaces=[])
     cfg = _make_config(
@@ -763,7 +763,7 @@ def test_reconcile_marketplaces_always_added(fake_claude) -> None:
 
 def test_reconcile_stale_marketplace_not_evicted(fake_claude) -> None:
     """Marketplace installed but not declared → no remove call."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(marketplaces=[{"name": "stale", "source": "github:stale/mp"}])
     cfg = _make_config()  # no declared marketplaces
@@ -777,7 +777,7 @@ def test_reconcile_stale_marketplace_not_evicted(fake_claude) -> None:
 
 def test_reconcile_additive_disabled_not_in_to_disable(fake_claude) -> None:
     """ADDITIVE: disabled plugins not declared → not in to_disable."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake_claude(plugins=[{"id": "undeclared@m1", "enabled": False}])
     cfg = _make_config()
@@ -801,7 +801,7 @@ def test_reconcile_resolves_bare_profile_names_via_registry(fake_claude) -> None
     maps each name to a marketplace; reconcile must combine them into
     '<name>@<marketplace>' form before diffing against installed plugins.
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(plugins=[{"id": "superpowers@official", "enabled": True}])
     cfg = _make_config(
@@ -824,7 +824,7 @@ def test_reconcile_resolves_bare_profile_names_via_registry(fake_claude) -> None
 def test_reconcile_bare_name_to_install_emits_at_form_pair(fake_claude) -> None:
     """First-time-declared bare name lands in to_install as (name, marketplace);
     install loop receives @-form id without _split_id crashing."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     cfg = _make_config(
@@ -844,7 +844,7 @@ def test_reconcile_bare_name_to_install_emits_at_form_pair(fake_claude) -> None:
 def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
     """Already-installed-but-disabled plugin: bare profile name resolves via
     registry, matches the @-form id from claude plugin list, lands in to_enable."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude(plugins=[{"id": "wiki@llm-wiki", "enabled": False}])
     cfg = _make_config(
@@ -865,7 +865,7 @@ def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
 def test_reconcile_undeclared_bare_name_raises_config_error(fake_claude) -> None:
     """Profile lists a bare name not in the top-level registry → ConfigError
     naming the offending plugin, before any plugin write subprocesses run."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     fake = fake_claude()
     cfg = _make_config()  # empty registry
@@ -924,7 +924,7 @@ def _write_yaml_fixture(tmp_path: Path) -> Path:
 
 
 def test_yaml_add_marketplace_appends(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_marketplace
+    from setforge.claude_plugins import yaml_add_marketplace
 
     p = _write_yaml_fixture(tmp_path)
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
@@ -940,7 +940,7 @@ def test_yaml_add_marketplace_appends(tmp_path: Path) -> None:
 
 
 def test_yaml_add_marketplace_idempotent(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_marketplace
+    from setforge.claude_plugins import yaml_add_marketplace
 
     p = _write_yaml_fixture(tmp_path)
     src = MarketplaceSource(
@@ -953,19 +953,19 @@ def test_yaml_add_marketplace_idempotent(tmp_path: Path) -> None:
 
 
 def test_yaml_remove_marketplace(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_remove_marketplace
+    from setforge.claude_plugins import yaml_remove_marketplace
 
     p = _write_yaml_fixture(tmp_path)
     removed = yaml_remove_marketplace(p, "existing-mp")
     assert removed is True
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     cfg = load_config(p)
     assert "existing-mp" not in cfg.marketplaces
 
 
 def test_yaml_remove_marketplace_idempotent(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_remove_marketplace
+    from setforge.claude_plugins import yaml_remove_marketplace
 
     p = _write_yaml_fixture(tmp_path)
     removed = yaml_remove_marketplace(p, "ghost-mp")
@@ -973,7 +973,7 @@ def test_yaml_remove_marketplace_idempotent(tmp_path: Path) -> None:
 
 
 def test_yaml_add_plugin_appends(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_plugin
+    from setforge.claude_plugins import yaml_add_plugin
 
     p = _write_yaml_fixture(tmp_path)
     added = yaml_add_plugin(p, "new-plugin", "existing-mp")
@@ -985,7 +985,7 @@ def test_yaml_add_plugin_appends(tmp_path: Path) -> None:
 
 
 def test_yaml_add_plugin_idempotent(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_plugin
+    from setforge.claude_plugins import yaml_add_plugin
 
     p = _write_yaml_fixture(tmp_path)
     added = yaml_add_plugin(p, "existing-plugin", "existing-mp")
@@ -993,7 +993,7 @@ def test_yaml_add_plugin_idempotent(tmp_path: Path) -> None:
 
 
 def test_yaml_add_plugin_to_profile(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_plugin, yaml_add_plugin_to_profile
+    from setforge.claude_plugins import yaml_add_plugin, yaml_add_plugin_to_profile
 
     p = _write_yaml_fixture(tmp_path)
     # Mirror the production CLI flow: register in top-level claude_plugins
@@ -1002,14 +1002,14 @@ def test_yaml_add_plugin_to_profile(tmp_path: Path) -> None:
     yaml_add_plugin(p, "new-plugin", "existing-mp")
     added = yaml_add_plugin_to_profile(p, "myprofile", "new-plugin")
     assert added is True
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     cfg = load_config(p)
     assert "new-plugin" in cfg.profiles["myprofile"].claude_plugins
 
 
 def test_yaml_add_plugin_to_profile_idempotent(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_add_plugin_to_profile
+    from setforge.claude_plugins import yaml_add_plugin_to_profile
 
     p = _write_yaml_fixture(tmp_path)
     added = yaml_add_plugin_to_profile(p, "myprofile", "existing-plugin")
@@ -1017,12 +1017,12 @@ def test_yaml_add_plugin_to_profile_idempotent(tmp_path: Path) -> None:
 
 
 def test_yaml_remove_plugin_from_profile(tmp_path: Path) -> None:
-    from my_setup.claude_plugins import yaml_remove_plugin_from_profile
+    from setforge.claude_plugins import yaml_remove_plugin_from_profile
 
     p = _write_yaml_fixture(tmp_path)
     removed = yaml_remove_plugin_from_profile(p, "myprofile", "existing-plugin")
     assert removed is True
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     cfg = load_config(p)
     assert "existing-plugin" not in cfg.profiles["myprofile"].claude_plugins
@@ -1030,7 +1030,7 @@ def test_yaml_remove_plugin_from_profile(tmp_path: Path) -> None:
 
 def test_yaml_comments_preserved_after_edits(tmp_path: Path) -> None:
     """Multiple edits must not corrupt comments in the YAML file."""
-    from my_setup.claude_plugins import (
+    from setforge.claude_plugins import (
         yaml_add_marketplace,
         yaml_add_plugin,
         yaml_add_plugin_to_profile,
@@ -1057,8 +1057,8 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
     """--claude-bin flag must call binaries.set_cli_overrides(claude=...)."""
     from typer.testing import CliRunner
 
-    import my_setup.binaries as binaries_mod
-    from my_setup.cli import app
+    import setforge.binaries as binaries_mod
+    from setforge.cli import app
 
     calls: list[dict] = []
     original_set_cli_overrides = binaries_mod.set_cli_overrides
@@ -1096,11 +1096,11 @@ def test_reconcile_marketplaces_dry_run_not_added(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Under REPORT policy, marketplace_add is NOT called."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary",
+        "setforge.claude_plugins.resolve_binary",
         lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
     )
 
@@ -1115,7 +1115,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
             return subprocess.CompletedProcess(args, 0, json.dumps([]), "")
         raise AssertionError(f"REPORT mode must not invoke write command: {args!r}")
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", read_only_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", read_only_run)
     cfg = _make_config(
         marketplaces={
             "anthropic": MarketplaceSource(
@@ -1143,7 +1143,7 @@ def test_plugin_add_calls_enable_after_install(fake_claude, tmp_path: Path) -> N
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     p = _write_yaml_fixture(tmp_path)
     fake = fake_claude()  # marketplace + plugin lists start empty
@@ -1178,7 +1178,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     p = _write_yaml_fixture(tmp_path)
     fake = fake_claude()
@@ -1193,7 +1193,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1229,7 +1229,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     p = _write_yaml_fixture(tmp_path)
     fake = fake_claude()
@@ -1244,7 +1244,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_called_process_error(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1274,7 +1274,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     p = _write_yaml_fixture(tmp_path)
     fake = fake_claude()
@@ -1287,7 +1287,7 @@ def test_plugin_add_exits_nonzero_when_install_fails_with_timeout_expired(
             raise subprocess.TimeoutExpired(list(args), timeout=30)
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", timing_out_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", timing_out_run)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1318,8 +1318,8 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
-    from my_setup.errors import PluginToolMissing
+    from setforge.cli import app
+    from setforge.errors import PluginToolMissing
 
     p = _write_yaml_fixture(tmp_path)
 
@@ -1328,7 +1328,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
     def fake_install(name: str, marketplace: str) -> None:
         raise PluginToolMissing("fake message")
 
-    monkeypatch.setattr("my_setup.claude_plugins.plugin_install", fake_install)
+    monkeypatch.setattr("setforge.claude_plugins.plugin_install", fake_install)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1429,7 +1429,7 @@ def test_install_records_plugin_delta(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1477,7 +1477,7 @@ def test_install_records_plugin_delta_with_enable_transition(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1535,7 +1535,7 @@ def test_install_records_plugin_delta_with_enable_failure(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1554,7 +1554,7 @@ def test_install_records_plugin_delta_with_enable_failure(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     runner = CliRunner()
     installed = runner.invoke(
@@ -1587,7 +1587,7 @@ def test_install_records_plugin_delta_with_enable_failure(
 
     # Round-trip: revert MUST uninstall the plugin (no orphan). Clear
     # the failing-run override first so revert's uninstall succeeds.
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", real_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", real_run)
     reverted = runner.invoke(
         app,
         ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
@@ -1608,7 +1608,7 @@ def test_revert_restores_plugin_state(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, _state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1652,11 +1652,11 @@ def test_revert_noop_when_no_plugin_delta(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary",
+        "setforge.claude_plugins.resolve_binary",
         lambda _name: None,
     )
     fixture_yaml = _copy_e2e_fixture(tmp_path)
@@ -1703,7 +1703,7 @@ def test_revert_partial_failure(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     _, state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1728,7 +1728,7 @@ def test_revert_partial_failure(
             )
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", failing_run)
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     reverted = runner.invoke(
         app,
@@ -1767,7 +1767,7 @@ def test_roundtrip_file_and_plugin_state(
     """
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     fixture_yaml = _copy_e2e_fixture(tmp_path)
     home, _state_dir = _sandbox_state_dir(tmp_path, monkeypatch)
@@ -1908,14 +1908,14 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
         cache_root = tmp_path / "marketplaces"
         monkeypatch.setattr(cp, "MARKETPLACE_CACHE_ROOT", cache_root)
         monkeypatch.setattr(
-            "my_setup.claude_plugins.shutil.which",
+            "setforge.claude_plugins.shutil.which",
             lambda name: "/usr/bin/git" if name == "git" else None,
         )
         # If a prior test wired subprocess.run via fake_claude, this
         # overwrite is fine — FakeGit's run delegates non-git argv to
         # _real_run (which here is the un-monkeypatched subprocess.run
         # captured BEFORE this setattr).
-        monkeypatch.setattr("my_setup.claude_plugins.subprocess.run", fake.run)
+        monkeypatch.setattr("setforge.claude_plugins.subprocess.run", fake.run)
         cp._get_claude_bin.cache_clear()
         return fake
 
@@ -1924,7 +1924,7 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
 
 def _local_clone_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting LOCAL_CLONE."""
-    from my_setup import binaries as bin_mod
+    from setforge import binaries as bin_mod
 
     local_path = tmp_path / "local.yaml"
     local_path.write_text("claude:\n  install_mode: local-clone\n")
@@ -1933,7 +1933,7 @@ def _local_clone_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _regular_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting REGULAR."""
-    from my_setup import binaries as bin_mod
+    from setforge import binaries as bin_mod
 
     local_path = tmp_path / "local.yaml"
     local_path.write_text("claude:\n  install_mode: regular\n")
@@ -1945,7 +1945,7 @@ def _regular_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_marketplace_source_regular_returns_input(tmp_path: Path) -> None:
     """REGULAR mode never touches the source — pure passthrough."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_plugins import _resolve_marketplace_source
 
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
     out = _resolve_marketplace_source(
@@ -1957,7 +1957,7 @@ def test_resolve_marketplace_source_regular_returns_input(tmp_path: Path) -> Non
 
 def test_resolve_marketplace_source_path_kind_passthrough(tmp_path: Path) -> None:
     """PATH sources passthrough regardless of mode (already local)."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_plugins import _resolve_marketplace_source
 
     local = tmp_path / "preinstalled"
     local.mkdir()
@@ -1972,7 +1972,7 @@ def test_resolve_marketplace_source_local_clone_clones_on_cache_miss(
     fake_git, tmp_path: Path
 ) -> None:
     """Cache miss in LOCAL_CLONE mode triggers a single git clone."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_plugins import _resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
@@ -1988,8 +1988,8 @@ def test_resolve_marketplace_source_local_clone_offline_raises(
     fake_git, tmp_path: Path
 ) -> None:
     """git clone failure surfaces as MarketplaceCacheMiss with remediation."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
 
     fake_git(known_repos=set())  # any clone fails
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
@@ -2003,11 +2003,11 @@ def test_resolve_marketplace_source_git_binary_missing_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Missing git binary yields a specific remediation message."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
 
     monkeypatch.setattr(
-        "my_setup.claude_plugins.shutil.which",
+        "setforge.claude_plugins.shutil.which",
         lambda _: None,
     )
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
@@ -2021,7 +2021,7 @@ def test_resolve_marketplace_source_existing_cache_no_clone(
     fake_git, tmp_path: Path
 ) -> None:
     """When the cache already exists with a matching origin, no git clone runs."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_plugins import _resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     cache_root = tmp_path / "cache"
@@ -2042,8 +2042,8 @@ def test_resolve_marketplace_source_url_drift_invokes_wizard(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cache-origin URL drift dispatches the wizard; [u]pdate re-clones."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.marketplace_cache_wizard import (
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.marketplace_cache_wizard import (
         CollisionAction,
         CollisionResolution,
     )
@@ -2059,7 +2059,7 @@ def test_resolve_marketplace_source_url_drift_invokes_wizard(
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
     # Wizard returns UPDATE — the pre-wizard silent behavior.
     monkeypatch.setattr(
-        "my_setup.marketplace_cache_wizard.resolve_collision",
+        "setforge.marketplace_cache_wizard.resolve_collision",
         lambda **_: CollisionResolution(action=CollisionAction.UPDATE),
     )
     _resolve_marketplace_source(
@@ -2072,8 +2072,8 @@ def test_resolve_marketplace_source_url_drift_non_tty_no_auto_raises(
     fake_git, tmp_path: Path
 ) -> None:
     """Cache collision under non-TTY + no --auto raises MarketplaceCacheMiss."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
 
     fake = fake_git(known_repos={"anthropic/plug", "newowner/plug"})
     cache_root = tmp_path / "cache"
@@ -2106,7 +2106,7 @@ def test_clone_marketplace_argv_uses_dash_dash_separator(
     prevents shell-level injection; this completes the defense at the
     git-CLI argument-parsing layer.
     """
-    from my_setup.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_plugins import _resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
@@ -2138,8 +2138,8 @@ def test_clone_marketplace_argv_uses_dash_dash_separator(
 )
 def test_safe_cache_dir_rejects_traversal_inputs(tmp_path: Path, bad_name: str) -> None:
     """Empty/dot/double-dot/separator inputs raise MarketplaceCacheMiss."""
-    from my_setup.claude_plugins import _safe_cache_dir
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import _safe_cache_dir
+    from setforge.errors import MarketplaceCacheMiss
 
     with pytest.raises(MarketplaceCacheMiss):
         _safe_cache_dir(tmp_path, bad_name)
@@ -2147,7 +2147,7 @@ def test_safe_cache_dir_rejects_traversal_inputs(tmp_path: Path, bad_name: str) 
 
 def test_safe_cache_dir_accepts_plain_basename(tmp_path: Path) -> None:
     """A normal basename returns cache_root / name without raising."""
-    from my_setup.claude_plugins import _safe_cache_dir
+    from setforge.claude_plugins import _safe_cache_dir
 
     out = _safe_cache_dir(tmp_path, "plug")
     assert out == tmp_path / "plug"
@@ -2157,8 +2157,8 @@ def test_resolve_marketplace_source_rejects_path_traversal_repo(
     fake_git, tmp_path: Path
 ) -> None:
     """A repo of shape 'foo/..' (basename '..') is rejected pre-clone."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.errors import MarketplaceCacheMiss
 
     fake = fake_git(known_repos={"foo/.."})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="foo/..")
@@ -2174,8 +2174,8 @@ def test_sync_marketplace_cache_rejects_path_traversal_repo(
     fake_git, tmp_path: Path
 ) -> None:
     """sync_marketplace_cache also guards the cache subdir derivation."""
-    from my_setup.claude_plugins import sync_marketplace_cache
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import sync_marketplace_cache
+    from setforge.errors import MarketplaceCacheMiss
 
     fake_git(known_repos=set())
     cfg = _make_config(
@@ -2198,7 +2198,7 @@ def test_reconcile_local_clone_swaps_source_before_marketplace_add(
     fake_claude, fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """LOCAL_CLONE mode: reconcile calls marketplace_add with a PATH source."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     _local_clone_yaml(tmp_path, monkeypatch)
     fc = fake_claude()
@@ -2224,7 +2224,7 @@ def test_reconcile_regular_mode_install_mode_unchanged(
     fake_claude, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """REGULAR mode (default): reconcile preserves today's owner/repo argv."""
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     _regular_yaml(tmp_path, monkeypatch)
     fc = fake_claude()
@@ -2254,7 +2254,7 @@ def test_local_clone_repeat_install_is_offline(
     reconcile, AND that no git argv whatsoever was issued (no `fetch`,
     no `reset` — sync-cache is the only refresh surface).
     """
-    from my_setup.claude_plugins import reconcile
+    from setforge.claude_plugins import reconcile
 
     _local_clone_yaml(tmp_path, monkeypatch)
     fake_claude()
@@ -2299,7 +2299,7 @@ def test_local_clone_repeat_install_is_offline(
 
 def test_sync_marketplace_cache_clones_missing(fake_git, tmp_path: Path) -> None:
     """sync_marketplace_cache clones marketplaces absent from the cache."""
-    from my_setup.claude_plugins import sync_marketplace_cache
+    from setforge.claude_plugins import sync_marketplace_cache
 
     fake = fake_git(known_repos={"anthropic/plug"})
     cfg = _make_config(
@@ -2318,7 +2318,7 @@ def test_sync_marketplace_cache_clones_missing(fake_git, tmp_path: Path) -> None
 
 def test_sync_marketplace_cache_refreshes_existing(fake_git, tmp_path: Path) -> None:
     """sync_marketplace_cache fetch+resets caches that already exist."""
-    from my_setup.claude_plugins import sync_marketplace_cache
+    from setforge.claude_plugins import sync_marketplace_cache
 
     fake = fake_git(known_repos={"anthropic/plug"})
     cache_root = tmp_path / "marketplaces"
@@ -2346,7 +2346,7 @@ def test_sync_marketplace_cache_refreshes_existing(fake_git, tmp_path: Path) -> 
 
 def test_sync_marketplace_cache_skips_path_sources(fake_git, tmp_path: Path) -> None:
     """PATH-kind marketplaces are skipped (no clone, no fetch)."""
-    from my_setup.claude_plugins import sync_marketplace_cache
+    from setforge.claude_plugins import sync_marketplace_cache
 
     fake = fake_git(known_repos=set())
     local = tmp_path / "preinstalled"
@@ -2367,7 +2367,7 @@ def test_sync_marketplace_cache_no_github_marketplaces_no_op(
     fake_git, tmp_path: Path
 ) -> None:
     """Empty profile yields empty refresh list, exits cleanly."""
-    from my_setup.claude_plugins import sync_marketplace_cache
+    from setforge.claude_plugins import sync_marketplace_cache
 
     fake_git(known_repos=set())
     cfg = _make_config(marketplaces={}, claude_plugins={})
@@ -2380,8 +2380,8 @@ def test_sync_marketplace_cache_clone_failure_raises_cache_miss(
     fake_git, tmp_path: Path
 ) -> None:
     """sync_marketplace_cache surfaces a clone failure as MarketplaceCacheMiss."""
-    from my_setup.claude_plugins import sync_marketplace_cache
-    from my_setup.errors import MarketplaceCacheMiss
+    from setforge.claude_plugins import sync_marketplace_cache
+    from setforge.errors import MarketplaceCacheMiss
 
     fake_git(known_repos=set())  # any clone fails
     cfg = _make_config(

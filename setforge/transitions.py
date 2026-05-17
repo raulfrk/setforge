@@ -27,9 +27,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
-from my_setup import __version__
-from my_setup.binaries import resolve_binary
-from my_setup.errors import InvalidTransitionRecord, MySetupError, RevertFailed
+from setforge import __version__
+from setforge.binaries import resolve_binary
+from setforge.errors import InvalidTransitionRecord, MySetupError, RevertFailed
 
 
 class TransitionCommand(StrEnum):
@@ -110,7 +110,7 @@ class TransitionMeta:
     profile: str
     timestamp: datetime  # UTC; serialized as ISO 8601
     host: str  # platform.node()
-    version: str  # my_setup.__version__
+    version: str  # setforge.__version__
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -256,7 +256,7 @@ class PluginDelta:
       **JSON-primitive contract.** The ``source_repr`` dict MUST
       contain only JSON-safe primitive values (``str`` / ``int`` /
       ``bool`` / ``None``). Callers populating this field from a
-      live :class:`my_setup.config.MarketplaceSource` MUST serialize
+      live :class:`setforge.config.MarketplaceSource` MUST serialize
       via ``MarketplaceSource.model_dump(mode="json")`` (or
       equivalent) — the raw model has an enum ``source`` field and an
       optional :class:`pathlib.Path` ``path`` field, neither of which

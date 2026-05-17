@@ -21,9 +21,9 @@ from rich.table import Table
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, sections, yaml_merge
-from my_setup.config import Config, Dotfile, resolve_profile
-from my_setup.paths import template_context
+from setforge import jsonc, sections, yaml_merge
+from setforge.config import Config, Dotfile, resolve_profile
+from setforge.paths import template_context
 
 
 class CompareStatus(StrEnum):
@@ -73,7 +73,7 @@ def diff_file(
     """Return the unified diff between ``src`` and ``dst``.
 
     When preservation is enabled the comparison renders the post-merge
-    content (same merge sequence as :func:`my_setup.deploy.copy_atomic`)
+    content (same merge sequence as :func:`setforge.deploy.copy_atomic`)
     so preserved drift never shows in the diff body.
 
     Fast path: with ``preserve_user_sections=True``, if every section's
@@ -137,7 +137,7 @@ def _render_with_merges(
     strip_section_content(dst_text)``) and for the ``difflib.unified_diff``
     input — so any parsed-shape cache would force ``diff_file`` to keep
     raw bytes around anyway. The symmetric deploy-side helper
-    (:func:`my_setup.deploy._compute_content`) caches the pre-extracted
+    (:func:`setforge.deploy._compute_content`) caches the pre-extracted
     ``LiveSections`` instead because deploy has no strip-template need.
     See also: that function's docstring for the symmetric rationale.
     """

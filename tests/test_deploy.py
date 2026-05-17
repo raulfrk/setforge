@@ -9,17 +9,17 @@ from unittest import mock
 
 import pytest
 
-from my_setup import sections
-from my_setup.config import Config, Dotfile, Profile, resolve_profile
-from my_setup.deploy import (
+from setforge import sections
+from setforge.config import Config, Dotfile, Profile, resolve_profile
+from setforge.deploy import (
     DeployAction,
     DeployResult,
     bootstrap_local,
     copy_atomic,
     validate_srcs_exist,
 )
-from my_setup.errors import MergeTypeMismatch, MissingTrackedFile
-from my_setup.sections import (
+from setforge.errors import MergeTypeMismatch, MissingTrackedFile
+from setforge.sections import (
     detect_legacy_markers,
     extract_marker_hashes,
     hash_sections,

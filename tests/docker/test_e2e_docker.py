@@ -534,16 +534,16 @@ def test_install_comprehensive_plugins_extensions(
 def test_install_verbose_emits_my_setup_debug(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``-v`` flag surfaces ``my_setup.claude_plugins`` DEBUG from a real subprocess.
+    """``-v`` flag surfaces ``setforge.claude_plugins`` DEBUG from a real subprocess.
 
     Closes the e2e scope gap left by the in-process CliRunner unit tests
     in :mod:`tests.test_cli_e2e` (which prove flag mechanics inside the
     test interpreter but not real-subprocess logging propagation). Runs
     the comprehensive profile under ``-v`` in a fresh Debian container
-    and asserts a ``my_setup.claude_plugins DEBUG:`` line lands on
+    and asserts a ``setforge.claude_plugins DEBUG:`` line lands on
     stderr — proving the dotfiles-58x verbosity surface threads
     end-to-end through CLI startup, ``logging.basicConfig(stream=sys.stderr)``,
-    and the production ``my_setup.claude_plugins`` LOGGER call sites
+    and the production ``setforge.claude_plugins`` LOGGER call sites
     (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``).
 
     The ``claude.install_mode: local-clone`` opt-in via host-local
@@ -572,8 +572,8 @@ def test_install_verbose_emits_my_setup_debug(
         ),
     )
     result = _install(c, "test-comprehensive", root_args=["-v"])
-    assert "my_setup.claude_plugins DEBUG:" in result.stderr, (
-        f"expected 'my_setup.claude_plugins DEBUG:' in stderr; "
+    assert "setforge.claude_plugins DEBUG:" in result.stderr, (
+        f"expected 'setforge.claude_plugins DEBUG:' in stderr; "
         f"first 800 chars: {result.stderr[:800]}"
     )
 
@@ -623,7 +623,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
 
     Uses YAML deep (not JSONC deep) because capture-time wizard
     deep-merge walking is intentionally skipped for JSONC per
-    my_setup/capture_wizard.py:175 (deep_paths_to_walk = []
+    setforge/capture_wizard.py:175 (deep_paths_to_walk = []
     for JSONC). YAML deep is where the capture wizard's auto-accept
     plumbing actually fires today.
     """
@@ -650,7 +650,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
 
 # --- Variant P (interactive: pty + 'k') -----------------------------------
 #
-# Wizard surface note (verified against my_setup/capture_wizard.py:175):
+# Wizard surface note (verified against setforge/capture_wizard.py:175):
 # the capture-time wizard's deep-merge walker SKIPS JSONC files
 # (deep_paths_to_walk = preserve_user_keys_deep if fmt != "jsonc"
 # else []). JSONC deep-merge per-sub-key drift is handled by deploy's
@@ -702,7 +702,7 @@ def test_sync_interactive_skip_via_pty(
 ) -> None:
     """R: pexpect; send 's' (save-as-preserved); my_setup.yaml gets the key added.
 
-    Per ``my_setup/wizard.py`` _action_save_as_preserved (verified
+    Per ``setforge/wizard.py`` _action_save_as_preserved (verified
     against wizard source per open question 8): ``s`` appends
     ``item.key_path`` to the dotfile's ``preserve_user_keys`` list in
     my_setup.yaml. The tracked file is unchanged; only the YAML
@@ -740,7 +740,7 @@ def test_sync_interactive_merge_via_pty(
 ) -> None:
     """S: pexpect; send 'm' (manual edit) then 'n' (decline editor) → pending state.
 
-    Per ``my_setup/wizard.py`` _action_manual_edit (verified against
+    Per ``setforge/wizard.py`` _action_manual_edit (verified against
     wizard source per open question 8): ``m`` prompts ``y/n``; ``y``
     launches ``$EDITOR``, ``n`` returns MANUAL_PENDING which halts the
     wizard at this drift item. The pending state means tracked is

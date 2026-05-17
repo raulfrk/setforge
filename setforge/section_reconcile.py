@@ -10,8 +10,8 @@ fold without surprising the user on bare ``my-setup install`` runs.
 
 The classifier is pure: given (tracked text, live text), it returns a
 deterministic state per shared section, derived from
-:func:`my_setup.sections.hash_sections` (actual body) and
-:func:`my_setup.sections.extract_marker_hashes` (recorded baseline).
+:func:`setforge.sections.hash_sections` (actual body) and
+:func:`setforge.sections.extract_marker_hashes` (recorded baseline).
 The CLI consumes that classification to decide warn / prompt / silent.
 
 Host-local sections always silently keep the live body, regardless of
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from my_setup.sections import (
+from setforge.sections import (
     SectionSemantics,
     extract_marker_hashes,
     extract_sections,
@@ -108,7 +108,7 @@ def classify_section_drift(
     order — deterministic across runs, the contract the wizard relies on
     when it asks "next section?". Sections that exist in tracked but not
     in live (or vice versa) are silently skipped here; the deploy path
-    handles those via :func:`my_setup.sections.merge_sections`'s
+    handles those via :func:`setforge.sections.merge_sections`'s
     placeholder behaviour. ``set_marker_hashes`` callers are likewise
     expected to operate on the post-merge content.
 
@@ -119,7 +119,7 @@ def classify_section_drift(
     state honestly so a debugging dump shows "host-local + bodies
     differ" rather than synthesizing a fake :attr:`LIVE_EDITED`.
 
-    Raises :class:`my_setup.errors.MarkerError` via the section
+    Raises :class:`setforge.errors.MarkerError` via the section
     primitives on malformed markers.
     """
     # Live side is parsed with allow_legacy=True so pre-9by user files
@@ -209,8 +209,8 @@ def _classify_one(
 def maintain_marker_hashes(text: str) -> str:
     """Rewrite every end-marker's ``hash=<...>`` to match its body content.
 
-    Composition of :func:`my_setup.sections.hash_sections` and
-    :func:`my_setup.sections.set_marker_hashes`. Idempotent: applying it
+    Composition of :func:`setforge.sections.hash_sections` and
+    :func:`setforge.sections.set_marker_hashes`. Idempotent: applying it
     twice yields the same output as applying it once (set_marker_hashes
     is byte-preserving outside the end-marker line, and the body it
     hashes is unchanged).
@@ -220,7 +220,7 @@ def maintain_marker_hashes(text: str) -> str:
     ``extract_marker_hashes(text) == hash_sections(text)`` (modulo
     ``None`` entries — there shouldn't be any post-install).
 
-    Raises :class:`my_setup.errors.MarkerError` on malformed markers.
+    Raises :class:`setforge.errors.MarkerError` on malformed markers.
     """
     return set_marker_hashes(text, hash_sections(text))
 
@@ -253,7 +253,7 @@ def stamp_tracked_baseline(tracked_path: Path) -> bool:
     ``LEGACY`` for sections without a prior baseline. The next ``install``
     fixes that.
 
-    Raises :class:`my_setup.errors.MarkerError` on malformed markers.
+    Raises :class:`setforge.errors.MarkerError` on malformed markers.
     """
     text = tracked_path.read_text(encoding="utf-8")
     actual = hash_sections(text)
@@ -270,7 +270,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
     Honours the install-time atomic-writes-everywhere invariant the
     project already enforces on the live side (see
-    :func:`my_setup.deploy._atomic_write`). A SIGTERM mid-write leaves
+    :func:`setforge.deploy._atomic_write`). A SIGTERM mid-write leaves
     ``path`` intact rather than truncated; the temp file in the same
     directory is unlinked on the exception path.
     """

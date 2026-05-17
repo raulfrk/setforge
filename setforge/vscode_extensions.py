@@ -1,7 +1,7 @@
 """VSCode extension reconcile, driven by the ``code`` CLI.
 
 All subprocess invocations honor the locked hygiene rules: the ``code``
-binary is resolved via :func:`my_setup.binaries.resolve_binary` (which
+binary is resolved via :func:`setforge.binaries.resolve_binary` (which
 walks CLI flag → env var → host-local config → PATH), raising
 :class:`ExtensionToolMissing` if every layer comes up empty.
 ``subprocess.run`` always uses ``check=True, text=True,
@@ -26,9 +26,9 @@ from ruamel.yaml.comments import (  # type: ignore[import-not-found]
     CommentedSeq,
 )
 
-from my_setup.binaries import resolve_binary, stderr_of
-from my_setup.config import Extensions, ReconcilePolicy, load_config, resolve_profile
-from my_setup.errors import (
+from setforge.binaries import resolve_binary, stderr_of
+from setforge.config import Extensions, ReconcilePolicy, load_config, resolve_profile
+from setforge.errors import (
     ConfigError,
     ExtensionInstallFailed,
     ExtensionToolMissing,

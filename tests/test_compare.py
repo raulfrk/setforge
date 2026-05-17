@@ -5,14 +5,14 @@ from pathlib import Path
 
 from rich.console import Console
 
-from my_setup.compare import (
+from setforge.compare import (
     CompareStatus,
     classify_yaml_drift,
     compare_profile,
     compare_summary_table,
     diff_file,
 )
-from my_setup.config import Config, Dotfile, Profile
+from setforge.config import Config, Dotfile, Profile
 
 
 def _write(path: Path, content: str) -> None:
@@ -428,7 +428,7 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 0 on clean profile."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x"
@@ -452,7 +452,7 @@ def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 1 when unexpected drift exists."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
@@ -476,7 +476,7 @@ def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
     """CLI compare --check exits 0 when all drift is expected (preserve_user_keys)."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
@@ -500,7 +500,7 @@ def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None
     """CLI compare --check --strict exits 1 on expected drift."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x.yaml"
@@ -524,7 +524,7 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     """CLI compare --check --strict exits 0 on a clean profile."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x"
@@ -562,7 +562,7 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     """CLI compare --full-diff includes +++ / --- diff markers."""
     from typer.testing import CliRunner
 
-    from my_setup.cli import app
+    from setforge.cli import app
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x"

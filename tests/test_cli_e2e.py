@@ -34,7 +34,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from my_setup.cli import app
+from setforge.cli import app
 
 # Snapshot the real ``subprocess.run`` at import time so the ``fake_code``
 # fixture can forward non-code, non-claude invocations (e.g. the ``patch``
@@ -82,7 +82,7 @@ def sandboxed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def no_code_bin(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make ``code`` CLI absent so extension reconcile is warn-and-skipped."""
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary",
+        "setforge.vscode_extensions.resolve_binary",
         lambda name: None,
     )
 
@@ -95,11 +95,11 @@ def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
     prior test (e.g. ``test_claude_plugins.py``) that cached a fake path
     doesn't short-circuit our monkeypatched resolver.
     """
-    from my_setup import claude_plugins as cp
+    from setforge import claude_plugins as cp
 
     cp._get_claude_bin.cache_clear()
     monkeypatch.setattr(
-        "my_setup.claude_plugins.resolve_binary",
+        "setforge.claude_plugins.resolve_binary",
         lambda name: None,
     )
 
@@ -108,7 +108,7 @@ def no_claude_bin(monkeypatch: pytest.MonkeyPatch) -> None:
 # FakeCode — in-memory ``code`` driver for the extension reconcile leg.
 #
 # Mirrors the FakeClaude pattern from tests/test_claude_plugins.py but is
-# scoped to ``my_setup.vscode_extensions``. ``vscode_extensions`` invokes
+# scoped to ``setforge.vscode_extensions``. ``vscode_extensions`` invokes
 # ``subprocess.run`` with separate argv tokens (``[code, "--install-extension",
 # id]``) and has no ``lru_cache``'d resolver, so the fixture only needs to
 # monkeypatch ``resolve_binary`` + ``subprocess.run`` — no cache to clear.
@@ -132,7 +132,7 @@ class FakeCode:
     plugin list``) are forwarded to ``_delegate`` — set by the
     ``fake_code`` fixture to the previously-installed ``subprocess.run``
     so a co-resident ``fake_claude`` continues to handle its own calls.
-    This is required because monkeypatching ``my_setup.foo.subprocess.run``
+    This is required because monkeypatching ``setforge.foo.subprocess.run``
     actually patches the global ``subprocess.run`` attribute (both
     modules share the same ``subprocess`` module object), so the second
     fixture would otherwise clobber the first.
@@ -199,7 +199,7 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
     """Return a factory that wires :class:`FakeCode` into ``vscode_extensions``.
 
     Parallel to ``fake_claude``: monkeypatches both
-    ``my_setup.vscode_extensions.resolve_binary`` (so ``_ensure_code``
+    ``setforge.vscode_extensions.resolve_binary`` (so ``_ensure_code``
     returns a non-None path) and ``subprocess.run`` (so reconcile
     invokes the fake driver instead of the real ``code`` binary).
 
@@ -207,8 +207,8 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
     before this factory ran — possibly ``fake_claude.run``) and stores
     it on the FakeCode instance so non-code argv shapes forward through
     instead of raising. Letting both fakes coexist requires this because
-    both ``my_setup.vscode_extensions.subprocess`` and
-    ``my_setup.claude_plugins.subprocess`` resolve to the same module
+    both ``setforge.vscode_extensions.subprocess`` and
+    ``setforge.claude_plugins.subprocess`` resolve to the same module
     object — the second monkeypatch would otherwise clobber the first.
 
     The fixture-order precondition (``fake_claude`` must be requested
@@ -233,10 +233,10 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeCode]:
         fake._delegate = subprocess.run
         fake._real_run = _REAL_SUBPROCESS_RUN
         monkeypatch.setattr(
-            "my_setup.vscode_extensions.resolve_binary",
+            "setforge.vscode_extensions.resolve_binary",
             lambda name: Path("/usr/local/bin/code") if name == "code" else None,
         )
-        monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake.run)
+        monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake.run)
         return fake
 
     return factory
@@ -289,7 +289,7 @@ class TestInstall:
         the post-install live byte-matches ``maintain_marker_hashes``
         applied to tracked, not the raw tracked bytes.
         """
-        from my_setup.section_reconcile import maintain_marker_hashes
+        from setforge.section_reconcile import maintain_marker_hashes
 
         result = _invoke(
             [
@@ -809,7 +809,7 @@ class TestVerbosity:
     def test_root_v_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
+        assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
     def test_env_var_enables_debug_when_flag_absent(
         self,
@@ -819,7 +819,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "DEBUG")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
+        assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
     def test_garbage_env_var_falls_back_to_warning(
         self,
@@ -829,7 +829,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "not-a-level")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" not in result.stderr
+        assert "setforge.cli DEBUG: logging configured at level" not in result.stderr
 
     def test_flag_overrides_env(
         self,
@@ -839,7 +839,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "WARNING")
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
+        assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
     def test_garbage_my_setup_log_level_emits_stderr_warning(
         self,

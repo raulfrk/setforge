@@ -11,11 +11,11 @@ completion records exactly one MERGE transition so ``my-setup revert``
 can undo the whole session uniformly.
 
 Generic wizard mechanics (snapshot, prompt, action dispatch, signal
-handlers, the per-item run loop) live in :mod:`my_setup.wizard` and are
+handlers, the per-item run loop) live in :mod:`setforge.wizard` and are
 shared with the capture-time wizard. This module owns only the
 install-trigger walker (:func:`walk_unexpected_drift`) and the
 install-trigger entry point (:func:`run_wizard`), which is a thin
-wrapper over :func:`my_setup.wizard.run_wizard_loop`.
+wrapper over :func:`setforge.wizard.run_wizard_loop`.
 
 POSIX-only: the underlying single-keypress prompter uses ``tty`` +
 ``termios``.
@@ -29,10 +29,10 @@ from rich.console import Console
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, transitions, wizard
-from my_setup.compare import CompareReport, CompareStatus
-from my_setup.config import Config
-from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
+from setforge import jsonc, transitions, wizard
+from setforge.compare import CompareReport, CompareStatus
+from setforge.config import Config
+from setforge.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 # ---------------------------------------------------------------------------
 # Walker
@@ -55,7 +55,7 @@ def walk_unexpected_drift(
     in ``preserve_user_keys_deep`` (``"deep"``) or otherwise (``"shallow"``);
     ``_action_use_live`` routes through the matching overlay variant.
     """
-    from my_setup.compare import resolve_dst, resolve_src
+    from setforge.compare import resolve_dst, resolve_src
 
     for entry in report.entries:
         if entry.status != CompareStatus.DRIFTED:
@@ -150,7 +150,7 @@ def run_wizard(
 ) -> list[tuple[DriftItem, ActionResult]]:
     """Run the install-time merge wizard over all unexpected drift in ``report``.
 
-    Thin wrapper over :func:`my_setup.wizard.run_wizard_loop` that supplies
+    Thin wrapper over :func:`setforge.wizard.run_wizard_loop` that supplies
     the install-trigger walker, transition command, and pending-edit message.
 
     Parameters

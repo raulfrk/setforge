@@ -1,4 +1,4 @@
-"""Tests for my_setup.binaries — host-local binary override resolver."""
+"""Tests for setforge.binaries — host-local binary override resolver."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from my_setup import binaries
-from my_setup.binaries import ClaudeLocalConfig, HostLocalConfig, load_host_local_config
-from my_setup.config import ClaudeInstallMode
-from my_setup.errors import BinaryOverrideInvalid, ConfigError
+from setforge import binaries
+from setforge.binaries import ClaudeLocalConfig, HostLocalConfig, load_host_local_config
+from setforge.config import ClaudeInstallMode
+from setforge.errors import BinaryOverrideInvalid, ConfigError
 
 
 @pytest.fixture(autouse=True)

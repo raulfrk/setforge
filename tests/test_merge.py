@@ -21,13 +21,13 @@ from typing import Any, override
 
 import pytest
 
-# ruamel.yaml ships py.typed without resolvable annotations; see my_setup/compare.py.
+# ruamel.yaml ships py.typed without resolvable annotations; see setforge/compare.py.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup.compare import CompareReport, CompareStatus, FileCompare
-from my_setup.config import Config, Dotfile, Profile
-from my_setup.merge import walk_unexpected_drift
-from my_setup.wizard import (
+from setforge.compare import CompareReport, CompareStatus, FileCompare
+from setforge.config import Config, Dotfile, Profile
+from setforge.merge import walk_unexpected_drift
+from setforge.wizard import (
     ActionResult,
     DriftItem,
     DriftMode,
@@ -185,10 +185,10 @@ def _make_stdin(chars: str):
 def test_read_one_choice_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Valid key is returned lowercased."""
     monkeypatch.setattr("sys.stdin", io.StringIO("k"))
-    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("setforge.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("setforge.wizard.tty.setraw", lambda fd: None)
     monkeypatch.setattr(
-        "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
+        "setforge.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
     result = read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
@@ -197,10 +197,10 @@ def test_read_one_choice_valid(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_read_one_choice_uppercase_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     """Uppercase input is lowercased and accepted."""
     monkeypatch.setattr("sys.stdin", io.StringIO("K"))
-    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("setforge.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("setforge.wizard.tty.setraw", lambda fd: None)
     monkeypatch.setattr(
-        "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
+        "setforge.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
     result = read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
@@ -208,7 +208,7 @@ def test_read_one_choice_uppercase_accepted(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_read_one_choice_invalid_then_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Invalid key triggers bell and re-reads; valid key then accepted."""
-    monkeypatch.setattr("my_setup.wizard.sys.stdin", io.StringIO("xk"))
+    monkeypatch.setattr("setforge.wizard.sys.stdin", io.StringIO("xk"))
 
     written: list[str] = []
 
@@ -229,10 +229,10 @@ def test_read_one_choice_invalid_then_valid(monkeypatch: pytest.MonkeyPatch) -> 
 def test_read_one_choice_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ctrl-C (\\x03) raises KeyboardInterrupt."""
     monkeypatch.setattr("sys.stdin", io.StringIO("\x03"))
-    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", lambda fd: [])
-    monkeypatch.setattr("my_setup.wizard.tty.setraw", lambda fd: None)
+    monkeypatch.setattr("setforge.wizard.termios.tcgetattr", lambda fd: [])
+    monkeypatch.setattr("setforge.wizard.tty.setraw", lambda fd: None)
     monkeypatch.setattr(
-        "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
+        "setforge.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
     with pytest.raises(KeyboardInterrupt):
         read_one_choice("Choice: ", {"k", "u", "s", "m"})
@@ -252,12 +252,12 @@ def test_read_one_choice_termios_error_falls_back_to_line_buffered(
         def fileno(self) -> int:
             return 0
 
-    monkeypatch.setattr("my_setup.wizard.sys.stdin", PipedStdin("k\n"))
+    monkeypatch.setattr("setforge.wizard.sys.stdin", PipedStdin("k\n"))
 
     def fake_tcgetattr(_fd: int) -> object:
         raise _termios.error(25, "Inappropriate ioctl for device")
 
-    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", fake_tcgetattr)
+    monkeypatch.setattr("setforge.wizard.termios.tcgetattr", fake_tcgetattr)
     result = read_one_choice("Choice: ", {"k", "u"})
     assert result == "k"
 
@@ -344,7 +344,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
     updated_text = src.read_text()
 
     # json5 can parse the result.
-    # json5 ships py.typed without resolvable annotations; see my_setup/jsonc.py.
+    # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
     from json5.loader import loads  # type: ignore[import-not-found]
 
     parsed = loads(updated_text)
@@ -462,10 +462,10 @@ def test_apply_action_m_y_launches_editor(
 
     monkeypatch.setenv("EDITOR", "myfakeeditor")
     monkeypatch.setattr(
-        "my_setup._editor.shutil.which", lambda name: f"/usr/bin/{name}"
+        "setforge._editor.shutil.which", lambda name: f"/usr/bin/{name}"
     )
-    monkeypatch.setattr("my_setup._editor.subprocess.run", fake_run)
-    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "y")
+    monkeypatch.setattr("setforge._editor.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "y")
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_EDIT_DONE
@@ -491,11 +491,11 @@ def test_apply_action_m_n_returns_manual_pending(
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
-    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "n")
+    monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "n")
 
     run_called = []
     monkeypatch.setattr(
-        "my_setup._editor.subprocess.run", lambda *a, **kw: run_called.append(a)
+        "setforge._editor.subprocess.run", lambda *a, **kw: run_called.append(a)
     )
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
@@ -546,7 +546,7 @@ def test_snapshot_restore_on_sigint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """SIGINT during wizard restores files from snapshot; no transition recorded."""
-    from my_setup.merge import run_wizard
+    from setforge.merge import run_wizard
 
     f = tmp_path / "target.yaml"
     f.write_text("b: 2\n", encoding="utf-8")
@@ -554,7 +554,7 @@ def test_snapshot_restore_on_sigint(
     # Monkeypatch write_transition to detect if it's called
     transition_calls: list[Any] = []
     monkeypatch.setattr(
-        "my_setup.wizard.transitions.write_transition",
+        "setforge.wizard.transitions.write_transition",
         lambda *a, **kw: transition_calls.append(1),
     )
 
@@ -568,7 +568,7 @@ def test_snapshot_restore_on_sigint(
     # Simulate SIGINT via raising KeyboardInterrupt inside read_one_choice
     snap_root = tmp_path / "snaps"
     monkeypatch.setattr(
-        "my_setup.wizard.read_one_choice",
+        "setforge.wizard.read_one_choice",
         lambda prompt, choices: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -595,7 +595,7 @@ def test_successful_walk_records_one_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A completed wizard walk records exactly one merge-transition."""
-    from my_setup.merge import run_wizard
+    from setforge.merge import run_wizard
 
     config, repo, _src, _dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
@@ -610,11 +610,11 @@ def test_successful_walk_records_one_transition(
         return Path("/tmp/fake")
 
     monkeypatch.setattr(
-        "my_setup.wizard.transitions.write_transition",
+        "setforge.wizard.transitions.write_transition",
         _fake_write_transition_keep,
     )
     # choose [k] for every prompt
-    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "k")
+    monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "k")
 
     snap_root = tmp_path / "snaps"
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -634,7 +634,7 @@ def test_manual_pending_records_transition_for_applied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[m]+n pauses walk; merge-transition IS recorded for prior decisions."""
-    from my_setup.merge import run_wizard
+    from setforge.merge import run_wizard
 
     # Two drift keys: first -> [k], second -> [m]+n
     config = Config(
@@ -672,13 +672,13 @@ def test_manual_pending_records_transition_for_applied(
         return Path("/tmp/fake")
 
     monkeypatch.setattr(
-        "my_setup.wizard.transitions.write_transition",
+        "setforge.wizard.transitions.write_transition",
         _fake_write_transition_mixed,
     )
 
     choices = iter(["k", "m", "n"])
     monkeypatch.setattr(
-        "my_setup.wizard.read_one_choice", lambda prompt, cs: next(choices)
+        "setforge.wizard.read_one_choice", lambda prompt, cs: next(choices)
     )
 
     snap_root = tmp_path / "snaps"

@@ -2,8 +2,8 @@
 
 import pytest
 
-from my_setup.errors import MergeTypeMismatch
-from my_setup.yaml_merge import delete_keys, extract_keys, overlay
+from setforge.errors import MergeTypeMismatch
+from setforge.yaml_merge import delete_keys, extract_keys, overlay
 
 
 def test_dotted_path_overlay() -> None:

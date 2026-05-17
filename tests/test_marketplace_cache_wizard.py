@@ -1,4 +1,4 @@
-"""Tests for :mod:`my_setup.marketplace_cache_wizard`.
+"""Tests for :mod:`setforge.marketplace_cache_wizard`.
 
 Covers the four-option (k/u/b/a) collision-resolution surface plus
 the spec-locked non-interactive safe-default (auto / non-TTY refuse
@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 import typer
 
-from my_setup.errors import MarketplaceCacheMiss
-from my_setup.marketplace_cache_wizard import (
+from setforge.errors import MarketplaceCacheMiss
+from setforge.marketplace_cache_wizard import (
     CollisionAction,
     _is_valid_subdir_name,
     resolve_collision,
@@ -237,8 +237,8 @@ def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[k]eep returns the existing cache_dir and runs zero clones."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.config import (
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
         MarketplaceSourceKind,
@@ -252,13 +252,13 @@ def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
     fake.cloned[cache_dir] = "anthropic/plug"
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
 
-    from my_setup.marketplace_cache_wizard import (
+    from setforge.marketplace_cache_wizard import (
         CollisionAction,
         CollisionResolution,
     )
 
     monkeypatch.setattr(
-        "my_setup.marketplace_cache_wizard.resolve_collision",
+        "setforge.marketplace_cache_wizard.resolve_collision",
         lambda **_: CollisionResolution(action=CollisionAction.KEEP),
     )
     out = _resolve_marketplace_source(
@@ -275,13 +275,13 @@ def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[b]oth clones into a fresh subdir; existing cache stays put."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.config import (
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
         MarketplaceSourceKind,
     )
-    from my_setup.marketplace_cache_wizard import (
+    from setforge.marketplace_cache_wizard import (
         CollisionAction,
         CollisionResolution,
     )
@@ -296,7 +296,7 @@ def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
     new_dir = cache_root / "plug-v2"
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
     monkeypatch.setattr(
-        "my_setup.marketplace_cache_wizard.resolve_collision",
+        "setforge.marketplace_cache_wizard.resolve_collision",
         lambda **_: CollisionResolution(
             action=CollisionAction.BOTH, new_cache_dir=new_dir
         ),
@@ -315,8 +315,8 @@ def test_resolve_marketplace_source_url_drift_abort_propagates(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """typer.Abort from the wizard propagates out of _resolve_marketplace_source."""
-    from my_setup.claude_plugins import _resolve_marketplace_source
-    from my_setup.config import (
+    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
         MarketplaceSourceKind,
@@ -333,7 +333,7 @@ def test_resolve_marketplace_source_url_drift_abort_propagates(
         raise typer.Abort()
 
     monkeypatch.setattr(
-        "my_setup.marketplace_cache_wizard.resolve_collision",
+        "setforge.marketplace_cache_wizard.resolve_collision",
         _raise_abort,
     )
     with pytest.raises(typer.Abort):

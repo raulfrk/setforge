@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import NewType, assert_never
 
-from my_setup.errors import MarkerError
+from setforge.errors import MarkerError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 

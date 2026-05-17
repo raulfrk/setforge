@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
-from my_setup.errors import MergeTypeMismatch
+from setforge.errors import MergeTypeMismatch
 
 _TOKEN_RE = re.compile(r"^(?P<key>[^.\[\]]+)(?P<suffix>\[\*\]|\[\])?$")
 
@@ -232,9 +232,9 @@ def _deep_merge_dicts(
 def extract_keys(doc: Any, key_paths: list[str]) -> dict[str, Any]:
     """Return a flat ``{path: value}`` dict of values at each path in ``doc``.
 
-    Missing paths are silently skipped. Used by :mod:`my_setup.capture` to
+    Missing paths are silently skipped. Used by :mod:`setforge.capture` to
     know which user-key values to strip from live before writing tracked,
-    and by :mod:`my_setup.compare` to render an apples-to-apples view for
+    and by :mod:`setforge.compare` to render an apples-to-apples view for
     drift classification.
     """
     result: dict[str, Any] = {}

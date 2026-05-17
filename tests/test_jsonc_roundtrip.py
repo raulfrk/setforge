@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from my_setup.cli import app
+from setforge.cli import app
 
 _TRACKED_FIXTURE = """\
 {
@@ -80,7 +80,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda name: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda name: None)
 
 
 def test_install_preserves_tracked_comments_and_keeps_user_keys(

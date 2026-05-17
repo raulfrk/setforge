@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.errors import MarkerError
-from my_setup.sections import (
+from setforge.errors import MarkerError
+from setforge.sections import (
     SectionSemantics,
     detect_legacy_markers,
     extract_marker_hashes,

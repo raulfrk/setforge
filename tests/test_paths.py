@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from my_setup import paths
+from setforge import paths
 
 
 def test_vscode_user_dir_linux(monkeypatch: pytest.MonkeyPatch) -> None:

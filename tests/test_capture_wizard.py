@@ -1,4 +1,4 @@
-"""Tests for the capture-time merge wizard — :mod:`my_setup.capture_wizard`.
+"""Tests for the capture-time merge wizard — :mod:`setforge.capture_wizard`.
 
 Walker tests (Phase A) cover the two flavors of capture-time drift the
 walker yields:
@@ -10,7 +10,7 @@ walker yields:
    ``walk_unexpected_drift``).
 
 Wrapper test (Phase B) verifies ``run_capture_wizard`` delegates to
-:func:`my_setup.wizard.run_wizard_loop` with ``TransitionCommand.SYNC``.
+:func:`setforge.wizard.run_wizard_loop` with ``TransitionCommand.SYNC``.
 
 Orchestration tests (Phase G) verify ``capture_profile`` fires the
 wizard, raises :class:`CaptureRequiresInteractive` in non-TTY contexts
@@ -29,12 +29,12 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from my_setup.capture import CaptureAction, CaptureAuto, capture_profile
-from my_setup.capture_wizard import run_capture_wizard, walk_capture_drift
-from my_setup.config import Config, Dotfile, Profile
-from my_setup.errors import CaptureRequiresInteractive
-from my_setup.transitions import TransitionCommand
-from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
+from setforge.capture import CaptureAction, CaptureAuto, capture_profile
+from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
+from setforge.config import Config, Dotfile, Profile
+from setforge.errors import CaptureRequiresInteractive
+from setforge.transitions import TransitionCommand
+from setforge.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -347,7 +347,7 @@ def test_walker_jsonc_top_level_non_preserve_drift(tmp_path: Path) -> None:
     """JSONC: top-level non-preserve shared-different key yields one
     shallow item. (JSONC deep-merge sub-key walking is out of scope
     for nen.23 v1; the wizard's [u] action uses
-    :func:`my_setup.jsonc.overlay_user_keys` which only handles
+    :func:`setforge.jsonc.overlay_user_keys` which only handles
     top-level literal key names. Per-sub-key JSONC drift lands via
     `dotfiles-nen.19`.)"""
     config, repo, _src, _dst = _make_config(
@@ -389,7 +389,7 @@ def test_run_capture_wizard_delegates_to_loop(
         return [(it, ActionResult.KEEP_TRACKED) for it in materialized]
 
     monkeypatch.setattr(
-        "my_setup.capture_wizard.wizard.run_wizard_loop",
+        "setforge.capture_wizard.wizard.run_wizard_loop",
         fake_run_wizard_loop,
     )
 
@@ -588,7 +588,7 @@ def test_capture_profile_interactive_mixed_decisions(
     def fake_prompt_one(item: DriftItem, console: Console) -> str:
         return next(choices)
 
-    monkeypatch.setattr("my_setup.wizard.prompt_one", fake_prompt_one)
+    monkeypatch.setattr("setforge.wizard.prompt_one", fake_prompt_one)
 
     capture_profile(
         config,
@@ -627,7 +627,7 @@ def test_capture_wizard_cancel_restores_tracked(
     def fake_prompt_one(item: DriftItem, console: Console) -> str:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("my_setup.wizard.prompt_one", fake_prompt_one)
+    monkeypatch.setattr("setforge.wizard.prompt_one", fake_prompt_one)
 
     # Use temporary snapshot base so signal handlers in
     # run_wizard_loop don't touch ~/.local. The wizard re-raises

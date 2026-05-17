@@ -6,7 +6,7 @@ Today's ``my-setup sync`` (capture) is a silent absorb: read live, strip
 addresses:
 
 1. **Deep-merge sub-key drift** — once
-   :class:`my_setup.config.Dotfile.preserve_user_keys_deep` declares a
+   :class:`setforge.config.Dotfile.preserve_user_keys_deep` declares a
    path, tracked is supposed to retain hand-maintained baseline content
    at deep sub-keys. The whole-subtree strip on capture undid that on
    the first ``sync``.
@@ -17,12 +17,12 @@ addresses:
 This module exposes a two-flavor walker
 (:func:`walk_capture_drift`) and a thin entry point
 (:func:`run_capture_wizard`) that delegates to
-:func:`my_setup.wizard.run_wizard_loop` with
+:func:`setforge.wizard.run_wizard_loop` with
 ``transition_command=TransitionCommand.SYNC``. The wizard's
 ``[k] / [u] / [s] / [m]`` actions cover both drift flavors uniformly —
 no new actions needed.
 
-Both walker flavors yield :class:`my_setup.wizard.DriftItem` records.
+Both walker flavors yield :class:`setforge.wizard.DriftItem` records.
 ``DriftItem.mode`` carries ``"deep"`` for deep-merge sub-key drift and
 ``"shallow"`` for top-level non-preserve drift; the wizard's
 ``_action_use_live`` already routes through the matching overlay
@@ -50,13 +50,13 @@ from rich.console import Console
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, wizard
-from my_setup.compare import expand_dotfile, resolve_dst, resolve_src
-from my_setup.config import Config, resolve_profile
-from my_setup.errors import CaptureRequiresInteractive
-from my_setup.jsonc import PATH_SEPARATOR, preserved_positions_for_top
-from my_setup.transitions import TransitionCommand
-from my_setup.wizard import ActionResult, DriftItem, DriftMode, FileFormat
+from setforge import jsonc, wizard
+from setforge.compare import expand_dotfile, resolve_dst, resolve_src
+from setforge.config import Config, resolve_profile
+from setforge.errors import CaptureRequiresInteractive
+from setforge.jsonc import PATH_SEPARATOR, preserved_positions_for_top
+from setforge.transitions import TransitionCommand
+from setforge.wizard import ActionResult, DriftItem, DriftMode, FileFormat
 
 __all__ = [
     "CaptureRequiresInteractive",
@@ -108,7 +108,7 @@ def walk_capture_drift(
     Parameters
     ----------
     config:
-        Loaded :class:`my_setup.config.Config`.
+        Loaded :class:`setforge.config.Config`.
     profile_name:
         Profile to walk; profiles inherit from ``extends:`` chains.
     repo_root:
@@ -150,7 +150,7 @@ def _walk_one_file(
 ) -> Iterator[DriftItem]:
     """Yield drift items for one (tracked, live) file pair.
 
-    Format dispatch: JSONC iff :func:`my_setup.jsonc.is_jsonc_file`
+    Format dispatch: JSONC iff :func:`setforge.jsonc.is_jsonc_file`
     matches; everything else is YAML round-tripped.
     """
     if jsonc.is_jsonc_file(src):
@@ -324,7 +324,7 @@ def _walk_deep(
     JSONC nested-path filter: when ``preserved_positions`` contains the
     current sub-key's position-tuple, the wizard skips emitting a
     :class:`DriftItem` — the leaf is auto-applied by deploy's overlay
-    via :func:`my_setup.jsonc.overlay_user_keys` instead.
+    via :func:`setforge.jsonc.overlay_user_keys` instead.
 
     When both sides have a dict at the same key, recurse one level
     deeper so the user's per-key decision lives at the leaf.
@@ -383,7 +383,7 @@ def _join(prefix: str, key: str, fmt: FileFormat) -> str:
     YAML continues to emit ``"a.b"`` (legacy ``preserve_user_keys_deep``
     convention). JSONC emits ``"a > b"`` (nested-path syntax from
     ``dotfiles-nen.19``) — the ``[u]se-live`` action forwards the
-    ``key_path`` to :func:`my_setup.jsonc.overlay_user_keys`, which
+    ``key_path`` to :func:`setforge.jsonc.overlay_user_keys`, which
     parses on ``" > "``.
     """
     if fmt is FileFormat.JSONC:
@@ -454,7 +454,7 @@ def run_capture_wizard(
 ) -> list[tuple[DriftItem, ActionResult]]:
     """Fire the merge wizard at capture time.
 
-    Thin wrapper around :func:`my_setup.wizard.run_wizard_loop` that
+    Thin wrapper around :func:`setforge.wizard.run_wizard_loop` that
     supplies the capture-trigger walker, transition command, and
     pending-edit message. Snapshot base defaults to
     ``~/.local/state/my-setup/sync-snapshots`` (parallel to merge's
@@ -463,7 +463,7 @@ def run_capture_wizard(
     Parameters
     ----------
     config:
-        Loaded :class:`my_setup.config.Config`.
+        Loaded :class:`setforge.config.Config`.
     profile_name:
         Profile to walk.
     repo_root:

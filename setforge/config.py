@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup.errors import ConfigError, ProfileNotFound
+from setforge.errors import ConfigError, ProfileNotFound
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -24,7 +24,7 @@ _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"
 _PRESERVE_PATH_SEPARATOR: str = " > "
 """Segment separator for nested-path entries in ``Dotfile.preserve_user_keys``.
 
-Mirrors :data:`my_setup.jsonc.PATH_SEPARATOR` — re-declared here so the
+Mirrors :data:`setforge.jsonc.PATH_SEPARATOR` — re-declared here so the
 config schema does not depend on the JSONC module at import time.
 """
 

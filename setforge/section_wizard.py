@@ -1,7 +1,7 @@
 """Install-time interactive wizard for `shared` user-section drift.
 
 Resolves per-section drift surfaced by
-:func:`my_setup.section_reconcile.classify_section_drift` into a final
+:func:`setforge.section_reconcile.classify_section_drift` into a final
 body string per section. Three modes:
 
 - ``--reconcile-user-sections`` (interactive) — prompt per drifted
@@ -17,7 +17,7 @@ surfaces them.
 
 POSIX-only: the editor sub-action shells out to ``$EDITOR`` (default
 ``vi``); the single-keypress prompter is delegated to
-:func:`my_setup.wizard.read_one_choice` so prompts behave identically
+:func:`setforge.wizard.read_one_choice` so prompts behave identically
 to the existing install / sync wizards.
 """
 
@@ -35,13 +35,13 @@ from typing import assert_never
 from rich.console import Console
 from rich.syntax import Syntax
 
-from my_setup._editor import run_editor
-from my_setup.section_reconcile import (
+from setforge._editor import run_editor
+from setforge.section_reconcile import (
     SectionDrift,
     SectionDriftState,
 )
-from my_setup.sections import SectionSemantics
-from my_setup.wizard import read_one_choice
+from setforge.sections import SectionSemantics
+from setforge.wizard import read_one_choice
 
 __all__ = [
     "ReconcileAuto",

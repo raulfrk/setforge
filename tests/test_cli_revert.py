@@ -13,7 +13,7 @@ from typing import Any, TypedDict
 import pytest
 from typer.testing import CliRunner
 
-from my_setup.cli import app
+from setforge.cli import app
 
 
 class _ExtState(TypedDict):
@@ -67,7 +67,7 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     function; patching one leaves the other free to hit real PATH.
     """
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary",
+        "setforge.vscode_extensions.resolve_binary",
         lambda name: None,
     )
 
@@ -185,7 +185,7 @@ def test_revert_with_no_history_exits_non_zero(
     """Empty history → non-zero exit with NoTransitionFound. CliRunner
     bypasses the CLI's main() error wrapper, so the exit comes via the
     raised exception rather than printed output; assert on both."""
-    from my_setup.errors import NoTransitionFound
+    from setforge.errors import NoTransitionFound
 
     cfg, _ = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
@@ -249,10 +249,10 @@ def test_revert_restores_extension_state_to_pre_install(
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary",
+        "setforge.vscode_extensions.resolve_binary",
         lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_run)
 
     pre_install = sorted(state["installed"])
 
@@ -279,7 +279,7 @@ def test_revert_refuses_when_target_drifted(
 ) -> None:
     """If a touched file has drifted since the transition was recorded,
     revert refuses with a non-zero exit and no partial changes."""
-    from my_setup.errors import RevertFailed
+    from setforge.errors import RevertFailed
 
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
@@ -368,10 +368,10 @@ def test_revert_continues_after_extension_uninstall_failure(
         raise AssertionError(args)
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary",
+        "setforge.vscode_extensions.resolve_binary",
         lambda name: Path("/usr/bin/code") if name == "code" else None,
     )
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_run)
 
     runner = CliRunner()
     install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])

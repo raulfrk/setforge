@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from my_setup.cli import app
-from my_setup.sections import (
+from setforge.cli import app
+from setforge.sections import (
     detect_legacy_markers,
     extract_marker_hashes,
     hash_sections,
@@ -64,10 +64,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     )
 
     # Stub out side effects so the test doesn't write transition state.
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
+        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
 
     return {"cfg": cfg, "src": src, "dst": dst}
@@ -504,10 +504,10 @@ def test_install_reconciles_profile_extend_resolved_set(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
+        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
 
     runner = CliRunner()
@@ -538,7 +538,7 @@ def test_install_with_use_tracked_records_transition(
         calls.append((a, kw))
         return Path("/tmp/fake")
 
-    monkeypatch.setattr("my_setup.transitions.write_transition", fake_write)
+    monkeypatch.setattr("setforge.transitions.write_transition", fake_write)
 
     live_body = "rule A\n"
     tracked_body = "rule A\nrule B\n"

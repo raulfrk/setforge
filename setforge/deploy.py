@@ -28,10 +28,10 @@ from pathlib import Path
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, sections, yaml_merge
-from my_setup.config import Config, ResolvedProfile
-from my_setup.errors import MissingTrackedFile
-from my_setup.section_reconcile import maintain_marker_hashes
+from setforge import jsonc, sections, yaml_merge
+from setforge.config import Config, ResolvedProfile
+from setforge.errors import MissingTrackedFile
+from setforge.section_reconcile import maintain_marker_hashes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def copy_atomic(
 
     When ``preserve_user_sections`` is True, the rendered content has
     every end-marker's ``hash=<...>`` rewritten via
-    :func:`my_setup.section_reconcile.maintain_marker_hashes` so the
+    :func:`setforge.section_reconcile.maintain_marker_hashes` so the
     embedded hashes always match the body actually written
     (post-install invariant). ``section_bodies_override`` lets callers
     (the install path's wizard) supply a per-section body that overrides
@@ -189,7 +189,7 @@ def _compute_content(
     because deploy has no upstream need for raw live text — it only
     splices live bodies into tracked content and stamps end-marker
     hashes. The symmetric compare-side helper
-    (:func:`my_setup.compare._render_with_merges`) caches raw
+    (:func:`setforge.compare._render_with_merges`) caches raw
     ``dst_text`` instead because compare's strip-template comparison
     needs the text. See also: that function's docstring for the
     symmetric rationale.
@@ -291,7 +291,7 @@ def validate_srcs_exist(
     listing every missing path so ``install`` fails before any deploy
     or backup happens.
     """
-    from my_setup.compare import resolve_src
+    from setforge.compare import resolve_src
 
     missing: list[str] = []
     for name in resolved.dotfiles:

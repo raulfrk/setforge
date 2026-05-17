@@ -1,11 +1,11 @@
-"""Tests for my_setup.jsonc — JSONC overlay / strip / drift classify."""
+"""Tests for setforge.jsonc — JSONC overlay / strip / drift classify."""
 
 from pathlib import Path
 
 import pytest
 
-from my_setup.errors import MergeTypeMismatch
-from my_setup.jsonc import (
+from setforge.errors import MergeTypeMismatch
+from setforge.jsonc import (
     classify_jsonc_drift,
     overlay_user_keys,
     parse_jsonc,
@@ -180,11 +180,11 @@ def test_overlay_user_keys_deep_unions_top_level_object() -> None:
 
 
 def test_python_to_node_supports_nested_object() -> None:
-    # json5 ships py.typed without resolvable annotations; see my_setup/jsonc.py.
+    # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
     from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
     from json5.model import JSONObject  # type: ignore[import-not-found]
 
-    from my_setup.jsonc import _python_to_node, parse_jsonc
+    from setforge.jsonc import _python_to_node, parse_jsonc
 
     node = _python_to_node({"a": {"b": 1}})
     assert isinstance(node, JSONObject)
@@ -194,11 +194,11 @@ def test_python_to_node_supports_nested_object() -> None:
 
 
 def test_python_to_node_supports_nested_array() -> None:
-    # json5 ships py.typed without resolvable annotations; see my_setup/jsonc.py.
+    # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
     from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
     from json5.model import JSONArray  # type: ignore[import-not-found]
 
-    from my_setup.jsonc import _python_to_node, parse_jsonc
+    from setforge.jsonc import _python_to_node, parse_jsonc
 
     node = _python_to_node([1, "two", {"a": 1}])
     assert isinstance(node, JSONArray)
@@ -413,7 +413,7 @@ def test_pydantic_rejects_empty_path_segment() -> None:
     """Leading ``" > "`` produces an empty first segment → reject."""
     from pydantic import ValidationError
 
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     with pytest.raises(ValidationError):
         Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[" > foo"])
@@ -423,7 +423,7 @@ def test_pydantic_rejects_trailing_separator() -> None:
     """Trailing ``" > "`` produces an empty last segment → reject."""
     from pydantic import ValidationError
 
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     with pytest.raises(ValidationError):
         Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo > "])
@@ -433,7 +433,7 @@ def test_pydantic_rejects_whitespace_only_segment() -> None:
     """A segment that's just whitespace is rejected as malformed."""
     from pydantic import ValidationError
 
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     with pytest.raises(ValidationError):
         Dotfile(
@@ -445,7 +445,7 @@ def test_pydantic_rejects_empty_string_path() -> None:
     """An empty path string is rejected."""
     from pydantic import ValidationError
 
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     with pytest.raises(ValidationError):
         Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[""])
@@ -457,7 +457,7 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
     whole-subtree vs leaf)."""
     from pydantic import ValidationError
 
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     with pytest.raises(ValidationError):
         Dotfile(
@@ -470,7 +470,7 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
 
 def test_pydantic_accepts_well_formed_nested_path() -> None:
     """Sanity check: a clean two-segment path is accepted."""
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     dotfile = Dotfile(
         src=Path("a.json"),
@@ -482,7 +482,7 @@ def test_pydantic_accepts_well_formed_nested_path() -> None:
 
 def test_pydantic_accepts_flat_v1_paths() -> None:
     """Sanity check: single-segment names (no separator) still accepted."""
-    from my_setup.config import Dotfile
+    from setforge.config import Dotfile
 
     dotfile = Dotfile(
         src=Path("a.json"),

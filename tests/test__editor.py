@@ -1,4 +1,4 @@
-"""Unit tests for my_setup._editor.run_editor."""
+"""Unit tests for setforge._editor.run_editor."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from my_setup import _editor
-from my_setup._editor import run_editor
-from my_setup.errors import MySetupError
+from setforge import _editor
+from setforge._editor import run_editor
+from setforge.errors import MySetupError
 
 
 def test_missing_editor_raises_mysetuperror(

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from my_setup.errors import MarkerError
-from my_setup.section_reconcile import (
+from setforge.errors import MarkerError
+from setforge.section_reconcile import (
     SectionDrift,
     SectionDriftState,
     _classify_one,
@@ -15,7 +15,7 @@ from my_setup.section_reconcile import (
     maintain_marker_hashes,
     stamp_tracked_baseline,
 )
-from my_setup.sections import (
+from setforge.sections import (
     SectionSemantics,
     extract_marker_hashes,
     hash_sections,

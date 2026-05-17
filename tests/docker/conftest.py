@@ -57,7 +57,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/my_setup.test.yaml"
-"""Shared fixture path for the my_setup test config used by every Docker e2e test."""
+"""Shared fixture path for the setforge test config used by every Docker e2e test."""
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
@@ -113,7 +113,7 @@ _HASH_INPUT_FILES: tuple[Path, ...] = (
 )
 _HASH_INPUT_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "fixtures" / "e2e",
-    REPO_ROOT / "my_setup",
+    REPO_ROOT / "setforge",
     REPO_ROOT / "tracked",
 )
 
@@ -234,7 +234,7 @@ def docker_image() -> str:
 
     The tag is content-hashed over the inputs that define the image
     (Dockerfile, ``my_setup.yaml``, ``tests/fixtures/e2e/**``,
-    ``my_setup/**``) — see :func:`_compute_inputs_hash`. A workspace
+    ``setforge/**``) — see :func:`_compute_inputs_hash`. A workspace
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
     rebuild is skipped (fast cache hit); when no image carries the

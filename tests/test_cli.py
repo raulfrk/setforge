@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from my_setup import deploy
-from my_setup.cli import app
-from my_setup.deploy import DeployAction, DeployResult
+from setforge import deploy
+from setforge.cli import app
+from setforge.deploy import DeployAction, DeployResult
 
 
 def test_install_passes_precomputed_live_sections_to_deploy(
@@ -59,10 +59,10 @@ def test_install_passes_precomputed_live_sections_to_deploy(
     )
 
     # Stub out side effects so the test doesn't write transition state.
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("my_setup.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
     monkeypatch.setattr(
-        "my_setup.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
+        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
 
     captured: dict[str, Any] = {}

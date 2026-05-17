@@ -13,9 +13,9 @@ from typing import Any, TypedDict
 
 import pytest
 
-from my_setup.config import Extensions, ReconcilePolicy
-from my_setup.errors import ExtensionToolMissing, ProfileNotFound
-from my_setup.vscode_extensions import (
+from setforge.config import Extensions, ReconcilePolicy
+from setforge.errors import ExtensionToolMissing, ProfileNotFound
+from setforge.vscode_extensions import (
     ReconcileReport,
     add_to_include,
     capture_extensions,
@@ -72,10 +72,10 @@ def fake_code(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], FakeCode
     def factory(installed: list[str]) -> FakeCode:
         fake = FakeCode(installed)
         monkeypatch.setattr(
-            "my_setup.vscode_extensions.resolve_binary",
+            "setforge.vscode_extensions.resolve_binary",
             lambda name: Path("/usr/bin/code") if name == "code" else None,
         )
-        monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake.run)
+        monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake.run)
         return fake
 
     return factory
@@ -105,7 +105,7 @@ def test_list_installed_skips_non_extension_id_lines(fake_code) -> None:
 
 
 def test_missing_code_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("my_setup.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     with pytest.raises(ExtensionToolMissing, match="not found"):
         list_installed()
     with pytest.raises(ExtensionToolMissing, match="not found"):
@@ -210,11 +210,11 @@ def test_clean_state_returns_falsy_report(fake_code) -> None:
 def test_install_one_wraps_called_process_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.errors import ExtensionInstallFailed
-    from my_setup.vscode_extensions import install_one
+    from setforge.errors import ExtensionInstallFailed
+    from setforge.vscode_extensions import install_one
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs: Any):
@@ -222,23 +222,23 @@ def test_install_one_wraps_called_process_error(
             1, args, output="", stderr="marketplace 404"
         )
 
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed, match="marketplace 404"):
         install_one("ghost.extension")
 
 
 def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from my_setup.errors import ExtensionInstallFailed
-    from my_setup.vscode_extensions import install_one
+    from setforge.errors import ExtensionInstallFailed
+    from setforge.vscode_extensions import install_one
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs: Any):
         raise subprocess.TimeoutExpired(args, 30)
 
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed):
         install_one("slow.one")
 
@@ -246,10 +246,10 @@ def test_install_one_wraps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_list_installed_wraps_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from my_setup.errors import ExtensionInstallFailed
+    from setforge.errors import ExtensionInstallFailed
 
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     def boom(args, **kwargs: Any):
@@ -257,7 +257,7 @@ def test_list_installed_wraps_failure(
             2, args, output="", stderr="connection refused"
         )
 
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", boom)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", boom)
     with pytest.raises(ExtensionInstallFailed, match="connection refused"):
         list_installed()
 
@@ -267,7 +267,7 @@ def test_reconcile_continues_after_install_failure(
 ) -> None:
     """One bad install must not abort the rest of the loop."""
     monkeypatch.setattr(
-        "my_setup.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
+        "setforge.vscode_extensions.resolve_binary", lambda _: Path("/usr/bin/code")
     )
 
     state: _FakeRunState = {"installed": ["existing.one"], "calls": []}
@@ -288,7 +288,7 @@ def test_reconcile_continues_after_install_failure(
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(args)
 
-    monkeypatch.setattr("my_setup.vscode_extensions.subprocess.run", fake_run)
+    monkeypatch.setattr("setforge.vscode_extensions.subprocess.run", fake_run)
 
     ext = Extensions(
         include=["existing.one", "broken.one", "good.one"],
@@ -311,7 +311,7 @@ def test_reconcile_continues_after_install_failure(
 
 def test_add_to_include_rejects_when_in_exclude(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
-    from my_setup.errors import ConfigError as _ConfigError
+    from setforge.errors import ConfigError as _ConfigError
 
     with pytest.raises(_ConfigError, match="exclude"):
         add_to_include(cfg, "base", "drop.me")
@@ -321,7 +321,7 @@ def test_remove_from_include_errors_when_only_in_parent(tmp_path: Path) -> None:
     """If ext is declared in an extends: ancestor, the user can't remove
     it from the child without going to the ancestor (or using --exclude).
     """
-    from my_setup.errors import ConfigError as _ConfigError
+    from setforge.errors import ConfigError as _ConfigError
 
     fixture = """\
 version: 1
@@ -369,7 +369,7 @@ profiles:
     # exclude entry should now sit under child
     assert "inherited.one" in text
     # And it's still under parent.include — child override doesn't touch parent
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     cfg = load_config(p)
     assert "inherited.one" in cfg.profiles["parent"].extensions.include
@@ -475,7 +475,7 @@ def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
     tmp_path: Path,
 ) -> None:
     """After an edit, load_config must still validate the file."""
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     cfg = _write_fixture(tmp_path)
     add_to_include(cfg, "base", "post.edit")
@@ -501,7 +501,7 @@ def test_capture_extensions_writes_installed_minus_exclude(
     assert "extra.one" in text
     assert "drop.me" in text  # appears under exclude (already there)
     # "drop.me" is excluded so it shouldn't end up in the new include list
-    from my_setup.config import load_config
+    from setforge.config import load_config
 
     reloaded = load_config(cfg)
     assert "drop.me" not in reloaded.profiles["base"].extensions.include

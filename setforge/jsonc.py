@@ -59,7 +59,7 @@ from json5.model import (  # type: ignore[import-not-found]
     SingleQuotedString,
 )
 
-from my_setup.errors import MergeTypeMismatch
+from setforge.errors import MergeTypeMismatch
 
 PATH_SEPARATOR: str = " > "
 """Segment separator for nested-path entries in ``preserve_user_keys``.
@@ -76,7 +76,7 @@ def _split_path(name: str) -> list[str]:
 
     Single-segment names (no separator) return ``[name]`` — v1 literal
     top-level behavior. Whitespace-only segments are not stripped; the
-    Pydantic validator at :class:`my_setup.config.Dotfile` rejects
+    Pydantic validator at :class:`setforge.config.Dotfile` rejects
     malformed paths at config-load time.
     """
     if PATH_SEPARATOR not in name:
@@ -357,7 +357,7 @@ def preserved_positions_for_top(
     whole-key-expected branch.
 
     Public within the package: shared between
-    :func:`classify_jsonc_drift` and :mod:`my_setup.capture_wizard`'s
+    :func:`classify_jsonc_drift` and :mod:`setforge.capture_wizard`'s
     deep-walk phase. Path-preserve coverage is inherently a JSONC-domain
     concept, so the implementation lives here and consumers import it.
     """

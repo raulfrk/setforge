@@ -1,9 +1,9 @@
 """Generic wizard utilities shared by install-time merge and capture-time deep-merge.
 
-These primitives originally lived in :mod:`my_setup.merge`. They were
-factored out so that the install-time wizard (`my_setup.merge.run_wizard`)
+These primitives originally lived in :mod:`setforge.merge`. They were
+factored out so that the install-time wizard (`setforge.merge.run_wizard`)
 and the capture-time wizard (`nen.23`'s upcoming
-`my_setup.capture.run_capture_wizard`) can share a single implementation.
+`setforge.capture.run_capture_wizard`) can share a single implementation.
 
 What lives here:
 
@@ -47,9 +47,9 @@ from rich.table import Table
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from my_setup import jsonc, transitions, yaml_merge
-from my_setup._editor import run_editor
-from my_setup.transitions import TransitionCommand
+from setforge import jsonc, transitions, yaml_merge
+from setforge._editor import run_editor
+from setforge.transitions import TransitionCommand
 
 # Matches signal.signal's first-arg signature; aliased here so the
 # wizard's signal-handler save/restore typing is precise (mypy rejects
@@ -103,7 +103,7 @@ class DriftMode(StrEnum):
 class DriftItem:
     """One diverged key path between tracked and live for a drift item.
 
-    Produced by trigger-specific walkers (:func:`my_setup.merge.walk_unexpected_drift`
+    Produced by trigger-specific walkers (:func:`setforge.merge.walk_unexpected_drift`
     for install, :func:`walk_capture_drift` for capture in `nen.23`); consumed by
     the merge wizard.
     """

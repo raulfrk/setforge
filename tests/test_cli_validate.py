@@ -19,7 +19,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from my_setup.cli import app
+from setforge.cli import app
 
 # ---------------------------------------------------------------------------
 # Minimal YAML builder helpers
