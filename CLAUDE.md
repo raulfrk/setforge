@@ -85,6 +85,21 @@ Filing a new bead covers follow-up work but does NOT replace
 the revert-or-fix step. A red main is not OK. Either path (revert-and-re-PR
 OR inline-fix) must re-run Phase 7 to confirm main is green.
 
+**Routine post-merge review-fan findings (no broken gates).** The strict
+1-file/1-2-line rule above is for ACTUAL test failures or pre-commit fails
+on main. When all Phase 7 gates stay green and the cross-cutting review
+fan surfaces quality nits (prose tweaks, missed annotations, docstring
+drift, small refactors), follow the **Decision-I default**: fix INLINE on
+main as SEPARATE review-fix commits (one logical change per commit per the
+Commits rule); reserve `bd create` ONLY for LARGE follow-ups:
+
+- (b) introduces a new design question requiring its own brainstorm + spec, OR
+- (c) cross-cutting across 3+ files outside the bead's scope, OR
+- (d) the implementer/reviewer is uncertain whether it's safe to fix inline.
+
+After ANY inline-fix on main (failure-handling OR Decision-I), re-run the
+Phase 7 gates per `feedback_phase7_rerun_after_inline_fix` memory.
+
 ## The four-tool stack
 
 Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `my-setup install` does NOT bootstrap them.
