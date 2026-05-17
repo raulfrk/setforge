@@ -522,7 +522,15 @@ def strip_section_content(text: str) -> str:
     template for re-merging on a future deploy."""
     out_lines: list[str] = []
     for event in _walk_markers(text, allow_legacy=True):
-        if isinstance(event, (_OutsideLine, _StartMarker, _EndMarker)):
-            out_lines.append(event.line)
-        # _BodyLine instances are dropped (the "strip content" semantics).
+        match event:
+            case _BodyLine():
+                pass
+            case (
+                _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
     return "".join(out_lines)
