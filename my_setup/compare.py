@@ -131,14 +131,15 @@ def _render_with_merges(
     """Render the post-merge tracked content that ``diff_file`` compares
     against the live ``dst_text``.
 
-    Cache shape: takes ``dst_text`` as raw bytes (not pre-extracted
+    Cache shape: takes ``dst_text`` as raw text (not pre-extracted
     sections) because ``diff_file`` upstream needs the raw text for
     its strip-template comparison (``strip_section_content(src) ==
-    strip_section_content(dst_text)``) — caching the parsed shape
-    would force a re-stringify there. The symmetric deploy-side helper
+    strip_section_content(dst_text)``) and for the ``difflib.unified_diff``
+    input — so any parsed-shape cache would force ``diff_file`` to keep
+    raw bytes around anyway. The symmetric deploy-side helper
     (:func:`my_setup.deploy._compute_content`) caches the pre-extracted
-    ``LiveSections`` instead because deploy has no strip-template need;
-    see that function's docstring for the symmetric rationale.
+    ``LiveSections`` instead because deploy has no strip-template need.
+    See also: that function's docstring for the symmetric rationale.
     """
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
