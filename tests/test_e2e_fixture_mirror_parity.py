@@ -44,6 +44,8 @@ def test_fixture_mirror_byte_identical() -> None:
     """Every mirrored file matches its source byte-for-byte."""
     _require_dirs()
     src_files = _gather_files(SRC)
+    # Set-parity is the precondition for this test; missing-side files
+    # are caught by the companion test_fixture_mirror_has_same_file_set.
     differences = [
         rel
         for rel in src_files
