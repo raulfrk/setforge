@@ -1,10 +1,10 @@
 # setforge
 
-Tracked files + VSCode extensions, driven by a single Python CLI (`setforge`) and a typed `my_setup.yaml`.
+Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `my_setup.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the setforge-2ba.4 split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
 
 ## The meta-twist: live vs tracked
 
-`tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `setforge install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `setforge sync` first.
+For setforge users (including the author): the user's config repo's `tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to the CONFIG REPO's `tracked/claude/CLAUDE.md` survive `setforge install`. When working on the author's config: edit `~/.local/share/setforge/sources/setforge-config/tracked/claude/CLAUDE.md` (or wherever the config repo is cloned), not the live file. Before any edit, run `diff -q ~/.claude/CLAUDE.md <config-repo>/tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `setforge sync` first.
 
 User-section markers in tracked CLAUDE.md (HTML comments around section bodies) make those regions per-host: edits to live `~/.claude/CLAUDE.md` between markers survive a re-install. The marker syntax requires a `host-local|shared` semantics keyword on both start and end markers:
 
@@ -24,7 +24,7 @@ End markers may carry an optional `hash=<sha256-hex>` segment that records the b
 
 ## Profiles — always pass --profile=
 
-Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md). Never run a `setforge` command without `--profile=`.
+Profiles are defined in the USER's config repo's `my_setup.yaml`. The author's daily-driver profile is `vm-headless`. Never run a `setforge` command without `--profile=`.
 
 ## Workflow verbs
 
@@ -116,8 +116,12 @@ Beads + Superpowers configured by this repo. Repomix + worktrunk installed exter
 
 ## Adding tracked files and extensions
 
-- Tracked file: edit `my_setup.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
-- Extension: add the extension ID to the profile's `extensions.include:` list in `my_setup.yaml`. (Pillar 2 will add an `ext` subcommand that edits this YAML in place.)
+Both happen in the USER's config repo (the one configured via the source layer), not in this engine repo:
+
+- Tracked file: edit `<config-repo>/my_setup.yaml` to add an entry under `tracked_files:`, reference it from the relevant profile, place the source file under `<config-repo>/tracked/<src>`.
+- Extension: add the extension ID to the profile's `extensions.include:` list in `<config-repo>/my_setup.yaml`.
+
+After editing the config repo, commit + push there. On the next `setforge install --profile=X` the engine reads the updated config via the source layer.
 
 ## Host-local, never-tracked
 
