@@ -17,7 +17,7 @@ Covers:
 import io
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -248,6 +248,7 @@ def test_read_one_choice_termios_error_falls_back_to_line_buffered(
     class PipedStdin(io.StringIO):
         """StringIO that reports a real fd, mimicking piped stdin."""
 
+        @override
         def fileno(self) -> int:
             return 0
 
