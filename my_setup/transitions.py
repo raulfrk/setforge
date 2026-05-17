@@ -348,29 +348,16 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
             )
         validated_pairs.append((name, dict(payload)))
 
+    def field(key: str) -> tuple[str, ...]:
+        return tuple(
+            _validated_str_list(raw.get(key, []), key=key, source_label="plugins.json")
+        )
+
     return PluginDelta(
-        installed=tuple(
-            _validated_str_list(
-                raw.get("installed", []), key="installed", source_label="plugins.json"
-            )
-        ),
-        enabled=tuple(
-            _validated_str_list(
-                raw.get("enabled", []), key="enabled", source_label="plugins.json"
-            )
-        ),
-        disabled=tuple(
-            _validated_str_list(
-                raw.get("disabled", []), key="disabled", source_label="plugins.json"
-            )
-        ),
-        marketplaces_added=tuple(
-            _validated_str_list(
-                raw.get("marketplaces_added", []),
-                key="marketplaces_added",
-                source_label="plugins.json",
-            )
-        ),
+        installed=field("installed"),
+        enabled=field("enabled"),
+        disabled=field("disabled"),
+        marketplaces_added=field("marketplaces_added"),
         marketplaces_removed=tuple(validated_pairs),
     )
 
