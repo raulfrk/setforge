@@ -126,7 +126,7 @@ def _render_with_merges(
     preserve_user_keys: list[str] | None,
     preserve_user_keys_deep: list[str] | None = None,
     *,
-    dst_text: str | None = None,
+    dst_text: str,
 ) -> str:
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
@@ -151,10 +151,7 @@ def _render_with_merges(
 
     if preserve_user_sections:
         # See ``diff_file`` above for the ``allow_legacy=True`` rationale.
-        text_for_extract = (
-            dst_text if dst_text is not None else dst.read_text(encoding="utf-8")
-        )
-        live_sections = sections.extract_sections(text_for_extract, allow_legacy=True)
+        live_sections = sections.extract_sections(dst_text, allow_legacy=True)
         content = sections.merge_sections(content, live_sections)
     return content
 
