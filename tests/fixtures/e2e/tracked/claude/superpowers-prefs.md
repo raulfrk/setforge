@@ -28,8 +28,8 @@ Superpowers skills are designed to defer to.
      decision, finite options) and plan mode for multi-option or
      spec-shaping decisions; the background-mode override does not
      bind.
-     *(empirical observation K, 2026-05-13 — see bd dotfiles-uhb /
-     dotfiles-ds9: unilateral pick on a load-bearing design call
+     *(empirical observation K, 2026-05-13 — see bd setforge-uhb /
+     setforge-ds9: unilateral pick on a load-bearing design call
      mid-session because the background-mode override was treated
      as binding while the user was actively engaging.)*
 
@@ -56,7 +56,7 @@ Superpowers skills are designed to defer to.
      (ii) `rg -A4 ... | rg -q ...` with wider context windows,
      (iii) `awk '/^def NAME/,/^def \w/'` with `\w` (gawk; POSIX uses
      `[[:alpha:]_]`) bounding the next function.
-     *(empirical observation L, 2026-05-17 — see bd dotfiles-6aj:
+     *(empirical observation L, 2026-05-17 — see bd setforge-6aj:
      brittle `rg -A1` / `awk [^a-z]` ranges produced Phase 5
      false-negatives that needed inline review-fix commits.)*
    - **Spec is snapshot; bd is contract.** The archived spec file is
@@ -91,7 +91,7 @@ Superpowers skills are designed to defer to.
    `isolation: worktree` parameter is unreliable in this VM-headless
    build: auto-worktrees at `.claude/worktrees/agent-*` paths branch
    from a stale base AND their sandboxes deny git ops + file edits
-   *(empirical observation J, 2026-05-12 — see bd dotfiles-7gf for
+   *(empirical observation J, 2026-05-12 — see bd setforge-7gf for
    full evidence)*.
 
 5. **Phase 5 — Review fan** — always parallel. Invoke the appropriate

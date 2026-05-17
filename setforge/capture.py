@@ -9,7 +9,7 @@ The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
 - ``preserve_user_keys`` files have those YAML keys removed (so live
   values stay host-local and never bake into the repo).
 
-Since `dotfiles-nen.23`, capture is no longer a silent absorb. When a
+Since `setforge-nen.23`, capture is no longer a silent absorb. When a
 tracked_file declares ``preserve_user_keys_deep`` or carries non-preserve
 top-level drift between tracked and live, the capture-time merge
 wizard fires (interactive by default; non-interactive via
@@ -89,7 +89,7 @@ def capture_tracked_file(
     (``STRIP``). KEEP_DEFAULTS falls back to STRIP semantics when src
     doesn't yet exist — no defaults to preserve.
 
-    ``preserve_user_keys_deep`` (since `dotfiles-nen.23`) signals that
+    ``preserve_user_keys_deep`` (since `setforge-nen.23`) signals that
     tracked-only sub-keys at those paths must survive the live → tracked
     overlay. The capture-time wizard (fired by :func:`capture_profile`
     upstream) mutates tracked in place at the per-sub-key level before

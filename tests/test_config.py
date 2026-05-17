@@ -377,7 +377,7 @@ def test_config_rejects_unknown_field_in_nested_tracked_file() -> None:
 
 
 # ---------------------------------------------------------------------------
-# preserve_user_keys_deep validators (dotfiles-nen.21)
+# preserve_user_keys_deep validators (setforge-nen.21)
 # ---------------------------------------------------------------------------
 
 

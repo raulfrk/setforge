@@ -23,7 +23,7 @@ Your aspects to check:
 
 1. **Missing requirements** — every load-bearing item from `--acceptance` and the spec is implemented. If acceptance includes commands that must exit 0, each command resolves to something runnable in the diff.
 2. **Scope additions** — every meaningful change in the diff traces to a spec/contract requirement. Out-of-scope changes are CRITICAL findings (they violate the "keep changes small" rule).
-3. **Deviation justifications** — per observation D from dotfiles-23k, when the implementer's commit message claims "X was already true at <line>", verify that claim against the actual pre-branch state. Made-up justifications are IMPORTANT findings even when the change itself is sound.
+3. **Deviation justifications** — per observation D from setforge-23k, when the implementer's commit message claims "X was already true at <line>", verify that claim against the actual pre-branch state. Made-up justifications are IMPORTANT findings even when the change itself is sound.
 4. **Acceptance command runnability** — for each command in `--acceptance`, confirm the diff makes it runnable / true. E.g., if acceptance says `test -f foo.py`, confirm `foo.py` is present in `HEAD`.
 
 Output format (strictly):

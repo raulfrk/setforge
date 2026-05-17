@@ -1,8 +1,8 @@
-# Test-only setforge config for E2E coverage (dotfiles-nen.9).
+# Test-only setforge config for E2E coverage (setforge-nen.9).
 #
 # This config is tool-generic — it never references production profiles
 # (vm-headless / -full / workstation), which will be extracted to a
-# separate config repo via dotfiles-2ba. Every profile here exercises
+# separate config repo via setforge-2ba. Every profile here exercises
 # one well-defined mechanism so the matching variant in
 # tests/test_e2e_docker.py and tests/test_cli_e2e.py can assert against
 # a stable shape.
@@ -31,7 +31,7 @@ tracked_files:
     preserve_user_sections: true
 
   # Shared-semantics user-section markers — exercises the three-way
-  # reconcile wizard introduced in dotfiles-9by.
+  # reconcile wizard introduced in setforge-9by.
   sections_shared_md:
     src: sections/shared.md
     dst: ~/.my_setup_e2e/sections/shared.md
@@ -113,7 +113,7 @@ tracked_files:
     src: comprehensive/config.yaml
     dst: ~/.my_setup_e2e/comprehensive/config.yaml
 
-  # Prose-reviewer agents + reviewing-markdown skill (dotfiles-h5k).
+  # Prose-reviewer agents + reviewing-markdown skill (setforge-h5k).
   # Test-only mirror of the production wiring in /workspace/my_setup.yaml;
   # used by the prose-reviewer Docker e2e variants to exercise install /
   # compare / revert against new files that have no user-section markers
@@ -233,7 +233,7 @@ profiles:
     bootstrap:
       - ~/.my_setup_e2e/comprehensive/bootstrap-stub.txt
 
-  # ---- Prose-reviewer artifacts (dotfiles-h5k) ------------------------
+  # ---- Prose-reviewer artifacts (setforge-h5k) ------------------------
   # Exercises install / compare / revert for the three new prose
   # reviewer agents + the new reviewing-markdown skill, in isolation
   # from plugin / extension reconciliation.

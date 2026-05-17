@@ -1,6 +1,6 @@
 """Focused CLI tests for exit-code contracts.
 
-Broader CLI integration coverage lives under dotfiles-nen.9 (Docker
+Broader CLI integration coverage lives under setforge-nen.9 (Docker
 e2e). This file pins the narrow exit-code behaviors that are only
 observable through the Typer surface — chiefly that ``ext reconcile``
 exits non-zero in read-only modes when drift exists, and that
@@ -349,7 +349,7 @@ def test_install_both_flags_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-9by — section reconcile flag matrix
+# setforge-9by — section reconcile flag matrix
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Docker fixtures for the E2E test ring (dotfiles-nen.9).
+"""Docker fixtures for the E2E test ring (setforge-nen.9).
 
 Three fixtures:
 
@@ -104,7 +104,7 @@ def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
 # into the image (Dockerfile + sources copied in) or read by the e2e tests
 # from inside the image (fixture yaml + canonical my_setup.yaml) goes here.
 # A change to any of these flips the content hash, which flips the image
-# tag, which naturally invalidates the build cache — see dotfiles-0ci.
+# tag, which naturally invalidates the build cache — see setforge-0ci.
 _HASH_INPUT_FILES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "docker" / "Dockerfile",
     REPO_ROOT / "my_setup.yaml",
@@ -238,7 +238,7 @@ def docker_image() -> str:
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
     rebuild is skipped (fast cache hit); when no image carries the
-    current hash we build. See dotfiles-0ci for the footgun this
+    current hash we build. See setforge-0ci for the footgun this
     replaces.
 
     Concurrent pytest sessions on the same host can race the inspect/build

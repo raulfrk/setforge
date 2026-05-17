@@ -1,4 +1,4 @@
-"""CliRunner ring for the ``setforge`` CLI (dotfiles-nen.9 inner ring).
+"""CliRunner ring for the ``setforge`` CLI (setforge-nen.9 inner ring).
 
 Drives the real Typer surface against ``tests/fixtures/e2e/my_setup.test.yaml``,
 sandboxing the live tree under ``tmp_path`` via ``$HOME`` redirection and
@@ -11,7 +11,7 @@ One test class per top-level CLI command (``install``, ``sync``,
 The Docker ring (``tests/test_e2e_docker.py``) exercises the same
 fixtures against real ``claude`` + ``code`` binaries.
 
-dotfiles-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
+setforge-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
 in-memory driver fixtures so the inner ring also exercises the
 extension + plugin reconcile legs (not just the warn-and-skip path).
 ``FakeClaude`` lives in ``tests.test_claude_plugins`` (its primary
@@ -793,7 +793,7 @@ class TestValidate:
 
 
 # ---------------------------------------------------------------------------
-# --verbose/-v flag + SETFORGE_LOG_LEVEL env var (dotfiles-58x)
+# --verbose/-v flag + SETFORGE_LOG_LEVEL env var (setforge-58x)
 # ---------------------------------------------------------------------------
 
 

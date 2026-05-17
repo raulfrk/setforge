@@ -61,7 +61,7 @@ def test_diff_file_preserves_user_sections(tmp_path: Path) -> None:
 def test_diff_file_hash_fast_path_returns_empty(tmp_path: Path) -> None:
     """When section bodies hash-match AND non-section content is identical,
     diff_file short-circuits to '' via the hash_sections fast path
-    (dotfiles-xyw)."""
+    (setforge-xyw)."""
     src = tmp_path / "src.md"
     dst = tmp_path / "dst.md"
     same = (

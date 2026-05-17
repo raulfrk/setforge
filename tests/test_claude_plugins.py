@@ -452,7 +452,7 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
 def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     """Fresh install must trigger an enable so the plugin lands active.
 
-    Primary acceptance gate for dotfiles-l37: a freshly-declared plugin
+    Primary acceptance gate for setforge-l37: a freshly-declared plugin
     must be both installed AND enabled in a single reconcile run, even
     though `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
@@ -1131,7 +1131,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-l37 — `plugin add` strict enable behavior
+# setforge-l37 — `plugin add` strict enable behavior
 # ---------------------------------------------------------------------------
 
 
@@ -1216,7 +1216,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-oyv — `plugin add` install subprocess error handling
+# setforge-oyv — `plugin add` install subprocess error handling
 # ---------------------------------------------------------------------------
 
 
@@ -1351,7 +1351,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-nen.13 — PluginDelta in transition records + revert inverse
+# setforge-nen.13 — PluginDelta in transition records + revert inverse
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the install → transition-record → revert round-trip
@@ -1762,7 +1762,7 @@ def test_roundtrip_file_and_plugin_state(
     both match the pre-install bytes.
 
     This is the load-bearing acceptance: revert must converge full
-    external state, not just file content (the gap dotfiles-nen.13
+    external state, not just file content (the gap setforge-nen.13
     closes).
     """
     from typer.testing import CliRunner

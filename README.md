@@ -74,7 +74,7 @@ For non-interactive contexts (CI, scripted runs):
 - `--auto=keep-tracked` is the safer alternative — every drift item is rejected, tracked stays as-is.
 - Without TTY and without `--auto`, `sync` exits 1 with `CaptureRequiresInteractive`. Migration: scripted runs of `setforge sync` need to add `--auto=use-live` (compatibility) or `--auto=keep-tracked` (stricter) once a profile starts declaring `preserve_user_keys_deep` or accumulating top-level non-preserve drift.
 
-`revert` undoes the most recent `install` or `sync` for the named profile by replaying its transition record in reverse — file diffs via `patch -R`, plus uninstalling extensions that were installed (and reinstalling extensions that were uninstalled). Drift on any touched file aborts cleanly with no partial revert. A second `revert` acts as redo. Transition records are written to `~/.local/state/setforge/transitions/` and kept indefinitely; if that directory grows large, you can `rm -rf` it (a future bead, `dotfiles-nen`-tracked, will add automatic pruning).
+`revert` undoes the most recent `install` or `sync` for the named profile by replaying its transition record in reverse — file diffs via `patch -R`, plus uninstalling extensions that were installed (and reinstalling extensions that were uninstalled). Drift on any touched file aborts cleanly with no partial revert. A second `revert` acts as redo. Transition records are written to `~/.local/state/setforge/transitions/` and kept indefinitely; if that directory grows large, you can `rm -rf` it (a future bead, `setforge-nen`-tracked, will add automatic pruning).
 
 ## User-section preservation
 

@@ -1,6 +1,6 @@
-"""Docker E2E tests for dotfiles-9by section reconcile wizard.
+"""Docker E2E tests for setforge-9by section reconcile wizard.
 
-19 cases per the bd dotfiles-9by --notes:
+19 cases per the bd setforge-9by --notes:
 
 Original behavior + flag matrix (1-10):
 - 1: --auto=use-tracked deploys shared drift + hash assertion.

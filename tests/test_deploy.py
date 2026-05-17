@@ -386,7 +386,7 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# dotfiles-9ln — install migrates legacy live; post-install invariant holds
+# setforge-9ln — install migrates legacy live; post-install invariant holds
 # ---------------------------------------------------------------------------
 
 

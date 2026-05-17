@@ -109,7 +109,7 @@ tracked_files:
     preserve_user_keys:
       - claudeCode.allowDangerouslySkipPermissions
       - claudeCode.initialPermissionMode
-      # Nested-path archetype (dotfiles-nen.19): `[python]`'s `editor.fontSize`
+      # Nested-path archetype (setforge-nen.19): `[python]`'s `editor.fontSize`
       # is host-local while sibling formatter / actions stay tracked.
       - "[python] > editor.fontSize"
 

@@ -107,8 +107,8 @@ After `wt merge`, the project's wt config (`.config/wt.toml`) runs
 post-merge hook runs in the TARGET branch worktree (typically main) —
 not the merging worktree, which `wt merge` removes by default. This
 keeps main's venv in sync when a merged branch adds a new dep (e.g.
-the dotfiles-rsw / nen.9 + pexpect class). Unrelated sibling worktrees
-still need manual `uv sync` recovery — see dotfiles-b6d for scope.
+the setforge-rsw / nen.9 + pexpect class). Unrelated sibling worktrees
+still need manual `uv sync` recovery — see setforge-b6d for scope.
 
 ## The four-tool stack
 

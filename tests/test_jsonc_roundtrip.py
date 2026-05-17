@@ -1,4 +1,4 @@
-"""Load-bearing end-to-end gate for JSONC support (dotfiles-nen.6).
+"""Load-bearing end-to-end gate for JSONC support (setforge-nen.6).
 
 If this fails, the json-five-based design is invalid and we'd fall back
 to hand-rolled textual surgery. Every other JSONC test in the suite

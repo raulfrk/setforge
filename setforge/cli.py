@@ -2,7 +2,7 @@
 
 Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
 Pillar 2 adds extension reconcile inside ``install``. Claude plugin
-reconcile lands in Pillar 3. ``revert`` (dotfiles-19n) replays the most
+reconcile lands in Pillar 3. ``revert`` (setforge-19n) replays the most
 recent transition for a profile in reverse.
 """
 
@@ -1651,11 +1651,11 @@ def plugin_add(
     # required because `claude plugin install` writes
     # ``installed_plugins.json`` without flipping ``enabledPlugins`` —
     # without this second call the plugin lands disabled (see
-    # dotfiles-l37). Strict failure on enable matches the interactive
+    # setforge-l37). Strict failure on enable matches the interactive
     # single-plugin shape of `plugin add`: a silent warning would be a
     # footgun. The install half retains today's pattern; latent
     # subprocess-error handling on install is tracked separately as
-    # dotfiles-oyv.
+    # setforge-oyv.
     if not no_install:
         try:
             claude_plugins_mod.plugin_install(plugin_name, mp_name)

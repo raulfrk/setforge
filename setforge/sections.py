@@ -7,7 +7,7 @@ Marker syntax (HTML comments only)::
     <!-- setforge:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
 
 The ``host-local|shared`` keyword is REQUIRED on both start and end
-markers as of dotfiles-9by. ``host-local`` sections are preserved
+markers as of setforge-9by. ``host-local`` sections are preserved
 unconditionally from live on install; ``shared`` sections participate in
 a three-way merge that can surface tracked-side updates via the
 ``--reconcile-user-sections`` wizard. End markers carry a mandatory
