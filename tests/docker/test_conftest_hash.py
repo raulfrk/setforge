@@ -142,3 +142,53 @@ def test_compute_inputs_hash_stable_against_coverage_file(
     coverage.unlink()
     after_remove = _compute_inputs_hash()
     assert before == after_add == after_remove
+
+
+def test_iter_hash_input_paths_excludes_outside_repo_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A symlink under a hash-input dir whose target resolves OUTSIDE
+    ``REPO_ROOT`` is NOT yielded.
+
+    Locks the guard at ``conftest.py:169`` against regressions: removing
+    the ``is_relative_to(REPO_ROOT)`` check would let escaping symlinks
+    leak into the hash input set.
+    """
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
+    outside.write_text("escape", encoding="utf-8")
+    link = inside / "link"
+    link.symlink_to(outside)
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    try:
+        yielded = set(_iter_hash_input_paths())
+        assert link.resolve() not in yielded
+        assert link not in yielded
+    finally:
+        outside.unlink()
+
+
+def test_iter_hash_input_paths_includes_inside_repo_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: a symlink whose target resolves INSIDE ``REPO_ROOT`` IS yielded.
+
+    Without this case, the exclude-test alone could pass on a broken guard
+    that drops every symlink unconditionally.
+    """
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    target = inside / "target.txt"
+    target.write_text("kept", encoding="utf-8")
+    link = inside / "link"
+    link.symlink_to(target)
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    yielded = set(_iter_hash_input_paths())
+    assert target.resolve() in yielded
