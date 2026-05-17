@@ -172,6 +172,104 @@ def test_install_bare_warns_on_shared_pending_tracked(
     assert "rule B" not in fixture["dst"].read_text()
 
 
+def test_install_warns_loudly_on_section_conflict(
+    fixture: dict[str, Path],
+) -> None:
+    """Bare install with shared CONFLICT drift surfaces a RED+bold WARNING.
+
+    A second shared section in PENDING_TRACKED state in the same file MUST
+    NOT downgrade the CONFLICT warning: when any section is in CONFLICT, the
+    file-level warning is the loud one. The yellow "warning:" prefix is
+    reserved for files whose only shared drift is non-CONFLICT.
+    """
+    # Section A: CONFLICT (A_L != E_L AND A_T != E_T).
+    baseline_a = "rule A\n"
+    live_a = "rule A (live edits)\n"
+    tracked_a = "rule A (tracked update)\n"
+    # Section B: PENDING_TRACKED (A_L == E_L AND A_T != E_T).
+    baseline_b = "rule B\n"
+    live_b = baseline_b
+    tracked_b = "rule B + new\n"
+
+    def _two_section(a_body: str, a_hash: str, b_body: str, b_hash: str) -> str:
+        return (
+            "preamble\n"
+            "<!-- my-setup:user-section start shared alpha -->\n"
+            f"{a_body}"
+            f"<!-- my-setup:user-section end shared alpha hash={a_hash} -->\n"
+            "middle\n"
+            "<!-- my-setup:user-section start shared beta -->\n"
+            f"{b_body}"
+            f"<!-- my-setup:user-section end shared beta hash={b_hash} -->\n"
+            "epilogue\n"
+        )
+
+    fixture["src"].write_text(
+        _two_section(tracked_a, _sha256(baseline_a), tracked_b, _sha256(baseline_b))
+    )
+    fixture["dst"].write_text(
+        _two_section(live_a, _sha256(baseline_a), live_b, _sha256(baseline_b))
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=p", f"--config={fixture['cfg']}"],
+        color=True,
+    )
+    assert result.exit_code == 0, result.output
+    # Loud CONFLICT branch fired: uppercase "WARNING:" + RED + bold ANSI.
+    assert "WARNING:" in result.output
+    assert "CONFLICT" in result.output
+    assert "three-way conflict" in result.output
+    # ANSI RED foreground (\x1b[31m) + bold (\x1b[1m) — typer.secho with
+    # fg=RED, bold=True emits both.
+    assert "\x1b[31m" in result.output
+    assert "\x1b[1m" in result.output
+    # The yellow lowercase "warning:" prefix MUST NOT also fire for this
+    # FILE — the CONFLICT branch is exclusive. Scope to the dst path so the
+    # unrelated extension-CLI yellow warning doesn't false-match.
+    assert f"warning: {fixture['dst']}" not in result.output
+    # Live preserved on bare install.
+    assert "rule A (tracked update)" not in fixture["dst"].read_text()
+
+
+def test_install_pending_tracked_only_keeps_yellow_warning(
+    fixture: dict[str, Path],
+) -> None:
+    """Bare install with shared PENDING_TRACKED only stays on the YELLOW path.
+
+    Companion to ``test_install_warns_loudly_on_section_conflict``: when no
+    section is in CONFLICT, the warning prefix is the lowercase yellow
+    "warning:" — not the loud RED "WARNING:".
+    """
+    live_body = "rule A\n"
+    tracked_body = "rule A\nrule B\n"
+    fixture["src"].write_text(
+        _make_section_text("workflow", "shared", tracked_body, _sha256(live_body))
+    )
+    fixture["dst"].write_text(
+        _make_section_text("workflow", "shared", live_body, _sha256(live_body))
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=p", f"--config={fixture['cfg']}"],
+        color=True,
+    )
+    assert result.exit_code == 0, result.output
+    assert "warning:" in result.output
+    assert "pending tracked update" in result.output
+    # YELLOW (\x1b[33m), NOT RED (\x1b[31m) and NOT bold (\x1b[1m).
+    assert "\x1b[33m" in result.output
+    assert "\x1b[31m" not in result.output
+    assert "\x1b[1m" not in result.output
+    # Loud-branch prefix MUST NOT fire.
+    assert "WARNING:" not in result.output
+    assert "CONFLICT" not in result.output
+
+
 def test_install_bare_no_warn_when_host_local_drift_only(
     fixture: dict[str, Path],
 ) -> None:

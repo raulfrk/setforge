@@ -55,7 +55,7 @@ from my_setup.errors import (
     NoTransitionFound,
     PluginToolMissing,
 )
-from my_setup.section_reconcile import SectionDriftState
+from my_setup.section_reconcile import SectionDrift, SectionDriftState
 from my_setup.section_wizard import ReconcileAuto, SectionAction
 from my_setup.sections import SectionSemantics, detect_legacy_markers
 
@@ -250,6 +250,45 @@ def _refuse_legacy_live_markers(
             )
 
 
+def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> None:
+    """Emit the bare-install drift warning for one dotfile.
+
+    Routes by worst state present across the file's ``shared`` sections:
+
+    - any :attr:`SectionDriftState.CONFLICT` present → loud
+      ``WARNING: ... CONFLICT — ...`` line in RED + bold (genuine three-way
+      divergence; user attention warranted before the next install).
+    - otherwise, at least one non-:attr:`NO_DRIFT` shared section
+      (``PENDING_TRACKED`` / ``LIVE_EDITED`` / ``LEGACY`` / ``INCONSISTENT``)
+      → regular ``warning: ...`` line in YELLOW (today's behaviour, kept
+      for the non-CONFLICT states).
+    - no shared drift → silent (host-local-only drift never warns).
+    """
+    shared_drifts = [
+        d
+        for d in drifts.values()
+        if d.semantics is SectionSemantics.SHARED
+        and d.state is not SectionDriftState.NO_DRIFT
+    ]
+    if not shared_drifts:
+        return
+    summary = section_wizard.format_drift_summary(shared_drifts)
+    tail = "(re-run with --reconcile-user-sections or --auto=use-tracked)"
+    if any(d.state is SectionDriftState.CONFLICT for d in shared_drifts):
+        typer.secho(
+            f"WARNING: {sub_dst}: CONFLICT — {summary} {tail}",
+            err=True,
+            fg=typer.colors.RED,
+            bold=True,
+        )
+    else:
+        typer.secho(
+            f"warning: {sub_dst}: {summary} {tail}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+
+
 def _resolve_section_decisions(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -277,19 +316,8 @@ def _resolve_section_decisions(
         drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
         if not drifts:
             continue
-        if (
-            section_auto is None
-            and not interactive
-            and section_reconcile.has_shared_drift(drifts)
-        ):
-            summary = section_wizard.format_drift_summary(drifts.values())
-            typer.secho(
-                f"warning: {sub_dst}: {summary} "
-                f"(re-run with --reconcile-user-sections "
-                f"or --auto=use-tracked)",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
+        if section_auto is None and not interactive:
+            _warn_shared_drift(sub_dst, drifts)
         outcomes = section_wizard.reconcile_sections(
             drifts, auto=section_auto, interactive=interactive
         )
