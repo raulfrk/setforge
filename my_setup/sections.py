@@ -38,7 +38,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NewType
+from typing import NewType, assert_never
 
 from my_setup.errors import MarkerError
 
@@ -325,13 +325,18 @@ def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]
     sections: dict[str, str] = {}
     section_lines: list[str] = []
     for event in _walk_markers(text, allow_legacy=allow_legacy):
-        if isinstance(event, _BodyLine):
-            section_lines.append(event.line)
-        elif isinstance(event, _StartMarker):
-            section_lines = []
-        elif isinstance(event, _EndMarker):
-            sections[event.key] = "".join(section_lines)
-            section_lines = []
+        match event:
+            case _BodyLine(line=line):
+                section_lines.append(line)
+            case _StartMarker():
+                section_lines = []
+            case _EndMarker(key=key):
+                sections[key] = "".join(section_lines)
+                section_lines = []
+            case _OutsideLine():
+                pass
+            case _ as never:
+                assert_never(never)
     return sections
 
 
@@ -363,24 +368,27 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
     consumed: set[str] = set()
 
     for event in _walk_markers(tracked_text):
-        if isinstance(event, _OutsideLine):
-            out_lines.append(event.line)
-        elif isinstance(event, _BodyLine):
-            placeholder_lines.append(event.line)
-        elif isinstance(event, _StartMarker):
-            out_lines.append(event.line)
-            placeholder_lines = []
-        else:  # _EndMarker
-            if event.key in live_sections:
-                content = live_sections[event.key]
-                if content and not content.endswith("\n"):
-                    content += "\n"
-                out_lines.append(content)
-                consumed.add(event.key)
-            else:
-                out_lines.extend(placeholder_lines)
-            out_lines.append(event.line)
-            placeholder_lines = []
+        match event:
+            case _OutsideLine(line=line):
+                out_lines.append(line)
+            case _BodyLine(line=line):
+                placeholder_lines.append(line)
+            case _StartMarker(line=line):
+                out_lines.append(line)
+                placeholder_lines = []
+            case _EndMarker(key=key, line=line):
+                if key in live_sections:
+                    content = live_sections[key]
+                    if content and not content.endswith("\n"):
+                        content += "\n"
+                    out_lines.append(content)
+                    consumed.add(key)
+                else:
+                    out_lines.extend(placeholder_lines)
+                out_lines.append(line)
+                placeholder_lines = []
+            case _ as never:
+                assert_never(never)
 
     for key in sorted(set(live_sections) - consumed):
         LOGGER.warning("live has user-section %r not present in tracked; dropping", key)
@@ -452,14 +460,17 @@ def set_marker_hashes(
 
     out_lines: list[str] = []
     for event in _walk_markers(text, allow_legacy=allow_legacy):
-        if isinstance(event, _EndMarker):
-            out_lines.append(
-                _format_end_marker(
-                    event.name, event.semantics, hashes.get(event.key), event.line
+        match event:
+            case _EndMarker(name=name, semantics=semantics, key=key, line=line):
+                out_lines.append(
+                    _format_end_marker(name, semantics, hashes.get(key), line)
                 )
-            )
-        else:
-            out_lines.append(event.line)
+            case (
+                _BodyLine(line=line) | _OutsideLine(line=line) | _StartMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
     return "".join(out_lines)
 
 
