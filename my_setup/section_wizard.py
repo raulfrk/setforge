@@ -17,7 +17,7 @@ surfaces them.
 
 POSIX-only: the editor sub-action shells out to ``$EDITOR`` (default
 ``vi``); the single-keypress prompter is delegated to
-:func:`my_setup.wizard._read_one_choice` so prompts behave identically
+:func:`my_setup.wizard.read_one_choice` so prompts behave identically
 to the existing install / sync wizards.
 """
 
@@ -41,7 +41,7 @@ from my_setup.section_reconcile import (
     SectionDriftState,
 )
 from my_setup.sections import SectionSemantics
-from my_setup.wizard import _read_one_choice
+from my_setup.wizard import read_one_choice
 
 __all__ = [
     "ReconcileAuto",
@@ -174,7 +174,7 @@ def _prompt_one(drift: SectionDrift, console: Console) -> SectionDecision:
     _render_header(drift, console)
     _render_diff(drift, console)
     _render_choices(console)
-    choice = _read_one_choice("   Choice (k/t/e/s/q): ", {"k", "t", "e", "s", "q"})
+    choice = read_one_choice("   Choice (k/t/e/s/q): ", {"k", "t", "e", "s", "q"})
     if choice == "k":
         return SectionDecision(drift.name, drift.live_body, SectionAction.KEEP_LIVE)
     if choice == "t":

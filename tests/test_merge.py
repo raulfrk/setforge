@@ -3,7 +3,7 @@
 Covers:
 - Walker yields DriftItem items for YAML and JSONC drift
 - dotfile_filter narrows walker output
-- _read_one_choice: valid key, invalid key (bell + re-read), Ctrl-C
+- read_one_choice: valid key, invalid key (bell + re-read), Ctrl-C
 - apply_action [k], [u] YAML (comments preserved), [u] JSONC (comments preserved)
 - apply_action [s] — extends preserve_user_keys in my_setup.yaml (comments preserved)
 - apply_action [m]+y — launches $EDITOR and continues
@@ -33,8 +33,8 @@ from my_setup.wizard import (
     DriftMode,
     FileFormat,
     Snapshot,
-    _read_one_choice,
     apply_action,
+    read_one_choice,
 )
 
 # ---------------------------------------------------------------------------
@@ -173,12 +173,12 @@ def test_walk_dotfile_filter(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _read_one_choice tests  (monkeypatched tty/termios)
+# read_one_choice tests  (monkeypatched tty/termios)
 # ---------------------------------------------------------------------------
 
 
 def _make_stdin(chars: str):
-    """Return a StringIO-like that behaves like sys.stdin for _read_one_choice."""
+    """Return a StringIO-like that behaves like sys.stdin for read_one_choice."""
     return io.StringIO(chars)
 
 
@@ -190,7 +190,7 @@ def test_read_one_choice_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
-    result = _read_one_choice("Choice: ", {"k", "u", "s", "m"})
+    result = read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
 
 
@@ -202,7 +202,7 @@ def test_read_one_choice_uppercase_accepted(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
-    result = _read_one_choice("Choice: ", {"k", "u", "s", "m"})
+    result = read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
 
 
@@ -221,7 +221,7 @@ def test_read_one_choice_invalid_then_valid(monkeypatch: pytest.MonkeyPatch) -> 
             pass
 
     monkeypatch.setattr("sys.stdout", FakeStdout())
-    result = _read_one_choice("Choice: ", {"k", "u", "s", "m"})
+    result = read_one_choice("Choice: ", {"k", "u", "s", "m"})
     assert result == "k"
     assert "\a" in written
 
@@ -235,7 +235,7 @@ def test_read_one_choice_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
         "my_setup.wizard.termios.tcsetattr", lambda fd, when, attr: None
     )
     with pytest.raises(KeyboardInterrupt):
-        _read_one_choice("Choice: ", {"k", "u", "s", "m"})
+        read_one_choice("Choice: ", {"k", "u", "s", "m"})
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ def test_apply_action_m_y_launches_editor(
         "my_setup._editor.shutil.which", lambda name: f"/usr/bin/{name}"
     )
     monkeypatch.setattr("my_setup._editor.subprocess.run", fake_run)
-    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "y")
+    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "y")
 
     result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_EDIT_DONE
@@ -467,7 +467,7 @@ def test_apply_action_m_n_returns_manual_pending(
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
 
-    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "n")
+    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "n")
 
     run_called = []
     monkeypatch.setattr(
@@ -541,10 +541,10 @@ def test_snapshot_restore_on_sigint(
     my_setup_yaml = tmp_path / "my_setup.yaml"
     my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
-    # Simulate SIGINT via raising KeyboardInterrupt inside _read_one_choice
+    # Simulate SIGINT via raising KeyboardInterrupt inside read_one_choice
     snap_root = tmp_path / "snaps"
     monkeypatch.setattr(
-        "my_setup.wizard._read_one_choice",
+        "my_setup.wizard.read_one_choice",
         lambda prompt, choices: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -590,7 +590,7 @@ def test_successful_walk_records_one_transition(
         _fake_write_transition_keep,
     )
     # choose [k] for every prompt
-    monkeypatch.setattr("my_setup.wizard._read_one_choice", lambda prompt, choices: "k")
+    monkeypatch.setattr("my_setup.wizard.read_one_choice", lambda prompt, choices: "k")
 
     snap_root = tmp_path / "snaps"
     report = _make_report(name="x", expected=["a"], unexpected=["b"])
@@ -654,7 +654,7 @@ def test_manual_pending_records_transition_for_applied(
 
     choices = iter(["k", "m", "n"])
     monkeypatch.setattr(
-        "my_setup.wizard._read_one_choice", lambda prompt, cs: next(choices)
+        "my_setup.wizard.read_one_choice", lambda prompt, cs: next(choices)
     )
 
     snap_root = tmp_path / "snaps"

@@ -210,7 +210,7 @@ class Snapshot:
 # ---------------------------------------------------------------------------
 
 
-def _read_one_choice(prompt: str, choices: set[str]) -> str:
+def read_one_choice(prompt: str, choices: set[str]) -> str:
     """Read one keypress from stdin in raw mode. POSIX-only.
 
     Echoes the chosen key and prints a newline, then returns the lowercase
@@ -266,7 +266,7 @@ def prompt_one(item: DriftItem, console: Console) -> str:
     """Render the per-drift block for ``item`` and return the chosen action key.
 
     Uses rich for the header and value display; reads action via
-    :func:`_read_one_choice` (single keypress, no Enter required).
+    :func:`read_one_choice` (single keypress, no Enter required).
     """
     sep = "─" * 57
     console.print(f"\n[dim]{sep}[/dim]")
@@ -297,7 +297,7 @@ def prompt_one(item: DriftItem, console: Console) -> str:
     console.print("   [bold][[m]][/bold] manual edit")
     console.print("")
 
-    return _read_one_choice("   Choice (k/u/s/m): ", {"k", "u", "s", "m"})
+    return read_one_choice("   Choice (k/u/s/m): ", {"k", "u", "s", "m"})
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +399,7 @@ def _action_save_as_preserved(
 def _action_manual_edit(item: DriftItem) -> ActionResult:
     """Sub-prompt y/n; y opens ``$EDITOR`` on the tracked file; n returns pending."""
     file_display = item.src_path
-    yn = _read_one_choice(f"   Open $EDITOR on {file_display} now? (y/n): ", {"y", "n"})
+    yn = read_one_choice(f"   Open $EDITOR on {file_display} now? (y/n): ", {"y", "n"})
     if yn == "y":
         run_editor(item.src_path)
         return ActionResult.MANUAL_EDIT_DONE

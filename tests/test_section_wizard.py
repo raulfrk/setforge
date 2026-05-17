@@ -161,7 +161,7 @@ class _StdinPipe:
     """Replace sys.stdin with a StringIO that lacks fileno().
 
     Triggers the non-tty fallback in
-    :func:`my_setup.wizard._read_one_choice`.
+    :func:`my_setup.wizard.read_one_choice`.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
