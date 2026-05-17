@@ -227,8 +227,10 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
     print(prompt, end="", flush=True)
     try:
         fd = sys.stdin.fileno()
-    except io.UnsupportedOperation:
-        # Non-tty stdin (tests, piped input) — read one char without raw mode
+        old = termios.tcgetattr(fd)
+    except (io.UnsupportedOperation, termios.error):
+        # Non-tty stdin (tests, piped input, pipe-to-docker-exec) —
+        # line-buffered fallback, no raw mode
         while True:
             ch = sys.stdin.read(1)
             if not ch:
@@ -242,7 +244,6 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
             sys.stdout.write("\a")
             sys.stdout.flush()
 
-    old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
         while True:

@@ -238,6 +238,29 @@ def test_read_one_choice_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
         read_one_choice("Choice: ", {"k", "u", "s", "m"})
 
 
+def test_read_one_choice_termios_error_falls_back_to_line_buffered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """termios.error on tcgetattr (e.g., piped stdin to docker exec -i) falls
+    back to the line-buffered loop instead of crashing."""
+    import termios as _termios
+
+    class PipedStdin(io.StringIO):
+        """StringIO that reports a real fd, mimicking piped stdin."""
+
+        def fileno(self) -> int:
+            return 0
+
+    monkeypatch.setattr("my_setup.wizard.sys.stdin", PipedStdin("k\n"))
+
+    def fake_tcgetattr(_fd: int) -> object:
+        raise _termios.error(25, "Inappropriate ioctl for device")
+
+    monkeypatch.setattr("my_setup.wizard.termios.tcgetattr", fake_tcgetattr)
+    result = read_one_choice("Choice: ", {"k", "u"})
+    assert result == "k"
+
+
 # ---------------------------------------------------------------------------
 # apply_action tests
 # ---------------------------------------------------------------------------
