@@ -528,7 +528,12 @@ def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
     ``allow_legacy`` defaults to ``True`` because the historical callers
     (compare's drift gate, capture's strip path) both consume live-side
     text that may contain pre-9by markers. Pass ``allow_legacy=False``
-    explicitly for strict-mode parsing on canonical (tracked-side) input.
+    explicitly where canonical-form input is guaranteed at the call site
+    AND no live-side comparand needs symmetric parsing — symmetric
+    comparisons (e.g. ``compare.diff_file``'s strip-template gate, which
+    runs ``strip_section_content(src) == strip_section_content(dst)``)
+    MUST use ``allow_legacy=True`` on both sides for the equality to be
+    meaningful, even when the ``src`` side is tracked.
     """
     out_lines: list[str] = []
     for event in _walk_markers(text, allow_legacy=allow_legacy):
