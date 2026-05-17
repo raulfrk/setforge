@@ -48,14 +48,17 @@ Superpowers skills are designed to defer to.
    - **Robust acceptance commands.** Brittle command shapes produce
      false negatives during Phase 5 review. Avoid `rg -A1 PATTERN`
      ranges (truncate before predicates that sit 3+ lines below a
-     multi-line opener) and `awk '/PAT/,/PAT2/'` with `[^a-z]` bounds
-     (skip lowercase-prefixed defs; over-span until the next
-     non-lowercase def). Prefer:
+     multi-line opener) and `awk '/PAT/,/^def [^a-z]/'` bounds
+     (end pattern fails on lowercase-prefixed defs; range over-spans
+     past every `def foo` until the next `def _` or non-`def` line).
+     Prefer:
      (i) `python -c '<ast snippet>'` for structural assertions,
-     (ii) `rg -A N with N>=4 ... | rg -q ...` with wider context windows,
+     (ii) `rg -A4 ... | rg -q ...` with wider context windows,
      (iii) `awk '/^def NAME/,/^def \w/'` with `\w` (gawk; POSIX uses
      `[[:alpha:]_]`) bounding the next function.
-     *(empirical observation L from dotfiles-6aj.)*
+     *(empirical observation L, 2026-05-17 — see bd dotfiles-6aj:
+     brittle `rg -A1` / `awk [^a-z]` ranges produced Phase 5
+     false-negatives that needed inline review-fix commits.)*
    - **Spec is snapshot; bd is contract.** The archived spec file is
      a historical record of what was agreed at brainstorm time. The
      bd issue's `--design` / `--acceptance` / `--notes` is the
@@ -124,7 +127,9 @@ Superpowers skills are designed to defer to.
 
    Review-fix commits land as their OWN commits — never squashed into
    the implementation commit. *(empirical observation F; also in
-   CLAUDE.md Commits section.)* Use `wt merge --no-squash` (ff-only) for worktree merges, or `git merge --ff-only` when not using wt, to preserve the separate commits at merge time.
+   CLAUDE.md Commits section.)* Use `wt merge --no-squash` (ff-only)
+   for worktree merges, or `git merge --ff-only` when not using wt,
+   to preserve the separate commits at merge time.
    - **Single-worktree merge**: `wt merge --no-squash` (ff-only) into target (typically main).
    - **Multi-worktree merge** (sibling rebase): when N sibling
      worktrees branch from a common parent and the parent gets a
