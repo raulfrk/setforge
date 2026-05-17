@@ -191,3 +191,63 @@ def test_iter_hash_input_paths_includes_inside_repo_symlink(
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
     yielded = set(_iter_hash_input_paths())
     assert target.resolve() in yielded
+
+
+@pytest.mark.parametrize(
+    "dir_name",
+    ["tests_fixtures_e2e", "my_setup", "tracked"],
+)
+def test_compute_inputs_hash_changes_on_edit_under_each_input_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dir_name: str,
+) -> None:
+    """Editing a file under any ``_HASH_INPUT_DIRS`` entry flips the hash.
+
+    Parametrized over the three real entries (``tests/fixtures/e2e``,
+    ``my_setup``, ``tracked``) — the dir_name is only used to give each
+    parametrized case a distinct sandbox directory; the hash-input contract
+    is identical for all three so the test body itself is shared.
+
+    Mirrors the 4nm monkeypatch convention: redirect ``REPO_ROOT`` at a
+    fresh ``tmp_path / "repo"`` AND pin ``_HASH_INPUT_FILES = ()`` so the
+    real anchor files (Dockerfile, pyproject.toml, ...) cannot leak into
+    the digest from disk.
+    """
+    repo_root = tmp_path / "repo"
+    inside = repo_root / dir_name
+    inside.mkdir(parents=True)
+    target = inside / "file.txt"
+    target.write_text("before", encoding="utf-8")
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    h1 = _compute_inputs_hash()
+    target.write_text("after", encoding="utf-8")
+    h2 = _compute_inputs_hash()
+    assert h1 != h2
+
+
+def test_compute_inputs_hash_ignores_pycache_additions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding ``__pycache__/x.pyc`` under a hash-input dir does NOT flip the hash.
+
+    Locks the ``__pycache__`` exclusion in ``_iter_hash_input_paths`` —
+    without it, every byte-code regeneration during a test run would
+    invalidate the docker image-tag cache.
+    """
+    repo_root = tmp_path / "repo"
+    inside = repo_root / "inside"
+    inside.mkdir(parents=True)
+    (inside / "real.txt").write_text("payload", encoding="utf-8")
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
+    monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
+    h1 = _compute_inputs_hash()
+    pycache = inside / "__pycache__"
+    pycache.mkdir()
+    (pycache / "x.pyc").write_bytes(b"\x00\x01\x02")
+    h2 = _compute_inputs_hash()
+    assert h1 == h2
