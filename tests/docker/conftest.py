@@ -240,6 +240,13 @@ def docker_image() -> str:
     rebuild is skipped (fast cache hit); when no image carries the
     current hash we build. See dotfiles-0ci for the footgun this
     replaces.
+
+    Concurrent pytest sessions on the same host can race the inspect/build
+    step: both see returncode != 0 from ``docker image inspect``, both invoke
+    ``docker build -t <same-hashed-tag>``. ``docker build`` serializes by tag
+    so the final image is deterministic, but the second build is wasted work.
+    Currently mitigated by CI being single-stream; if a matrix is added,
+    serialize via ``flock`` on the tag.
     """
     if not _docker_available():
         pytest.skip("docker binary not on PATH")
