@@ -193,16 +193,17 @@ def test_iter_hash_input_paths_includes_inside_repo_symlink(
     assert target.resolve() in yielded
 
 
-def test_compute_inputs_hash_changes_on_edit_under_each_input_dir(
+def test_compute_inputs_hash_changes_on_file_edit_in_input_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Editing a file under any ``_HASH_INPUT_DIRS`` entry flips the hash.
+    """Editing a file under a single pinned ``_HASH_INPUT_DIRS`` entry flips the hash.
 
     Mirrors the 4nm monkeypatch convention: redirect ``REPO_ROOT`` at a
     fresh ``tmp_path / "repo"`` AND pin ``_HASH_INPUT_FILES = ()`` so the
     real anchor files (Dockerfile, pyproject.toml, ...) cannot leak into
-    the digest from disk.
+    the digest from disk. Single-dir scope — cross-entry coverage was
+    dropped with the parametrize in the f9ef316 review-fix.
     """
     repo_root = tmp_path / "repo"
     inside = repo_root / "inside"
