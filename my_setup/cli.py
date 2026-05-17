@@ -272,9 +272,12 @@ def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> Non
     ]
     if not shared_drifts:
         return
-    summary = section_wizard.format_drift_summary(shared_drifts)
     tail = "(re-run with --reconcile-user-sections or --auto=use-tracked)"
-    if any(d.state is SectionDriftState.CONFLICT for d in shared_drifts):
+    conflict_drifts = [
+        d for d in shared_drifts if d.state is SectionDriftState.CONFLICT
+    ]
+    if conflict_drifts:
+        summary = section_wizard.format_drift_summary(conflict_drifts)
         typer.secho(
             f"WARNING: {sub_dst}: CONFLICT — {summary} {tail}",
             err=True,
@@ -282,6 +285,10 @@ def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> Non
             bold=True,
         )
     else:
+        non_conflict_drifts = [
+            d for d in shared_drifts if d.state is not SectionDriftState.CONFLICT
+        ]
+        summary = section_wizard.format_drift_summary(non_conflict_drifts)
         typer.secho(
             f"warning: {sub_dst}: {summary} {tail}",
             err=True,

@@ -219,13 +219,22 @@ def test_install_warns_loudly_on_section_conflict(
     )
     assert result.exit_code == 0, result.output
     # Loud CONFLICT branch fired: uppercase "WARNING:" + RED + bold ANSI.
-    assert "WARNING:" in result.output
-    assert "CONFLICT" in result.output
-    assert "three-way conflict" in result.output
+    # Scope summary assertions to the WARNING line itself so the
+    # narrowed summary (CONFLICT-only) is asserted, not just presence
+    # somewhere in stdout.
+    warning_lines = [line for line in result.output.splitlines() if "WARNING:" in line]
+    assert len(warning_lines) == 1, result.output
+    warning_line = warning_lines[0]
+    assert "CONFLICT" in warning_line
+    assert "three-way conflict" in warning_line
+    # Spec narrows the loud summary to conflict_drifts only — the
+    # PENDING_TRACKED fragment from Section B MUST NOT bleed into the
+    # CONFLICT WARNING line.
+    assert "pending tracked update" not in warning_line
     # ANSI RED foreground (\x1b[31m) + bold (\x1b[1m) — typer.secho with
     # fg=RED, bold=True emits both.
-    assert "\x1b[31m" in result.output
-    assert "\x1b[1m" in result.output
+    assert "\x1b[31m" in warning_line
+    assert "\x1b[1m" in warning_line
     # The yellow lowercase "warning:" prefix MUST NOT also fire for this
     # FILE — the CONFLICT branch is exclusive. Scope to the dst path so the
     # unrelated extension-CLI yellow warning doesn't false-match.
