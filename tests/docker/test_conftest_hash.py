@@ -193,21 +193,11 @@ def test_iter_hash_input_paths_includes_inside_repo_symlink(
     assert target.resolve() in yielded
 
 
-@pytest.mark.parametrize(
-    "dir_name",
-    ["tests_fixtures_e2e", "my_setup", "tracked"],
-)
 def test_compute_inputs_hash_changes_on_edit_under_each_input_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    dir_name: str,
 ) -> None:
     """Editing a file under any ``_HASH_INPUT_DIRS`` entry flips the hash.
-
-    Parametrized over the three real entries (``tests/fixtures/e2e``,
-    ``my_setup``, ``tracked``) — the dir_name is only used to give each
-    parametrized case a distinct sandbox directory; the hash-input contract
-    is identical for all three so the test body itself is shared.
 
     Mirrors the 4nm monkeypatch convention: redirect ``REPO_ROOT`` at a
     fresh ``tmp_path / "repo"`` AND pin ``_HASH_INPUT_FILES = ()`` so the
@@ -215,7 +205,7 @@ def test_compute_inputs_hash_changes_on_edit_under_each_input_dir(
     the digest from disk.
     """
     repo_root = tmp_path / "repo"
-    inside = repo_root / dir_name
+    inside = repo_root / "inside"
     inside.mkdir(parents=True)
     target = inside / "file.txt"
     target.write_text("before", encoding="utf-8")
