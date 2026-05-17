@@ -12,12 +12,14 @@ from my_setup.section_reconcile import (
     classify_section_drift,
     has_shared_drift,
     maintain_marker_hashes,
+    stamp_tracked_baseline,
 )
 from my_setup.sections import (
     SectionSemantics,
     extract_marker_hashes,
     hash_sections,
     set_marker_hashes,
+    strip_section_content,
 )
 
 
@@ -355,3 +357,95 @@ def test_round_trip_set_marker_hashes_then_classify_no_drift() -> None:
     )
     result = classify_section_drift(tracked, live)
     assert result["workflow"].state is SectionDriftState.NO_DRIFT
+
+
+# ---------------------------------------------------------------------------
+# Group A: classify_section_drift -> INCONSISTENT (mid-migration shapes).
+# ---------------------------------------------------------------------------
+
+
+def test_classify_section_drift_yields_inconsistent_on_each_side_pristine() -> None:
+    """Both sides are baseline-stamped against their own body, but the
+    bodies disagree. This hits the ``_classify_one`` fall-through:
+
+    - ``a_t != a_l`` (bodies differ, so hashes differ) -> not NO_DRIFT.
+    - ``e_t`` and ``e_l`` are both present -> not LEGACY.
+    - ``a_l == e_l`` (live pristine) AND ``a_t == e_t`` (tracked pristine)
+      -> none of PENDING_TRACKED / LIVE_EDITED / CONFLICT matches.
+    - Falls through to INCONSISTENT.
+
+    Shouldn't happen in steady state (hashes agree on each side but
+    bodies disagree across sides), but the reconciler must classify
+    it deterministically rather than crash.
+    """
+    tracked_body = "tracked content\n"
+    live_body = "live content\n"
+    tracked_text = _make_text("workflow", "shared", tracked_body, _sha256(tracked_body))
+    live_text = _make_text("workflow", "shared", live_body, _sha256(live_body))
+    result = classify_section_drift(tracked_text, live_text)
+    assert result["workflow"].state is SectionDriftState.INCONSISTENT
+
+
+# ---------------------------------------------------------------------------
+# Group B: stamp_tracked_baseline no-op + write paths + body preservation.
+# ---------------------------------------------------------------------------
+
+
+def test_stamp_tracked_baseline_returns_false_when_aligned(tmp_path) -> None:
+    """Already-stamped tracked file: no-op (returns False, byte-identical)."""
+    body = "BODY_BYTES\n"
+    aligned = (
+        "header before\n"
+        + _make_text("NAME", "shared", body, _sha256(body))
+        + "trailer after\n"
+    )
+    path = tmp_path / "tracked.md"
+    path.write_text(aligned, encoding="utf-8")
+    assert stamp_tracked_baseline(path) is False
+    assert path.read_text(encoding="utf-8") == aligned
+
+
+def test_stamp_tracked_baseline_returns_true_when_unaligned(tmp_path) -> None:
+    """Stale-hash tracked: rewrites file, returns True, hash matches body.
+
+    ``stamp_tracked_baseline`` parses tracked strictly (no
+    ``allow_legacy``), so the unaligned fixture must already carry a
+    syntactically valid ``hash=<...>`` segment whose value disagrees
+    with the actual body hash.
+    """
+    body = "DIFFERENT_BYTES\n"
+    stale = _make_text("NAME", "shared", body, "0" * 64)
+    path = tmp_path / "tracked.md"
+    path.write_text(stale, encoding="utf-8")
+    assert stamp_tracked_baseline(path) is True
+    rewritten = path.read_text(encoding="utf-8")
+    assert f"hash={_sha256(body)}" in rewritten
+    assert "DIFFERENT_BYTES" in rewritten
+
+
+def test_stamp_tracked_baseline_preserves_body_bytes_outside_end_marker(
+    tmp_path,
+) -> None:
+    """Only end-marker hash= changes; body + non-section content byte-preserved."""
+    body = "PRESERVED_BODY\n"
+    stale = (
+        "header line\n"
+        + _make_text("NAME", "shared", body, "0" * 64)
+        + "trailer line\n"
+    )
+    path = tmp_path / "tracked.md"
+    path.write_text(stale, encoding="utf-8")
+    stamp_tracked_baseline(path)
+    rewritten = path.read_text(encoding="utf-8")
+    assert "PRESERVED_BODY\n" in rewritten
+    assert "header line\n" in rewritten
+    assert "trailer line\n" in rewritten
+    # End-marker hash= flipped from zeros to the correct sha256; body
+    # and surrounding lines must stay byte-identical.
+    assert f"hash={_sha256(body)}" in rewritten
+    assert "hash=" + ("0" * 64) not in rewritten
+    # Stripped (markers-only) views: both sides retain the same marker
+    # framing; only the end-marker line text differs (hash value flip).
+    # Body and outside-section lines are dropped by strip_section_content,
+    # so the diff between stripped views isolates the end-marker change.
+    assert strip_section_content(rewritten) != strip_section_content(stale)
