@@ -288,12 +288,15 @@ class PluginDelta:
 
 
 def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
-    """Return ``raw`` as a ``list[str]`` or raise :class:`InvalidTransitionRecord`.
+    """Return a validated ``list[str]`` built from ``raw``.
 
+    Raises :class:`InvalidTransitionRecord` on any shape deviation.
     Used by the JSON-boundary readers below to validate fields that
     must be lists of strings (``installed``, ``enabled``, ``added``,
     etc.). ``key`` names the field for error messages; ``source_label``
-    names the on-disk file (e.g. ``"plugins.json"``).
+    names the on-disk file (e.g. ``"plugins.json"``). Returns a fresh
+    list (not the input object) so the caller never aliases the
+    JSON-deserialized payload.
     """
     if not isinstance(raw, list):
         raise InvalidTransitionRecord(
@@ -348,16 +351,16 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
             )
         validated_pairs.append((name, dict(payload)))
 
-    def field(key: str) -> tuple[str, ...]:
+    def _str_list_field(key: str) -> tuple[str, ...]:
         return tuple(
             _validated_str_list(raw.get(key, []), key=key, source_label="plugins.json")
         )
 
     return PluginDelta(
-        installed=field("installed"),
-        enabled=field("enabled"),
-        disabled=field("disabled"),
-        marketplaces_added=field("marketplaces_added"),
+        installed=_str_list_field("installed"),
+        enabled=_str_list_field("enabled"),
+        disabled=_str_list_field("disabled"),
+        marketplaces_added=_str_list_field("marketplaces_added"),
         marketplaces_removed=tuple(validated_pairs),
     )
 
