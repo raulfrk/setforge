@@ -809,7 +809,7 @@ class TestVerbosity:
     def test_root_v_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.output
+        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
 
     def test_env_var_enables_debug_when_flag_absent(
         self,
@@ -819,7 +819,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "DEBUG")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.output
+        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
 
     def test_garbage_env_var_falls_back_to_warning(
         self,
@@ -829,7 +829,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "not-a-level")
         result = _invoke(["validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" not in result.output
+        assert "my_setup.cli DEBUG: logging configured at level" not in result.stderr
 
     def test_flag_overrides_env(
         self,
@@ -839,7 +839,7 @@ class TestVerbosity:
         monkeypatch.setenv("MY_SETUP_LOG_LEVEL", "WARNING")
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        assert "my_setup.cli DEBUG: logging configured at level" in result.output
+        assert "my_setup.cli DEBUG: logging configured at level" in result.stderr
 
     def test_garbage_my_setup_log_level_emits_stderr_warning(
         self,
