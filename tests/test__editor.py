@@ -44,7 +44,6 @@ def test_multitoken_editor_passes_to_subprocess(
 
     monkeypatch.setattr(_editor.subprocess, "run", fake_run)
     target = tmp_path / "file.md"
-    target.write_text("body", encoding="utf-8")
     run_editor(target)
     assert captured["argv"] == ["echo", "--wait", str(target)]
 
@@ -67,6 +66,5 @@ def test_default_to_vi_when_unset(
     monkeypatch.setattr(_editor.shutil, "which", fake_which)
     monkeypatch.setattr(_editor.subprocess, "run", fake_run)
     target = tmp_path / "file.md"
-    target.write_text("body", encoding="utf-8")
     run_editor(target)
     assert captured["argv"] == ["vi", str(target)]
