@@ -20,7 +20,6 @@ from my_setup.sections import (
     extract_marker_hashes,
     hash_sections,
     set_marker_hashes,
-    strip_section_content,
 )
 
 
@@ -427,7 +426,7 @@ def test_stamp_tracked_baseline_returns_true_when_unaligned(tmp_path: Path) -> N
 def test_stamp_tracked_baseline_preserves_body_bytes_outside_end_marker(
     tmp_path: Path,
 ) -> None:
-    """Only end-marker hash= changes; body + non-section content byte-preserved."""
+    """Only end-marker hash= changes; everything else byte-preserved."""
     body = "PRESERVED_BODY\n"
     stale = (
         "header line\n"
@@ -438,15 +437,8 @@ def test_stamp_tracked_baseline_preserves_body_bytes_outside_end_marker(
     path.write_text(stale, encoding="utf-8")
     stamp_tracked_baseline(path)
     rewritten = path.read_text(encoding="utf-8")
-    assert "PRESERVED_BODY\n" in rewritten
-    assert "header line\n" in rewritten
-    assert "trailer line\n" in rewritten
-    # End-marker hash= flipped from zeros to the correct sha256; body
-    # and surrounding lines must stay byte-identical.
-    assert f"hash={_sha256(body)}" in rewritten
-    assert "hash=" + ("0" * 64) not in rewritten
-    # Stripped (markers-only) views: both sides retain the same marker
-    # framing; only the end-marker line text differs (hash value flip).
-    # Body and outside-section lines are dropped by strip_section_content,
-    # so the diff between stripped views isolates the end-marker change.
-    assert strip_section_content(rewritten) != strip_section_content(stale)
+    # The ONLY byte that may change is the end-marker's hash= segment:
+    # zeros -> sha256 of body. Asserting full byte-equality catches any
+    # other accidental mutation (line endings, marker spacing, body bytes).
+    expected = stale.replace("hash=" + "0" * 64, f"hash={_sha256(body)}")
+    assert rewritten == expected
