@@ -243,10 +243,12 @@ def docker_image() -> str:
 
     Concurrent pytest sessions on the same host can race the inspect/build
     step: both see returncode != 0 from ``docker image inspect``, both invoke
-    ``docker build -t <same-hashed-tag>``. ``docker build`` serializes by tag
-    so the final image is deterministic, but the second build is wasted work.
-    Currently mitigated by CI being single-stream; if a matrix is added,
-    serialize via ``flock`` on the tag.
+    ``docker build -t <same-hashed-tag>``. Both builds run concurrently;
+    whichever finishes last rewrites the tag ref. The final image is
+    byte-equivalent because the inputs hash matches, but the second build
+    is wasted work. Currently mitigated by CI being single-stream; if a
+    matrix is added, wrap the inspect+build sequence in ``flock`` against a
+    tag-keyed lockfile (e.g. ``flock /tmp/my-setup-build-${tag}.lock``).
     """
     if not _docker_available():
         pytest.skip("docker binary not on PATH")
