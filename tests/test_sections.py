@@ -542,17 +542,18 @@ def test_semantics_mismatch_raises_marker_error() -> None:
         extract_sections(text)
 
 
-def test_unknown_semantics_keyword_is_not_recognised_as_marker() -> None:
-    """A token that is neither 'host-local' nor 'shared' makes the start
-    marker fail to match the regex entirely (extra tokens before the
-    closing ``-->``); the start line is then treated as outside-section
-    text, so the subsequent end raises end-without-start."""
+def test_unknown_semantics_keyword_raises_at_parse_time() -> None:
+    """A token that is neither 'host-local' nor 'shared' on a start marker
+    surfaces a precise :class:`MarkerError` with line context naming the
+    bad keyword — rather than silently falling through and producing an
+    opaque downstream 'end-without-start' from the subsequent end marker.
+    """
     text = (
         "<!-- my-setup:user-section start unknown workflow -->\n"
         "body\n"
         "<!-- my-setup:user-section end shared workflow -->\n"
     )
-    with pytest.raises(MarkerError, match="without matching start"):
+    with pytest.raises(MarkerError, match="unknown semantics keyword 'unknown'"):
         extract_sections(text)
 
 
@@ -863,3 +864,34 @@ def test_valid_64_hex_hash_still_parses() -> None:
         f"<!-- my-setup:user-section end shared FOO hash={valid} -->\n"
     )
     extract_sections(text)
+
+
+def test_unknown_semantics_raises_marker_error_with_line() -> None:
+    """Unknown semantics keyword surfaces a MarkerError naming the line and keyword."""
+    text = (
+        "<!-- my-setup:user-section start fish-tacos NAME -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end fish-tacos NAME -->\n"
+    )
+    with pytest.raises(MarkerError) as excinfo:
+        list(extract_sections(text))
+    msg = str(excinfo.value)
+    assert "line 1" in msg, msg
+    assert "unknown semantics" in msg, msg
+    assert "fish-tacos" in msg, msg
+
+
+def test_unknown_semantics_raises_under_allow_legacy() -> None:
+    """Unknown (not missing) semantics still raises even under allow_legacy=True.
+
+    Only NULL/missing semantics gets the legacy SHARED fallback; an
+    explicit-but-invalid keyword is still a malformed marker.
+    """
+    text = (
+        "<!-- my-setup:user-section start fish-tacos NAME -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end fish-tacos NAME -->\n"
+    )
+    with pytest.raises(MarkerError) as excinfo:
+        extract_sections(text, allow_legacy=True)
+    assert "unknown semantics" in str(excinfo.value)

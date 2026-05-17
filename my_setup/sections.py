@@ -73,6 +73,15 @@ _MARKER_RE = re.compile(
     r"\s*-->\s*$"
 )
 
+# Broad detector: matches any line whose prefix declares it as one of our
+# markers, regardless of payload shape. Used by :func:`_parse_marker_line` to
+# distinguish "not our marker at all" from "our marker, but malformed" so the
+# latter surfaces a precise :class:`MarkerError` instead of being silently
+# dropped as outside-content. Captures (kind, rest-before-`-->`).
+_MARKER_PREFIX_RE = re.compile(
+    r"^\s*<!--\s*my-setup:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
+)
+
 _HASH_VALUE_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -208,6 +217,40 @@ def _handle_end_marker(
     return event
 
 
+def _raise_if_malformed_marker(line: str, lineno: int) -> None:
+    """Raise :class:`MarkerError` when ``line`` looks like one of our markers
+    but is malformed (currently: unknown semantics keyword).
+
+    Called by :func:`_parse_marker_line` after the strict ``_MARKER_RE`` has
+    failed. Without this gate, a marker like
+    ``<!-- my-setup:user-section start fish-tacos NAME -->`` would be
+    silently treated as outside-content; the user would see no error or
+    an opaque downstream "end-without-start" instead of the precise
+    "unknown semantics keyword" with line context.
+
+    Today only the unknown-semantics case is detected here; other
+    malformed shapes (e.g. trailing junk after ``-->``) still parse as
+    non-markers because they don't satisfy the broad-prefix matcher.
+    """
+    broad = _MARKER_PREFIX_RE.match(line)
+    if broad is None:
+        return
+    kind = broad.group(1)
+    rest = broad.group(2)
+    tokens = rest.split()
+    if not tokens:
+        return
+    first = tokens[0]
+    if first.startswith("hash="):
+        return
+    if first in {s.value for s in SectionSemantics}:
+        return
+    raise MarkerError(
+        f"line {lineno}: user-section {kind} marker has unknown semantics "
+        f"keyword {first!r}; expected 'host-local' or 'shared'"
+    )
+
+
 def _parse_marker_line(
     line: str, lineno: int, *, allow_legacy: bool
 ) -> tuple[str, str, str | None, str | None] | None:
@@ -240,6 +283,7 @@ def _parse_marker_line(
     """
     match = _MARKER_RE.match(line)
     if match is None:
+        _raise_if_malformed_marker(line, lineno)
         return None
     kind = match.group(1)
     semantics_raw = match.group(2)
