@@ -54,8 +54,11 @@ def test_run_editor_wraps_shlex_split_value_error(
     monkeypatch.setenv("EDITOR", "vi 'unclosed")
     target = tmp_path / "f.txt"
     target.touch()
-    with pytest.raises(MySetupError, match="malformed quoting"):
+    with pytest.raises(MySetupError, match="malformed quoting") as excinfo:
         run_editor(target)
+    assert isinstance(excinfo.value.__cause__, ValueError), (
+        "expected MySetupError to chain via `from exc` to preserve shlex column info"
+    )
 
 
 def test_default_to_vi_when_unset(
