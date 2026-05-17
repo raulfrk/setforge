@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
 
 from my_setup import __version__
 from my_setup.binaries import resolve_binary
@@ -288,6 +287,28 @@ class PluginDelta:
         )
 
 
+def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
+    """Return ``raw`` as a ``list[str]`` or raise :class:`InvalidTransitionRecord`.
+
+    Used by the JSON-boundary readers below to validate fields that
+    must be lists of strings (``installed``, ``enabled``, ``added``,
+    etc.). ``key`` names the field for error messages; ``source_label``
+    names the on-disk file (e.g. ``"plugins.json"``).
+    """
+    if not isinstance(raw, list):
+        raise InvalidTransitionRecord(
+            f"{source_label}: {key} must be a list, got {type(raw).__name__}"
+        )
+    validated: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            raise InvalidTransitionRecord(
+                f"{source_label}: {key} entry has wrong type: {type(entry).__name__}"
+            )
+        validated.append(entry)
+    return validated
+
+
 def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     """Reconstruct a :class:`PluginDelta` from a JSON-deserialized
     ``plugins.json`` record. Inverse of the on-disk shape produced by
@@ -303,13 +324,9 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     With the guard, the failure is caught cleanly at the
     ``MySetupError`` boundary before any inverse op runs.
 
-    Field-level :func:`typing.cast` on the other fields: ``raw[k]`` is
-    ``object`` because :func:`json.loads` is untyped at the leaf and
-    the caller (revert) treats the loaded record as a free-form
-    mapping. The dataclass itself constrains shapes at write time via
-    :func:`write_transition`'s string-value guard, so reads here
-    trust the file's structure for the simple list fields — the cast
-    makes that trust assertion explicit instead of suppressing.
+    Other list-of-string fields are validated via
+    :func:`_validated_str_list`, which raises the same
+    :class:`InvalidTransitionRecord` on shape deviation.
     """
     marketplaces_removed_raw = raw.get("marketplaces_removed", [])
     if not isinstance(marketplaces_removed_raw, list):
@@ -332,10 +349,28 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
         validated_pairs.append((name, dict(payload)))
 
     return PluginDelta(
-        installed=tuple(cast(list[str], raw.get("installed", []))),
-        enabled=tuple(cast(list[str], raw.get("enabled", []))),
-        disabled=tuple(cast(list[str], raw.get("disabled", []))),
-        marketplaces_added=tuple(cast(list[str], raw.get("marketplaces_added", []))),
+        installed=tuple(
+            _validated_str_list(
+                raw.get("installed", []), key="installed", source_label="plugins.json"
+            )
+        ),
+        enabled=tuple(
+            _validated_str_list(
+                raw.get("enabled", []), key="enabled", source_label="plugins.json"
+            )
+        ),
+        disabled=tuple(
+            _validated_str_list(
+                raw.get("disabled", []), key="disabled", source_label="plugins.json"
+            )
+        ),
+        marketplaces_added=tuple(
+            _validated_str_list(
+                raw.get("marketplaces_added", []),
+                key="marketplaces_added",
+                source_label="plugins.json",
+            )
+        ),
         marketplaces_removed=tuple(validated_pairs),
     )
 
@@ -345,43 +380,22 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     ``extensions.json`` record. Inverse of the on-disk shape produced
     by :func:`write_transition`.
 
-    Validates ``added`` and ``removed`` are lists of strings, raising
-    :class:`InvalidTransitionRecord` on any deviation. Mirrors the
-    boundary guard added to :func:`plugin_delta_from_json` in bead dtm.
-    Without this guard a corrupted extensions.json (hand-edit, partial
-    write, or a bug in a future writer) would surface as an opaque
-    :class:`TypeError` from a downstream ``iter()`` call rather than a
-    clean :class:`MySetupError` at the JSON boundary.
+    Validates ``added`` and ``removed`` are lists of strings via
+    :func:`_validated_str_list`, raising :class:`InvalidTransitionRecord`
+    on any deviation. Mirrors the boundary guard added to
+    :func:`plugin_delta_from_json` in bead dtm. Without this guard a
+    corrupted extensions.json (hand-edit, partial write, or a bug in a
+    future writer) would surface as an opaque :class:`TypeError` from
+    a downstream ``iter()`` call rather than a clean
+    :class:`MySetupError` at the JSON boundary.
     """
-    added_raw = raw.get("added", [])
-    if not isinstance(added_raw, list):
-        raise InvalidTransitionRecord(
-            f"extensions.json: added must be a list, got {type(added_raw).__name__}"
-        )
-    validated_added: list[str] = []
-    for entry in added_raw:
-        if not isinstance(entry, str):
-            raise InvalidTransitionRecord(
-                f"extensions.json: added entry has wrong type: {type(entry).__name__}"
-            )
-        validated_added.append(entry)
-
-    removed_raw = raw.get("removed", [])
-    if not isinstance(removed_raw, list):
-        raise InvalidTransitionRecord(
-            f"extensions.json: removed must be a list, got {type(removed_raw).__name__}"
-        )
-    validated_removed: list[str] = []
-    for entry in removed_raw:
-        if not isinstance(entry, str):
-            raise InvalidTransitionRecord(
-                f"extensions.json: removed entry has wrong type: {type(entry).__name__}"
-            )
-        validated_removed.append(entry)
-
     return ExtensionDelta(
-        added=validated_added,
-        removed=validated_removed,
+        added=_validated_str_list(
+            raw.get("added", []), key="added", source_label="extensions.json"
+        ),
+        removed=_validated_str_list(
+            raw.get("removed", []), key="removed", source_label="extensions.json"
+        ),
     )
 
 
