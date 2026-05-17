@@ -39,7 +39,7 @@ Compute (or accept as input):
 Send **a single message** containing 5 `Agent` tool calls, one per reviewer:
 
 1. `subagent_type: claude-md-spec-reviewer` — spec-conformance, file placement, structural commitments.
-2. `subagent_type: claude-md-form-reviewer` — prose clarity, voice, links, header levels.
+2. `subagent_type: claude-md-form-reviewer` — header hierarchy, link validity, bullet style, markdown rendering.
 3. `subagent_type: claude-md-substance-reviewer` — internal coherence, cross-file consistency, cross-ref accuracy.
 4. `subagent_type: claude-md-specifics-reviewer` — meta-twist, user-section markers, enforcement-layer correctness, observation coverage.
 5. `subagent_type: claude-md-prose-reviewer` — prose quality + factual correctness vs. referenced skill / tool surfaces.
