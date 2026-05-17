@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from setforge.errors import ConfigError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
@@ -14,7 +15,6 @@ from setforge.source import (
     ENV_VAR,
     GitSource,
     PathSource,
-    ValidationError,
     _load_local_source_config,
     resolve_source,
     resolve_source_dir,

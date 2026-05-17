@@ -20,14 +20,21 @@ def _isolated_local_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Redirect ``binaries.LOCAL_CONFIG_PATH`` to a tmp path for every test.
+    """Redirect ``LOCAL_CONFIG_PATH`` constants to a tmp path for every test.
 
-    ``binaries.ensure_local_config_stub()`` runs in the typer ``@app.callback()``
-    on every ``CliRunner.invoke(app, ...)``. Without this fixture, every CLI
-    test would write ``~/.config/setforge/local.yaml`` on the dev host (or CI
-    runner). Pure test hygiene; no production effect.
+    Two modules carry the constant — ``binaries`` for the ``binaries:``
+    block and ``source`` for the ``source:`` block — and both must be
+    redirected so neither leaks to ``~/.config/setforge/local.yaml`` on
+    the dev host. Also resets ``source._cli_source`` to None so a test
+    that sets it directly via ``set_cli_source`` (without going through
+    a ``CliRunner`` callback) doesn't leak the value to later tests.
     """
     monkeypatch.setattr(
         "setforge.binaries.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )
+    monkeypatch.setattr(
+        "setforge.source.LOCAL_CONFIG_PATH",
+        tmp_path / "local.yaml",
+    )
+    monkeypatch.setattr("setforge.source._cli_source", None)

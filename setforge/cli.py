@@ -89,13 +89,13 @@ _PROFILE_OPTION = typer.Option(
 )
 _SOURCE_OPTION = typer.Option(
     None,
-    "--source",
+    source_mod.CLI_FLAG,
     help="Path to a config source directory (containing my_setup.yaml). "
     "Takes precedence over SETFORGE_SOURCE and "
     "~/.config/setforge/local.yaml `source:` block. Paths only — git "
     "sources live in local.yaml. Per-command --config flag still works "
-    "and overrides any source-layer resolution (legacy path; will be "
-    "removed in a follow-up bead).",
+    "and overrides any source-layer resolution (legacy path; removal "
+    "lands in setforge-2ba.3 alongside the git-mgmt subsystem).",
 )
 
 

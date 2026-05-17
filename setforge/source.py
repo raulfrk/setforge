@@ -25,10 +25,11 @@ at load time.
 
 import os
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
@@ -47,6 +48,17 @@ DEFAULT_CLONE_ROOT: Final[Path] = (
 CONFIG_FILENAME: Final[str] = "my_setup.yaml"
 
 
+class SourceKind(StrEnum):
+    """Discriminator for the :data:`Source` tagged union.
+
+    Mirrors :class:`setforge.config.MarketplaceSourceKind` (the
+    project's established pattern for Pydantic discriminator values).
+    """
+
+    PATH = "path"
+    GIT = "git"
+
+
 class PathSource(BaseModel):
     """Source backed by a directory already on disk.
 
@@ -56,7 +68,7 @@ class PathSource(BaseModel):
 
     model_config = _STRICT
 
-    kind: Literal["path"]
+    kind: Literal[SourceKind.PATH] = SourceKind.PATH
     path: Path
     name: str | None = None
 
@@ -76,7 +88,7 @@ class GitSource(BaseModel):
 
     model_config = _STRICT
 
-    kind: Literal["git"]
+    kind: Literal[SourceKind.GIT] = SourceKind.GIT
     url: str
     ref: str = "main"
     name: str | None = None
@@ -208,17 +220,17 @@ def resolve_source(
     configure.
     """
     if cli_path is not None:
-        return PathSource(kind="path", path=cli_path)
+        return PathSource(path=cli_path)
     env_value = env.get(ENV_VAR)
     if env_value:
-        return PathSource(kind="path", path=Path(env_value))
+        return PathSource(path=Path(env_value))
     local = _load_local_source_config(local_config_path)
     if local.source is not None:
         return local.source
     cwd_resolved = cwd or Path.cwd()
     cwd_yaml = cwd_resolved / CONFIG_FILENAME
     if cwd_yaml.exists():
-        return PathSource(kind="path", path=cwd_resolved, name=cwd_resolved.name)
+        return PathSource(path=cwd_resolved)
     raise NoSourceConfigured(
         "no config source configured. Layers checked in order:\n"
         f"  1. CLI flag {CLI_FLAG} PATH (not provided)\n"
@@ -273,7 +285,7 @@ __all__ = [
     "GitSource",
     "PathSource",
     "Source",
-    "ValidationError",
+    "SourceKind",
     "get_resolved_source",
     "resolve_source",
     "resolve_source_dir",
