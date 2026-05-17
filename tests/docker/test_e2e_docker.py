@@ -1156,7 +1156,7 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
     """
     c = docker_container()
     c.write_text(
-        "/home/tester/.claude/CLAUDE.md",
+        "/home/tester/.my_setup_e2e/sections/marked.md",
         "intro\n"
         "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
@@ -1164,7 +1164,14 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
         "outro\n",
     )
     result = c.exec(
-        ["uv", "run", "setforge", "merge", "--profile=vm-headless"],
+        [
+            "uv",
+            "run",
+            "setforge",
+            "merge",
+            "--profile=test-text-sections",
+            "--config=tests/fixtures/e2e/my_setup.test.yaml",
+        ],
         check=False,
     )
     assert result.returncode != 0, (
@@ -1193,7 +1200,7 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
     """
     c = docker_container()
     c.write_text(
-        "/home/tester/.claude/CLAUDE.md",
+        "/home/tester/.my_setup_e2e/sections/marked.md",
         "intro\n"
         "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
@@ -1201,7 +1208,14 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
         "outro\n",
     )
     result = c.exec(
-        ["uv", "run", "setforge", "sync", "--profile=vm-headless"],
+        [
+            "uv",
+            "run",
+            "setforge",
+            "sync",
+            "--profile=test-text-sections",
+            "--config=tests/fixtures/e2e/my_setup.test.yaml",
+        ],
         check=False,
     )
     assert result.returncode != 0, (
