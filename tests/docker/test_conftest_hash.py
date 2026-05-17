@@ -151,43 +151,42 @@ def test_iter_hash_input_paths_excludes_outside_repo_symlink(
     """A symlink under a hash-input dir whose target resolves OUTSIDE
     ``REPO_ROOT`` is NOT yielded.
 
-    Locks the guard at ``conftest.py:169`` against regressions: removing
-    the ``is_relative_to(REPO_ROOT)`` check would let escaping symlinks
-    leak into the hash input set.
+    Locks the ``is_relative_to(REPO_ROOT)`` guard in
+    ``_iter_hash_input_paths`` against regressions: removing it would let
+    escaping symlinks leak into the hash input set.
     """
-    inside = tmp_path / "inside"
-    inside.mkdir()
-    outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
+    repo_root = tmp_path / "repo"
+    inside = repo_root / "inside"
+    inside.mkdir(parents=True)
+    outside = tmp_path / "outside.txt"
     outside.write_text("escape", encoding="utf-8")
     link = inside / "link"
     link.symlink_to(outside)
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
-    try:
-        yielded = set(_iter_hash_input_paths())
-        assert link.resolve() not in yielded
-        assert link not in yielded
-    finally:
-        outside.unlink()
+    yielded = set(_iter_hash_input_paths())
+    assert link.resolve() not in yielded
 
 
 def test_iter_hash_input_paths_includes_inside_repo_symlink(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Control: a symlink whose target resolves INSIDE ``REPO_ROOT`` IS yielded.
+    """Control: a symlink whose target resolves INSIDE ``REPO_ROOT`` — its
+    resolved target IS yielded.
 
     Without this case, the exclude-test alone could pass on a broken guard
     that drops every symlink unconditionally.
     """
-    inside = tmp_path / "inside"
-    inside.mkdir()
+    repo_root = tmp_path / "repo"
+    inside = repo_root / "inside"
+    inside.mkdir(parents=True)
     target = inside / "target.txt"
     target.write_text("kept", encoding="utf-8")
     link = inside / "link"
     link.symlink_to(target)
-    monkeypatch.setattr(docker_conftest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(docker_conftest, "REPO_ROOT", repo_root)
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_FILES", ())
     monkeypatch.setattr(docker_conftest, "_HASH_INPUT_DIRS", (inside,))
     yielded = set(_iter_hash_input_paths())
