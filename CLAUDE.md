@@ -1,38 +1,38 @@
-# my-setup
+# setforge
 
-Dotfiles + VSCode extensions, driven by a single Python CLI (`my-setup`) and a typed `my_setup.yaml`.
+Tracked files + VSCode extensions, driven by a single Python CLI (`setforge`) and a typed `my_setup.yaml`.
 
 ## The meta-twist: live vs tracked
 
-`tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `my-setup install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `my-setup sync` first.
+`tracked/claude/*` is the source of truth for `~/.claude/*`. Edits to `~/.claude/CLAUDE.md` are ephemeral — only edits to `tracked/claude/CLAUDE.md` survive `setforge install`. When I say "edit CLAUDE.md," confirm which one I mean unless context makes it obvious. Before any edit, run `diff -q ~/.claude/CLAUDE.md tracked/claude/CLAUDE.md` — drift means there are unsaved live edits to capture via `setforge sync` first.
 
 User-section markers in tracked CLAUDE.md (HTML comments around section bodies) make those regions per-host: edits to live `~/.claude/CLAUDE.md` between markers survive a re-install. The marker syntax requires a `host-local|shared` semantics keyword on both start and end markers:
 
 ```
-<!-- my-setup:user-section start host-local NAME -->
+<!-- setforge:user-section start host-local NAME -->
 ... live edits to this body always survive re-install (host-specific) ...
-<!-- my-setup:user-section end host-local NAME -->
+<!-- setforge:user-section end host-local NAME -->
 
-<!-- my-setup:user-section start shared NAME -->
+<!-- setforge:user-section start shared NAME -->
 ... live edits survive too, but tracked-side updates surface in the
     `install --reconcile-user-sections` wizard (rules that should
     propagate across hosts) ...
-<!-- my-setup:user-section end shared NAME -->
+<!-- setforge:user-section end shared NAME -->
 ```
 
 End markers may carry an optional `hash=<sha256-hex>` segment that records the body's baseline hash; `install` rewrites it on every run so the three-way reconciler can tell pending-tracked drift from live edits.
 
 ## Profiles — always pass --profile=
 
-Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md). Never run a `my-setup` command without `--profile=`.
+Daily driver: `vm-headless`. Five profiles total — see [README.md](README.md). Never run a `setforge` command without `--profile=`.
 
 ## Workflow verbs
 
-- `uv run my-setup compare --profile=<name>` — read-only drift check (live vs tracked).
-- `uv run my-setup sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on `preserve_user_keys_deep` sub-keys or top-level non-preserve keys triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
-- `uv run my-setup install --profile=<name>` — deploy tracked → live. Drift inside `shared` user-section markers triggers the reconcile wizard interactively when `--reconcile-user-sections` is passed; for non-interactive use pass `--auto=use-tracked` (deploy tracked-side updates over the live body) or `--auto=keep-live` (silence the warning, keep live). `--reconcile-user-sections` and `--auto=` are mutually exclusive (exit 2). Bare `install` warns once per shared-drifted file and keeps live. `host-local` sections are always preserved-live regardless of flags.
-- `uv run my-setup revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/my-setup/transitions/` (kept indefinitely; pruning is a future bead).
-- `uv run my-setup validate --profile=<name>` — config-shape check (schema + profile chain + Jinja2 + tracked srcs + claude_plugins references). No filesystem comparison; works offline. CI runs `validate --all`.
+- `uv run setforge compare --profile=<name>` — read-only drift check (live vs tracked).
+- `uv run setforge sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on `preserve_user_keys_deep` sub-keys or top-level non-preserve keys triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
+- `uv run setforge install --profile=<name>` — deploy tracked → live. Drift inside `shared` user-section markers triggers the reconcile wizard interactively when `--reconcile-user-sections` is passed; for non-interactive use pass `--auto=use-tracked` (deploy tracked-side updates over the live body) or `--auto=keep-live` (silence the warning, keep live). `--reconcile-user-sections` and `--auto=` are mutually exclusive (exit 2). Bare `install` warns once per shared-drifted file and keeps live. `host-local` sections are always preserved-live regardless of flags.
+- `uv run setforge revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/setforge/transitions/` (kept indefinitely; pruning is a future bead).
+- `uv run setforge validate --profile=<name>` — config-shape check (schema + profile chain + Jinja2 + tracked srcs + claude_plugins references). No filesystem comparison; works offline. CI runs `validate --all`.
 
 ## Docker e2e tests
 
@@ -112,16 +112,16 @@ still need manual `uv sync` recovery — see dotfiles-b6d for scope.
 
 ## The four-tool stack
 
-Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `my-setup install` does NOT bootstrap them.
+Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `setforge install` does NOT bootstrap them.
 
 ## Adding tracked files and extensions
 
-- TrackedFile: edit `my_setup.yaml` to add an entry under `dotfiles:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
+- Tracked file: edit `my_setup.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
 - Extension: add the extension ID to the profile's `extensions.include:` list in `my_setup.yaml`. (Pillar 2 will add an `ext` subcommand that edits this YAML in place.)
 
 ## Host-local, never-tracked
 
-`~/.claude/additional-content.md` is intentionally untracked per host. `my-setup install` creates a stub if missing. Never commit its content.
+`~/.claude/additional-content.md` is intentionally untracked per host. `setforge install` creates a stub if missing. Never commit its content.
 
 `~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. The profile's `preserve_user_keys` overlays those keys from live to tracked on `install`, and `capture` strips them from tracked, so they stay host-local without manual intervention. Comments in the JSONC settings file are preserved end-to-end.
 

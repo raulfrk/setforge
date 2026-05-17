@@ -1,7 +1,7 @@
 version: 1
 
 # ============================================================================
-# Dotfiles. Profiles below pick subsets via `dotfiles:` lists. `src` is
+# Tracked files. Profiles below pick subsets via `tracked_files:` lists. `src` is
 # resolved relative to `tracked/`; `dst` may use Jinja2 templating when
 # `template: true` (only `{{ vscode_user_dir }}` is exposed today).
 # ============================================================================
