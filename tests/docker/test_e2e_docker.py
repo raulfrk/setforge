@@ -902,7 +902,7 @@ _LEGACY_LIVE_TEXT = (
 def test_compare_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """compare refuses legacy live markers with actionable MySetupError.
+    """compare refuses legacy live markers with actionable SetforgeError.
 
     Seeds a pre-9by-shaped live ``marked.md`` (untagged markers, no
     hash segment) and runs ``setforge compare``; asserts non-zero

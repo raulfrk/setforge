@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from setforge.errors import MySetupError
+from setforge.errors import SetforgeError
 
 
 def run_editor(target: Path) -> None:
@@ -16,7 +16,7 @@ def run_editor(target: Path) -> None:
 
     Honors ``EDITOR='code --wait'``-style multi-token invocations via
     :func:`shlex.split`. Pre-validates the editor binary with
-    :func:`shutil.which` and raises :class:`MySetupError` with a
+    :func:`shutil.which` and raises :class:`SetforgeError` with a
     clean message instead of a raw :exc:`FileNotFoundError` when the
     editor is missing. Propagates
     :exc:`subprocess.CalledProcessError` on non-zero exit (caller
@@ -26,11 +26,11 @@ def run_editor(target: Path) -> None:
     try:
         argv = shlex.split(editor)
     except ValueError as exc:
-        raise MySetupError(f"$EDITOR={editor!r} has malformed quoting: {exc}") from exc
+        raise SetforgeError(f"$EDITOR={editor!r} has malformed quoting: {exc}") from exc
     if not argv:
-        raise MySetupError("$EDITOR is empty; set EDITOR=<editor-binary> and retry.")
+        raise SetforgeError("$EDITOR is empty; set EDITOR=<editor-binary> and retry.")
     if shutil.which(argv[0]) is None:
-        raise MySetupError(
+        raise SetforgeError(
             f"editor {argv[0]!r} not found on PATH; "
             f"set $EDITOR or install it, then retry."
         )

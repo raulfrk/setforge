@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.errors import InvalidTransitionRecord, MySetupError, RevertFailed
+from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 from setforge.transitions import (
     ExtensionDelta,
     PluginDelta,
@@ -113,7 +113,7 @@ def test_ensure_state_dir_writable_creates_dir(
 def test_ensure_state_dir_writable_raises_on_unwritable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from setforge.errors import MySetupError
+    from setforge.errors import SetforgeError
     from setforge.transitions import ensure_state_dir_writable
 
     target = tmp_path / "ro" / "transitions"
@@ -121,7 +121,7 @@ def test_ensure_state_dir_writable_raises_on_unwritable(
     target.chmod(0o500)  # read+execute only, no write
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ro"))
     try:
-        with pytest.raises(MySetupError, match="not writable"):
+        with pytest.raises(SetforgeError, match="not writable"):
             ensure_state_dir_writable()
     finally:
         target.chmod(0o700)  # restore for cleanup
@@ -684,7 +684,7 @@ def test_resolve_transition_prefix_zero_match_raises(
     root.mkdir()
     _stub_full_transition(root / "20260507T120000000000Z-install-vmh", profile="vmh")
 
-    with pytest.raises(MySetupError, match="no transition matching prefix"):
+    with pytest.raises(SetforgeError, match="no transition matching prefix"):
         resolve_transition_prefix("19990101")
 
 
@@ -699,7 +699,7 @@ def test_resolve_transition_prefix_ambiguous_lists_candidates(
     _stub_full_transition(a, profile="vmh")
     _stub_full_transition(b, profile="vmh", command="sync")
 
-    with pytest.raises(MySetupError) as exc_info:
+    with pytest.raises(SetforgeError) as exc_info:
         resolve_transition_prefix("20260507T1")
 
     msg = str(exc_info.value)
@@ -715,7 +715,7 @@ def test_resolve_transition_prefix_root_missing(
     ``.iterdir()`` of a missing directory."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "ghost"))
 
-    with pytest.raises(MySetupError, match="no transition matching prefix"):
+    with pytest.raises(SetforgeError, match="no transition matching prefix"):
         resolve_transition_prefix("anything")
 
 
@@ -991,7 +991,7 @@ def test_plugin_delta_from_json_rejects_malformed_marketplaces_removed() -> None
     """Shape-validate ``marketplaces_removed`` entries before constructing
     :class:`PluginDelta`. A corrupted plugins.json (hand-edit, partial
     write) raises :class:`InvalidTransitionRecord` at the JSON boundary
-    so revert aborts cleanly via the ``MySetupError`` handler instead
+    so revert aborts cleanly via the ``SetforgeError`` handler instead
     of crashing mid-flight in
     :func:`_apply_marketplace_re_add`'s tuple unpack."""
     with pytest.raises(InvalidTransitionRecord, match="malformed"):

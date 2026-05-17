@@ -56,9 +56,9 @@ from setforge.errors import (
     ExtensionInstallFailed,
     ExtensionToolMissing,
     MarketplaceCacheMiss,
-    MySetupError,
     NoTransitionFound,
     PluginToolMissing,
+    SetforgeError,
 )
 from setforge.section_reconcile import SectionDrift, SectionDriftState
 from setforge.section_wizard import ReconcileAuto, SectionAction
@@ -223,7 +223,7 @@ def _iter_all_tracked_files(
 def _refuse_legacy_live_markers(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, command: str
 ) -> None:
-    """Raise :class:`MySetupError` if any live ``preserve_user_sections``
+    """Raise :class:`SetforgeError` if any live ``preserve_user_sections``
     file carries pre-9by markers.
 
     Walks every tracked_file in ``resolved`` whose tracked entry has
@@ -245,7 +245,7 @@ def _refuse_legacy_live_markers(
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
         if detect_legacy_markers(live_text):
-            raise MySetupError(
+            raise SetforgeError(
                 f"{sub_dst}: legacy user-section marker format detected "
                 f"(pre-9by markers without 'host-local'/'shared' keyword "
                 f"or 'hash=<sha256>' segment). 'setforge {command}' is "
@@ -1898,7 +1898,7 @@ def _check_profile(
     # Check 2: Profile resolution (covers missing profiles + cycle detection).
     try:
         resolved = resolve_profile(cfg, prof_name)
-    except MySetupError as exc:
+    except SetforgeError as exc:
         failures.append(f"{ctx}: {exc}")
         return
 
@@ -2008,7 +2008,7 @@ def validate(
     # Check 1: Pydantic schema validation + cross-field checks in load_config.
     try:
         cfg = load_config(config)
-    except (ValidationError, MySetupError) as exc:
+    except (ValidationError, SetforgeError) as exc:
         typer.echo(f"schema: {exc}")
         raise typer.Exit(1) from exc
 
@@ -2032,10 +2032,10 @@ def validate(
 
 
 def main() -> None:
-    """Entry point that wraps ``app`` with :class:`MySetupError` handling."""
+    """Entry point that wraps ``app`` with :class:`SetforgeError` handling."""
     try:
         app()
-    except MySetupError as exc:
+    except SetforgeError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         sys.exit(1)
 

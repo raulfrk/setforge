@@ -202,12 +202,12 @@ def test_show_ambiguous_prefix_lists_candidates(
         command="sync",
     )
 
-    from setforge.errors import MySetupError
+    from setforge.errors import SetforgeError
 
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1"])
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, MySetupError)
+    assert isinstance(result.exception, SetforgeError)
     msg = str(result.exception)
     assert "matches 2 transitions" in msg
     assert "20260507T120000000000Z-install-vmh" in msg
@@ -222,12 +222,12 @@ def test_show_zero_match_prefix_errors(
     root.mkdir()
     _stub(root, dirname="20260507T120000000000Z-install-vmh", profile="vmh")
 
-    from setforge.errors import MySetupError
+    from setforge.errors import SetforgeError
 
     result = CliRunner().invoke(app, ["transitions", "show", "19990101"])
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, MySetupError)
+    assert isinstance(result.exception, SetforgeError)
 
 
 def test_show_omits_files_section_when_no_patch(

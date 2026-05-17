@@ -9,7 +9,7 @@ import pytest
 
 from setforge import _editor
 from setforge._editor import run_editor
-from setforge.errors import MySetupError
+from setforge.errors import SetforgeError
 
 
 def test_missing_editor_raises_mysetuperror(
@@ -17,7 +17,7 @@ def test_missing_editor_raises_mysetuperror(
 ) -> None:
     monkeypatch.setenv("EDITOR", "nonexistent-binary-xyz-987")
     target = tmp_path / "file.md"
-    with pytest.raises(MySetupError, match=r"not found on PATH"):
+    with pytest.raises(SetforgeError, match=r"not found on PATH"):
         run_editor(target)
 
 
@@ -26,7 +26,7 @@ def test_empty_editor_raises_mysetuperror(
 ) -> None:
     monkeypatch.setenv("EDITOR", "")
     target = tmp_path / "file.md"
-    with pytest.raises(MySetupError, match=r"\$EDITOR is empty"):
+    with pytest.raises(SetforgeError, match=r"\$EDITOR is empty"):
         run_editor(target)
 
 
@@ -54,10 +54,10 @@ def test_run_editor_wraps_shlex_split_value_error(
     monkeypatch.setenv("EDITOR", "vi 'unclosed")
     target = tmp_path / "f.txt"
     target.touch()
-    with pytest.raises(MySetupError, match="malformed quoting") as excinfo:
+    with pytest.raises(SetforgeError, match="malformed quoting") as excinfo:
         run_editor(target)
     assert isinstance(excinfo.value.__cause__, ValueError), (
-        "expected MySetupError to chain via `from exc` to preserve shlex column info"
+        "expected SetforgeError to chain via `from exc` to preserve shlex column info"
     )
 
 

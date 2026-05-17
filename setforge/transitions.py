@@ -29,7 +29,7 @@ from pathlib import Path
 
 from setforge import __version__
 from setforge.binaries import resolve_binary
-from setforge.errors import InvalidTransitionRecord, MySetupError, RevertFailed
+from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 
 
 class TransitionCommand(StrEnum):
@@ -79,7 +79,7 @@ def ensure_state_dir_writable() -> None:
         probe.touch()
         probe.unlink()
     except OSError as exc:
-        raise MySetupError(
+        raise SetforgeError(
             f"transition state dir not writable: {root} ({exc})"
         ) from exc
 
@@ -325,7 +325,7 @@ def plugin_delta_from_json(raw: dict[str, object]) -> PluginDelta:
     :class:`ValueError` at the tuple-unpack in
     :func:`_apply_marketplace_re_add`, aborting revert mid-flight.
     With the guard, the failure is caught cleanly at the
-    ``MySetupError`` boundary before any inverse op runs.
+    ``SetforgeError`` boundary before any inverse op runs.
 
     Other list-of-string fields are validated via
     :func:`_validated_str_list`, which raises the same
@@ -377,7 +377,7 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
     corrupted extensions.json (hand-edit, partial write, or a bug in a
     future writer) would surface as an opaque :class:`TypeError` from
     a downstream ``iter()`` call rather than a clean
-    :class:`MySetupError` at the JSON boundary.
+    :class:`SetforgeError` at the JSON boundary.
     """
     return ExtensionDelta(
         added=_validated_str_list(
@@ -743,16 +743,16 @@ def resolve_transition_prefix(prefix: str) -> Path:
     Resolution rules:
     1. Exact dirname match → return that directory.
     2. Otherwise collect every directory whose dirname starts with ``prefix``.
-    3. Zero matches → raise :class:`MySetupError`.
+    3. Zero matches → raise :class:`SetforgeError`.
     4. One match → return it.
-    5. Multiple matches → raise :class:`MySetupError` listing every candidate
+    5. Multiple matches → raise :class:`SetforgeError` listing every candidate
        sorted ascending so the user can disambiguate.
 
     Used by ``setforge transitions show <prefix>``. Read-only.
     """
     root = transitions_root()
     if not root.exists():
-        raise MySetupError(f"no transition matching prefix {prefix!r}")
+        raise SetforgeError(f"no transition matching prefix {prefix!r}")
     exact = root / prefix
     if exact.is_dir() and (exact / "meta.json").exists():
         return exact
@@ -765,10 +765,10 @@ def resolve_transition_prefix(prefix: str) -> Path:
         and (child / "meta.json").exists()
     )
     if not matches:
-        raise MySetupError(f"no transition matching prefix {prefix!r}")
+        raise SetforgeError(f"no transition matching prefix {prefix!r}")
     if len(matches) > 1:
         joined = "\n  ".join(child.name for child in matches)
-        raise MySetupError(
+        raise SetforgeError(
             f"prefix {prefix!r} matches {len(matches)} transitions:\n  {joined}"
         )
     return matches[0]
