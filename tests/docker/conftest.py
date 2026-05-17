@@ -190,6 +190,8 @@ def _compute_inputs_hash() -> str:
     return digest.hexdigest()[:12]
 
 
+# Session-scoped cache: do NOT invoke _image_tag.cache_clear() mid-session
+# — it breaks the per-session hash invariant the docstring promises.
 @functools.cache
 def _image_tag() -> str:
     """Return the per-session content-hashed image tag (cached)."""
