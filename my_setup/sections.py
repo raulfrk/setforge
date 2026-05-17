@@ -367,6 +367,10 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
     placeholder_lines: list[str] = []
     consumed: set[str] = set()
 
+    # The uniform line=line capture is the selective style here: every
+    # arm of this cascade legitimately consumes ``line``. Compare
+    # ``extract_sections`` above where some arms (e.g. ``_StartMarker()``)
+    # genuinely don't need the capture and elide it.
     for event in _walk_markers(tracked_text):
         match event:
             case _OutsideLine(line=line):
