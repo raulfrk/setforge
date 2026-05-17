@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import FrameType
+from typing import Self
 
 from rich.console import Console
 from rich.table import Table
@@ -158,7 +159,7 @@ class Snapshot:
     snapshot_base: Path
     snapshot_dir: Path = field(default_factory=lambda: Path("."))
 
-    def __enter__(self) -> "Snapshot":
+    def __enter__(self) -> Self:
         """Create snapshot dir and copy each file into it."""
         ts = time.strftime("%Y%m%dT%H%M%S")
         self.snapshot_dir = self.snapshot_base / ts
