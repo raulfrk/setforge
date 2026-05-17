@@ -82,6 +82,15 @@ _MARKER_PREFIX_RE = re.compile(
     r"^\s*<!--\s*setforge:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
 )
 
+# Pre-rename (setforge-2ba.1) namespace detector. Live files deployed
+# before the my-setup → setforge rename carry markers like
+# ``<!-- my-setup:user-section start ... -->``; the post-rename parser
+# (_MARKER_PREFIX_RE above) doesn't recognize them, which would silently
+# drop section bodies on the first post-rename install. Used by
+# :func:`detect_legacy_namespace_markers` to give the user a clear
+# "run sed to migrate" error instead.
+_LEGACY_NAMESPACE_RE = re.compile(r"^\s*<!--\s*my-setup:user-section\s+(start|end)\b")
+
 _HASH_VALUE_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -344,6 +353,27 @@ def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerE
         name = state.section_name
         ident = name if name is not None else str(state.unnamed_index)
         raise MarkerError(f"unclosed user-section (started as {ident!r})")
+
+
+def detect_legacy_namespace_markers(text: str) -> bool:
+    """Return ``True`` if ``text`` contains any pre-rename
+    ``my-setup:user-section`` marker.
+
+    Detects markers carrying the OLD namespace from before the
+    my-setup → setforge rename (setforge-2ba.1). Such markers are
+    silently ignored by the post-rename parser; this detector lets
+    the CLI surface a clear "run sed migration" error before any
+    install/sync/compare run loses host-local section bodies.
+
+    Migration recipe (one-shot per host, per file):
+
+        sed -i 's/my-setup:user-section/setforge:user-section/g' \\
+            ~/.claude/CLAUDE.md  # or any other deployed file
+
+    Regex-only scan; no parser invocation. Returns ``True`` on the
+    first occurrence found.
+    """
+    return any(_LEGACY_NAMESPACE_RE.match(line) for line in text.splitlines())
 
 
 def detect_legacy_markers(text: str) -> bool:

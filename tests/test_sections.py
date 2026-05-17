@@ -834,6 +834,58 @@ def test_detect_legacy_markers_flags_malformed_end_hash() -> None:
     assert detect_legacy_markers(text) is True
 
 
+# ---------------------------------------------------------------------------
+# setforge-2ba.7 — detect_legacy_namespace_markers helper
+# (post-rename detection of pre-rename `my-setup:user-section` markers)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_legacy_namespace_markers_returns_true_for_old_start() -> None:
+    text = "<!-- my-setup:user-section start shared workflow -->\n"
+    from setforge.sections import detect_legacy_namespace_markers
+
+    assert detect_legacy_namespace_markers(text) is True
+
+
+def test_detect_legacy_namespace_markers_returns_true_for_old_end() -> None:
+    text = f"<!-- my-setup:user-section end shared workflow hash={_HASH_HEX_64} -->\n"
+    from setforge.sections import detect_legacy_namespace_markers
+
+    assert detect_legacy_namespace_markers(text) is True
+
+
+def test_detect_legacy_namespace_markers_returns_false_for_new_namespace() -> None:
+    text = (
+        "<!-- setforge:user-section start shared workflow -->\n"
+        "body\n"
+        f"<!-- setforge:user-section end shared workflow hash={_HASH_HEX_64} -->\n"
+    )
+    from setforge.sections import detect_legacy_namespace_markers
+
+    assert detect_legacy_namespace_markers(text) is False
+
+
+def test_detect_legacy_namespace_markers_returns_false_for_no_markers() -> None:
+    from setforge.sections import detect_legacy_namespace_markers
+
+    assert detect_legacy_namespace_markers("plain text\nno markers\n") is False
+
+
+def test_detect_legacy_namespace_markers_flags_mixed_namespaces() -> None:
+    """A file with BOTH old and new namespace markers still flags as legacy."""
+    text = (
+        "<!-- setforge:user-section start shared a -->\n"
+        "body\n"
+        f"<!-- setforge:user-section end shared a hash={_HASH_HEX_64} -->\n"
+        "<!-- my-setup:user-section start shared b -->\n"
+        "body2\n"
+        f"<!-- my-setup:user-section end shared b hash={_HASH_HEX_64} -->\n"
+    )
+    from setforge.sections import detect_legacy_namespace_markers
+
+    assert detect_legacy_namespace_markers(text) is True
+
+
 def test_malformed_hash_segment_raises_in_strict_mode() -> None:
     """A non-64-hex ``hash=`` value is rejected with a clear MarkerError."""
     text = (

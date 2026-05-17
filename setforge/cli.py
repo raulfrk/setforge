@@ -63,7 +63,11 @@ from setforge.errors import (
 )
 from setforge.section_reconcile import SectionDrift, SectionDriftState
 from setforge.section_wizard import ReconcileAuto, SectionAction
-from setforge.sections import SectionSemantics, detect_legacy_markers
+from setforge.sections import (
+    SectionSemantics,
+    detect_legacy_markers,
+    detect_legacy_namespace_markers,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -281,6 +285,16 @@ def _refuse_legacy_live_markers(
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
+        if detect_legacy_namespace_markers(live_text):
+            raise SetforgeError(
+                f"{sub_dst}: legacy 'my-setup:user-section' marker namespace "
+                f"detected (pre-rename from setforge-2ba.1). The post-rename "
+                f"parser does not recognize these markers, so 'setforge "
+                f"{command}' would silently drop host-local section bodies. "
+                f"Migrate the file in place with:\n"
+                f"  sed -i 's/my-setup:user-section/setforge:user-section/g' "
+                f"{sub_dst}"
+            )
         if detect_legacy_markers(live_text):
             raise SetforgeError(
                 f"{sub_dst}: legacy user-section marker format detected "
