@@ -150,7 +150,9 @@ def _iter_hash_input_paths() -> Iterator[Path]:
     seen: set[Path] = set()
     for path in _HASH_INPUT_FILES:
         if path.is_file():
-            seen.add(path.resolve())
+            resolved = path.resolve()
+            if resolved.is_relative_to(REPO_ROOT):
+                seen.add(resolved)
     for root in _HASH_INPUT_DIRS:
         if not root.is_dir():
             continue
@@ -163,7 +165,10 @@ def _iter_hash_input_paths() -> Iterator[Path]:
                 continue
             if any(part in excluded_dirs for part in path.parts):
                 continue
-            seen.add(path.resolve())
+            resolved = path.resolve()
+            if not resolved.is_relative_to(REPO_ROOT):
+                continue
+            seen.add(resolved)
     yield from sorted(seen, key=lambda p: p.relative_to(REPO_ROOT).as_posix())
 
 
