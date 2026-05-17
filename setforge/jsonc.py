@@ -76,7 +76,7 @@ def _split_path(name: str) -> list[str]:
 
     Single-segment names (no separator) return ``[name]`` — v1 literal
     top-level behavior. Whitespace-only segments are not stripped; the
-    Pydantic validator at :class:`setforge.config.Dotfile` rejects
+    Pydantic validator at :class:`setforge.config.TrackedFile` rejects
     malformed paths at config-load time.
     """
     if PATH_SEPARATOR not in name:

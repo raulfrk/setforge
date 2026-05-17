@@ -22,7 +22,7 @@ _STRICT = ConfigDict(extra="forbid")
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
 _PRESERVE_PATH_SEPARATOR: str = " > "
-"""Segment separator for nested-path entries in ``Dotfile.preserve_user_keys``.
+"""Segment separator for nested-path entries in ``TrackedFile.preserve_user_keys``.
 
 Mirrors :data:`setforge.jsonc.PATH_SEPARATOR` — re-declared here so the
 config schema does not depend on the JSONC module at import time.
@@ -76,7 +76,7 @@ class SectionMode(StrEnum):
     STRIP = "strip"
 
 
-class Dotfile(BaseModel):
+class TrackedFile(BaseModel):
     model_config = _STRICT
 
     src: Path
@@ -239,7 +239,7 @@ class Config(BaseModel):
     model_config = _STRICT
 
     version: int = 1
-    dotfiles: dict[str, Dotfile]
+    dotfiles: dict[str, TrackedFile]
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
     profiles: dict[str, Profile]

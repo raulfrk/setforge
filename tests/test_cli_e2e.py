@@ -491,7 +491,7 @@ class TestInstall:
         assert fk.install_args() == ["editorconfig.editorconfig"]
         assert fk.installed_set() == {"editorconfig.editorconfig"}
 
-        # Dotfile leg still completed.
+        # TrackedFile leg still completed.
         root = sandboxed_home / ".my_setup_e2e" / "comprehensive"
         assert (root / "notes.md").exists()
 

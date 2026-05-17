@@ -25,7 +25,7 @@ import pytest
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge.compare import CompareReport, CompareStatus, FileCompare
-from setforge.config import Config, Dotfile, Profile
+from setforge.config import Config, Profile, TrackedFile
 from setforge.merge import walk_unexpected_drift
 from setforge.wizard import (
     ActionResult,
@@ -103,7 +103,7 @@ def _make_config(
     _write(dst, dst_text)
     config = Config(
         dotfiles={
-            dotfile_name: Dotfile(
+            dotfile_name: TrackedFile(
                 src=Path(f"{dotfile_name}{ext}"),
                 dst=str(dst),
                 preserve_user_keys=preserve or [],
@@ -639,7 +639,7 @@ def test_manual_pending_records_transition_for_applied(
     # Two drift keys: first -> [k], second -> [m]+n
     config = Config(
         dotfiles={
-            "x": Dotfile(
+            "x": TrackedFile(
                 src=Path("x.yaml"),
                 dst=str(tmp_path / "live" / "x.yaml"),
                 preserve_user_keys=["a"],

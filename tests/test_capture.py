@@ -7,7 +7,7 @@ from setforge.capture import (
     capture_dotfile,
     capture_profile,
 )
-from setforge.config import Config, Dotfile, Profile, SectionMode
+from setforge.config import Config, Profile, SectionMode, TrackedFile
 
 
 def _write(path: Path, content: str) -> None:
@@ -160,7 +160,7 @@ def test_dotfile_default_section_mode_is_keep_defaults() -> None:
     """Schema default protects users from accidental destruction. If this
     flips, every existing yaml with `preserve_user_sections: true` would
     silently start stripping global defaults on sync."""
-    assert Dotfile(src=Path("x"), dst="y").preserve_user_sections_mode is (
+    assert TrackedFile(src=Path("x"), dst="y").preserve_user_sections_mode is (
         SectionMode.KEEP_DEFAULTS
     )
 
@@ -213,8 +213,8 @@ def test_capture_profile_iterates_dotfiles(tmp_path: Path) -> None:
 
     config = Config(
         dotfiles={
-            "x": Dotfile(src=Path("x"), dst=str(dst1)),
-            "y": Dotfile(src=Path("y"), dst=str(dst2)),
+            "x": TrackedFile(src=Path("x"), dst=str(dst1)),
+            "y": TrackedFile(src=Path("y"), dst=str(dst2)),
         },
         profiles={"p": Profile(dotfiles=["x", "y"])},
     )

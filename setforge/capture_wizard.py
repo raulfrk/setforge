@@ -6,7 +6,7 @@ Today's ``my-setup sync`` (capture) is a silent absorb: read live, strip
 addresses:
 
 1. **Deep-merge sub-key drift** — once
-   :class:`setforge.config.Dotfile.preserve_user_keys_deep` declares a
+   :class:`setforge.config.TrackedFile.preserve_user_keys_deep` declares a
    path, tracked is supposed to retain hand-maintained baseline content
    at deep sub-keys. The whole-subtree strip on capture undid that on
    the first ``sync``.

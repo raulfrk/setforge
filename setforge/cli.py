@@ -39,10 +39,10 @@ from setforge.compare import CompareStatus, expand_dotfile, resolve_dst, resolve
 from setforge.config import (
     ClaudeInstallMode,
     Config,
-    Dotfile,
     MarketplaceSource,
     ReconcilePolicy,
     ResolvedProfile,
+    TrackedFile,
     load_config,
     resolve_profile,
 )
@@ -195,7 +195,7 @@ def _iter_section_dotfiles(
 
 def _iter_all_dotfiles(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> Iterator[tuple[Dotfile, Path, Path]]:
+) -> Iterator[tuple[TrackedFile, Path, Path]]:
     """Yield ``(dotfile, sub_src, sub_dst)`` for every dotfile in ``resolved.dotfiles``.
 
     Sibling of :func:`_iter_section_dotfiles` without the

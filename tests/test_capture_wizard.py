@@ -4,7 +4,7 @@ Walker tests (Phase A) cover the two flavors of capture-time drift the
 walker yields:
 
 1. Deep-merge sub-key drift — for paths in
-   ``Dotfile.preserve_user_keys_deep``, walk per-sub-key.
+   ``TrackedFile.preserve_user_keys_deep``, walk per-sub-key.
 2. Non-preserve top-level drift — for top-level keys not covered by
    any preserve list (symmetric with install's
    ``walk_unexpected_drift``).
@@ -31,7 +31,7 @@ from rich.console import Console
 
 from setforge.capture import CaptureAction, CaptureAuto, capture_profile
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
-from setforge.config import Config, Dotfile, Profile
+from setforge.config import Config, Profile, TrackedFile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.transitions import TransitionCommand
 from setforge.wizard import ActionResult, DriftItem, DriftMode, FileFormat
@@ -70,7 +70,7 @@ def _make_config(
     _write(dst, dst_text)
     config = Config(
         dotfiles={
-            dotfile_name: Dotfile(
+            dotfile_name: TrackedFile(
                 src=Path(f"{dotfile_name}{ext}"),
                 dst=str(dst),
                 preserve_user_keys=preserve_user_keys or [],
@@ -287,7 +287,7 @@ def test_walker_skips_when_live_missing(tmp_path: Path) -> None:
     dst = tmp_path / "live" / "x.yaml"
     # Don't create dst.
     config = Config(
-        dotfiles={"x": Dotfile(src=Path("x.yaml"), dst=str(dst))},
+        dotfiles={"x": TrackedFile(src=Path("x.yaml"), dst=str(dst))},
         profiles={"p": Profile(dotfiles=["x"])},
     )
     items = list(walk_capture_drift(config, "p", repo))
@@ -307,8 +307,8 @@ def test_walker_honors_dotfile_filter(tmp_path: Path) -> None:
     _write(dst2, "a: 99\n")
     config = Config(
         dotfiles={
-            "x": Dotfile(src=Path("x.yaml"), dst=str(dst1)),
-            "y": Dotfile(src=Path("y.yaml"), dst=str(dst2)),
+            "x": TrackedFile(src=Path("x.yaml"), dst=str(dst1)),
+            "y": TrackedFile(src=Path("y.yaml"), dst=str(dst2)),
         },
         profiles={"p": Profile(dotfiles=["x", "y"])},
     )
@@ -331,7 +331,7 @@ def test_walker_skips_section_dotfiles(tmp_path: Path) -> None:
     _write(dst, "# live\n")
     config = Config(
         dotfiles={
-            "x": Dotfile(
+            "x": TrackedFile(
                 src=Path("x.md"),
                 dst=str(dst),
                 preserve_user_sections=True,

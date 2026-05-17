@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 
 from setforge import sections
-from setforge.config import Config, Dotfile, Profile, resolve_profile
+from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.deploy import (
     DeployAction,
     DeployResult,
@@ -343,7 +343,7 @@ def _build_profile(tmp_path: Path, present: list[str], missing: list[str]):
         (repo / "tracked" / name).write_text("data\n")
     cfg = Config(
         dotfiles={
-            name: Dotfile(src=Path(name), dst=str(live / name))
+            name: TrackedFile(src=Path(name), dst=str(live / name))
             for name in (*present, *missing)
         },
         profiles={"p": Profile(dotfiles=[*present, *missing])},

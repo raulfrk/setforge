@@ -166,7 +166,7 @@ def _apply_deep_overlay(
     kind, key = tokens[0]
     rest = tokens[1:]
     if kind != "key":
-        # Validator on Dotfile.preserve_user_keys_deep already rejects
+        # Validator on TrackedFile.preserve_user_keys_deep already rejects
         # [*] / [] suffixes — defensive only.
         raise ValueError(f"deep overlay does not support {path!r}")
     if not isinstance(live_node, Mapping) or key not in live_node:

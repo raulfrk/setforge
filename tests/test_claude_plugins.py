@@ -24,12 +24,12 @@ from setforge.config import (
     ClaudeInstallMode,
     ClaudePluginRef,
     Config,
-    Dotfile,
     MarketplaceSource,
     MarketplaceSourceKind,
     Profile,
     ReconcilePolicy,
     ResolvedProfile,
+    TrackedFile,
 )
 from setforge.errors import ConfigError, PluginToolMissing
 
@@ -45,7 +45,7 @@ def _make_config(
 ) -> Config:
     """Build a minimal Config for reconcile tests."""
     return Config(
-        dotfiles={"d": Dotfile(src=Path("tracked/x"), dst="~/x")},
+        dotfiles={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
         marketplaces=marketplaces or {},
         claude_plugins=claude_plugins or {},
         profiles={"default": Profile(dotfiles=["d"])},

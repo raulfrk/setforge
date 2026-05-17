@@ -12,7 +12,7 @@ from setforge.compare import (
     compare_summary_table,
     diff_file,
 )
-from setforge.config import Config, Dotfile, Profile
+from setforge.config import Config, Profile, TrackedFile
 
 
 def _write(path: Path, content: str) -> None:
@@ -201,7 +201,7 @@ def test_classify_yaml_drift_list_whole(tmp_path: Path) -> None:
     assert unexpected == []
 
 
-def _make_config(profile: Profile, dotfile: Dotfile, key: str) -> Config:
+def _make_config(profile: Profile, dotfile: TrackedFile, key: str) -> Config:
     return Config(
         dotfiles={key: dotfile},
         profiles={"p": profile},
@@ -217,7 +217,7 @@ def test_compare_profile_unchanged(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x"), dst=str(dst)),
+        TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -235,7 +235,7 @@ def test_compare_profile_drifted_markdown_unexpected(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x.md"), dst=str(dst)),
+        TrackedFile(src=Path("x.md"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -252,7 +252,7 @@ def test_compare_profile_yaml_all_expected(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
+        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -272,7 +272,7 @@ def test_compare_profile_yaml_mixed_drift(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
+        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -291,7 +291,7 @@ def test_compare_profile_missing_dst(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x"), dst=str(dst)),
+        TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -315,7 +315,7 @@ def _make_config_with_yaml(
     _write(dst, dst_text)
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=preserve),
+        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=preserve),
         "x",
     )
     return config, repo
@@ -331,7 +331,7 @@ def test_compare_summary_table_renders_headers(tmp_path: Path) -> None:
     _write(dst, "a: 1\n")
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x.yaml"), dst=str(dst)),
+        TrackedFile(src=Path("x.yaml"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -369,7 +369,7 @@ def test_check_flag_clean_exits_0(tmp_path: Path) -> None:
     _write(dst, "same\n")
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x"), dst=str(dst)),
+        TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -416,7 +416,7 @@ def test_check_strict_clean_is_not_drifted(tmp_path: Path) -> None:
     _write(dst, "same\n")
     config = _make_config(
         Profile(dotfiles=["x"]),
-        Dotfile(src=Path("x"), dst=str(dst)),
+        TrackedFile(src=Path("x"), dst=str(dst)),
         "x",
     )
     report = compare_profile(config, "p", repo)

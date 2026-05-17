@@ -8,13 +8,13 @@ from pydantic import ValidationError
 from setforge.config import (
     ClaudePluginRef,
     Config,
-    Dotfile,
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
     Profile,
     ReconcilePolicy,
     ResolvedProfile,
+    TrackedFile,
     load_config,
     resolve_profile,
 )
@@ -147,7 +147,7 @@ profiles:
 
 
 def test_dotfile_defaults() -> None:
-    df = Dotfile(src=Path("a"), dst="b")
+    df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
     assert df.preserve_user_sections is False
     assert df.preserve_user_keys == []
@@ -158,21 +158,21 @@ def test_dotfile_rejects_tab_in_src() -> None:
     transitions; reject at config-load time with the offending byte
     surfaced as ``\\xNN`` for diagnosability."""
     with pytest.raises(ValidationError) as exc_info:
-        Dotfile(src=Path("path/with\ttab"), dst="~/x")
+        TrackedFile(src=Path("path/with\ttab"), dst="~/x")
     assert "\\x09" in str(exc_info.value)
 
 
 def test_dotfile_rejects_newline_in_dst() -> None:
     """Same hazard via ``dst``; ensure both fields are guarded."""
     with pytest.raises(ValidationError) as exc_info:
-        Dotfile(src=Path("ok"), dst="bad\npath")
+        TrackedFile(src=Path("ok"), dst="bad\npath")
     assert "\\x0a" in str(exc_info.value)
 
 
 def test_dotfile_accepts_paths_with_spaces_and_unicode() -> None:
     """Negative test guarding against over-rejection: spaces and
     non-ASCII (C1+) characters are valid in real paths."""
-    df = Dotfile(src=Path("my path/with spaces.txt"), dst="~/some/é-named/file")
+    df = TrackedFile(src=Path("my path/with spaces.txt"), dst="~/some/é-named/file")
     assert df.dst == "~/some/é-named/file"
 
 
@@ -200,7 +200,7 @@ def test_config_round_trip_via_model() -> None:
 
 def _cfg(profiles: dict[str, Profile]) -> Config:
     return Config(
-        dotfiles={"d": Dotfile(src=Path("a"), dst="b")},
+        dotfiles={"d": TrackedFile(src=Path("a"), dst="b")},
         profiles=profiles,
     )
 
@@ -325,7 +325,7 @@ def test_resolve_unknown_parent_raises() -> None:
 
 def test_dotfile_rejects_unknown_field() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        Dotfile.model_validate({"src": "a", "dst": "b", "typo": True})
+        TrackedFile.model_validate({"src": "a", "dst": "b", "typo": True})
 
 
 def test_profile_rejects_unknown_field() -> None:
@@ -383,7 +383,7 @@ def test_config_rejects_unknown_field_in_nested_dotfile() -> None:
 
 def test_dotfile_rejects_path_in_both_preserve_lists() -> None:
     with pytest.raises(ValidationError, match="declared in both"):
-        Dotfile(
+        TrackedFile(
             src=Path("a"),
             dst="b",
             preserve_user_keys=["a.b"],
@@ -394,7 +394,7 @@ def test_dotfile_rejects_path_in_both_preserve_lists() -> None:
 @pytest.mark.parametrize("path", ["a[*]", "a[]"])
 def test_dotfile_rejects_list_suffix_in_preserve_user_keys_deep(path: str) -> None:
     with pytest.raises(ValidationError, match="does not support"):
-        Dotfile(
+        TrackedFile(
             src=Path("a"),
             dst="b",
             preserve_user_keys_deep=[path],

@@ -116,7 +116,7 @@ Beads + Superpowers configured by this repo. Repomix + worktrunk installed exter
 
 ## Adding tracked files and extensions
 
-- Dotfile: edit `my_setup.yaml` to add an entry under `dotfiles:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
+- TrackedFile: edit `my_setup.yaml` to add an entry under `dotfiles:` and reference it from the relevant profile, then place the source file under `tracked/<src>`.
 - Extension: add the extension ID to the profile's `extensions.include:` list in `my_setup.yaml`. (Pillar 2 will add an `ext` subcommand that edits this YAML in place.)
 
 ## Host-local, never-tracked

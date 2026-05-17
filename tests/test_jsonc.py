@@ -413,30 +413,34 @@ def test_pydantic_rejects_empty_path_segment() -> None:
     """Leading ``" > "`` produces an empty first segment → reject."""
     from pydantic import ValidationError
 
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[" > foo"])
+        TrackedFile(
+            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[" > foo"]
+        )
 
 
 def test_pydantic_rejects_trailing_separator() -> None:
     """Trailing ``" > "`` produces an empty last segment → reject."""
     from pydantic import ValidationError
 
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo > "])
+        TrackedFile(
+            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo > "]
+        )
 
 
 def test_pydantic_rejects_whitespace_only_segment() -> None:
     """A segment that's just whitespace is rejected as malformed."""
     from pydantic import ValidationError
 
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        Dotfile(
+        TrackedFile(
             src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo >    > bar"]
         )
 
@@ -445,10 +449,10 @@ def test_pydantic_rejects_empty_string_path() -> None:
     """An empty path string is rejected."""
     from pydantic import ValidationError
 
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        Dotfile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[""])
+        TrackedFile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[""])
 
 
 def test_pydantic_rejects_head_collision_with_deep_list() -> None:
@@ -457,10 +461,10 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
     whole-subtree vs leaf)."""
     from pydantic import ValidationError
 
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        Dotfile(
+        TrackedFile(
             src=Path("a.json"),
             dst="/tmp/a.json",
             preserve_user_keys=["[python] > editor.fontSize"],
@@ -470,9 +474,9 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
 
 def test_pydantic_accepts_well_formed_nested_path() -> None:
     """Sanity check: a clean two-segment path is accepted."""
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
-    dotfile = Dotfile(
+    dotfile = TrackedFile(
         src=Path("a.json"),
         dst="/tmp/a.json",
         preserve_user_keys=["[python] > editor.fontSize"],
@@ -482,9 +486,9 @@ def test_pydantic_accepts_well_formed_nested_path() -> None:
 
 def test_pydantic_accepts_flat_v1_paths() -> None:
     """Sanity check: single-segment names (no separator) still accepted."""
-    from setforge.config import Dotfile
+    from setforge.config import TrackedFile
 
-    dotfile = Dotfile(
+    dotfile = TrackedFile(
         src=Path("a.json"),
         dst="/tmp/a.json",
         preserve_user_keys=["claudeCode.foo"],

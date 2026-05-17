@@ -22,7 +22,7 @@ from rich.table import Table
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, sections, yaml_merge
-from setforge.config import Config, Dotfile, resolve_profile
+from setforge.config import Config, TrackedFile, resolve_profile
 from setforge.paths import template_context
 
 
@@ -47,13 +47,13 @@ class CompareReport:
     has_unexpected_drift: bool
 
 
-def resolve_src(dotfile: Dotfile, repo_root: Path) -> Path:
+def resolve_src(dotfile: TrackedFile, repo_root: Path) -> Path:
     """Resolve a dotfile's ``src`` (relative to ``tracked/``) to an
     absolute path inside the repo."""
     return repo_root / "tracked" / dotfile.src
 
 
-def resolve_dst(dotfile: Dotfile) -> Path:
+def resolve_dst(dotfile: TrackedFile) -> Path:
     """Resolve a dotfile's ``dst`` template (if any) to an absolute path
     via Jinja2 + ``~`` expansion."""
     raw = dotfile.dst
@@ -297,7 +297,7 @@ def compare_profile(
 
 
 def _compare_one(
-    name: str, src: Path, dst: Path, dotfile: Dotfile
+    name: str, src: Path, dst: Path, dotfile: TrackedFile
 ) -> tuple[FileCompare, bool]:
     if not dst.exists():
         return (

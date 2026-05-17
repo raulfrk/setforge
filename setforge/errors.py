@@ -21,7 +21,7 @@ class ProfileNotFound(ConfigError):
 
 
 class MissingTrackedFile(MySetupError):
-    """Raised when a Dotfile entry's ``src`` path does not exist on disk
+    """Raised when a TrackedFile entry's ``src`` path does not exist on disk
     at deploy time."""
 
 
