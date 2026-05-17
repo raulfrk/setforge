@@ -27,7 +27,7 @@ Your aspects to check:
 3. **Enforcement-layer correctness** — a rule lands in the file whose enforcement properties match its scope:
    - Cross-project critical rules → `tracked/claude/CLAUDE.md` (OVERRIDE wrapper, always loaded).
    - Workflow-flow detail → `tracked/claude/superpowers-prefs.md` (OVERRIDE via @import).
-   - Project-specific tool conventions → `setforge/CLAUDE.md` (project-scope).
+   - Project-specific tool conventions → `my-setup/CLAUDE.md` (project root) (project-scope).
    - Per-tool operational details → relevant skill (`bd-reference`, `wt-reference`).
    - Automatable enforcement → settings.json hooks.
    Misplaced rules (e.g., a workflow detail in CLAUDE.md instead of superpowers-prefs.md, or a tool detail inline instead of in the skill) are IMPORTANT.
@@ -50,5 +50,5 @@ Definition of done:
 - [ ] Confirmed user-section markers in tracked CLAUDE.md remain intact.
 - [ ] For each new rule, validated its file matches the enforcement-layer match: cross-project critical → CLAUDE.md; workflow flow → superpowers-prefs.md; project tool → setforge/CLAUDE.md; per-tool → skill.
 - [ ] For every observation listed in the spec, traced its codification or its deferral.
-- [ ] If `my_setup.yaml` touched: confirmed new entries match existing `tracked files:` pattern and profile names are valid.
+- [ ] If `my_setup.yaml` touched: confirmed new entries match existing `tracked_files:` pattern and profile names are valid.
 - [ ] Validated cross-references to skills (bd-reference, wt-reference) point at real skill content.

@@ -1799,7 +1799,7 @@ def test_roundtrip_file_and_plugin_state(
     # File state reversed — the comprehensive dir was created from
     # absence on install, so revert deletes its contents. (``revert``
     # only reverses files it touched on install; bootstrap stubs may
-    # survive but the tracked tracked_file content does not.)
+    # survive but the tracked_file content does not.)
     notes = live_root / "notes.md"
     assert not notes.exists() or notes.read_text() == ""
     # Plugin state reversed.

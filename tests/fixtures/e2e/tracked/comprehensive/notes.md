@@ -1,3 +1,3 @@
 # comprehensive notes (text)
 
-A plain-text dotfile inside test-comprehensive.
+A plain-text tracked file inside test-comprehensive.

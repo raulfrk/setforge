@@ -175,7 +175,7 @@ N+1.
 - Specs → `~/.claude/projects/{cwd-slug}/specs/<YYYY-MM-DD>-<topic>.md`
 - Plans → `~/.claude/projects/{cwd-slug}/plans/<YYYY-MM-DD>-<feature>.md`
 - `{cwd-slug}` matches the auto-memory convention — cwd with `/` → `-`
-  (e.g. `-home-raul-setforge`).
+  (e.g. `-home-raul-my-setup`).
 
 ## Hard-gate posture
 

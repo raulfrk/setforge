@@ -67,7 +67,7 @@ from setforge.sections import SectionSemantics, detect_legacy_markers
 LOGGER = logging.getLogger(__name__)
 
 app = typer.Typer(
-    help="setforge: tracked_file + extension + Claude-plugin orchestration.",
+    help="setforge: tracked file + extension + Claude plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -315,7 +315,7 @@ def _resolve_section_decisions(
 
     Renders one bare-install warning per tracked_file that has any shared
     drift; surfacing the warnings here keeps the deploy loop a thin
-    orchestrator. Dotfiles without ``preserve_user_sections`` are
+    orchestrator. Tracked files without ``preserve_user_sections`` are
     silently skipped; their copy_atomic call gets an empty override.
     """
     decisions: dict[Path, dict[str, str]] = {}

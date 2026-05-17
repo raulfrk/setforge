@@ -29,7 +29,7 @@ git clone https://github.com/raulfrk/setforge ~/setforge && cd ~/setforge
 uv run setforge install --profile=<profile>
 ```
 
-`setforge install` deploys tracked tracked files to their live destinations and (P2/P3) reconciles VSCode extensions and Claude plugins.
+`setforge install` deploys tracked files to their live destinations and (P2/P3) reconciles VSCode extensions and Claude plugins.
 
 ## Development setup
 
@@ -99,7 +99,7 @@ YAML tracked files can declare `preserve_user_keys: list[str]` per tracked file 
 
 Edit `~/.claude/additional-content.md` directly on each host for machine-specific Claude Code rules. `setforge install` creates it as an empty file if missing; the repo never tracks its content.
 
-## Add a new tracked tracked file
+## Add a new tracked file
 
 1. Edit `my_setup.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile's `tracked_files:` list.
 2. Place the file under `tracked/<src>` (matching the entry's `src:` path).

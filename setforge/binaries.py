@@ -7,8 +7,8 @@ precedence:
 1. CLI flags (``--code-bin``, ``--claude-bin``, ``--patch-bin``) —
    stored in module-level state by :func:`set_cli_overrides`, which the
    Typer ``@app.callback()`` invokes once at startup.
-2. Environment variables ``SETFORGE_CODE_BIN`` / ``CLAUDE_BIN`` /
-   ``PATCH_BIN``.
+2. Environment variables ``SETFORGE_CODE_BIN`` / ``SETFORGE_CLAUDE_BIN``
+   / ``SETFORGE_PATCH_BIN``.
 3. Host-local config file ``~/.config/setforge/local.yaml`` with shape
    ``binaries: {code: /p, claude: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).

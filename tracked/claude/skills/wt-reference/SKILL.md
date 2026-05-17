@@ -56,7 +56,7 @@ When dispatching N subagents in parallel for a bd-issue-per-worktree batch, the 
 
 ```
 # Orchestrator side (in main worktree)
-wt switch --create tracked files-<id>-<slug>
+wt switch --create setforge-<id>-<slug>
 # → worktree at <wt-path>; wt prints the path it created.
 # The "Cannot change directory — shell requires restart" warning is
 # benign for orchestration; the worktree IS created.
@@ -65,7 +65,7 @@ wt switch --create tracked files-<id>-<slug>
 # Subagent prompt template:
 #   cd <wt-path>
 #   uv sync --all-extras       # fresh worktree's .venv is pristine
-#   bd update tracked files-<id> --claim
+#   bd update setforge-<id> --claim
 #   ... implementation ...
 ```
 

@@ -14,7 +14,7 @@
 version: 1
 
 # ----------------------------------------------------------------------
-# Dotfiles. Each entry pairs a tracked src with a live dst plus optional
+# Tracked files. Each entry pairs a tracked src with a live dst plus optional
 # preserve / template / section directives. Keys are stable identifiers
 # referenced by profile.tracked_files lists below.
 # ----------------------------------------------------------------------
@@ -24,7 +24,7 @@ tracked_files:
     src: minimal/text.txt
     dst: ~/.my_setup_e2e/minimal/text.txt
 
-  # Text dotfile with HTML-comment user-section markers (sections.py).
+  # Text tracked file with HTML-comment user-section markers (sections.py).
   sections_md:
     src: sections/marked.md
     dst: ~/.my_setup_e2e/sections/marked.md
@@ -37,7 +37,7 @@ tracked_files:
     dst: ~/.my_setup_e2e/sections/shared.md
     preserve_user_sections: true
 
-  # JSON dotfile — byte copy, no preserve mechanism.
+  # JSON tracked file — byte copy, no preserve mechanism.
   json_settings:
     src: json/settings.json
     dst: ~/.my_setup_e2e/json/settings.json
@@ -85,7 +85,7 @@ tracked_files:
     dst: "{{ vscode_user_dir }}/setforge-e2e-template.txt"
     template: true
 
-  # Three-level chain dotfiles (one per chain layer for distinguishable
+  # Three-level chain tracked files (one per chain layer for distinguishable
   # parent-first-dedup ordering in test_install_chain_resolution).
   chain_grand:
     src: chain/grand.txt
@@ -218,7 +218,7 @@ profiles:
     bootstrap:
       - ~/.my_setup_e2e/chain/bootstrap-child.txt
 
-  # ---- Comprehensive — dotfiles + plugins + extensions + bootstrap ----
+  # ---- Comprehensive — tracked files + plugins + extensions + bootstrap ----
   test-comprehensive:
     tracked_files:
       - comprehensive_text
