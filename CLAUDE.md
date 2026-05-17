@@ -93,9 +93,9 @@ drift, small refactors), follow the **Decision-I default**: fix INLINE on
 main as SEPARATE review-fix commits (one logical change per commit per the
 Commits rule); reserve `bd create` ONLY for LARGE follow-ups:
 
-- (b) introduces a new design question requiring its own brainstorm + spec, OR
-- (c) cross-cutting across 3+ files outside the bead's scope, OR
-- (d) the implementer/reviewer is uncertain whether it's safe to fix inline.
+- (a) introduces a new design question requiring its own brainstorm + spec, OR
+- (b) cross-cutting across 3+ files outside the bead's scope, OR
+- (c) the implementer/reviewer is uncertain whether it's safe to fix inline.
 
 After ANY inline-fix on main (failure-handling OR Decision-I), re-run the
 Phase 7 gates per `feedback_phase7_rerun_after_inline_fix` memory.
