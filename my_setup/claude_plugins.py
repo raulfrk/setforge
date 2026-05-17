@@ -308,6 +308,21 @@ def _resolve_git_or_raise() -> Path:
     return Path(git)
 
 
+def _debug_git_output(prefix: str, result: subprocess.CompletedProcess) -> None:
+    """Emit DEBUG logs for a completed git invocation's stdout/stderr.
+
+    Skips empty streams. ``prefix`` is the caller-formatted invocation
+    label (e.g. ``"git clone 'owner/repo'"``); the stream name and
+    payload follow via ``%s`` lazy-formatting per LOGGER convention.
+    Used by the success paths of the git wrappers below to share the
+    triplet-emission shape.
+    """
+    if result.stdout:
+        LOGGER.debug("%s stdout: %s", prefix, result.stdout)
+    if result.stderr:
+        LOGGER.debug("%s stderr: %s", prefix, result.stderr)
+
+
 def _run_git(
     *args: str,
     cwd: Path | None = None,
@@ -344,10 +359,7 @@ def _run_git(
         raise MarketplaceCacheMiss(
             f"`git {' '.join(args)}` failed: {stderr_of(exc)}"
         ) from exc
-    if result.stdout:
-        LOGGER.debug("git %s stdout: %s", args, result.stdout)
-    if result.stderr:
-        LOGGER.debug("git %s stderr: %s", args, result.stderr)
+    _debug_git_output(f"git {args}", result)
     return result
 
 
@@ -415,10 +427,7 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
             f"Run `my-setup plugin sync-cache --profile=<name>` while online "
             f"first."
         ) from exc
-    if result.stdout:
-        LOGGER.debug("git clone %r stdout: %s", source.repo, result.stdout)
-    if result.stderr:
-        LOGGER.debug("git clone %r stderr: %s", source.repo, result.stderr)
+    _debug_git_output(f"git clone {source.repo!r}", result)
 
 
 def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> None:
@@ -477,18 +486,7 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
             stderr_of(exc),
         )
         return None
-    if result.stdout:
-        LOGGER.debug(
-            "git remote get-url origin (cache %s) stdout: %s",
-            cache_dir,
-            result.stdout,
-        )
-    if result.stderr:
-        LOGGER.debug(
-            "git remote get-url origin (cache %s) stderr: %s",
-            cache_dir,
-            result.stderr,
-        )
+    _debug_git_output(f"git remote get-url origin (cache {cache_dir})", result)
     return result.stdout.strip()
 
 
