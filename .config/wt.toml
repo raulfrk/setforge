@@ -7,3 +7,14 @@
 # their first command. See dotfiles-rsw.
 [pre-start]
 deps = "uv sync --extra dev"
+
+# post-merge re-runs `uv sync --extra dev` after `wt merge`. Per
+# `wt hook --help`, post-merge runs in the TARGET branch worktree
+# (typically main) — not the merging worktree, which `wt merge`
+# removes by default. So this catches the case where the just-merged
+# branch added a dep (e.g. dotfiles-rsw / nen.9 + pexpect) and the
+# main worktree's venv would otherwise lag. Unrelated sibling
+# worktrees still need manual `uv sync` (b6d scope: Option (a) only).
+# See dotfiles-b6d.
+[post-merge]
+deps = "uv sync --extra dev"

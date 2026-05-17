@@ -100,6 +100,16 @@ Commits rule); reserve `bd create` ONLY for LARGE follow-ups:
 After ANY inline-fix on main (failure-handling OR Decision-I), re-run the
 Phase 7 gates per `feedback_phase7_rerun_after_inline_fix` memory.
 
+## wt post-merge hook
+
+After `wt merge`, the project's wt config (`.config/wt.toml`) runs
+`uv sync --extra dev` automatically. Per `wt hook --help`, the
+post-merge hook runs in the TARGET branch worktree (typically main) —
+not the merging worktree, which `wt merge` removes by default. This
+keeps main's venv in sync when a merged branch adds a new dep (e.g.
+the dotfiles-rsw / nen.9 + pexpect class). Unrelated sibling worktrees
+still need manual `uv sync` recovery — see dotfiles-b6d for scope.
+
 ## The four-tool stack
 
 Beads + Superpowers configured by this repo. Repomix + worktrunk installed externally; `my-setup install` does NOT bootstrap them.
