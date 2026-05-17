@@ -89,7 +89,7 @@ If no, cut it. CLAUDE.md is advisory, not enforced — for hard rules, write a P
 - Body required only when the diff is not self-evident: state the problem and the user-visible consequence, not diff narration. Skip body for renames, formatting, trivial fixes.
 - Wrap body at 72; one blank line between subject and body.
 - One logical change per commit — if the subject needs "and", split it.
-- Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` for worktree merges, or `git merge --ff-only` for plain git.
+- Never squash review-fix commits into the implementation commit. They document what the review fan caught; preserving them as separate commits keeps the audit trail meaningful. Operationally: use `wt merge --no-squash` (ff-only) for worktree merges, or `git merge --ff-only` for plain git.
 - No issue refs in the subject; footers (`Refs: #123`) go after a blank line at the end.
 - Use Conventional Commits (`feat:`, `fix:`) only when the repo has a changelog generator or commitlint wired up. Otherwise it's noise.
 <!-- my-setup:user-section end shared commits hash=afbb7e1ef81c8e1afc691d6d559c0bc37cedf9dfaaccc2004da4af67293db9b8 -->

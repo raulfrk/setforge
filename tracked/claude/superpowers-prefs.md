@@ -113,7 +113,7 @@ Superpowers skills are designed to defer to.
 
    Review-fix commits land as their OWN commits — never squashed into
    the implementation commit. *(empirical observation F; also in
-   CLAUDE.md Commits section.)* Use `wt merge --no-squash` (or `git
+   CLAUDE.md Commits section.)* Use `wt merge --no-squash` (ff-only) (or `git
    merge --ff-only` when not using wt) to preserve the separate
    commits at merge time.
    - **Single-worktree merge**: `wt merge --no-squash` (ff-only) into target (typically main).
