@@ -310,9 +310,10 @@ def detect_legacy_markers(text: str) -> bool:
     parser's :class:`MarkerError` propagates as a raw ``line N: missing
     keyword`` / ``missing hash`` message.
 
-    A marker is "legacy" if EITHER its semantics keyword is missing OR
-    (for end markers) its ``hash=<...>`` segment is missing. Returns
-    ``True`` on the first such marker found.
+    A marker is "legacy" if its semantics keyword is missing OR (for
+    end markers) its ``hash=<...>`` segment is missing OR its
+    ``hash=<...>`` segment is present but not a 64-char hex digest.
+    Returns ``True`` on the first such marker found.
     """
     for line in text.splitlines():
         match = _MARKER_RE.match(line)
@@ -322,6 +323,12 @@ def detect_legacy_markers(text: str) -> bool:
         if semantics_raw is None:
             return True
         if kind == "end" and embedded_hash is None:
+            return True
+        if (
+            kind == "end"
+            and embedded_hash is not None
+            and not _HASH_VALUE_RE.fullmatch(embedded_hash)
+        ):
             return True
     return False
 

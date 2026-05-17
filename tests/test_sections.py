@@ -818,6 +818,21 @@ def test_detect_legacy_markers_returns_true_when_any_marker_is_legacy() -> None:
     assert detect_legacy_markers(text) is True
 
 
+def test_detect_legacy_markers_flags_malformed_end_hash() -> None:
+    """An end marker carrying a non-64-hex ``hash=`` value flags as legacy.
+
+    Without this branch a live file with ``hash=NOTHEX`` slips past the
+    CLI's legacy-detector and surfaces a raw ``MarkerError`` mid-flight
+    instead of the friendly "run install first" upgrade hint.
+    """
+    text = (
+        "<!-- my-setup:user-section start shared a -->\n"
+        "body\n"
+        "<!-- my-setup:user-section end shared a hash=NOTHEX -->\n"
+    )
+    assert detect_legacy_markers(text) is True
+
+
 def test_malformed_hash_segment_raises_in_strict_mode() -> None:
     """A non-64-hex ``hash=`` value is rejected with a clear MarkerError."""
     text = (
