@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -1174,7 +1174,7 @@ def _reverse_plugins(
 def _write_reverse_transition(
     transition: Path,
     profile: str,
-    touched_paths: list[Path],
+    touched_paths: Sequence[Path],
     file_pre: Mapping[Path, str | None],
 ) -> Path:
     """Reverse plugin/extension deltas from ``transition`` and write the redo record."""
