@@ -510,13 +510,8 @@ def strip_section_content(text: str) -> str:
     removed. Markers themselves are kept so the file remains a valid
     template for re-merging on a future deploy."""
     out_lines: list[str] = []
-    in_section = False
-    for line in text.splitlines(keepends=True):
-        match = _MARKER_RE.match(line)
-        if match is None:
-            if not in_section:
-                out_lines.append(line)
-            continue
-        out_lines.append(line)
-        in_section = match.group(1) == "start"
+    for event in _walk_markers(text, allow_legacy=True):
+        if isinstance(event, (_OutsideLine, _StartMarker, _EndMarker)):
+            out_lines.append(event.line)
+        # _BodyLine instances are dropped (the "strip content" semantics).
     return "".join(out_lines)
