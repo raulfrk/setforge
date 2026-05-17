@@ -11,17 +11,27 @@ from __future__ import annotations
 import filecmp
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC = REPO_ROOT / "tracked" / "claude"
-MIRROR = REPO_ROOT / "tests" / "fixtures" / "e2e" / "tracked" / "claude"
+REPO_ROOT: Path = Path(__file__).resolve().parents[1]
+SRC: Path = REPO_ROOT / "tracked" / "claude"
+MIRROR: Path = REPO_ROOT / "tests" / "fixtures" / "e2e" / "tracked" / "claude"
 
 
 def _gather_files(root: Path) -> set[Path]:
     return {p.relative_to(root) for p in root.rglob("*") if p.is_file()}
 
 
+def _require_dirs() -> None:
+    """Fail loudly if either tree is missing.
+
+    Prevents vacuous-pass on misconfigured runs where rglob yields empty sets.
+    """
+    assert SRC.is_dir(), f"source tree missing: {SRC}"
+    assert MIRROR.is_dir(), f"mirror tree missing: {MIRROR}"
+
+
 def test_fixture_mirror_has_same_file_set() -> None:
-    """Every file under tracked/claude/ has a counterpart in the mirror."""
+    """tracked/claude/ and the e2e fixture mirror contain the same file set."""
+    _require_dirs()
     src_files = _gather_files(SRC)
     mirror_files = _gather_files(MIRROR)
     missing_in_mirror = src_files - mirror_files
@@ -32,6 +42,7 @@ def test_fixture_mirror_has_same_file_set() -> None:
 
 def test_fixture_mirror_byte_identical() -> None:
     """Every mirrored file matches its source byte-for-byte."""
+    _require_dirs()
     src_files = _gather_files(SRC)
     differences = [
         rel
