@@ -1057,7 +1057,7 @@ def test_install_deploys_new_reviewing_markdown_skill(
 def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """After clean install, compare --check --strict exits 0 (no drift)."""
+    """After clean install, compare --check exits 0 (no drift)."""
     c = docker_container()
     _install(c, "test-prose-reviewers")
     proc = c.exec(
