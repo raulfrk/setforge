@@ -93,10 +93,34 @@ _SOURCE_OPTION = typer.Option(
     help="Path to a config source directory (containing my_setup.yaml). "
     "Takes precedence over SETFORGE_SOURCE and "
     "~/.config/setforge/local.yaml `source:` block. Paths only — git "
-    "sources live in local.yaml. Per-command --config flag still works "
-    "and overrides any source-layer resolution (legacy path; removal "
-    "lands in setforge-2ba.3 alongside the git-mgmt subsystem).",
+    "sources live in local.yaml. The per-command --config flag, when "
+    "set explicitly, overrides this; the source-layer discovery only "
+    "fires when --config is left at its default AND the CWD has no "
+    "my_setup.yaml.",
 )
+
+
+def _resolve_config_arg(config: Path) -> Path:
+    """Resolve a command's ``--config`` arg through the source-layer fallback.
+
+    Precedence:
+
+    1. ``--config`` explicitly set (non-default) → use it (legacy flow).
+    2. ``--config`` at its default → consult the source-layer (``--source``
+       > ``SETFORGE_SOURCE`` > ``~/.config/setforge/local.yaml`` > CWD
+       fallback), then return the ``my_setup.yaml`` inside the resolved
+       source dir.
+
+    The 4th tier of the source-layer (CWD-fallback) preserves the legacy
+    "run from inside config repo" UX bit-for-bit: when no source layer
+    is configured, ``setforge install`` from a CWD containing
+    ``my_setup.yaml`` still works without ``--config``.
+    """
+    default = Path("my_setup.yaml")
+    if config != default:
+        return config
+    resolved_source = source_mod.get_resolved_source()
+    return source_mod.validate_source_dir(resolved_source)
 
 
 @app.callback()
@@ -427,6 +451,7 @@ def install(
     ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
+    config = _resolve_config_arg(config)
     # Mutual-exclusivity guard for the legacy unexpected-drift flags.
     if auto_accept_tracked and auto_accept_live:
         typer.secho(
@@ -585,6 +610,7 @@ def compare(
     ),
 ) -> None:
     """Report drift between tracked and live for every tracked_file in the profile."""
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -691,6 +717,7 @@ def capture(
     pass ``--auto={use-live, keep-tracked}`` for non-interactive
     contexts.
     """
+    config = _resolve_config_arg(config)
     auto_enum: CaptureAuto | None
     if auto is None:
         auto_enum = None
@@ -800,6 +827,7 @@ def sync(
     behavior (e.g. for scripted runs) or ``--auto=keep-tracked`` to
     refuse to absorb drift.
     """
+    config = _resolve_config_arg(config)
     auto_enum: CaptureAuto | None
     if auto is None:
         auto_enum = None
@@ -1278,6 +1306,7 @@ def revert(
     uninstalled). Records its own reverse transition so a second
     revert invocation acts as redo.
     """
+    config = _resolve_config_arg(config)
     transition = transitions.load_latest(profile)
     if transition is None:
         raise NoTransitionFound(f"no transition history for profile {profile!r}")
@@ -1999,6 +2028,7 @@ def validate(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Config-shape validation; no filesystem comparison or live target paths."""
+    config = _resolve_config_arg(config)
     if profile is not None and all_profiles:
         typer.secho(
             "error: --profile and --all are mutually exclusive",
@@ -2042,6 +2072,24 @@ def validate(
         raise typer.Exit(1)
 
     typer.echo("ok")
+
+
+@app.command()
+def fetch() -> None:
+    """Clone/fetch the configured git source and check out its pinned ref.
+
+    Resolves the active source via the 4-layer precedence (CLI ``--source``
+    > ``SETFORGE_SOURCE`` env > host-local ``local.yaml`` > CWD-fallback).
+    For a :class:`setforge.source.PathSource` this is a no-op. For a
+    :class:`setforge.source.GitSource`: (1) clone to ``clone_dest`` if
+    missing; (2) fetch ``origin``; (3) verify ``tracked/`` is clean
+    (refuses to clobber user edits); (4) check out the pinned ``ref``
+    (branch or SHA; default ``main``). Auth delegates to the user's
+    git/SSH/credential-helper config.
+    """
+    resolved_source = source_mod.get_resolved_source()
+    msg = source_mod.fetch_source(resolved_source)
+    typer.echo(msg)
 
 
 def main() -> None:

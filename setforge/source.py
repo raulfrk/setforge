@@ -35,7 +35,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
 
-from setforge.errors import ConfigError, NoSourceConfigured, SourceNotCloned
+from setforge import git_ops
+from setforge.errors import (
+    ConfigError,
+    DirtySourceCheckout,
+    NoSourceConfigured,
+    SourceNotCloned,
+)
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -276,6 +282,84 @@ def validate_source_dir(source: Source) -> Path:
     return config_path
 
 
+def check_source_clean(source: Source) -> None:
+    """Pre-write gate: raise :class:`DirtySourceCheckout` on dirty source.
+
+    Scopes the porcelain check to ``tracked/`` (the engine's only write
+    surface). Non-git PathSource dirs skip the check (the user isn't
+    using git here; nothing to protect against). GitSource always runs
+    the check; if its clone is missing, :class:`SourceNotCloned` from
+    :func:`resolve_source_dir` propagates.
+    """
+    source_dir = resolve_source_dir(source)
+    if not git_ops.is_git_repo(source_dir):
+        return
+    porcelain = git_ops.status_porcelain(source_dir, path="tracked")
+    if not porcelain:
+        return
+    file_count = len([line for line in porcelain.splitlines() if line.strip()])
+    raise DirtySourceCheckout(
+        f"{source_dir}/tracked/ has uncommitted changes "
+        f"({file_count} file{'s' if file_count != 1 else ''}). "
+        "Commit or stash before retrying."
+    )
+
+
+def fetch_source(source: Source) -> str:
+    """Clone-on-missing + fetch + ref-checkout the given git source.
+
+    Returns a one-line human-readable status message describing the
+    operation performed. :class:`PathSource` returns
+    ``"source is a path; nothing to fetch"`` immediately (no git ops).
+    GitSource: (1) compute clone_dest, clone if missing; (2) fetch
+    origin; (3) verify ``tracked/`` is clean; (4) check out the
+    pinned ref. Errors propagate (:class:`GitOpError`,
+    :class:`DirtySourceCheckout`).
+    """
+    if isinstance(source, PathSource):
+        return "source is a path; nothing to fetch"
+    clone_dest = source.resolved_clone_dest
+    cloned = False
+    if not clone_dest.exists():
+        git_ops.git_clone(source.url, clone_dest)
+        cloned = True
+    git_ops.git_fetch(clone_dest)
+    porcelain = git_ops.status_porcelain(clone_dest, path="tracked")
+    if porcelain:
+        file_count = len([line for line in porcelain.splitlines() if line.strip()])
+        raise DirtySourceCheckout(
+            f"{clone_dest}/tracked/ has uncommitted changes "
+            f"({file_count} file{'s' if file_count != 1 else ''}). "
+            "Commit or stash before fetching."
+        )
+    git_ops.git_checkout(clone_dest, source.ref)
+    action = "cloned and checked out" if cloned else "fetched and checked out"
+    return f"{action} {source.ref} at {clone_dest}"
+
+
+def format_post_write_hint(source: Source, file_count: int) -> str:
+    """Build the post-sync/capture hint message pointing at the source dir.
+
+    Three shapes (decided by source kind + git upstream presence):
+
+    * PathSource without ``.git/``: bare file-count message, no git hint.
+    * Git repo without upstream: ``cd ... && git diff && git commit``.
+    * Git repo with upstream: ``... && git push`` appended.
+    """
+    try:
+        source_dir = resolve_source_dir(source)
+    except SourceNotCloned:
+        return f"→ wrote {file_count} files to <source> (not on disk?)"
+    plural = "s" if file_count != 1 else ""
+    base = f"→ wrote {file_count} file{plural} to {source_dir}/tracked/"
+    if not git_ops.is_git_repo(source_dir):
+        return base
+    upstream = git_ops.rev_parse_upstream(source_dir)
+    if upstream is not None:
+        return f"{base}; cd {source_dir} && git diff && git commit && git push"
+    return f"{base}; cd {source_dir} && git diff && git commit"
+
+
 __all__ = [
     "CLI_FLAG",
     "CONFIG_FILENAME",
@@ -286,6 +370,9 @@ __all__ = [
     "PathSource",
     "Source",
     "SourceKind",
+    "check_source_clean",
+    "fetch_source",
+    "format_post_write_hint",
     "get_resolved_source",
     "resolve_source",
     "resolve_source_dir",

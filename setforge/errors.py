@@ -38,6 +38,20 @@ class SourceNotCloned(SetforgeError):
     ``setforge fetch`` to clone the source before any read command."""
 
 
+class GitOpError(SetforgeError):
+    """Raised when a subprocess invocation of ``git`` exits non-zero or
+    times out. The wrapped error's stderr is surfaced in the message
+    so the user sees git's own diagnostic."""
+
+
+class DirtySourceCheckout(SetforgeError):
+    """Raised by the sync/capture pre-write gate when the source's
+    ``tracked/`` subtree has uncommitted changes. The message lists
+    the affected file count and a recovery hint ("commit or stash
+    before retrying"). No ``--force`` flag — the user takes the
+    explicit recovery action."""
+
+
 class BackupCollision(SetforgeError):
     """Reserved for backup-path collisions that cannot be safely overwritten.
 
