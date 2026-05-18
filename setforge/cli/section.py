@@ -378,7 +378,7 @@ def section_add(
     tracked_file: str | None = typer.Option(
         None, "--tracked-file", help="tracked_files key from setforge.yaml"
     ),
-    semantics: str | None = typer.Option(None, "--semantics", help="shared|host-local"),
+    semantics: SectionSemantics | None = typer.Option(None, "--semantics"),
     name: str | None = typer.Option(
         None, "--name", help="lowercase-with-dashes section name"
     ),
@@ -387,9 +387,7 @@ def section_add(
         "--anchor-line",
         help="1-indexed line; marker pair inserted AFTER this line",
     ),
-    body_source: str | None = typer.Option(
-        None, "--body-source", help="empty|editor|file"
-    ),
+    body_source: BodySource | None = typer.Option(None, "--body-source"),
     body_file: Path | None = typer.Option(
         None, "--body-file", help="Path to a file whose contents go between markers."
     ),
