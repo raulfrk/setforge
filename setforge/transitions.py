@@ -415,26 +415,14 @@ def write_transition(
     a crash mid-write never leaves a half-formed transition visible to
     :func:`load_latest`.
 
-    Write order:
-    1. Create ``.pending-<dirname>/`` staging dir.
-    2. Write ``changes.patch`` into staging (if non-empty).
-    3. Write ``extensions.json`` into staging (if non-empty).
-    4. Write ``plugins.json`` into staging (if non-empty).
-    5. ``os.rename(pending, target)`` — atomic POSIX rename, same fs.
-    6. Write ``meta.json`` inside the now-real ``target/`` dir. ← commit point.
-
-    A crash before step 6 leaves either a ``.pending-<dirname>/`` (skipped by
+    Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
+    (if delta non-empty), and ``plugins.json`` (if delta non-empty) into a
+    ``.pending-<dirname>/`` staging dir; ``os.rename(pending, target)`` —
+    atomic POSIX rename, same fs; write ``meta.json`` inside the now-real
+    ``target/`` dir as the commit point. A crash before that final
+    ``meta.json`` write leaves either a ``.pending-<dirname>/`` (skipped by
     :func:`load_latest` via the ``.pending-`` name guard) or a ``<dirname>/``
-    with no ``meta.json`` (skipped by the existing meta.json filter).
-
-    Layout of the committed directory:
-    - ``meta.json`` — always present, includes a ``paths`` field listing
-      every absolute path the transition touched.
-    - ``changes.patch`` — present iff :func:`compute_patch` returned non-empty.
-    - ``extensions.json`` — present iff ``ext_delta`` is non-None and
-      non-empty.
-    - ``plugins.json`` — present iff ``plugin_delta`` is non-None and
-      non-empty.
+    without ``meta.json`` (skipped by the existing meta.json filter).
 
     Returns the absolute path of the committed directory.
     """
@@ -450,54 +438,12 @@ def write_transition(
     if patch:
         (pending / "changes.patch").write_text(patch, encoding="utf-8")
 
-    if ext_delta is not None and not ext_delta.is_empty():
-        payload = (
-            json.dumps(
-                {"added": ext_delta.added, "removed": ext_delta.removed}, indent=2
-            )
-            + "\n"
-        )
-        (pending / "extensions.json").write_text(payload, encoding="utf-8")
+    ext_payload = _serialize_ext_payload(ext_delta)
+    if ext_payload is not None:
+        (pending / "extensions.json").write_text(ext_payload, encoding="utf-8")
 
-    if plugin_delta is not None and not plugin_delta.is_empty():
-        # ``marketplaces_removed`` is ``tuple[tuple[name, source_dict], ...]``
-        # → serialized as ``[[name, source_dict], ...]`` so each entry
-        # round-trips through ``json.loads`` as a 2-element list (caller
-        # converts back to a tuple by position).
-        #
-        # Defensive contract enforcement: per :class:`PluginDelta`'s
-        # JSON-primitive contract, every source-dict value must be a
-        # ``str``. Raise loudly here so a caller that bypasses
-        # ``MarketplaceSource.model_dump(mode="json")`` and passes raw
-        # enum/Path values gets an actionable error instead of an
-        # opaque ``json.dumps`` failure mid-serialization. Today's
-        # install path hard-codes ``()`` so this guard is dormant; it
-        # fires the moment a future caller starts populating the field.
-        for name, src in plugin_delta.marketplaces_removed:
-            for key, value in src.items():
-                if not isinstance(value, str):
-                    raise TypeError(
-                        f"marketplaces_removed source dict {name!r} has "
-                        f"non-str value for key {key!r}: {value!r} "
-                        f"({type(value).__name__}). Callers must serialize "
-                        "via MarketplaceSource.model_dump(mode='json')."
-                    )
-        plugin_payload = (
-            json.dumps(
-                {
-                    "installed": list(plugin_delta.installed),
-                    "enabled": list(plugin_delta.enabled),
-                    "disabled": list(plugin_delta.disabled),
-                    "marketplaces_added": list(plugin_delta.marketplaces_added),
-                    "marketplaces_removed": [
-                        [name, dict(src)]
-                        for name, src in plugin_delta.marketplaces_removed
-                    ],
-                },
-                indent=2,
-            )
-            + "\n"
-        )
+    plugin_payload = _serialize_plugin_payload(plugin_delta)
+    if plugin_payload is not None:
         (pending / "plugins.json").write_text(plugin_payload, encoding="utf-8")
 
     os.rename(pending, target)
@@ -506,6 +452,62 @@ def write_transition(
     write_meta(target, meta, paths=touched)
 
     return target
+
+
+def _serialize_ext_payload(ext_delta: ExtensionDelta | None) -> str | None:
+    """Return the ``extensions.json`` body, or ``None`` if nothing to write."""
+    if ext_delta is None or ext_delta.is_empty():
+        return None
+    return (
+        json.dumps({"added": ext_delta.added, "removed": ext_delta.removed}, indent=2)
+        + "\n"
+    )
+
+
+def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
+    """Return the ``plugins.json`` body, or ``None`` when there's nothing to write.
+
+    ``marketplaces_removed`` is ``tuple[tuple[name, source_dict], ...]`` →
+    serialized as ``[[name, source_dict], ...]`` so each entry round-trips
+    through ``json.loads`` as a 2-element list (caller converts back to a
+    tuple by position).
+
+    Defensive contract enforcement: per :class:`PluginDelta`'s
+    JSON-primitive contract, every source-dict value must be a ``str``.
+    Raise loudly here so a caller that bypasses
+    ``MarketplaceSource.model_dump(mode="json")`` and passes raw
+    enum/Path values gets an actionable error instead of an opaque
+    ``json.dumps`` failure mid-serialization. Today's install path
+    hard-codes ``()`` so this guard is dormant; it fires the moment a
+    future caller starts populating the field.
+    """
+    if plugin_delta is None or plugin_delta.is_empty():
+        return None
+    for name, src in plugin_delta.marketplaces_removed:
+        for key, value in src.items():
+            if not isinstance(value, str):
+                raise TypeError(
+                    f"marketplaces_removed source dict {name!r} has "
+                    f"non-str value for key {key!r}: {value!r} "
+                    f"({type(value).__name__}). Callers must serialize "
+                    "via MarketplaceSource.model_dump(mode='json')."
+                )
+    return (
+        json.dumps(
+            {
+                "installed": list(plugin_delta.installed),
+                "enabled": list(plugin_delta.enabled),
+                "disabled": list(plugin_delta.disabled),
+                "marketplaces_added": list(plugin_delta.marketplaces_added),
+                "marketplaces_removed": [
+                    [name, dict(src)]
+                    for name, src in plugin_delta.marketplaces_removed
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def load_latest(profile: str) -> Path | None:
