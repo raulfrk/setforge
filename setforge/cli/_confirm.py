@@ -193,6 +193,8 @@ def confirm_auto_operation(
     if console is None:
         console = Console()
     _render_panel(command=command, profile=profile, plan=plan, console=console)
+    # prompt_toolkit 3.0.x yes_no_dialog has no default= kwarg; radiolist
+    # with default=False gives default-No behavior.
     choice = radiolist_dialog(
         title=f"setforge {command}",
         text="Proceed with the mutation above?",
