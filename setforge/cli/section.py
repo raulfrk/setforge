@@ -282,15 +282,30 @@ def _interactive_pick_semantics() -> str:
     return result
 
 
+_MAX_NAME_PROMPT_ATTEMPTS: int = 3
+
+
 def _interactive_pick_name() -> str:
-    result = input_dialog(
-        title="section name",
-        text="lowercase-dashes, <=63 chars",
-    ).run()
-    if result is None:
-        raise typer.Exit(0)
-    _validate_name(result)
-    return result
+    """Prompt for a section name; re-prompt on validation failure.
+
+    Caps at :data:`_MAX_NAME_PROMPT_ATTEMPTS` attempts to avoid an
+    infinite loop when the user keeps entering invalid input; exits
+    cleanly on user-cancel (``None`` return from ``input_dialog``).
+    """
+    hint = "lowercase-dashes, <=63 chars"
+    for _ in range(_MAX_NAME_PROMPT_ATTEMPTS):
+        result = input_dialog(title="section name", text=hint).run()
+        if result is None:
+            raise typer.Exit(0)
+        try:
+            _validate_name(result)
+        except typer.BadParameter as exc:
+            hint = f"{exc.message}\n\nlowercase-dashes, <=63 chars"
+            continue
+        return result
+    raise typer.BadParameter(
+        f"section name validation failed after {_MAX_NAME_PROMPT_ATTEMPTS} attempts"
+    )
 
 
 def _interactive_pick_body_source() -> str:

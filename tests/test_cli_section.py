@@ -657,3 +657,32 @@ def test_section_add_interactive_non_tty_falls_back_to_error(
         app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
     )
     assert result.exit_code == 2
+
+
+def test_section_add_interactive_validates_user_name_input(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid name from input_dialog re-prompts; second (valid) try wins."""
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("setforge.cli.section.input_dialog") as ip,
+        patch("setforge.cli.section.yes_no_dialog") as yn,
+        patch("setforge.cli.section.pick_anchor_line", return_value=2),
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.side_effect = ["shared", "empty"]
+        # First call returns an invalid name; second call returns a valid one.
+        ip.return_value.run.side_effect = ["BadName", "good-name"]
+        yn.return_value.run.return_value = True
+        result = runner.invoke(
+            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+        )
+    assert result.exit_code == 0
+    assert "shared good-name" in tracked.read_text()
+    # input_dialog().run() was called twice — once with the invalid name,
+    # once with the valid one (proving the re-prompt loop fired).
+    assert ip.return_value.run.call_count == 2
