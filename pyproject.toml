@@ -60,7 +60,7 @@ target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ANN"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ANN", "C901"]
 # ANN202 is a permanent ignore: project annotates public surface only (per CLAUDE.md).
 ignore = [
     "ANN202",
