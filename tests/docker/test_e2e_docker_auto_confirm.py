@@ -461,9 +461,7 @@ def test_install_auto_use_tracked_revert_roundtrip(
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
     pre = c.read_text(_LIVE_SHARED)
-    _install(
-        c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"]
-    )
+    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"])
     revert = c.exec(
         [
             "uv",
