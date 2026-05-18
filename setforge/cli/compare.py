@@ -65,10 +65,29 @@ def compare(
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
     console = Console()
+    _render_compare_report(report, console, full_diff=full_diff)
+
+    if reconcile_user_sections:
+        _print_section_reconcile_dry_run(cfg, profile, repo_root, console)
+
+    if check:
+        if strict:
+            if any(e.status == CompareStatus.DRIFTED for e in report.entries):
+                raise typer.Exit(code=1)
+        elif report.has_unexpected_drift:
+            raise typer.Exit(code=1)
+
+
+def _render_compare_report(
+    report: compare_mod.CompareReport,
+    console: Console,
+    *,
+    full_diff: bool,
+) -> None:
+    """Print the summary table, per-status counts, and optional unified diff bodies."""
     table = compare_mod.compare_summary_table(report)
     console.print(table)
 
-    # Counts below the table
     unchanged_count = sum(
         1 for e in report.entries if e.status == CompareStatus.UNCHANGED
     )
@@ -82,16 +101,6 @@ def compare(
         for entry in report.entries:
             if entry.diff:
                 console.print(Syntax(entry.diff, "diff"))
-
-    if reconcile_user_sections:
-        _print_section_reconcile_dry_run(cfg, profile, repo_root, console)
-
-    if check:
-        if strict:
-            if any(e.status == CompareStatus.DRIFTED for e in report.entries):
-                raise typer.Exit(code=1)
-        elif report.has_unexpected_drift:
-            raise typer.Exit(code=1)
 
 
 def _print_section_reconcile_dry_run(
