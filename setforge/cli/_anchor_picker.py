@@ -1,0 +1,165 @@
+"""TUI line picker for ``setforge section add``'s anchor-line selection.
+
+Built on prompt_toolkit's full-screen :class:`Application` API:
+
+- :class:`BufferControl` over a read-only :class:`Buffer` of the
+  tracked file's text.
+- Custom :class:`KeyBindings`: ↑/↓ move cursor by one line; PgUp/PgDn
+  page; Home/End jump to first/last line; ``/`` triggers a
+  :class:`SearchToolbar`; Enter confirms the current cursor line;
+  Esc / Ctrl-C cancel with a ``None`` sentinel.
+- Status bar at the bottom showing filename, current line / total
+  lines, and key hints.
+
+POSIX-only (Debian VM, headless). No Windows support intended.
+"""
+
+from __future__ import annotations
+
+from prompt_toolkit.application import Application
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.document import Document
+from prompt_toolkit.input import Input
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.key_processor import KeyPressEvent
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.output import Output
+from prompt_toolkit.search import start_search
+from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import SearchToolbar
+
+_PAGE_LINES: int = 10
+
+
+def pick_anchor_line(
+    *,
+    file_text: str,
+    filename: str,
+    _input: Input | None = None,
+    _output: Output | None = None,
+) -> int | None:
+    """Open a TUI file viewer; return the 1-indexed line the user picked.
+
+    Returns ``None`` if the user cancels with Esc or Ctrl-C, or if
+    ``file_text`` is empty (no lines to pick).
+
+    The ``_input`` / ``_output`` kwargs are private and exist so unit
+    tests can drive the viewer via :func:`prompt_toolkit.input.create_pipe_input`
+    and :class:`prompt_toolkit.output.DummyOutput`. Production callers
+    leave both at ``None`` and the real terminal is used.
+    """
+    if not file_text:
+        return None
+    buffer = Buffer(
+        document=Document(file_text, cursor_position=0),
+        read_only=True,
+    )
+    return _run_picker(
+        buffer=buffer,
+        filename=filename,
+        pt_input=_input,
+        pt_output=_output,
+    )
+
+
+def _status_text(buffer: Buffer, filename: str) -> str:
+    line = buffer.document.cursor_position_row + 1
+    total = buffer.document.line_count
+    return (
+        f"  [{filename}]  line {line}/{total}  "
+        f"  [Enter] confirm   [/] search   [PgUp/PgDn] page   "
+        f"[Home/End] jump   [Esc] cancel"
+    )
+
+
+def _build_keybindings(
+    *,
+    buffer: Buffer,
+    buffer_control: BufferControl,
+    result_holder: dict[str, int | None],
+) -> KeyBindings:
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_up(count=1)
+
+    @kb.add("down")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_down(count=1)
+
+    @kb.add("pageup")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_up(count=_PAGE_LINES)
+
+    @kb.add("pagedown")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_down(count=_PAGE_LINES)
+
+    @kb.add("home")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_position = 0
+
+    @kb.add("end")
+    def _(event: KeyPressEvent) -> None:
+        buffer.cursor_position = len(buffer.text)
+
+    @kb.add("/")
+    def _(event: KeyPressEvent) -> None:
+        start_search(buffer_control)
+
+    @kb.add("enter")
+    def _(event: KeyPressEvent) -> None:
+        result_holder["line"] = buffer.document.cursor_position_row + 1
+        event.app.exit()
+
+    @kb.add("escape", eager=True)
+    def _(event: KeyPressEvent) -> None:
+        result_holder["line"] = None
+        event.app.exit()
+
+    @kb.add("c-c")
+    def _(event: KeyPressEvent) -> None:
+        result_holder["line"] = None
+        event.app.exit()
+
+    return kb
+
+
+def _run_picker(
+    *,
+    buffer: Buffer,
+    filename: str,
+    pt_input: Input | None,
+    pt_output: Output | None,
+) -> int | None:
+    """Run a prompt_toolkit Application around ``buffer``; return the line."""
+    result_holder: dict[str, int | None] = {"line": None}
+
+    search_toolbar = SearchToolbar()
+    buffer_control = BufferControl(buffer=buffer, search_buffer_control=search_toolbar.control)
+    body = Window(content=buffer_control)
+    status = Window(
+        height=1,
+        content=FormattedTextControl(text=lambda: _status_text(buffer, filename)),
+        style="reverse",
+    )
+    layout = Layout(HSplit([body, status, search_toolbar]))
+
+    style = Style.from_dict({})
+    kb = _build_keybindings(
+        buffer=buffer,
+        buffer_control=buffer_control,
+        result_holder=result_holder,
+    )
+    app: Application[None] = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        style=style,
+        input=pt_input,
+        output=pt_output,
+    )
+    app.run()
+    return result_holder["line"]
