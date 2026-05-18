@@ -23,8 +23,6 @@ def _make_plan(
         FileChange(
             source=Path("/x/tracked.md"),
             dest=Path("/y/live.md"),
-            added=1,
-            removed=0,
             changed=2,
         ),
     ),
@@ -51,7 +49,7 @@ def test_autodirection_strenum_values() -> None:
 def test_filechange_slots_frozen() -> None:
     fc = FileChange(source=Path("/a"), dest=Path("/b"))
     with pytest.raises(FrozenInstanceError):
-        fc.added = 9  # type: ignore[misc]
+        fc.changed = 9  # type: ignore[misc]
     assert "__slots__" in dir(type(fc))
 
 
@@ -64,8 +62,6 @@ def test_autoplan_slots_frozen() -> None:
 
 def test_filechange_default_change_counts() -> None:
     fc = FileChange(source=Path("/a"), dest=Path("/b"))
-    assert fc.added == 0
-    assert fc.removed == 0
     assert fc.changed == 0
 
 
@@ -244,9 +240,7 @@ def test_panel_includes_all_file_changes(monkeypatch: pytest.MonkeyPatch) -> Non
             FileChange(
                 source=Path(f"/t/f{i}.md"),
                 dest=Path(f"/l/f{i}.md"),
-                added=i,
-                removed=0,
-                changed=0,
+                changed=i,
             )
             for i in (1, 2, 3)
         ),

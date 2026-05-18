@@ -44,12 +44,16 @@ class AutoDirection(StrEnum):
 
 @dataclass(slots=True, frozen=True)
 class FileChange:
-    """One file that the --auto* operation will mutate."""
+    """One file that the --auto* operation will mutate.
+
+    ``changed`` counts the unit the builder works in — sections for
+    shared-section drift, unexpected keys for unexpected-drift entries,
+    or a generic ``1`` when only a unified diff is available. We do
+    not report line-level +/- because neither builder computes them.
+    """
 
     source: Path
     dest: Path
-    added: int = 0
-    removed: int = 0
     changed: int = 0
 
 
@@ -79,18 +83,21 @@ def _render_panel(
     console.print(Panel.fit(header, title="confirmation required"))
 
     if plan.file_changes:
-        table = Table(title="file changes", show_lines=False)
+        table = Table(
+            title="file changes",
+            caption=(
+                "counts are sections for shared-section drift, "
+                "keys for unexpected-drift entries"
+            ),
+            show_lines=False,
+        )
         table.add_column("source")
         table.add_column("dest")
-        table.add_column("+", justify="right")
-        table.add_column("-", justify="right")
-        table.add_column("Δ", justify="right")
+        table.add_column("changes", justify="right")
         for fc in plan.file_changes:
             table.add_row(
                 str(fc.source),
                 str(fc.dest),
-                str(fc.added),
-                str(fc.removed),
                 str(fc.changed),
             )
         console.print(table)
