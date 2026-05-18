@@ -242,8 +242,25 @@ def plugin_reconcile(
         raise typer.Exit(code=1) from exc
 
     is_read_only = resolved.plugins_reconcile is ReconcilePolicy.REPORT or dry_run
-    failed_ids = {pid for pid, _ in report.failed}
+    _render_reconcile_report(report, is_read_only=is_read_only)
+    if not report:
+        typer.echo("plugins: nothing to reconcile")
+    elif is_read_only:
+        raise typer.Exit(code=1)
 
+
+def _render_reconcile_report(
+    report: claude_plugins_mod.ReconcileReport, *, is_read_only: bool
+) -> None:
+    """Print one line per planned/executed action plus FAILED lines for failures.
+
+    ``is_read_only`` toggles the verb between ``would <action>`` (dry-run /
+    ``REPORT`` policy) and the past-tense action (PRUNE/ADDITIVE actually
+    ran). Plugin ids that landed in ``report.failed`` are suppressed from
+    the action lists so the user doesn't see "installed X" followed by
+    "FAILED X" for the same id.
+    """
+    failed_ids = {pid for pid, _ in report.failed}
     for name, mp in report.to_install:
         pid = f"{name}@{mp}"
         verb = "would install" if is_read_only else "installed"
@@ -259,10 +276,6 @@ def plugin_reconcile(
             typer.echo(f"{verb}  {pid}")
     for pid, err in report.failed:
         typer.secho(f"FAILED  {pid} — {err}", err=True, fg=typer.colors.YELLOW)
-    if not report:
-        typer.echo("plugins: nothing to reconcile")
-    elif is_read_only:
-        raise typer.Exit(code=1)
 
 
 @plugin_app.command("sync-cache")
