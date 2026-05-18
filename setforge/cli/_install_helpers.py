@@ -221,6 +221,10 @@ def _build_unexpected_drift_plan(
         file_changes=tuple(file_changes),
         risks=(
             f"{risk_target} values on {len(file_changes)} file(s) will be overwritten",
+            # The gate fires AFTER the unexpected-drift filter, which
+            # already excludes preserve_user_keys overlays — surface
+            # that reassurance to the user.
+            "host-local keys covered by preserve_user_keys are not affected",
         ),
         revert_command=f"setforge revert --profile={profile}",
     )
@@ -275,6 +279,10 @@ def _build_shared_section_plan(
         risks=(
             f"shared user-section bodies on {len(file_changes)} file(s) "
             "will be overwritten with tracked-side content",
+            # The gate only surfaces ``shared`` sections; ``host-local``
+            # sections never participate in section reconcile and stay
+            # untouched regardless of --auto* flag.
+            "host-local sections are not affected",
         ),
         revert_command=f"setforge revert --profile={profile}",
     )
