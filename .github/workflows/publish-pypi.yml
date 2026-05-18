@@ -1,0 +1,38 @@
+name: Publish to PyPI
+
+# Fires when a release-shaped tag (v*.*.*) is pushed to the repo. The
+# workflow builds the sdist + wheel with `uv build` and uploads them
+# via pypa/gh-action-pypi-publish using a PYPI_API_TOKEN secret.
+# `skip-existing: true` so a re-push of the same tag is idempotent.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build and publish setforge to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Twine-check the built artifacts
+        run: uv tool run --from twine twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

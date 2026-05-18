@@ -1,5 +1,9 @@
 # setforge
 
+[![CI](https://github.com/raulfrk/my-setup/actions/workflows/ci.yml/badge.svg)](https://github.com/raulfrk/my-setup/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/setforge.svg)](https://pypi.org/project/setforge/)
+[![Python](https://img.shields.io/pypi/pyversions/setforge.svg)](https://pypi.org/project/setforge/)
+
 Tracked-file + VSCode-extension + Claude-plugin orchestration CLI for personal config (dotfiles + extensions + Claude plugins). Single Python CLI (`setforge`) driven by a `setforge.yaml` declarative config that lives in a SEPARATE config repo (you bring your own).
 
 ## Stack
@@ -40,7 +44,17 @@ setforge discovers your config repo via a 4-layer precedence (first non-empty wi
 
 Two pieces: install the engine, then point it at your config.
 
-### 1. Install the engine
+### 1a. Install from PyPI (recommended)
+
+```bash
+uv tool install setforge
+# or, for the latest pre-release tag:
+uv tool install "setforge==0.2.0"
+```
+
+`setforge --version` should print the installed version. The CLI lands on your PATH as `setforge` (`uv tool install` symlinks it for you).
+
+### 1b. Install the engine from source (development)
 
 ```bash
 git clone https://github.com/raulfrk/my-setup ~/setforge && cd ~/setforge
@@ -101,14 +115,25 @@ All commands require `--profile=<name>`. Profiles live in YOUR config repo's `se
 ```bash
 uv run setforge fetch                              # clone/fetch + checkout the configured git source
 uv run setforge compare --profile=<profile>       # show drift between live and tracked/
-uv run setforge sync    --profile=<profile>       # capture live edits into tracked/
+uv run setforge capture --profile=<profile>       # run the merge wizard on tracked-file drift
+uv run setforge merge   --profile=<profile>       # standalone merge wizard (no profile capture)
+uv run setforge sync    --profile=<profile>       # capture + record a transition (for revert)
 uv run setforge install --profile=<profile>       # deploy tracked/ -> live
 uv run setforge revert  --profile=<profile>       # undo the most recent install/sync
-uv run setforge validate --profile=<profile>     # config-shape check (no live target paths needed)
+uv run setforge validate --profile=<profile>      # config-shape check (no live target paths needed)
 uv run setforge --help                            # list all commands
 ```
 
-`sync` is the alias for `capture` — "I tweaked something live, now save it." Setforge writes the captured content into your config repo's `<source-dir>/tracked/`; `git diff` + commit + push from inside the config repo to lock in.
+`sync` is `capture`'s transition-recording sibling — "I tweaked something live, now save it and record a transition I can revert later." Both write the captured content into your config repo's `<source-dir>/tracked/`; `git diff` + commit + push from inside the config repo to lock in.
+
+### Subcommand groups
+
+setforge ships four subcommand groups for narrow inspections and edits:
+
+- `setforge transitions list` / `show` — inspect the install/sync/revert history under `~/.local/state/setforge/transitions/`.
+- `setforge ext list` / `add` / `remove` / `reconcile` — manage VSCode extensions in your profile's `extensions:` block.
+- `setforge plugin list` / `add` / `remove` / `reconcile` / `sync-cache` — manage Claude plugins in your profile's `claude_plugins:` block.
+- `setforge marketplace add` / `remove` / `update` — manage Claude plugin marketplaces (the upstream sources plugins are installed from).
 
 When tracked declares `preserve_user_keys_deep` or carries top-level non-preserve drift between tracked and live, `sync` fires the merge wizard interactively (symmetric with `install`'s drift gate). For non-interactive contexts (CI, scripted runs):
 

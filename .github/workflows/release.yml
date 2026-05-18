@@ -1,0 +1,43 @@
+name: GitHub Release
+
+# Fires alongside the PyPI publish workflow on release-shaped tag pushes
+# (v*.*.*). Creates a GitHub Release with auto-generated notes from the
+# commits between this tag and the previous tag. The PyPI publish
+# workflow handles the package upload; this workflow handles the
+# user-visible release page.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --notes-start-tag points at the previous release; gh fills
+          # the body with commit titles between that tag and HEAD.
+          PREV_TAG=$(git tag --list 'v*.*.*' --sort=-version:refname | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --notes-start-tag "${PREV_TAG}"
+          else
+            # First release — let gh generate from full history.
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
