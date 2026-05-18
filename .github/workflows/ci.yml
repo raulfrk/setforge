@@ -33,7 +33,7 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
       - name: Twine-check the built artifacts
-        run: uv tool run --from twine twine check dist/*
+        run: uv tool run --from twine twine check --strict dist/*
 
   e2e-docker:
     name: E2E Docker tests
