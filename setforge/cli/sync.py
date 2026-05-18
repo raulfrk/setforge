@@ -39,7 +39,7 @@ from setforge.cli._helpers import (
     _parse_capture_auto,
     _refuse_legacy_live_markers,
 )
-from setforge.config import load_config, resolve_profile
+from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
 
 
@@ -69,24 +69,9 @@ def capture(
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    try:
-        results = capture_mod.capture_profile(
-            cfg,
-            profile,
-            repo_root,
-            setforge_yaml_path=config.resolve(),
-            auto=auto_enum,
-        )
-    except CaptureRequiresInteractive as exc:
-        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(1) from exc
-    except KeyboardInterrupt:
-        typer.secho(
-            "capture cancelled (Ctrl-C); files restored from snapshot",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        raise typer.Exit(130) from None
+    results = _run_capture(
+        cfg, profile, repo_root, config, auto_enum, command="capture"
+    )
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
@@ -140,32 +125,25 @@ def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
     no_transition: bool = typer.Option(
-        False,
-        "--no-transition",
-        hidden=True,
+        False, "--no-transition", hidden=True,
         help="Skip writing a transition record (testing / debugging).",
     ),
     auto: str | None = typer.Option(
-        None,
-        "--auto",
+        None, "--auto",
         help=(
-            "Non-interactive resolution for capture-time drift: "
-            "'use-live' absorbs all drift (today's silent-absorb "
-            "behavior), 'keep-tracked' rejects all drift. Without TTY "
-            "and without --auto, sync exits 1 with "
+            "Non-interactive capture-time drift resolution: 'use-live' "
+            "absorbs all drift; 'keep-tracked' rejects all drift. Without "
+            "TTY and without --auto, sync exits 1 with "
             "CaptureRequiresInteractive."
         ),
     ),
 ) -> None:
     """Capture live → tracked for tracked_files and extensions.
 
-    When tracked declares ``preserve_user_keys_deep`` or carries
-    non-preserve top-level drift, the merge wizard fires interactively
-    so you can review each diverged sub-key / top-level key; this
-    behavior is symmetric with ``setforge install``'s drift gate. Pass
-    ``--auto=use-live`` to reproduce the pre-`nen.23` silent-absorb
-    behavior (e.g. for scripted runs) or ``--auto=keep-tracked`` to
-    refuse to absorb drift.
+    Symmetric with ``setforge install``'s drift gate: the merge wizard
+    fires interactively for ``preserve_user_keys_deep`` and non-preserve
+    top-level drift. Pass ``--auto=use-live`` (pre-`nen.23` silent
+    absorb) or ``--auto=keep-tracked`` (refuse) for scripted runs.
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
@@ -178,15 +156,71 @@ def sync(
     if not no_transition:
         transitions.ensure_state_dir_writable()
 
-    src_paths: list[Path] = [
-        sub_src for _, sub_src, _ in _iter_all_tracked_files(cfg, resolved, repo_root)
-    ]
-    src_paths.append(config.resolve())
-
+    src_paths = _sync_snapshot_paths(cfg, resolved, repo_root, config)
     file_pre = transitions.snapshot_paths(src_paths)
 
+    results = _run_capture(
+        cfg, profile, repo_root, config, auto_enum, command="sync"
+    )
+    for result in results:
+        typer.echo(f"{result.action.value:>8}  {result.name}")
+
+    _capture_extensions(config, profile)
+
+    file_post = transitions.snapshot_paths(src_paths)
+    if not no_transition:
+        target = transitions.write_transition(
+            transitions.make_meta(transitions.TransitionCommand.SYNC, profile),
+            file_pre,
+            file_post,
+            None,  # sync's extension change is reflected in the YAML diff
+        )
+        typer.echo(f"transition: {target}")
+
+
+def _sync_snapshot_paths(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path, config: Path
+) -> list[Path]:
+    """Every tracked src path under the profile plus ``setforge.yaml`` itself."""
+    paths = [
+        sub_src for _, sub_src, _ in _iter_all_tracked_files(cfg, resolved, repo_root)
+    ]
+    paths.append(config.resolve())
+    return paths
+
+
+def _capture_extensions(config: Path, profile: str) -> None:
+    """Capture vscode-extension include changes; surface tool-missing as a warning."""
     try:
-        results = capture_mod.capture_profile(
+        changed = vscode_extensions.capture_extensions(config, profile)
+    except ExtensionToolMissing as exc:
+        typer.secho(
+            f"warning: skipping extension capture — {exc}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+    typer.echo(f"extensions: include {'updated' if changed else 'unchanged'}")
+
+
+def _run_capture(
+    cfg: Config,
+    profile: str,
+    repo_root: Path,
+    config: Path,
+    auto_enum: capture_mod.CaptureAuto | None,
+    *,
+    command: str,
+) -> list[capture_mod.CaptureResult]:
+    """Run ``capture_profile`` with the standard CLI error mapping.
+
+    Centralizes the ``CaptureRequiresInteractive`` → exit-1 and
+    ``KeyboardInterrupt`` → exit-130 mapping shared between
+    :func:`capture` and :func:`sync`. ``command`` names the caller so
+    the Ctrl-C message reads "<command> cancelled".
+    """
+    try:
+        return capture_mod.capture_profile(
             cfg,
             profile,
             repo_root,
@@ -198,32 +232,8 @@ def sync(
         raise typer.Exit(1) from exc
     except KeyboardInterrupt:
         typer.secho(
-            "sync cancelled (Ctrl-C); files restored from snapshot",
+            f"{command} cancelled (Ctrl-C); files restored from snapshot",
             err=True,
             fg=typer.colors.YELLOW,
         )
         raise typer.Exit(130) from None
-    for result in results:
-        typer.echo(f"{result.action.value:>8}  {result.name}")
-
-    try:
-        changed = vscode_extensions.capture_extensions(config, profile)
-    except ExtensionToolMissing as exc:
-        typer.secho(
-            f"warning: skipping extension capture — {exc}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        typer.echo(f"extensions: include {'updated' if changed else 'unchanged'}")
-
-    file_post = transitions.snapshot_paths(src_paths)
-
-    if not no_transition:
-        target = transitions.write_transition(
-            transitions.make_meta(transitions.TransitionCommand.SYNC, profile),
-            file_pre,
-            file_post,
-            None,  # sync's extension change is reflected in the YAML diff
-        )
-        typer.echo(f"transition: {target}")
