@@ -38,6 +38,7 @@ from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
     FileChange,
+    _resolve_drift_paths,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
@@ -45,7 +46,6 @@ from setforge.cli._helpers import (
     _parse_capture_auto,
     _refuse_legacy_live_markers,
 )
-from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
 
@@ -64,26 +64,14 @@ def _build_capture_plan(
     drift keys) against the tracked_file path map. Direction is always
     LIVE_TO_TRACKED — sync absorbs live edits.
     """
-    paths_by_name: dict[str, tuple[Path, Path]] = {}
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
-        cfg, resolved, repo_root
-    ):
-        paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
     file_changes: list[FileChange] = []
-    for entry in drift_report.entries:
-        if entry.status is not CompareStatus.DRIFTED:
-            continue
-        # sync absorbs ANY drift on use-live (not just unexpected) — the
-        # capture writes everything that differs into tracked.
-        if not (entry.unexpected_drift_keys or entry.diff):
-            continue
-        paths = paths_by_name.get(entry.name)
-        if paths is None:
-            sub_src = Path(entry.name)
-            sub_dst = Path(entry.name)
-        else:
-            sub_src, sub_dst = paths
+    # sync absorbs ANY drift on use-live (not just unexpected) — the
+    # capture writes everything that differs into tracked. The shared
+    # ``_resolve_drift_paths`` helper already filters to entries with
+    # ``unexpected_drift_keys or diff``, which matches sync's intent.
+    for entry, sub_src, sub_dst in _resolve_drift_paths(
+        drift_report, cfg, resolved, repo_root
+    ):
         file_changes.append(
             FileChange(
                 source=sub_dst,

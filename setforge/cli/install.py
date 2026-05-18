@@ -29,6 +29,7 @@ from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
     FileChange,
+    _resolve_drift_paths,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
@@ -44,7 +45,6 @@ from setforge.cli._install_helpers import (
     _write_install_transition,
 )
 from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugins
-from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
@@ -62,36 +62,20 @@ def _build_unexpected_drift_plan(
 ) -> AutoPlan:
     """Build an AutoPlan from a drift report for legacy --auto-accept-* paths.
 
-    Walks ``_iter_all_tracked_files`` to build a name → (sub_src, sub_dst)
-    map, then joins with the ``CompareReport.entries`` that have
-    ``unexpected_drift_keys``. The "+/-/Δ" columns aren't computed for
-    unexpected drift (the diff body is YAML/JSONC key-level, not line-level),
-    so ``changed`` is set to the number of unexpected keys.
+    Delegates name → (sub_src, sub_dst) resolution to the shared
+    ``_resolve_drift_paths`` helper, then filters to entries with
+    ``unexpected_drift_keys`` (install's legacy gate ignores
+    diff-only entries). ``changed`` is the number of unexpected keys.
     """
-    paths_by_name: dict[str, tuple[Path, Path]] = {}
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
-        cfg, resolved, repo_root
-    ):
-        # expand_tracked_file's naming convention: plain files use the
-        # tracked_file name directly; directory entries use "name/relpath".
-        # We register both the bare name and the prefixed form so lookup
-        # works regardless of expansion shape.
-        paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
     file_changes: list[FileChange] = []
-    for entry in drift_report.entries:
-        if entry.status is not CompareStatus.DRIFTED:
-            continue
+    for entry, sub_src, sub_dst in _resolve_drift_paths(
+        drift_report, cfg, resolved, repo_root
+    ):
+        # install's legacy --auto-accept-* gate ONLY surfaces entries
+        # with unexpected-drift keys; entries that drift only via diff
+        # body fall through to the bare-install warning path.
         if not entry.unexpected_drift_keys:
             continue
-        paths = paths_by_name.get(entry.name)
-        if paths is None:
-            # Fall back to using the entry name in both columns; preserves
-            # user-visible information when the join misses.
-            sub_src = Path(entry.name)
-            sub_dst = Path(entry.name)
-        else:
-            sub_src, sub_dst = paths
         if direction is AutoDirection.TRACKED_TO_LIVE:
             source, dest = sub_src, sub_dst
         else:
