@@ -234,6 +234,45 @@ def _print_next_steps(*, console: Console, target: Path, profile: str) -> None:
     console.print(f"  setforge install --profile={profile}")
 
 
+def _apply_section_add(
+    *,
+    config_path: Path,
+    profile: str,
+    tracked_file: str,
+    semantics: str,
+    name: str,
+    anchor_line: int,
+    body: str,
+) -> None:
+    """Insert a marker pair into the resolved tracked file.
+
+    The shared post-validation flow: resolve path, suffix-check,
+    duplicate-name guard, anchor-line bound-check, insert, write,
+    next-steps print. Both the scripted and interactive entry points
+    converge here AFTER they've turned their respective input shapes
+    (CLI flags vs prompt_toolkit dialogs) into the seven concrete
+    arguments this helper consumes.
+    """
+    target = _resolve_tracked_file_path(
+        config_path=config_path, tracked_file_key=tracked_file
+    )
+    _check_markdown_suffix(target=target)
+    text = target.read_text()
+    _validate_anchor_line(
+        anchor_line=anchor_line, total_lines=_count_total_lines(text)
+    )
+    _check_duplicate_name(file_text=text, name=name)
+    updated = _insert_marker_pair(
+        file_text=text,
+        anchor_line=anchor_line,
+        semantics=semantics,
+        name=name,
+        body=body,
+    )
+    target.write_text(updated)
+    _print_next_steps(console=Console(), target=target, profile=profile)
+
+
 def _section_add_scripted(
     *,
     config_path: Path,
@@ -253,24 +292,16 @@ def _section_add_scripted(
         raise typer.BadParameter(
             "--body-source=empty is mutually exclusive with --body-file"
         )
-    target = _resolve_tracked_file_path(
-        config_path=config_path, tracked_file_key=tracked_file
-    )
-    _check_markdown_suffix(target=target)
-    text = target.read_text()
-    total_lines = _count_total_lines(text)
-    _validate_anchor_line(anchor_line=anchor_line, total_lines=total_lines)
-    _check_duplicate_name(file_text=text, name=name)
     body = _read_body(body_source=body_source, body_file=body_file)
-    updated = _insert_marker_pair(
-        file_text=text,
-        anchor_line=anchor_line,
+    _apply_section_add(
+        config_path=config_path,
+        profile=profile,
+        tracked_file=tracked_file,
         semantics=semantics,
         name=name,
+        anchor_line=anchor_line,
         body=body,
     )
-    target.write_text(updated)
-    _print_next_steps(console=Console(), target=target, profile=profile)
 
 
 def _interactive_pick_tracked_file(*, config_path: Path) -> str:
@@ -391,6 +422,9 @@ def _section_add_interactive(
     )
     _check_markdown_suffix(target=target)
     text = target.read_text()
+    # Surface the duplicate-name error BEFORE opening the anchor picker so
+    # the user doesn't lose a TUI session to a name they could have caught
+    # at flag-parse time. _apply_section_add re-checks under the same lock.
     _check_duplicate_name(file_text=text, name=name)
 
     if anchor_line is None:
@@ -398,7 +432,6 @@ def _section_add_interactive(
         if anchor_line is None:
             typer.echo("aborted.")
             raise typer.Exit(0)
-    _validate_anchor_line(anchor_line=anchor_line, total_lines=_count_total_lines(text))
 
     if body_source is None:
         body_source = _interactive_pick_body_source()
@@ -408,15 +441,15 @@ def _section_add_interactive(
         typer.echo("aborted.")
         raise typer.Exit(0)
 
-    updated = _insert_marker_pair(
-        file_text=text,
-        anchor_line=anchor_line,
+    _apply_section_add(
+        config_path=config_path,
+        profile=profile,
+        tracked_file=tracked_file,
         semantics=semantics,
         name=name,
+        anchor_line=anchor_line,
         body=body,
     )
-    target.write_text(updated)
-    _print_next_steps(console=Console(), target=target, profile=profile)
 
 
 @section_app.command("add")
