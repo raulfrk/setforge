@@ -127,6 +127,25 @@ def test_non_tty_without_yes_raises_confirm_requires_interactive(
     assert "--yes" in str(exc.value)
 
 
+def test_non_tty_raise_path_renders_no_panel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TTY check fires BEFORE panel rendering — non-TTY callers see
+    nothing on the wizard console, only the global handler's
+    ``error: ... requires --yes`` line."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    console = Console(record=True)
+    with pytest.raises(ConfirmRequiresInteractive):
+        confirm_auto_operation(
+            command="sync --auto=use-live",
+            profile="test",
+            plan=_make_plan(),
+            yes=False,
+            console=console,
+        )
+    assert console.export_text() == ""
+
+
 def test_tty_yes_response_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     with patch("setforge.cli._confirm.radiolist_dialog") as dlg:

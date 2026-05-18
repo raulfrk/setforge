@@ -126,13 +126,16 @@ def confirm_auto_operation(
         return True
     if not plan.file_changes and not plan.risks:
         return True
-    if console is None:
-        console = Console()
-    _render_panel(command=command, profile=profile, plan=plan, console=console)
+    # TTY check FIRST — non-TTY callers see only the global handler's
+    # ``error: ... requires --yes`` line, not a long panel printed
+    # before the raise.
     if not sys.stdin.isatty():
         raise ConfirmRequiresInteractive(
             f"setforge {command} with --auto* requires --yes when stdin is not a TTY"
         )
+    if console is None:
+        console = Console()
+    _render_panel(command=command, profile=profile, plan=plan, console=console)
     choice = radiolist_dialog(
         title=f"setforge {command}",
         text="Proceed with the mutation above?",
