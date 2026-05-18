@@ -34,13 +34,79 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._confirm import (
+    AutoDirection,
+    AutoPlan,
+    FileChange,
+    confirm_auto_operation,
+)
 from setforge.cli._helpers import (
     _iter_all_tracked_files,
     _parse_capture_auto,
     _refuse_legacy_live_markers,
 )
+from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
+
+
+def _build_capture_plan(
+    *,
+    drift_report: compare_mod.CompareReport,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> AutoPlan:
+    """Build an AutoPlan for the live → tracked capture path (sync --auto=use-live).
+
+    Joins the ``CompareReport.entries`` (entries marked DRIFTED with any
+    drift keys) against the tracked_file path map. Direction is always
+    LIVE_TO_TRACKED — sync absorbs live edits.
+    """
+    paths_by_name: dict[str, tuple[Path, Path]] = {}
+    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
+        cfg, resolved, repo_root
+    ):
+        paths_by_name[sub_src.name] = (sub_src, sub_dst)
+        paths_by_name[tracked_file.src] = (sub_src, sub_dst)
+    file_changes: list[FileChange] = []
+    for entry in drift_report.entries:
+        if entry.status is not CompareStatus.DRIFTED:
+            continue
+        # sync absorbs ANY drift on use-live (not just unexpected) — the
+        # capture writes everything that differs into tracked.
+        if not (entry.unexpected_drift_keys or entry.diff):
+            continue
+        paths = paths_by_name.get(entry.name)
+        if paths is None:
+            sub_src = Path(entry.name)
+            sub_dst = Path(entry.name)
+        else:
+            sub_src, sub_dst = paths
+        file_changes.append(
+            FileChange(
+                source=sub_dst,
+                dest=sub_src,
+                changed=max(len(entry.unexpected_drift_keys), 1),
+            ),
+        )
+    if not file_changes:
+        return AutoPlan(
+            direction=AutoDirection.LIVE_TO_TRACKED,
+            file_changes=(),
+            risks=(),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+    return AutoPlan(
+        direction=AutoDirection.LIVE_TO_TRACKED,
+        file_changes=tuple(file_changes),
+        risks=(
+            f"tracked-side files on {len(file_changes)} file(s) will be overwritten "
+            "with live edits — propagates to all hosts via the tracked repo",
+        ),
+        revert_command=f"setforge revert --profile={profile}",
+    )
 
 
 @app.command()
@@ -140,6 +206,12 @@ def sync(
             "CaptureRequiresInteractive."
         ),
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the --auto=use-live confirmation prompt (for non-interactive use).",
+    ),
 ) -> None:
     """Capture live → tracked for tracked_files and extensions.
 
@@ -159,6 +231,24 @@ def sync(
     if not no_transition:
         transitions.ensure_state_dir_writable()
 
+    # bviv: confirmation gate for sync --auto=use-live (live → tracked).
+    if auto_enum is capture_mod.CaptureAuto.USE_LIVE:
+        drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+        plan = _build_capture_plan(
+            drift_report=drift_report,
+            cfg=cfg,
+            resolved=resolved,
+            repo_root=repo_root,
+            profile=profile,
+        )
+        if not confirm_auto_operation(
+            command="sync --auto=use-live",
+            profile=profile,
+            plan=plan,
+            yes=yes,
+        ):
+            raise typer.Exit(0)
+
     src_paths = _sync_snapshot_paths(cfg, resolved, repo_root, config)
     file_pre = transitions.snapshot_paths(src_paths)
 
@@ -177,6 +267,7 @@ def sync(
             None,  # sync's extension change is reflected in the YAML diff
         )
         typer.echo(f"transition: {target}")
+        typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
 
 def _sync_snapshot_paths(
