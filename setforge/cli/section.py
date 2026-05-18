@@ -331,6 +331,20 @@ def _section_add_interactive(
     yes: bool,
 ) -> None:
     """Walk every missing flag through a prompt_toolkit dialog."""
+    # Pre-validate any user-supplied flags up front so partial-flag
+    # invocations (e.g. ``--name=Foo`` with the rest missing) fail before
+    # any TUI dialog opens. Mirrors the scripted-path validation order.
+    if semantics is not None:
+        _validate_semantics(semantics)
+    if name is not None:
+        _validate_name(name)
+    if body_source is not None:
+        body_source_enum = _validate_body_source(body_source)
+        if body_source_enum is BodySource.EMPTY and body_file is not None:
+            raise typer.BadParameter(
+                "--body-source=empty is mutually exclusive with --body-file"
+            )
+
     if tracked_file is None:
         tracked_file = _interactive_pick_tracked_file(config_path=config_path)
     if semantics is None:
