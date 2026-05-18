@@ -214,6 +214,8 @@ def test_section_add_then_install_deploys_marker_pair_to_live(
             "install",
             "--profile=test-text-sections",
             f"--config={CONFIG_FIXTURE}",
+            "--auto=use-tracked",
+            "--yes",
         ],
         check=False,
     )
