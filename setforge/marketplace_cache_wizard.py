@@ -205,20 +205,43 @@ def resolve_collision(
     header = _render_prompt(mp_name, cache_dir, existing_origin, new_repo)
     while True:
         choice = prompt_fn(header).strip().lower()
-        if choice in ("k", "keep"):
-            return CollisionResolution(action=CollisionAction.KEEP)
-        if choice in ("u", "update"):
-            return CollisionResolution(action=CollisionAction.UPDATE)
-        if choice in ("b", "both"):
-            return _resolve_both(
-                mp_name=mp_name,
-                cache_root=cache_root,
-                name_prompt_fn=name_prompt_fn,
-            )
-        if choice in ("a", "abort"):
-            raise typer.Abort()
+        resolution = _dispatch_collision_choice(
+            choice,
+            mp_name=mp_name,
+            cache_root=cache_root,
+            name_prompt_fn=name_prompt_fn,
+        )
+        if resolution is not None:
+            return resolution
         # Anything else: re-prompt with a hint.
         header = "Enter k, u, b, or a: "
+
+
+def _dispatch_collision_choice(
+    choice: str,
+    *,
+    mp_name: str,
+    cache_root: Path,
+    name_prompt_fn: Callable[[str], str],
+) -> CollisionResolution | None:
+    """Map one user choice token to a ``CollisionResolution`` or ``None``.
+
+    Returns ``None`` for unrecognised input so the caller can re-prompt;
+    raises :class:`typer.Abort` for ``[a]bort``.
+    """
+    if choice in ("k", "keep"):
+        return CollisionResolution(action=CollisionAction.KEEP)
+    if choice in ("u", "update"):
+        return CollisionResolution(action=CollisionAction.UPDATE)
+    if choice in ("b", "both"):
+        return _resolve_both(
+            mp_name=mp_name,
+            cache_root=cache_root,
+            name_prompt_fn=name_prompt_fn,
+        )
+    if choice in ("a", "abort"):
+        raise typer.Abort()
+    return None
 
 
 def _resolve_both(
