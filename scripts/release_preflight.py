@@ -37,6 +37,12 @@ _REQUIRED_COMMANDS = (
     "marketplace",
 )
 
+_WORKFLOW_REQUIRED_JOBS: dict[str, frozenset[str]] = {
+    "ci.yml": frozenset({"build-verify"}),
+    "publish-pypi.yml": frozenset({"build-and-publish"}),
+    "release.yml": frozenset({"release"}),
+}
+
 
 def _run(
     *args: str,
@@ -114,14 +120,24 @@ def step_6_import_version(version: str) -> None:
     )
 
 
-def step_7_workflow_yaml_parse() -> None:
-    """Verify every .github/workflows/*.yml parses cleanly."""
+def step_7_workflow_yaml_integrity() -> None:
+    """Verify every .github/workflows/*.yml parses AND declares required jobs."""
     yaml = YAML(typ="safe")
     for path in Path(".github/workflows").glob("*.yml"):
         try:
-            yaml.load(path)
+            data = yaml.load(path)
         except Exception as exc:
             raise AssertionError(f"YAML parse failed for {path}: {exc}") from exc
+        required = _WORKFLOW_REQUIRED_JOBS.get(path.name)
+        if not required:
+            continue
+        present = frozenset((data.get("jobs") or {}).keys())
+        missing = required - present
+        if missing:
+            raise AssertionError(
+                f"{path}: missing required jobs: {sorted(missing)} "
+                f"(present: {sorted(present)})"
+            )
 
 
 def step_8_bd_ready_p012_empty() -> None:
@@ -201,7 +217,7 @@ def main() -> int:
             "6: import setforge; assert __version__",
             lambda: step_6_import_version(version),
         ),
-        ("7: workflow YAML parse", step_7_workflow_yaml_parse),
+        ("7: workflow YAML integrity", step_7_workflow_yaml_integrity),
         ("8: bd ready P0/P1/P2 empty", step_8_bd_ready_p012_empty),
     ]
     for name, fn in remaining:
