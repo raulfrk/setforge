@@ -125,11 +125,14 @@ def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
     no_transition: bool = typer.Option(
-        False, "--no-transition", hidden=True,
+        False,
+        "--no-transition",
+        hidden=True,
         help="Skip writing a transition record (testing / debugging).",
     ),
     auto: str | None = typer.Option(
-        None, "--auto",
+        None,
+        "--auto",
         help=(
             "Non-interactive capture-time drift resolution: 'use-live' "
             "absorbs all drift; 'keep-tracked' rejects all drift. Without "
@@ -159,9 +162,7 @@ def sync(
     src_paths = _sync_snapshot_paths(cfg, resolved, repo_root, config)
     file_pre = transitions.snapshot_paths(src_paths)
 
-    results = _run_capture(
-        cfg, profile, repo_root, config, auto_enum, command="sync"
-    )
+    results = _run_capture(cfg, profile, repo_root, config, auto_enum, command="sync")
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
 

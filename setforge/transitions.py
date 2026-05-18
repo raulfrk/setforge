@@ -500,8 +500,7 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
                 "disabled": list(plugin_delta.disabled),
                 "marketplaces_added": list(plugin_delta.marketplaces_added),
                 "marketplaces_removed": [
-                    [name, dict(src)]
-                    for name, src in plugin_delta.marketplaces_removed
+                    [name, dict(src)] for name, src in plugin_delta.marketplaces_removed
                 ],
             },
             indent=2,
