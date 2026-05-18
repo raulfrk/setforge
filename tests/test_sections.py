@@ -557,6 +557,44 @@ def test_unknown_semantics_keyword_raises_at_parse_time() -> None:
         extract_sections(text)
 
 
+def test_hash_in_semantics_position_raises_with_missing_semantics_hint() -> None:
+    """A ``hash=`` token in the semantics position (token 1) surfaces a
+    precise :class:`MarkerError` flagging the missing semantics keyword —
+    not the generic "unknown semantics" error and NOT a silent non-marker
+    fallthrough (which the pre-q1l deferral produced).
+
+    The strict syntax is ``<kind> <semantics> [NAME] [hash=<sha>]``;
+    ``hash=`` is only valid in position 3 on end markers (after NAME).
+    A first-token ``hash=`` means the user forgot the semantics keyword.
+    """
+    text = (
+        "<!-- setforge:user-section start hash=abc workflow -->\n"
+        "body\n"
+        "<!-- setforge:user-section end shared workflow -->\n"
+    )
+    with pytest.raises(
+        MarkerError, match="is missing the semantics keyword before 'hash="
+    ):
+        extract_sections(text)
+
+
+def test_hash_in_semantics_position_on_end_marker_raises() -> None:
+    """Same hardening as for start markers: ``end hash=...`` (no preceding
+    semantics keyword) surfaces "missing semantics keyword", not a silent
+    fallthrough. Mirror coverage for the end-marker branch since both
+    kinds share the helper.
+    """
+    text = (
+        "<!-- setforge:user-section start shared workflow -->\n"
+        "body\n"
+        "<!-- setforge:user-section end hash=abc workflow -->\n"
+    )
+    with pytest.raises(
+        MarkerError, match="is missing the semantics keyword before 'hash="
+    ):
+        extract_sections(text)
+
+
 def test_extract_sections_accepts_host_local_keyword() -> None:
     text = (
         "<!-- setforge:user-section start host-local notes -->\n"

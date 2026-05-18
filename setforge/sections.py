@@ -250,10 +250,20 @@ def _raise_if_malformed_marker(line: str, lineno: int) -> None:
     if not tokens:
         return
     first = tokens[0]
-    if first.startswith("hash="):
-        return
     if first in {s.value for s in SectionSemantics}:
         return
+    # A ``hash=`` token in the semantics position (token 1) is always
+    # malformed — the strict syntax is ``<kind> <semantics> [NAME]
+    # [hash=<sha>]`` and ``hash=`` only appears in position 3 on end
+    # markers. Surface this distinctly so the user sees "you forgot the
+    # semantics keyword" rather than "unknown semantics keyword
+    # 'hash=abc'".
+    if first.startswith("hash="):
+        raise MarkerError(
+            f"line {lineno}: user-section {kind} marker is missing the "
+            f"semantics keyword before {first!r}; expected "
+            f"'host-local' or 'shared' as the first token"
+        )
     raise MarkerError(
         f"line {lineno}: user-section {kind} marker has unknown semantics "
         f"keyword {first!r}; expected 'host-local' or 'shared'"

@@ -56,6 +56,12 @@ ignore = [
 # untyped-seam reasoning as yaml_merge.py: the third-party type surface
 # is the constraint, not our annotation discipline.
 "setforge/jsonc.py" = ["ANN401"]
+# tests/ holds pytest fixture parameters (`monkeypatch`, `tmp_path`,
+# `capsys`, …) whose types are obvious from naming and whose explicit
+# annotation buys no daily reading clarity. ANN401 is also allowed
+# here because tests construct ad-hoc dict / list scaffolds where
+# `Any` is the only honest type.
+"tests/**" = ["ANN001", "ANN401"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
