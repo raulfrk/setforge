@@ -38,7 +38,10 @@ _REQUIRED_COMMANDS = (
 )
 
 
-def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    *args: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run a subprocess with the project's standard discipline."""
     return subprocess.run(
         list(args),
@@ -117,7 +120,7 @@ def step_7_workflow_yaml_parse() -> None:
     for path in Path(".github/workflows").glob("*.yml"):
         try:
             yaml.load(path)
-        except Exception as exc:  # noqa: BLE001 - report the path in the message
+        except Exception as exc:
             raise AssertionError(f"YAML parse failed for {path}: {exc}") from exc
 
 
@@ -131,9 +134,7 @@ def step_8_bd_ready_p012_empty() -> None:
     ]
     if blocking_lines:
         joined = "\n    ".join(blocking_lines)
-        raise AssertionError(
-            f"unfinished P0/P1/P2 work blocks release:\n    {joined}"
-        )
+        raise AssertionError(f"unfinished P0/P1/P2 work blocks release:\n    {joined}")
 
 
 def main() -> int:
@@ -180,9 +181,18 @@ def main() -> int:
     print("OK")
 
     later_steps: list[tuple[str, Callable[[], None]]] = [
-        ("4: installed --version", lambda: step_4_installed_version(tmp_tool_dir, version)),
-        ("5: installed --help (8 commands present)", lambda: step_5_installed_help(tmp_tool_dir)),
-        ("6: import setforge; assert __version__", lambda: step_6_import_version(version)),
+        (
+            "4: installed --version",
+            lambda: step_4_installed_version(tmp_tool_dir, version),
+        ),
+        (
+            "5: installed --help (8 commands present)",
+            lambda: step_5_installed_help(tmp_tool_dir),
+        ),
+        (
+            "6: import setforge; assert __version__",
+            lambda: step_6_import_version(version),
+        ),
         ("7: workflow YAML parse", step_7_workflow_yaml_parse),
         ("8: bd ready P0/P1/P2 empty", step_8_bd_ready_p012_empty),
     ]
