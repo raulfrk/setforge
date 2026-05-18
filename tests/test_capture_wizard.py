@@ -15,10 +15,10 @@ Wrapper test (Phase B) verifies ``run_capture_wizard`` delegates to
 Orchestration tests (Phase G) verify ``capture_profile`` fires the
 wizard, raises :class:`CaptureRequiresInteractive` in non-TTY contexts
 without ``--auto``, and surfaces interactive decisions to tracked /
-``my_setup.yaml``.
+``setforge.yaml``.
 
 Cancel-atomicity test (Phase G) verifies Ctrl-C mid-wizard restores
-tracked + ``my_setup.yaml`` to pre-wizard state and short-circuits the
+tracked + ``setforge.yaml`` to pre-wizard state and short-circuits the
 writeback.
 """
 
@@ -82,9 +82,9 @@ def _make_config(
     return config, repo, src, dst
 
 
-def _make_my_setup_yaml(tmp_path: Path, *, tracked_file_name: str = "x") -> Path:
-    """Write a minimal valid my_setup.yaml referencing the test tracked_file."""
-    path = tmp_path / "my_setup.yaml"
+def _make_setforge_yaml(tmp_path: Path, *, tracked_file_name: str = "x") -> Path:
+    """Write a minimal valid setforge.yaml referencing the test tracked_file."""
+    path = tmp_path / "setforge.yaml"
     path.write_text(
         f"version: 1\n"
         f"tracked_files:\n"
@@ -379,7 +379,7 @@ def test_run_capture_wizard_delegates_to_loop(
         src_text="a: 1\nb: 2\n",
         dst_text="a: 99\nb: 88\n",
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     captured_calls: list[dict[str, Any]] = []
 
@@ -397,7 +397,7 @@ def test_run_capture_wizard_delegates_to_loop(
         config,
         "p",
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         snapshot_base=tmp_path / "snaps",
         console=Console(file=StringIO(), force_terminal=False, no_color=True),
         auto_accept="k",
@@ -429,7 +429,7 @@ def test_capture_profile_errors_in_non_interactive_when_drift_present_and_no_aut
         src_text="a: 1\nb: 2\n",
         dst_text="a: 99\nb: 2\n",
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
     src_before = src.read_text()
 
     with pytest.raises(CaptureRequiresInteractive):
@@ -437,7 +437,7 @@ def test_capture_profile_errors_in_non_interactive_when_drift_present_and_no_aut
             config,
             "p",
             repo,
-            setforge_yaml_path=my_setup_yaml,
+            setforge_yaml_path=setforge_yaml,
             interactive=False,
             auto=None,
         )
@@ -454,13 +454,13 @@ def test_capture_profile_proceeds_in_non_interactive_when_no_drift(
         src_text="a: 1\n",
         dst_text="a: 1\n",
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     results = capture_profile(
         config,
         "p",
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         interactive=False,
         auto=None,
     )
@@ -491,13 +491,13 @@ def test_capture_profile_auto_use_live_absorbs_all_drift(
         ),
         preserve_user_keys_deep=["deep_root"],
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     capture_profile(
         config,
         "p",
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         interactive=False,
         auto=CaptureAuto.USE_LIVE,
     )
@@ -536,13 +536,13 @@ def test_capture_profile_auto_keep_tracked_rejects_all_drift(
         ),
         preserve_user_keys_deep=["deep_root"],
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     capture_profile(
         config,
         "p",
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         interactive=False,
         auto=CaptureAuto.KEEP_TRACKED,
     )
@@ -562,7 +562,7 @@ def test_capture_profile_interactive_mixed_decisions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Monkey-patched prompt_one returns mixed (u/k/s) over 3 walked
-    items. Tracked reflects each decision; my_setup.yaml gained the
+    items. Tracked reflects each decision; setforge.yaml gained the
     'save-as-preserved' key path."""
     config, repo, src, _dst = _make_config(
         tmp_path,
@@ -577,7 +577,7 @@ def test_capture_profile_interactive_mixed_decisions(
         ),
         preserve_user_keys_deep=["deep_root"],
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     # Walker yields three items in this order:
     #   1. deep_root.k_keep (deep)
@@ -594,7 +594,7 @@ def test_capture_profile_interactive_mixed_decisions(
         config,
         "p",
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         interactive=True,
         auto=None,
     )
@@ -603,7 +603,7 @@ def test_capture_profile_interactive_mixed_decisions(
     assert "k_keep: tracked_keep" in final  # [k] preserved tracked
     assert "k_use: live_use" in final  # [u] absorbed live
 
-    yaml_text = my_setup_yaml.read_text()
+    yaml_text = setforge_yaml.read_text()
     # [s] appended save_top to the tracked_file's preserve_user_keys
     assert "save_top" in yaml_text
 
@@ -611,7 +611,7 @@ def test_capture_profile_interactive_mixed_decisions(
 def test_capture_wizard_cancel_restores_tracked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """KeyboardInterrupt mid-wizard restores tracked + my_setup.yaml
+    """KeyboardInterrupt mid-wizard restores tracked + setforge.yaml
     from snapshot. Capture writeback does not run."""
     config, repo, src, _dst = _make_config(
         tmp_path,
@@ -619,10 +619,10 @@ def test_capture_wizard_cancel_restores_tracked(
         dst_text=("deep_root:\n  a: live_a\n  b: live_b\n"),
         preserve_user_keys_deep=["deep_root"],
     )
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     src_pre = src.read_bytes()
-    yaml_pre = my_setup_yaml.read_bytes()
+    yaml_pre = setforge_yaml.read_bytes()
 
     def fake_prompt_one(item: DriftItem, console: Console) -> str:
         raise KeyboardInterrupt
@@ -637,7 +637,7 @@ def test_capture_wizard_cancel_restores_tracked(
             config,
             "p",
             repo,
-            setforge_yaml_path=my_setup_yaml,
+            setforge_yaml_path=setforge_yaml,
             interactive=True,
             auto=None,
             snapshot_base=tmp_path / "snaps",
@@ -645,11 +645,11 @@ def test_capture_wizard_cancel_restores_tracked(
 
     # KeyboardInterrupt path: snapshot is preserved; the CLI signal
     # handler is responsible for restore. capture_profile must NOT
-    # run writeback after a cancel, so tracked + my_setup.yaml are
+    # run writeback after a cancel, so tracked + setforge.yaml are
     # exactly the pre-wizard bytes (no writeback over the wizard's
     # in-progress edits).
     assert src.read_bytes() == src_pre
-    assert my_setup_yaml.read_bytes() == yaml_pre
+    assert setforge_yaml.read_bytes() == yaml_pre
 
 
 # ---------------------------------------------------------------------------

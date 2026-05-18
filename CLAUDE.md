@@ -1,6 +1,6 @@
 # setforge
 
-Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `my_setup.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the setforge-2ba.4 split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
+Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `setforge.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the setforge-2ba.4 split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
 
 ## The meta-twist: live vs tracked
 
@@ -24,7 +24,7 @@ End markers may carry an optional `hash=<sha256-hex>` segment that records the b
 
 ## Profiles — always pass --profile=
 
-Profiles are defined in the USER's config repo's `my_setup.yaml`. The author's daily-driver profile is `vm-headless`. Never run a `setforge` command without `--profile=`.
+Profiles are defined in the USER's config repo's `setforge.yaml`. The author's daily-driver profile is `vm-headless`. Never run a `setforge` command without `--profile=`.
 
 ## Workflow verbs
 
@@ -118,8 +118,8 @@ Beads + Superpowers configured by this repo. Repomix + worktrunk installed exter
 
 Both happen in the USER's config repo (the one configured via the source layer), not in this engine repo:
 
-- Tracked file: edit `<config-repo>/my_setup.yaml` to add an entry under `tracked_files:`, reference it from the relevant profile, place the source file under `<config-repo>/tracked/<src>`.
-- Extension: add the extension ID to the profile's `extensions.include:` list in `<config-repo>/my_setup.yaml`.
+- Tracked file: edit `<config-repo>/setforge.yaml` to add an entry under `tracked_files:`, reference it from the relevant profile, place the source file under `<config-repo>/tracked/<src>`.
+- Extension: add the extension ID to the profile's `extensions.include:` list in `<config-repo>/setforge.yaml`.
 
 After editing the config repo, commit + push there. On the next `setforge install --profile=X` the engine reads the updated config via the source layer.
 
@@ -132,4 +132,4 @@ After editing the config repo, commit + push there. On the next `setforge instal
 ## Don't-do list
 
 - Don't push to git remotes automatically — I push when ready.
-- Don't auto-edit `my_setup.yaml`'s extension lists — those land via the dedicated `ext` subcommand once Pillar 2 ships.
+- Don't auto-edit `setforge.yaml`'s extension lists — those land via the dedicated `ext` subcommand once Pillar 2 ships.

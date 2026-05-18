@@ -10,7 +10,7 @@ capture_output=True, timeout=30``, and args are always a list with no
 
 Also exposes YAML-edit helpers used by the ``ext`` subcommand group to
 mutate a profile's ``extensions.include`` / ``extensions.exclude`` lists
-in ``my_setup.yaml`` without losing comments.
+in ``setforge.yaml`` without losing comments.
 """
 
 import logging
@@ -232,7 +232,7 @@ def _load_yaml_doc(config_path: Path):
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
     yaml = YAML(typ="rt")
-    # Match the indent style used in my_setup.yaml so list edits don't
+    # Match the indent style used in setforge.yaml so list edits don't
     # noisy-reformat the rest of the file (lists indented under their key).
     yaml.indent(mapping=2, sequence=4, offset=2)
     yaml.preserve_quotes = True
@@ -274,7 +274,7 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     if ext_id in cfg.profiles[profile].extensions.exclude:
         raise ConfigError(
             f"{ext_id!r} is in {profile}.extensions.exclude — remove it from "
-            "exclude first (e.g. by editing my_setup.yaml) before adding to include"
+            "exclude first (e.g. by editing setforge.yaml) before adding to include"
         )
     yaml, doc = _load_yaml_doc(config_path)
     ext_block = _profile_extensions_block(doc, profile)

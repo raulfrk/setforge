@@ -337,7 +337,7 @@ profiles:
     extends: parent
     tracked_files: [d]
 """
-    p = tmp_path / "my_setup.yaml"
+    p = tmp_path / "setforge.yaml"
     p.write_text(fixture, encoding="utf-8")
     with pytest.raises(_ConfigError, match="inherited profile 'parent'"):
         remove_from_include(p, "child", "inherited.one")
@@ -361,7 +361,7 @@ profiles:
     extends: parent
     tracked_files: [d]
 """
-    p = tmp_path / "my_setup.yaml"
+    p = tmp_path / "setforge.yaml"
     p.write_text(fixture, encoding="utf-8")
     changed = remove_from_include(p, "child", "inherited.one", add_to_exclude_list=True)
     assert changed is True
@@ -405,7 +405,7 @@ profiles:
 
 
 def _write_fixture(tmp_path: Path) -> Path:
-    p = tmp_path / "my_setup.yaml"
+    p = tmp_path / "setforge.yaml"
     p.write_text(_FIXTURE_YAML, encoding="utf-8")
     return p
 

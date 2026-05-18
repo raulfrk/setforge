@@ -1,6 +1,6 @@
 """Typed configuration schema for setforge.
 
-Pydantic models validate ``my_setup.yaml`` and provide the in-memory
+Pydantic models validate ``setforge.yaml`` and provide the in-memory
 contract used by every subcommand. YAML is loaded via ruamel.yaml in
 round-trip mode so comments and key order survive subsequent capture
 writes that re-serialize the document.
@@ -324,7 +324,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
 
 
 def load_config(path: Path) -> Config:
-    """Parse ``my_setup.yaml`` from disk and validate against the schema.
+    """Parse ``setforge.yaml`` from disk and validate against the schema.
 
     Raises :class:`ConfigError` on file-not-found, YAML parse errors, or
     cross-field violations (e.g. profile ``claude_plugins`` referencing

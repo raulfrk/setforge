@@ -228,7 +228,7 @@ def test_capture_profile_iterates_tracked_files(tmp_path: Path) -> None:
         config,
         "p",
         repo,
-        setforge_yaml_path=tmp_path / "my_setup.yaml",
+        setforge_yaml_path=tmp_path / "setforge.yaml",
     )
     assert {r.name for r in results} == {"x", "y"}
     assert all(r.action is CaptureAction.UPDATED for r in results)

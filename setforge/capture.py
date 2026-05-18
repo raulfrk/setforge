@@ -231,7 +231,7 @@ def capture_profile(
     repo_root:
         Repo root used for ``resolve_src``.
     setforge_yaml_path:
-        Path to ``my_setup.yaml`` — needed by the wizard's ``[s]``
+        Path to ``setforge.yaml`` — needed by the wizard's ``[s]``
         action.
     interactive:
         Force-toggle for whether the wizard prompts. ``None`` (default)

@@ -1,6 +1,6 @@
 # setforge
 
-Tracked-file + VSCode-extension + Claude-plugin orchestration CLI for personal config (dotfiles + extensions + Claude plugins). Single Python CLI (`setforge`) driven by a `my_setup.yaml` declarative config that lives in a SEPARATE config repo (you bring your own).
+Tracked-file + VSCode-extension + Claude-plugin orchestration CLI for personal config (dotfiles + extensions + Claude plugins). Single Python CLI (`setforge`) driven by a `setforge.yaml` declarative config that lives in a SEPARATE config repo (you bring your own).
 
 ## Stack
 
@@ -27,14 +27,14 @@ The Claude Code workflow setforge is built around relies on four tools:
 setforge is a TOOL; the config it deploys is YOUR data. Post-setforge-2ba.4, the two live in separate repos:
 
 - **Engine repo (this one)**: ships the `setforge` CLI + the source-discovery layer + git-management subsystem. No user-specific config.
-- **Config repo (your repo)**: holds `my_setup.yaml` + `tracked/<paths>` for the dotfiles you want managed. The author's personal config repo is `raulfrk/setforge-config` (private).
+- **Config repo (your repo)**: holds `setforge.yaml` + `tracked/<paths>` for the dotfiles you want managed. The author's personal config repo is `raulfrk/setforge-config` (private).
 
 setforge discovers your config repo via a 4-layer precedence (first non-empty wins):
 
 1. CLI flag: `--source PATH` (paths only).
 2. Env var: `SETFORGE_SOURCE=PATH` (paths only).
 3. Host-local config file `~/.config/setforge/local.yaml` `source:` block (path OR git).
-4. Fallback: CWD if it contains `my_setup.yaml`.
+4. Fallback: CWD if it contains `setforge.yaml`.
 
 ## Install on a new machine
 
@@ -96,7 +96,7 @@ uv run pre-commit install
 
 ## Daily workflow
 
-All commands require `--profile=<name>`. Profiles live in YOUR config repo's `my_setup.yaml`.
+All commands require `--profile=<name>`. Profiles live in YOUR config repo's `setforge.yaml`.
 
 ```bash
 uv run setforge fetch                              # clone/fetch + checkout the configured git source
@@ -135,7 +135,7 @@ Markdown tracked files can opt into per-host preservation. Wrap any region in HT
 
 See the project-root [CLAUDE.md](CLAUDE.md) marker-syntax section for the full grammar (including the `hash=<sha256-hex>` segment install rewrites on every run).
 
-YAML tracked files can declare `preserve_user_keys: list[str]` per tracked file in your config repo's `my_setup.yaml`. Live values at those JSONPath-lite paths overlay tracked content on every deploy and are stripped from tracked on every capture.
+YAML tracked files can declare `preserve_user_keys: list[str]` per tracked file in your config repo's `setforge.yaml`. Live values at those JSONPath-lite paths overlay tracked content on every deploy and are stripped from tracked on every capture.
 
 ## Host-local files
 
@@ -145,16 +145,16 @@ Edit `~/.claude/additional-content.md` directly on each host for machine-specifi
 
 Both happen in YOUR config repo, not in this engine repo:
 
-1. Edit `<config-repo>/my_setup.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile's `tracked_files:` list. (Extensions: add the extension ID to the profile's `extensions.include:` list.)
+1. Edit `<config-repo>/setforge.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile's `tracked_files:` list. (Extensions: add the extension ID to the profile's `extensions.include:` list.)
 2. Place tracked-file source files under `<config-repo>/tracked/<src>` (matching each entry's `src:` path).
 3. Commit + push to your config repo.
 4. On every machine: `uv run setforge fetch` (for git sources) or `git pull` (for path sources), then `uv run setforge install --profile=<profile>`.
 
 ## CI
 
-Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): unit tests (`uv run pytest`), config validation against the e2e test fixture (`uv run setforge validate --config=tests/fixtures/e2e/my_setup.test.yaml --all`), and gitleaks.
+Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): unit tests (`uv run pytest`), config validation against the e2e test fixture (`uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all`), and gitleaks.
 
-The engine repo no longer carries a `my_setup.yaml` at root (it lives in your config repo post-setforge-2ba.4); CI validates against the e2e test fixture instead.
+The engine repo no longer carries a `setforge.yaml` at root (it lives in your config repo post-setforge-2ba.4); CI validates against the e2e test fixture instead.
 
 ## Upgrading from my-setup v0.x to setforge
 
@@ -181,6 +181,15 @@ setforge is the post-rename + post-split form of the older `my-setup` tool. If y
    - **Option A** (clean): clone the new engine repo afresh, then create / clone a config repo containing your `my_setup.yaml` + `tracked/` (you can use `git filter-repo --path tracked/ --path my_setup.yaml` to extract them from your old monorepo with full history).
    - **Option B** (migrated): if you're `raulfrk` (the author), your config now lives at `git@github.com:raulfrk/setforge-config.git`.
 
-4. **Configure the source layer** so setforge finds your config repo (see "Architecture: engine + config repos" above).
+4. **Rename your config file**: setforge now expects `setforge.yaml` (was `my_setup.yaml`). In your config repo:
 
-5. **Run**: `setforge install --profile=<your-profile>` should be a no-op on a host that was already on the latest my-setup state.
+   ```bash
+   git mv my_setup.yaml setforge.yaml
+   git commit -m "Rename my_setup.yaml to setforge.yaml"
+   ```
+
+   If you forget, `setforge` refuses to run with a `ConfigError` pointing at this exact command.
+
+5. **Configure the source layer** so setforge finds your config repo (see "Architecture: engine + config repos" above).
+
+6. **Run**: `setforge install --profile=<your-profile>` should be a no-op on a host that was already on the latest my-setup state.

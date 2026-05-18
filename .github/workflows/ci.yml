@@ -17,9 +17,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
-      # The engine repo no longer carries my_setup.yaml at root after the
+      # The engine repo no longer carries setforge.yaml at root after the
       # setforge-2ba.4 split; CI validates against the e2e test fixture only.
-      - run: uv run setforge validate --config=tests/fixtures/e2e/my_setup.test.yaml --all
+      - run: uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest

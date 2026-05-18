@@ -42,8 +42,8 @@ from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
 
 pytestmark = pytest.mark.e2e_docker
 
-_LIVE_SHARED = "/home/tester/.my_setup_e2e/sections/shared.md"
-_LIVE_HOST_LOCAL = "/home/tester/.my_setup_e2e/sections/marked.md"
+_LIVE_SHARED = "/home/tester/.setforge_e2e/sections/shared.md"
+_LIVE_HOST_LOCAL = "/home/tester/.setforge_e2e/sections/marked.md"
 _TRACKED_SHARED = "/workspace/tests/fixtures/e2e/tracked/sections/shared.md"
 
 # The shared.md fixture body deployed by `_install`. ``_BASELINE_HASH`` is

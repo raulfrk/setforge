@@ -40,8 +40,8 @@ profiles:
 
 
 def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Write a minimal my_setup.yaml + tracked tree, mock the code CLI."""
-    cfg = tmp_path / "my_setup.yaml"
+    """Write a minimal setforge.yaml + tracked tree, mock the code CLI."""
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML, encoding="utf-8")
     (tmp_path / "tracked").mkdir()
     (tmp_path / "tracked" / "x").write_text("data\n")
@@ -186,12 +186,12 @@ def _setup_install_fixture(
     src_text: str = "tracked\n",
     dst_text: str = "tracked\n",
 ) -> Path:
-    """Write a minimal my_setup.yaml + tracked file + live destination."""
+    """Write a minimal setforge.yaml + tracked file + live destination."""
     dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(dst_text, encoding="utf-8")
 
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(_INSTALL_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "tracked_file.txt").write_text(src_text, encoding="utf-8")
@@ -232,7 +232,7 @@ def test_install_unexpected_drift_exits_1_with_message(
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("a: 99\nb: 88\n", encoding="utf-8")
 
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
         f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
@@ -303,7 +303,7 @@ def test_install_auto_accept_live_resolves_drift(
     dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("a: 1\nb: 99\n", encoding="utf-8")
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
         f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",

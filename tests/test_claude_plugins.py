@@ -918,7 +918,7 @@ profiles:
 
 
 def _write_yaml_fixture(tmp_path: Path) -> Path:
-    p = tmp_path / "my_setup.yaml"
+    p = tmp_path / "setforge.yaml"
     p.write_text(_YAML_FIXTURE, encoding="utf-8")
     return p
 
@@ -1374,7 +1374,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 # of the full fixture YAML + tracked tree under tmp_path so tracked_file
 # srcs resolve.
 _E2E_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
-_E2E_FIXTURE_YAML = _E2E_FIXTURE_DIR / "my_setup.test.yaml"
+_E2E_FIXTURE_YAML = _E2E_FIXTURE_DIR / "setforge.test.yaml"
 _E2E_FIXTURE_TRACKED = _E2E_FIXTURE_DIR / "tracked"
 
 
@@ -1383,9 +1383,9 @@ def _copy_e2e_fixture(tmp_path: Path) -> Path:
     yaml path. Mirror of ``test_cli_e2e.fixture_repo``."""
     target = tmp_path / "repo"
     target.mkdir()
-    shutil.copy2(_E2E_FIXTURE_YAML, target / "my_setup.test.yaml")
+    shutil.copy2(_E2E_FIXTURE_YAML, target / "setforge.test.yaml")
     shutil.copytree(_E2E_FIXTURE_TRACKED, target / "tracked")
-    return target / "my_setup.test.yaml"
+    return target / "setforge.test.yaml"
 
 
 def _sandbox_state_dir(
@@ -1671,7 +1671,7 @@ def test_revert_noop_when_no_plugin_delta(
 
     transition_dir = _latest_transition(state_dir)
     assert not (transition_dir / "plugins.json").exists()
-    live = home / ".my_setup_e2e" / "minimal" / "text.txt"
+    live = home / ".setforge_e2e" / "minimal" / "text.txt"
     assert live.exists()
 
     reverted = runner.invoke(
@@ -1774,7 +1774,7 @@ def test_roundtrip_file_and_plugin_state(
     fc = fake_claude()
 
     # Pre-install snapshot: file state + plugin state.
-    live_root = home / ".my_setup_e2e" / "comprehensive"
+    live_root = home / ".setforge_e2e" / "comprehensive"
     assert not live_root.exists()
     pre_plugin_state = fc.installed_state()
     pre_marketplaces = fc.marketplaces_state()

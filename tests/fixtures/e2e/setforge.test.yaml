@@ -22,32 +22,32 @@ tracked_files:
   # Plain text — floor case, no overlays, byte copy.
   minimal_text:
     src: minimal/text.txt
-    dst: ~/.my_setup_e2e/minimal/text.txt
+    dst: ~/.setforge_e2e/minimal/text.txt
 
   # Text tracked file with HTML-comment user-section markers (sections.py).
   sections_md:
     src: sections/marked.md
-    dst: ~/.my_setup_e2e/sections/marked.md
+    dst: ~/.setforge_e2e/sections/marked.md
     preserve_user_sections: true
 
   # Shared-semantics user-section markers — exercises the three-way
   # reconcile wizard introduced in setforge-9by.
   sections_shared_md:
     src: sections/shared.md
-    dst: ~/.my_setup_e2e/sections/shared.md
+    dst: ~/.setforge_e2e/sections/shared.md
     preserve_user_sections: true
 
   # JSON tracked file — byte copy, no preserve mechanism.
   json_settings:
     src: json/settings.json
-    dst: ~/.my_setup_e2e/json/settings.json
+    dst: ~/.setforge_e2e/json/settings.json
 
   # JSONC with shallow preserve_user_keys (dotted-name leaves).
-  # NOTE: extension is `.json` because my_setup/jsonc.py:is_jsonc_file
+  # NOTE: extension is `.json` because setforge/jsonc.py:is_jsonc_file
   # treats every `.json` as JSONC-capable (matches VSCode semantics).
   jsonc_shallow:
     src: jsonc/shallow.json
-    dst: ~/.my_setup_e2e/jsonc/shallow.json
+    dst: ~/.setforge_e2e/jsonc/shallow.json
     preserve_user_keys:
       - userKeyA
       - userKeyB
@@ -55,14 +55,14 @@ tracked_files:
   # JSONC with deep preserve_user_keys_deep — drives JSONC wizard variants.
   jsonc_deep:
     src: jsonc/deep.json
-    dst: ~/.my_setup_e2e/jsonc/deep.json
+    dst: ~/.setforge_e2e/jsonc/deep.json
     preserve_user_keys_deep:
       - settings
 
   # YAML shallow — proves yaml_merge.py shallow parity with jsonc.py.
   yaml_shallow:
     src: yaml/shallow.yaml
-    dst: ~/.my_setup_e2e/yaml/shallow.yaml
+    dst: ~/.setforge_e2e/yaml/shallow.yaml
     preserve_user_keys:
       - userKeyA
       - userKeyB
@@ -70,14 +70,14 @@ tracked_files:
   # YAML deep — proves yaml_merge.py deep parity; drives YAML wizard variant.
   yaml_deep:
     src: yaml/deep.yaml
-    dst: ~/.my_setup_e2e/yaml/deep.yaml
+    dst: ~/.setforge_e2e/yaml/deep.yaml
     preserve_user_keys_deep:
       - settings
 
   # Directory tree — recursive copy.
   directory_tree:
     src: directory
-    dst: ~/.my_setup_e2e/directory
+    dst: ~/.setforge_e2e/directory
 
   # Template — Jinja2 dst rendered (template: true triggers render).
   template_path:
@@ -89,32 +89,32 @@ tracked_files:
   # parent-first-dedup ordering in test_install_chain_resolution).
   chain_grand:
     src: chain/grand.txt
-    dst: ~/.my_setup_e2e/chain/grand.txt
+    dst: ~/.setforge_e2e/chain/grand.txt
   chain_base:
     src: chain/base.txt
-    dst: ~/.my_setup_e2e/chain/base.txt
+    dst: ~/.setforge_e2e/chain/base.txt
   chain_child:
     src: chain/child.txt
-    dst: ~/.my_setup_e2e/chain/child.txt
+    dst: ~/.setforge_e2e/chain/child.txt
 
   # Comprehensive: plain + JSON + JSONC + YAML in one profile.
   comprehensive_text:
     src: comprehensive/notes.md
-    dst: ~/.my_setup_e2e/comprehensive/notes.md
+    dst: ~/.setforge_e2e/comprehensive/notes.md
   comprehensive_json:
     src: comprehensive/data.json
-    dst: ~/.my_setup_e2e/comprehensive/data.json
+    dst: ~/.setforge_e2e/comprehensive/data.json
   comprehensive_jsonc:
     src: comprehensive/preserve-settings.json
-    dst: ~/.my_setup_e2e/comprehensive/preserve-settings.json
+    dst: ~/.setforge_e2e/comprehensive/preserve-settings.json
     preserve_user_keys:
       - userKey
   comprehensive_yaml:
     src: comprehensive/config.yaml
-    dst: ~/.my_setup_e2e/comprehensive/config.yaml
+    dst: ~/.setforge_e2e/comprehensive/config.yaml
 
   # Prose-reviewer agents + reviewing-markdown skill (setforge-h5k).
-  # Test-only mirror of the production wiring in /workspace/my_setup.yaml;
+  # Test-only mirror of the production wiring in /workspace/setforge.yaml;
   # used by the prose-reviewer Docker e2e variants to exercise install /
   # compare / revert against new files that have no user-section markers
   # (implicitly covers 9by's strict-tag parser).
@@ -202,21 +202,21 @@ profiles:
     tracked_files:
       - chain_grand
     bootstrap:
-      - ~/.my_setup_e2e/chain/bootstrap-grand.txt
+      - ~/.setforge_e2e/chain/bootstrap-grand.txt
 
   test-chain-base:
     extends: test-chain-grandparent
     tracked_files:
       - chain_base
     bootstrap:
-      - ~/.my_setup_e2e/chain/bootstrap-base.txt
+      - ~/.setforge_e2e/chain/bootstrap-base.txt
 
   test-chain-child:
     extends: test-chain-base
     tracked_files:
       - chain_child
     bootstrap:
-      - ~/.my_setup_e2e/chain/bootstrap-child.txt
+      - ~/.setforge_e2e/chain/bootstrap-child.txt
 
   # ---- Comprehensive — tracked files + plugins + extensions + bootstrap ----
   test-comprehensive:
@@ -231,7 +231,7 @@ profiles:
       include:
         - editorconfig.editorconfig
     bootstrap:
-      - ~/.my_setup_e2e/comprehensive/bootstrap-stub.txt
+      - ~/.setforge_e2e/comprehensive/bootstrap-stub.txt
 
   # ---- Prose-reviewer artifacts (setforge-h5k) ------------------------
   # Exercises install / compare / revert for the three new prose

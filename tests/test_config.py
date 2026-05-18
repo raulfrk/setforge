@@ -84,7 +84,7 @@ def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None
     """A profile referencing a plugin missing from the top-level
     claude_plugins registry raises ConfigError naming both the profile
     and the offending plugin, before any subprocess work runs."""
-    config_path = tmp_path / "my_setup.yaml"
+    config_path = tmp_path / "setforge.yaml"
     config_path.write_text(
         """\
 version: 1
@@ -120,7 +120,7 @@ def test_load_config_collects_multiple_undeclared_plugin_references(
 ) -> None:
     """When several profiles reference undeclared plugins, all offenders
     appear in a single ConfigError message — no early-bail on the first."""
-    config_path = tmp_path / "my_setup.yaml"
+    config_path = tmp_path / "setforge.yaml"
     config_path.write_text(
         """\
 version: 1

@@ -79,28 +79,28 @@ app = typer.Typer(
 
 
 _CONFIG_OPTION = typer.Option(
-    Path("my_setup.yaml"),
+    Path("setforge.yaml"),
     "--config",
     "-c",
-    help="Path to my_setup.yaml.",
+    help="Path to setforge.yaml.",
     show_default=True,
 )
 _PROFILE_OPTION = typer.Option(
     ...,
     "--profile",
     "-p",
-    help="Profile name from my_setup.yaml.",
+    help="Profile name from setforge.yaml.",
 )
 _SOURCE_OPTION = typer.Option(
     None,
     source_mod.CLI_FLAG,
-    help="Path to a config source directory (containing my_setup.yaml). "
+    help="Path to a config source directory (containing setforge.yaml). "
     "Takes precedence over SETFORGE_SOURCE and "
     "~/.config/setforge/local.yaml `source:` block. Paths only — git "
     "sources live in local.yaml. The per-command --config flag, when "
     "set explicitly, overrides this; the source-layer discovery only "
     "fires when --config is left at its default AND the CWD has no "
-    "my_setup.yaml.",
+    "setforge.yaml.",
 )
 
 
@@ -112,15 +112,15 @@ def _resolve_config_arg(config: Path) -> Path:
     1. ``--config`` explicitly set (non-default) → use it (legacy flow).
     2. ``--config`` at its default → consult the source-layer (``--source``
        > ``SETFORGE_SOURCE`` > ``~/.config/setforge/local.yaml`` > CWD
-       fallback), then return the ``my_setup.yaml`` inside the resolved
+       fallback), then return the ``setforge.yaml`` inside the resolved
        source dir.
 
     The 4th tier of the source-layer (CWD-fallback) preserves the legacy
     "run from inside config repo" UX bit-for-bit: when no source layer
     is configured, ``setforge install`` from a CWD containing
-    ``my_setup.yaml`` still works without ``--config``.
+    ``setforge.yaml`` still works without ``--config``.
     """
-    default = Path("my_setup.yaml")
+    default = Path("setforge.yaml")
     if config != default:
         return config
     resolved_source = source_mod.get_resolved_source()
@@ -1438,7 +1438,7 @@ def transitions_show(
 
 
 ext_app = typer.Typer(
-    help="Manage VSCode extensions in my_setup.yaml.",
+    help="Manage VSCode extensions in setforge.yaml.",
     no_args_is_help=True,
 )
 app.add_typer(ext_app, name="ext")
@@ -1575,7 +1575,7 @@ def ext_reconcile(
 # ---------------------------------------------------------------------------
 
 plugin_app = typer.Typer(
-    help="Manage Claude plugins in my_setup.yaml.",
+    help="Manage Claude plugins in setforge.yaml.",
     no_args_is_help=True,
 )
 app.add_typer(plugin_app, name="plugin")
@@ -1858,7 +1858,7 @@ def sync_cache(
 # ---------------------------------------------------------------------------
 
 marketplace_app = typer.Typer(
-    help="Manage Claude plugin marketplaces in my_setup.yaml.",
+    help="Manage Claude plugin marketplaces in setforge.yaml.",
     no_args_is_help=True,
 )
 app.add_typer(marketplace_app, name="marketplace")

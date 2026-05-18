@@ -435,7 +435,7 @@ def test_cli_compare_check_exits_0_no_drift(tmp_path: Path) -> None:
     _write(src, "same\n")
     dst = tmp_path / "live" / "x"
     _write(dst, "same\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
         "profiles:\n  p:\n    tracked_files: [x]\n",
@@ -459,7 +459,7 @@ def test_cli_compare_check_exits_1_unexpected_drift(tmp_path: Path) -> None:
     _write(src, "a: 1\nb: 2\n")
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, "a: 99\nb: 88\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
         f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
@@ -483,7 +483,7 @@ def test_cli_compare_check_exits_0_all_expected_drift(tmp_path: Path) -> None:
     _write(src, "a: 1\nb: 2\n")
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, "a: 99\nb: 2\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
         f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
@@ -507,7 +507,7 @@ def test_cli_compare_check_strict_exits_1_expected_drift(tmp_path: Path) -> None
     _write(src, "a: 1\nb: 2\n")
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, "a: 99\nb: 2\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x.yaml\n    dst: {dst}\n"
         f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [x]\n",
@@ -531,7 +531,7 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     _write(src, "same\n")
     dst = tmp_path / "live" / "x"
     _write(dst, "same\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
         "profiles:\n  p:\n    tracked_files: [x]\n",
@@ -569,7 +569,7 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     _write(src, "tracked\n")
     dst = tmp_path / "live" / "x"
     _write(dst, "live\n")
-    cfg_path = repo / "my_setup.yaml"
+    cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
         "profiles:\n  p:\n    tracked_files: [x]\n",

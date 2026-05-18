@@ -57,8 +57,8 @@ profiles:
 
 
 def _write_config(tmp_path: Path, content: str, *, create_src: bool = True) -> Path:
-    """Write my_setup.yaml and optionally create the dummy tracked file."""
-    cfg = tmp_path / "my_setup.yaml"
+    """Write setforge.yaml and optionally create the dummy tracked file."""
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(content, encoding="utf-8")
     (tmp_path / "tracked").mkdir(exist_ok=True)
     if create_src:

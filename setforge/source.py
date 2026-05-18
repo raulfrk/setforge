@@ -1,6 +1,6 @@
 """Config-source discovery layer for setforge.
 
-The engine reads its declarative config (``my_setup.yaml`` + ``tracked/``)
+The engine reads its declarative config (``setforge.yaml`` + ``tracked/``)
 from a *source* — a directory containing both. Sources are typed as a
 discriminated union of ``PathSource`` (a plain directory path on disk)
 and ``GitSource`` (a clone destination derived from a git URL; the actual
@@ -15,7 +15,7 @@ Discovery walks four precedence layers, first non-empty wins entirely
 2. Env var — ``SETFORGE_SOURCE=PATH`` (paths only).
 3. Host-local config — ``~/.config/setforge/local.yaml`` top-level
    ``source:`` block (PathSource OR GitSource).
-4. Fallback — CWD if it contains ``my_setup.yaml``.
+4. Fallback — CWD if it contains ``setforge.yaml``.
 
 Multi-source / stacked sources are explicitly OUT OF SCOPE per the
 parent spec (setforge-2ba). The Pydantic schema's ``source:`` key is
@@ -51,7 +51,7 @@ LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.y
 DEFAULT_CLONE_ROOT: Final[Path] = (
     Path.home() / ".local" / "share" / "setforge" / "sources"
 )
-CONFIG_FILENAME: Final[str] = "my_setup.yaml"
+CONFIG_FILENAME: Final[str] = "setforge.yaml"
 
 
 class SourceKind(StrEnum):
@@ -68,7 +68,7 @@ class SourceKind(StrEnum):
 class PathSource(BaseModel):
     """Source backed by a directory already on disk.
 
-    The directory must contain ``my_setup.yaml`` at its root (validated
+    The directory must contain ``setforge.yaml`` at its root (validated
     lazily by :func:`validate_source_dir`, not at model construction).
     """
 
@@ -219,7 +219,7 @@ def resolve_source(
     1. ``cli_path`` (from ``--source PATH`` on the command line).
     2. ``env[ENV_VAR]`` (``SETFORGE_SOURCE=PATH``).
     3. ``local_config_path`` ``source:`` block (path OR git source).
-    4. ``cwd / "my_setup.yaml"`` exists (back-compat for run-from-repo).
+    4. ``cwd / "setforge.yaml"`` exists (back-compat for run-from-repo).
 
     Raises :class:`NoSourceConfigured` when no layer produces a source,
     listing all four layers in the message so the user knows where to
@@ -266,20 +266,33 @@ def resolve_source_dir(source: Source) -> Path:
 
 
 def validate_source_dir(source: Source) -> Path:
-    """Verify the source's directory contains ``my_setup.yaml``; return its path.
+    """Verify the source's directory contains ``setforge.yaml``; return its path.
 
     Raises :class:`SourceNotCloned` if a :class:`GitSource`'s clone is
     absent; raises :class:`ConfigError` if the directory exists but does
-    not contain ``my_setup.yaml`` at its root.
+    not contain ``setforge.yaml`` at its root. When a legacy
+    ``my_setup.yaml`` is present, the error message surfaces a ``git mv``
+    migration recipe.
     """
     source_dir = resolve_source_dir(source)
     config_path = source_dir / CONFIG_FILENAME
-    if not config_path.exists():
+    if config_path.exists():
+        return config_path
+    # Friendly migration error for the my_setup.yaml -> setforge.yaml
+    # rename (setforge-2ba.1). Mirrors the legacy-namespace detector
+    # pattern in setforge.sections.detect_legacy_namespace_markers.
+    legacy_path = source_dir / "my_setup.yaml"
+    if legacy_path.exists():
         raise ConfigError(
-            f"source {source.display_name!r} at {source_dir} does not contain "
-            f"{CONFIG_FILENAME}"
+            f"source {source.display_name!r} at {source_dir} contains a "
+            f"legacy 'my_setup.yaml'. setforge expects '{CONFIG_FILENAME}'. "
+            f"Rename: (cd {source_dir} && git mv my_setup.yaml "
+            f"{CONFIG_FILENAME})"
         )
-    return config_path
+    raise ConfigError(
+        f"source {source.display_name!r} at {source_dir} does not contain "
+        f"{CONFIG_FILENAME}"
+    )
 
 
 def check_source_clean(source: Source) -> None:

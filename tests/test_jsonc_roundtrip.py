@@ -74,7 +74,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
     dst = tmp_path / "live" / "settings.json"
     dst.parent.mkdir(parents=True)
     dst.write_text(_LIVE_FIXTURE, encoding="utf-8")
-    cfg = repo / "my_setup.yaml"
+    cfg = repo / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     return cfg, dst
 

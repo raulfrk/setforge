@@ -29,7 +29,7 @@ def _write_local_yaml(path: Path, body: str) -> Path:
 
 
 def _write_source_dir(tmp_path: Path, name: str = "src") -> Path:
-    """Create a directory with a stub ``my_setup.yaml`` inside."""
+    """Create a directory with a stub ``setforge.yaml`` inside."""
     src = tmp_path / name
     src.mkdir()
     (src / CONFIG_FILENAME).write_text("version: 1\n", encoding="utf-8")
@@ -230,7 +230,7 @@ class TestResolveSourcePrecedence:
         assert isinstance(result, PathSource)
         assert result.path == Path("/tmp/yaml_src")
 
-    def test_cwd_fallback_when_my_setup_yaml_present(self, tmp_path: Path) -> None:
+    def test_cwd_fallback_when_setforge_yaml_present(self, tmp_path: Path) -> None:
         cwd_src = _write_source_dir(tmp_path)
         result = resolve_source(
             cli_path=None,
@@ -242,7 +242,7 @@ class TestResolveSourcePrecedence:
         assert result.path == cwd_src
 
     def test_no_layer_produces_source_raises(self, tmp_path: Path) -> None:
-        # cwd has no my_setup.yaml; no other layers populated.
+        # cwd has no setforge.yaml; no other layers populated.
         empty_cwd = tmp_path / "empty_cwd"
         empty_cwd.mkdir()
         with pytest.raises(NoSourceConfigured) as excinfo:
@@ -292,7 +292,7 @@ class TestResolveSourceDir:
 
 
 class TestValidateSourceDir:
-    """``validate_source_dir`` checks for ``my_setup.yaml`` in the source."""
+    """``validate_source_dir`` checks for ``setforge.yaml`` in the source."""
 
     def test_returns_setforge_yaml_path(self, tmp_path: Path) -> None:
         src_dir = _write_source_dir(tmp_path)
@@ -300,13 +300,13 @@ class TestValidateSourceDir:
         result = validate_source_dir(src)
         assert result == src_dir / CONFIG_FILENAME
 
-    def test_raises_config_error_when_my_setup_yaml_missing(
+    def test_raises_config_error_when_setforge_yaml_missing(
         self, tmp_path: Path
     ) -> None:
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         src = PathSource(kind="path", path=empty_dir)
-        with pytest.raises(ConfigError, match=r"does not contain my_setup\.yaml"):
+        with pytest.raises(ConfigError, match=r"does not contain setforge\.yaml"):
             validate_source_dir(src)
 
     def test_propagates_source_not_cloned_for_git_source(self, tmp_path: Path) -> None:
@@ -316,6 +316,30 @@ class TestValidateSourceDir:
             clone_dest=tmp_path / "missing",
         )
         with pytest.raises(SourceNotCloned):
+            validate_source_dir(src)
+
+    def test_raises_migration_error_when_only_legacy_my_setup_yaml_present(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy ``my_setup.yaml`` triggers a ``git mv`` migration hint.
+
+        Mirrors the legacy-namespace detector pattern in
+        :func:`setforge.sections.detect_legacy_namespace_markers`: when
+        the parser would otherwise raise a generic "not found" error,
+        recognize the old name and emit an actionable migration recipe
+        instead.
+        """
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "my_setup.yaml").write_text("profiles: {}\n")
+        src = PathSource(kind="path", path=src_dir)
+        with pytest.raises(
+            ConfigError,
+            match=(
+                r"contains a legacy 'my_setup\.yaml'.*"
+                r"git mv my_setup\.yaml setforge\.yaml"
+            ),
+        ):
             validate_source_dir(src)
 
 

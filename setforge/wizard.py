@@ -109,7 +109,7 @@ class DriftItem:
     """
 
     tracked_file_name: str
-    """The ``my_setup.yaml`` ``tracked_files.<key>`` identifier."""
+    """The ``setforge.yaml`` ``tracked_files.<key>`` identifier."""
 
     src_path: Path
     """Tracked path (under tracked/)."""
@@ -490,7 +490,7 @@ def run_wizard_loop(
         walker. Materialized once internally to build the snapshot file
         list, so callers may pass a generator.
     setforge_yaml_path:
-        Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
+        Path to ``setforge.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir.
     console:

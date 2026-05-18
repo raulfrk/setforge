@@ -32,7 +32,7 @@ Your aspects to check:
    - Automatable enforcement → settings.json hooks.
    Misplaced rules (e.g., a workflow detail in CLAUDE.md instead of superpowers-prefs.md, or a tool detail inline instead of in the skill) are IMPORTANT.
 4. **Observation / acceptance coverage** — for every observation listed in the spec (e.g., A through L for setforge-23k), confirm one of: (a) codified in a file per the placement map; (b) explicitly cross-referenced to a deferred bd issue; (c) explicitly marked out-of-scope in the spec with reason. Missing observations are CRITICAL (the spec is the contract).
-5. **`my_setup.yaml` schema integrity** — if the diff touches `my_setup.yaml`, the additions match the existing pattern (e.g., tracked file entries follow `{name}: { src: ..., dst: ... }` shape; profile references follow snake_case names). Schema drift is IMPORTANT.
+5. **`setforge.yaml` schema integrity** — if the diff touches `setforge.yaml`, the additions match the existing pattern (e.g., tracked file entries follow `{name}: { src: ..., dst: ... }` shape; profile references follow snake_case names). Schema drift is IMPORTANT.
 
 Output format (strictly):
 
@@ -50,5 +50,5 @@ Definition of done:
 - [ ] Confirmed user-section markers in tracked CLAUDE.md remain intact.
 - [ ] For each new rule, validated its file matches the enforcement-layer match: cross-project critical → CLAUDE.md; workflow flow → superpowers-prefs.md; project tool → setforge/CLAUDE.md; per-tool → skill.
 - [ ] For every observation listed in the spec, traced its codification or its deferral.
-- [ ] If `my_setup.yaml` touched: confirmed new entries match existing `tracked_files:` pattern and profile names are valid.
+- [ ] If `setforge.yaml` touched: confirmed new entries match existing `tracked_files:` pattern and profile names are valid.
 - [ ] Validated cross-references to skills (bd-reference, wt-reference) point at real skill content.

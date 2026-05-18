@@ -49,7 +49,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     src.parent.mkdir(parents=True, exist_ok=True)
     dst = tmp_path / "live" / "section.md"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\n"
         "tracked_files:\n"
@@ -485,7 +485,7 @@ def test_install_reconciles_profile_extend_resolved_set(
         )
     )
 
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\n"
         "tracked_files:\n"

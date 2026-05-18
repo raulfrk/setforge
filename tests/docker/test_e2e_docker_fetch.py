@@ -30,7 +30,7 @@ _CLONE_DEST = "/home/tester/.local/share/setforge/sources/upstream"
 
 
 def _git_setup_bare_upstream(c: ContainerHandle) -> None:
-    """Initialize ``/srv/upstream.git`` as a bare repo with my_setup.yaml + tracked/."""
+    """Initialize ``/srv/upstream.git`` as a bare repo with setforge.yaml + tracked/."""
     # Bare repo
     c.exec(["git", "init", "-q", "--bare", _BARE_REPO])
     # Staging area to build the first commit
@@ -39,7 +39,7 @@ def _git_setup_bare_upstream(c: ContainerHandle) -> None:
     c.exec(["git", "config", "user.name", "Test"], workdir=_CHECKOUT_AREA)
     # Minimal config + tracked content
     c.write_text(
-        f"{_CHECKOUT_AREA}/my_setup.yaml",
+        f"{_CHECKOUT_AREA}/setforge.yaml",
         "version: 1\n"
         "tracked_files:\n"
         "  hello:\n"
@@ -99,10 +99,10 @@ class TestSetforgeFetchGitSource:
         result = c.exec(["uv", "run", "setforge", "fetch"], workdir="/workspace")
         assert result.returncode == 0
         assert "cloned and checked out main" in result.stdout
-        # Post-condition: clone_dest exists with the my_setup.yaml inside.
+        # Post-condition: clone_dest exists with the setforge.yaml inside.
         assert (
             c.exec(
-                ["test", "-f", f"{_CLONE_DEST}/my_setup.yaml"], check=False
+                ["test", "-f", f"{_CLONE_DEST}/setforge.yaml"], check=False
             ).returncode
             == 0
         )
@@ -191,10 +191,10 @@ class TestSetforgeFetchPathSource:
         docker_container: Callable[..., ContainerHandle],
     ) -> None:
         c = docker_container()
-        # Create a plain directory with my_setup.yaml inside.
+        # Create a plain directory with setforge.yaml inside.
         c.exec(["mkdir", "-p", "/tmp/plain/tracked"])
         c.write_text(
-            "/tmp/plain/my_setup.yaml",
+            "/tmp/plain/setforge.yaml",
             "version: 1\ntracked_files: {}\nprofiles: {minimal: {tracked_files: []}}\n",
         )
         _write_local_yaml_path_source(c, "/tmp/plain")
@@ -205,10 +205,10 @@ class TestSetforgeFetchPathSource:
 
 
 class TestSourceLayerIntegration:
-    """End-to-end: `setforge install` resolves my_setup.yaml via source-layer.
+    """End-to-end: `setforge install` resolves setforge.yaml via source-layer.
 
     The --config flag continues to work; the source-layer fires when
-    --config is at its default AND CWD has no my_setup.yaml. To test
+    --config is at its default AND CWD has no setforge.yaml. To test
     the source-layer without CWD-fallback contamination, use the
     --source root flag (highest precedence layer).
     """
@@ -218,11 +218,11 @@ class TestSourceLayerIntegration:
         docker_container: Callable[..., ContainerHandle],
     ) -> None:
         c = docker_container()
-        # Build a minimal config dir at /tmp/plain/ with my_setup.yaml +
+        # Build a minimal config dir at /tmp/plain/ with setforge.yaml +
         # tracked/hello.txt. Profile deploys hello -> /tmp/hello.out.
         c.exec(["mkdir", "-p", "/tmp/plain/tracked"])
         c.write_text(
-            "/tmp/plain/my_setup.yaml",
+            "/tmp/plain/setforge.yaml",
             "version: 1\n"
             "tracked_files:\n"
             "  hello:\n"
@@ -234,7 +234,7 @@ class TestSourceLayerIntegration:
         )
         c.write_text("/tmp/plain/tracked/hello.txt", "from-source-layer\n")
         # Use the --source root flag (highest precedence) so we don't
-        # have to fight CWD-fallback for /workspace's own my_setup.yaml.
+        # have to fight CWD-fallback for /workspace's own setforge.yaml.
         result = c.exec(
             [
                 "uv",

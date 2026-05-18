@@ -44,7 +44,7 @@ def test_install_passes_precomputed_live_sections_to_deploy(
         encoding="utf-8",
     )
 
-    cfg = tmp_path / "my_setup.yaml"
+    cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\n"
         "tracked_files:\n"

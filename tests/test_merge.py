@@ -5,7 +5,7 @@ Covers:
 - tracked_file_filter narrows walker output
 - read_one_choice: valid key, invalid key (bell + re-read), Ctrl-C
 - apply_action [k], [u] YAML (comments preserved), [u] JSONC (comments preserved)
-- apply_action [s] — extends preserve_user_keys in my_setup.yaml (comments preserved)
+- apply_action [s] — extends preserve_user_keys in setforge.yaml (comments preserved)
 - apply_action [m]+y — launches $EDITOR and continues
 - apply_action [m]+n — returns ActionResult.MANUAL_PENDING
 - Snapshot context manager: snapshot dir created, restore reverts files,
@@ -42,7 +42,7 @@ from setforge.wizard import (
 # ---------------------------------------------------------------------------
 
 
-# Minimal my_setup.yaml body used by several wizard / snapshot tests below.
+# Minimal setforge.yaml body used by several wizard / snapshot tests below.
 _BASIC_YAML: str = (
     "version: 1\n"
     "tracked_files:\n"
@@ -284,9 +284,9 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
+    setforge_yaml = tmp_path / "setforge.yaml"
     original_src_content = src.read_text()
-    result = apply_action(uk, "k", setforge_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "k", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.KEEP_TRACKED
     # tracked file untouched
     assert src.read_text() == original_src_content
@@ -309,8 +309,8 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    result = apply_action(uk, "u", setforge_yaml_path=my_setup_yaml)
+    setforge_yaml = tmp_path / "setforge.yaml"
+    result = apply_action(uk, "u", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.USE_LIVE
 
     # Read back and check value is updated
@@ -339,8 +339,8 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
         file_format=FileFormat.JSONC,
         mode=DriftMode.SHALLOW,
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    result = apply_action(uk, "u", setforge_yaml_path=my_setup_yaml)
+    setforge_yaml = tmp_path / "setforge.yaml"
+    result = apply_action(uk, "u", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.USE_LIVE
 
     updated_text = src.read_text()
@@ -357,8 +357,8 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
 
 def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
     """[s] save-as-preserved appends key_path to tracked_file.preserve_user_keys."""
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    # Write a minimal my_setup.yaml with comments
+    setforge_yaml = tmp_path / "setforge.yaml"
+    # Write a minimal setforge.yaml with comments
     yaml_text = (
         "# setforge config\n"
         "version: 1\n"
@@ -372,7 +372,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         "  p:\n"
         "    tracked_files: [x]\n"
     )
-    my_setup_yaml.write_text(yaml_text, encoding="utf-8")
+    setforge_yaml.write_text(yaml_text, encoding="utf-8")
 
     _config, _repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
@@ -387,21 +387,21 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    result = apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "s", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.SAVE_AS_PRESERVED
 
     # Reload and verify
     y = YAML(typ="rt")
-    updated = y.load(my_setup_yaml.read_text())
+    updated = y.load(setforge_yaml.read_text())
     assert "b" in updated["tracked_files"]["x"]["preserve_user_keys"]
 
     # Comment preserved
-    assert "# setforge config" in my_setup_yaml.read_text()
+    assert "# setforge config" in setforge_yaml.read_text()
 
 
 def test_apply_action_s_idempotent(tmp_path: Path) -> None:
     """[s] does not duplicate an already-present key_path."""
-    my_setup_yaml = tmp_path / "my_setup.yaml"
+    setforge_yaml = tmp_path / "setforge.yaml"
     yaml_text = (
         "version: 1\n"
         "tracked_files:\n"
@@ -415,7 +415,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         "  p:\n"
         "    tracked_files: [x]\n"
     )
-    my_setup_yaml.write_text(yaml_text, encoding="utf-8")
+    setforge_yaml.write_text(yaml_text, encoding="utf-8")
 
     _config, _repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a", "b"]
@@ -430,9 +430,9 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
+    apply_action(uk, "s", setforge_yaml_path=setforge_yaml)
     y = YAML(typ="rt")
-    updated = y.load(my_setup_yaml.read_text())
+    updated = y.load(setforge_yaml.read_text())
     # b should appear exactly once
     assert updated["tracked_files"]["x"]["preserve_user_keys"].count("b") == 1
 
@@ -454,7 +454,7 @@ def test_apply_action_m_y_launches_editor(
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
+    setforge_yaml = tmp_path / "setforge.yaml"
 
     calls: list[list[str]] = []
 
@@ -469,7 +469,7 @@ def test_apply_action_m_y_launches_editor(
     monkeypatch.setattr("setforge._editor.subprocess.run", fake_run)
     monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "y")
 
-    result = apply_action(uk, "m", setforge_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "m", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.MANUAL_EDIT_DONE
     assert calls == [["myfakeeditor", str(src)]]
 
@@ -491,7 +491,7 @@ def test_apply_action_m_n_returns_manual_pending(
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
+    setforge_yaml = tmp_path / "setforge.yaml"
 
     monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "n")
 
@@ -500,7 +500,7 @@ def test_apply_action_m_n_returns_manual_pending(
         "setforge._editor.subprocess.run", lambda *a, **kw: run_called.append(a)
     )
 
-    result = apply_action(uk, "m", setforge_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "m", setforge_yaml_path=setforge_yaml)
     assert result == ActionResult.MANUAL_PENDING
     assert not run_called
 
@@ -564,8 +564,8 @@ def test_snapshot_restore_on_sigint(
     config, repo, _src, _dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
+    setforge_yaml = tmp_path / "setforge.yaml"
+    setforge_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     # Simulate SIGINT via raising KeyboardInterrupt inside read_one_choice
     snap_root = tmp_path / "snaps"
@@ -581,7 +581,7 @@ def test_snapshot_restore_on_sigint(
             report,
             config,
             repo,
-            setforge_yaml_path=my_setup_yaml,
+            setforge_yaml_path=setforge_yaml,
             snapshot_base=snap_root,
         )
 
@@ -602,8 +602,8 @@ def test_successful_walk_records_one_transition(
     config, repo, _src, _dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 99\nb: 88\n", preserve=["a"]
     )
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
+    setforge_yaml = tmp_path / "setforge.yaml"
+    setforge_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     transition_calls: list[Any] = []
 
@@ -624,7 +624,7 @@ def test_successful_walk_records_one_transition(
         report,
         config,
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         snapshot_base=snap_root,
         profile="p",
     )
@@ -654,8 +654,8 @@ def test_manual_pending_records_transition_for_applied(
     _write(src, "a: 1\nb: 2\nc: 3\n")
     _write(tmp_path / "live" / "x.yaml", "a: 99\nb: 88\nc: 77\n")
 
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text(_BASIC_YAML, encoding="utf-8")
+    setforge_yaml = tmp_path / "setforge.yaml"
+    setforge_yaml.write_text(_BASIC_YAML, encoding="utf-8")
 
     # Report: 2 unexpected keys
     entry = FileCompare(
@@ -688,7 +688,7 @@ def test_manual_pending_records_transition_for_applied(
         report,
         config,
         repo,
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         snapshot_base=snap_root,
         profile="p",
     )
@@ -746,9 +746,9 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
 
 
 def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
-    """After [s], comments in my_setup.yaml survive."""
-    my_setup_yaml = tmp_path / "my_setup.yaml"
-    my_setup_yaml.write_text("# my config\n" + _BASIC_YAML, encoding="utf-8")
+    """After [s], comments in setforge.yaml survive."""
+    setforge_yaml = tmp_path / "setforge.yaml"
+    setforge_yaml.write_text("# my config\n" + _BASIC_YAML, encoding="utf-8")
     _config, _repo, src, dst = _make_config(
         tmp_path / "sub", "a: 1\nb: 2\n", "a: 1\nb: 99\n", preserve=["a"]
     )
@@ -762,5 +762,5 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
-    assert "# my config" in my_setup_yaml.read_text()
+    apply_action(uk, "s", setforge_yaml_path=setforge_yaml)
+    assert "# my config" in setforge_yaml.read_text()

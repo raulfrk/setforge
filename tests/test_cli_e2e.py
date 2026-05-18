@@ -1,6 +1,6 @@
 """CliRunner ring for the ``setforge`` CLI (setforge-nen.9 inner ring).
 
-Drives the real Typer surface against ``tests/fixtures/e2e/my_setup.test.yaml``,
+Drives the real Typer surface against ``tests/fixtures/e2e/setforge.test.yaml``,
 sandboxing the live tree under ``tmp_path`` via ``$HOME`` redirection and
 mocking ``subprocess.run`` at the ``code`` / ``claude`` seams (extension
 + plugin reconcile). Runs in default ``pytest`` — fast, no Docker.
@@ -49,7 +49,7 @@ _REAL_SUBPROCESS_RUN = subprocess.run
 
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
-_FIXTURE_YAML = _FIXTURE_DIR / "my_setup.test.yaml"
+_FIXTURE_YAML = _FIXTURE_DIR / "setforge.test.yaml"
 _FIXTURE_TRACKED = _FIXTURE_DIR / "tracked"
 
 
@@ -57,20 +57,20 @@ _FIXTURE_TRACKED = _FIXTURE_DIR / "tracked"
 def fixture_repo(tmp_path: Path) -> Path:
     """Copy the fixture repo into ``tmp_path`` so tests can mutate freely.
 
-    Returns the path to the copied ``my_setup.test.yaml``. The
+    Returns the path to the copied ``setforge.test.yaml``. The
     accompanying ``tracked/`` tree sits beside it (yaml's parent = repo
     root for ``resolve_src``).
     """
     target = tmp_path / "repo"
     target.mkdir()
-    shutil.copy2(_FIXTURE_YAML, target / "my_setup.test.yaml")
+    shutil.copy2(_FIXTURE_YAML, target / "setforge.test.yaml")
     shutil.copytree(_FIXTURE_TRACKED, target / "tracked")
-    return target / "my_setup.test.yaml"
+    return target / "setforge.test.yaml"
 
 
 @pytest.fixture
 def sandboxed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect ``$HOME`` to a tmp dir so dst ``~/.my_setup_e2e/...`` is sandboxed."""
+    """Redirect ``$HOME`` to a tmp dir so dst ``~/.setforge_e2e/...`` is sandboxed."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -271,7 +271,7 @@ class TestInstall:
             ["install", "--profile=test-minimal", f"--config={fixture_repo}"]
         )
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
+        live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
         assert live.exists()
         assert live.read_text() == "hello from test-minimal\n"
 
@@ -299,7 +299,7 @@ class TestInstall:
             ]
         )
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "sections" / "marked.md"
+        live = sandboxed_home / ".setforge_e2e" / "sections" / "marked.md"
         tracked = fixture_repo.parent / "tracked" / "sections" / "marked.md"
         assert live.read_text() == maintain_marker_hashes(tracked.read_text())
 
@@ -312,7 +312,7 @@ class TestInstall:
     ) -> None:
         result = _invoke(["install", "--profile=test-json", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "json" / "settings.json"
+        live = sandboxed_home / ".setforge_e2e" / "json" / "settings.json"
         payload = json.loads(live.read_text())
         assert payload == {
             "settingA": "tracked-value-A",
@@ -336,7 +336,7 @@ class TestInstall:
             ]
         )
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "jsonc" / "shallow.json"
+        live = sandboxed_home / ".setforge_e2e" / "jsonc" / "shallow.json"
         content = live.read_text()
         assert "// tracked side comment" in content
         assert "tracked-placeholder-A" in content
@@ -357,7 +357,7 @@ class TestInstall:
             ]
         )
         assert result.exit_code == 0, result.output
-        live = sandboxed_home / ".my_setup_e2e" / "yaml" / "shallow.yaml"
+        live = sandboxed_home / ".setforge_e2e" / "yaml" / "shallow.yaml"
         content = live.read_text()
         assert "trackedKey: tracked-value" in content
         # Comment from the tracked side should survive a round-trip.
@@ -374,7 +374,7 @@ class TestInstall:
             ["install", "--profile=test-directory", f"--config={fixture_repo}"]
         )
         assert result.exit_code == 0, result.output
-        root = sandboxed_home / ".my_setup_e2e" / "directory"
+        root = sandboxed_home / ".setforge_e2e" / "directory"
         assert (root / "file-a.txt").read_text() == "file-a content\n"
         assert (root / "file-b.txt").read_text() == "file-b content\n"
         assert (root / "nested" / "file-c.txt").read_text() == (
@@ -398,7 +398,7 @@ class TestInstall:
         )
         assert result.exit_code == 0, result.output
 
-        root = sandboxed_home / ".my_setup_e2e" / "chain"
+        root = sandboxed_home / ".setforge_e2e" / "chain"
         assert (root / "grand.txt").read_text() == "grand-content\n"
         assert (root / "base.txt").read_text() == "base-content\n"
         assert (root / "child.txt").read_text() == "child-content\n"
@@ -429,7 +429,7 @@ class TestInstall:
         )
         assert result.exit_code == 0, result.output
 
-        root = sandboxed_home / ".my_setup_e2e" / "comprehensive"
+        root = sandboxed_home / ".setforge_e2e" / "comprehensive"
         assert "comprehensive notes" in (root / "notes.md").read_text()
         assert json.loads((root / "data.json").read_text()) == {
             "key": "comprehensive-value"
@@ -492,7 +492,7 @@ class TestInstall:
         assert fk.installed_set() == {"editorconfig.editorconfig"}
 
         # TrackedFile leg still completed.
-        root = sandboxed_home / ".my_setup_e2e" / "comprehensive"
+        root = sandboxed_home / ".setforge_e2e" / "comprehensive"
         assert (root / "notes.md").exists()
 
 
@@ -532,7 +532,7 @@ class TestSync:
     ) -> None:
         """Plain-text drift outside preserve_user_* surfaces is silently absorbed."""
         _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
-        live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
+        live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
         live.write_text("updated locally\n")
 
         synced = _invoke(["sync", "--profile=test-minimal", f"--config={fixture_repo}"])
@@ -614,7 +614,7 @@ class TestCompare:
         no_claude_bin: None,
     ) -> None:
         _invoke(["install", "--profile=test-minimal", f"--config={fixture_repo}"])
-        live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
+        live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
         live.write_text("mutated\n")
 
         result = _invoke(
@@ -687,7 +687,7 @@ class TestRevert:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        live = sandboxed_home / ".my_setup_e2e" / "minimal" / "text.txt"
+        live = sandboxed_home / ".setforge_e2e" / "minimal" / "text.txt"
         assert not live.exists()
 
         installed = _invoke(
@@ -841,7 +841,7 @@ class TestVerbosity:
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
-    def test_garbage_my_setup_log_level_emits_stderr_warning(
+    def test_garbage_setforge_log_level_emits_stderr_warning(
         self,
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -852,7 +852,7 @@ class TestVerbosity:
         assert "unknown SETFORGE_LOG_LEVEL='DEBGU'" in result.stderr
         assert "defaulting to WARNING" in result.stderr
 
-    def test_garbage_my_setup_log_level_with_non_level_module_attr_warns(
+    def test_garbage_setforge_log_level_with_non_level_module_attr_warns(
         self,
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,

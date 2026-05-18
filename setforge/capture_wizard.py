@@ -469,7 +469,7 @@ def run_capture_wizard(
     repo_root:
         Repo root used for ``resolve_src``.
     setforge_yaml_path:
-        Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
+        Path to ``setforge.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir. Defaults to
         ``~/.local/state/setforge/sync-snapshots``.

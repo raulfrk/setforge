@@ -16,7 +16,7 @@ Artifacts in scope (ONLY `.md` files under `tracked/claude/`):
 - `tracked/claude/CLAUDE.md`, `tracked/claude/superpowers-prefs.md`, `tracked/claude/header.md`, `tracked/claude/additional-content.md`.
 - `tracked/claude/skills/<skill>/SKILL.md` (new or edited skills).
 - `tracked/claude/agents/<agent>.md` (new or edited agent definitions).
-- `my_setup.yaml` when the change touches deployment of any of the above.
+- `setforge.yaml` when the change touches deployment of any of the above.
 
 Out of scope: project-level CLAUDE.md (the one at a project's root, NOT under `tracked/claude/`) and any other `.md` file outside `tracked/claude/` belong to `reviewing-markdown`.
 

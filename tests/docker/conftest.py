@@ -56,7 +56,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.option.numprocesses = "auto"
 
 
-CONFIG_FIXTURE: str = "tests/fixtures/e2e/my_setup.test.yaml"
+CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
 """Shared fixture path for the setforge test config used by every Docker e2e test."""
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -102,12 +102,11 @@ def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
 
 # Inputs whose content determines the docker image identity. Anything baked
 # into the image (Dockerfile + sources copied in) or read by the e2e tests
-# from inside the image (fixture yaml + canonical my_setup.yaml) goes here.
-# A change to any of these flips the content hash, which flips the image
-# tag, which naturally invalidates the build cache — see setforge-0ci.
+# from inside the image (the e2e config fixture) goes here. A change to
+# any of these flips the content hash, which flips the image tag, which
+# naturally invalidates the build cache — see setforge-0ci.
 _HASH_INPUT_FILES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "docker" / "Dockerfile",
-    REPO_ROOT / "my_setup.yaml",
     REPO_ROOT / "pyproject.toml",
     REPO_ROOT / "uv.lock",
 )
@@ -233,8 +232,8 @@ def docker_image() -> str:
     without burying it in a fixture-error stack.
 
     The tag is content-hashed over the inputs that define the image
-    (Dockerfile, ``my_setup.yaml``, ``tests/fixtures/e2e/**``,
-    ``setforge/**``) — see :func:`_compute_inputs_hash`. A workspace
+    (Dockerfile, ``tests/fixtures/e2e/**``, ``setforge/**``) — see
+    :func:`_compute_inputs_hash`. A workspace
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
     rebuild is skipped (fast cache hit); when no image carries the

@@ -19,7 +19,7 @@ Each test takes the form:
 
   1. Spin a fresh container.
   2. ``uv run setforge <verb> --profile=test-<x>
-     --config=tests/fixtures/e2e/my_setup.test.yaml``
+     --config=tests/fixtures/e2e/setforge.test.yaml``
   3. Read the resulting live file(s) and assert parsed/structured equality.
 
 See ``tests/docker/conftest.py`` for the ``docker_image``,
@@ -119,7 +119,7 @@ def _read_live(container: ContainerHandle, path: str) -> str:
 # a drift body into the live file, drive ``sync`` via PTY through one
 # (or two) wizard prompts, then return pre/post snapshots of the target.
 
-_YAML_DEEP_LIVE = "/home/tester/.my_setup_e2e/yaml/deep.yaml"
+_YAML_DEEP_LIVE = "/home/tester/.setforge_e2e/yaml/deep.yaml"
 _YAML_DEEP_TRACKED = "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
 
 
@@ -197,7 +197,7 @@ def test_install_minimal_floor(
     c = docker_container()
     _install(c, "test-minimal")
     assert (
-        _read_live(c, ".my_setup_e2e/minimal/text.txt") == "hello from test-minimal\n"
+        _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
     )
 
 
@@ -216,7 +216,7 @@ def test_install_text_sections_no_live(
     """
     c = docker_container()
     _install(c, "test-text-sections")
-    live = _read_live(c, ".my_setup_e2e/sections/marked.md")
+    live = _read_live(c, ".setforge_e2e/sections/marked.md")
     assert "<!-- setforge:user-section start host-local notes -->" in live
     assert "default notes (tracked side)" in live
     assert re.search(
@@ -247,10 +247,10 @@ def test_install_text_sections_preserve_user_content(
         Trailing live content (not preserved on next install).
         """
     )
-    c.write_text("/home/tester/.my_setup_e2e/sections/marked.md", pre_seeded)
+    c.write_text("/home/tester/.setforge_e2e/sections/marked.md", pre_seeded)
 
     _install(c, "test-text-sections")
-    live = _read_live(c, ".my_setup_e2e/sections/marked.md")
+    live = _read_live(c, ".setforge_e2e/sections/marked.md")
     # Marker body preserved (inside-markers user content survives).
     assert "host-local marker body content" in live
     # Outside-markers content reverted to tracked.
@@ -266,7 +266,7 @@ def test_install_json_byte_copy(
     """E: JSON tracked_file byte-copies; parsed result matches tracked."""
     c = docker_container()
     _install(c, "test-json")
-    payload = json.loads(_read_live(c, ".my_setup_e2e/json/settings.json"))
+    payload = json.loads(_read_live(c, ".setforge_e2e/json/settings.json"))
     assert payload == {
         "settingA": "tracked-value-A",
         "settingB": 42,
@@ -283,7 +283,7 @@ def test_install_jsonc_shallow_no_live(
     """F: JSONC byte copy + comments preserved when no preserve overlay applies."""
     c = docker_container()
     _install(c, "test-jsonc-shallow")
-    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.json")
+    live = _read_live(c, ".setforge_e2e/jsonc/shallow.json")
     assert "// tracked side comment" in live
     assert "tracked-placeholder-A" in live
     assert "tracked-placeholder-B" in live
@@ -306,7 +306,7 @@ def test_install_jsonc_shallow_preserve_overlay(
     # First install to produce baseline.
     _install(c, "test-jsonc-shallow")
     # Mutate ONLY preserve_user_keys entries on the live side.
-    live_path = "/home/tester/.my_setup_e2e/jsonc/shallow.json"
+    live_path = "/home/tester/.setforge_e2e/jsonc/shallow.json"
     c.write_text(
         live_path,
         textwrap.dedent(
@@ -321,7 +321,7 @@ def test_install_jsonc_shallow_preserve_overlay(
         ),
     )
     _install(c, "test-jsonc-shallow")
-    live = _read_live(c, ".my_setup_e2e/jsonc/shallow.json")
+    live = _read_live(c, ".setforge_e2e/jsonc/shallow.json")
     # userKeyA / userKeyB preserved from live; trackedKey is the tracked value.
     assert "live-A" in live
     assert "live-B" in live
@@ -344,7 +344,7 @@ def test_install_jsonc_deep_preserve_overlay(
     """
     c = docker_container()
     _install(c, "test-jsonc-deep")
-    live_path = "/home/tester/.my_setup_e2e/jsonc/deep.json"
+    live_path = "/home/tester/.setforge_e2e/jsonc/deep.json"
     c.write_text(
         live_path,
         textwrap.dedent(
@@ -360,7 +360,7 @@ def test_install_jsonc_deep_preserve_overlay(
         ),
     )
     _install(c, "test-jsonc-deep")
-    live = _read_live(c, ".my_setup_e2e/jsonc/deep.json")
+    live = _read_live(c, ".setforge_e2e/jsonc/deep.json")
     # Deep merge: live userSub survives; tracked trackedSub keeps its
     # tracked value (deep-merge is parent-first union; live wins on
     # overlap, tracked keeps tracked-only keys).
@@ -383,7 +383,7 @@ def test_install_yaml_shallow_preserve_overlay(
     """
     c = docker_container()
     _install(c, "test-yaml-shallow")
-    live_path = "/home/tester/.my_setup_e2e/yaml/shallow.yaml"
+    live_path = "/home/tester/.setforge_e2e/yaml/shallow.yaml"
     c.write_text(
         live_path,
         textwrap.dedent(
@@ -395,7 +395,7 @@ def test_install_yaml_shallow_preserve_overlay(
         ),
     )
     _install(c, "test-yaml-shallow")
-    live = _read_live(c, ".my_setup_e2e/yaml/shallow.yaml")
+    live = _read_live(c, ".setforge_e2e/yaml/shallow.yaml")
     assert "live-A" in live
     assert "live-B" in live
     assert "tracked-value" in live  # trackedKey is the tracked value
@@ -414,7 +414,7 @@ def test_install_yaml_deep_preserve_overlay(
     """
     c = docker_container()
     _install(c, "test-yaml-deep")
-    live_path = "/home/tester/.my_setup_e2e/yaml/deep.yaml"
+    live_path = "/home/tester/.setforge_e2e/yaml/deep.yaml"
     c.write_text(
         live_path,
         textwrap.dedent(
@@ -427,7 +427,7 @@ def test_install_yaml_deep_preserve_overlay(
         ),
     )
     _install(c, "test-yaml-deep")
-    live = _read_live(c, ".my_setup_e2e/yaml/deep.yaml")
+    live = _read_live(c, ".setforge_e2e/yaml/deep.yaml")
     assert "live-user-value" in live  # live deep sub-key survives
     assert "tracked-sub-value" in live  # tracked-only deep sub-key kept
     assert "tracked-value" in live  # top-level untouched
@@ -442,10 +442,10 @@ def test_install_directory_copy(
     """I: directory tree copied recursively, nested files included."""
     c = docker_container()
     _install(c, "test-directory")
-    assert _read_live(c, ".my_setup_e2e/directory/file-a.txt") == "file-a content\n"
-    assert _read_live(c, ".my_setup_e2e/directory/file-b.txt") == "file-b content\n"
+    assert _read_live(c, ".setforge_e2e/directory/file-a.txt") == "file-a content\n"
+    assert _read_live(c, ".setforge_e2e/directory/file-b.txt") == "file-b content\n"
     assert (
-        _read_live(c, ".my_setup_e2e/directory/nested/file-c.txt")
+        _read_live(c, ".setforge_e2e/directory/nested/file-c.txt")
         == "file-c content (nested)\n"
     )
 
@@ -485,7 +485,7 @@ def test_install_chain_resolution_and_bootstrap(
     """K: 3-level extends chain; parent-first tracked_file dedup + bootstrap stubs."""
     c = docker_container()
     _install(c, "test-chain-child")
-    root = ".my_setup_e2e/chain"
+    root = ".setforge_e2e/chain"
     assert _read_live(c, f"{root}/grand.txt") == "grand-content\n"
     assert _read_live(c, f"{root}/base.txt") == "base-content\n"
     assert _read_live(c, f"{root}/child.txt") == "child-content\n"
@@ -515,7 +515,7 @@ def test_install_comprehensive_plugins_extensions(
     # drift gate without needing --auto-accept-* flags.
     proc = _install(c, "test-comprehensive")
     assert proc.returncode == 0, proc.stderr
-    root = ".my_setup_e2e/comprehensive"
+    root = ".setforge_e2e/comprehensive"
     assert "comprehensive notes" in _read_live(c, f"{root}/notes.md")
     assert json.loads(_read_live(c, f"{root}/data.json")) == {
         "key": "comprehensive-value"
@@ -607,7 +607,7 @@ def test_sync_auto_use_live_silent_absorb(
     """N: pre-seed drift, --auto=use-live absorbs live into tracked."""
     c = docker_container()
     _install(c, "test-minimal")
-    c.write_text("/home/tester/.my_setup_e2e/minimal/text.txt", "live-only-content\n")
+    c.write_text("/home/tester/.setforge_e2e/minimal/text.txt", "live-only-content\n")
     _sync(c, "test-minimal", extra=["--auto=use-live"])
     tracked = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")
     assert "live-only-content" in tracked
@@ -632,7 +632,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
     pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")
     # Pre-seed live drift inside the preserve_user_keys_deep `settings` subtree.
     c.write_text(
-        "/home/tester/.my_setup_e2e/yaml/deep.yaml",
+        "/home/tester/.setforge_e2e/yaml/deep.yaml",
         textwrap.dedent(
             """\
             trackedKey: tracked-value
@@ -700,12 +700,12 @@ def test_sync_interactive_skip_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
-    """R: pexpect; send 's' (save-as-preserved); my_setup.yaml gets the key added.
+    """R: pexpect; send 's' (save-as-preserved); setforge.yaml gets the key added.
 
     Per ``setforge/wizard.py`` _action_save_as_preserved (verified
     against wizard source per open question 8): ``s`` appends
     ``item.key_path`` to the tracked_file's ``preserve_user_keys`` list in
-    my_setup.yaml. The tracked file is unchanged; only the YAML
+    setforge.yaml. The tracked file is unchanged; only the YAML
     config gets the new preserve entry.
     """
     c = docker_container()
@@ -790,7 +790,7 @@ def test_compare_reports_drift_exit_nonzero(
     """T: install, mutate live, compare --check --strict exits non-zero."""
     c = docker_container()
     _install(c, "test-minimal")
-    c.write_text("/home/tester/.my_setup_e2e/minimal/text.txt", "live-drift\n")
+    c.write_text("/home/tester/.setforge_e2e/minimal/text.txt", "live-drift\n")
     proc = c.exec(
         [
             "uv",
@@ -819,7 +819,7 @@ def test_install_then_revert_restores_state(
     # Confirm the file exists post-install.
     assert (
         c.exec(
-            ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
+            ["test", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False
         ).returncode
         == 0
     )
@@ -837,7 +837,7 @@ def test_install_then_revert_restores_state(
     # File is gone after revert (it was created from absence on install).
     assert (
         c.exec(
-            ["test", "-f", "/home/tester/.my_setup_e2e/minimal/text.txt"], check=False
+            ["test", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False
         ).returncode
         != 0
     )
@@ -852,10 +852,10 @@ def test_install_idempotent_second_run_noop(
     """V: install twice; second run exits 0 with consistent dst state."""
     c = docker_container()
     _install(c, "test-minimal")
-    first = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")
+    first = c.read_text("/home/tester/.setforge_e2e/minimal/text.txt")
     second = _install(c, "test-minimal")
     assert second.returncode == 0
-    after = c.read_text("/home/tester/.my_setup_e2e/minimal/text.txt")
+    after = c.read_text("/home/tester/.setforge_e2e/minimal/text.txt")
     assert first == after
 
 
@@ -913,7 +913,7 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
     """
     c = docker_container()
     c.write_text(
-        "/home/tester/.my_setup_e2e/sections/marked.md",
+        "/home/tester/.setforge_e2e/sections/marked.md",
         _LEGACY_LIVE_TEXT,
     )
     proc = c.exec(
@@ -946,7 +946,7 @@ def test_install_legacy_live_markers_preserves_body_and_retags(
     end markers re-tagged with the ``host-local`` semantics keyword and a
     ``hash=<64-hex>`` segment that matches the migrated body."""
     c = docker_container()
-    live_path = "/home/tester/.my_setup_e2e/sections/marked.md"
+    live_path = "/home/tester/.setforge_e2e/sections/marked.md"
     c.write_text(live_path, _LEGACY_LIVE_TEXT)
 
     _install(c, "test-text-sections")
@@ -977,7 +977,7 @@ def test_compare_after_legacy_install_is_clean(
     the migrated live is strict-clean and the reconciler sees no
     unexpected drift."""
     c = docker_container()
-    live_path = "/home/tester/.my_setup_e2e/sections/marked.md"
+    live_path = "/home/tester/.setforge_e2e/sections/marked.md"
     c.write_text(live_path, _LEGACY_LIVE_TEXT)
 
     # First migrate via install.
@@ -1156,7 +1156,7 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
     """
     c = docker_container()
     c.write_text(
-        "/home/tester/.my_setup_e2e/sections/marked.md",
+        "/home/tester/.setforge_e2e/sections/marked.md",
         "intro\n"
         "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
@@ -1170,7 +1170,7 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
             "setforge",
             "merge",
             "--profile=test-text-sections",
-            "--config=tests/fixtures/e2e/my_setup.test.yaml",
+            "--config=tests/fixtures/e2e/setforge.test.yaml",
         ],
         check=False,
     )
@@ -1200,7 +1200,7 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
     """
     c = docker_container()
     c.write_text(
-        "/home/tester/.my_setup_e2e/sections/marked.md",
+        "/home/tester/.setforge_e2e/sections/marked.md",
         "intro\n"
         "<!-- setforge:user-section start workflow -->\n"
         "- body line\n"
@@ -1214,7 +1214,7 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
             "setforge",
             "sync",
             "--profile=test-text-sections",
-            "--config=tests/fixtures/e2e/my_setup.test.yaml",
+            "--config=tests/fixtures/e2e/setforge.test.yaml",
         ],
         check=False,
     )

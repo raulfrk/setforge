@@ -45,9 +45,9 @@ def _make_item(tmp_path: Path, name: str) -> DriftItem:
     )
 
 
-def _make_my_setup_yaml(tmp_path: Path) -> Path:
-    """Write a minimal valid my_setup.yaml stub."""
-    path = tmp_path / "my_setup.yaml"
+def _make_setforge_yaml(tmp_path: Path) -> Path:
+    """Write a minimal valid setforge.yaml stub."""
+    path = tmp_path / "setforge.yaml"
     path.write_text(
         "version: 1\n"
         "tracked_files:\n"
@@ -73,7 +73,7 @@ def test_run_wizard_loop_dispatches_per_item(
     """run_wizard_loop dispatches the chosen action per item; records one transition."""
     item1 = _make_item(tmp_path, "one")
     item2 = _make_item(tmp_path, "two")
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     transition_calls: list[Any] = []
 
@@ -89,7 +89,7 @@ def test_run_wizard_loop_dispatches_per_item(
     console = Console(file=StringIO(), force_terminal=False, no_color=True)
     decisions = run_wizard_loop(
         iter([item1, item2]),
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         snapshot_base=tmp_path / "snaps",
         console=console,
         auto_accept="k",
@@ -111,7 +111,7 @@ def test_run_wizard_loop_breaks_on_manual_pending(
     """First MANUAL_PENDING halts the loop; prints the trigger-specific message."""
     item1 = _make_item(tmp_path, "one")
     item2 = _make_item(tmp_path, "two")
-    my_setup_yaml = _make_my_setup_yaml(tmp_path)
+    setforge_yaml = _make_setforge_yaml(tmp_path)
 
     apply_call_count = {"n": 0}
 
@@ -131,7 +131,7 @@ def test_run_wizard_loop_breaks_on_manual_pending(
 
     decisions = run_wizard_loop(
         iter([item1, item2]),
-        setforge_yaml_path=my_setup_yaml,
+        setforge_yaml_path=setforge_yaml,
         snapshot_base=tmp_path / "snaps",
         console=console,
         auto_accept="m",

@@ -41,13 +41,13 @@ profiles:
 
 
 def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """Build a tracked/ tree + my_setup.yaml at tmp_path. Returns (cfg, dst)."""
+    """Build a tracked/ tree + setforge.yaml at tmp_path. Returns (cfg, dst)."""
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
     src = repo / "tracked" / "greeting.md"
     src.write_text("hello\n", encoding="utf-8")
     dst = tmp_path / "live" / "greeting.md"
-    cfg = repo / "my_setup.yaml"
+    cfg = repo / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     return cfg, dst
 
