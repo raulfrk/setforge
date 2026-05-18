@@ -265,7 +265,10 @@ def test_install_auto_accept_tracked_with_yes(
         check=False,
     )
     # Acceptance: didn't get blocked by the confirm gate.
-    assert "--yes" not in (result.stderr or "")
+    assert result.returncode == 0, result.stderr or result.stdout
+    # Positive content check — confirms the install actually executed
+    # past the gate (revert hint only prints on successful transition).
+    assert "↩  revert with" in result.stdout
 
 
 def test_install_auto_accept_tracked_non_tty_no_yes_exit_1(
@@ -314,7 +317,8 @@ def test_install_auto_accept_live_with_yes(
         extra=["--auto-accept-live", "--yes"],
         check=False,
     )
-    assert "--yes" not in (result.stderr or "")
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "↩  revert with" in result.stdout
 
 
 def test_install_auto_accept_live_non_tty_no_yes_exit_1(
@@ -363,8 +367,10 @@ def test_sync_auto_use_live_with_yes(
         extra=["--auto=use-live", "--yes"],
         check=False,
     )
-    # Either exit 0 (captured) or exit 0 with revert hint printed.
-    assert "--yes" not in (result.stderr or "")
+    assert result.returncode == 0, result.stderr or result.stdout
+    # sync writes the transition hint on success; absence means the
+    # gate aborted upstream.
+    assert "↩  revert with" in result.stdout
 
 
 def test_sync_auto_use_live_non_tty_no_yes_exit_1(
