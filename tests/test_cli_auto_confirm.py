@@ -391,6 +391,26 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+@pytest.fixture
+def stubbed_install_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Stub the IO-touching dependencies of install/sync integration tests.
+
+    Returns the ``setforge.yaml`` path for ``runner.invoke`` callers.
+    Shared by the four ``test_*_no_confirm`` tests that all need the
+    same ``resolve_binary`` / ``ensure_state_dir_writable`` /
+    ``write_transition`` stubs.
+    """
+    yaml_path = _setup_minimal_profile(tmp_path)
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
+    monkeypatch.setattr(
+        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
+    )
+    return yaml_path
+
+
 def test_install_help_lists_yes(runner: CliRunner) -> None:
     result = runner.invoke(app, ["install", "--help"])
     assert result.exit_code == 0
@@ -404,33 +424,27 @@ def test_sync_help_lists_yes(runner: CliRunner) -> None:
 
 
 def test_install_bare_no_auto_no_confirm(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    runner: CliRunner,
+    stubbed_install_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bare install never invokes the confirm wizard."""
-    yaml_path = _setup_minimal_profile(tmp_path)
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
-    monkeypatch.setattr(
-        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
-    )
     confirm = _ConfirmRecorder()
     monkeypatch.setattr(
         "setforge.cli._install_helpers.confirm_auto_operation", confirm
     )
-    runner.invoke(app, ["install", "--profile=testp", f"--config={yaml_path}"])
+    runner.invoke(
+        app, ["install", "--profile=testp", f"--config={stubbed_install_env}"]
+    )
     assert confirm.call_count == 0
 
 
 def test_install_auto_keep_live_no_confirm(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    runner: CliRunner,
+    stubbed_install_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-mutating --auto=keep-live never invokes the confirm wizard."""
-    yaml_path = _setup_minimal_profile(tmp_path)
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
-    monkeypatch.setattr(
-        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
-    )
     confirm = _ConfirmRecorder()
     monkeypatch.setattr(
         "setforge.cli._install_helpers.confirm_auto_operation", confirm
@@ -440,7 +454,7 @@ def test_install_auto_keep_live_no_confirm(
         [
             "install",
             "--profile=testp",
-            f"--config={yaml_path}",
+            f"--config={stubbed_install_env}",
             "--auto=keep-live",
         ],
     )
@@ -448,29 +462,21 @@ def test_install_auto_keep_live_no_confirm(
 
 
 def test_sync_bare_no_auto_no_confirm(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    runner: CliRunner,
+    stubbed_install_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    yaml_path = _setup_minimal_profile(tmp_path)
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
-    monkeypatch.setattr(
-        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
-    )
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
-    runner.invoke(app, ["sync", "--profile=testp", f"--config={yaml_path}"])
+    runner.invoke(app, ["sync", "--profile=testp", f"--config={stubbed_install_env}"])
     assert confirm.call_count == 0
 
 
 def test_sync_auto_keep_tracked_no_confirm(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    runner: CliRunner,
+    stubbed_install_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    yaml_path = _setup_minimal_profile(tmp_path)
-    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)
-    monkeypatch.setattr(
-        "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
-    )
     confirm = _ConfirmRecorder()
     monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
     runner.invoke(
@@ -478,7 +484,7 @@ def test_sync_auto_keep_tracked_no_confirm(
         [
             "sync",
             "--profile=testp",
-            f"--config={yaml_path}",
+            f"--config={stubbed_install_env}",
             "--auto=keep-tracked",
         ],
     )
