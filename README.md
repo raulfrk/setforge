@@ -184,6 +184,35 @@ Both happen in YOUR config repo, not in this engine repo:
 3. Commit + push to your config repo.
 4. On every machine: `uv run setforge fetch` (for git sources) or `git pull` (for path sources), then `uv run setforge install --profile=<profile>`.
 
+## Managing user-section markers
+
+Adding `<!-- setforge:user-section ... -->` marker pairs to tracked
+markdown files is automated by `setforge section`:
+
+```bash
+# Interactive: arrow-key picker for semantics + TUI anchor picker + confirm.
+uv run setforge section add --profile=<profile>
+
+# Scripted: every flag set, --yes bypasses the final confirm.
+uv run setforge section add --profile=<profile> \
+    --tracked-file=<key-from-setforge.yaml> \
+    --semantics=shared \
+    --name=my-notes \
+    --anchor-line=42 \
+    --body-source=empty \
+    --yes
+
+# Print a paste-ready marker pair for files setforge cannot edit
+# (anything not .md or .markdown).
+uv run setforge section emit shared my-notes
+```
+
+`section add` only edits markdown (`.md` / `.markdown`); other suffixes
+print a hint to use `section emit` and paste the marker pair manually.
+The end marker is stamped with the body's sha256 hash on write so the
+new pair passes strict parsing immediately — install / compare / sync
+read it without an explicit migration step.
+
 ## CI
 
 Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): unit tests (`uv run pytest`), config validation against the e2e test fixture (`uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all`), and gitleaks.
