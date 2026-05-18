@@ -130,6 +130,7 @@ def test_install_auto_use_tracked_with_yes(
     assert "revert with: setforge revert" in result.stdout
 
 
+# Skipped pending pyte-backed PTY harness; see bd setforge-ffs0.
 @pytest.mark.skip(
     reason=(
         "prompt_toolkit radiolist_dialog runs in full-screen TUI mode, "
@@ -176,6 +177,7 @@ def test_install_auto_use_tracked_pty_confirm_yes(
     assert "rule B (new in tracked)" in c.read_text(_LIVE_SHARED)
 
 
+# Skipped pending pyte-backed PTY harness; see bd setforge-ffs0.
 @pytest.mark.skip(
     reason=(
         "Same PTY-vs-full-screen-TUI limitation as the confirm-yes "
