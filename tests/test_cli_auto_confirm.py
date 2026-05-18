@@ -2,7 +2,7 @@
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 from rich.console import Console
@@ -14,6 +14,62 @@ from setforge.cli._confirm import (
     FileChange,
     confirm_auto_operation,
 )
+
+
+class _FakeDialogResult:
+    """Stand-in for prompt_toolkit's ``Dialog`` return object.
+
+    The real ``radiolist_dialog(...)`` returns a ``Dialog`` whose
+    ``.run()`` yields the user's choice. Tests configure
+    ``.run()`` to return a value, raise ``KeyboardInterrupt``, etc.
+    """
+
+    def __init__(
+        self,
+        *,
+        return_value: object = True,
+        side_effect: type[BaseException] | None = None,
+    ) -> None:
+        self._return_value = return_value
+        self._side_effect = side_effect
+        self.run_calls = 0
+
+    def run(self) -> object:
+        self.run_calls += 1
+        if self._side_effect is not None:
+            raise self._side_effect()
+        return self._return_value
+
+
+class _DialogRecorder:
+    """Callable that records invocation and returns a configured fake.
+
+    Replaces ``setforge.cli._confirm.radiolist_dialog`` so tests can
+    assert the dialog was/was-not invoked without
+    ``unittest.mock.MagicMock`` semantics.
+    """
+
+    def __init__(self, fake: _FakeDialogResult | None = None) -> None:
+        self.fake = fake or _FakeDialogResult()
+        self.call_count = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialogResult:
+        self.call_count += 1
+        return self.fake
+
+
+def _patch_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    return_value: object = True,
+    side_effect: type[BaseException] | None = None,
+) -> _DialogRecorder:
+    """Replace ``radiolist_dialog`` with a recorder; return it for assertions."""
+    recorder = _DialogRecorder(
+        _FakeDialogResult(return_value=return_value, side_effect=side_effect)
+    )
+    monkeypatch.setattr("setforge.cli._confirm.radiolist_dialog", recorder)
+    return recorder
 
 
 def _make_plan(
@@ -68,18 +124,18 @@ def test_filechange_default_change_counts() -> None:
 # --- confirm_auto_operation behavior ---
 
 
-def test_yes_short_circuits_true() -> None:
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        assert (
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=_make_plan(),
-                yes=True,
-            )
-            is True
+def test_yes_short_circuits_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    dlg = _patch_dialog(monkeypatch)
+    assert (
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=_make_plan(),
+            yes=True,
         )
-        dlg.assert_not_called()
+        is True
+    )
+    assert dlg.call_count == 0
 
 
 def test_yes_short_circuit_skips_panel_rendering() -> None:
@@ -94,19 +150,21 @@ def test_yes_short_circuit_skips_panel_rendering() -> None:
     assert console.export_text() == ""
 
 
-def test_empty_plan_skips_confirm_returns_true() -> None:
+def test_empty_plan_skips_confirm_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     empty = _make_plan(file_changes=(), risks=())
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        assert (
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=empty,
-                yes=False,
-            )
-            is True
+    dlg = _patch_dialog(monkeypatch)
+    assert (
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=empty,
+            yes=False,
         )
-        dlg.assert_not_called()
+        is True
+    )
+    assert dlg.call_count == 0
 
 
 def test_non_tty_without_yes_raises_confirm_requires_interactive(
@@ -144,38 +202,36 @@ def test_non_tty_raise_path_renders_no_panel(
 
 def test_tty_yes_response_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = True
-        console = Console(record=True)
-        assert (
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=_make_plan(),
-                yes=False,
-                console=console,
-            )
-            is True
+    _patch_dialog(monkeypatch, return_value=True)
+    console = Console(record=True)
+    assert (
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=_make_plan(),
+            yes=False,
+            console=console,
         )
-        assert "proceeding" in console.export_text()
+        is True
+    )
+    assert "proceeding" in console.export_text()
 
 
 def test_tty_no_response_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = False
-        console = Console(record=True)
-        assert (
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=_make_plan(),
-                yes=False,
-                console=console,
-            )
-            is False
+    _patch_dialog(monkeypatch, return_value=False)
+    console = Console(record=True)
+    assert (
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=_make_plan(),
+            yes=False,
+            console=console,
         )
-        assert "aborted" in console.export_text()
+        is False
+    )
+    assert "aborted" in console.export_text()
 
 
 def test_tty_dialog_returns_none_treated_as_abort(
@@ -183,32 +239,30 @@ def test_tty_dialog_returns_none_treated_as_abort(
 ) -> None:
     """User pressing Esc returns None from radiolist_dialog → abort."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = None
-        assert (
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=_make_plan(),
-                yes=False,
-            )
-            is False
+    _patch_dialog(monkeypatch, return_value=None)
+    assert (
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=_make_plan(),
+            yes=False,
         )
+        is False
+    )
 
 
 def test_keyboard_interrupt_during_confirm_propagates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.side_effect = KeyboardInterrupt
-        with pytest.raises(KeyboardInterrupt):
-            confirm_auto_operation(
-                command="install --auto=use-tracked",
-                profile="test",
-                plan=_make_plan(),
-                yes=False,
-            )
+    _patch_dialog(monkeypatch, side_effect=KeyboardInterrupt)
+    with pytest.raises(KeyboardInterrupt):
+        confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile="test",
+            plan=_make_plan(),
+            yes=False,
+        )
 
 
 # --- panel content ---
@@ -218,22 +272,22 @@ def test_panel_includes_revert_command_string(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, return_value=True)
     console = Console(record=True, width=120)
     plan = _make_plan(revert_command="setforge revert --profile=foo")
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = True
-        confirm_auto_operation(
-            command="install --auto=use-tracked",
-            profile="foo",
-            plan=plan,
-            yes=False,
-            console=console,
-        )
+    confirm_auto_operation(
+        command="install --auto=use-tracked",
+        profile="foo",
+        plan=plan,
+        yes=False,
+        console=console,
+    )
     assert "setforge revert --profile=foo" in console.export_text()
 
 
 def test_panel_includes_all_file_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, return_value=True)
     console = Console(record=True, width=200)
     plan = _make_plan(
         file_changes=tuple(
@@ -245,15 +299,13 @@ def test_panel_includes_all_file_changes(monkeypatch: pytest.MonkeyPatch) -> Non
             for i in (1, 2, 3)
         ),
     )
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = True
-        confirm_auto_operation(
-            command="install --auto=use-tracked",
-            profile="t",
-            plan=plan,
-            yes=False,
-            console=console,
-        )
+    confirm_auto_operation(
+        command="install --auto=use-tracked",
+        profile="t",
+        plan=plan,
+        yes=False,
+        console=console,
+    )
     text = console.export_text()
     for i in (1, 2, 3):
         assert f"f{i}.md" in text
@@ -261,17 +313,16 @@ def test_panel_includes_all_file_changes(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_panel_includes_all_risk_bullets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, return_value=True)
     console = Console(record=True, width=200)
     plan = _make_plan(risks=("risk A", "risk B", "risk C"))
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = True
-        confirm_auto_operation(
-            command="x",
-            profile="t",
-            plan=plan,
-            yes=False,
-            console=console,
-        )
+    confirm_auto_operation(
+        command="x",
+        profile="t",
+        plan=plan,
+        yes=False,
+        console=console,
+    )
     text = console.export_text()
     for r in ("risk A", "risk B", "risk C"):
         assert r in text
@@ -279,17 +330,16 @@ def test_panel_includes_all_risk_bullets(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_panel_distinguishes_direction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, return_value=True)
     console = Console(record=True, width=200)
     plan = _make_plan(direction=AutoDirection.LIVE_TO_TRACKED)
-    with patch("setforge.cli._confirm.radiolist_dialog") as dlg:
-        dlg.return_value.run.return_value = True
-        confirm_auto_operation(
-            command="sync --auto=use-live",
-            profile="t",
-            plan=plan,
-            yes=False,
-            console=console,
-        )
+    confirm_auto_operation(
+        command="sync --auto=use-live",
+        profile="t",
+        plan=plan,
+        yes=False,
+        console=console,
+    )
     assert "live-to-tracked" in console.export_text()
 
 
@@ -300,6 +350,17 @@ def test_panel_distinguishes_direction(monkeypatch: pytest.MonkeyPatch) -> None:
 from typer.testing import CliRunner  # noqa: E402
 
 from setforge.cli import app  # noqa: E402
+
+
+class _ConfirmRecorder:
+    """Stand-in for ``confirm_auto_operation`` that records call count."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> bool:
+        self.call_count += 1
+        return True
 
 
 @pytest.fixture
@@ -355,9 +416,12 @@ def test_install_bare_no_auto_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli._install_helpers.confirm_auto_operation") as confirm:
-        runner.invoke(app, ["install", "--profile=testp", f"--config={yaml_path}"])
-        confirm.assert_not_called()
+    confirm = _ConfirmRecorder()
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.confirm_auto_operation", confirm
+    )
+    runner.invoke(app, ["install", "--profile=testp", f"--config={yaml_path}"])
+    assert confirm.call_count == 0
 
 
 def test_install_auto_keep_live_no_confirm(
@@ -370,17 +434,20 @@ def test_install_auto_keep_live_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli._install_helpers.confirm_auto_operation") as confirm:
-        runner.invoke(
-            app,
-            [
-                "install",
-                "--profile=testp",
-                f"--config={yaml_path}",
-                "--auto=keep-live",
-            ],
-        )
-        confirm.assert_not_called()
+    confirm = _ConfirmRecorder()
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.confirm_auto_operation", confirm
+    )
+    runner.invoke(
+        app,
+        [
+            "install",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--auto=keep-live",
+        ],
+    )
+    assert confirm.call_count == 0
 
 
 def test_sync_bare_no_auto_no_confirm(
@@ -392,9 +459,10 @@ def test_sync_bare_no_auto_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli.sync.confirm_auto_operation") as confirm:
-        runner.invoke(app, ["sync", "--profile=testp", f"--config={yaml_path}"])
-        confirm.assert_not_called()
+    confirm = _ConfirmRecorder()
+    monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
+    runner.invoke(app, ["sync", "--profile=testp", f"--config={yaml_path}"])
+    assert confirm.call_count == 0
 
 
 def test_sync_auto_keep_tracked_no_confirm(
@@ -406,14 +474,15 @@ def test_sync_auto_keep_tracked_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli.sync.confirm_auto_operation") as confirm:
-        runner.invoke(
-            app,
-            [
-                "sync",
-                "--profile=testp",
-                f"--config={yaml_path}",
-                "--auto=keep-tracked",
-            ],
-        )
-        confirm.assert_not_called()
+    confirm = _ConfirmRecorder()
+    monkeypatch.setattr("setforge.cli.sync.confirm_auto_operation", confirm)
+    runner.invoke(
+        app,
+        [
+            "sync",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--auto=keep-tracked",
+        ],
+    )
+    assert confirm.call_count == 0
