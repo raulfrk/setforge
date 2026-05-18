@@ -183,6 +183,27 @@ Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): uni
 
 The engine repo no longer carries a `setforge.yaml` at root (it lives in your config repo since v0.2.0); CI validates against the e2e test fixture instead.
 
+## Cutting a release
+
+Run the preflight script BEFORE pushing a `v*.*.*` tag:
+
+```bash
+uv run python scripts/release_preflight.py
+```
+
+It runs 8 checks: `uv build` → `twine check` → tmp `UV_TOOL_DIR` install → `setforge --version` / `--help` / `__version__` assertions → workflow YAML parse → `bd ready` P0-P2 empty check. Exits 0 on success; non-zero with the failing step name on the first failure.
+
+After preflight green, the tag-push sequence is:
+
+```bash
+cd ~/setforge
+git push origin main
+git tag -a vX.Y.Z -m 'vX.Y.Z: summary'
+git push origin vX.Y.Z
+```
+
+This fires `.github/workflows/publish-pypi.yml` (build + twine + PyPI upload via `PYPI_API_TOKEN`) and `.github/workflows/release.yml` (`gh release create` with auto-generated notes). Verify on https://pypi.org/project/setforge/ and the Releases tab.
+
 ## Upgrading from my-setup v0.x to setforge
 
 setforge is the post-rename + post-split form of the older `my-setup` tool. If you have an existing my-setup checkout, the migration is:
