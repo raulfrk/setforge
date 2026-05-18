@@ -32,6 +32,39 @@ from prompt_toolkit.widgets import SearchToolbar
 _PAGE_LINES: int = 10
 
 
+def _move_down_clamped(buffer: Buffer, *, count: int) -> None:
+    """``cursor_down`` capped at the last non-empty row."""
+    target = min(buffer.document.cursor_position_row + count, _last_content_row(buffer))
+    delta = target - buffer.document.cursor_position_row
+    if delta > 0:
+        buffer.cursor_down(count=delta)
+
+
+def _jump_to_last_content_row(buffer: Buffer) -> None:
+    """Move the cursor to the start of the last non-empty row."""
+    target_row = _last_content_row(buffer)
+    delta = target_row - buffer.document.cursor_position_row
+    if delta > 0:
+        buffer.cursor_down(count=delta)
+    elif delta < 0:
+        buffer.cursor_up(count=-delta)
+
+
+def _last_content_row(buffer: Buffer) -> int:
+    """Return the 0-indexed row of the last non-empty line.
+
+    A trailing ``\\n`` in the source text produces a phantom empty row
+    at ``line_count - 1``. We treat the last content row as the
+    anchorable bottom of the file (insertion after a phantom row would
+    no-op the cursor move and is never what the user wants).
+    """
+    lines = buffer.document.lines
+    last = len(lines) - 1
+    while last > 0 and lines[last] == "":
+        last -= 1
+    return last
+
+
 def pick_anchor_line(
     *,
     file_text: str,
@@ -87,7 +120,7 @@ def _build_keybindings(
 
     @kb.add("down")
     def _(event: KeyPressEvent) -> None:
-        buffer.cursor_down(count=1)
+        _move_down_clamped(buffer, count=1)
 
     @kb.add("pageup")
     def _(event: KeyPressEvent) -> None:
@@ -95,7 +128,7 @@ def _build_keybindings(
 
     @kb.add("pagedown")
     def _(event: KeyPressEvent) -> None:
-        buffer.cursor_down(count=_PAGE_LINES)
+        _move_down_clamped(buffer, count=_PAGE_LINES)
 
     @kb.add("home")
     def _(event: KeyPressEvent) -> None:
@@ -103,7 +136,7 @@ def _build_keybindings(
 
     @kb.add("end")
     def _(event: KeyPressEvent) -> None:
-        buffer.cursor_position = len(buffer.text)
+        _jump_to_last_content_row(buffer)
 
     @kb.add("/")
     def _(event: KeyPressEvent) -> None:
@@ -111,7 +144,8 @@ def _build_keybindings(
 
     @kb.add("enter")
     def _(event: KeyPressEvent) -> None:
-        result_holder["line"] = buffer.document.cursor_position_row + 1
+        row = min(buffer.document.cursor_position_row, _last_content_row(buffer))
+        result_holder["line"] = row + 1
         event.app.exit()
 
     @kb.add("escape", eager=True)
