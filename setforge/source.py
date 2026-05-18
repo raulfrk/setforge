@@ -24,6 +24,7 @@ at load time.
 """
 
 import os
+import shlex
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
@@ -52,6 +53,11 @@ DEFAULT_CLONE_ROOT: Final[Path] = (
     Path.home() / ".local" / "share" / "setforge" / "sources"
 )
 CONFIG_FILENAME: Final[str] = "setforge.yaml"
+# Pre-rename filename, retained as a one-shot migration target for
+# validate_source_dir's friendly ConfigError. Mirrors the
+# CONFIG_FILENAME shape so a future removal of legacy support is a
+# single-symbol edit.
+_LEGACY_CONFIG_FILENAME: Final[str] = "my_setup.yaml"
 
 
 class SourceKind(StrEnum):
@@ -281,13 +287,14 @@ def validate_source_dir(source: Source) -> Path:
     # Friendly migration error for the my_setup.yaml -> setforge.yaml
     # rename (setforge-2ba.1). Mirrors the legacy-namespace detector
     # pattern in setforge.sections.detect_legacy_namespace_markers.
-    legacy_path = source_dir / "my_setup.yaml"
+    legacy_path = source_dir / _LEGACY_CONFIG_FILENAME
     if legacy_path.exists():
+        quoted_dir = shlex.quote(str(source_dir))
         raise ConfigError(
             f"source {source.display_name!r} at {source_dir} contains a "
-            f"legacy 'my_setup.yaml'. setforge expects '{CONFIG_FILENAME}'. "
-            f"Rename: (cd {source_dir} && git mv my_setup.yaml "
-            f"{CONFIG_FILENAME})"
+            f"legacy {_LEGACY_CONFIG_FILENAME!r}. setforge expects "
+            f"'{CONFIG_FILENAME}'. Rename: (cd {quoted_dir} && "
+            f"git mv {_LEGACY_CONFIG_FILENAME} {CONFIG_FILENAME})"
         )
     raise ConfigError(
         f"source {source.display_name!r} at {source_dir} does not contain "

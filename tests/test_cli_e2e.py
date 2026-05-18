@@ -885,19 +885,15 @@ class TestSourceLayerMigrationError:
     def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``compare --source=<legacy-dir>`` raises ConfigError with ``git mv`` hint.
 
-        Reset module-level ``_cli_source`` before invoking — Typer's
-        root callback stashes the flag value at module scope (see
-        ``setforge.source._cli_source``), and prior tests in this
-        session may have populated it.
+        The autouse ``_isolated_local_config`` fixture in
+        ``tests/conftest.py`` already resets module-level
+        ``setforge.source._cli_source`` per test.
         """
-        from setforge import source as source_mod
         from setforge.errors import ConfigError
 
-        monkeypatch.setattr(source_mod, "_cli_source", None)
         src_dir = tmp_path / "legacy-src"
         src_dir.mkdir()
         (src_dir / "my_setup.yaml").write_text("version: 1\nprofiles: {}\n")
