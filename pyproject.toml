@@ -83,8 +83,12 @@ ignore = [
 # `capsys`, …) whose types are obvious from naming and whose explicit
 # annotation buys no daily reading clarity. ANN401 is also allowed
 # here because tests construct ad-hoc dict / list scaffolds where
-# `Any` is the only honest type.
-"tests/**" = ["ANN001", "ANN401"]
+# `Any` is the only honest type. C901 is allowed because test code
+# (especially binary-stub dispatch in tests/test_claude_plugins.py
+# and the e2e Docker fixture in tests/docker/conftest.py) is
+# naturally branchy by design; cyclomatic complexity is a
+# production-code smell, not a test-quality signal.
+"tests/**" = ["ANN001", "ANN401", "C901"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
