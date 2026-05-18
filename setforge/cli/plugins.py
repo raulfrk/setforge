@@ -25,7 +25,7 @@ from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
 # plugin sub-app
 # ---------------------------------------------------------------------------
 
-plugin_app = typer.Typer(
+plugin_app: typer.Typer = typer.Typer(
     help="Manage Claude plugins in setforge.yaml.",
     no_args_is_help=True,
 )
@@ -308,7 +308,7 @@ def sync_cache(
 # marketplace sub-app
 # ---------------------------------------------------------------------------
 
-marketplace_app = typer.Typer(
+marketplace_app: typer.Typer = typer.Typer(
     help="Manage Claude plugin marketplaces in setforge.yaml.",
     no_args_is_help=True,
 )

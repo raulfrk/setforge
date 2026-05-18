@@ -19,9 +19,9 @@ from setforge import binaries
 from setforge import source as source_mod
 from setforge.errors import SetforgeError
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
-app = typer.Typer(
+app: typer.Typer = typer.Typer(
     help="setforge: tracked file + extension + Claude plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,

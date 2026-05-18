@@ -14,7 +14,7 @@ from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
 from setforge.config import ReconcilePolicy, load_config, resolve_profile
 from setforge.errors import ExtensionToolMissing
 
-ext_app = typer.Typer(
+ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
     no_args_is_help=True,
 )

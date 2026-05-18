@@ -53,7 +53,7 @@ def revert(
     typer.echo(f"transition: {target}")
 
 
-transitions_app = typer.Typer(
+transitions_app: typer.Typer = typer.Typer(
     help="Inspect transition history for install/sync/revert.",
     no_args_is_help=True,
 )
