@@ -134,14 +134,19 @@ def _root(
 
 # Subcommand modules — imported for the side effect of @app.command()
 # registration. Must run AFTER `app`, the shared option constants, and
-# `_resolve_config_arg` are defined above.
-from setforge.cli import compare as _compare  # noqa: E402, F401
-from setforge.cli import ext as _ext  # noqa: E402, F401
+# `_resolve_config_arg` are defined above. Order MATTERS: it determines
+# the listing order in `setforge --help` (Typer preserves registration
+# order). Match the pre-split cli.py source-order so the help output
+# stays bit-for-bit identical.
+# isort: off
 from setforge.cli import install as _install  # noqa: E402, F401
-from setforge.cli import plugins as _plugins  # noqa: E402, F401
-from setforge.cli import revert as _revert  # noqa: E402, F401
-from setforge.cli import sync as _sync  # noqa: E402, F401
-from setforge.cli import validate as _validate  # noqa: E402, F401
+from setforge.cli import compare as _compare  # noqa: E402, F401
+from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
+from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
+from setforge.cli import ext as _ext  # noqa: E402, F401
+from setforge.cli import plugins as _plugins  # noqa: E402, F401 (plugin + marketplace subgroups)
+from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + fetch)
+# isort: on
 
 
 def main() -> None:
@@ -151,7 +156,3 @@ def main() -> None:
     except SetforgeError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
