@@ -24,6 +24,17 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pytest
 
+  build-verify:
+    name: Build + twine check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Twine-check the built artifacts
+        run: uv tool run --from twine twine check dist/*
+
   e2e-docker:
     name: E2E Docker tests
     runs-on: ubuntu-latest
