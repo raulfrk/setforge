@@ -34,7 +34,7 @@ import hashlib
 import subprocess
 from collections.abc import Callable
 
-import pexpect  # type: ignore[import-untyped]
+import pexpect  # type: ignore[import-untyped]  # pexpect ships no py.typed
 import pytest
 
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
