@@ -107,6 +107,17 @@ class CaptureRequiresInteractive(SetforgeError):
     ``auto_accept`` parameter."""
 
 
+class ConfirmRequiresInteractive(SetforgeError):
+    """Raised when a mutating ``--auto*`` flag is set, stdin is not a
+    TTY, and ``--yes`` was not passed.
+
+    Sibling of :class:`CaptureRequiresInteractive` for the
+    :func:`setforge.cli._confirm.confirm_auto_operation` gate that
+    fronts ``install --auto-accept-*`` / ``install --auto=use-tracked``
+    / ``sync --auto=use-live``. The escape hatch is ``--yes`` /
+    ``-y``, which short-circuits the prompt for scripted contexts."""
+
+
 class NoTransitionFound(SetforgeError):
     """Raised by ``setforge revert`` when no transition history exists
     for the requested profile."""

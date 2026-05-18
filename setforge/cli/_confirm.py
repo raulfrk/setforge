@@ -20,7 +20,19 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from setforge.errors import SetforgeError
+from setforge.errors import ConfirmRequiresInteractive
+
+# Re-export for callers that import via the historical
+# ``setforge.cli._confirm`` path (tests, sibling CLI modules). The
+# canonical home is ``setforge.errors`` alongside
+# ``CaptureRequiresInteractive``.
+__all__ = [
+    "AutoDirection",
+    "AutoPlan",
+    "ConfirmRequiresInteractive",
+    "FileChange",
+    "confirm_auto_operation",
+]
 
 
 class AutoDirection(StrEnum):
@@ -53,10 +65,6 @@ class AutoPlan:
     file_changes: tuple[FileChange, ...]
     risks: tuple[str, ...]
     revert_command: str
-
-
-class ConfirmRequiresInteractive(SetforgeError):
-    """Raised when --auto* is set, stdin is not a TTY, and --yes is not set."""
 
 
 def _render_panel(
