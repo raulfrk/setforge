@@ -3,7 +3,7 @@
 # Dockerfile for the E2E test ring (setforge-nen.9).
 #
 # Build with the repo root as the context (so COPY can pull in
-# pyproject.toml / uv.lock / my_setup/ / tracked/):
+# pyproject.toml / uv.lock / setforge/ / tracked/):
 #
 #   docker build -t setforge-e2e:test-<inputs-hash> -f tests/docker/Dockerfile .
 #
@@ -29,7 +29,7 @@
 #   - claude-code:  pinned via `@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`
 #   - code:         pinned to ${VSCODE_VERSION}-stable from Microsoft's repo
 #   - python:       uv-managed ${PYTHON_VERSION} (Debian 12 apt only
-#                   ships 3.11; my_setup uses PEP 695 generics so >= 3.12
+#                   ships 3.11; setforge uses PEP 695 generics so >= 3.12
 #                   is required).
 
 FROM debian:12-slim
@@ -94,7 +94,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 # ----------------------------------------------------------------------
 # Layer 6: Python deps (changes only when pyproject/uv.lock change).
 # Skips project install — `--no-install-project` avoids a wasted
-# re-install in the final layer that COPYs my_setup/ source.
+# re-install in the final layer that COPYs setforge/ source.
 # ----------------------------------------------------------------------
 COPY --chown=tester:tester pyproject.toml uv.lock ./
 RUN uv sync --extra dev --python ${PYTHON_VERSION} --no-install-project

@@ -531,7 +531,7 @@ def test_install_comprehensive_plugins_extensions(
 # --- Variant L1 (setforge-58x verbosity surface) --------------------------
 
 
-def test_install_verbose_emits_my_setup_debug(
+def test_install_verbose_emits_setforge_debug(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """``-v`` flag surfaces ``setforge.claude_plugins`` DEBUG from a real subprocess.
