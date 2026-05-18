@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 from rich.console import Console
+from typer.testing import CliRunner
 
+from setforge.cli import app
 from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
@@ -346,10 +348,6 @@ def test_panel_distinguishes_direction(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # Integration via typer.testing.CliRunner
 # ---------------------------------------------------------------------------
-
-from typer.testing import CliRunner  # noqa: E402
-
-from setforge.cli import app  # noqa: E402
 
 
 class _ConfirmRecorder:
