@@ -38,6 +38,11 @@ _VALID_SEMANTICS: frozenset[str] = frozenset(s.value for s in SectionSemantics)
 _VALID_BODY_SOURCES: frozenset[str] = frozenset({"empty", "editor", "file"})
 
 
+def _stdin_is_tty() -> bool:
+    """Indirection layer so unit tests can monkeypatch this single function."""
+    return sys.stdin.isatty()
+
+
 def _validate_name(name: str) -> None:
     if not _NAME_PATTERN.fullmatch(name):
         raise typer.BadParameter(
@@ -390,7 +395,7 @@ def section_add(
         )
         return
 
-    if not sys.stdin.isatty():
+    if not _stdin_is_tty():
         raise typer.BadParameter(
             "interactive flags missing in non-TTY context; pass --tracked-file, "
             "--semantics, --name, --anchor-line, --body-source, --yes"

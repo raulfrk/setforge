@@ -408,3 +408,139 @@ def test_section_add_marker_pair_round_trips_through_extract_sections(
 
     sections = extract_sections(tracked.read_text(), allow_legacy=True)
     assert "rt" in sections
+
+
+# --- section add (interactive path; mock prompt_toolkit boundary) ---
+
+
+def _force_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("setforge.cli.section._stdin_is_tty", lambda: True)
+
+
+def test_section_add_interactive_walks_all_prompts(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("setforge.cli.section.input_dialog") as ip,
+        patch("setforge.cli.section.yes_no_dialog") as yn,
+        patch(
+            "setforge.cli.section.pick_anchor_line", return_value=2
+        ),
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.side_effect = ["shared", "empty"]
+        ip.return_value.run.return_value = "foo"
+        yn.return_value.run.return_value = True
+        result = runner.invoke(
+            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+        )
+    assert result.exit_code == 0
+    assert "shared foo" in tracked.read_text()
+
+
+def test_section_add_interactive_aborts_on_anchor_cancel(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("setforge.cli.section.input_dialog") as ip,
+        patch("setforge.cli.section.pick_anchor_line", return_value=None),
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.return_value = "shared"
+        ip.return_value.run.return_value = "foo"
+        result = runner.invoke(
+            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+        )
+    assert result.exit_code == 0
+    assert "shared foo" not in tracked.read_text()
+
+
+def test_section_add_interactive_aborts_on_confirm_no(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("setforge.cli.section.input_dialog") as ip,
+        patch("setforge.cli.section.yes_no_dialog") as yn,
+        patch("setforge.cli.section.pick_anchor_line", return_value=2),
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.side_effect = ["shared", "empty"]
+        ip.return_value.run.return_value = "foo"
+        yn.return_value.run.return_value = False
+        result = runner.invoke(
+            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+        )
+    assert result.exit_code == 0
+    assert "shared foo" not in tracked.read_text()
+
+
+def test_section_add_interactive_aborts_on_semantics_cancel(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.return_value = None
+        result = runner.invoke(
+            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+        )
+    assert result.exit_code == 0
+    assert "shared" not in tracked.read_text()
+
+
+def test_section_add_interactive_with_yes_skips_final_confirm(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, tracked = minimal_config
+    _force_tty(monkeypatch)
+    with (
+        patch("setforge.cli.section.radiolist_dialog") as rd,
+        patch("setforge.cli.section.input_dialog") as ip,
+        patch("setforge.cli.section.yes_no_dialog") as yn,
+        patch("setforge.cli.section.pick_anchor_line", return_value=2),
+        patch("typer.prompt", return_value="1"),
+    ):
+        rd.return_value.run.side_effect = ["shared", "empty"]
+        ip.return_value.run.return_value = "foo"
+        result = runner.invoke(
+            app,
+            ["section", "add", "--profile=testp", f"--config={yaml_path}", "--yes"],
+        )
+    assert result.exit_code == 0
+    assert "shared foo" in tracked.read_text()
+    yn.return_value.run.assert_not_called()
+
+
+def test_section_add_interactive_non_tty_falls_back_to_error(
+    runner: CliRunner,
+    minimal_config: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yaml_path, _ = minimal_config
+    monkeypatch.setattr("setforge.cli.section._stdin_is_tty", lambda: False)
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
+    assert result.exit_code == 2
