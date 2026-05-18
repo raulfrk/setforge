@@ -137,6 +137,25 @@ def step_8_bd_ready_p012_empty() -> None:
         raise AssertionError(f"unfinished P0/P1/P2 work blocks release:\n    {joined}")
 
 
+def _run_step(name: str, fn: Callable[[], None]) -> bool:
+    """Run one step; print result; return True on pass, False on fail."""
+    print(f"  • {name}", end=" ", flush=True)
+    try:
+        fn()
+    except subprocess.CalledProcessError as exc:
+        print(f"FAILED: {exc}")
+        if exc.stderr:
+            print(f"    stderr: {exc.stderr.strip()}", file=sys.stderr)
+        if exc.stdout:
+            print(f"    stdout: {exc.stdout.strip()}", file=sys.stderr)
+        return False
+    except AssertionError as exc:
+        print(f"FAILED: {exc}")
+        return False
+    print("OK")
+    return True
+
+
 def main() -> int:
     """Run the 8-step preflight; return 0 on success, 1 on first failure."""
     try:
@@ -147,40 +166,29 @@ def main() -> int:
 
     print(f"===> setforge {version} preflight")
 
-    tmp_tool_dir: Path | None = None
-    steps: list[tuple[str, Callable[[], None]]] = [
-        ("1: uv build", lambda: step_1_uv_build(version)),
-        ("2: twine check", step_2_twine_check),
-    ]
-
-    # Steps 3-5 share the tmp UV_TOOL_DIR; build separately so step_3 can stash it.
-    print("  • 1: uv build", end=" ", flush=True)
-    try:
-        step_1_uv_build(version)
-    except (subprocess.CalledProcessError, AssertionError) as exc:
-        print(f"FAILED: {exc}")
+    if not _run_step("1: uv build", lambda: step_1_uv_build(version)):
         return 1
-    print("OK")
+    if not _run_step("2: twine check", step_2_twine_check):
+        return 1
 
-    for name, fn in steps[1:]:
-        print(f"  • {name}", end=" ", flush=True)
-        try:
-            fn()
-        except (subprocess.CalledProcessError, AssertionError) as exc:
-            print(f"FAILED: {exc}")
-            return 1
-        print("OK")
-
-    # Step 3 needs to return tmp_tool_dir for steps 4 + 5.
+    # Step 3 yields tmp_tool_dir for steps 4-5 to share; run inline so the
+    # closures below can capture it.
     print("  • 3: install in tmp UV_TOOL_DIR", end=" ", flush=True)
     try:
         tmp_tool_dir = step_3_install_in_tmp(version)
-    except (subprocess.CalledProcessError, AssertionError) as exc:
+    except subprocess.CalledProcessError as exc:
+        print(f"FAILED: {exc}")
+        if exc.stderr:
+            print(f"    stderr: {exc.stderr.strip()}", file=sys.stderr)
+        if exc.stdout:
+            print(f"    stdout: {exc.stdout.strip()}", file=sys.stderr)
+        return 1
+    except AssertionError as exc:
         print(f"FAILED: {exc}")
         return 1
     print("OK")
 
-    later_steps: list[tuple[str, Callable[[], None]]] = [
+    remaining: list[tuple[str, Callable[[], None]]] = [
         (
             "4: installed --version",
             lambda: step_4_installed_version(tmp_tool_dir, version),
@@ -196,14 +204,9 @@ def main() -> int:
         ("7: workflow YAML parse", step_7_workflow_yaml_parse),
         ("8: bd ready P0/P1/P2 empty", step_8_bd_ready_p012_empty),
     ]
-    for name, fn in later_steps:
-        print(f"  • {name}", end=" ", flush=True)
-        try:
-            fn()
-        except (subprocess.CalledProcessError, AssertionError) as exc:
-            print(f"FAILED: {exc}")
+    for name, fn in remaining:
+        if not _run_step(name, fn):
             return 1
-        print("OK")
 
     print("===> preflight passed")
     return 0
