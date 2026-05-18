@@ -391,6 +391,33 @@ def _interactive_confirm(*, target: Path, anchor_line: int) -> bool:
     )
 
 
+def _prevalidate_interactive_flags(
+    *,
+    semantics: str | None,
+    name: str | None,
+    body_source: str | None,
+    body_file: Path | None,
+) -> None:
+    """Run scripted-path validators on user-supplied flags before any TUI opens.
+
+    Partial-flag invocations (e.g. ``--name=Foo`` with the rest missing)
+    must fail before any prompt_toolkit dialog opens. Typer's enum
+    validation already covers ``--semantics`` / ``--body-source`` at the
+    CLI boundary; this helper covers ``--name`` and the
+    ``--body-source=empty + --body-file=...`` mutex.
+    """
+    if semantics is not None:
+        _validate_semantics(semantics)
+    if name is not None:
+        _validate_name(name)
+    if body_source is not None:
+        body_source_enum = _validate_body_source(body_source)
+        if body_source_enum is BodySource.EMPTY and body_file is not None:
+            raise typer.BadParameter(
+                "--body-source=empty is mutually exclusive with --body-file"
+            )
+
+
 def _section_add_interactive(
     *,
     config_path: Path,
@@ -404,20 +431,9 @@ def _section_add_interactive(
     yes: bool,
 ) -> None:
     """Walk every missing flag through a prompt_toolkit dialog."""
-    # Pre-validate any user-supplied flags up front so partial-flag
-    # invocations (e.g. ``--name=Foo`` with the rest missing) fail before
-    # any TUI dialog opens. Mirrors the scripted-path validation order.
-    if semantics is not None:
-        _validate_semantics(semantics)
-    if name is not None:
-        _validate_name(name)
-    if body_source is not None:
-        body_source_enum = _validate_body_source(body_source)
-        if body_source_enum is BodySource.EMPTY and body_file is not None:
-            raise typer.BadParameter(
-                "--body-source=empty is mutually exclusive with --body-file"
-            )
-
+    _prevalidate_interactive_flags(
+        semantics=semantics, name=name, body_source=body_source, body_file=body_file
+    )
     if tracked_file is None:
         tracked_file = _interactive_pick_tracked_file(config_path=config_path)
     if semantics is None:
@@ -440,11 +456,9 @@ def _section_add_interactive(
         if anchor_line is None:
             typer.echo("aborted.")
             raise typer.Exit(0)
-
     if body_source is None:
         body_source = _interactive_pick_body_source()
     body = _read_body(body_source=body_source, body_file=body_file)
-
     if not yes and not _interactive_confirm(target=target, anchor_line=anchor_line):
         typer.echo("aborted.")
         raise typer.Exit(0)

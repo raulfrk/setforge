@@ -105,11 +105,13 @@ def test_picker_slash_starts_search() -> None:
     (the buffer cursor only moves under a real terminal's async loop),
     so we verify the boundary call instead of the downstream cursor jump.
     """
-    with patch("setforge.cli._anchor_picker.start_search") as mock_start_search:
-        with create_pipe_input() as pipe:
-            pipe.send_bytes(b"/\r")
-            with create_app_session(input=pipe, output=DummyOutput()):
-                pick_anchor_line(file_text=_FIXTURE, filename="test.md")
+    with (
+        patch("setforge.cli._anchor_picker.start_search") as mock_start_search,
+        create_pipe_input() as pipe,
+    ):
+        pipe.send_bytes(b"/\r")
+        with create_app_session(input=pipe, output=DummyOutput()):
+            pick_anchor_line(file_text=_FIXTURE, filename="test.md")
     assert mock_start_search.call_count == 1
 
 
