@@ -36,7 +36,6 @@ app.add_typer(section_app, name="section")
 
 _NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
-_VALID_SEMANTICS: frozenset[str] = frozenset(s.value for s in SectionSemantics)
 _VALID_BODY_SOURCES: frozenset[str] = frozenset({"empty", "editor", "file"})
 
 
@@ -54,10 +53,12 @@ def _validate_name(name: str) -> None:
 
 
 def _validate_semantics(semantics: str) -> None:
-    if semantics not in _VALID_SEMANTICS:
+    try:
+        SectionSemantics(semantics)
+    except ValueError as exc:
         raise typer.BadParameter(
             f"semantics {semantics!r} not in {{shared, host-local}}"
-        )
+        ) from exc
 
 
 def _format_marker_pair_with_body(*, semantics: str, name: str, body: str) -> str:
