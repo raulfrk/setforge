@@ -870,3 +870,40 @@ class TestVerbosity:
         assert result.exit_code == 0, result.output
         assert "unknown SETFORGE_LOG_LEVEL='BASIC_FORMAT'" in result.stderr
         assert "defaulting to WARNING" in result.stderr
+
+
+class TestSourceLayerMigrationError:
+    """Verify legacy ``my_setup.yaml`` triggers a CLI-surfaced migration hint.
+
+    The unit test in :class:`tests.test_source.TestValidateSourceDir`
+    pins the function-level contract; these tests pin the CLI
+    integration (the source-layer resolution fires from ``--source``,
+    propagates the ConfigError up the Typer call chain, and surfaces
+    the actionable migration recipe to the caller).
+    """
+
+    def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``compare --source=<legacy-dir>`` raises ConfigError with ``git mv`` hint.
+
+        Reset module-level ``_cli_source`` before invoking — Typer's
+        root callback stashes the flag value at module scope (see
+        ``setforge.source._cli_source``), and prior tests in this
+        session may have populated it.
+        """
+        from setforge import source as source_mod
+        from setforge.errors import ConfigError
+
+        monkeypatch.setattr(source_mod, "_cli_source", None)
+        src_dir = tmp_path / "legacy-src"
+        src_dir.mkdir()
+        (src_dir / "my_setup.yaml").write_text("version: 1\nprofiles: {}\n")
+        result = _invoke(["--source", str(src_dir), "compare", "--profile=anything"])
+        assert result.exit_code != 0, result.output
+        assert isinstance(result.exception, ConfigError), result.exception
+        msg = str(result.exception)
+        assert "legacy 'my_setup.yaml'" in msg, msg
+        assert "git mv my_setup.yaml setforge.yaml" in msg, msg

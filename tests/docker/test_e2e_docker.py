@@ -1228,3 +1228,53 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
         f"expected 'Run 'uv run setforge install' in output: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
+
+
+# --- Variant L2 (legacy my_setup.yaml migration error) ----------------------
+
+
+def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Legacy ``my_setup.yaml`` in a ``--source`` dir triggers ``git mv`` hint.
+
+    Pairs with the unit test in
+    :class:`tests.test_source.TestValidateSourceDir` and the CliRunner
+    test in :class:`tests.test_cli_e2e.TestSourceLayerMigrationError`:
+    proves the migration error fires in a real subprocess too, with
+    the actionable ``git mv`` recipe landing on stderr.
+
+    The container's source-layer ``validate_source_dir`` walks
+    ``--source`` first, finds the legacy filename, and raises
+    :class:`setforge.errors.ConfigError`. ``main()``'s
+    ``SetforgeError`` catch formats the message on stderr and exits
+    non-zero — this test pins that user-facing contract.
+    """
+    c = docker_container()
+    c.write_text(
+        "/home/tester/legacy-src/my_setup.yaml",
+        "version: 1\nprofiles: {}\n",
+    )
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "--source",
+            "/home/tester/legacy-src",
+            "compare",
+            "--profile=anything",
+        ],
+        check=False,
+    )
+    assert result.returncode != 0, (
+        f"expected non-zero exit for legacy my_setup.yaml; "
+        f"got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    assert "legacy 'my_setup.yaml'" in result.stderr, (
+        f"expected migration hint in stderr; got: {result.stderr!r}"
+    )
+    assert "git mv my_setup.yaml setforge.yaml" in result.stderr, (
+        f"expected 'git mv' recipe in stderr; got: {result.stderr!r}"
+    )
