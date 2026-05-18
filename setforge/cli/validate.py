@@ -11,11 +11,21 @@ one profile (``--profile=NAME``) or every profile (``--all``).
 from pathlib import Path
 
 import typer
+from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
+from pydantic import ValidationError
 
 from setforge import source as source_mod
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
-from setforge.config import Config, load_config, resolve_profile
+from setforge.compare import resolve_src
+from setforge.config import (
+    Config,
+    ResolvedProfile,
+    TrackedFile,
+    load_config,
+    resolve_profile,
+)
 from setforge.errors import SetforgeError
+from setforge.paths import template_context
 
 
 def _check_profile(
@@ -25,81 +35,137 @@ def _check_profile(
     failures: list[str],
 ) -> None:
     """Run checks 2-6 for a single profile, appending failures in-place."""
-    from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
-
-    from setforge.compare import resolve_src
-    from setforge.paths import template_context
-
     ctx = f"profile {prof_name!r}"
 
-    # Check 2: Profile resolution (covers missing profiles + cycle detection).
-    try:
-        resolved = resolve_profile(cfg, prof_name)
-    except SetforgeError as exc:
-        failures.append(f"{ctx}: {exc}")
+    resolved = _check_profile_resolution(cfg, prof_name, ctx, failures)
+    if resolved is None:
         return
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
         dot_ctx = f"{ctx}: tracked_file {tracked_file_name!r}"
+        if not _check_jinja_templates(tracked_file, dot_ctx, failures):
+            continue
+        _check_tracked_srcs(tracked_file, repo_root, dot_ctx, failures)
 
-        # Check 3: Jinja2 dst template renderability (StrictUndefined catches typos).
-        if tracked_file.template:
-            try:
-                Template(tracked_file.dst, undefined=StrictUndefined).render(
-                    **template_context()
-                )
-            except (TemplateSyntaxError, UndefinedError) as exc:
-                failures.append(f"{dot_ctx}: unrenderable dst template: {exc}")
-                continue
+    _check_extension_includes(cfg, prof_name, ctx, failures)
+    _check_claude_plugins(cfg, prof_name, ctx, failures)
+    _check_marketplaces(cfg, resolved, ctx, failures)
 
-        # Check 4: tracked src exists on disk.
-        src = resolve_src(tracked_file, repo_root)
-        if not src.exists():
-            failures.append(f"{dot_ctx}: src {tracked_file.src} does not exist")
 
-    # Check 5: extension include list — non-empty IDs, no duplicates.
-    # Check the raw profile (before extends-merging) so duplicates that
-    # _merge_list would silently drop are still caught here.
+def _check_profile_resolution(
+    cfg: Config, prof_name: str, ctx: str, failures: list[str]
+) -> ResolvedProfile | None:
+    """Check 2: resolve profile (covers missing profiles + cycle detection)."""
+    try:
+        return resolve_profile(cfg, prof_name)
+    except SetforgeError as exc:
+        failures.append(f"{ctx}: {exc}")
+        return None
+
+
+def _check_jinja_templates(
+    tracked_file: TrackedFile, dot_ctx: str, failures: list[str]
+) -> bool:
+    """Check 3: Jinja2 dst template renders with StrictUndefined.
+
+    Returns ``True`` when the template is OK (or absent), ``False`` when a
+    syntax/undefined-variable error was recorded — caller should skip
+    further checks for this tracked_file.
+    """
+    if not tracked_file.template:
+        return True
+    try:
+        Template(tracked_file.dst, undefined=StrictUndefined).render(
+            **template_context()
+        )
+    except (TemplateSyntaxError, UndefinedError) as exc:
+        failures.append(f"{dot_ctx}: unrenderable dst template: {exc}")
+        return False
+    return True
+
+
+def _check_tracked_srcs(
+    tracked_file: TrackedFile, repo_root: Path, dot_ctx: str, failures: list[str]
+) -> None:
+    """Check 4: tracked src exists on disk."""
+    src = resolve_src(tracked_file, repo_root)
+    if not src.exists():
+        failures.append(f"{dot_ctx}: src {tracked_file.src} does not exist")
+
+
+def _check_extension_includes(
+    cfg: Config, prof_name: str, ctx: str, failures: list[str]
+) -> None:
+    """Check 5: extension include list — non-empty IDs, no duplicates.
+
+    Walks the raw profile (before extends-merging) so duplicates that
+    ``_merge_list`` would silently drop are still caught.
+    """
     raw_include = cfg.profiles[prof_name].extensions.include
-    seen_ext: set[str] = set()
-    reported_dup_ext: set[str] = set()
-    empty_reported_ext = False
-    for ext_id in raw_include:
-        if not ext_id.strip():
-            if not empty_reported_ext:
-                failures.append(f"{ctx}: extensions.include contains empty ID")
-                empty_reported_ext = True
-        elif ext_id in seen_ext:
-            if ext_id not in reported_dup_ext:
-                failures.append(f"{ctx}: extensions.include duplicate: {ext_id!r}")
-                reported_dup_ext.add(ext_id)
-        else:
-            seen_ext.add(ext_id)
+    _check_dedup(
+        raw_include,
+        ctx=ctx,
+        failures=failures,
+        empty_msg="extensions.include contains empty ID",
+        dup_label="extensions.include duplicate",
+    )
 
-    # Same raw-profile rationale as Check 5: _merge_list dedupes during
-    # resolve_profile, so duplicates would be silently swallowed by the
-    # resolved list. Walk the raw list to catch them at config time.
+
+def _check_claude_plugins(
+    cfg: Config, prof_name: str, ctx: str, failures: list[str]
+) -> None:
+    """Check 5b: claude_plugins list — non-empty refs, no duplicates.
+
+    Same raw-profile rationale as Check 5: ``_merge_list`` dedupes during
+    ``resolve_profile``, so duplicates would be silently swallowed by the
+    resolved list. Walk the raw list to catch them at config time.
+    """
     raw_plugins = cfg.profiles[prof_name].claude_plugins
-    seen_plugin: set[str] = set()
-    reported_dup_plugin: set[str] = set()
-    empty_reported_plugin = False
-    for plugin_ref in raw_plugins:
-        if not plugin_ref.strip():
-            if not empty_reported_plugin:
-                failures.append(f"{ctx}: claude_plugins contains empty ref")
-                empty_reported_plugin = True
-        elif plugin_ref in seen_plugin:
-            if plugin_ref not in reported_dup_plugin:
-                failures.append(f"{ctx}: claude_plugins duplicate: {plugin_ref!r}")
-                reported_dup_plugin.add(plugin_ref)
-        else:
-            seen_plugin.add(plugin_ref)
+    _check_dedup(
+        raw_plugins,
+        ctx=ctx,
+        failures=failures,
+        empty_msg="claude_plugins contains empty ref",
+        dup_label="claude_plugins duplicate",
+    )
 
-    # Check 6: claude_plugins marketplace-reference internal consistency.
-    # Every plugin referenced in the profile must have its marketplace
-    # declared in cfg.marketplaces. (Plugin existence in cfg.claude_plugins
-    # is already validated by load_config → _validate_plugin_references.)
+
+def _check_dedup(
+    items: list[str],
+    *,
+    ctx: str,
+    failures: list[str],
+    empty_msg: str,
+    dup_label: str,
+) -> None:
+    """Common dedup walk used by Check 5 and Check 5b."""
+    seen: set[str] = set()
+    reported_dup: set[str] = set()
+    empty_reported = False
+    for item in items:
+        if not item.strip():
+            if not empty_reported:
+                failures.append(f"{ctx}: {empty_msg}")
+                empty_reported = True
+        elif item in seen:
+            if item not in reported_dup:
+                failures.append(f"{ctx}: {dup_label}: {item!r}")
+                reported_dup.add(item)
+        else:
+            seen.add(item)
+
+
+def _check_marketplaces(
+    cfg: Config, resolved: ResolvedProfile, ctx: str, failures: list[str]
+) -> None:
+    """Check 6: claude_plugins marketplace-reference internal consistency.
+
+    Every plugin referenced in the profile must have its marketplace
+    declared in ``cfg.marketplaces``. (Plugin existence in
+    ``cfg.claude_plugins`` is already validated by ``load_config`` →
+    ``_validate_plugin_references``.)
+    """
     marketplace_keys = set(cfg.marketplaces)
     for plugin_ref in resolved.claude_plugins:
         bare_name = plugin_ref.split("@")[0]
@@ -138,8 +204,6 @@ def validate(
             fg=typer.colors.RED,
         )
         raise typer.Exit(2)
-
-    from pydantic import ValidationError
 
     failures: list[str] = []
 
