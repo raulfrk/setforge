@@ -1,6 +1,6 @@
 """Helpers for setforge.cli.install — module-private.
 
-Three helpers extracted from ``install()`` body per setforge-pm6:
+Helpers extracted from ``install()`` body:
 
 - :func:`_check_unexpected_drift`: drift gate + wizard hand-off + :class:`typer.Exit`
   on no-resolve.
@@ -9,6 +9,13 @@ Three helpers extracted from ``install()`` body per setforge-pm6:
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
+- :func:`_confirm_legacy_drift_or_exit` /
+  :func:`_confirm_section_reconcile_or_exit`: bviv confirm-or-exit
+  wrappers that pair a plan-builder with
+  :func:`setforge.cli._confirm.confirm_auto_operation`.
+- :func:`_build_unexpected_drift_plan` /
+  :func:`_build_shared_section_plan`: AutoPlan builders used by the
+  confirm-or-exit helpers above.
 
 NO ``@app.command`` decorators; NO ``app`` import — this module is
 internal-only and stays out of typer's command surface.
@@ -32,10 +39,22 @@ from setforge import (
 from setforge import (
     merge as merge_mod,
 )
-from setforge.cli._helpers import _iter_all_tracked_files
+from setforge.cli._confirm import (
+    AutoDirection,
+    AutoPlan,
+    FileChange,
+    _resolve_drift_paths,
+    confirm_auto_operation,
+)
+from setforge.cli._helpers import (
+    _iter_all_tracked_files,
+    _iter_section_tracked_files,
+)
 from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile
-from setforge.sections import LiveSections
+from setforge.section_reconcile import SectionDriftState
+from setforge.section_wizard import ReconcileAuto
+from setforge.sections import LiveSections, SectionSemantics
 
 
 def _check_unexpected_drift(
@@ -151,3 +170,184 @@ def _write_install_transition(
         ext_delta,
         plugin_delta=plugin_delta,
     )
+
+
+def _build_unexpected_drift_plan(
+    *,
+    drift_report: compare_mod.CompareReport,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    direction: AutoDirection,
+    profile: str,
+) -> AutoPlan:
+    """Build an AutoPlan from a drift report for legacy --auto-accept-* paths.
+
+    Delegates name → (sub_src, sub_dst) resolution to the shared
+    ``_resolve_drift_paths`` helper, then filters to entries with
+    ``unexpected_drift_keys`` (install's legacy gate ignores
+    diff-only entries). ``changed`` is the number of unexpected keys.
+    """
+    file_changes: list[FileChange] = []
+    for entry, sub_src, sub_dst in _resolve_drift_paths(
+        drift_report, cfg, resolved, repo_root
+    ):
+        # install's legacy --auto-accept-* gate ONLY surfaces entries
+        # with unexpected-drift keys; entries that drift only via diff
+        # body fall through to the bare-install warning path.
+        if not entry.unexpected_drift_keys:
+            continue
+        if direction is AutoDirection.TRACKED_TO_LIVE:
+            source, dest = sub_src, sub_dst
+        else:
+            source, dest = sub_dst, sub_src
+        file_changes.append(
+            FileChange(
+                source=source,
+                dest=dest,
+                changed=len(entry.unexpected_drift_keys),
+            ),
+        )
+    if not file_changes:
+        return AutoPlan(
+            direction=direction,
+            file_changes=(),
+            risks=(),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+    risk_target = "live" if direction is AutoDirection.TRACKED_TO_LIVE else "tracked"
+    return AutoPlan(
+        direction=direction,
+        file_changes=tuple(file_changes),
+        risks=(
+            f"{risk_target} values on {len(file_changes)} file(s) will be overwritten",
+        ),
+        revert_command=f"setforge revert --profile={profile}",
+    )
+
+
+def _build_shared_section_plan(
+    *,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> AutoPlan:
+    """Build an AutoPlan from shared-section drift across tracked markdown files.
+
+    Walks ``_iter_section_tracked_files`` and runs
+    ``classify_section_drift`` on each pair, collecting tracked_files where
+    any ``shared`` section has a non-``NO_DRIFT`` state. The plan's
+    ``changed`` column counts drifted shared sections per file.
+    """
+    file_changes: list[FileChange] = []
+    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+        if not sub_dst.exists():
+            continue
+        tracked_text = sub_src.read_text(encoding="utf-8")
+        live_text = sub_dst.read_text(encoding="utf-8")
+        drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
+        shared_drifted = [
+            d
+            for d in drifts.values()
+            if d.semantics is SectionSemantics.SHARED
+            and d.state is not SectionDriftState.NO_DRIFT
+        ]
+        if not shared_drifted:
+            continue
+        file_changes.append(
+            FileChange(
+                source=sub_src,
+                dest=sub_dst,
+                changed=len(shared_drifted),
+            ),
+        )
+    if not file_changes:
+        return AutoPlan(
+            direction=AutoDirection.TRACKED_TO_LIVE,
+            file_changes=(),
+            risks=(),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+    return AutoPlan(
+        direction=AutoDirection.TRACKED_TO_LIVE,
+        file_changes=tuple(file_changes),
+        risks=(
+            f"shared user-section bodies on {len(file_changes)} file(s) "
+            "will be overwritten with tracked-side content",
+        ),
+        revert_command=f"setforge revert --profile={profile}",
+    )
+
+
+def _confirm_legacy_drift_or_exit(
+    *,
+    drift_report: compare_mod.CompareReport,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+    auto_accept_tracked: bool,
+    auto_accept_live: bool,
+    yes: bool,
+) -> None:
+    """Render the legacy unexpected-drift confirm wizard; ``typer.Exit(0)`` on decline.
+
+    Wraps the ``install --auto-accept-{tracked,live}`` confirm block.
+    No-op when neither flag is set.
+    """
+    if not (auto_accept_tracked or auto_accept_live):
+        return
+    direction = (
+        AutoDirection.TRACKED_TO_LIVE
+        if auto_accept_tracked
+        else AutoDirection.LIVE_TO_TRACKED
+    )
+    flag = "--auto-accept-tracked" if auto_accept_tracked else "--auto-accept-live"
+    plan = _build_unexpected_drift_plan(
+        drift_report=drift_report,
+        cfg=cfg,
+        resolved=resolved,
+        repo_root=repo_root,
+        direction=direction,
+        profile=profile,
+    )
+    if not confirm_auto_operation(
+        command=f"install {flag}",
+        profile=profile,
+        plan=plan,
+        yes=yes,
+    ):
+        raise typer.Exit(0)
+
+
+def _confirm_section_reconcile_or_exit(
+    *,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+    section_auto: ReconcileAuto | None,
+    yes: bool,
+) -> None:
+    """Render the section-reconcile confirm wizard; ``typer.Exit(0)`` on decline.
+
+    Wraps the ``install --auto=use-tracked`` confirm block. No-op
+    unless ``section_auto`` is ``USE_TRACKED`` (the only mutating
+    section-reconcile mode).
+    """
+    if section_auto is not ReconcileAuto.USE_TRACKED:
+        return
+    plan = _build_shared_section_plan(
+        cfg=cfg,
+        resolved=resolved,
+        repo_root=repo_root,
+        profile=profile,
+    )
+    if not confirm_auto_operation(
+        command="install --auto=use-tracked",
+        profile=profile,
+        plan=plan,
+        yes=yes,
+    ):
+        raise typer.Exit(0)

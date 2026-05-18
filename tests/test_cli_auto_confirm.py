@@ -355,7 +355,7 @@ def test_install_bare_no_auto_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli.install.confirm_auto_operation") as confirm:
+    with patch("setforge.cli._install_helpers.confirm_auto_operation") as confirm:
         runner.invoke(app, ["install", "--profile=testp", f"--config={yaml_path}"])
         confirm.assert_not_called()
 
@@ -370,7 +370,7 @@ def test_install_auto_keep_live_no_confirm(
     monkeypatch.setattr(
         "setforge.transitions.write_transition", lambda *a, **kw: tmp_path / "fake"
     )
-    with patch("setforge.cli.install.confirm_auto_operation") as confirm:
+    with patch("setforge.cli._install_helpers.confirm_auto_operation") as confirm:
         runner.invoke(
             app,
             [
