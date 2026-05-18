@@ -392,9 +392,7 @@ def _strip_ansi(text: str) -> str:
 
 
 @pytest.fixture
-def stubbed_install_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Path:
+def stubbed_install_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Stub the IO-touching dependencies of install/sync integration tests.
 
     Returns the ``setforge.yaml`` path for ``runner.invoke`` callers.
@@ -430,9 +428,7 @@ def test_install_bare_no_auto_no_confirm(
 ) -> None:
     """Bare install never invokes the confirm wizard."""
     confirm = _ConfirmRecorder()
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers.confirm_auto_operation", confirm
-    )
+    monkeypatch.setattr("setforge.cli._install_helpers.confirm_auto_operation", confirm)
     runner.invoke(
         app, ["install", "--profile=testp", f"--config={stubbed_install_env}"]
     )
@@ -446,9 +442,7 @@ def test_install_auto_keep_live_no_confirm(
 ) -> None:
     """Non-mutating --auto=keep-live never invokes the confirm wizard."""
     confirm = _ConfirmRecorder()
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers.confirm_auto_operation", confirm
-    )
+    monkeypatch.setattr("setforge.cli._install_helpers.confirm_auto_operation", confirm)
     runner.invoke(
         app,
         [
