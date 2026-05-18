@@ -1,5 +1,6 @@
 """Unit tests for setforge.cli._confirm — bviv --auto* confirmation wizard."""
 
+import re
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
@@ -387,8 +388,6 @@ def _setup_minimal_profile(tmp_path: Path) -> Path:
 
 def _strip_ansi(text: str) -> str:
     """Strip ANSI escape sequences from rich-rendered help text."""
-    import re
-
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
