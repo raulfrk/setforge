@@ -1,9 +1,11 @@
 """Plugin + extension reconcile and reverse helpers shared by install / revert.
 
-Pure helpers — no ``app`` import, no decorator registrations. Holds the
-plugin reverse dispatch table (``_REVERSE_PLUGIN_DISPATCH``), the
-extension/plugin reconcile entry points, and the reverse-transition
-writer used by ``revert`` to record its redo file.
+No ``app`` import and no ``@app.command()`` decorator registrations.
+Helpers do drive subprocesses (``claude`` / ``code``), write stderr via
+``typer.secho``, and ``_write_reverse_transition`` persists a transition
+record. The split keeps the subcommand modules free of reconcile state
+machinery; the dispatch table here (``_REVERSE_PLUGIN_DISPATCH``) is the
+single source of truth for plugin-side reverse orchestration.
 """
 
 import json

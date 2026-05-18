@@ -1,8 +1,12 @@
-"""capture / merge / sync subcommands — bidirectional tracked ↔ live flow.
+"""capture / merge / sync subcommands — live → tracked capture flow.
 
-``capture`` runs the merge wizard for tracked-file drift; ``merge`` is the
-unified entry point for capture-side reconcile; ``sync`` is the
-non-interactive capture orchestrator that also records a transition.
+All three drive the same ``capture_mod.capture_profile`` pipeline, which
+fires the merge wizard interactively when drift requires resolution.
+``--auto={use-live,keep-tracked}`` switches to non-interactive mode.
+
+- ``capture`` runs the pipeline without writing a transition.
+- ``merge`` runs the wizard standalone (no profile capture).
+- ``sync`` runs the pipeline AND records a transition for ``revert``.
 """
 
 from pathlib import Path
