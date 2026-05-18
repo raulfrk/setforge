@@ -31,3 +31,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 *.egg-info/
+
+# Build artifacts (uv build / hatchling)
+dist/
+build/
