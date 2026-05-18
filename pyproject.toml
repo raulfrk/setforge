@@ -31,10 +31,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/raulfrk/my-setup"
-Source = "https://github.com/raulfrk/my-setup"
-Issues = "https://github.com/raulfrk/my-setup/issues"
-Changelog = "https://github.com/raulfrk/my-setup/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/raulfrk/setforge"
+Source = "https://github.com/raulfrk/setforge"
+Issues = "https://github.com/raulfrk/setforge/issues"
+Changelog = "https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

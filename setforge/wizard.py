@@ -138,7 +138,7 @@ class DriftItem:
     walkers populate it from the tracked_file's two preserve lists."""
 
 
-@dataclass
+@dataclass(slots=True)
 class Snapshot:
     """Context manager that snapshots files at wizard start for cancel atomicity.
 

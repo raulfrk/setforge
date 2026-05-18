@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-05-18
+## [0.2.0] - Unreleased
 
 The rename release. setforge is the renamed, re-architected successor
 to the prior `my-setup` tool. v0.2.0 is the first release under the new
@@ -109,5 +109,5 @@ tag). See the migration section of the README for the upgrade recipe.
 
 <!-- Compare-URL and release-URL refs are placeholders until the v0.2.0
 tag lands on origin/main; before push they resolve to 404. -->
-[Unreleased]: https://github.com/raulfrk/my-setup/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/raulfrk/my-setup/releases/tag/v0.2.0
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/raulfrk/setforge/releases/tag/v0.2.0

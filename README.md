@@ -1,6 +1,6 @@
 # setforge
 
-[![CI](https://github.com/raulfrk/my-setup/actions/workflows/ci.yml/badge.svg)](https://github.com/raulfrk/my-setup/actions/workflows/ci.yml)
+[![CI](https://github.com/raulfrk/setforge/actions/workflows/ci.yml/badge.svg)](https://github.com/raulfrk/setforge/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/setforge.svg)](https://pypi.org/project/setforge/)
 [![Python](https://img.shields.io/pypi/pyversions/setforge.svg)](https://pypi.org/project/setforge/)
 
@@ -28,7 +28,7 @@ The Claude Code workflow setforge is built around relies on four tools:
 
 ## Architecture: engine + config repos
 
-setforge is a TOOL; the config it deploys is YOUR data. Post-setforge-2ba.4, the two live in separate repos:
+setforge is a TOOL; the config it deploys is YOUR data. Since v0.2.0, the two live in separate repos:
 
 - **Engine repo (this one)**: ships the `setforge` CLI + the source-discovery layer + git-management subsystem. No user-specific config.
 - **Config repo (your repo)**: holds `setforge.yaml` + `tracked/<paths>` for the dotfiles you want managed. The author's personal config repo is `raulfrk/setforge-config` (private).
@@ -61,11 +61,9 @@ uv tool install "setforge==0.2.0"
 ### 1b. Install the engine from source (current path; pre-PyPI)
 
 ```bash
-git clone https://github.com/raulfrk/my-setup ~/setforge && cd ~/setforge
+git clone https://github.com/raulfrk/setforge ~/setforge && cd ~/setforge
 uv sync --extra dev
 ```
-
-(The engine repo's GitHub name remains `raulfrk/my-setup` until/unless the user renames it; the engine itself is `setforge`.)
 
 ### 2. Configure a source
 
@@ -183,7 +181,7 @@ Both happen in YOUR config repo, not in this engine repo:
 
 Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): unit tests (`uv run pytest`), config validation against the e2e test fixture (`uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all`), and gitleaks.
 
-The engine repo no longer carries a `setforge.yaml` at root (it lives in your config repo post-setforge-2ba.4); CI validates against the e2e test fixture instead.
+The engine repo no longer carries a `setforge.yaml` at root (it lives in your config repo since v0.2.0); CI validates against the e2e test fixture instead.
 
 ## Upgrading from my-setup v0.x to setforge
 
