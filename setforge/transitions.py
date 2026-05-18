@@ -528,6 +528,13 @@ def load_latest(profile: str) -> Path | None:
     if not root.exists():
         return None
 
+    _sweep_stale_pending(root)
+    candidates = _filter_transition_entries(root, profile)
+    return _pick_latest_transition(candidates)
+
+
+def _sweep_stale_pending(root: Path) -> None:
+    """Best-effort: remove ``.pending-*`` dirs older than ``_STALE_PENDING_AGE``."""
     now = datetime.now(UTC).timestamp()
     for d in root.iterdir():
         if d.is_dir() and d.name.startswith(".pending-"):
@@ -537,6 +544,9 @@ def load_latest(profile: str) -> Path | None:
             except OSError:
                 continue
 
+
+def _filter_transition_entries(root: Path, profile: str) -> list[Path]:
+    """Return committed transition dirs whose ``meta.json`` matches ``profile``."""
     candidates: list[Path] = []
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith(".pending-"):
@@ -550,6 +560,11 @@ def load_latest(profile: str) -> Path | None:
             continue
         if payload.get("profile") == profile:
             candidates.append(d)
+    return candidates
+
+
+def _pick_latest_transition(candidates: list[Path]) -> Path | None:
+    """Return the lex-max-by-name candidate (UTC-ISO prefix → chronological)."""
     if not candidates:
         return None
     return max(candidates, key=lambda d: d.name)
