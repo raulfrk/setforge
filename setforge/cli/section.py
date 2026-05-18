@@ -92,7 +92,9 @@ def section_emit(
     """Print a paste-ready marker pair to stdout."""
     _validate_semantics(semantics)
     _validate_name(name)
-    sys.stdout.write(_format_marker_pair_with_body(semantics=semantics, name=name, body=""))
+    sys.stdout.write(
+        _format_marker_pair_with_body(semantics=semantics, name=name, body="")
+    )
 
 
 def _resolve_tracked_file_path(*, config_path: Path, tracked_file_key: str) -> Path:
@@ -122,9 +124,7 @@ def _validate_anchor_line(*, anchor_line: int, total_lines: int) -> None:
 def _check_duplicate_name(*, file_text: str, name: str) -> None:
     sections = extract_sections(file_text, allow_legacy=True)
     if name in sections:
-        raise typer.BadParameter(
-            f"section name {name!r} already exists in this file"
-        )
+        raise typer.BadParameter(f"section name {name!r} already exists in this file")
 
 
 def _check_markdown_suffix(*, target: Path) -> None:
@@ -144,9 +144,7 @@ def _read_body(*, body_source: str, body_file: Path | None) -> str:
             raise typer.BadParameter("--body-source=file requires --body-file")
         return body_file.read_text()
     if body_source == "editor":
-        with tempfile.NamedTemporaryFile(
-            mode="w+", suffix=".md", delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
             run_editor(tmp_path)
@@ -182,9 +180,7 @@ def _insert_marker_pair(
 ) -> str:
     """Return ``file_text`` with a marker pair inserted AFTER ``anchor_line``."""
     lines = file_text.splitlines(keepends=True)
-    insertion = _format_marker_pair_with_body(
-        semantics=semantics, name=name, body=body
-    )
+    insertion = _format_marker_pair_with_body(semantics=semantics, name=name, body=body)
     head = "".join(lines[:anchor_line])
     tail = "".join(lines[anchor_line:])
     return head + insertion + tail
@@ -337,9 +333,7 @@ def _section_add_interactive(
         if anchor_line is None:
             typer.echo("aborted.")
             raise typer.Exit(0)
-    _validate_anchor_line(
-        anchor_line=anchor_line, total_lines=_count_total_lines(text)
-    )
+    _validate_anchor_line(anchor_line=anchor_line, total_lines=_count_total_lines(text))
 
     if body_source is None:
         body_source = _interactive_pick_body_source()
@@ -364,11 +358,13 @@ def _section_add_interactive(
 def section_add(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
-    tracked_file: str | None = typer.Option(None, "--tracked-file"),
-    semantics: str | None = typer.Option(
-        None, "--semantics", help="shared|host-local"
+    tracked_file: str | None = typer.Option(
+        None, "--tracked-file", help="tracked_files key from setforge.yaml"
     ),
-    name: str | None = typer.Option(None, "--name"),
+    semantics: str | None = typer.Option(None, "--semantics", help="shared|host-local"),
+    name: str | None = typer.Option(
+        None, "--name", help="lowercase-with-dashes section name"
+    ),
     anchor_line: int | None = typer.Option(
         None,
         "--anchor-line",
@@ -377,7 +373,9 @@ def section_add(
     body_source: str | None = typer.Option(
         None, "--body-source", help="empty|editor|file"
     ),
-    body_file: Path | None = typer.Option(None, "--body-file"),
+    body_file: Path | None = typer.Option(
+        None, "--body-file", help="Path to a file whose contents go between markers."
+    ),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the final confirm prompt."
     ),

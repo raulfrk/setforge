@@ -106,13 +106,8 @@ def _status_text(buffer: Buffer, filename: str) -> str:
     )
 
 
-def _build_keybindings(
-    *,
-    buffer: Buffer,
-    buffer_control: BufferControl,
-    result_holder: dict[str, int | None],
-) -> KeyBindings:
-    kb = KeyBindings()
+def _bind_motion_keys(kb: KeyBindings, buffer: Buffer) -> None:
+    """Cursor-motion keys: ↑/↓ / PgUp/PgDn / Home/End."""
 
     @kb.add("up")
     def _(event: KeyPressEvent) -> None:
@@ -138,6 +133,16 @@ def _build_keybindings(
     def _(event: KeyPressEvent) -> None:
         _jump_to_last_content_row(buffer)
 
+
+def _bind_terminal_keys(
+    kb: KeyBindings,
+    *,
+    buffer: Buffer,
+    buffer_control: BufferControl,
+    result_holder: dict[str, int | None],
+) -> None:
+    """Keys that exit or open auxiliary UI: ``/`` / Enter / Esc / Ctrl-C."""
+
     @kb.add("/")
     def _(event: KeyPressEvent) -> None:
         start_search(buffer_control)
@@ -158,6 +163,21 @@ def _build_keybindings(
         result_holder["line"] = None
         event.app.exit()
 
+
+def _build_keybindings(
+    *,
+    buffer: Buffer,
+    buffer_control: BufferControl,
+    result_holder: dict[str, int | None],
+) -> KeyBindings:
+    kb = KeyBindings()
+    _bind_motion_keys(kb, buffer)
+    _bind_terminal_keys(
+        kb,
+        buffer=buffer,
+        buffer_control=buffer_control,
+        result_holder=result_holder,
+    )
     return kb
 
 
@@ -172,7 +192,10 @@ def _run_picker(
     result_holder: dict[str, int | None] = {"line": None}
 
     search_toolbar = SearchToolbar()
-    buffer_control = BufferControl(buffer=buffer, search_buffer_control=search_toolbar.control)
+    buffer_control = BufferControl(
+        buffer=buffer,
+        search_buffer_control=search_toolbar.control,
+    )
     body = Window(content=buffer_control)
     status = Window(
         height=1,

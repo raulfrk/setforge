@@ -24,6 +24,7 @@ def test_section_emit_shared(runner: CliRunner) -> None:
     assert result.exit_code == 0
     # Body between markers is a single "\n"; its sha256 is the stamped hash.
     import hashlib
+
     expected_hash = hashlib.sha256(b"\n").hexdigest()
     assert result.stdout == (
         "<!-- setforge:user-section start shared foo -->\n"
@@ -117,10 +118,16 @@ def test_section_add_scripted_shared_empty_body(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -139,10 +146,16 @@ def test_section_add_scripted_host_local_empty_body(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=host-local", "--name=bar",
-            "--anchor-line=3", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=host-local",
+            "--name=bar",
+            "--anchor-line=3",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -157,10 +170,16 @@ def test_section_add_scripted_at_boundary_lines(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            f"--anchor-line={anchor}", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            f"--anchor-line={anchor}",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -173,19 +192,31 @@ def test_section_add_scripted_appends_second_pair_with_different_name(
     runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=first",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=first",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=second",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=second",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -202,10 +233,16 @@ def test_section_add_rejects_invalid_name(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", f"--name={bad_name}",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            f"--name={bad_name}",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -218,19 +255,31 @@ def test_section_add_rejects_duplicate_name(
     runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=3", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=3",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -244,10 +293,16 @@ def test_section_add_rejects_non_markdown(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -261,10 +316,16 @@ def test_section_add_rejects_invalid_anchor_line(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            f"--anchor-line={anchor}", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            f"--anchor-line={anchor}",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -277,11 +338,16 @@ def test_section_add_rejects_unknown_tracked_file(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
             "--tracked-file=does-not-exist",
-            "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -294,10 +360,16 @@ def test_section_add_rejects_unknown_semantics(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=weird", "--name=foo",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=weird",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -310,10 +382,16 @@ def test_section_add_rejects_unknown_body_source(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=weird", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=weird",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -328,11 +406,17 @@ def test_section_add_rejects_body_file_with_empty_source(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=empty",
-            f"--body-file={body_path}", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=empty",
+            f"--body-file={body_path}",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -345,10 +429,16 @@ def test_section_add_rejects_missing_body_file_when_source_is_file(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=file", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=file",
+            "--yes",
         ],
     )
     assert result.exit_code == 2
@@ -363,11 +453,17 @@ def test_section_add_scripted_with_file_body_source(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=file",
-            f"--body-file={body_path}", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=file",
+            f"--body-file={body_path}",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -388,10 +484,16 @@ def test_section_add_scripted_editor_body_source(
     result = runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=foo",
-            "--anchor-line=1", "--body-source=editor", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=foo",
+            "--anchor-line=1",
+            "--body-source=editor",
+            "--yes",
         ],
     )
     assert result.exit_code == 0
@@ -405,10 +507,16 @@ def test_section_add_marker_pair_round_trips_through_extract_sections(
     runner.invoke(
         app,
         [
-            "section", "add",
-            "--profile=testp", f"--config={yaml_path}",
-            "--tracked-file=doc", "--semantics=shared", "--name=rt",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=testp",
+            f"--config={yaml_path}",
+            "--tracked-file=doc",
+            "--semantics=shared",
+            "--name=rt",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
     )
     from setforge.sections import extract_sections
@@ -435,9 +543,7 @@ def test_section_add_interactive_walks_all_prompts(
         patch("setforge.cli.section.radiolist_dialog") as rd,
         patch("setforge.cli.section.input_dialog") as ip,
         patch("setforge.cli.section.yes_no_dialog") as yn,
-        patch(
-            "setforge.cli.section.pick_anchor_line", return_value=2
-        ),
+        patch("setforge.cli.section.pick_anchor_line", return_value=2),
         patch("typer.prompt", return_value="1"),
     ):
         rd.return_value.run.side_effect = ["shared", "empty"]

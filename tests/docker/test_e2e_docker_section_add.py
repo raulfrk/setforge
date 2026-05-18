@@ -117,10 +117,16 @@ def test_section_add_scripted_shared_writes_marker_pair_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=shared", "--name=extras",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=shared",
+            "--name=extras",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -137,11 +143,16 @@ def test_section_add_scripted_host_local_writes_marker_pair_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=host-local",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=host-local",
             "--name=morenotes",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -157,12 +168,17 @@ def test_section_add_scripted_with_file_body_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=shared",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=shared",
             "--name=custom",
-            "--anchor-line=1", "--body-source=file",
-            "--body-file=/tmp/body.md", "--yes",
+            "--anchor-line=1",
+            "--body-source=file",
+            "--body-file=/tmp/body.md",
+            "--yes",
         ],
         check=False,
     )
@@ -178,11 +194,16 @@ def test_section_add_then_install_deploys_marker_pair_to_live(
     add = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=shared",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=shared",
             "--name=postinstall",
-            "--anchor-line=2", "--body-source=empty", "--yes",
+            "--anchor-line=2",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -191,7 +212,8 @@ def test_section_add_then_install_deploys_marker_pair_to_live(
         c,
         [
             "install",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
     )
@@ -211,11 +233,16 @@ def test_section_add_refuses_non_markdown_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-json", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=json_settings", "--semantics=shared",
+            "section",
+            "add",
+            "--profile=test-json",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=json_settings",
+            "--semantics=shared",
             "--name=foo",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -233,11 +260,16 @@ def test_section_add_refuses_duplicate_name_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=shared",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=shared",
             "--name=notes",
-            "--anchor-line=1", "--body-source=empty", "--yes",
+            "--anchor-line=1",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -251,11 +283,16 @@ def test_section_add_refuses_anchor_past_eof_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
-            "--tracked-file=sections_md", "--semantics=shared",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--tracked-file=sections_md",
+            "--semantics=shared",
             "--name=eof",
-            "--anchor-line=9999", "--body-source=empty", "--yes",
+            "--anchor-line=9999",
+            "--body-source=empty",
+            "--yes",
         ],
         check=False,
     )
@@ -270,8 +307,10 @@ def test_section_add_non_tty_no_flags_exits_2_in_container(
     result = _setforge(
         c,
         [
-            "section", "add",
-            "--profile=test-text-sections", f"--config={CONFIG_FIXTURE}",
+            "section",
+            "add",
+            "--profile=test-text-sections",
+            f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
     )
