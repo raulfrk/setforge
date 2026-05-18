@@ -1,9 +1,11 @@
 """Typer CLI entry point for ``setforge``.
 
-Commands wired in Pillar 1: ``install``, ``compare``, ``capture``, ``sync``.
-Pillar 2 adds extension reconcile inside ``install``. Claude plugin
-reconcile lands in Pillar 3. ``revert`` (setforge-19n) replays the most
-recent transition for a profile in reverse.
+Holds the package-level ``app = typer.Typer(...)``, the shared option
+constants (``_CONFIG_OPTION``, ``_PROFILE_OPTION``, ``_SOURCE_OPTION``),
+the ``--config`` source-layer resolver, the ``_root`` callback, and
+``main()``. The per-subcommand bodies live in dedicated modules under
+this package — see the bottom of the file for the side-effect import
+block that wires each ``@app.command()`` registration.
 """
 
 import logging
