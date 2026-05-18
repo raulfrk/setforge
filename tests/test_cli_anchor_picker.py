@@ -1,12 +1,16 @@
 """Unit tests for :mod:`setforge.cli._anchor_picker`.
 
-Drive the picker via :func:`prompt_toolkit.input.create_pipe_input` +
+Drive the picker via :func:`prompt_toolkit.application.create_app_session`
+wrapping :func:`prompt_toolkit.input.create_pipe_input` +
 :class:`prompt_toolkit.output.DummyOutput` so the tests don't need a
-real terminal.
+real terminal. See
+https://python-prompt-toolkit.readthedocs.io/en/stable/pages/asking_for_input.html#testing
+for the canonical pattern.
 """
 
 from __future__ import annotations
 
+from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -17,14 +21,10 @@ _FIXTURE: str = "line one\nline two\nline three\nline four\nline five\n"
 
 def _drive(input_keys: bytes, *, file_text: str = _FIXTURE) -> int | None:
     """Run :func:`pick_anchor_line` with piped input + dummy output."""
-    with create_pipe_input() as inp:
-        inp.send_bytes(input_keys)
-        return pick_anchor_line(
-            file_text=file_text,
-            filename="test.md",
-            _input=inp,
-            _output=DummyOutput(),
-        )
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(input_keys)
+        with create_app_session(input=pipe, output=DummyOutput()):
+            return pick_anchor_line(file_text=file_text, filename="test.md")
 
 
 def test_picker_returns_line_1_when_enter_at_top() -> None:

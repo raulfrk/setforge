@@ -19,12 +19,10 @@ from __future__ import annotations
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
-from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-from prompt_toolkit.output import Output
 from prompt_toolkit.search import start_search
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import SearchToolbar
@@ -65,22 +63,17 @@ def _last_content_row(buffer: Buffer) -> int:
     return last
 
 
-def pick_anchor_line(
-    *,
-    file_text: str,
-    filename: str,
-    _input: Input | None = None,
-    _output: Output | None = None,
-) -> int | None:
+def pick_anchor_line(*, file_text: str, filename: str) -> int | None:
     """Open a TUI file viewer; return the 1-indexed line the user picked.
 
     Returns ``None`` if the user cancels with Esc or Ctrl-C, or if
     ``file_text`` is empty (no lines to pick).
 
-    The ``_input`` / ``_output`` kwargs are private and exist so unit
-    tests can drive the viewer via :func:`prompt_toolkit.input.create_pipe_input`
-    and :class:`prompt_toolkit.output.DummyOutput`. Production callers
-    leave both at ``None`` and the real terminal is used.
+    Tests drive this function via prompt_toolkit's
+    :func:`~prompt_toolkit.application.create_app_session` context
+    manager (see
+    https://python-prompt-toolkit.readthedocs.io/en/stable/pages/asking_for_input.html#testing).
+    Production callers invoke it bare and the real terminal is used.
     """
     if not file_text:
         return None
@@ -88,12 +81,7 @@ def pick_anchor_line(
         document=Document(file_text, cursor_position=0),
         read_only=True,
     )
-    return _run_picker(
-        buffer=buffer,
-        filename=filename,
-        pt_input=_input,
-        pt_output=_output,
-    )
+    return _run_picker(buffer=buffer, filename=filename)
 
 
 def _status_text(buffer: Buffer, filename: str) -> str:
@@ -181,13 +169,7 @@ def _build_keybindings(
     return kb
 
 
-def _run_picker(
-    *,
-    buffer: Buffer,
-    filename: str,
-    pt_input: Input | None,
-    pt_output: Output | None,
-) -> int | None:
+def _run_picker(*, buffer: Buffer, filename: str) -> int | None:
     """Run a prompt_toolkit Application around ``buffer``; return the line."""
     result_holder: dict[str, int | None] = {"line": None}
 
@@ -215,8 +197,6 @@ def _run_picker(
         key_bindings=kb,
         full_screen=True,
         style=style,
-        input=pt_input,
-        output=pt_output,
     )
     app.run()
     return result_holder["line"]
