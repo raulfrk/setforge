@@ -173,6 +173,7 @@ from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transit
 from setforge.cli import ext as _ext  # noqa: E402, F401
 from setforge.cli import plugins as _plugins  # noqa: E402, F401 (plugin + marketplace subgroups)
 from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + fetch)
+from setforge.cli import section as _section  # noqa: E402, F401 (section subgroup)
 # isort: on
 
 
