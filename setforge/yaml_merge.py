@@ -116,15 +116,7 @@ def _apply_overlay(
         raise MergeTypeMismatch(f"cannot descend into non-mapping at {path!r}")
 
     if kind == "key":
-        if not rest:
-            if key in src_node:
-                _check_leaf_type(src_node[key], live_value, path)
-            src_node[key] = copy.deepcopy(live_value)
-            return
-        if key not in src_node:
-            src_node[key] = copy.deepcopy(live_value)
-            return
-        _apply_overlay(src_node[key], live_value, rest, path)
+        _overlay_scalar(src_node, key, live_value, rest, path)
         return
 
     if not isinstance(live_value, list):
@@ -139,18 +131,47 @@ def _apply_overlay(
         )
 
     if kind == "key_whole":
-        src_list = src_node[key]
-        src_list.clear()
-        src_list.extend(copy.deepcopy(item) for item in live_value)
+        _overlay_list_whole(src_node[key], live_value)
         return
-
     if kind == "key_each":
-        src_list = src_node[key]
-        for i in range(min(len(src_list), len(live_value))):
-            src_list[i] = copy.deepcopy(live_value[i])
-        for i in range(len(src_list), len(live_value)):
-            src_list.append(copy.deepcopy(live_value[i]))
+        _overlay_list_each(src_node[key], live_value)
+
+
+def _overlay_scalar(
+    src_node: MutableMapping,
+    key: str,
+    live_value: Any,
+    rest: list[tuple[str, str]],
+    path: str,
+) -> None:
+    """Handle a plain ``key`` token at the head of the remaining path.
+
+    Terminal step → leaf-type-check and replace; non-terminal step →
+    copy live's subtree when src lacks the key, otherwise recurse.
+    """
+    if not rest:
+        if key in src_node:
+            _check_leaf_type(src_node[key], live_value, path)
+        src_node[key] = copy.deepcopy(live_value)
         return
+    if key not in src_node:
+        src_node[key] = copy.deepcopy(live_value)
+        return
+    _apply_overlay(src_node[key], live_value, rest, path)
+
+
+def _overlay_list_whole(src_list: list[Any], live_value: list[Any]) -> None:
+    """Whole-list replace (``[]`` suffix): drop src, copy every live element."""
+    src_list.clear()
+    src_list.extend(copy.deepcopy(item) for item in live_value)
+
+
+def _overlay_list_each(src_list: list[Any], live_value: list[Any]) -> None:
+    """Per-element overlay (``[*]`` suffix): overwrite shared indices, append tail."""
+    for i in range(min(len(src_list), len(live_value))):
+        src_list[i] = copy.deepcopy(live_value[i])
+    for i in range(len(src_list), len(live_value)):
+        src_list.append(copy.deepcopy(live_value[i]))
 
 
 def _apply_deep_overlay(
