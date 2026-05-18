@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-05-18
+## [0.2.0] - 2026-05-18
 
 The rename release. setforge is the renamed, re-architected successor
 to the prior `my-setup` tool. v0.2.0 is the first release under the new
@@ -61,6 +61,24 @@ to the YAML config surface beyond the file rename.
   file gets a module-level docstring describing its scope and any
   cross-file dependencies (e.g. the bottom-of-`__init__.py`
   side-effect import block).
+- **`setforge --version` flag** — eager Typer callback that prints
+  `setforge.__version__` (sourced from `importlib.metadata`) and exits
+  before the root callback runs.
+- **PyPI publish workflow** at `.github/workflows/publish-pypi.yml` —
+  fires on `v*.*.*` tag push, runs `uv build` + `twine check`, uploads
+  via `pypa/gh-action-pypi-publish` using the `PYPI_API_TOKEN` secret
+  scoped through a `pypi` GitHub environment. `skip-existing: true`
+  makes re-pushes of the same tag idempotent.
+- **GitHub Release workflow** at `.github/workflows/release.yml` —
+  fires on the same tags, creates a GitHub Release with auto-generated
+  notes scoped to the commit range between the previous release tag
+  and the current one (or full history on the first release).
+- **`CHANGELOG.md`** in Keep-a-Changelog 1.1.0 format (this file).
+- **`LICENSE` (MIT)** — first formal license file in the repo.
+- **PyPI-ready `pyproject.toml` metadata** — `readme`, `license`,
+  `authors`, `keywords`, full `classifiers` (intended audience, OS,
+  license, topics), and a `[project.urls]` block (homepage, source,
+  issues, changelog).
 
 ### Fixed
 - **`hash=` in semantics position is now a `MarkerError`** instead of
@@ -84,10 +102,12 @@ to the YAML config surface beyond the file rename.
   `setforge.yaml`. Loaders surface a migration error pointing at the
   new filename instead of silently accepting the old name.
 
-## [0.1.0] — pre-rename
+## [0.1.0]
 
-Earlier development series under the `my-setup` name. See the migration
-section of the README for the upgrade recipe.
+Earlier development series under the `my-setup` name (no formal release
+tag). See the migration section of the README for the upgrade recipe.
 
+<!-- Compare-URL and release-URL refs are placeholders until the v0.2.0
+tag lands on origin/main; before push they resolve to 404. -->
 [Unreleased]: https://github.com/raulfrk/my-setup/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/raulfrk/my-setup/releases/tag/v0.2.0
