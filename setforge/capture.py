@@ -104,53 +104,25 @@ def capture_tracked_file(
             name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
         )
 
-    # Markdown / preserve_user_sections path: capture's section
-    # handling is unchanged from pre-`nen.23` (the capture-time wizard
-    # does not fire for these tracked_files). Read live, optionally strip
-    # shallow keys, merge tracked sections.
     if preserve_user_sections:
-        if preserve_user_keys and jsonc.is_jsonc_file(dst):
-            live_text = dst.read_text(encoding="utf-8")
-            content = jsonc.strip_user_keys(live_text, preserve_user_keys)
-        elif preserve_user_keys:
-            yaml = YAML(typ="rt")
-            with dst.open("r", encoding="utf-8") as fh:
-                doc = yaml.load(fh)
-            yaml_merge.delete_keys(doc, preserve_user_keys)
-            buf = io.StringIO()
-            yaml.dump(doc, buf)
-            content = buf.getvalue()
-        else:
-            content = dst.read_text(encoding="utf-8")
+        # Markdown / preserve_user_sections path: capture's section
+        # handling is unchanged from pre-`nen.23` (the capture-time wizard
+        # does not fire for these tracked_files). Read live, optionally
+        # strip shallow keys, merge tracked sections.
+        content = _read_with_shallow_strip(dst, preserve_user_keys)
         if preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS and src.exists():
             tracked_text = src.read_text(encoding="utf-8")
             tracked_sections = sections.extract_sections(tracked_text)
             content = sections.merge_sections(content, tracked_sections)
         else:
             content = sections.strip_section_content(content, allow_legacy=True)
-        src.parent.mkdir(parents=True, exist_ok=True)
-        if src.exists() and src.read_text(encoding="utf-8") == content:
-            return CaptureResult(name=src.name, action=CaptureAction.NOOP)
-        src.write_text(content, encoding="utf-8")
-        return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
+        return _write_if_changed(src, content)
 
     if not src.exists():
         # Fresh capture (no tracked) — today's behavior: strip shallow
         # preserves from live, write to tracked. Deep paths can't apply
         # here because there's nothing to preserve on the tracked side.
-        if preserve_user_keys and jsonc.is_jsonc_file(dst):
-            live_text = dst.read_text(encoding="utf-8")
-            content = jsonc.strip_user_keys(live_text, preserve_user_keys)
-        elif preserve_user_keys:
-            yaml = YAML(typ="rt")
-            with dst.open("r", encoding="utf-8") as fh:
-                doc = yaml.load(fh)
-            yaml_merge.delete_keys(doc, preserve_user_keys)
-            buf = io.StringIO()
-            yaml.dump(doc, buf)
-            content = buf.getvalue()
-        else:
-            content = dst.read_text(encoding="utf-8")
+        content = _read_with_shallow_strip(dst, preserve_user_keys)
         src.parent.mkdir(parents=True, exist_ok=True)
         src.write_text(content, encoding="utf-8")
         return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
@@ -166,11 +138,7 @@ def capture_tracked_file(
         # wizard didn't fire here (the walker silently skips files
         # whose parsed root isn't a dict), so live's content is
         # the desired tracked content.
-        content = dst.read_text(encoding="utf-8")
-        if src.read_text(encoding="utf-8") == content:
-            return CaptureResult(name=src.name, action=CaptureAction.NOOP)
-        src.write_text(content, encoding="utf-8")
-        return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
+        return _write_if_changed(src, dst.read_text(encoding="utf-8"))
 
     # Structured file with at least one preserve declaration. The
     # capture-time wizard (upstream) has already absorbed every drift
@@ -179,28 +147,50 @@ def capture_tracked_file(
     # Tracked-only top-level keys and tracked-only deep sub-keys
     # survive untouched.
     #
-    # Defensively strip any shallow-preserve content — it shouldn't
-    # be there post-wizard but the strip is the canonical enforcement
-    # of the shallow-preserve contract.
-    if preserve_user_keys and jsonc.is_jsonc_file(src):
-        tracked_text = src.read_text(encoding="utf-8")
-        content = jsonc.strip_user_keys(tracked_text, preserve_user_keys)
-    elif preserve_user_keys:
-        yaml = YAML(typ="rt")
-        with src.open("r", encoding="utf-8") as fh:
-            doc = yaml.load(fh)
-        yaml_merge.delete_keys(doc, preserve_user_keys)
-        buf = io.StringIO()
-        yaml.dump(doc, buf)
-        content = buf.getvalue()
-    else:
-        # Has preserve_user_keys_deep but no shallow preserve_user_keys.
-        # tracked already in desired state post-wizard; nothing to strip.
-        content = src.read_text(encoding="utf-8")
+    # Defensively strip any shallow-preserve content from tracked — it
+    # shouldn't be there post-wizard but the strip is the canonical
+    # enforcement of the shallow-preserve contract. When only
+    # preserve_user_keys_deep is set, tracked is already in the desired
+    # state and we just round-trip the file.
+    content = _read_with_shallow_strip(src, preserve_user_keys)
+    return _write_if_changed(src, content)
 
-    if src.read_text(encoding="utf-8") == content:
+
+def _read_with_shallow_strip(path: Path, preserve_user_keys: list[str]) -> str:
+    """Return ``path`` contents with any ``preserve_user_keys`` stripped.
+
+    Dispatches to JSONC or YAML strip per the file's extension; falls
+    back to a plain read when no shallow keys are declared.
+    """
+    if not preserve_user_keys:
+        return path.read_text(encoding="utf-8")
+    if jsonc.is_jsonc_file(path):
+        return _strip_shallow_keys_jsonc(path, preserve_user_keys)
+    return _strip_shallow_keys_yaml(path, preserve_user_keys)
+
+
+def _strip_shallow_keys_jsonc(path: Path, preserve_user_keys: list[str]) -> str:
+    """Read JSONC ``path`` and drop every top-level key in ``preserve_user_keys``."""
+    text = path.read_text(encoding="utf-8")
+    return jsonc.strip_user_keys(text, preserve_user_keys)
+
+
+def _strip_shallow_keys_yaml(path: Path, preserve_user_keys: list[str]) -> str:
+    """Read YAML ``path``, drop ``preserve_user_keys``, return round-tripped text."""
+    yaml = YAML(typ="rt")
+    with path.open("r", encoding="utf-8") as fh:
+        doc = yaml.load(fh)
+    yaml_merge.delete_keys(doc, preserve_user_keys)
+    buf = io.StringIO()
+    yaml.dump(doc, buf)
+    return buf.getvalue()
+
+
+def _write_if_changed(src: Path, content: str) -> CaptureResult:
+    """Write ``content`` to ``src`` unless it already matches; return action."""
+    src.parent.mkdir(parents=True, exist_ok=True)
+    if src.exists() and src.read_text(encoding="utf-8") == content:
         return CaptureResult(name=src.name, action=CaptureAction.NOOP)
-
     src.write_text(content, encoding="utf-8")
     return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
 
