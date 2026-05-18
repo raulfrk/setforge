@@ -15,6 +15,7 @@ import hashlib
 import re
 import sys
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -36,7 +37,14 @@ app.add_typer(section_app, name="section")
 
 _NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
-_VALID_BODY_SOURCES: frozenset[str] = frozenset({"empty", "editor", "file"})
+
+
+class BodySource(StrEnum):
+    """Closed set of ``--body-source`` values for ``setforge section add``."""
+
+    EMPTY = "empty"
+    EDITOR = "editor"
+    FILE = "file"
 
 
 def _stdin_is_tty() -> bool:
@@ -137,32 +145,43 @@ def _check_markdown_suffix(*, target: Path) -> None:
         )
 
 
+def _validate_body_source(body_source: str) -> BodySource:
+    """Validate ``body_source`` against :class:`BodySource` and return the member."""
+    try:
+        return BodySource(body_source)
+    except ValueError as exc:
+        choices = sorted(s.value for s in BodySource)
+        raise typer.BadParameter(
+            f"--body-source must be one of {choices}"
+        ) from exc
+
+
 def _read_body(*, body_source: str, body_file: Path | None) -> str:
-    if body_source == "empty":
-        return ""
-    if body_source == "file":
-        if body_file is None:
-            raise typer.BadParameter("--body-source=file requires --body-file")
-        return body_file.read_text()
-    if body_source == "editor":
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        try:
-            run_editor(tmp_path)
-            body = tmp_path.read_text()
-        finally:
-            tmp_path.unlink(missing_ok=True)
-        if not body.strip():
-            typer.secho(
-                "editor returned empty body; aborting.",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-            raise typer.Exit(1)
-        return body
-    raise typer.BadParameter(
-        f"--body-source must be one of {sorted(_VALID_BODY_SOURCES)}"
-    )
+    match _validate_body_source(body_source):
+        case BodySource.EMPTY:
+            return ""
+        case BodySource.FILE:
+            if body_file is None:
+                raise typer.BadParameter("--body-source=file requires --body-file")
+            return body_file.read_text()
+        case BodySource.EDITOR:
+            with tempfile.NamedTemporaryFile(
+                mode="w+", suffix=".md", delete=False
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                run_editor(tmp_path)
+                body = tmp_path.read_text()
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            if not body.strip():
+                typer.secho(
+                    "editor returned empty body; aborting.",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+                raise typer.Exit(1)
+            return body
 
 
 def _count_total_lines(text: str) -> int:
@@ -210,13 +229,10 @@ def _section_add_scripted(
     """Apply ``section add`` without any prompts."""
     _validate_semantics(semantics)
     _validate_name(name)
-    if body_source == "empty" and body_file is not None:
+    body_source_enum = _validate_body_source(body_source)
+    if body_source_enum is BodySource.EMPTY and body_file is not None:
         raise typer.BadParameter(
             "--body-source=empty is mutually exclusive with --body-file"
-        )
-    if body_source not in _VALID_BODY_SOURCES:
-        raise typer.BadParameter(
-            f"--body-source must be one of {sorted(_VALID_BODY_SOURCES)}"
         )
     target = _resolve_tracked_file_path(
         config_path=config_path, tracked_file_key=tracked_file
