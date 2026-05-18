@@ -33,7 +33,7 @@ from setforge.config import Config, ResolvedProfile
 from setforge.errors import MissingTrackedFile
 from setforge.section_reconcile import maintain_marker_hashes
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 class DeployAction(StrEnum):

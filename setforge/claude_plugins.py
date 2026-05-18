@@ -56,7 +56,7 @@ from setforge.errors import (
     ProfileNotFound,
 )
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _CLAUDE_BIN_NAME = "claude"
 _TIMEOUT_S = 30
