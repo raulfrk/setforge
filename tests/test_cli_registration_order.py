@@ -35,6 +35,7 @@ EXPECTED_SUBGROUPS: tuple[str, ...] = (
     "ext",
     "plugin",
     "marketplace",
+    "section",
 )
 
 
