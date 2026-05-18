@@ -39,15 +39,23 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT", "ANN"]
 # ANN202 is a permanent ignore: project annotates public surface only (per CLAUDE.md).
-# The remaining suppressions are deferred to follow-up beads — clear each entry as the
-# corresponding bead closes:
-#   ANN001 → setforge-seu (85 sites: missing function-arg annotations)
-#   ANN401 → setforge-m6g (29 sites: Any usages)
 ignore = [
-    "ANN001",
     "ANN202",
-    "ANN401",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# yaml_merge.py overlays ruamel.yaml CommentedMap / CommentedSeq / scalar
+# trees at the YAML-document boundary. ruamel does not ship public-API
+# type stubs, so the merge helpers accept and return `typing.Any`
+# per the json-five-style untyped seam. Tightening to a union over
+# ruamel's private node types would import third-party internals into
+# our annotation surface without buying mypy coverage that callers can
+# verify. ANN401 is the right per-file allow here.
+"setforge/yaml_merge.py" = ["ANN401"]
+# jsonc.py wraps json-five's untyped AST (model + lib_json). Same
+# untyped-seam reasoning as yaml_merge.py: the third-party type surface
+# is the constraint, not our annotation discipline.
+"setforge/jsonc.py" = ["ANN401"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."

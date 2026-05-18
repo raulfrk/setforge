@@ -407,9 +407,17 @@ def _nested_path_heads(preserve_user_keys: list[str]) -> set[str]:
     return heads
 
 
-def _navigate(doc: Any, path: str, fmt: FileFormat) -> Any:
+def _navigate(
+    doc: Any,  # noqa: ANN401
+    path: str,
+    fmt: FileFormat,
+) -> Any:  # noqa: ANN401
     """Walk ``doc`` along a format-appropriate path. Returns ``None`` if
     any component is missing or a non-dict.
+
+    Accepts ``Any`` for ``doc`` and returns ``Any`` because the helper is
+    format-agnostic: callers thread in either a ruamel.yaml ``CommentedMap``
+    or a json-five model node, neither of which has a public type stub.
 
     YAML splits on ``.``; JSONC splits on ``" > "``. JSONC's
     ``preserve_user_keys_deep`` entries are single literal keys per
@@ -426,13 +434,15 @@ def _navigate(doc: Any, path: str, fmt: FileFormat) -> Any:
     return node
 
 
-def _equal(a: Any, b: Any) -> bool:
+def _equal(a: Any, b: Any) -> bool:  # noqa: ANN401
     """Compare two parsed values for capture-drift equality.
 
-    ruamel.yaml round-trip mode produces wrapper types (``CommentedMap``,
-    ``CommentedSeq``, ``ScalarFloat``, …) that compare equal to plain
-    Python values via ``==``; relying on ``==`` here keeps the walker
-    format-agnostic (YAML and JSONC both go through this helper)."""
+    Accepts ``Any`` for both operands because the helper is format-
+    agnostic — ruamel.yaml round-trip mode produces wrapper types
+    (``CommentedMap``, ``CommentedSeq``, ``ScalarFloat``, …) that
+    compare equal to plain Python values via ``==``; relying on ``==``
+    here keeps the walker symmetric across YAML and JSONC.
+    """
     return a == b
 
 

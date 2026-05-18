@@ -27,7 +27,13 @@ from ruamel.yaml.comments import (  # type: ignore[import-not-found]
 )
 
 from setforge.binaries import resolve_binary, stderr_of
-from setforge.config import Extensions, ReconcilePolicy, load_config, resolve_profile
+from setforge.config import (
+    Config,
+    Extensions,
+    ReconcilePolicy,
+    load_config,
+    resolve_profile,
+)
 from setforge.errors import (
     ConfigError,
     ExtensionInstallFailed,
@@ -228,7 +234,7 @@ def uninstall_one(ext_id: str) -> None:
         ) from exc
 
 
-def _load_yaml_doc(config_path: Path):
+def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
     yaml = YAML(typ="rt")
@@ -240,7 +246,7 @@ def _load_yaml_doc(config_path: Path):
         return yaml, yaml.load(fh)
 
 
-def _profile_extensions_block(doc, profile: str) -> CommentedMap:
+def _profile_extensions_block(doc: CommentedMap, profile: str) -> CommentedMap:
     """Return the profile's ``extensions:`` block, creating it if absent."""
     profiles = doc.get("profiles")
     if profiles is None or profile not in profiles:
@@ -287,7 +293,7 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     return True
 
 
-def _ancestor_declaring(cfg, profile: str, ext_id: str) -> str | None:
+def _ancestor_declaring(cfg: Config, profile: str, ext_id: str) -> str | None:
     """Walk the extends: chain of ``profile`` (excluding ``profile`` itself)
     and return the first ancestor whose literal ``include`` lists ``ext_id``,
     or ``None``."""
