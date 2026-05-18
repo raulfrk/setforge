@@ -479,19 +479,17 @@ def section_add(
     """Add a user-section marker pair to a tracked markdown file."""
     config_path = _resolve_config_arg(config)
 
-    all_set = (
-        tracked_file is not None
-        and semantics is not None
-        and name is not None
+    # ``anchor_line is not None`` is the only check that can't fold into a
+    # truthy guard — 0 is invalid but boolean-falsy, and we want
+    # _validate_anchor_line to surface the real error rather than silently
+    # routing through the interactive fallback below.
+    if (
+        tracked_file
+        and semantics
+        and name
         and anchor_line is not None
-        and body_source is not None
-    )
-    if all_set:
-        assert tracked_file is not None
-        assert semantics is not None
-        assert name is not None
-        assert anchor_line is not None
-        assert body_source is not None
+        and body_source
+    ):
         _section_add_scripted(
             config_path=config_path,
             profile=profile,
