@@ -291,7 +291,7 @@ def test_install_auto_accept_tracked_resolves_drift(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-tracked"],
+        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-tracked", "--yes"],
     )
     assert result.exit_code == 0
 
@@ -324,7 +324,7 @@ def test_install_auto_accept_live_resolves_drift(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-live"],
+        ["install", "--profile=p", f"--config={cfg}", "--auto-accept-live", "--yes"],
     )
     assert result.exit_code == 0
 

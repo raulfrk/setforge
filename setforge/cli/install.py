@@ -16,6 +16,7 @@ from setforge import (
 )
 from setforge import (
     deploy,
+    section_reconcile,
     transitions,
 )
 from setforge.cli import (
@@ -24,9 +25,16 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._confirm import (
+    AutoDirection,
+    AutoPlan,
+    FileChange,
+    confirm_auto_operation,
+)
 from setforge.cli._helpers import (
     _extract_live_sections_map,
     _iter_all_tracked_files,
+    _iter_section_tracked_files,
     _parse_section_auto,
     _resolve_section_decisions,
 )
@@ -36,7 +44,136 @@ from setforge.cli._install_helpers import (
     _write_install_transition,
 )
 from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugins
-from setforge.config import load_config, resolve_profile
+from setforge.compare import CompareStatus
+from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
+from setforge.section_reconcile import SectionDriftState
+from setforge.sections import SectionSemantics
+from setforge.section_wizard import ReconcileAuto
+
+
+def _build_unexpected_drift_plan(
+    *,
+    drift_report: compare_mod.CompareReport,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    direction: AutoDirection,
+    profile: str,
+) -> AutoPlan:
+    """Build an AutoPlan from a compare-time drift report for legacy --auto-accept-* paths.
+
+    Walks ``_iter_all_tracked_files`` to build a name → (sub_src, sub_dst)
+    map, then joins with the ``CompareReport.entries`` that have
+    ``unexpected_drift_keys``. The "+/-/Δ" columns aren't computed for
+    unexpected drift (the diff body is YAML/JSONC key-level, not line-level),
+    so ``changed`` is set to the number of unexpected keys.
+    """
+    paths_by_name: dict[str, tuple[Path, Path]] = {}
+    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
+        cfg, resolved, repo_root
+    ):
+        # expand_tracked_file's naming convention: plain files use the
+        # tracked_file name directly; directory entries use "name/relpath".
+        # We register both the bare name and the prefixed form so lookup
+        # works regardless of expansion shape.
+        name = tracked_file.src
+        paths_by_name[sub_src.name] = (sub_src, sub_dst)
+        paths_by_name[name] = (sub_src, sub_dst)
+    file_changes: list[FileChange] = []
+    for entry in drift_report.entries:
+        if entry.status is not CompareStatus.DRIFTED:
+            continue
+        if not entry.unexpected_drift_keys:
+            continue
+        paths = paths_by_name.get(entry.name)
+        if paths is None:
+            # Fall back to using the entry name in both columns; preserves
+            # user-visible information when the join misses.
+            sub_src = Path(entry.name)
+            sub_dst = Path(entry.name)
+        else:
+            sub_src, sub_dst = paths
+        if direction is AutoDirection.TRACKED_TO_LIVE:
+            source, dest = sub_src, sub_dst
+        else:
+            source, dest = sub_dst, sub_src
+        file_changes.append(
+            FileChange(
+                source=source,
+                dest=dest,
+                changed=len(entry.unexpected_drift_keys),
+            ),
+        )
+    if not file_changes:
+        return AutoPlan(
+            direction=direction,
+            file_changes=(),
+            risks=(),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+    risk_target = "live" if direction is AutoDirection.TRACKED_TO_LIVE else "tracked"
+    return AutoPlan(
+        direction=direction,
+        file_changes=tuple(file_changes),
+        risks=(
+            f"{risk_target} values on {len(file_changes)} file(s) will be overwritten",
+        ),
+        revert_command=f"setforge revert --profile={profile}",
+    )
+
+
+def _build_shared_section_plan(
+    *,
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> AutoPlan:
+    """Build an AutoPlan from shared-section drift across tracked markdown files.
+
+    Walks ``_iter_section_tracked_files`` and runs
+    ``classify_section_drift`` on each pair, collecting tracked_files where
+    any ``shared`` section has a non-``NO_DRIFT`` state. The plan's
+    ``changed`` column counts drifted shared sections per file.
+    """
+    file_changes: list[FileChange] = []
+    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+        if not sub_dst.exists():
+            continue
+        tracked_text = sub_src.read_text(encoding="utf-8")
+        live_text = sub_dst.read_text(encoding="utf-8")
+        drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
+        shared_drifted = [
+            d
+            for d in drifts.values()
+            if d.semantics is SectionSemantics.SHARED
+            and d.state is not SectionDriftState.NO_DRIFT
+        ]
+        if not shared_drifted:
+            continue
+        file_changes.append(
+            FileChange(
+                source=sub_src,
+                dest=sub_dst,
+                changed=len(shared_drifted),
+            ),
+        )
+    if not file_changes:
+        return AutoPlan(
+            direction=AutoDirection.TRACKED_TO_LIVE,
+            file_changes=(),
+            risks=(),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+    return AutoPlan(
+        direction=AutoDirection.TRACKED_TO_LIVE,
+        file_changes=tuple(file_changes),
+        risks=(
+            f"shared user-section bodies on {len(file_changes)} file(s) "
+            "will be overwritten with tracked-side content",
+        ),
+        revert_command=f"setforge revert --profile={profile}",
+    )
 
 
 @app.command()
@@ -77,6 +214,12 @@ def install(
             "Mutually exclusive with --reconcile-user-sections."
         ),
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the --auto* confirmation prompt (for non-interactive use).",
+    ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
     config = _resolve_config_arg(config)
@@ -107,6 +250,31 @@ def install(
     # in unexpected ways) gate install. MISSING entries are expected on
     # first install and are handled by deploy below.
     drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+
+    # bviv: confirmation gate for legacy --auto-accept-* paths (unexpected drift).
+    if auto_accept_tracked or auto_accept_live:
+        direction = (
+            AutoDirection.TRACKED_TO_LIVE
+            if auto_accept_tracked
+            else AutoDirection.LIVE_TO_TRACKED
+        )
+        flag = "--auto-accept-tracked" if auto_accept_tracked else "--auto-accept-live"
+        plan = _build_unexpected_drift_plan(
+            drift_report=drift_report,
+            cfg=cfg,
+            resolved=resolved,
+            repo_root=repo_root,
+            direction=direction,
+            profile=profile,
+        )
+        if not confirm_auto_operation(
+            command=f"install {flag}",
+            profile=profile,
+            plan=plan,
+            yes=yes,
+        ):
+            raise typer.Exit(0)
+
     _check_unexpected_drift(
         drift_report,
         cfg,
@@ -116,6 +284,22 @@ def install(
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
     )
+
+    # bviv: confirmation gate for the section-auto=use-tracked mutating path.
+    if section_auto is ReconcileAuto.USE_TRACKED:
+        plan = _build_shared_section_plan(
+            cfg=cfg,
+            resolved=resolved,
+            repo_root=repo_root,
+            profile=profile,
+        )
+        if not confirm_auto_operation(
+            command="install --auto=use-tracked",
+            profile=profile,
+            plan=plan,
+            yes=yes,
+        ):
+            raise typer.Exit(0)
 
     # Resolve user-section drift (shared sections) into per-tracked_file
     # decisions BEFORE the deploy loop so wizard prompts and the
@@ -158,3 +342,4 @@ def install(
             profile, file_pre, file_post, ext_delta, plugin_delta
         )
         typer.echo(f"transition: {target}")
+        typer.echo(f"↩  revert with: setforge revert --profile={profile}")

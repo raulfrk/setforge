@@ -100,6 +100,7 @@ def test_install_auto_use_tracked_deploys_tracked_body(
             "--profile=p",
             f"--config={fixture['cfg']}",
             "--auto=use-tracked",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -513,7 +514,13 @@ def test_install_reconciles_profile_extend_resolved_set(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["install", "--profile=child-p", f"--config={cfg}", "--auto=use-tracked"],
+        [
+            "install",
+            "--profile=child-p",
+            f"--config={cfg}",
+            "--auto=use-tracked",
+            "--yes",
+        ],
     )
     assert result.exit_code == 0, result.output
     # Both base and child sections deployed (extends resolved both).
@@ -557,6 +564,7 @@ def test_install_with_use_tracked_records_transition(
             "--profile=p",
             f"--config={fixture['cfg']}",
             "--auto=use-tracked",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
