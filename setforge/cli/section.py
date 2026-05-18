@@ -11,6 +11,7 @@ prompt_toolkit dialogs + the bespoke anchor-line TUI picker.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from rich.console import Console
 from setforge._editor import run_editor
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
 from setforge.cli._anchor_picker import pick_anchor_line
+from setforge.compare import resolve_src
 from setforge.config import load_config
 from setforge.sections import SectionSemantics, extract_sections
 
@@ -64,12 +66,21 @@ def _format_marker_pair_with_body(*, semantics: str, name: str, body: str) -> st
     Always emits exactly one newline between the start marker and the
     body, and exactly one newline between the body and the end marker.
     Empty bodies render a single blank line between the markers.
+
+    The body's sha256 is stamped into the end marker as
+    ``hash=<sha256-hex>`` so the resulting pair satisfies the strict
+    parser (``extract_sections(allow_legacy=False)``) — install /
+    compare / sync all reject hash-less markers on the tracked side.
     """
     body_block = (body if body.endswith("\n") else body + "\n") if body else "\n"
+    # ``extract_sections`` returns the content between the markers — which
+    # is ``body_block`` literally. Hash that so the embedded ``hash=``
+    # matches what install / compare / sync re-derive.
+    body_hash = hashlib.sha256(body_block.encode("utf-8")).hexdigest()
     return (
         f"<!-- setforge:user-section start {semantics} {name} -->\n"
         f"{body_block}"
-        f"<!-- setforge:user-section end {semantics} {name} -->\n"
+        f"<!-- setforge:user-section end {semantics} {name} hash={body_hash} -->\n"
     )
 
 
@@ -85,14 +96,18 @@ def section_emit(
 
 
 def _resolve_tracked_file_path(*, config_path: Path, tracked_file_key: str) -> Path:
-    """Resolve a ``tracked_files`` key to an absolute path in the config repo."""
+    """Resolve a ``tracked_files`` key to an absolute path in the config repo.
+
+    Matches the canonical install/compare resolver:
+    ``<config-repo-root>/tracked/<tracked_file.src>``.
+    """
     cfg = load_config(config_path)
     if tracked_file_key not in cfg.tracked_files:
         raise typer.BadParameter(
             f"tracked_file {tracked_file_key!r} not found in {config_path}"
         )
     repo_root = config_path.resolve().parent
-    return repo_root / cfg.tracked_files[tracked_file_key].src
+    return resolve_src(cfg.tracked_files[tracked_file_key], repo_root)
 
 
 def _validate_anchor_line(*, anchor_line: int, total_lines: int) -> None:

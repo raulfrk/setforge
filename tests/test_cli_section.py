@@ -22,10 +22,13 @@ def runner() -> CliRunner:
 def test_section_emit_shared(runner: CliRunner) -> None:
     result = runner.invoke(app, ["section", "emit", "shared", "foo"])
     assert result.exit_code == 0
+    # Body between markers is a single "\n"; its sha256 is the stamped hash.
+    import hashlib
+    expected_hash = hashlib.sha256(b"\n").hexdigest()
     assert result.stdout == (
         "<!-- setforge:user-section start shared foo -->\n"
         "\n"
-        "<!-- setforge:user-section end shared foo -->\n"
+        f"<!-- setforge:user-section end shared foo hash={expected_hash} -->\n"
     )
 
 
@@ -33,7 +36,7 @@ def test_section_emit_host_local(runner: CliRunner) -> None:
     result = runner.invoke(app, ["section", "emit", "host-local", "bar"])
     assert result.exit_code == 0
     assert "<!-- setforge:user-section start host-local bar -->" in result.stdout
-    assert "<!-- setforge:user-section end host-local bar -->" in result.stdout
+    assert "<!-- setforge:user-section end host-local bar hash=" in result.stdout
 
 
 def test_section_emit_uses_setforge_namespace_not_legacy(runner: CliRunner) -> None:
@@ -79,7 +82,11 @@ def test_section_emit_no_extra_blanks(runner: CliRunner) -> None:
 
 
 def _write_minimal_config(tmp_path: Path, *, suffix: str = ".md") -> tuple[Path, Path]:
-    """Build a minimal setforge.yaml + a single tracked file. Return (yaml, tracked)."""
+    """Build a minimal setforge.yaml + a single tracked file. Return (yaml, tracked).
+
+    Mirrors the canonical layout: ``setforge.yaml`` at repo root, tracked
+    sources under ``<repo>/tracked/`` (resolved by :func:`resolve_src`).
+    """
     tracked = tmp_path / "tracked" / f"doc{suffix}"
     tracked.parent.mkdir(parents=True, exist_ok=True)
     tracked.write_text("line 1\nline 2\nline 3\nline 4\nline 5\n")
@@ -88,8 +95,8 @@ def _write_minimal_config(tmp_path: Path, *, suffix: str = ".md") -> tuple[Path,
         "version: 1\n"
         "tracked_files:\n"
         "  doc:\n"
-        f"    src: tracked/doc{suffix}\n"
-        f"    dst: doc{suffix}\n"
+        f"    src: doc{suffix}\n"
+        f"    dst: ~/.local/doc{suffix}\n"
         "profiles:\n"
         "  testp:\n"
         "    tracked_files: [doc]\n"
@@ -119,7 +126,7 @@ def test_section_add_scripted_shared_empty_body(
     assert result.exit_code == 0
     text = tracked.read_text()
     assert "<!-- setforge:user-section start shared foo -->" in text
-    assert "<!-- setforge:user-section end shared foo -->" in text
+    assert "<!-- setforge:user-section end shared foo hash=" in text
     lines = text.splitlines()
     assert lines[1] == "line 2"
     assert lines[2].startswith("<!-- setforge:user-section start shared foo")
