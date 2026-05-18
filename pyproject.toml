@@ -95,6 +95,14 @@ ignore = [
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
 
+[tool.ruff.lint.flake8-bugbear]
+# Typer's ``Option`` / ``Argument`` are explicitly documented as
+# function-default-call markers (the CLI parser detects them and rewrites
+# the default at parse time). ruff's B008 normally flags this pattern as
+# "do not perform function call in argument defaults"; bypass for the
+# pair that the project depends on.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.pytest.ini_options]
 markers = [
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
