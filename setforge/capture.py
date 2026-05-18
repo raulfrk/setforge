@@ -210,7 +210,7 @@ def capture_profile(
     profile_name: str,
     repo_root: Path,
     *,
-    my_setup_yaml_path: Path,
+    setforge_yaml_path: Path,
     interactive: bool | None = None,
     auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
@@ -230,7 +230,7 @@ def capture_profile(
         Profile to capture.
     repo_root:
         Repo root used for ``resolve_src``.
-    my_setup_yaml_path:
+    setforge_yaml_path:
         Path to ``my_setup.yaml`` — needed by the wizard's ``[s]``
         action.
     interactive:
@@ -278,7 +278,7 @@ def capture_profile(
             config,
             profile_name,
             repo_root,
-            my_setup_yaml_path=my_setup_yaml_path,
+            setforge_yaml_path=setforge_yaml_path,
             snapshot_base=snapshot_base,
             console=console,
             auto_accept=auto_accept_map[auto],

@@ -397,7 +397,7 @@ def test_run_capture_wizard_delegates_to_loop(
         config,
         "p",
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         snapshot_base=tmp_path / "snaps",
         console=Console(file=StringIO(), force_terminal=False, no_color=True),
         auto_accept="k",
@@ -437,7 +437,7 @@ def test_capture_profile_errors_in_non_interactive_when_drift_present_and_no_aut
             config,
             "p",
             repo,
-            my_setup_yaml_path=my_setup_yaml,
+            setforge_yaml_path=my_setup_yaml,
             interactive=False,
             auto=None,
         )
@@ -460,7 +460,7 @@ def test_capture_profile_proceeds_in_non_interactive_when_no_drift(
         config,
         "p",
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         interactive=False,
         auto=None,
     )
@@ -497,7 +497,7 @@ def test_capture_profile_auto_use_live_absorbs_all_drift(
         config,
         "p",
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         interactive=False,
         auto=CaptureAuto.USE_LIVE,
     )
@@ -542,7 +542,7 @@ def test_capture_profile_auto_keep_tracked_rejects_all_drift(
         config,
         "p",
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         interactive=False,
         auto=CaptureAuto.KEEP_TRACKED,
     )
@@ -594,7 +594,7 @@ def test_capture_profile_interactive_mixed_decisions(
         config,
         "p",
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         interactive=True,
         auto=None,
     )
@@ -637,7 +637,7 @@ def test_capture_wizard_cancel_restores_tracked(
             config,
             "p",
             repo,
-            my_setup_yaml_path=my_setup_yaml,
+            setforge_yaml_path=my_setup_yaml,
             interactive=True,
             auto=None,
             snapshot_base=tmp_path / "snaps",

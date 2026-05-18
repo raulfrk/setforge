@@ -286,7 +286,7 @@ def test_apply_action_k_no_fs_write(tmp_path: Path) -> None:
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
     original_src_content = src.read_text()
-    result = apply_action(uk, "k", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "k", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.KEEP_TRACKED
     # tracked file untouched
     assert src.read_text() == original_src_content
@@ -310,7 +310,7 @@ def test_apply_action_u_yaml(tmp_path: Path) -> None:
         mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "u", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.USE_LIVE
 
     # Read back and check value is updated
@@ -340,7 +340,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
         mode=DriftMode.SHALLOW,
     )
     my_setup_yaml = tmp_path / "my_setup.yaml"
-    result = apply_action(uk, "u", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "u", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.USE_LIVE
 
     updated_text = src.read_text()
@@ -387,7 +387,7 @@ def test_apply_action_s_extends_preserve_user_keys(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    result = apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.SAVE_AS_PRESERVED
 
     # Reload and verify
@@ -430,7 +430,7 @@ def test_apply_action_s_idempotent(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
+    apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
     y = YAML(typ="rt")
     updated = y.load(my_setup_yaml.read_text())
     # b should appear exactly once
@@ -469,7 +469,7 @@ def test_apply_action_m_y_launches_editor(
     monkeypatch.setattr("setforge._editor.subprocess.run", fake_run)
     monkeypatch.setattr("setforge.wizard.read_one_choice", lambda prompt, choices: "y")
 
-    result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "m", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_EDIT_DONE
     assert calls == [["myfakeeditor", str(src)]]
 
@@ -500,7 +500,7 @@ def test_apply_action_m_n_returns_manual_pending(
         "setforge._editor.subprocess.run", lambda *a, **kw: run_called.append(a)
     )
 
-    result = apply_action(uk, "m", my_setup_yaml_path=my_setup_yaml)
+    result = apply_action(uk, "m", setforge_yaml_path=my_setup_yaml)
     assert result == ActionResult.MANUAL_PENDING
     assert not run_called
 
@@ -581,7 +581,7 @@ def test_snapshot_restore_on_sigint(
             report,
             config,
             repo,
-            my_setup_yaml_path=my_setup_yaml,
+            setforge_yaml_path=my_setup_yaml,
             snapshot_base=snap_root,
         )
 
@@ -624,7 +624,7 @@ def test_successful_walk_records_one_transition(
         report,
         config,
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         snapshot_base=snap_root,
         profile="p",
     )
@@ -688,7 +688,7 @@ def test_manual_pending_records_transition_for_applied(
         report,
         config,
         repo,
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         snapshot_base=snap_root,
         profile="p",
     )
@@ -717,7 +717,7 @@ def test_use_live_yaml_comments_survive(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
+    apply_action(uk, "u", setforge_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
     assert "# top-level comment" in text
     assert "# inline" in text
@@ -740,7 +740,7 @@ def test_use_live_jsonc_comments_survive(tmp_path: Path) -> None:
         file_format=FileFormat.JSONC,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "u", my_setup_yaml_path=tmp_path / "x.yaml")
+    apply_action(uk, "u", setforge_yaml_path=tmp_path / "x.yaml")
     text = src.read_text()
     assert "// settings" in text
 
@@ -762,5 +762,5 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
         file_format=FileFormat.YAML,
         mode=DriftMode.SHALLOW,
     )
-    apply_action(uk, "s", my_setup_yaml_path=my_setup_yaml)
+    apply_action(uk, "s", setforge_yaml_path=my_setup_yaml)
     assert "# my config" in my_setup_yaml.read_text()

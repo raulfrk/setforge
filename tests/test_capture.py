@@ -221,14 +221,14 @@ def test_capture_profile_iterates_tracked_files(tmp_path: Path) -> None:
         profiles={"p": Profile(tracked_files=["x", "y"])},
     )
     # Fresh capture: tracked doesn't exist yet; the walker yields no
-    # items, so my_setup_yaml_path is required by signature only —
+    # items, so setforge_yaml_path is required by signature only —
     # not actually read. Pass a placeholder path that doesn't need to
     # exist for this no-drift case.
     results = capture_profile(
         config,
         "p",
         repo,
-        my_setup_yaml_path=tmp_path / "my_setup.yaml",
+        setforge_yaml_path=tmp_path / "my_setup.yaml",
     )
     assert {r.name for r in results} == {"x", "y"}
     assert all(r.action is CaptureAction.UPDATED for r in results)

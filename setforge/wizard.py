@@ -314,7 +314,7 @@ def apply_action(
     item: DriftItem,
     choice: str,
     *,
-    my_setup_yaml_path: Path,
+    setforge_yaml_path: Path,
 ) -> ActionResult:
     """Apply the chosen action for ``item`` and return the result.
 
@@ -323,7 +323,7 @@ def apply_action(
     - ``k`` — no-op (caller handles re-deploy).
     - ``u`` — write live value into tracked (YAML or JSONC round-trip).
     - ``s`` — append ``item.key_path`` to ``preserve_user_keys`` in
-      ``my_setup_yaml_path``.
+      ``setforge_yaml_path``.
     - ``m`` — sub-prompt y/n; y launches ``$EDITOR``; n returns pending.
     """
     if choice == "k":
@@ -333,7 +333,7 @@ def apply_action(
         return _action_use_live(item)
 
     if choice == "s":
-        return _action_save_as_preserved(item, my_setup_yaml_path)
+        return _action_save_as_preserved(item, setforge_yaml_path)
 
     if choice == "m":
         return _action_manual_edit(item)
@@ -372,11 +372,11 @@ def _action_use_live(item: DriftItem) -> ActionResult:
 
 
 def _action_save_as_preserved(
-    item: DriftItem, my_setup_yaml_path: Path
+    item: DriftItem, setforge_yaml_path: Path
 ) -> ActionResult:
     """Append ``item.key_path`` to the tracked_file's ``preserve_user_keys``."""
     y = YAML(typ="rt")
-    with my_setup_yaml_path.open("r", encoding="utf-8") as fh:
+    with setforge_yaml_path.open("r", encoding="utf-8") as fh:
         doc = y.load(fh)
 
     # Navigate: tracked_files -> <name> -> preserve_user_keys
@@ -397,7 +397,7 @@ def _action_save_as_preserved(
 
     buf = io.StringIO()
     y.dump(doc, buf)
-    my_setup_yaml_path.write_text(buf.getvalue(), encoding="utf-8")
+    setforge_yaml_path.write_text(buf.getvalue(), encoding="utf-8")
     return ActionResult.SAVE_AS_PRESERVED
 
 
@@ -467,7 +467,7 @@ def _restore_signal_handlers(prev: dict[int, _SignalHandler]) -> None:
 def run_wizard_loop(
     items: Iterator[DriftItem],
     *,
-    my_setup_yaml_path: Path,
+    setforge_yaml_path: Path,
     snapshot_base: Path,
     console: Console,
     auto_accept: str | None,
@@ -489,7 +489,7 @@ def run_wizard_loop(
         Iterator of :class:`DriftItem` produced by a trigger-specific
         walker. Materialized once internally to build the snapshot file
         list, so callers may pass a generator.
-    my_setup_yaml_path:
+    setforge_yaml_path:
         Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir.
@@ -529,7 +529,7 @@ def run_wizard_loop(
     items_list = list(items)
 
     # Collect all affected paths for the snapshot
-    affected_paths: list[Path] = [my_setup_yaml_path]
+    affected_paths: list[Path] = [setforge_yaml_path]
     for item in items_list:
         if item.src_path not in affected_paths:
             affected_paths.append(item.src_path)
@@ -552,7 +552,7 @@ def run_wizard_loop(
                     choice = prompt_one(item, console)
 
                 result = apply_action(
-                    item, choice, my_setup_yaml_path=my_setup_yaml_path
+                    item, choice, setforge_yaml_path=setforge_yaml_path
                 )
                 decisions.append((item, result))
 

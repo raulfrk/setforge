@@ -294,7 +294,7 @@ class TestResolveSourceDir:
 class TestValidateSourceDir:
     """``validate_source_dir`` checks for ``my_setup.yaml`` in the source."""
 
-    def test_returns_my_setup_yaml_path(self, tmp_path: Path) -> None:
+    def test_returns_setforge_yaml_path(self, tmp_path: Path) -> None:
         src_dir = _write_source_dir(tmp_path)
         src = PathSource(kind="path", path=src_dir)
         result = validate_source_dir(src)

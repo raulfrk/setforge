@@ -509,7 +509,7 @@ def install(
                 drift_report,
                 cfg,
                 repo_root,
-                my_setup_yaml_path=config.resolve(),
+                setforge_yaml_path=config.resolve(),
                 profile=profile,
                 auto_accept="k",
             )
@@ -519,7 +519,7 @@ def install(
                 drift_report,
                 cfg,
                 repo_root,
-                my_setup_yaml_path=config.resolve(),
+                setforge_yaml_path=config.resolve(),
                 profile=profile,
                 auto_accept="u",
             )
@@ -753,7 +753,7 @@ def capture(
             cfg,
             profile,
             repo_root,
-            my_setup_yaml_path=config.resolve(),
+            setforge_yaml_path=config.resolve(),
             auto=auto_enum,
         )
     except CaptureRequiresInteractive as exc:
@@ -796,7 +796,7 @@ def merge(
             report,
             cfg,
             repo_root,
-            my_setup_yaml_path=config.resolve(),
+            setforge_yaml_path=config.resolve(),
             profile=profile,
             tracked_file_filter=tracked_file,
         )
@@ -876,7 +876,7 @@ def sync(
             cfg,
             profile,
             repo_root,
-            my_setup_yaml_path=config.resolve(),
+            setforge_yaml_path=config.resolve(),
             auto=auto_enum,
         )
     except CaptureRequiresInteractive as exc:

@@ -89,7 +89,7 @@ def test_run_wizard_loop_dispatches_per_item(
     console = Console(file=StringIO(), force_terminal=False, no_color=True)
     decisions = run_wizard_loop(
         iter([item1, item2]),
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         snapshot_base=tmp_path / "snaps",
         console=console,
         auto_accept="k",
@@ -131,7 +131,7 @@ def test_run_wizard_loop_breaks_on_manual_pending(
 
     decisions = run_wizard_loop(
         iter([item1, item2]),
-        my_setup_yaml_path=my_setup_yaml,
+        setforge_yaml_path=my_setup_yaml,
         snapshot_base=tmp_path / "snaps",
         console=console,
         auto_accept="m",

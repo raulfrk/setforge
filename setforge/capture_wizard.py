@@ -446,7 +446,7 @@ def run_capture_wizard(
     profile_name: str,
     repo_root: Path,
     *,
-    my_setup_yaml_path: Path,
+    setforge_yaml_path: Path,
     snapshot_base: Path | None = None,
     console: Console | None = None,
     auto_accept: str | None = None,
@@ -468,7 +468,7 @@ def run_capture_wizard(
         Profile to walk.
     repo_root:
         Repo root used for ``resolve_src``.
-    my_setup_yaml_path:
+    setforge_yaml_path:
         Path to ``my_setup.yaml`` — needed by the ``[s]`` action.
     snapshot_base:
         Parent directory for the timestamped snapshot dir. Defaults to
@@ -508,7 +508,7 @@ def run_capture_wizard(
     )
     return wizard.run_wizard_loop(
         items,
-        my_setup_yaml_path=my_setup_yaml_path,
+        setforge_yaml_path=setforge_yaml_path,
         snapshot_base=snapshot_base,
         console=console,
         auto_accept=auto_accept,
