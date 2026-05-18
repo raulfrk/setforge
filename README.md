@@ -44,9 +44,10 @@ setforge discovers your config repo via a 4-layer precedence (first non-empty wi
 
 Two pieces: install the engine, then point it at your config.
 
-> Heads-up: PyPI publishing fires on the first `v*.*.*` tag push (see
-> `.github/workflows/publish-pypi.yml`). Until v0.2.0 lands on PyPI, the
-> from-source path below is the way to get setforge on a new machine.
+> Heads-up: PyPI publishing fires on any `v*.*.*` tag push (idempotent
+> via `skip-existing: true` in `.github/workflows/publish-pypi.yml`).
+> Until v0.2.0 lands on PyPI, the from-source path below is the way to
+> get setforge on a new machine.
 
 ### 1a. Install from PyPI (once v0.2.0 ships)
 
