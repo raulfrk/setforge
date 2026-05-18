@@ -20,6 +20,7 @@ from pathlib import Path
 import typer
 from prompt_toolkit.shortcuts import input_dialog, radiolist_dialog, yes_no_dialog
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 from setforge._editor import run_editor
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
@@ -226,11 +227,18 @@ def _insert_marker_pair(
 
 
 def _print_next_steps(*, console: Console, target: Path, profile: str) -> None:
-    console.print(f"[green]wrote[/green] marker pair to [bold]{target}[/bold]")
+    # rich treats ``[...]`` as markup; tracked filenames with literal
+    # square brackets (legal on POSIX) would break the rendered output
+    # without escape. ``target`` itself is interpolated into a markup
+    # span so it goes through rich_escape too.
+    safe_target = rich_escape(str(target))
+    safe_parent = rich_escape(str(target.parent))
+    safe_name = rich_escape(target.name)
+    console.print(f"[green]wrote[/green] marker pair to [bold]{safe_target}[/bold]")
     console.print("next steps:")
-    console.print(f"  cd {target.parent}")
+    console.print(f"  cd {safe_parent}")
     console.print("  git diff")
-    console.print(f"  git add {target.name} && git commit && git push")
+    console.print(f"  git add {safe_name} && git commit && git push")
     console.print(f"  setforge install --profile={profile}")
 
 
