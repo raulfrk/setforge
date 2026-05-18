@@ -35,6 +35,7 @@ class _CaptureOutput(DummyOutput):
     def captured(self) -> str:
         return "".join(self.buffer)
 
+
 _FIXTURE: str = "line one\nline two\nline three\nline four\nline five\n"
 
 

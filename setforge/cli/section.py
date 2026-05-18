@@ -165,9 +165,7 @@ def _validate_body_source(body_source: str) -> BodySource:
         return BodySource(body_source)
     except ValueError as exc:
         choices = sorted(s.value for s in BodySource)
-        raise typer.BadParameter(
-            f"--body-source must be one of {choices}"
-        ) from exc
+        raise typer.BadParameter(f"--body-source must be one of {choices}") from exc
 
 
 def _read_body(*, body_source: str, body_file: Path | None) -> str:
@@ -266,9 +264,7 @@ def _apply_section_add(
     )
     _check_markdown_suffix(target=target)
     text = target.read_text()
-    _validate_anchor_line(
-        anchor_line=anchor_line, total_lines=_count_total_lines(text)
-    )
+    _validate_anchor_line(anchor_line=anchor_line, total_lines=_count_total_lines(text))
     _check_duplicate_name(file_text=text, name=name)
     updated = _insert_marker_pair(
         file_text=text,
@@ -505,13 +501,7 @@ def section_add(
     # truthy guard — 0 is invalid but boolean-falsy, and we want
     # _validate_anchor_line to surface the real error rather than silently
     # routing through the interactive fallback below.
-    if (
-        tracked_file
-        and semantics
-        and name
-        and anchor_line is not None
-        and body_source
-    ):
+    if tracked_file and semantics and name and anchor_line is not None and body_source:
         _section_add_scripted(
             config_path=config_path,
             profile=profile,
