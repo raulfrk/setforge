@@ -11,7 +11,6 @@ prompt_toolkit dialogs + the bespoke anchor-line TUI picker.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import sys
 import tempfile
@@ -27,7 +26,12 @@ from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, a
 from setforge.cli._anchor_picker import pick_anchor_line
 from setforge.compare import resolve_src
 from setforge.config import load_config
-from setforge.sections import SectionSemantics, extract_sections
+from setforge.sections import (
+    SectionSemantics,
+    extract_sections,
+    hash_sections,
+    set_marker_hashes,
+)
 
 section_app: typer.Typer = typer.Typer(
     help="Manage user-section markers in tracked markdown files.",
@@ -69,28 +73,38 @@ def _validate_semantics(semantics: str) -> None:
         ) from exc
 
 
-def _format_marker_pair_with_body(*, semantics: str, name: str, body: str) -> str:
-    """Render a marker pair around ``body``.
+def _format_marker_pair_unstamped(*, semantics: str, name: str, body: str) -> str:
+    """Render a marker pair around ``body`` with the end marker UNSTAMPED.
+
+    The end marker omits its ``hash=<sha256-hex>`` segment; callers feed
+    the resulting text through :func:`_stamp_section_hashes` to land the
+    canonical fully-stamped form. Keeping format-vs-stamp split lets
+    :mod:`setforge.sections` remain the single source of truth for the
+    hash algorithm and ``hash=`` segment layout.
 
     Always emits exactly one newline between the start marker and the
     body, and exactly one newline between the body and the end marker.
     Empty bodies render a single blank line between the markers.
-
-    The body's sha256 is stamped into the end marker as
-    ``hash=<sha256-hex>`` so the resulting pair satisfies the strict
-    parser (``extract_sections(allow_legacy=False)``) — install /
-    compare / sync all reject hash-less markers on the tracked side.
     """
     body_block = (body if body.endswith("\n") else body + "\n") if body else "\n"
-    # ``extract_sections`` returns the content between the markers — which
-    # is ``body_block`` literally. Hash that so the embedded ``hash=``
-    # matches what install / compare / sync re-derive.
-    body_hash = hashlib.sha256(body_block.encode("utf-8")).hexdigest()
     return (
         f"<!-- setforge:user-section start {semantics} {name} -->\n"
         f"{body_block}"
-        f"<!-- setforge:user-section end {semantics} {name} hash={body_hash} -->\n"
+        f"<!-- setforge:user-section end {semantics} {name} -->\n"
     )
+
+
+def _stamp_section_hashes(text: str) -> str:
+    """Stamp every section's body hash into its end marker.
+
+    Routes hash format + algorithm through the public sections API so
+    install / compare / sync / section-add all agree on the segment
+    shape without each call site re-implementing sha256-of-body.
+    ``allow_legacy=True`` lets us accept unstamped input (the
+    pre-stamp marker pair from :func:`_format_marker_pair_unstamped`).
+    """
+    hashes = hash_sections(text, allow_legacy=True)
+    return set_marker_hashes(text, hashes, allow_legacy=True)
 
 
 @section_app.command("emit")
@@ -101,9 +115,8 @@ def section_emit(
     """Print a paste-ready marker pair to stdout."""
     _validate_semantics(semantics)
     _validate_name(name)
-    sys.stdout.write(
-        _format_marker_pair_with_body(semantics=semantics, name=name, body="")
-    )
+    unstamped = _format_marker_pair_unstamped(semantics=semantics, name=name, body="")
+    sys.stdout.write(_stamp_section_hashes(unstamped))
 
 
 def _resolve_tracked_file_path(*, config_path: Path, tracked_file_key: str) -> Path:
@@ -198,12 +211,18 @@ def _insert_marker_pair(
     name: str,
     body: str,
 ) -> str:
-    """Return ``file_text`` with a marker pair inserted AFTER ``anchor_line``."""
+    """Insert a marker pair after ``anchor_line``; stamp every section hash.
+
+    Builds an unstamped marker pair, splices it into ``file_text``, and
+    routes the resulting text through :func:`_stamp_section_hashes` so
+    EVERY end marker (the new one + any pre-existing pairs without a
+    fresh stamp) carries the canonical ``hash=<sha256-hex>`` form.
+    """
     lines = file_text.splitlines(keepends=True)
-    insertion = _format_marker_pair_with_body(semantics=semantics, name=name, body=body)
+    insertion = _format_marker_pair_unstamped(semantics=semantics, name=name, body=body)
     head = "".join(lines[:anchor_line])
     tail = "".join(lines[anchor_line:])
-    return head + insertion + tail
+    return _stamp_section_hashes(head + insertion + tail)
 
 
 def _print_next_steps(*, console: Console, target: Path, profile: str) -> None:
