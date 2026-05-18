@@ -44,17 +44,21 @@ setforge discovers your config repo via a 4-layer precedence (first non-empty wi
 
 Two pieces: install the engine, then point it at your config.
 
-### 1a. Install from PyPI (recommended)
+> Heads-up: PyPI publishing fires on the first `v*.*.*` tag push (see
+> `.github/workflows/publish-pypi.yml`). Until v0.2.0 lands on PyPI, the
+> from-source path below is the way to get setforge on a new machine.
+
+### 1a. Install from PyPI (once v0.2.0 ships)
 
 ```bash
 uv tool install setforge
-# or, for the latest pre-release tag:
+# or, to pin a specific version once published:
 uv tool install "setforge==0.2.0"
 ```
 
-`setforge --version` should print the installed version. The CLI lands on your PATH as `setforge` (`uv tool install` symlinks it for you).
+`setforge --version` prints the installed version. The CLI lands on your PATH as `setforge` (`uv tool install` symlinks it for you).
 
-### 1b. Install the engine from source (development)
+### 1b. Install the engine from source (current path; pre-PyPI)
 
 ```bash
 git clone https://github.com/raulfrk/my-setup ~/setforge && cd ~/setforge
