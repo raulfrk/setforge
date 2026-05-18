@@ -12,6 +12,7 @@ import typer
 
 from setforge import section_reconcile, section_wizard
 from setforge import sections as sections_mod
+from setforge.capture import CaptureAuto
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
@@ -22,6 +23,27 @@ from setforge.sections import (
     detect_legacy_markers,
     detect_legacy_namespace_markers,
 )
+
+
+def _parse_capture_auto(auto: str | None) -> CaptureAuto | None:
+    """Validate and parse ``--auto=`` for the capture-side flow.
+
+    Raises :class:`typer.Exit(2)` with a user-visible error if ``auto``
+    is neither ``"use-live"`` nor ``"keep-tracked"``. Shared by
+    ``capture`` and ``sync`` so the parse-and-validate pattern stays in
+    one place.
+    """
+    if auto is None:
+        return None
+    try:
+        return CaptureAuto(auto)
+    except ValueError:
+        typer.secho(
+            f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2) from None
 
 
 def _parse_section_auto(

@@ -26,7 +26,6 @@ from setforge import (
     transitions,
     vscode_extensions,
 )
-from setforge.capture import CaptureAuto
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -35,6 +34,7 @@ from setforge.cli import (
 )
 from setforge.cli._helpers import (
     _iter_all_tracked_files,
+    _parse_capture_auto,
     _refuse_legacy_live_markers,
 )
 from setforge.config import load_config, resolve_profile
@@ -63,19 +63,7 @@ def capture(
     contexts.
     """
     config = _resolve_config_arg(config)
-    auto_enum: CaptureAuto | None
-    if auto is None:
-        auto_enum = None
-    else:
-        try:
-            auto_enum = CaptureAuto(auto)
-        except ValueError:
-            typer.secho(
-                f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
-                err=True,
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(2) from None
+    auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
@@ -173,19 +161,7 @@ def sync(
     refuse to absorb drift.
     """
     config = _resolve_config_arg(config)
-    auto_enum: CaptureAuto | None
-    if auto is None:
-        auto_enum = None
-    else:
-        try:
-            auto_enum = CaptureAuto(auto)
-        except ValueError:
-            typer.secho(
-                f"error: --auto must be 'use-live' or 'keep-tracked' (got {auto!r})",
-                err=True,
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(2) from None
+    auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
     repo_root = config.resolve().parent
