@@ -19,12 +19,39 @@ import typer
 
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import transitions, vscode_extensions
-from setforge.config import Config, MarketplaceSource, ResolvedProfile
+from setforge.config import (
+    Config,
+    MarketplaceSource,
+    MarketplaceSourceKind,
+    ResolvedProfile,
+)
 from setforge.errors import (
     ExtensionInstallFailed,
     ExtensionToolMissing,
     PluginToolMissing,
 )
+
+
+def _parse_marketplace_from(from_: str) -> MarketplaceSource:
+    """Parse ``--from=github:owner/repo`` or ``--from=path:/dir`` into a source.
+
+    Raises :class:`typer.Exit(1)` with a user-visible error if the prefix
+    is neither ``github:`` nor ``path:``. Shared by ``plugin add`` and
+    ``marketplace add`` so the parser stays in one place.
+    """
+    if from_.startswith("github:"):
+        repo = from_[len("github:") :]
+        return MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
+    if from_.startswith("path:"):
+        local_path = Path(from_[len("path:") :]).expanduser()
+        return MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
+    typer.secho(
+        f"error: unrecognised --from format {from_!r};"
+        " use github:owner/repo or path:/dir",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
 
 
 def _reconcile_extensions(

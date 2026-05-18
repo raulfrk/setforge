@@ -13,6 +13,7 @@ import typer
 from setforge import binaries
 from setforge import claude_plugins as claude_plugins_mod
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli._plugin_helpers import _parse_marketplace_from
 from setforge.config import (
     ClaudeInstallMode,
     ReconcilePolicy,
@@ -113,23 +114,7 @@ def plugin_add(
 
     load_config(config)
 
-    # Parse --from into a MarketplaceSource
-    from setforge.config import MarketplaceSource, MarketplaceSourceKind
-
-    if from_.startswith("github:"):
-        repo = from_[len("github:") :]
-        source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
-    elif from_.startswith("path:"):
-        local_path = Path(from_[len("path:") :]).expanduser()
-        source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
-    else:
-        typer.secho(
-            f"error: unrecognised --from format {from_!r};"
-            " use github:owner/repo or path:/dir",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=1)
+    source = _parse_marketplace_from(from_)
 
     # Register marketplace in YAML if not already present
     mp_added = claude_plugins_mod.yaml_add_marketplace(config, mp_name, source)
@@ -326,22 +311,7 @@ def marketplace_add_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Register a marketplace in YAML and run claude plugin marketplace add."""
-    from setforge.config import MarketplaceSource, MarketplaceSourceKind
-
-    if from_.startswith("github:"):
-        repo = from_[len("github:") :]
-        source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo=repo)
-    elif from_.startswith("path:"):
-        local_path = Path(from_[len("path:") :]).expanduser()
-        source = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local_path)
-    else:
-        typer.secho(
-            f"error: unrecognised --from format {from_!r};"
-            " use github:owner/repo or path:/dir",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=1)
+    source = _parse_marketplace_from(from_)
 
     yaml_changed = claude_plugins_mod.yaml_add_marketplace(config, name, source)
     if yaml_changed:
