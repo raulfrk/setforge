@@ -16,6 +16,7 @@ from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
 from setforge.cli._plugin_helpers import _parse_marketplace_from
 from setforge.config import (
     ClaudeInstallMode,
+    MarketplaceSource,
     ReconcilePolicy,
     load_config,
     resolve_profile,
@@ -98,82 +99,98 @@ def plugin_add(
     ),
 ) -> None:
     """Register a marketplace (if new), declare plugin in YAML, and install."""
-    # Parse plugin name and marketplace from the argument
-    if "@" in name:
-        plugin_name, mp_name = name.split("@", 1)
-    elif marketplace:
-        plugin_name = name
-        mp_name = marketplace
-    else:
-        typer.secho(
-            "error: provide plugin as <name>@<marketplace> or use --marketplace",
-            err=True,
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=1)
-
+    plugin_name, mp_name = _validate_plugin_add_args(name, marketplace)
     load_config(config)
-
     source = _parse_marketplace_from(from_)
 
-    # Register marketplace in YAML if not already present
+    _register_plugin_in_yaml(config, profile, plugin_name, mp_name, source)
+    if not no_install:
+        _execute_plugin_add(plugin_name, mp_name)
+
+
+def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, str]:
+    """Split ``<name>@<marketplace>`` or pair ``name`` with ``--marketplace``.
+
+    Exits 1 via ``typer.Exit`` when neither form is supplied.
+    """
+    if "@" in name:
+        plugin_name, mp_name = name.split("@", 1)
+        return plugin_name, mp_name
+    if marketplace:
+        return name, marketplace
+    typer.secho(
+        "error: provide plugin as <name>@<marketplace> or use --marketplace",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
+
+
+def _register_plugin_in_yaml(
+    config: Path,
+    profile: str,
+    plugin_name: str,
+    mp_name: str,
+    source: MarketplaceSource,
+) -> None:
+    """Register the marketplace, plugin, and profile binding in setforge.yaml."""
     mp_added = claude_plugins_mod.yaml_add_marketplace(config, mp_name, source)
     if mp_added:
         typer.echo(f"registered marketplace: {mp_name}")
-        # Add marketplace to claude via CLI
         try:
             claude_plugins_mod.marketplace_add(mp_name, source)
             typer.echo(f"marketplace added: {mp_name}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
-    # Declare plugin in top-level claude_plugins block
     plugin_declared = claude_plugins_mod.yaml_add_plugin(config, plugin_name, mp_name)
     if plugin_declared:
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
-    # Add to profile
     profile_added = claude_plugins_mod.yaml_add_plugin_to_profile(
         config, profile, f"{plugin_name}@{mp_name}"
     )
     if profile_added:
         typer.echo(f"added to {profile}.claude_plugins: {plugin_name}@{mp_name}")
 
-    # Install via claude CLI, then strictly enable. The enable step is
-    # required because `claude plugin install` writes
-    # ``installed_plugins.json`` without flipping ``enabledPlugins`` —
-    # without this second call the plugin lands disabled (see
-    # setforge-l37). Strict failure on enable matches the interactive
-    # single-plugin shape of `plugin add`: a silent warning would be a
-    # footgun. The install half retains today's pattern; latent
-    # subprocess-error handling on install is tracked separately as
-    # setforge-oyv.
-    if not no_install:
-        try:
-            claude_plugins_mod.plugin_install(plugin_name, mp_name)
-        except PluginToolMissing as exc:
-            typer.secho(
-                f"warning: skipping install — {exc}", err=True, fg=typer.colors.YELLOW
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            typer.secho(
-                f"ERROR: install failed — {binaries.stderr_of(exc)}",
-                err=True,
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(code=1) from exc
-        else:
-            typer.echo(f"installed plugin: {plugin_name}@{mp_name}")
-            try:
-                claude_plugins_mod.plugin_enable(f"{plugin_name}@{mp_name}")
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                typer.secho(
-                    f"ERROR: enable failed — {binaries.stderr_of(exc)}",
-                    err=True,
-                    fg=typer.colors.RED,
-                )
-                raise typer.Exit(code=1) from exc
-            typer.echo(f"enabled plugin: {plugin_name}@{mp_name}")
+
+def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
+    """Run ``claude plugin install`` then ``claude plugin enable``.
+
+    Per setforge-l37: ``claude plugin install`` writes
+    ``installed_plugins.json`` without flipping ``enabledPlugins`` — without
+    the second call the plugin lands disabled. Strict failure on enable
+    matches the interactive single-plugin shape of ``plugin add``: a silent
+    warning would be a footgun. The install half retains today's pattern;
+    latent subprocess-error handling on install is tracked separately as
+    setforge-oyv.
+    """
+    pid = f"{plugin_name}@{mp_name}"
+    try:
+        claude_plugins_mod.plugin_install(plugin_name, mp_name)
+    except PluginToolMissing as exc:
+        typer.secho(
+            f"warning: skipping install — {exc}", err=True, fg=typer.colors.YELLOW
+        )
+        return
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        typer.secho(
+            f"ERROR: install failed — {binaries.stderr_of(exc)}",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"installed plugin: {pid}")
+    try:
+        claude_plugins_mod.plugin_enable(pid)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        typer.secho(
+            f"ERROR: enable failed — {binaries.stderr_of(exc)}",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"enabled plugin: {pid}")
 
 
 @plugin_app.command("remove")
