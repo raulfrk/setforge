@@ -1,11 +1,15 @@
-"""Plugin + extension reconcile and reverse helpers shared by install / revert.
+"""Plugin + extension reconcile and reverse helpers shared by
+install / revert / plugins subcommand modules.
 
 No ``app`` import and no ``@app.command()`` decorator registrations.
 Helpers do drive subprocesses (``claude`` / ``code``), write stderr via
 ``typer.secho``, and ``_write_reverse_transition`` persists a transition
 record. The split keeps the subcommand modules free of reconcile state
-machinery; the dispatch table here (``_REVERSE_PLUGIN_DISPATCH``) is the
-single source of truth for plugin-side reverse orchestration.
+machinery; the dispatch table here (``_REVERSE_PLUGIN_DISPATCH``) covers
+four of the five plugin-side inverse ops — ``marketplaces_removed`` is
+handled separately by :func:`_apply_marketplace_re_add` because it
+needs marketplace-source re-construction that the per-plugin dispatch
+shape doesn't fit.
 """
 
 import json
@@ -310,7 +314,8 @@ def _apply_marketplace_re_add(
             # per PluginDelta.marketplaces_removed contract); pydantic
             # coerces them back into MarketplaceSourceKind / Path through
             # model_validate (accepts Any, runs full validation — avoids
-            # the # type: ignore[arg-type] the **-splat construction needed).
+            # the `# type: ignore[arg-type]` that the **-splat
+            # construction would otherwise need).
             source = MarketplaceSource.model_validate(source_payload)
             claude_plugins_mod.marketplace_add(name, source)
             success_list.append((name, dict(source_payload)))

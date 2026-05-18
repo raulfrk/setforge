@@ -121,11 +121,15 @@ def _root(
         is_eager=True,
     ),
 ) -> None:
-    """Wire host-local binary overrides, configure logging, ensure local stub exists.
+    """Wire host-local binary overrides + source-layer override + logging + local stub.
 
-    Also wires ``--source`` (passed through to the source-layer resolver)
-    and ``--version`` (eager-callback prints version and exits before
-    the body runs).
+    Side effects (in order): set CLI binary overrides via
+    ``binaries.set_cli_overrides``, ensure ``~/.config/setforge/local.yaml``
+    stub exists via ``binaries.ensure_local_config_stub``, set the
+    ``--source`` override via ``source_mod.set_cli_source``, configure
+    root logging level.
+    ``--version`` is wired as an eager callback that prints
+    ``setforge.__version__`` and exits before this body runs.
     """
     if verbose:
         level = logging.DEBUG

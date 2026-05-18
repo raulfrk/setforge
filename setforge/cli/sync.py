@@ -1,12 +1,14 @@
 """capture / merge / sync subcommands — live → tracked capture flow.
 
-All three drive the same ``capture_mod.capture_profile`` pipeline, which
-fires the merge wizard interactively when drift requires resolution.
-``--auto={use-live,keep-tracked}`` switches to non-interactive mode.
-
-- ``capture`` runs the pipeline without writing a transition.
-- ``merge`` runs the wizard standalone (no profile capture).
-- ``sync`` runs the pipeline AND records a transition for ``revert``.
+- ``capture`` and ``sync`` drive the ``capture_mod.capture_profile``
+  pipeline; the merge wizard fires interactively on drift, with
+  ``--auto={use-live,keep-tracked}`` as the non-interactive escape.
+  ``capture`` is the pipeline alone; ``sync`` also records a transition
+  so ``revert`` can replay it.
+- ``merge`` runs the merge wizard standalone via
+  ``merge_mod.run_wizard`` — no profile capture, no transition. It has
+  its own ``--tracked_file`` filter; no ``--auto`` option (the wizard
+  is always interactive for the merge subcommand).
 """
 
 from pathlib import Path
@@ -99,7 +101,12 @@ def merge(
         help="Narrow the walk to one tracked_file entry key.",
     ),
 ) -> None:
-    """Interactively resolve unexpected drift for every tracked_file in the profile."""
+    """Interactively resolve unexpected drift for every tracked_file in the profile.
+
+    Exits 0 with a "no unexpected drift; nothing to do." message when
+    ``compare`` reports no unexpected drift — the wizard runs only when
+    there's work to do.
+    """
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)

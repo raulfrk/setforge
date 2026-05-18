@@ -1,8 +1,12 @@
 """Section-marker helpers shared by install / compare / sync subcommands.
 
-Pure helpers — no ``app`` import, no decorator registrations, no I/O
-beyond the live-file reads the legacy-marker refuse / section-decisions
-flow already performs.
+No ``app`` import and no ``@app.command()`` decorator registrations.
+Two flavors of I/O run through this module: (1) the live-file reads
+the legacy-marker-refuse / section-decisions / live-sections-extract
+flow performs, and (2) the directory walks ``expand_tracked_file`` runs
+for tracked entries whose ``src`` is a directory — both helpers below
+that delegate to ``expand_tracked_file`` (``_iter_section_tracked_files``,
+``_iter_all_tracked_files``) inherit that walk cost.
 """
 
 from collections.abc import Iterator, Mapping
@@ -84,10 +88,12 @@ def _iter_section_tracked_files(
     ``preserve_user_sections`` filter chain that
     :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
     :func:`_extract_live_sections_map`, and
-    :func:`_print_section_reconcile_dry_run` all duplicate today. Pure
-    walk — no I/O; callers that need the live or tracked text read it
-    themselves so the generator's iteration cost stays O(N) in
-    the tracked-file count regardless of file sizes.
+    :func:`_print_section_reconcile_dry_run` all duplicate today.
+    ``expand_tracked_file`` runs ``Path.rglob`` for directory-shaped
+    tracked entries (a per-call filesystem walk); for plain-file entries
+    the helper is allocation-only. Callers that need the live or tracked
+    text read it themselves so the generator's iteration cost stays
+    O(N) in the tracked-file count regardless of file sizes.
 
     Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
