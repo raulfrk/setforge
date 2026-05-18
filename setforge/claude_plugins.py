@@ -862,16 +862,36 @@ def reconcile(
         cfg, mps_to_add, install_mode, MARKETPLACE_CACHE_ROOT, failed
     )
 
-    # Per spec § Algorithm β2 (setforge-l37): freshly-installed plugins
-    # land disabled in installed_plugins.json — `claude plugin install`
-    # never touches enabledPlugins. To make a single reconcile run land
-    # the plugin active, we route successful installs through the enable
-    # loop via a separate working list, leaving the report's
-    # `to_enable` field semantically clean (only the original
-    # `declared intersect disabled` set, NOT freshly-installed plugins). Failed
-    # installs are NOT enabled.
-    runtime_to_enable: list[str] = list(to_enable)
+    _reconcile_install(to_install, to_enable, failed)
+    if profile.plugins_reconcile is ReconcilePolicy.PRUNE:
+        _reconcile_remove(to_disable, failed)
 
+    return ReconcileReport(
+        to_install=[_split_id(pid) for pid in to_install],
+        to_enable=to_enable,
+        to_disable=to_disable,
+        marketplaces_added=mps_to_add,
+        dry_run=False,
+        failed=failed,
+    )
+
+
+def _reconcile_install(
+    to_install: list[str],
+    to_enable: list[str],
+    failed: list[tuple[str, str]],
+) -> None:
+    """Run the install + enable loop, appending subprocess failures to ``failed``.
+
+    Per spec § Algorithm β2 (setforge-l37): freshly-installed plugins
+    land disabled in ``installed_plugins.json`` — ``claude plugin install``
+    never touches ``enabledPlugins``. To make a single reconcile run land
+    each plugin active, successful installs are routed through the enable
+    loop via a separate working list, leaving the report's ``to_enable``
+    field semantically clean (the original ``declared intersect disabled``
+    set, NOT freshly-installed plugins). Failed installs are NOT enabled.
+    """
+    runtime_to_enable: list[str] = list(to_enable)
     for pid in to_install:
         name, mp = _split_id(pid)
         LOGGER.info("installing plugin: %s @ %s", name, mp)
@@ -893,24 +913,20 @@ def reconcile(
             LOGGER.warning("plugin_enable failed for %s: %s", pid, msg)
             failed.append((pid, msg))
 
-    if profile.plugins_reconcile is ReconcilePolicy.PRUNE:
-        for pid in to_disable:
-            LOGGER.info("disabling plugin: %s", pid)
-            try:
-                plugin_disable(pid)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                msg = stderr_of(exc)
-                LOGGER.warning("plugin_disable failed for %s: %s", pid, msg)
-                failed.append((pid, msg))
 
-    return ReconcileReport(
-        to_install=[_split_id(pid) for pid in to_install],
-        to_enable=to_enable,
-        to_disable=to_disable,
-        marketplaces_added=mps_to_add,
-        dry_run=False,
-        failed=failed,
-    )
+def _reconcile_remove(
+    to_disable: list[str],
+    failed: list[tuple[str, str]],
+) -> None:
+    """Run the disable loop for ``PRUNE`` policy, recording failures."""
+    for pid in to_disable:
+        LOGGER.info("disabling plugin: %s", pid)
+        try:
+            plugin_disable(pid)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            msg = stderr_of(exc)
+            LOGGER.warning("plugin_disable failed for %s: %s", pid, msg)
+            failed.append((pid, msg))
 
 
 # ---------------------------------------------------------------------------
