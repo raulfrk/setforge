@@ -47,8 +47,8 @@ from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugi
 from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
-from setforge.sections import SectionSemantics
 from setforge.section_wizard import ReconcileAuto
+from setforge.sections import SectionSemantics
 
 
 def _build_unexpected_drift_plan(
@@ -60,7 +60,7 @@ def _build_unexpected_drift_plan(
     direction: AutoDirection,
     profile: str,
 ) -> AutoPlan:
-    """Build an AutoPlan from a compare-time drift report for legacy --auto-accept-* paths.
+    """Build an AutoPlan from a drift report for legacy --auto-accept-* paths.
 
     Walks ``_iter_all_tracked_files`` to build a name → (sub_src, sub_dst)
     map, then joins with the ``CompareReport.entries`` that have
@@ -76,9 +76,8 @@ def _build_unexpected_drift_plan(
         # tracked_file name directly; directory entries use "name/relpath".
         # We register both the bare name and the prefixed form so lookup
         # works regardless of expansion shape.
-        name = tracked_file.src
         paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[name] = (sub_src, sub_dst)
+        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
     file_changes: list[FileChange] = []
     for entry in drift_report.entries:
         if entry.status is not CompareStatus.DRIFTED:

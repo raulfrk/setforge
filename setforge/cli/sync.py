@@ -69,7 +69,7 @@ def _build_capture_plan(
         cfg, resolved, repo_root
     ):
         paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[tracked_file.src] = (sub_src, sub_dst)
+        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
     file_changes: list[FileChange] = []
     for entry in drift_report.entries:
         if entry.status is not CompareStatus.DRIFTED:
