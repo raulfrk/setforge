@@ -77,6 +77,15 @@ def _resolve_config_arg(config: Path) -> Path:
     return source_mod.validate_source_dir(resolved_source)
 
 
+def _version_callback(value: bool) -> None:
+    """``--version`` flag handler — print the package version and exit."""
+    if value:
+        from setforge import __version__
+
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
 @app.callback()
 def _root(
     code_bin: str | None = typer.Option(
@@ -104,8 +113,20 @@ def _root(
         "-v",
         help="Emit DEBUG-level logging to stderr.",
     ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Print the setforge version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
 ) -> None:
-    """Wire host-local binary overrides, configure logging, ensure local stub exists."""
+    """Wire host-local binary overrides, configure logging, ensure local stub exists.
+
+    Also wires ``--source`` (passed through to the source-layer resolver)
+    and ``--version`` (eager-callback prints version and exits before
+    the body runs).
+    """
     if verbose:
         level = logging.DEBUG
     else:
