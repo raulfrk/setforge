@@ -334,6 +334,58 @@ def _serialize_reconcile_outcomes(
     )
 
 
+_VALID_OUTCOME_KINDS: frozenset[str] = frozenset({"plugin", "extension"})
+_VALID_OUTCOME_STATUSES: frozenset[str] = frozenset(
+    {"ok", "retried_ok", "skipped", "aborted"}
+)
+
+
+def _validate_one_outcome(entry: object) -> ReconcileOutcome:
+    """Validate one JSON entry into a :class:`ReconcileOutcome`.
+
+    Raises :class:`InvalidTransitionRecord` on any deviation from the
+    four-field shape. Kept as a free function so
+    :func:`reconcile_outcomes_from_json`'s per-entry block flattens to
+    one ``append(_validate_one_outcome(entry))`` call (nesting depth 2,
+    not 3).
+    """
+    if not isinstance(entry, dict):
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: entry must be a dict, got "
+            f"{type(entry).__name__}"
+        )
+    item_id = entry.get("item_id")
+    kind = entry.get("kind")
+    status = entry.get("status")
+    err = entry.get("error_summary")
+    if not isinstance(item_id, str):
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: item_id must be str, got "
+            f"{type(item_id).__name__}"
+        )
+    if kind not in _VALID_OUTCOME_KINDS:
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: kind must be in "
+            f"{sorted(_VALID_OUTCOME_KINDS)}, got {kind!r}"
+        )
+    if status not in _VALID_OUTCOME_STATUSES:
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: status must be in "
+            f"{sorted(_VALID_OUTCOME_STATUSES)}, got {status!r}"
+        )
+    if err is not None and not isinstance(err, str):
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: error_summary must be str | None, "
+            f"got {type(err).__name__}"
+        )
+    return ReconcileOutcome(
+        item_id=item_id,
+        kind=kind,  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        error_summary=err,
+    )
+
+
 def reconcile_outcomes_from_json(
     raw: dict[str, object],
 ) -> tuple[ReconcileOutcome, ...]:
@@ -351,48 +403,7 @@ def reconcile_outcomes_from_json(
             f"reconcile_outcomes.json: outcomes must be a list, got "
             f"{type(raw_list).__name__}"
         )
-    validated: list[ReconcileOutcome] = []
-    valid_kinds = {"plugin", "extension"}
-    valid_statuses = {"ok", "retried_ok", "skipped", "aborted"}
-    for entry in raw_list:
-        if not isinstance(entry, dict):
-            raise InvalidTransitionRecord(
-                f"reconcile_outcomes.json: entry must be a dict, got "
-                f"{type(entry).__name__}"
-            )
-        item_id = entry.get("item_id")
-        kind = entry.get("kind")
-        status = entry.get("status")
-        err = entry.get("error_summary")
-        if not isinstance(item_id, str):
-            raise InvalidTransitionRecord(
-                f"reconcile_outcomes.json: item_id must be str, got "
-                f"{type(item_id).__name__}"
-            )
-        if kind not in valid_kinds:
-            raise InvalidTransitionRecord(
-                f"reconcile_outcomes.json: kind must be in {sorted(valid_kinds)}, "
-                f"got {kind!r}"
-            )
-        if status not in valid_statuses:
-            raise InvalidTransitionRecord(
-                f"reconcile_outcomes.json: status must be in "
-                f"{sorted(valid_statuses)}, got {status!r}"
-            )
-        if err is not None and not isinstance(err, str):
-            raise InvalidTransitionRecord(
-                f"reconcile_outcomes.json: error_summary must be str | None, "
-                f"got {type(err).__name__}"
-            )
-        validated.append(
-            ReconcileOutcome(
-                item_id=item_id,
-                kind=kind,  # type: ignore[arg-type]
-                status=status,  # type: ignore[arg-type]
-                error_summary=err,
-            )
-        )
-    return tuple(validated)
+    return tuple(_validate_one_outcome(entry) for entry in raw_list)
 
 
 def load_reconcile_outcomes(
