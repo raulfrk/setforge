@@ -37,32 +37,9 @@ from pathlib import Path
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_configure(config: pytest.Config) -> None:
-    """Auto-activate pytest-xdist when running with ``-m e2e_docker``.
-
-    Sets ``config.option.numprocesses = "auto"`` BEFORE xdist's own
-    ``pytest_configure(trylast=True)`` consumes the value. The
-    ``tryfirst=True`` ordering is load-bearing — without it, the
-    previous incarnation's default-priority ``pytest_configure`` could
-    fire AFTER xdist's, and xdist would silently decide "no workers"
-    despite the docs claiming auto-activation.
-
-    Activates only when:
-
-    - the ``-m`` markexpr contains ``e2e_docker`` (substring match —
-      covers compound expressions like ``-m "e2e_docker and not slow"``), AND
-    - ``-n`` / ``--numprocesses`` was not set explicitly on the CLI
-      (preserves user opt-out via ``-n 0`` for serial-mode debugging).
-    """
-    markexpr = config.getoption("markexpr", default="") or ""
-    if "e2e_docker" not in markexpr:
-        return
-    explicit = config.getoption("numprocesses", default=None)
-    if explicit is not None:
-        return
-    config.option.numprocesses = "auto"
+# xdist auto-activation moved to project-root ``conftest.py:pytest_configure``
+# — a subdir ``pytest_configure(tryfirst=True)`` here fires AFTER xdist consumes
+# ``numprocesses`` (xdist#917), so the activation was silently ignored.
 
 
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
