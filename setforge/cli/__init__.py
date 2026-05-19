@@ -28,6 +28,13 @@ app: typer.Typer = typer.Typer(
     # Pin help-output column width so CliRunner snapshot assertions
     # stay byte-for-byte stable across CI vs local (Click #2253).
     context_settings={"max_content_width": 100, "terminal_width": 100},
+    # Disable Rich-rendered --help so Click's `\b` epilog idiom
+    # preserves newlines AND so CliRunner substring asserts on flag
+    # names (e.g. `'--dry-run' in result.stdout`) survive without ANSI
+    # injection breaking the match. ``rich_markup_mode`` does NOT
+    # propagate to sub-Typers, so the same kwarg is repeated on every
+    # ``typer.Typer(...)`` constructor under setforge/cli/.
+    rich_markup_mode=None,
 )
 
 
