@@ -20,6 +20,7 @@ import io
 import logging
 import os
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
@@ -59,6 +60,7 @@ def copy_atomic(
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
     precomputed_live_sections: sections.LiveSections | None = None,
+    mode: int | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -87,6 +89,12 @@ def copy_atomic(
     for the current on-disk live file; behaviour is otherwise identical
     to the default ``None`` code path. ``section_bodies_override`` still
     wins per-key when both are supplied.
+
+    ``mode`` is the POSIX file-mode bits to apply to ``dst`` via
+    ``os.fchmod`` on the temp fd BEFORE ``os.replace`` (closes the
+    TOCTOU symlink-swap window and bypasses umask). When ``None``,
+    the temp file inherits the source's mode via
+    :func:`stat.S_IMODE` (today's behavior, zero regression).
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -118,7 +126,7 @@ def copy_atomic(
     if action is DeployAction.NOOP:
         return DeployResult(dst=real_dst, action=action, backup_path=None)
 
-    backup_path = _atomic_write(content, src, real_dst, dst_existed, backup)
+    backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
     return DeployResult(dst=real_dst, action=action, backup_path=backup_path)
 
 
@@ -238,7 +246,19 @@ def _atomic_write(
     dst: Path,
     dst_existed: bool,
     backup: bool,
+    mode: int | None,
 ) -> Path | None:
+    """Atomically write ``content`` to ``dst`` with explicit mode bits.
+
+    ``os.fchmod`` runs on the temp fd BEFORE ``os.replace`` so the
+    final mode is applied in the same FS object, closing the TOCTOU
+    symlink-swap window that a post-replace path-based chmod call
+    would expose. When ``mode`` is None, the temp file gets the
+    source's mode (via :func:`stat.S_IMODE`) — today's behavior.
+    fchmod failure is contractual: it propagates (no
+    :func:`contextlib.suppress` wrapper).
+    """
+    effective_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
     tmp_fd, tmp_name = tempfile.mkstemp(
         dir=str(dst.parent), prefix=f".{dst.name}.", suffix=".tmp"
     )
@@ -246,8 +266,8 @@ def _atomic_write(
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             fh.write(content)
-        with contextlib.suppress(OSError):
-            shutil.copystat(src, tmp_path)
+            fh.flush()
+            os.fchmod(fh.fileno(), effective_mode)
 
         backup_path: Path | None = None
         if backup and dst_existed:

@@ -174,6 +174,7 @@ def _deploy_all_tracked_files(
             preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
             section_bodies_override=override,
             precomputed_live_sections=precomputed,
+            mode=tracked_file.mode,
         )
         typer.echo(f"{result.action.value:>8}  {sub_dst}")
         if tracked_file.preserve_user_sections:
