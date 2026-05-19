@@ -189,6 +189,7 @@ from setforge.cli import section as _section  # noqa: E402, F401 (section subgro
 from setforge.cli import init as _init  # noqa: E402, F401
 from setforge.cli import upgrade as _upgrade  # noqa: E402, F401
 from setforge.cli import migrate as _migrate  # noqa: E402, F401 (schema migration)
+from setforge.cli import status as _status  # noqa: E402, F401  (xra8)
 # isort: on
 
 

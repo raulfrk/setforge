@@ -172,9 +172,7 @@ def test_make_meta_source_sha_none_when_source_dir_is_not_git_repo(
     tmp_path: Path,
 ) -> None:
     """A non-git directory must not crash; ``source_sha`` stays None."""
-    meta = make_meta(
-        TransitionCommand.INSTALL, "vm-headless", source_dir=tmp_path
-    )
+    meta = make_meta(TransitionCommand.INSTALL, "vm-headless", source_dir=tmp_path)
     assert meta.source_sha is None
 
 
