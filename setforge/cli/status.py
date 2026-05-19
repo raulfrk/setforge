@@ -17,6 +17,7 @@ YAML, unknown profile).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import shutil
@@ -48,6 +49,7 @@ from setforge.cli._init_helpers import (
 )
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_profile
+from setforge.errors import InvalidTransitionRecord
 from setforge.source import LOCAL_CONFIG_PATH, get_resolved_source, resolve_source_dir
 
 _GIT_TIMEOUT_SECONDS: int = 30
@@ -236,10 +238,9 @@ def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
     )
     if latest_dir is None:
         return None
-    try:
+    with contextlib.suppress(InvalidTransitionRecord):
         return transitions.load_meta(latest_dir)
-    except Exception:  # InvalidTransitionRecord or any read error
-        return None
+    return None
 
 
 def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
