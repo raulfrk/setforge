@@ -2214,3 +2214,190 @@ def test_e2e_docker_migrate_multi_file_fake(
     assert c.read_text(yaml_path).strip().endswith("profiles: {p: {}}")
     assert "old_key:" in c.read_text(yaml_path)
     assert "legacy" in c.read_text(tracked_path)
+
+
+# ===========================================================================
+# Section: snapshot create / list / restore (setforge-of3a)
+# ===========================================================================
+#
+# Directory-copy snapshots of the profile-resolved tracked_files.dst set
+# plus host-local local.yaml. Three named cases per the spec:
+#   1. create -> list -> restore round-trip (additive overlay verified)
+#   2. auto-prune on create keeps N most-recent snapshots
+#   3. restore choosing "yes + write a pre-restore snapshot" first
+
+
+_SNAPSHOTS_ROOT = "/home/tester/.local/share/setforge/snapshots"
+
+
+def test_e2e_docker_snapshot_create_list_restore_roundtrip(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Snapshot a freshly-installed profile, drift live, restore — body returns.
+
+    Asserts (1) ``snapshot create`` writes a finalized snapshot dir with
+    ``_meta.json`` commit marker, (2) ``snapshot list`` surfaces the
+    label, (3) ``snapshot restore --yes`` overlays the live destination
+    additively (live-only sibling file is NOT touched).
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+    pre = c.read_text(target)
+
+    create = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "snapshot",
+            "create",
+            "before-edit",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr + create.stdout
+    assert "snapshot complete" in create.stdout
+
+    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
+    assert listed.returncode == 0
+    assert "before-edit" in listed.stdout
+
+    # Drift the live file AND add a live-only sibling.
+    c.write_text(target, "drifted body\n")
+    sibling = "/home/tester/.setforge_e2e/minimal/live-only.txt"
+    c.write_text(sibling, "sibling untouched\n")
+
+    restore = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "snapshot",
+            "restore",
+            "before-edit",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert restore.returncode == 0, restore.stderr + restore.stdout
+    assert c.read_text(target) == pre
+    # Additive overlay (Q6): the live-only sibling is untouched.
+    assert c.read_text(sibling) == "sibling untouched\n"
+
+
+def test_e2e_docker_snapshot_auto_prune_keeps_n(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Creating 4 snapshots with ``--keep=2`` leaves exactly 2 on disk.
+
+    Verifies the prune-on-create retention contract (Q15) end-to-end: the
+    oldest snapshots are removed after a successful create — the newest
+    ``--keep`` survive.
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    for label in ("s1", "s2", "s3", "s4"):
+        result = c.exec(
+            [
+                "uv",
+                "run",
+                "setforge",
+                "snapshot",
+                "create",
+                label,
+                "--profile=test-minimal",
+                f"--config={CONFIG_FIXTURE}",
+                "--keep=2",
+            ],
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        # One-second resolution guarantees a fresh snapshot id per loop.
+        c.exec(["sleep", "1"])
+
+    listing = c.exec(["ls", _SNAPSHOTS_ROOT], check=False).stdout
+    surviving = [line for line in listing.splitlines() if line.strip()]
+    # Two retained snapshot dirs; no `.partial` lingering.
+    assert len(surviving) == 2, f"expected 2 snapshots, got {surviving!r}"
+    assert all(not s.endswith(".partial") for s in surviving)
+    # Oldest two removed: only s3 + s4 must remain.
+    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
+    assert "s4" in listed.stdout
+    assert "s3" in listed.stdout
+    assert "s1" not in listed.stdout
+    assert "s2" not in listed.stdout
+
+
+def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Interactive RESTORE_WITH_PRE_SNAPSHOT path writes a pre-restore snapshot.
+
+    Drives the radiolist via ``setforge`` CLI's ``--yes`` shortcut is
+    NOT enough — that path always skips pre-snapshot per spec. Instead,
+    invoke the domain helper directly via ``python -c`` inside the
+    container to exercise the ``pre_snapshot=True`` branch (the wizard
+    surface is covered by the unit + CLI tests).
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+
+    # Create the baseline snapshot via the public CLI.
+    create = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "snapshot",
+            "create",
+            "baseline",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr + create.stdout
+
+    # Drift the live state so the restore is a no-op-on-bytes check
+    # for the baseline but the pre-restore snapshot captures v2.
+    c.write_text(target, "drifted v2 body\n")
+
+    # Drive restore_snapshot(..., pre_snapshot=True) via python -c so the
+    # interactive RESTORE_WITH_PRE_SNAPSHOT path is exercised on the real
+    # filesystem (CliRunner monkeypatch covers it for unit; this is the
+    # cross-process variant).
+    pre_restore_script = textwrap.dedent(
+        f"""
+        import sys
+        from pathlib import Path
+        from setforge import snapshots
+        from setforge.config import load_config, resolve_profile
+
+        config = Path('{CONFIG_FIXTURE}').resolve()
+        cfg = load_config(config)
+        resolved = resolve_profile(cfg, 'test-minimal')
+        ctx = (cfg, resolved, config.parent, 'test-minimal')
+        snapshots.restore_snapshot('baseline', pre_snapshot=True, pre_snapshot_ctx=ctx)
+        print('restored', file=sys.stderr)
+        """
+    ).strip()
+    result = c.exec(
+        ["uv", "run", "python", "-c", pre_restore_script],
+        workdir="/workspace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    # Snapshot list now contains both the baseline AND a pre-restore-<id>.
+    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
+    assert "baseline" in listed.stdout
+    assert "pre-restore-" in listed.stdout
+    # Live target is now back to the original install body.
+    pre_install_body = c.read_text(target)
+    assert "drifted v2" not in pre_install_body
