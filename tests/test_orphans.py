@@ -41,9 +41,7 @@ def _strip_ansi_and_newlines(text: str) -> str:
 
 
 @pytest.fixture
-def isolated_state_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Path:
+def isolated_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Redirect ``SETFORGE_STATE_DIR`` to a per-test tmp tree."""
     state = tmp_path / "state"
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
@@ -63,9 +61,7 @@ def _make_config_with(tracked: dict[str, TrackedFile]) -> Config:
     )
 
 
-def _write_meta_record(
-    transitions_root: Path, dirname: str, paths: list[str]
-) -> Path:
+def _write_meta_record(transitions_root: Path, dirname: str, paths: list[str]) -> Path:
     """Write a minimal ``meta.json`` record exposing ``paths`` for detection."""
     target = transitions_root / dirname
     target.mkdir(parents=True, exist_ok=True)
@@ -118,8 +114,7 @@ def test_detect_orphans_empty_when_transitions_missing(tmp_path: Path) -> None:
         {"x": TrackedFile(src=Path("x"), dst=str(tmp_path / "x"))}
     )
     assert (
-        detect_orphans(resolve_profile_wrap(config, "p"), config, transitions_dir)
-        == []
+        detect_orphans(resolve_profile_wrap(config, "p"), config, transitions_dir) == []
     )
 
 
@@ -155,9 +150,7 @@ def test_detect_orphans_respects_ignore_list(tmp_path: Path) -> None:
     # suppress it.
     config = Config(
         tracked_files={
-            "ignored_id": TrackedFile(
-                src=Path("ignored.txt"), dst=str(live_ignored)
-            ),
+            "ignored_id": TrackedFile(src=Path("ignored.txt"), dst=str(live_ignored)),
         },
         profiles={"p": Profile(tracked_files=[])},
     )
@@ -189,9 +182,7 @@ def test_load_ignored_orphans_parses_list(tmp_path: Path) -> None:
     """A `orphan_ignore:` block round-trips into a frozenset."""
     cfg_path = compare_mod.LOCAL_CONFIG_PATH
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(
-        "orphan_ignore:\n  - foo\n  - bar\n", encoding="utf-8"
-    )
+    cfg_path.write_text("orphan_ignore:\n  - foo\n  - bar\n", encoding="utf-8")
     assert load_ignored_orphans() == frozenset({"foo", "bar"})
 
 
@@ -320,7 +311,6 @@ def test_apply_yes_writes_transition_first(
     )
     monkeypatch.setattr(Path, "unlink", _spy_unlink)
 
-
     orphans_mod._apply_cleanup(
         "p",
         [orphan_entry],
@@ -387,9 +377,7 @@ def test_ignore_writes_local_yaml_not_tracked(
     assert payload == {"orphan_ignore": ["some_old_id"]}
 
 
-def test_ignore_is_idempotent(
-    runner: CliRunner, tmp_path: Path
-) -> None:
+def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
     """Re-adding an existing id leaves the list shape unchanged."""
     cfg = _write_minimal_yaml(tmp_path)
     for _ in range(2):
@@ -576,14 +564,10 @@ def test_compare_renders_orphans_block(
     # doesn't trip.
     (tmp_path / "kept.txt").write_text("k", encoding="utf-8")
 
-    result = runner.invoke(
-        app, ["compare", "--profile", "p", "--config", str(cfg)]
-    )
+    result = runner.invoke(app, ["compare", "--profile", "p", "--config", str(cfg)])
     assert result.exit_code == 0, result.stdout
     # Rich wraps fragments in ANSI escapes AND newlines for narrow
     # terminal width; strip both before substring assertions.
     plain = _strip_ansi_and_newlines(result.stdout)
     assert "Orphans (1):" in plain
     assert live_orphan.name in plain
-
-

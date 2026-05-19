@@ -188,9 +188,7 @@ def _read_orphan_content(path: Path) -> str | None:
         return None
 
 
-def _write_orphan_transition(
-    profile: str, orphans: list[OrphanEntry]
-) -> Path:
+def _write_orphan_transition(profile: str, orphans: list[OrphanEntry]) -> Path:
     """Write a transition record capturing pre-delete content for revert.
 
     Builds ``file_pre`` from each orphan's current content (or ``None``
@@ -200,9 +198,7 @@ def _write_orphan_transition(
     unlink so a crash mid-cleanup still leaves the user a recoverable
     state.
     """
-    meta = transitions.make_meta(
-        transitions.TransitionCommand.CLEANUP_ORPHANS, profile
-    )
+    meta = transitions.make_meta(transitions.TransitionCommand.CLEANUP_ORPHANS, profile)
     file_pre: dict[Path, str | None] = {
         orphan.path: _read_orphan_content(orphan.path) for orphan in orphans
     }
@@ -264,8 +260,7 @@ def _rmdir_empty_parents(parents: list[Path], console: Console) -> None:
                 console.print(f"  deleted  {parent}/   (empty)")
         except OSError as exc:
             console.print(
-                f"[yellow]warning:[/yellow] could not remove empty dir "
-                f"{parent}: {exc}"
+                f"[yellow]warning:[/yellow] could not remove empty dir {parent}: {exc}"
             )
 
 
