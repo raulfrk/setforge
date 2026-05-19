@@ -68,7 +68,7 @@ def _patch_urlopen(
     """Replace ``urllib.request.urlopen`` with a factory; record calls."""
     calls: list[tuple[str, dict[str, str]]] = []
 
-    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:  # noqa: ARG001
+    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
         headers = {k.title(): v for k, v in request.header_items()}
         calls.append((request.full_url, headers))
         return response_factory(request)
@@ -287,9 +287,7 @@ def test_fetch_latest_version_raises_on_invalid_json(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def factory(_request: Any) -> _FakeResponse:
-        return _FakeResponse(
-            status=200, body=b"not-json", headers={"ETag": "x"}
-        )
+        return _FakeResponse(status=200, body=b"not-json", headers={"ETag": "x"})
 
     _patch_urlopen(monkeypatch, response_factory=factory)
     with pytest.raises(PyPIFetchError, match="non-JSON"):

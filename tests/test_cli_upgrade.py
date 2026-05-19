@@ -22,7 +22,6 @@ from setforge.cli.upgrade import (
     _confirm_upgrade,
 )
 
-
 # ---------------------------------------------------------------------------
 # Schema-change assessment
 # ---------------------------------------------------------------------------
@@ -52,10 +51,7 @@ def test_assess_schema_change_detected_from_schema_version_bumped_line() -> None
 
 
 def test_assess_schema_change_detected_from_breaking_block() -> None:
-    notes = (
-        "### Changed\n"
-        "- BREAKING: schema field `bootstrap` renamed to `scaffold`.\n"
-    )
+    notes = "### Changed\n- BREAKING: schema field `bootstrap` renamed to `scaffold`.\n"
     out = _assess_schema_change(notes, current_schema="1.0", is_major_bump=False)
     assert out.kind is SchemaChangeKind.DETECTED
     assert "BREAKING" in out.impact_summary
@@ -191,7 +187,9 @@ def test_confirm_panel_default_biases_migrate_check_when_detected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _make_plan(schema_kind=SchemaChangeKind.DETECTED)
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK)
+    recorder = _patch_radiolist(
+        monkeypatch, return_value=UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
+    )
     _confirm_upgrade(plan, yes=False)
     assert recorder.kwargs[0]["default"] is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
 
@@ -228,12 +226,8 @@ def _patch_pypi(
     monkeypatch.setattr("setforge.cli.upgrade.fetch_latest_version", fake_fetch)
 
 
-def _patch_notes(
-    monkeypatch: pytest.MonkeyPatch, *, notes: str | None
-) -> None:
-    monkeypatch.setattr(
-        "setforge.cli.upgrade._load_release_notes", lambda _v: notes
-    )
+def _patch_notes(monkeypatch: pytest.MonkeyPatch, *, notes: str | None) -> None:
+    monkeypatch.setattr("setforge.cli.upgrade._load_release_notes", lambda _v: notes)
 
 
 def test_build_upgrade_plan_passes_through_pypi_version(
@@ -285,10 +279,10 @@ def _patch_subprocess_run(
     def fake_run(
         cmd: list[str],
         *,
-        capture_output: bool = False,  # noqa: ARG001
-        text: bool = False,  # noqa: ARG001
-        check: bool = False,  # noqa: ARG001
-        timeout: float | None = None,  # noqa: ARG001
+        capture_output: bool = False,
+        text: bool = False,
+        check: bool = False,
+        timeout: float | None = None,
         **_kwargs: Any,
     ) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
@@ -485,9 +479,10 @@ def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
     # CliRunner bypasses that handler, so the UpgradeError raises directly.
     result = runner.invoke(app, ["upgrade", "--no-prompt"])
     assert result.exit_code != 0
-    assert "permission denied" in (
-        str(result.exception) if result.exception else ""
-    ) or "permission denied" in result.output
+    assert (
+        "permission denied" in (str(result.exception) if result.exception else "")
+        or "permission denied" in result.output
+    )
 
 
 def test_cli_upgrade_post_verify_failure(
@@ -536,7 +531,7 @@ def test_cli_upgrade_pypi_fetch_error_exits_one(
 
 def test_upgrade_module_uses_only_radiolist_no_typer_prompt() -> None:
     """Grep upgrade.py for forbidden prompt shapes."""
-    text = (upgrade_mod.__file__ or "")
+    text = upgrade_mod.__file__ or ""
     assert text  # path must be present
     from pathlib import Path
 

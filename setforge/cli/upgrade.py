@@ -83,8 +83,7 @@ _BREAKING_SCHEMA_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _MIGRATE_HINT: str = (
-    "   After upgrade, run `setforge migrate --apply` "
-    "to update your local files."
+    "   After upgrade, run `setforge migrate --apply` to update your local files."
 )
 _MANIFEST_LINE_RE: re.Pattern[str] = re.compile(
     r"^\s*[-*]\s*(?:renames?|adds?|removes?|breaking):.*$",
@@ -280,14 +279,10 @@ def _is_major_bump(current: str, target: str) -> bool:
         return False
 
 
-def _build_upgrade_plan(
-    *, to: str | None, prerelease: bool
-) -> UpgradePlan:
+def _build_upgrade_plan(*, to: str | None, prerelease: bool) -> UpgradePlan:
     """Resolve target version + load notes + assess schema → UpgradePlan."""
     if to is not None and not _VERSION_RE.match(to):
-        raise UpgradeError(
-            f"--to value {to!r} is not a valid X.Y.Z version string"
-        )
+        raise UpgradeError(f"--to value {to!r} is not a valid X.Y.Z version string")
     info: PyPIVersionInfo = fetch_latest_version(
         package=_PACKAGE_NAME,
         current_version=_CURRENT_VERSION,

@@ -162,9 +162,7 @@ def _fetch_json(
         request.add_header("If-None-Match", cached_etag)
     effective_timeout = max(timeout)
     try:
-        with urllib.request.urlopen(
-            request, timeout=effective_timeout
-        ) as response:
+        with urllib.request.urlopen(request, timeout=effective_timeout) as response:
             status = response.status
             body_bytes = response.read()
             new_etag = response.headers.get("ETag")
@@ -214,7 +212,7 @@ def fetch_latest_version(
     resolved_cache_dir = cache_dir if cache_dir is not None else _default_cache_dir()
     cache_path = _etag_cache_path(cache_dir=resolved_cache_dir, package=package)
     cached = _read_etag_cache(cache_path)
-    cached_etag, cached_body = (cached if cached is not None else (None, None))
+    cached_etag, cached_body = cached if cached is not None else (None, None)
     base = os.environ.get(_PYPI_BASE_ENV, _DEFAULT_PYPI_BASE).rstrip("/")
     url = f"{base}/{package}/json"
     user_agent = _build_user_agent(current_version=current_version)
@@ -236,9 +234,7 @@ def fetch_latest_version(
         releases=releases_raw, include_prereleases=include_prereleases
     )
     if selected is None:
-        raise PyPIFetchError(
-            f"no non-yanked release found for {package} on PyPI"
-        )
+        raise PyPIFetchError(f"no non-yanked release found for {package} on PyPI")
     if not used_304 and new_etag is not None:
         _write_etag_cache(cache_path, etag=new_etag, body=body)
     yanked, yanked_reason = _yanked_state(body=body, selected=selected)
