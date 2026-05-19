@@ -17,6 +17,7 @@ subcommand re-computes orphans under ``--apply`` and removes them.
 import difflib
 import io
 import json
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -47,6 +48,11 @@ class FileCompare:
     diff: str
     expected_drift_keys: list[str]
     unexpected_drift_keys: list[str]
+    mode_drift: bool = False
+    """True when the tracked_file declares ``mode:`` and the live file's
+    permission bits (via :func:`stat.S_IMODE`) differ. Always False when
+    ``mode:`` is unset — the drift axis is opt-in per tracked_file.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +491,14 @@ def _compare_one(
                 preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
             )
 
-    is_drifted = bool(diff) or bool(expected_keys) or bool(unexpected_keys)
+    mode_drift = False
+    if tracked_file.mode is not None:
+        live_mode = stat.S_IMODE(dst.stat().st_mode)
+        mode_drift = live_mode != tracked_file.mode
+
+    is_drifted = (
+        bool(diff) or bool(expected_keys) or bool(unexpected_keys) or mode_drift
+    )
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
 
     return (
@@ -495,8 +508,9 @@ def _compare_one(
             diff=diff,
             expected_drift_keys=expected_keys,
             unexpected_drift_keys=unexpected_keys,
+            mode_drift=mode_drift,
         ),
-        bool(diff),
+        bool(diff) or mode_drift,
     )
 
 
