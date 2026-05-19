@@ -39,6 +39,7 @@ from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
 from setforge.errors import WelcomeRequiresInteractive
 
 __all__ = [
+    "OverlayDelta",
     "WelcomeChoice",
     "WelcomeInventory",
     "build_welcome_inventory",
@@ -74,6 +75,38 @@ class WelcomeChoice(StrEnum):
 
 
 @dataclass(slots=True, frozen=True)
+class OverlayDelta:
+    """Counts the local.yaml host-overlay deltas for a profile.
+
+    Mockup G calls out six welcome categories — the sixth is "applied
+    local.yaml overlays". Today the host-overlay schema (spec B,
+    setforge-2by4 / preserve_user_keys overlay) is not yet implemented,
+    so every field on a fresh host is zero. The struct is kept distinct
+    from :class:`WelcomeInventory` so the implementation of spec B can
+    populate it without rewriting the inventory contract — only
+    :func:`build_welcome_inventory` would need to learn the overlay
+    accessor at that point.
+    """
+
+    plugin_add: int = 0
+    plugin_remove: int = 0
+    extension_add: int = 0
+    extension_remove: int = 0
+    host_local_sections: int = 0
+
+    @property
+    def is_empty(self) -> bool:
+        """Return ``True`` when every field is zero (no host overlay applied)."""
+        return (
+            self.plugin_add == 0
+            and self.plugin_remove == 0
+            and self.extension_add == 0
+            and self.extension_remove == 0
+            and self.host_local_sections == 0
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class WelcomeInventory:
     """Counts the welcome panel renders for a fresh-host install.
 
@@ -88,6 +121,7 @@ class WelcomeInventory:
     plugin_count: int
     extension_count: int
     bootstrap_count: int
+    overlay_delta: OverlayDelta
     profile: str
 
 
@@ -142,8 +176,23 @@ def build_welcome_inventory(ctx: ProfileContext) -> WelcomeInventory:
         plugin_count=len(ctx.resolved.claude_plugins),
         extension_count=len(ctx.resolved.extensions.include),
         bootstrap_count=len(ctx.resolved.bootstrap),
+        overlay_delta=_compute_overlay_delta(ctx),
         profile=ctx.profile,
     )
+
+
+def _compute_overlay_delta(ctx: ProfileContext) -> OverlayDelta:
+    """Return the host-overlay delta for ``ctx``.
+
+    The local.yaml host-overlay schema (spec B: ``preserve_user_keys``
+    add/remove, plugin add/remove, host-local section overrides) is not
+    yet implemented in setforge; every load returns a zero delta. When
+    spec B lands, this helper grows the accessor to the parsed overlay
+    block — the welcome surface contract (a zero-shaped
+    :class:`OverlayDelta`) stays the same.
+    """
+    del ctx  # placeholder until spec B's local.yaml overlay schema lands.
+    return OverlayDelta()
 
 
 _DOCS_HINT: str = (
@@ -175,7 +224,24 @@ def _render_panel(inventory: WelcomeInventory, *, console: Console) -> None:
     summary.add_row(str(inventory.plugin_count), "claude plugin(s)")
     summary.add_row(str(inventory.extension_count), "vscode extension(s)")
     summary.add_row(str(inventory.bootstrap_count), "bootstrap stub file(s)")
+    summary.add_row(_format_overlay_row(inventory.overlay_delta), "applied local.yaml overlay(s)")
     console.print(summary)
+
+
+def _format_overlay_row(delta: OverlayDelta) -> str:
+    """Return the 6th-row content for the welcome summary table.
+
+    Renders the delta as a compact "Np+/Np-/Nx+/Nx-/Ns" breakdown so
+    every channel is visible at a glance. Mockup G uses the phrase
+    "1 plugin add, 1 plugin remove, 1 host_local_section"; the compact
+    form is the same content in less horizontal space (which matters
+    inside the count column of the Rich Table).
+    """
+    return (
+        f"{delta.plugin_add}p+/{delta.plugin_remove}p-/"
+        f"{delta.extension_add}x+/{delta.extension_remove}x-/"
+        f"{delta.host_local_sections}s"
+    )
 
 
 def _make_signal_handler(

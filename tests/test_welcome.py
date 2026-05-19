@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.cli._helpers import ProfileContext
 from setforge.cli._welcome import (
+    OverlayDelta,
     WelcomeChoice,
     WelcomeInventory,
     build_welcome_inventory,
@@ -196,10 +197,27 @@ def test_welcome_inventory_is_frozen() -> None:
         plugin_count=0,
         extension_count=0,
         bootstrap_count=0,
+        overlay_delta=OverlayDelta(),
         profile="x",
     )
     with pytest.raises(AttributeError):
         inv.profile = "y"  # type: ignore[misc]
+
+
+def test_build_welcome_inventory_overlay_delta_is_zero(
+    fixture_repo: Path, sandboxed_home: Path
+) -> None:
+    """Fresh inventory carries a zero-shaped :class:`OverlayDelta`.
+
+    Spec B (local.yaml ``preserve_user_keys`` overlay) is not yet
+    implemented, so every channel reads zero. When spec B lands, this
+    test grows fixtures that drive non-zero values; the contract that
+    :class:`OverlayDelta` is always present on the inventory stays.
+    """
+    ctx = _build_ctx(fixture_repo, profile="test-comprehensive")
+    inv = build_welcome_inventory(ctx)
+    assert inv.overlay_delta == OverlayDelta()
+    assert inv.overlay_delta.is_empty
 
 
 # ---------------------------------------------------------------------------
@@ -207,13 +225,17 @@ def test_welcome_inventory_is_frozen() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _empty_inventory(profile: str = "test") -> WelcomeInventory:
+def _empty_inventory(
+    profile: str = "test",
+    overlay_delta: OverlayDelta | None = None,
+) -> WelcomeInventory:
     return WelcomeInventory(
         tracked_file_count=3,
         dst_dirs_to_create=(Path("/tmp/x"),),
         plugin_count=1,
         extension_count=2,
         bootstrap_count=1,
+        overlay_delta=overlay_delta or OverlayDelta(),
         profile=profile,
     )
 
@@ -248,6 +270,44 @@ def test_non_tty_renders_no_panel(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(WelcomeRequiresInteractive):
         prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
     assert console.export_text() == ""
+
+
+def test_panel_renders_overlay_row_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fresh-host panel renders the 6th category row with zero overlay deltas."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, WelcomeChoice.PROCEED)
+    console = Console(record=True, width=120)
+    prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
+    text = console.export_text()
+    assert "applied local.yaml overlay" in text
+    # Zero-shaped delta renders as "0p+/0p-/0x+/0x-/0s".
+    assert "0p+/0p-/0x+/0x-/0s" in text
+
+
+def test_panel_renders_overlay_row_non_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-zero :class:`OverlayDelta` surfaces every channel in the 6th row.
+
+    Documents the row format so spec B (local.yaml overlay schema) lands
+    with a known-shape integration point: the welcome surface MUST
+    render every overlay channel without re-spec'ing the panel.
+    """
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, WelcomeChoice.PROCEED)
+    console = Console(record=True, width=120)
+    delta = OverlayDelta(
+        plugin_add=2,
+        plugin_remove=1,
+        extension_add=3,
+        extension_remove=0,
+        host_local_sections=4,
+    )
+    prompt_welcome(
+        inventory=_empty_inventory(overlay_delta=delta),
+        yes=False,
+        console=console,
+    )
+    text = console.export_text()
+    assert "2p+/1p-/3x+/0x-/4s" in text
 
 
 def test_tty_proceed(monkeypatch: pytest.MonkeyPatch) -> None:
