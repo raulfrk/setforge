@@ -112,7 +112,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 [tool.pytest.ini_options]
 markers = [
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
-    "xdist_group: pin tests in the same group to a single xdist worker (re-declared here for --strict-markers; the marker is provided by pytest-xdist itself).",
 ]
 # Default run skips e2e_docker so plain `pytest` stays fast and docker-free.
 addopts = "-m 'not e2e_docker'"
