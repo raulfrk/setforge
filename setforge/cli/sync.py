@@ -43,6 +43,11 @@ from setforge.cli._confirm import (
     FileChange,
     confirm_auto_operation,
 )
+from setforge.cli._help_examples import (
+    CAPTURE_EXAMPLES,
+    MERGE_EXAMPLES,
+    SYNC_EXAMPLES,
+)
 from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
@@ -97,7 +102,7 @@ def _build_capture_plan(
     )
 
 
-@app.command()
+@app.command(epilog=CAPTURE_EXAMPLES)
 def capture(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -130,7 +135,7 @@ def capture(
         typer.echo(f"{result.action.value:>8}  {result.name}")
 
 
-@app.command()
+@app.command(epilog=MERGE_EXAMPLES)
 def merge(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -177,7 +182,7 @@ def merge(
         raise typer.Exit(130) from None
 
 
-@app.command()
+@app.command(epilog=SYNC_EXAMPLES)
 def sync(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
