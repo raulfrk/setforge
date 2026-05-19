@@ -40,7 +40,7 @@ from rich.console import Console
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.source import PathSource, Source, resolve_source_dir
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT_SECONDS: int = 30
 _GIT_LOCALE_ENV: dict[str, str] = {"LANG": "C", "LC_ALL": "C"}
