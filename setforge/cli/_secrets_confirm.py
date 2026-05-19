@@ -17,7 +17,7 @@ attribute-access seam (mirrors :mod:`setforge.cli._confirm`).
 from __future__ import annotations
 
 import sys
-from typing import Any
+from typing import Any, cast
 
 from rich.console import Console
 from rich.panel import Panel
@@ -88,4 +88,4 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
     ).run()
     if choice is None:
         return SecretAction.ABORT
-    return choice
+    return cast(SecretAction, choice)
