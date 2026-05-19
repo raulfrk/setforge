@@ -300,14 +300,15 @@ def _mkdir_with_retry(path: Path) -> None:
     CPython issue #142916 — the syscall can spuriously raise
     :class:`FileExistsError` when another process deletes the path
     between syscall and post-check. A single 10 ms retry covers the
-    realistic window.
+    realistic window. The ``(attempt, is_last)`` paired iter
+    flattens the retry/raise dispatch (nesting depth 2 instead of 4).
     """
-    for attempt in (1, 2):
+    for _attempt, is_last in ((1, False), (2, True)):
         try:
             path.mkdir(parents=True, exist_ok=True)
             return
         except FileExistsError:
-            if attempt == 2:
+            if is_last:
                 raise
             time.sleep(0.01)
 
