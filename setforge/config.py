@@ -285,7 +285,7 @@ def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
     )
 
 
-def _resolve_chain(config: Config, name: str) -> list[Profile]:
+def resolve_chain(config: Config, name: str) -> list[Profile]:
     """Walk ``extends:`` from leaf to root, return profiles root-first."""
     chain: list[Profile] = []
     visited: list[str] = []
@@ -317,7 +317,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     """
     if name not in config.profiles:
         raise ProfileNotFound(f"profile not found: {name}")
-    chain = _resolve_chain(config, name)
+    chain = resolve_chain(config, name)
 
     resolved = ResolvedProfile()
     for profile in chain:

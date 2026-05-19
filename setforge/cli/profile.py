@@ -29,8 +29,8 @@ from setforge.cli._helpers import ProfileContext
 from setforge.config import (
     Config,
     Profile,
-    _resolve_chain,
     load_config,
+    resolve_chain,
     resolve_profile,
 )
 from setforge.errors import SetforgeError
@@ -127,10 +127,10 @@ def _format_extends_chain(cfg: Config, name: str) -> str:
 
     Returns an empty string when the profile has no parent. ``A -> B``
     means ``B`` extends ``A``. Walks the chain via
-    :func:`setforge.config._resolve_chain` so cycle detection stays in
+    :func:`setforge.config.resolve_chain` so cycle detection stays in
     one place.
     """
-    chain = _resolve_chain(cfg, name)
+    chain = resolve_chain(cfg, name)
     if len(chain) <= 1:
         return ""
     parents = [_chain_label(cfg, profile) for profile in chain[:-1]]
@@ -140,9 +140,9 @@ def _format_extends_chain(cfg: Config, name: str) -> str:
 def _chain_label(cfg: Config, profile: Profile) -> str:
     """Return the YAML key that maps to ``profile`` in ``cfg.profiles``.
 
-    :func:`_resolve_chain` returns :class:`Profile` instances; the
+    :func:`resolve_chain` returns :class:`Profile` instances; the
     rendered chain needs the name keys. Falls back to ``?`` when no
-    match is found (defensive — _resolve_chain only yields profiles
+    match is found (defensive — resolve_chain only yields profiles
     that are in ``cfg.profiles``, so the fallback is unreachable in
     practice but keeps the type signature total).
     """
@@ -212,7 +212,7 @@ def _chain_resolved_by_name_field(
     root-first so :func:`_tag_provenance` finds the earliest-introducing
     ancestor.
     """
-    chain = _resolve_chain(cfg, name)
+    chain = resolve_chain(cfg, name)
     out: list[tuple[str, set[str]]] = []
     for ancestor_profile in chain[:-1]:
         ancestor_name = _chain_label(cfg, ancestor_profile)
@@ -370,7 +370,7 @@ def _extensions_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str
     than living on the top-level resolved object, so the generic
     ``getattr(..., field)`` shape doesn't apply directly.
     """
-    chain = _resolve_chain(cfg, name)
+    chain = resolve_chain(cfg, name)
     out: list[tuple[str, set[str]]] = []
     for ancestor_profile in chain[:-1]:
         ancestor_name = _chain_label(cfg, ancestor_profile)
