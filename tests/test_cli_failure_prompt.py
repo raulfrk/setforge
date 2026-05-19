@@ -135,9 +135,7 @@ def test_tty_skip_response_returns_skip(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_values=[FailureAction.SKIP])
     console = Console(record=True)
-    result = prompt_failure_action(
-        message="failed: x", yes=False, console=console
-    )
+    result = prompt_failure_action(message="failed: x", yes=False, console=console)
     assert result is FailureAction.SKIP
     assert "reconcile failure" in console.export_text()
 
@@ -145,19 +143,13 @@ def test_tty_skip_response_returns_skip(monkeypatch: pytest.MonkeyPatch) -> None
 def test_tty_retry_response_returns_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_values=[FailureAction.RETRY])
-    assert (
-        prompt_failure_action(message="failed: x", yes=False)
-        is FailureAction.RETRY
-    )
+    assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.RETRY
 
 
 def test_tty_abort_response_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_values=[FailureAction.ABORT])
-    assert (
-        prompt_failure_action(message="failed: x", yes=False)
-        is FailureAction.ABORT
-    )
+    assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT
 
 
 # --- Esc / None handling -------------------------------------------------
@@ -174,10 +166,7 @@ def test_dialog_returns_none_treated_as_abort(
     surface as ABORT so the user knows the install is rolling back."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_values=[None])
-    assert (
-        prompt_failure_action(message="failed: x", yes=False)
-        is FailureAction.ABORT
-    )
+    assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT
 
 
 # --- DIAGNOSE re-prompt loop ---------------------------------------------
@@ -235,10 +224,7 @@ def test_diagnose_then_abort_returns_abort(
         monkeypatch,
         return_values=[FailureAction.DIAGNOSE, FailureAction.ABORT],
     )
-    assert (
-        prompt_failure_action(message="failed", yes=False)
-        is FailureAction.ABORT
-    )
+    assert prompt_failure_action(message="failed", yes=False) is FailureAction.ABORT
 
 
 def test_diagnose_then_none_returns_abort(
@@ -252,10 +238,7 @@ def test_diagnose_then_none_returns_abort(
         monkeypatch,
         return_values=[FailureAction.DIAGNOSE, None],
     )
-    assert (
-        prompt_failure_action(message="failed", yes=False)
-        is FailureAction.ABORT
-    )
+    assert prompt_failure_action(message="failed", yes=False) is FailureAction.ABORT
 
 
 # --- prompt message content ----------------------------------------------
