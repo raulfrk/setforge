@@ -29,6 +29,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "validate",
     "fetch",
     "init",
+    "upgrade",
 )
 
 EXPECTED_SUBGROUPS: tuple[str, ...] = (
