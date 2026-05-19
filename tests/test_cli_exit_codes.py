@@ -49,6 +49,10 @@ def _setup_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state: dict[str, list[str]] = {"installed": []}
 
     def fake_run(args, **kwargs: Any):
+        if args[0] == "git":
+            # _git_check pre-deploy probes the source dir via git rev-parse;
+            # tmp_path is not a git repo, so return "false" so the check skips.
+            return subprocess.CompletedProcess(args, 0, "false\n", "")
         if args[1] == "--list-extensions":
             stdout = "\n".join(state["installed"]) + (
                 "\n" if state["installed"] else ""
