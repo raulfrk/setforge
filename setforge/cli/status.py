@@ -223,8 +223,17 @@ def _format_age(now: datetime, then: datetime) -> str:
 
 
 def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
-    """Return the most-recent transition meta for ``profile``, or None."""
-    latest_dir = transitions.load_latest(profile)
+    """Return the most-recent INSTALL transition meta for ``profile``, or None.
+
+    Filters to ``TransitionCommand.INSTALL`` so a later sync or revert
+    doesn't shadow the install row — the "last install:" label promises
+    install-specific provenance (and the source_sha that drives
+    commits-since-install) and only install transitions carry that
+    payload semantics.
+    """
+    latest_dir = transitions.load_latest(
+        profile, command=transitions.TransitionCommand.INSTALL
+    )
     if latest_dir is None:
         return None
     try:

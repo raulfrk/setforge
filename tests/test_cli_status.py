@@ -71,6 +71,7 @@ def _stub_transition(
     dirname: str,
     timestamp: str = "2026-05-18T07:00:15+00:00",
     source_sha: str | None = None,
+    command: str = "install",
 ) -> Path:
     """Materialize one transition meta.json under ``state_root/transitions``."""
     root = state_root / "transitions"
@@ -78,7 +79,7 @@ def _stub_transition(
     target = root / dirname
     target.mkdir()
     meta: dict[str, str] = {
-        "command": "install",
+        "command": command,
         "profile": profile,
         "timestamp": timestamp,
         "host": "h",
@@ -423,6 +424,54 @@ def test_status_no_transitions_recorded_shows_marker(
 
     assert result.exit_code == 0, result.output
     assert "no transitions recorded" in result.output
+
+
+def test_status_skips_later_sync_for_last_install_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later SYNC must NOT be rendered under the ``last install:`` label.
+
+    Regression: ``_load_last_install_meta`` previously called
+    ``load_latest(profile)`` unconditionally, which returns the latest
+    transition of ANY command type. When a sync lands after an install,
+    the sync's transition (no source_sha) was rendered with the
+    misleading "requires source_sha; this transition predates schema
+    bump" placeholder. The fix filters to INSTALL only.
+    """
+    config_path = _write_minimal_config(tmp_path)
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
+    # Older install with source_sha set.
+    _stub_transition(
+        state_dir,
+        profile="vm-headless",
+        dirname="20260518T070015000000Z-install-vm-headless",
+        source_sha="deadbeef",
+        command="install",
+    )
+    # Newer sync — no source_sha; under the old code this would shadow
+    # the install in the "last install:" line.
+    _stub_transition(
+        state_dir,
+        profile="vm-headless",
+        dirname="20260518T080015000000Z-sync-vm-headless",
+        timestamp="2026-05-18T08:00:15+00:00",
+        command="sync",
+    )
+    runner = _patch_git_for_clean_repo(monkeypatch)
+    # source_sha = deadbeef triggers an extra `deadbeef..HEAD` git query.
+    runner.add(("deadbeef..HEAD",), returncode=0, stdout="0\n")
+
+    result = _invoke_status(source_dir=tmp_path, config_path=config_path)
+
+    assert result.exit_code == 0, result.output
+    # The install dirname renders in the last-install line; the sync does not.
+    assert "20260518T070015000000Z-install-vm-headless" in result.output
+    assert "20260518T080015000000Z-sync-vm-headless" not in result.output
+    # And the misleading schema-bump placeholder must NOT appear (the
+    # install carries a source_sha, so commits-since-install is concrete).
+    assert "requires source_sha" not in result.output
 
 
 def test_status_unknown_profile_exits_nonzero(
