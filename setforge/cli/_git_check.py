@@ -1,27 +1,14 @@
-"""Pre-deploy git-status check helpers for ``setforge install``.
+"""Pre-deploy git-status check for ``setforge install``.
 
-Runs two narrow checks BEFORE the drift-gate flow on every ``install``
-that does not pass ``--no-git-check``:
+Runs before the drift gate; warns on:
 
-1. **Path source — uncommitted changes**: ``git status --porcelain=v2
-   --ignore-submodules=all`` against the source directory. Any output
-   lines mean the working tree is dirty; surface them to the user via
-   the 3-option choice prompt (abort default / proceed / show-diff).
-2. **Git source — cache behind remote**: ``git ls-remote origin main``
-   against the cached clone vs the cache's local HEAD; on lag, list
-   the missing commits via ``git log --oneline LOCAL..REMOTE``.
+- path source: uncommitted changes in the config repo
+- git source: local cache behind remote HEAD
 
-Both checks tolerate edge cases without blocking install: bare repos
-log-and-proceed silently (rare; nothing to compare); ``ls-remote``
-network failure warns and proceeds (transient failures must not block
-a deploy); detached HEAD surfaces a warning and still presents the
-3-option prompt.
-
-The choice prompt is a **mutate-gate** per the project's
-``feedback_mutate_gate_vs_failure_prompt`` memory: non-TTY without
-``--no-git-check`` AND a dirty/stale tree RAISES
-:class:`ConfirmRequiresInteractive`. Install IS about to mutate live,
-so consent must be explicit — no silent fallback to "proceed".
+Non-TTY without ``--no-git-check`` AND dirty/stale state RAISES
+:class:`ConfirmRequiresInteractive` — non-TTY + mutating op = raise
+(consent for mutation; not fall-back). The radiolist offers
+abort / proceed / show-diff-and-re-prompt.
 """
 
 from __future__ import annotations
@@ -147,20 +134,10 @@ def _is_detached_head(source_dir: Path) -> bool:
 
 
 def check_path_source_clean(source_dir: Path) -> list[str]:
-    """Return non-clean lines from ``git status --porcelain=v2`` for ``source_dir``.
+    """Return porcelain v2 dirty entries for the config repo path source.
 
-    Empty list means the working tree is clean (or the repo is bare —
-    bare repos have no working tree to dirty, so they are treated as
-    clean for install's purposes). Non-empty list means there are
-    uncommitted changes; each entry is a one-line summary derived
-    from the v2 porcelain entry (status code + path).
-
-    Submodules are ignored (``--ignore-submodules=all``) so nested
-    untracked entries don't surface as ``??`` noise.
-
-    On a non-git directory: log-and-return empty (the install proceeds
-    because we cannot warn meaningfully without a git history to
-    compare against — a path source need not be under version control).
+    Empty list = clean. Bare repos / non-git dirs return empty (no
+    issue to surface). Submodules ignored (``--ignore-submodules=all``).
     """
     if not (source_dir / ".git").exists():
         LOGGER.debug(
