@@ -158,9 +158,7 @@ def _dispatch_check(
         typer.echo("specify --check, --apply, or --pin=X.Y.")
 
 
-def _dispatch_apply(
-    *, cfg_path: Path, chain: Sequence[Migration], yes: bool
-) -> None:
+def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) -> None:
     """Handle the ``--apply`` branch.
 
     Short-circuits with ``"nothing to apply"`` when the chain is
@@ -356,9 +354,7 @@ class _suppress_preview_errors:
             return False
         if not issubclass(exc_type, Exception):
             return False  # let KeyboardInterrupt / SystemExit propagate
-        typer.echo(
-            f"(preview unavailable for {self._label}: {exc_type.__name__})"
-        )
+        typer.echo(f"(preview unavailable for {self._label}: {exc_type.__name__})")
         return True  # suppress Exception subclasses
 
 
