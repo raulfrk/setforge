@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from setforge import transitions
 from setforge._editor import run_editor
@@ -57,6 +59,28 @@ def _human_age(timestamp: datetime, now: datetime) -> str:
     days = hours // 24
     unit = "day" if days == 1 else "days"
     return f"{days} {unit} ago"
+
+
+def _compact_age(timestamp: datetime, now: datetime) -> str:
+    """Return the mockup's compact age form ("2h ago", "3d ago", "5m ago", "<1m ago").
+
+    Distinct from :func:`_human_age` (used by the confirm wizard's
+    long-form panel) — the listing column needs a fixed-narrow string
+    so the table aligns. Uses UTC arithmetic via the caller-supplied
+    ``now``; both ``timestamp`` and ``now`` must be tz-aware.
+    """
+    delta = now - timestamp
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "<1m ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
 
 
 def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
@@ -341,87 +365,188 @@ _TRANSITIONS_LIST_PROFILE_OPTION = typer.Option(
     "-p",
     help="Filter to specified profile(s). Repeatable; OR-filter.",
 )
-_TRANSITIONS_LIST_REVERSE_OPTION = typer.Option(
-    False, "--reverse", help="Newest-first instead of oldest-first."
+_TRANSITIONS_LIST_OLDEST_FIRST_OPTION = typer.Option(
+    False,
+    "--oldest-first",
+    help="Reverse the default newest-first order (oldest first).",
 )
 
 
 @transitions_app.command("list")
 def transitions_list(
     profile: list[str] | None = _TRANSITIONS_LIST_PROFILE_OPTION,
-    reverse: bool = _TRANSITIONS_LIST_REVERSE_OPTION,
+    oldest_first: bool = _TRANSITIONS_LIST_OLDEST_FIRST_OPTION,
 ) -> None:
-    """List recorded transitions across all profiles."""
+    """List recorded transitions for one or more profiles (newest-first).
+
+    Columns per mockup H: ``id`` / ``type`` / ``age`` / ``files`` /
+    ``plugins`` / ``ext``. Use ``--oldest-first`` to reverse to
+    chronological order.
+    """
     listings = transitions.list_transitions(
         profile_filter=list(profile) if profile else None,
-        reverse=reverse,
+        reverse=not oldest_first,
     )
     if not listings:
         typer.echo("(no transitions)")
         return
-    rows = [
-        (
-            entry.timestamp.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            entry.command,
-            entry.profile,
-            str(entry.file_count),
-            str(entry.ext_count),
-            str(entry.plugin_count),
+    profile_filter = list(profile) if profile else None
+    _render_transitions_table(listings, profile_filter=profile_filter)
+
+
+def _wide_console() -> Console:
+    """Build a Console wide enough that mockup-H rows never wrap.
+
+    Rich defaults to 80-col width when stdout is not a TTY (the case
+    under CliRunner) — which truncates / wraps transition dirnames
+    mid-line and breaks both the mockup parity and the
+    ``--to-before=<id>`` copy-paste suggestion. A fixed 200-col width
+    fits the widest realistic row (dirname + suffix < ~180 chars).
+
+    ``highlight=False`` disables Rich's auto-highlighter — the
+    transitions list embeds numbers and dirnames that Rich would
+    otherwise wrap in ANSI sequences, breaking substring assertions
+    in tests and copy-pasteability of the suggested commands.
+    """
+    return Console(width=200, soft_wrap=True, highlight=False)
+
+
+def _render_transitions_table(
+    listings: list[transitions.TransitionListing],
+    *,
+    profile_filter: list[str] | None,
+) -> None:
+    """Render the polished newest-first columnar listing per mockup H.
+
+    Trailing hint lines ("to view details", "to revert to BEFORE …")
+    surface only when at least one entry exists. The hint uses the
+    newest entry's id as the example and the first profile from the
+    filter (or the newest entry's profile when no filter is set) so
+    the suggested command is always copy-pasteable.
+    """
+    console = _wide_console()
+    now = datetime.now(UTC)
+    table = Table(show_header=True, box=None, pad_edge=False, padding=(0, 2))
+    table.add_column("id", no_wrap=True, style="cyan")
+    table.add_column("type", no_wrap=True)
+    table.add_column("age", no_wrap=True)
+    table.add_column("files", no_wrap=True, justify="right")
+    table.add_column("plugins", no_wrap=True, justify="right")
+    table.add_column("ext", no_wrap=True, justify="right")
+    for entry in listings:
+        table.add_row(
             entry.directory.name,
+            entry.command,
+            _compact_age(entry.timestamp, now),
+            str(entry.file_count),
+            str(entry.plugin_count),
+            str(entry.ext_count),
         )
-        for entry in listings
-    ]
-    headers = (
-        "TIMESTAMP",
-        "COMMAND",
-        "PROFILE",
-        "FILES",
-        "EXTS",
-        "PLUGINS",
-        "DIRECTORY",
+    if profile_filter:
+        header = "=== transitions for profile " + ", ".join(profile_filter) + " ==="
+    else:
+        header = "=== transitions (all profiles) ==="
+    console.print(header)
+    console.print(table)
+    sample = listings[0]
+    sample_profile = profile_filter[0] if profile_filter else sample.profile
+    console.print("=== to view details ===")
+    console.print(f"  setforge transitions show {sample.directory.name}")
+    console.print("=== to revert to BEFORE a specific transition ===")
+    console.print(
+        f"  setforge revert --profile={sample_profile} "
+        f"--to-before={sample.directory.name}"
     )
-    widths = [
-        max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
-        for i in range(len(headers))
-    ]
-    typer.echo("  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=False)))
-    for row in rows:
-        typer.echo("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=False)))
 
 
 @transitions_app.command("show")
 def transitions_show(
     prefix: str = typer.Argument(..., help="Dirname or unique-prefix match."),
 ) -> None:
-    """Show metadata and per-file action summary for one transition."""
+    """Show the full audit-detail panel for one transition (mockup H)."""
     target = transitions.resolve_transition_prefix(prefix)
     meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
-    typer.echo(f"DIRECTORY  {target.name}")
-    typer.echo(f"COMMAND    {meta.get('command', '')}")
-    typer.echo(f"PROFILE    {meta.get('profile', '')}")
-    typer.echo(f"TIMESTAMP  {meta.get('timestamp', '')}")
+    console = _wide_console()
+    profile = str(meta.get("profile", ""))
+    console.print(f"=== transition {target.name} ===")
+    console.print(f"  type:    {meta.get('command', '')}")
+    console.print(f"  profile: {profile}")
+    if "timestamp" in meta:
+        console.print(f"  start:   {meta['timestamp']}")
     if "host" in meta:
-        typer.echo(f"HOST       {meta['host']}")
+        console.print(f"  host:    {meta['host']}")
     if "version" in meta:
-        typer.echo(f"VERSION    {meta['version']}")
+        console.print(f"  version: {meta['version']}")
 
+    _render_files_section_show(target, console)
+    _render_plugins_section_show(target, console)
+    _render_extensions_section_show(target, console)
+
+    console.print("=== reverse this transition ===")
+    console.print(
+        f"  setforge revert --profile={profile} --to-before={target.name}"
+    )
+    console.print(
+        "    (will undo this transition AND every newer transition for this profile)"
+    )
+
+
+def _render_files_section_show(target: Path, console: Console) -> None:
+    """Render the ``files mutated (N):`` block with per-file diff stats."""
     file_actions = transitions.summarize_transition(target)
-    if file_actions:
-        typer.echo("")
-        typer.echo("FILES")
-        action_width = max(len(action) for action in file_actions.values())
-        for path, action in sorted(file_actions.items()):
-            typer.echo(f"  {action.ljust(action_width)}  {path}")
+    if not file_actions:
+        return
+    patch_file = target / "changes.patch"
+    diff_summaries: dict[str, str] = {}
+    if patch_file.exists():
+        diff_summaries = _diff_summaries_from_patch(
+            patch_file.read_text(encoding="utf-8")
+        )
+    sorted_items = sorted(file_actions.items())
+    console.print(f"  files mutated ({len(sorted_items)}):")
+    action_marker = {"created": "+", "deleted": "-", "modified": "M"}
+    for path, action in sorted_items:
+        marker = action_marker.get(action, "?")
+        stats = diff_summaries.get(path, "")
+        suffix = f"  diff: {stats}" if stats else ""
+        console.print(f"    {marker}  {path}{suffix}")
 
+
+def _render_plugins_section_show(target: Path, console: Console) -> None:
+    """Render the ``plugins:`` block if a plugins.json sidecar exists."""
+    plugin_file = target / "plugins.json"
+    if not plugin_file.exists():
+        return
+    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+    delta = transitions.plugin_delta_from_json(payload)
+    if delta.is_empty():
+        return
+    console.print("  plugins:")
+    for plugin_id in delta.installed:
+        console.print(f"    + {plugin_id}  (installed)")
+    for plugin_id in delta.enabled:
+        console.print(f"    + {plugin_id}  (enabled)")
+    for plugin_id in delta.disabled:
+        console.print(f"    - {plugin_id}  (disabled)")
+    for name in delta.marketplaces_added:
+        console.print(f"    + marketplace:{name}")
+    for entry in delta.marketplaces_removed:
+        name = entry[0] if isinstance(entry, tuple) else str(entry)
+        console.print(f"    - marketplace:{name}")
+
+
+def _render_extensions_section_show(target: Path, console: Console) -> None:
+    """Render the ``extensions:`` block if an extensions.json sidecar exists."""
     ext_file = target / "extensions.json"
-    if ext_file.exists():
-        ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
-        added = ext_payload.get("added", []) or []
-        removed = ext_payload.get("removed", []) or []
-        if added or removed:
-            typer.echo("")
-            typer.echo("EXTENSIONS")
-            for ext_id in added:
-                typer.echo(f"  added    {ext_id}")
-            for ext_id in removed:
-                typer.echo(f"  removed  {ext_id}")
+    if not ext_file.exists():
+        return
+    ext_payload = json.loads(ext_file.read_text(encoding="utf-8"))
+    added = ext_payload.get("added", []) or []
+    removed = ext_payload.get("removed", []) or []
+    if not (added or removed):
+        return
+    console.print("  extensions:")
+    for ext_id in added:
+        console.print(f"    + {ext_id}  (installed)")
+    for ext_id in removed:
+        console.print(f"    - {ext_id}  (uninstalled)")

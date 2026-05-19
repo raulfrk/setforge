@@ -6,12 +6,25 @@ or sync invocation needed.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Strip ANSI color/style escapes so substring asserts ignore Rich
+    formatting. The polished ``transitions list/show`` output uses Rich,
+    which emits ``\\x1b[1mheader\\x1b[0m`` even with ``highlight=False``
+    (the bold-on-headers behavior of ``rich.table.Table`` is opt-in via
+    ``show_header=True``)."""
+    return _ANSI_RE.sub("", text)
 
 
 def _stub(
@@ -67,9 +80,11 @@ def test_list_empty_history_prints_marker(
     assert "(no transitions)" in result.output
 
 
-def test_list_renders_columns_and_chronological_order(
+def test_list_renders_columns_newest_first_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """``transitions list`` defaults to newest-first per mockup H, with
+    columns id / type / age / files / plugins / ext."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
@@ -90,29 +105,32 @@ def test_list_renders_columns_and_chronological_order(
     result = CliRunner().invoke(app, ["transitions", "list"])
 
     assert result.exit_code == 0, result.output
-    lines = result.output.splitlines()
-    header_line = next(
-        line for line in lines if "TIMESTAMP" in line and "DIRECTORY" in line
-    )
-    # PLUGINS column surfaces TransitionListing.plugin_count alongside
-    # FILES/EXTS so plugin-only transitions aren't silently invisible
-    # in the list view (the field was added by nen.13 but only wired
-    # into the renderer in xj8).
-    assert "FILES" in header_line
-    assert "EXTS" in header_line
-    assert "PLUGINS" in header_line
+    clean = _strip_ansi(result.output)
+    lines = clean.splitlines()
+    header_line = next(line for line in lines if line.lstrip().startswith("id "))
+    # Mockup-H columns: id / type / age / files / plugins / ext.
+    assert "type" in header_line
+    assert "age" in header_line
+    assert "files" in header_line
+    assert "plugins" in header_line
+    assert "ext" in header_line
     install_idx = next(
-        i for i, line in enumerate(lines) if "install" in line and "vmh" in line
+        i for i, line in enumerate(lines) if "install-vmh" in line
     )
     sync_idx = next(
-        i for i, line in enumerate(lines) if "sync" in line and "vmh" in line
+        i for i, line in enumerate(lines) if "sync-vmh" in line
     )
-    assert install_idx < sync_idx
+    # Newest-first default: sync (17:00) before install (09:00).
+    assert sync_idx < install_idx
+    # Footer suggestions are rendered.
+    assert "to view details" in clean
+    assert "to revert to BEFORE" in clean
 
 
-def test_list_reverse_flips_order(
+def test_list_oldest_first_flips_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """``--oldest-first`` reverses the default newest-first ordering."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
@@ -124,17 +142,17 @@ def test_list_reverse_flips_order(
         command="sync",
     )
 
-    result = CliRunner().invoke(app, ["transitions", "list", "--reverse"])
+    result = CliRunner().invoke(app, ["transitions", "list", "--oldest-first"])
 
     assert result.exit_code == 0, result.output
-    lines = result.output.splitlines()
+    lines = _strip_ansi(result.output).splitlines()
     install_idx = next(
-        i for i, line in enumerate(lines) if "install" in line and "vmh" in line
+        i for i, line in enumerate(lines) if "install-vmh" in line
     )
     sync_idx = next(
-        i for i, line in enumerate(lines) if "sync" in line and "vmh" in line
+        i for i, line in enumerate(lines) if "sync-vmh" in line
     )
-    assert sync_idx < install_idx
+    assert install_idx < sync_idx
 
 
 def test_list_profile_filter_repeatable(
@@ -181,11 +199,17 @@ def test_show_resolves_unique_prefix(
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1200"])
 
     assert result.exit_code == 0, result.output
-    assert "DIRECTORY" in result.output
-    assert "20260507T120000000000Z-install-vmh" in result.output
-    assert "FILES" in result.output
-    assert "modified" in result.output
-    assert "/tmp/test-show-modified.txt" in result.output
+    clean = _strip_ansi(result.output)
+    # Mockup-H header line and per-field labels.
+    assert "transition 20260507T120000000000Z-install-vmh" in clean
+    assert "type:" in clean
+    assert "profile:" in clean
+    assert "start:" in clean
+    assert "files mutated" in clean
+    assert "/tmp/test-show-modified.txt" in clean
+    # Reverse-this-transition footer per mockup H.
+    assert "reverse this transition" in clean
+    assert "--to-before=20260507T120000000000Z-install-vmh" in clean
 
 
 def test_show_ambiguous_prefix_lists_candidates(
@@ -248,9 +272,10 @@ def test_show_omits_files_section_when_no_patch(
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1200"])
 
     assert result.exit_code == 0, result.output
-    assert "FILES" not in result.output
-    assert "EXTENSIONS" in result.output
-    assert "x.y" in result.output
+    clean = _strip_ansi(result.output)
+    assert "files mutated" not in clean
+    assert "extensions:" in clean
+    assert "x.y" in clean
 
 
 def test_show_omits_extensions_section_when_absent(
@@ -272,6 +297,68 @@ def test_show_omits_extensions_section_when_absent(
     result = CliRunner().invoke(app, ["transitions", "show", "20260507T1200"])
 
     assert result.exit_code == 0, result.output
-    assert "FILES" in result.output
-    assert "created" in result.output
-    assert "EXTENSIONS" not in result.output
+    clean = _strip_ansi(result.output)
+    assert "files mutated" in clean
+    # mockup uses + marker for created files (vs M for modified, - for deleted).
+    assert "+  /tmp/test-show-no-exts.txt" in clean
+    assert "extensions:" not in clean
+    assert "EXTENSIONS" not in clean
+
+
+# ---------------------------------------------------------------------------
+# sqcw mockup-H polish tests (compact age, polished show layout)
+# ---------------------------------------------------------------------------
+
+
+def test_list_human_age_format_h_d_m_seconds() -> None:
+    """``_compact_age`` produces the mockup-H narrow column form."""
+    from datetime import UTC, datetime, timedelta
+
+    from setforge.cli.revert import _compact_age
+
+    now = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+    # Seconds-old: <1m ago.
+    assert _compact_age(now - timedelta(seconds=10), now) == "<1m ago"
+    # Minutes (< 60).
+    assert _compact_age(now - timedelta(minutes=5), now) == "5m ago"
+    # Hours (< 24).
+    assert _compact_age(now - timedelta(hours=2), now) == "2h ago"
+    # Days.
+    assert _compact_age(now - timedelta(days=3), now) == "3d ago"
+
+
+def test_show_renders_command_and_profile_per_mockup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``transitions show`` emits ``type:`` and ``profile:`` per mockup H,
+    along with the reverse-this-transition footer."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    _stub(
+        root,
+        dirname="20260518T203015000000Z-install-vm-headless",
+        profile="vm-headless",
+        timestamp="2026-05-18T20:30:15+00:00",
+        paths=["/tmp/test-show-polish.txt"],
+        patch_text=(
+            "--- tmp/test-show-polish.txt\n"
+            "+++ tmp/test-show-polish.txt\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app, ["transitions", "show", "20260518T2030"]
+    )
+
+    assert result.exit_code == 0, result.output
+    clean = _strip_ansi(result.output)
+    assert "type:    install" in clean
+    assert "profile: vm-headless" in clean
+    assert "start:" in clean
+    # diff stats per file per mockup.
+    assert "diff:" in clean
+    assert "--to-before=20260518T203015000000Z-install-vm-headless" in clean

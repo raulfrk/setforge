@@ -43,10 +43,12 @@ __all__ = [
     "ExtensionOperation",
     "ExtensionReconcile",
     "FileMutation",
+    "MultiStepRevertPlan",
     "PluginOperation",
     "PluginReconcile",
     "RevertChoice",
     "RevertPlan",
+    "confirm_multi_step_revert_operation",
     "confirm_revert_operation",
 ]
 
@@ -314,6 +316,112 @@ def confirm_revert_operation(
         console = Console()
     _render_panel(plan, console)
     choice = _prompt_choice(plan)
+    if choice is RevertChoice.ABORT:
+        console.print("[red]aborted[/red] — no mutations applied")
+    return choice
+
+
+@dataclass(slots=True, frozen=True)
+class MultiStepRevertPlan:
+    """Multi-step rollback covering N transitions (``revert --to-before``).
+
+    Newest-first ordering matches the apply order — the user sees the
+    most-recent transition (which reverts first) at the top of the
+    summary, mirroring ``transitions list``'s default. The wrapped
+    :class:`RevertPlan` per step keeps the rich per-step data
+    (file mutations, plugin/extension reconciles) available without
+    re-walking the on-disk transition dir at render time.
+    """
+
+    profile: str
+    steps: tuple[RevertPlan, ...]
+
+    def __post_init__(self) -> None:
+        if not self.steps:
+            raise ValueError("MultiStepRevertPlan must have at least one step")
+
+
+def _render_multi_step_panel(
+    plan: MultiStepRevertPlan, console: Console
+) -> None:
+    """Print the multi-step summary panel; one row per transition step."""
+    header = (
+        f"[bold]setforge revert[/bold] profile=[yellow]{plan.profile}[/yellow] "
+        f"(reverts {len(plan.steps)} transitions)"
+    )
+    console.print(Panel.fit(header, title="multi-step revert (--to-before)"))
+    for i, step in enumerate(plan.steps, start=1):
+        files = len(step.file_mutations)
+        plugins = len(step.plugin_reconciles)
+        exts = len(step.extension_reconciles)
+        console.print(
+            f"  step {i}/{len(plan.steps)}: {step.transition_id}  "
+            f"type={step.transition_type}  age={step.age_human}  "
+            f"files={files} plugins={plugins} ext={exts}"
+        )
+    console.print("[bold]=== what 'revert --to-before' will do ===[/bold]")
+    console.print(
+        f"  Apply each step's reverse patch in newest-first order "
+        f"({len(plan.steps)} steps total)."
+    )
+    console.print(
+        "  All dry-runs have already passed; abort is still safe here "
+        "— nothing has been written."
+    )
+
+
+def _prompt_multi_step_choice(plan: MultiStepRevertPlan) -> RevertChoice:
+    """Drive ``radiolist_dialog`` for the multi-step plan; map to RevertChoice.
+
+    Esc / Ctrl-C / unknown returns map to :attr:`RevertChoice.ABORT`
+    per the wizard-discipline invariant — the safe default for a
+    destructive multi-step op.
+    """
+    from setforge.cli import _revert_confirm as _self
+
+    choice = _self.radiolist_dialog(
+        title=f"setforge revert --to-before ({len(plan.steps)} steps)",
+        text="What should setforge do?",
+        values=[
+            (RevertChoice.ABORT, "no, abort (default — safe)"),
+            (
+                RevertChoice.APPLY,
+                f"yes, revert these {len(plan.steps)} transitions",
+            ),
+        ],
+        default=RevertChoice.ABORT,
+    ).run()
+    if choice is None or choice is False:
+        return RevertChoice.ABORT
+    if not isinstance(choice, RevertChoice):
+        return RevertChoice.ABORT
+    return choice
+
+
+def confirm_multi_step_revert_operation(
+    *,
+    plan: MultiStepRevertPlan,
+    yes: bool,
+    console: Console | None = None,
+) -> RevertChoice:
+    """Render the multi-step summary and prompt the user once for all N steps.
+
+    Mirrors :func:`confirm_revert_operation`'s contract: short-circuits to
+    :attr:`RevertChoice.APPLY` when ``yes`` is set (no panel rendered);
+    raises :class:`ConfirmRequiresInteractive` on non-TTY without ``yes``;
+    returns :attr:`RevertChoice.ABORT` on Esc / Ctrl-C. One wizard
+    invocation covers all N transitions — never N separate prompts.
+    """
+    if yes:
+        return RevertChoice.APPLY
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge revert --to-before requires --yes when stdin is not a TTY"
+        )
+    if console is None:
+        console = Console()
+    _render_multi_step_panel(plan, console)
+    choice = _prompt_multi_step_choice(plan)
     if choice is RevertChoice.ABORT:
         console.print("[red]aborted[/red] — no mutations applied")
     return choice
