@@ -227,20 +227,20 @@ def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
-def _prompt_install_choice(
+def _resolve_non_dialog_choice(
     *,
     shell: ShellKind,
     non_interactive: bool,
     no_wire: bool,
-) -> CompletionChoice:
-    """Resolve the install-confirm prompt → :class:`CompletionChoice`.
+) -> CompletionChoice | None:
+    """Resolve the install choice WITHOUT showing a dialog, or ``None``.
 
-    Non-interactive precedence: ``--non-interactive`` skips the dialog
-    and picks ``YES_ONLY`` (when ``no_wire`` is set) or
-    ``YES_AND_WIRE`` (default). Non-TTY without ``--non-interactive``
+    Two non-dialog paths short-circuit the prompt:
+    ``--non-interactive`` picks ``YES_ONLY`` when ``no_wire`` else
+    ``YES_AND_WIRE``; non-TTY stdin without ``--non-interactive``
     raises :class:`ConfirmRequiresInteractive` per the mutate-gate
-    pattern in :func:`setforge.cli._confirm.confirm_auto_operation` —
-    rc-file edits need explicit consent.
+    pattern in :func:`setforge.cli._confirm.confirm_auto_operation`.
+    Returns ``None`` when the caller still needs to run the dialog.
     """
     if non_interactive:
         return CompletionChoice.YES_ONLY if no_wire else CompletionChoice.YES_AND_WIRE
@@ -249,6 +249,15 @@ def _prompt_install_choice(
             f"setforge completion install {shell.value} requires --non-interactive "
             "when stdin is not a TTY"
         )
+    return None
+
+
+def _run_install_dialog(shell: ShellKind) -> CompletionChoice:
+    """Show the arrow-key install-confirm dialog and return the choice.
+
+    ESC / Ctrl-C on the dialog is reported by prompt_toolkit as a
+    ``None`` result; we treat that as :attr:`CompletionChoice.ABORT`.
+    """
     from setforge.cli import completion as _self  # local alias for monkeypatch path
 
     result = _self.radiolist_dialog(
@@ -271,6 +280,26 @@ def _prompt_install_choice(
         return CompletionChoice.ABORT
     assert isinstance(result, CompletionChoice)
     return result
+
+
+def _prompt_install_choice(
+    *,
+    shell: ShellKind,
+    non_interactive: bool,
+    no_wire: bool,
+) -> CompletionChoice:
+    """Resolve the install-confirm prompt → :class:`CompletionChoice`.
+
+    Delegates non-dialog short-circuits to
+    :func:`_resolve_non_dialog_choice` and falls through to
+    :func:`_run_install_dialog` when interactive input is required.
+    """
+    resolved = _resolve_non_dialog_choice(
+        shell=shell, non_interactive=non_interactive, no_wire=no_wire
+    )
+    if resolved is not None:
+        return resolved
+    return _run_install_dialog(shell)
 
 
 def _write_script(script_path: Path, content: str) -> bool:
