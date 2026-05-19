@@ -317,9 +317,10 @@ _TO_BEFORE_OPTION = typer.Option(
     None,
     "--to-before",
     help=(
-        "Revert the named transition AND every newer transition for this "
-        "profile. All N steps are dry-run-checked atomically before any "
-        "live mutation; on any dry-run failure the live tree stays clean."
+        "Revert the named transition AND every newer transition for the "
+        "profile. The newest step is pre-flight dry-run-checked; later "
+        "steps fail-fast on mid-stream drift (partial state surfaced + "
+        "exit 1)."
     ),
 )
 
@@ -336,14 +337,19 @@ def revert(
     ),
     to_before: str | None = _TO_BEFORE_OPTION,
 ) -> None:
-    """Revert the most recent transition (default) or a chain back to a
-    named transition (``--to-before=<id>``).
+    """Revert the most recent transition for ``--profile=X``.
+
+    With ``--to-before=<id>``: revert the named transition AND every
+    newer transition for the profile (in reverse-chronological order).
+    The newest step is pre-flight dry-run-checked before any live
+    mutation. Subsequent steps each run their own internal
+    dry-run-then-apply gate and fail-fast on mid-stream drift, leaving
+    the system in a documented partial-state on failure (the applied
+    prefix has reverted, the unapplied suffix has not).
 
     Opens the confirm-explain-redo wizard before applying (mockup A for
     single-step; mockup H summary panel for multi-step). Records its own
-    reverse transition so a second revert acts as redo. For multi-step
-    revert the dry-run pass runs over ALL N transitions BEFORE any live
-    mutation — late-step drift aborts before the chain's first write.
+    reverse transition so a second revert acts as redo.
     """
     config = _resolve_config_arg(config)
     if to_before is not None:
