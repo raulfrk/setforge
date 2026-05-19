@@ -26,6 +26,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import INSTALL_EXAMPLES
 from setforge.cli._git_check import (
     resolve_source_for_git_check,
     run_git_check_or_raise,
@@ -66,7 +67,7 @@ from setforge.transitions import (
 )
 
 
-@app.command()
+@app.command(epilog=INSTALL_EXAMPLES)
 def install(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
