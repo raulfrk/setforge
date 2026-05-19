@@ -2,7 +2,7 @@
 
 Two autouse fixtures here form a defense-in-depth around the
 ``~/.config/setforge/local.yaml`` stub-creation race that surfaces
-under ``-n auto`` (setforge-hpd4):
+when CliRunner tests share ``$HOME`` (setforge-hpd4):
 
 - :func:`_isolated_local_config` redirects the ``LOCAL_CONFIG_PATH``
   module constants in ``setforge.binaries`` and ``setforge.source`` to
@@ -12,11 +12,6 @@ under ``-n auto`` (setforge-hpd4):
   resolves ``Path.home()`` lazily (completion, snapshots, transitions,
   migrations) — without this, parallel workers would still race on the
   dev-host home for those code paths.
-
-The xdist auto-activation hook lives in the **project-root**
-``conftest.py``; it can't live here because ``pytest_configure`` at a
-subdir conftest fires too late for xdist (see the root conftest's
-module docstring for the timing analysis).
 """
 
 import os
