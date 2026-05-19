@@ -594,9 +594,7 @@ def test_load_latest_filters_by_command(
     # Unfiltered: the sync wins (it's chronologically newer).
     assert load_latest("vmh") == newer_sync
     # Filtered to INSTALL: the install wins (sync is dropped from the set).
-    assert (
-        load_latest("vmh", command=TransitionCommand.INSTALL) == older_install
-    )
+    assert load_latest("vmh", command=TransitionCommand.INSTALL) == older_install
     # Filtered to a command with no matching record: None.
     assert load_latest("vmh", command=TransitionCommand.REVERT) is None
 
