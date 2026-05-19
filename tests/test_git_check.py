@@ -134,8 +134,11 @@ class TestCheckPathSourceClean:
         captured_cmd: list[str] = []
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            captured_cmd.extend(args[0])
-            return subprocess.CompletedProcess(args[0], 0, "", "")
+            cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
+            captured_cmd.extend(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
         monkeypatch.setattr("setforge.cli._git_check.subprocess.run", fake_run)
         check_path_source_clean(repo)
@@ -229,6 +232,8 @@ class TestCheckGitSourceFresh:
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
             if cmd[3:5] == ["symbolic-ref", "--short"]:
                 return subprocess.CompletedProcess(cmd, 0, "origin/main\n", "")
             if cmd[3] == "ls-remote":
@@ -249,6 +254,8 @@ class TestCheckGitSourceFresh:
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
             if cmd[3:5] == ["symbolic-ref", "--short"]:
                 return subprocess.CompletedProcess(cmd, 0, "origin/main\n", "")
             if cmd[3] == "ls-remote":
@@ -277,6 +284,8 @@ class TestCheckGitSourceFresh:
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
             if cmd[3:5] == ["symbolic-ref", "--short"]:
                 return subprocess.CompletedProcess(cmd, 0, "origin/main\n", "")
             if cmd[3] == "ls-remote":
@@ -301,6 +310,8 @@ class TestCheckGitSourceFresh:
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
             if cmd[3:5] == ["symbolic-ref", "--short"]:
                 return subprocess.CompletedProcess(cmd, 0, "origin/main\n", "")
             if cmd[3] == "ls-remote":
@@ -519,6 +530,8 @@ class TestGitSourceCachePath:
 
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             cmd = args[0]
+            if "--is-inside-work-tree" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "true\n", "")
             if cmd[3:5] == ["symbolic-ref", "--short"]:
                 return subprocess.CompletedProcess(cmd, 0, "origin/main\n", "")
             if cmd[3] == "ls-remote":

@@ -157,15 +157,34 @@ def _is_detached_head(source_dir: Path) -> bool:
     return False
 
 
+def _is_inside_git_work_tree(source_dir: Path) -> bool:
+    """Return True if ``source_dir`` is inside a git work tree.
+
+    Walks up from ``source_dir`` via ``git rev-parse --is-inside-work-tree``
+    so a config that lives in a SUB-directory of the user's git repo
+    (e.g. ``~/projects/my-repo/dotfiles/``) is still recognized as
+    git-managed. The prior check (``(source_dir / ".git").exists()``)
+    only matched repo roots — a real-world e2e regression caught when
+    the source_dir is the parent of ``setforge.yaml`` but ``.git``
+    lives at the enclosing repo root.
+    """
+    result = _git_run(
+        ["git", "-C", str(source_dir), "rev-parse", "--is-inside-work-tree"],
+        cwd=source_dir,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def check_path_source_clean(source_dir: Path) -> list[str]:
     """Return porcelain v2 dirty entries for the config repo path source.
 
     Empty list = clean. Bare repos / non-git dirs return empty (no
     issue to surface). Submodules ignored (``--ignore-submodules=all``).
     """
-    if not (source_dir / ".git").exists():
+    if not _is_inside_git_work_tree(source_dir):
         LOGGER.debug(
-            "path source %s is not a git repo; skipping clean check", source_dir
+            "path source %s is not inside a git work tree; skipping clean check",
+            source_dir,
         )
         return []
     if _is_bare_repository(source_dir):
@@ -244,9 +263,10 @@ def check_git_source_fresh(cache_dir: Path) -> tuple[str, ...]:
     exceptions is intentional. Also returns an empty tuple when
     ``cache_dir`` is not a git repo (defensive log-and-skip).
     """
-    if not (cache_dir / ".git").exists():
+    if not _is_inside_git_work_tree(cache_dir):
         LOGGER.debug(
-            "git source cache %s is not a git repo; skipping fresh check", cache_dir
+            "git source cache %s is not a git work tree; skipping fresh check",
+            cache_dir,
         )
         return ()
     ref = _resolve_default_branch(cache_dir)
@@ -503,7 +523,9 @@ def run_git_check_or_raise(
     detached = False
     dirty_lines: list[str] = []
     if isinstance(source, PathSource):
-        if (source_dir / ".git").exists() and not _is_bare_repository(source_dir):
+        if _is_inside_git_work_tree(source_dir) and not _is_bare_repository(
+            source_dir
+        ):
             detached = _is_detached_head(source_dir)
         dirty_lines = check_path_source_clean(source_dir)
     else:
