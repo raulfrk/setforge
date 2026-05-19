@@ -24,8 +24,13 @@ from typing import Any
 import typer
 from rich.console import Console
 
-from setforge.errors import ConfirmRequiresInteractive
-from setforge.source import PathSource, Source, resolve_source_dir
+from setforge.errors import ConfirmRequiresInteractive, NoSourceConfigured
+from setforge.source import (
+    PathSource,
+    Source,
+    get_resolved_source,
+    resolve_source_dir,
+)
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -52,8 +57,25 @@ __all__ = [
     "check_git_source_fresh",
     "check_path_source_clean",
     "prompt_git_check_choice",
+    "resolve_source_for_git_check",
     "run_git_check_or_raise",
 ]
+
+
+def resolve_source_for_git_check(repo_root: Path) -> Source:
+    """Return the :class:`Source` to inspect for the pre-deploy git check.
+
+    Prefers the configured source-layer (``--source`` / ``SETFORGE_SOURCE``
+    / ``~/.config/setforge/local.yaml``) so a git-source's CACHE dir is
+    inspected for staleness. Falls back to a synthetic
+    :class:`PathSource` rooted at ``repo_root`` when no source layer is
+    configured — covers the legacy explicit-``--config`` invocation
+    shape that the existing test suite relies on.
+    """
+    try:
+        return get_resolved_source()
+    except NoSourceConfigured:
+        return PathSource(path=repo_root)
 
 
 class GitCheckChoice(StrEnum):
