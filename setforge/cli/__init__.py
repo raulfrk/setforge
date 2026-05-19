@@ -191,6 +191,7 @@ from setforge.cli import upgrade as _upgrade  # noqa: E402, F401
 from setforge.cli import migrate as _migrate  # noqa: E402, F401 (schema migration)
 from setforge.cli import status as _status  # noqa: E402, F401  (xra8)
 from setforge.cli import profile as _profile  # noqa: E402, F401 (profile subgroup)
+from setforge.cli import snapshot as _snapshot  # noqa: E402, F401 (of3a)
 # isort: on
 
 
