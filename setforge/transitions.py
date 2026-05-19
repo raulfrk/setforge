@@ -800,7 +800,9 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
     )
 
 
-def load_latest(profile: str) -> Path | None:
+def load_latest(
+    profile: str, *, command: TransitionCommand | None = None
+) -> Path | None:
     """Return the most recent transition directory for ``profile``,
     or ``None`` if no history exists.
 
@@ -810,6 +812,15 @@ def load_latest(profile: str) -> Path | None:
     e.g. ``headless`` with ``vm-headless`` — meta.json is the canonical
     identity. Sorts lexicographically by dirname; transition_dirname's
     UTC-ISO prefix makes that equivalent to chronological order.
+
+    When ``command`` is provided, restricts the candidate set to
+    transitions whose ``meta.json`` ``command`` field equals that
+    enum's string value. ``None`` (the default) returns the latest
+    transition of ANY command type — preserves backward compatibility
+    for callers that want "the last thing that happened" (e.g. revert,
+    install --retry-failed). Filtering callers (e.g. status's
+    last-install line) pass ``command=TransitionCommand.INSTALL`` so a
+    later sync/revert doesn't shadow the install they want to display.
 
     Best-effort sweeps ``.pending-*`` dirs older than
     :data:`_STALE_PENDING_AGE` (24 h) before scanning candidates. These
@@ -821,7 +832,7 @@ def load_latest(profile: str) -> Path | None:
         return None
 
     _sweep_stale_pending(root)
-    candidates = _filter_transition_entries(root, profile)
+    candidates = _filter_transition_entries(root, profile, command=command)
     return _pick_latest_transition(candidates)
 
 
@@ -837,8 +848,17 @@ def _sweep_stale_pending(root: Path) -> None:
                 continue
 
 
-def _filter_transition_entries(root: Path, profile: str) -> list[Path]:
-    """Return committed transition dirs whose ``meta.json`` matches ``profile``."""
+def _filter_transition_entries(
+    root: Path, profile: str, *, command: TransitionCommand | None = None
+) -> list[Path]:
+    """Return committed transition dirs whose ``meta.json`` matches ``profile``.
+
+    When ``command`` is not None, further restricts to entries whose
+    ``meta.json`` ``command`` field equals that enum's string value.
+    Malformed ``command`` fields (missing, non-string, unknown value)
+    are silently dropped under filtered mode — best-effort posture
+    consistent with the broader transitions reader.
+    """
     candidates: list[Path] = []
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith(".pending-"):
@@ -850,8 +870,11 @@ def _filter_transition_entries(root: Path, profile: str) -> list[Path]:
             payload = json.loads(meta_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if payload.get("profile") == profile:
-            candidates.append(d)
+        if payload.get("profile") != profile:
+            continue
+        if command is not None and payload.get("command") != command.value:
+            continue
+        candidates.append(d)
     return candidates
 
 

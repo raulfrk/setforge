@@ -524,10 +524,10 @@ def test_load_latest_returns_none_when_root_missing(
     assert load_latest("vmh") is None
 
 
-def _stub_transition(target: Path, profile: str) -> None:
+def _stub_transition(target: Path, profile: str, *, command: str = "install") -> None:
     target.mkdir(parents=True, exist_ok=True)
     (target / "meta.json").write_text(
-        json.dumps({"profile": profile, "command": "install"}),
+        json.dumps({"profile": profile, "command": command}),
         encoding="utf-8",
     )
 
@@ -569,6 +569,36 @@ def test_load_latest_does_not_match_profile_substring(
     _stub_transition(decoy, profile="vm-headless")
     # Looking for 'headless' must NOT pick up vm-headless.
     assert load_latest("headless") is None
+
+
+def test_load_latest_filters_by_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``command=`` kwarg restricts candidates to that TransitionCommand value.
+
+    Regression for the setforge-xra8 last-install line: when a SYNC or
+    REVERT lands AFTER an INSTALL, ``load_latest(profile)`` returns the
+    sync/revert dir (the unconditional "latest"). Status's
+    "last install:" row needs the latest INSTALL specifically — passing
+    ``command=TransitionCommand.INSTALL`` filters the candidate set so
+    the later non-install transitions are ignored.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    root = tmp_path / "transitions"
+    root.mkdir()
+    older_install = root / "20260507T090000000000Z-install-vmh"
+    newer_sync = root / "20260507T170000000000Z-sync-vmh"
+    _stub_transition(older_install, profile="vmh", command="install")
+    _stub_transition(newer_sync, profile="vmh", command="sync")
+
+    # Unfiltered: the sync wins (it's chronologically newer).
+    assert load_latest("vmh") == newer_sync
+    # Filtered to INSTALL: the install wins (sync is dropped from the set).
+    assert (
+        load_latest("vmh", command=TransitionCommand.INSTALL) == older_install
+    )
+    # Filtered to a command with no matching record: None.
+    assert load_latest("vmh", command=TransitionCommand.REVERT) is None
 
 
 def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
