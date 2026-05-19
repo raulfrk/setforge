@@ -6,12 +6,19 @@ Two-axis classification:
   (live overlays tracked on the next deploy, by design).
 - Everything else is *unexpected* drift — what ``compare --check`` flags
   for CI and what Pillar 4's ``merge`` wizard exists to resolve.
+
+Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
+separate axis surfaced alongside drift: live files setforge previously
+deployed (per ``transitions/*/meta.json`` ``paths``) that are no longer
+listed in any resolved tracked_files entry. The ``cleanup-orphans``
+subcommand re-computes orphans under ``--apply`` and removes them.
 """
 
 import difflib
 import io
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -22,7 +29,8 @@ from rich.table import Table
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, sections, yaml_merge
-from setforge.config import Config, TrackedFile, resolve_profile
+from setforge.binaries import LOCAL_CONFIG_PATH
+from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_profile
 from setforge.paths import template_context
 
 
@@ -42,9 +50,127 @@ class FileCompare:
 
 
 @dataclass(frozen=True, slots=True)
+class OrphanEntry:
+    """One live path that setforge previously deployed but is no longer tracked.
+
+    The ``path`` field is the absolute live path that ``cleanup-orphans``
+    would remove. Captured from ``meta.json``'s ``paths`` field (the set
+    of paths setforge actually touched on this host), cross-referenced
+    against the resolved profile's current tracked_files. No re-tracking
+    or migration heuristic — orphans are strictly "previously here, no
+    longer in setforge.yaml."
+    """
+
+    path: Path
+
+
+@dataclass(frozen=True, slots=True)
 class CompareReport:
     entries: list[FileCompare]
     has_unexpected_drift: bool
+    orphans: list[OrphanEntry] = field(default_factory=list)
+
+
+def _resolved_tracked_dsts(
+    resolved: ResolvedProfile, config: Config, *, extra_ids: frozenset[str]
+) -> set[Path]:
+    """Resolved destination set for orphan exclusion.
+
+    Combines the resolved profile's ``tracked_files`` with any
+    ``extra_ids`` (the user's ``orphan_ignore`` list). Unknown ids in
+    ``extra_ids`` are silently skipped — a user may have removed an
+    ignore entry without cleaning the corresponding file; treating the
+    id as still-tracked is the safer default.
+    """
+    tracked_paths: set[Path] = set()
+    for name in resolved.tracked_files:
+        tracked_paths.add(resolve_dst(config.tracked_files[name]))
+    for name in extra_ids:
+        tracked_file = config.tracked_files.get(name)
+        if tracked_file is not None:
+            tracked_paths.add(resolve_dst(tracked_file))
+    return tracked_paths
+
+
+def _touched_paths_from_meta(transitions_dir: Path) -> set[Path]:
+    """Aggregate the ``paths`` field across every ``meta.json`` on disk.
+
+    Robust against malformed / unreadable meta.json files: a single bad
+    record is skipped, not fatal. Missing ``transitions_dir`` (no
+    install history yet) returns an empty set.
+    """
+    if not transitions_dir.exists():
+        return set()
+    touched: set[Path] = set()
+    for meta_path in transitions_dir.glob("*/meta.json"):
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        raw_paths = payload.get("paths")
+        if not isinstance(raw_paths, list):
+            continue
+        for raw in raw_paths:
+            if isinstance(raw, str):
+                touched.add(Path(raw))
+    return touched
+
+
+def detect_orphans(
+    resolved: ResolvedProfile,
+    config: Config,
+    transitions_dir: Path,
+    *,
+    ignored: frozenset[str] = frozenset(),
+) -> list[OrphanEntry]:
+    """Find live files setforge previously deployed that no longer appear
+    in ``resolved.tracked_files``.
+
+    Walks every ``transitions_dir/*/meta.json`` ``paths`` field (the
+    set of paths setforge actually touched on this host) and subtracts
+    the set of currently-resolved tracked destinations. The result is
+    sorted by string path for deterministic output.
+
+    ``ignored`` is a set of tracked_file IDs that the user has marked
+    as "keep orphan" via ``cleanup-orphans --ignore <id>``; their
+    resolved destinations are added to the tracked set so they never
+    surface as orphans.
+    """
+    tracked_paths = _resolved_tracked_dsts(resolved, config, extra_ids=ignored)
+    touched_paths = _touched_paths_from_meta(transitions_dir)
+    orphan_paths = sorted(touched_paths - tracked_paths, key=str)
+    return [OrphanEntry(path=p) for p in orphan_paths]
+
+
+def load_ignored_orphans() -> frozenset[str]:
+    """Return the set of tracked_file IDs flagged "keep orphan".
+
+    Reads ``orphan_ignore: [<id>, ...]`` from
+    :data:`setforge.binaries.LOCAL_CONFIG_PATH`. Returns an empty
+    frozenset when the file is absent, the key is missing, or the
+    payload is malformed (best-effort posture — a corrupt local.yaml
+    must not turn orphan-detection into a hard failure on every
+    ``compare``).
+    """
+    if not LOCAL_CONFIG_PATH.exists():
+        return frozenset()
+    yaml = YAML(typ="safe")
+    try:
+        data = yaml.load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        # Best-effort: a corrupt local.yaml must not turn orphan-detection
+        # into a hard failure on every ``compare``. The host-local config
+        # has its own validation path via :func:`load_host_local_config`
+        # for cases where strictness matters; orphan-ignore is advisory.
+        return frozenset()
+    if not isinstance(data, dict):
+        return frozenset()
+    raw = data.get("orphan_ignore")
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(item for item in raw if isinstance(item, str))
 
 
 def resolve_src(tracked_file: TrackedFile, repo_root: Path) -> Path:
@@ -278,8 +404,20 @@ def compare_profile(
     config: Config,
     profile_name: str,
     repo_root: Path,
+    *,
+    transitions_dir: Path | None = None,
+    ignored: frozenset[str] = frozenset(),
 ) -> CompareReport:
-    """Build a :class:`CompareReport` for every tracked_file in the resolved profile."""
+    """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
+
+    When ``transitions_dir`` is provided, also detects orphans (live
+    files setforge previously deployed but no longer tracked) via
+    :func:`detect_orphans`. ``ignored`` is the set of tracked_file IDs
+    flagged "keep orphan" via ``cleanup-orphans --ignore`` (stored in
+    ``~/.config/setforge/local.yaml``). When ``transitions_dir`` is
+    ``None`` the orphans list is empty — preserves the pre-orphan call
+    shape for callers that don't have a transitions dir handy.
+    """
     resolved = resolve_profile(config, profile_name)
     entries: list[FileCompare] = []
     has_unexpected = False
@@ -297,7 +435,13 @@ def compare_profile(
             if sub_unexpected:
                 has_unexpected = True
 
-    return CompareReport(entries=entries, has_unexpected_drift=has_unexpected)
+    orphans: list[OrphanEntry] = []
+    if transitions_dir is not None:
+        orphans = detect_orphans(resolved, config, transitions_dir, ignored=ignored)
+
+    return CompareReport(
+        entries=entries, has_unexpected_drift=has_unexpected, orphans=orphans
+    )
 
 
 def _compare_one(

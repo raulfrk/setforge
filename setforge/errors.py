@@ -154,6 +154,19 @@ class ConfirmRequiresInteractive(SetforgeError):
     ``-y``, which short-circuits the prompt for scripted contexts."""
 
 
+class OrphanCleanupRequiresInteractive(SetforgeError):
+    """Raised when ``setforge cleanup-orphans --apply`` is invoked
+    without a TTY and without ``--yes``.
+
+    Sibling of :class:`ConfirmRequiresInteractive` for the orphan
+    cleanup arrow-key wizard. ``cleanup-orphans --apply`` is a
+    mutate-gate (deletion is irreversible without a transition
+    record), so the non-TTY + no-``--yes`` combination raises instead
+    of falling back to a default — consent must be explicit. The
+    escape hatch is ``--yes``, which short-circuits to the safe
+    revert-able branch (delete + write transition)."""
+
+
 class NoTransitionFound(SetforgeError):
     """Raised by ``setforge revert`` when no transition history exists
     for the requested profile."""

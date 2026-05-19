@@ -39,6 +39,7 @@ class TransitionCommand(StrEnum):
     SYNC = "sync"
     REVERT = "revert"
     MERGE = "merge"
+    CLEANUP_ORPHANS = "cleanup-orphans"
 
 
 _STATE_ENV = "SETFORGE_STATE_DIR"
