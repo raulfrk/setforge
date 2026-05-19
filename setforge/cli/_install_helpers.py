@@ -156,16 +156,15 @@ def _write_install_transition(
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
-    ``source_dir`` is the config-repo root (``ctx.repo_root``); when
-    provided AND it is a git repo, :func:`transitions.make_meta` records
-    its HEAD commit sha so ``setforge status`` can compute
-    ``commits-since-last-install`` (setforge-xra8).
-    ``reconcile_outcomes`` defaults to an empty tuple so callers that
-    pre-date setforge-k0uj keep working. When non-empty, the tuple is
-    serialized to ``reconcile_outcomes.json`` next to the existing
-    ``extensions.json`` / ``plugins.json`` siblings so
-    ``install --retry-failed`` can rebuild the skipped-ids set on the
-    next invocation.
+    Two arguments carry schema-bump backward-compat history: ``source_dir``
+    (setforge-xra8 — when set and pointing at a git repo,
+    :func:`transitions.make_meta` records HEAD's sha so ``setforge
+    status`` can compute commits-since-last-install) and
+    ``reconcile_outcomes`` (setforge-k0uj — defaults to empty so
+    pre-bump callers keep working; when non-empty, serialized to
+    ``reconcile_outcomes.json`` alongside ``extensions.json`` /
+    ``plugins.json`` so ``install --retry-failed`` can rebuild the
+    skipped-ids set on the next invocation).
     """
     return transitions.write_transition(
         transitions.make_meta(

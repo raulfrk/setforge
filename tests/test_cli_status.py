@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -98,8 +99,6 @@ def _stub_transition(
 
 def test_format_age_seconds_to_days() -> None:
     """``_format_age`` must pick the largest unit that fits, never zero-up."""
-    from datetime import UTC, datetime, timedelta
-
     now = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
     assert status_mod._format_age(now, now - timedelta(seconds=5)) == "5s ago"
     assert status_mod._format_age(now, now - timedelta(minutes=3)) == "3m ago"
@@ -109,8 +108,6 @@ def test_format_age_seconds_to_days() -> None:
 
 def test_format_age_clamps_negative_delta() -> None:
     """A clock-skew ``then`` in the future must not surface a negative age."""
-    from datetime import UTC, datetime, timedelta
-
     now = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
     assert status_mod._format_age(now, now + timedelta(seconds=10)) == "0s ago"
 

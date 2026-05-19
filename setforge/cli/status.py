@@ -10,9 +10,10 @@ Renders five sections per the setforge-xra8 mockup (section O):
 
 The command is informational: it returns 0 even when capabilities are
 missing or the config repo is dirty. The exit code is gated only on
-hard errors raised by :func:`setforge.cli._resolve_config_arg` /
-:func:`setforge.config.load_config` (no source configured, malformed
-YAML, unknown profile).
+hard errors raised by :func:`setforge.cli._resolve_config_arg`,
+:func:`setforge.config.load_config`, and
+:func:`setforge.config.resolve_profile` (no source configured,
+malformed YAML, unknown profile).
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ _OVERLAY_KEYS: tuple[str, ...] = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True, frozen=True)
 class _GitInfo:
     """Resolved config-repo git state for the status report.
 
@@ -74,12 +75,12 @@ class _GitInfo:
 
     head_short: str | None
     commits_since_install: int | None
-    commits_since_install_reason: str | None  # placeholder text when count is None
+    commits_since_install_reason: str | None
     commits_vs_origin: int | None
     commits_vs_origin_reason: str | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True, frozen=True)
 class _DriftCounts:
     """Aggregated drift counts for the report."""
 
