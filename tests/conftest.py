@@ -15,7 +15,7 @@ when CliRunner tests share ``$HOME`` (setforge-hpd4):
 """
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -145,6 +145,7 @@ def _suppress_fresh_host_welcome(
     """
     if request.node.get_closest_marker("fresh_host") is not None:
         return
+
     # Patch BOTH the source module and ``setforge.cli.install``'s
     # import-site binding. ``install.py`` does
     # ``from setforge.cli._welcome import is_fresh_host``, so the
@@ -154,9 +155,11 @@ def _suppress_fresh_host_welcome(
     # that imports ``is_fresh_host`` (e.g. a new ``setforge status``
     # branch) — single point of truth for "this test ring treats the
     # host as non-fresh".
-    fake_is_fresh_host: Callable[[], bool] = lambda: False
-    monkeypatch.setattr("setforge.cli._welcome.is_fresh_host", fake_is_fresh_host)
-    monkeypatch.setattr("setforge.cli.install.is_fresh_host", fake_is_fresh_host)
+    def _force_non_fresh() -> bool:
+        return False
+
+    monkeypatch.setattr("setforge.cli._welcome.is_fresh_host", _force_non_fresh)
+    monkeypatch.setattr("setforge.cli.install.is_fresh_host", _force_non_fresh)
 
 
 def pytest_collection_modifyitems(
@@ -169,14 +172,13 @@ def pytest_collection_modifyitems(
     ``pytest --strict-markers`` happy without forcing every test author
     to remember the marker name in pyproject.toml. The collection hook
     fires once per session, so the registration cost is negligible.
+
+    The ``fresh_host`` marker is registered in ``pyproject.toml`` —
+    keeping a single registration site avoids drift between the two
+    descriptions.
     """
     del items  # collection hook accepts items; we don't filter here.
     config.addinivalue_line(
         "markers",
         "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
-    )
-    config.addinivalue_line(
-        "markers",
-        "fresh_host: opt this test out of the autouse fresh-host suppression "
-        "fixture so the install welcome gate fires.",
     )
