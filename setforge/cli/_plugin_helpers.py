@@ -93,6 +93,71 @@ def _stderr_full_from_failed(error_summary: str) -> str:
     return error_summary
 
 
+def _append_extension_success_outcomes(
+    outcomes: list[transitions.ReconcileOutcome],
+    ext_ids: Iterable[str],
+    *,
+    verb: str,
+) -> None:
+    """Append ``status="ok"`` outcomes for each extension id and echo progress.
+
+    ``verb`` is the past-tense action word printed on the progress line
+    (``"installed"`` or ``"uninstalled"``) — matches the prior inline
+    loop's output verbatim so tests asserting against stdout do not
+    shift.
+    """
+    for ext_id in ext_ids:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=ext_id,
+                kind="extension",
+                status="ok",
+                error_summary=None,
+            )
+        )
+        typer.echo(f"{verb}  {ext_id}")
+
+
+def _walk_extension_failures(
+    *,
+    report: "vscode_extensions.ReconcileReport",
+    retry_failed_ids: frozenset[str],
+    yes: bool,
+    outcomes: list[transitions.ReconcileOutcome],
+    final_added: list[str],
+    final_removed: list[str],
+) -> None:
+    """Walk ``report.failed`` and surface the per-item failure prompt.
+
+    Mutates ``outcomes`` (append per-item :class:`ReconcileOutcome`) and
+    ``final_added`` / ``final_removed`` (append on RETRY-success only).
+    Skips ids not in ``retry_failed_ids`` when that set is non-empty;
+    full-pass behavior is restored when it is empty. The is_install
+    branch picks the correct inverse for the RETRY path inside
+    :func:`_handle_extension_failure`.
+    """
+    for ext_id, err in report.failed:
+        if retry_failed_ids and ext_id not in retry_failed_ids:
+            continue
+        # The originating op was either install (in to_install) or
+        # uninstall (in to_uninstall). Pick the right inverse for RETRY.
+        is_install = ext_id in report.to_install
+        outcome, retry_ok = _handle_extension_failure(
+            ext_id=ext_id,
+            error_summary=err,
+            is_install=is_install,
+            yes=yes,
+            successful_added=tuple(final_added),
+            successful_removed=tuple(final_removed),
+        )
+        outcomes.append(outcome)
+        if retry_ok:
+            if is_install:
+                final_added.append(ext_id)
+            else:
+                final_removed.append(ext_id)
+
+
 def _reconcile_extensions(
     resolved: ResolvedProfile,
     *,
@@ -138,50 +203,22 @@ def _reconcile_extensions(
     successful_uninstall = [i for i in report.to_uninstall if i not in initial_failed]
 
     outcomes: list[transitions.ReconcileOutcome] = []
-    for ext_id in successful_install:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=ext_id,
-                kind="extension",
-                status="ok",
-                error_summary=None,
-            )
-        )
-        typer.echo(f"installed  {ext_id}")
-    for ext_id in successful_uninstall:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=ext_id,
-                kind="extension",
-                status="ok",
-                error_summary=None,
-            )
-        )
-        typer.echo(f"uninstalled  {ext_id}")
+    _append_extension_success_outcomes(outcomes, successful_install, verb="installed")
+    _append_extension_success_outcomes(
+        outcomes, successful_uninstall, verb="uninstalled"
+    )
 
     final_added = list(successful_install)
     final_removed = list(successful_uninstall)
 
-    for ext_id, err in report.failed:
-        if retry_failed_ids and ext_id not in retry_failed_ids:
-            continue
-        # The originating op was either install (in to_install) or
-        # uninstall (in to_uninstall). Pick the right inverse for RETRY.
-        is_install = ext_id in report.to_install
-        outcome, retry_ok = _handle_extension_failure(
-            ext_id=ext_id,
-            error_summary=err,
-            is_install=is_install,
-            yes=yes,
-            successful_added=tuple(final_added),
-            successful_removed=tuple(final_removed),
-        )
-        outcomes.append(outcome)
-        if retry_ok:
-            if is_install:
-                final_added.append(ext_id)
-            else:
-                final_removed.append(ext_id)
+    _walk_extension_failures(
+        report=report,
+        retry_failed_ids=retry_failed_ids,
+        yes=yes,
+        outcomes=outcomes,
+        final_added=final_added,
+        final_removed=final_removed,
+    )
 
     if not report:
         typer.echo("extensions: nothing to reconcile")
