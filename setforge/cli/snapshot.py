@@ -25,6 +25,11 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import (
+    SNAPSHOT_CREATE_EXAMPLES,
+    SNAPSHOT_LIST_EXAMPLES,
+    SNAPSHOT_RESTORE_EXAMPLES,
+)
 from setforge.cli._helpers import ProfileContext
 from setforge.config import load_config, resolve_profile
 from setforge.errors import SetforgeError
@@ -60,6 +65,10 @@ snapshot_app: typer.Typer = typer.Typer(
         "profile-resolved tracked_files.dst set plus local.yaml."
     ),
     no_args_is_help=True,
+    # Disable Rich-rendered --help so the Click `\b` epilog idiom
+    # preserves newlines; ``rich_markup_mode`` does NOT inherit from
+    # the root Typer.
+    rich_markup_mode=None,
 )
 app.add_typer(snapshot_app, name="snapshot")
 
@@ -110,7 +119,7 @@ def _emit_create_summary(meta: snap_mod.SnapshotMeta, *, console: Console) -> No
     console.print(f"  to restore: setforge snapshot restore {meta.label}")
 
 
-@snapshot_app.command("create")
+@snapshot_app.command("create", epilog=SNAPSHOT_CREATE_EXAMPLES)
 def snapshot_create(
     label: str = typer.Argument(
         ...,
@@ -134,7 +143,7 @@ def snapshot_create(
     _emit_create_summary(meta, console=Console())
 
 
-@snapshot_app.command("list")
+@snapshot_app.command("list", epilog=SNAPSHOT_LIST_EXAMPLES)
 def snapshot_list() -> None:
     """List every snapshot under ``~/.local/share/setforge/snapshots/``.
 
@@ -244,7 +253,7 @@ def _emit_restore_summary(meta: snap_mod.SnapshotMeta, *, console: Console) -> N
     console.print("=== restore complete ===")
 
 
-@snapshot_app.command("restore")
+@snapshot_app.command("restore", epilog=SNAPSHOT_RESTORE_EXAMPLES)
 def snapshot_restore(
     snapshot: str = typer.Argument(
         ...,
