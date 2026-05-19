@@ -279,9 +279,35 @@ def test_append_to_allowlist_appends_without_duplicating_header(tmp_path: Path) 
 def test_load_allowlist_skips_comments_and_blank(tmp_path: Path) -> None:
     """Internal helper: comments + blank lines are ignored when parsing."""
     allow = tmp_path / "allow"
+    hash_a = _sha("a")
+    hash_b = _sha("b")
     allow.write_text(
-        "# leading comment\n\n  # indented comment\nabc123\n\ndef456\n",
+        f"# leading comment\n\n  # indented comment\n{hash_a}\n\n{hash_b}\n",
         encoding="utf-8",
     )
     parsed = secrets._load_allowlist(allow)
-    assert parsed == frozenset({"abc123", "def456"})
+    assert parsed == frozenset({hash_a, hash_b})
+
+
+def test_load_allowlist_warns_on_malformed_hash(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-64-hex tokens emit a yellow warning and are excluded from the set."""
+    allow = tmp_path / "allow"
+    valid_hash = _sha("real")
+    allow.write_text(
+        f"# header\nabc123\n{valid_hash}\nNOT_A_HASH\n",
+        encoding="utf-8",
+    )
+
+    parsed = secrets._load_allowlist(allow)
+
+    captured = capsys.readouterr()
+    assert parsed == frozenset({valid_hash})
+    assert "'abc123'" in captured.err
+    assert "'NOT_A_HASH'" in captured.err
+    assert "is not a 64-hex sha256" in captured.err
+    # Line numbers in the warnings (abc123 is line 2, NOT_A_HASH is line 4).
+    assert "line 2" in captured.err
+    assert "line 4" in captured.err

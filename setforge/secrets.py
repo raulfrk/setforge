@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
@@ -42,6 +43,7 @@ _MISSING_BINARY_MESSAGE: Final[str] = (
     "warning: skipping pre-deploy secrets scan — gitleaks not found on PATH; "
     "install via https://github.com/gitleaks/gitleaks#installing for defense-in-depth"
 )
+_HASH_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SecretAction(StrEnum):
@@ -101,15 +103,30 @@ def _load_allowlist(allowlist_path: Path) -> frozenset[str]:
     first whitespace-separated token (so an inline comment after the
     hash on the same line is tolerated, though :func:`append_to_allowlist`
     writes the comment on a separate preceding line).
+
+    Defense-in-depth: tokens that are not a 64-hex-char sha256 hash are
+    rejected with a single yellow warning to stderr and excluded from
+    the loaded set. Malformed entries would otherwise silently never
+    match a real snippet hash — confusing UX for users hand-editing
+    the file.
     """
     if not allowlist_path.exists():
         return frozenset()
     out: set[str] = set()
-    for raw in allowlist_path.read_text(encoding="utf-8").splitlines():
+    for lineno, raw in enumerate(
+        allowlist_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        out.add(stripped.split()[0])
+        token = stripped.split()[0]
+        if not _HASH_RE.fullmatch(token):
+            _warn(
+                f"warning: secrets-allowlist line {lineno}: {token!r} "
+                "is not a 64-hex sha256; ignoring"
+            )
+            continue
+        out.add(token)
     return frozenset(out)
 
 
