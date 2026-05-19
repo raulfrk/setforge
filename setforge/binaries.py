@@ -60,6 +60,45 @@ _STUB_TEMPLATE: Final[str] = """\
 #   # Future knobs (not yet implemented):
 #   # claude_log_level: info
 #   # cache_max_age_days: 30
+#
+# ---------------------------------------------------------------------------
+# Per-host overlay classes (commented examples — uncomment + edit to use).
+# These mirror the overlay surfaces resolved at install/sync time on top of
+# the profile from the config repo's setforge.yaml. Schema for each block
+# is enforced by the relevant loader; see the spec for full semantics.
+# ---------------------------------------------------------------------------
+#
+# Per-host plugin overrides (claude_plugins). Uncomment + edit:
+# plugins:
+#   include:
+#     - secure-code-review@work-internal
+#   exclude: []
+#
+# Per-host extension overrides. Uncomment + edit:
+# extensions:
+#   include:
+#     - work-only-extension
+#   exclude: []
+#
+# Marketplaces (claude). Uncomment + edit:
+# marketplaces:
+#   work-internal: github:my-employer/claude-plugins-internal
+#
+# Host-local user-sections (overrides marker namespace on a per-tracked-file
+# basis):
+# host_local_sections:
+#   claude_clauded_md:
+#     - per-host-section-name
+#
+# Preserve user keys (deep-merge surface; per tracked file id):
+# preserve_user_keys:
+#   vscode_serv_settings:
+#     - claudeCode.allowDangerouslySkipPermissions
+#
+# Per-host tracked file overrides (rarely needed):
+# tracked_files:
+#   claude_clauded_md:
+#     dst: /custom/path/to/CLAUDE.md
 """
 
 
