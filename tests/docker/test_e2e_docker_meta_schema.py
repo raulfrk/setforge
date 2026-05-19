@@ -370,6 +370,4 @@ def test_command_line_redacts_secrets(
     assert isinstance(command_line, list), meta
     joined = " ".join(str(a) for a in command_line)
     assert "ghp_FAKE" not in joined, f"raw token leaked into meta.json: {joined}"
-    assert "<REDACTED>" in joined, (
-        f"expected <REDACTED> mask in command_line: {joined}"
-    )
+    assert "<REDACTED>" in joined, f"expected <REDACTED> mask in command_line: {joined}"
