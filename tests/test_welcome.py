@@ -35,6 +35,21 @@ from setforge.errors import WelcomeRequiresInteractive
 
 pytestmark = pytest.mark.fresh_host
 
+_VALID_META_PAYLOAD: dict[str, str] = {
+    "command": "install",
+    "profile": "x",
+    "timestamp": "2026-05-19T12:00:00+00:00",
+    "host": "fixture-host",
+    "version": "0.0.0-fixture",
+}
+"""Minimal :class:`setforge.transitions.TransitionMeta`-shaped payload.
+
+Used by tests that plant a transition record to assert
+:func:`is_fresh_host` reads False. ``is_fresh_host`` now validates each
+meta.json via ``transitions.load_meta`` so partial / corrupt records
+don't suppress the welcome; the fixture mirrors that contract.
+"""
+
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "e2e"
 _FIXTURE_YAML = _FIXTURE_DIR / "setforge.test.yaml"
 _FIXTURE_TRACKED = _FIXTURE_DIR / "tracked"
@@ -156,8 +171,26 @@ def test_is_fresh_host_returns_false_when_meta_present(
     """Transition record present → not fresh."""
     txn = tmp_path / "state" / "transitions" / "20260519T120000000000Z-install-x"
     txn.mkdir(parents=True)
-    (txn / "meta.json").write_text(json.dumps({"command": "install"}), encoding="utf-8")
+    (txn / "meta.json").write_text(
+        json.dumps(_VALID_META_PAYLOAD), encoding="utf-8"
+    )
     assert is_fresh_host() is False
+
+
+def test_is_fresh_host_skips_corrupt_meta(
+    sandboxed_home: Path, tmp_path: Path
+) -> None:
+    """Corrupt meta.json doesn't count — host stays fresh.
+
+    A partial-write / corrupt transition record (e.g. a setforge process
+    killed mid-write) should NOT silently suppress the welcome. The
+    safer fail mode is to re-show the consent surface.
+    """
+    txn = tmp_path / "state" / "transitions" / "20260519T120000000000Z-install-x"
+    txn.mkdir(parents=True)
+    # Missing required fields ("profile", "timestamp", ...) — load_meta raises.
+    (txn / "meta.json").write_text(json.dumps({"command": "install"}), encoding="utf-8")
+    assert is_fresh_host() is True
 
 
 def test_is_fresh_host_ignores_non_dir_children(
@@ -529,7 +562,9 @@ def test_install_after_first_run_skips_welcome(
     # Plant a transition record so is_fresh_host returns False.
     txn = tmp_path / "state" / "transitions" / "20260519T100000000000Z-install-x"
     txn.mkdir(parents=True)
-    (txn / "meta.json").write_text(json.dumps({"command": "install"}), encoding="utf-8")
+    (txn / "meta.json").write_text(
+        json.dumps(_VALID_META_PAYLOAD), encoding="utf-8"
+    )
     dlg = _patch_dialog(monkeypatch)
     # No --yes; the welcome should NOT fire because the host is not fresh.
     result = _invoke_install(fixture_repo)

@@ -19,6 +19,7 @@ SIGINT/SIGTERM restore the terminal before exiting.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import sys
@@ -36,7 +37,7 @@ from rich.table import Table
 
 from setforge import transitions
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
-from setforge.errors import WelcomeRequiresInteractive
+from setforge.errors import InvalidTransitionRecord, WelcomeRequiresInteractive
 
 __all__ = [
     "OverlayDelta",
@@ -126,7 +127,7 @@ class WelcomeInventory:
 
 
 def is_fresh_host() -> bool:
-    """Return True when no transition record exists for any profile.
+    """Return True when no VALID transition record exists for any profile.
 
     Fresh host = the user has never run a state-changing setforge
     command on this machine. The signal is intentionally
@@ -137,9 +138,13 @@ def is_fresh_host() -> bool:
 
     Reads :func:`transitions.transitions_root` (honors
     ``SETFORGE_STATE_DIR`` for tests / operators) and walks its
-    immediate children looking for a ``meta.json``. Host-wide signal —
-    no profile context needed; the welcome fires once per host across
-    all profiles, not per profile.
+    immediate children, loading each ``meta.json`` via
+    :func:`transitions.load_meta`. Only records that parse cleanly count
+    as "this host has used setforge"; corrupt or partial-write records
+    are skipped so a half-written state directory still triggers the
+    welcome (the safer fail mode — re-show consent rather than silently
+    suppress it). Host-wide signal — no profile context needed; the
+    welcome fires once per host across all profiles, not per profile.
     """
     root = transitions.transitions_root()
     if not root.is_dir():
@@ -147,7 +152,10 @@ def is_fresh_host() -> bool:
     for child in root.iterdir():
         if not child.is_dir():
             continue
-        if (child / "meta.json").is_file():
+        if not (child / "meta.json").is_file():
+            continue
+        with contextlib.suppress(InvalidTransitionRecord):
+            transitions.load_meta(child)
             return False
     return True
 
