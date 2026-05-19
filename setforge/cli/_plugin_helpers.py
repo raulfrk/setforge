@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import typer
 
@@ -591,6 +591,20 @@ def _retry_plugin_op(
     return None
 
 
+# Maps a retried op_kind from _classify_plugin_failure to the
+# _PluginRetriedPieces field that accumulates its second-attempt
+# successes. Unknown op kinds (the classifier's "unknown" fallback)
+# are deliberately absent — _handle_plugin_failure treats a missing
+# entry as a SKIP-equivalent rather than a retried_ok with no delta
+# bookkeeping.
+_RETRY_PIECE_FIELD: Final[Mapping[str, str]] = {
+    "install": "installed",
+    "enable": "enabled",
+    "disable": "disabled",
+    "marketplace_add": "marketplaces_added",
+}
+
+
 def _handle_plugin_failure(
     *,
     cfg: Config,
@@ -625,15 +639,14 @@ def _handle_plugin_failure(
         retry_err = _retry_plugin_op(cfg, failed_id, op_kind)
         if retry_err is None:
             # Record the retry success in the appropriate piece so the
-            # final delta reflects ground truth.
-            if op_kind == "install":
-                retried.installed.append(failed_id)
-            elif op_kind == "enable":
-                retried.enabled.append(failed_id)
-            elif op_kind == "disable":
-                retried.disabled.append(failed_id)
-            elif op_kind == "marketplace_add":
-                retried.marketplaces_added.append(failed_id)
+            # final delta reflects ground truth. ``op_kind == "unknown"``
+            # is a no-op append (matches the prior elif chain) — today
+            # that branch is dead because ``_retry_plugin_op`` already
+            # returns a non-None error string for unknown kinds, so this
+            # ``is None`` arm is only reached for the four mapped kinds.
+            piece_field = _RETRY_PIECE_FIELD.get(op_kind)
+            if piece_field is not None:
+                getattr(retried, piece_field).append(failed_id)
             return transitions.ReconcileOutcome(
                 item_id=failed_id,
                 kind="plugin",
