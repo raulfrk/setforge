@@ -38,13 +38,13 @@ from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
     FileChange,
-    _resolve_drift_paths,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
     _iter_all_tracked_files,
     _parse_capture_auto,
     _refuse_legacy_live_markers,
+    _resolve_drift_paths,
 )
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing

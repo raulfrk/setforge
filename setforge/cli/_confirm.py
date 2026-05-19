@@ -14,19 +14,13 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from setforge.cli._helpers import _iter_all_tracked_files
-from setforge.compare import CompareStatus
 from setforge.errors import ConfirmRequiresInteractive
-
-if TYPE_CHECKING:
-    from setforge.compare import CompareReport, FileCompare
-    from setforge.config import Config, ResolvedProfile
 
 # ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via the
 # module-level ``__getattr__`` below so non-interactive callers (and the
@@ -87,49 +81,6 @@ class AutoPlan:
     file_changes: tuple[FileChange, ...]
     risks: tuple[str, ...]
     revert_command: str
-
-
-def _resolve_drift_paths(
-    drift_report: CompareReport,
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-) -> list[tuple[FileCompare, Path, Path]]:
-    """Join ``drift_report.entries`` to tracked-file ``(sub_src, sub_dst)`` paths.
-
-    Both ``install._build_unexpected_drift_plan`` and
-    ``sync._build_capture_plan`` need the same ``name → (sub_src, sub_dst)``
-    map keyed by both the expanded name and the bare ``tracked_file.src``
-    string. Returns one ``(entry, sub_src, sub_dst)`` tuple per DRIFTED
-    entry with drift content (either ``unexpected_drift_keys`` or
-    ``diff`` non-empty). Entries with no path match fall back to the
-    entry name in both positions, preserving the pre-extraction
-    behavior.
-    """
-    paths_by_name: dict[str, tuple[Path, Path]] = {}
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
-        cfg, resolved, repo_root
-    ):
-        # expand_tracked_file's naming convention: plain files use the
-        # tracked_file name directly; directory entries use "name/relpath".
-        # Register both the bare name and the prefixed form so lookup
-        # works regardless of expansion shape.
-        paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
-    resolved_entries: list[tuple[FileCompare, Path, Path]] = []
-    for entry in drift_report.entries:
-        if entry.status is not CompareStatus.DRIFTED:
-            continue
-        if not (entry.unexpected_drift_keys or entry.diff):
-            continue
-        paths = paths_by_name.get(entry.name)
-        if paths is None:
-            sub_src = Path(entry.name)
-            sub_dst = Path(entry.name)
-        else:
-            sub_src, sub_dst = paths
-        resolved_entries.append((entry, sub_src, sub_dst))
-    return resolved_entries
 
 
 def _render_panel(

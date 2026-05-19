@@ -43,12 +43,12 @@ from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
     FileChange,
-    _resolve_drift_paths,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
     _iter_all_tracked_files,
     _iter_section_tracked_files,
+    _resolve_drift_paths,
 )
 from setforge.compare import CompareStatus
 from setforge.config import Config, ResolvedProfile
