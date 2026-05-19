@@ -234,7 +234,7 @@ def _read_body(*, body_source: BodySource, body_file: Path | None) -> str:
         case BodySource.FILE:
             if body_file is None:
                 raise typer.BadParameter("--body-source=file requires --body-file")
-            return body_file.read_text()
+            return body_file.read_text(encoding="utf-8")
         case BodySource.EDITOR:
             # Build the Path BEFORE entering the try: block so a
             # KeyboardInterrupt in the (very small) window between
@@ -249,7 +249,7 @@ def _read_body(*, body_source: BodySource, body_file: Path | None) -> str:
             tmp_path = Path(tmp.name)
             try:
                 run_editor(tmp_path)
-                body = tmp_path.read_text()
+                body = tmp_path.read_text(encoding="utf-8")
             finally:
                 tmp_path.unlink(missing_ok=True)
             if not body.strip():
@@ -322,7 +322,7 @@ def _apply_section_add(inputs: SectionAddInputs, *, body: str) -> None:
         config_path=inputs.config, tracked_file_key=inputs.tracked_file
     )
     _check_markdown_suffix(target=target)
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     _validate_anchor_line(
         anchor_line=inputs.anchor_line, total_lines=_count_total_lines(text)
     )
@@ -334,7 +334,7 @@ def _apply_section_add(inputs: SectionAddInputs, *, body: str) -> None:
         name=inputs.name,
         body=body,
     )
-    target.write_text(updated)
+    target.write_text(updated, encoding="utf-8")
     _print_next_steps(console=Console(), target=target, profile=inputs.profile)
 
 
@@ -515,7 +515,7 @@ def _section_add_interactive(
         config_path=config_path, tracked_file_key=tracked_file
     )
     _check_markdown_suffix(target=target)
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     # Surface the duplicate-name error BEFORE opening the anchor picker so
     # the user doesn't lose a TUI session to a name they could have caught
     # at flag-parse time. _apply_section_add re-checks under the same lock.
