@@ -523,9 +523,7 @@ def run_git_check_or_raise(
     detached = False
     dirty_lines: list[str] = []
     if isinstance(source, PathSource):
-        if _is_inside_git_work_tree(source_dir) and not _is_bare_repository(
-            source_dir
-        ):
+        if _is_inside_git_work_tree(source_dir) and not _is_bare_repository(source_dir):
             detached = _is_detached_head(source_dir)
         dirty_lines = check_path_source_clean(source_dir)
     else:
