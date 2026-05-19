@@ -36,7 +36,7 @@ import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -424,7 +424,7 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     if choice is UpgradeChoice.ABORT:
         console.print("[red]✗ aborted[/red] — no changes")
         return UpgradeChoice.ABORT
-    return choice
+    return cast(UpgradeChoice, choice)
 
 
 # ---------------------------------------------------------------------------
