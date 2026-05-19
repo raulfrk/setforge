@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -40,8 +40,10 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 
 
 __all__ = [
+    "ExtensionOperation",
     "ExtensionReconcile",
     "FileMutation",
+    "PluginOperation",
     "PluginReconcile",
     "RevertChoice",
     "RevertPlan",
@@ -55,6 +57,30 @@ class RevertChoice(StrEnum):
     ABORT = "abort"
     APPLY = "apply"
     APPLY_WITH_EDITOR = "apply-with-editor"
+
+
+class PluginOperation(StrEnum):
+    """Forward plugin operation recorded by an install/sync transition.
+
+    On revert, ``ENABLED`` is reversed to disable and ``DISABLED`` to
+    enable — see ``_render_plugins_section`` for the panel marker
+    dispatch.
+    """
+
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class ExtensionOperation(StrEnum):
+    """Forward extension operation recorded by an install/sync transition.
+
+    On revert, ``INSTALLED`` is reversed to uninstall and ``UNINSTALLED``
+    to install — see ``_render_extensions_section`` for the panel
+    marker dispatch.
+    """
+
+    INSTALLED = "installed"
+    UNINSTALLED = "uninstalled"
 
 
 @dataclass(slots=True, frozen=True)
@@ -77,14 +103,14 @@ class FileMutation:
 class PluginReconcile:
     """One plugin operation the install/sync transition performed.
 
-    On revert we will invert ``operation`` — an ``"enabled"`` plugin
-    becomes disabled, a ``"disabled"`` plugin becomes re-enabled.
-    ``source`` is the human-readable provenance hint (e.g. ``"[from
-    local.yaml]"``) surfaced in the panel listing.
+    On revert we will invert ``operation`` — a :attr:`PluginOperation.ENABLED`
+    plugin becomes disabled, a :attr:`PluginOperation.DISABLED` plugin
+    becomes re-enabled. ``source`` is the human-readable provenance hint
+    (e.g. ``"[from local.yaml]"``) surfaced in the panel listing.
     """
 
     plugin_id: str
-    operation: Literal["enabled", "disabled"]
+    operation: PluginOperation
     source: str
 
 
@@ -92,13 +118,14 @@ class PluginReconcile:
 class ExtensionReconcile:
     """One VSCode extension operation the install/sync transition performed.
 
-    On revert we will invert ``operation`` — ``"installed"`` becomes
-    uninstalled, ``"uninstalled"`` becomes re-installed. ``source`` is the
-    provenance hint surfaced in the panel listing.
+    On revert we will invert ``operation`` — :attr:`ExtensionOperation.INSTALLED`
+    becomes uninstalled, :attr:`ExtensionOperation.UNINSTALLED` becomes
+    re-installed. ``source`` is the provenance hint surfaced in the
+    panel listing.
     """
 
     extension_id: str
-    operation: Literal["installed", "uninstalled"]
+    operation: ExtensionOperation
     source: str
 
 
@@ -142,7 +169,7 @@ def _render_plugins_section(plan: RevertPlan, console: Console) -> None:
         return
     console.print(f"  plugins reconciled ({len(plan.plugin_reconciles)}):")
     for pr in plan.plugin_reconciles:
-        marker = "+" if pr.operation == "enabled" else "-"
+        marker = "+" if pr.operation is PluginOperation.ENABLED else "-"
         console.print(f"    {marker} {pr.plugin_id}  {pr.source}")
 
 
@@ -152,7 +179,7 @@ def _render_extensions_section(plan: RevertPlan, console: Console) -> None:
         return
     console.print(f"  extensions reconciled ({len(plan.extension_reconciles)}):")
     for er in plan.extension_reconciles:
-        marker = "+" if er.operation == "installed" else "-"
+        marker = "+" if er.operation is ExtensionOperation.INSTALLED else "-"
         console.print(f"    {marker} {er.extension_id}  {er.source}")
 
 

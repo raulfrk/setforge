@@ -28,7 +28,9 @@ from setforge.cli import (
 )
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
+    ExtensionOperation,
     FileMutation,
+    PluginOperation,
     RevertChoice,
     RevertPlan,
     confirm_revert_operation,
@@ -159,13 +161,13 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
         lines.append("")
         lines.append(f"plugins reconciled ({len(plan.plugin_reconciles)}):")
         for pr in plan.plugin_reconciles:
-            marker = "+" if pr.operation == "enabled" else "-"
+            marker = "+" if pr.operation is PluginOperation.ENABLED else "-"
             lines.append(f"  {marker} {pr.plugin_id}  {pr.source}")
     if plan.extension_reconciles:
         lines.append("")
         lines.append(f"extensions reconciled ({len(plan.extension_reconciles)}):")
         for er in plan.extension_reconciles:
-            marker = "+" if er.operation == "installed" else "-"
+            marker = "+" if er.operation is ExtensionOperation.INSTALLED else "-"
             lines.append(f"  {marker} {er.extension_id}  {er.source}")
     lines.append("")
     lines.append(f"REDO: {plan.redo_command}")

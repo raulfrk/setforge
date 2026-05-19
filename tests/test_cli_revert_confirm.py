@@ -11,8 +11,10 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.cli._revert_confirm import (
+    ExtensionOperation,
     ExtensionReconcile,
     FileMutation,
+    PluginOperation,
     PluginReconcile,
     RevertChoice,
     RevertPlan,
@@ -125,7 +127,9 @@ def test_file_mutation_default_user_edit_collision() -> None:
 
 
 def test_plugin_reconcile_frozen_slots() -> None:
-    pr = PluginReconcile(plugin_id="p@m", operation="enabled", source="[local]")
+    pr = PluginReconcile(
+        plugin_id="p@m", operation=PluginOperation.ENABLED, source="[local]"
+    )
     with pytest.raises(FrozenInstanceError):
         pr.plugin_id = "x"  # type: ignore[misc]
     assert "__slots__" in dir(type(pr))
@@ -133,7 +137,9 @@ def test_plugin_reconcile_frozen_slots() -> None:
 
 def test_extension_reconcile_frozen_slots() -> None:
     er = ExtensionReconcile(
-        extension_id="ext", operation="installed", source="[profile]"
+        extension_id="ext",
+        operation=ExtensionOperation.INSTALLED,
+        source="[profile]",
     )
     with pytest.raises(FrozenInstanceError):
         er.extension_id = "x"  # type: ignore[misc]
@@ -302,12 +308,12 @@ def test_panel_includes_plugin_reconciles(monkeypatch: pytest.MonkeyPatch) -> No
         plugin_reconciles=(
             PluginReconcile(
                 plugin_id="secure-code-review@work-internal",
-                operation="enabled",
+                operation=PluginOperation.ENABLED,
                 source="[from local.yaml]",
             ),
             PluginReconcile(
                 plugin_id="some-default-plugin",
-                operation="disabled",
+                operation=PluginOperation.DISABLED,
                 source="[from profile]",
             ),
         ),
@@ -329,7 +335,7 @@ def test_panel_includes_extension_reconciles(
         extension_reconciles=(
             ExtensionReconcile(
                 extension_id="work-only-extension",
-                operation="installed",
+                operation=ExtensionOperation.INSTALLED,
                 source="[from profile]",
             ),
         ),
