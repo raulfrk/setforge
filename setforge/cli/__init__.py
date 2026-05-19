@@ -188,6 +188,7 @@ from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + f
 from setforge.cli import section as _section  # noqa: E402, F401 (section subgroup)
 from setforge.cli import init as _init  # noqa: E402, F401
 from setforge.cli import upgrade as _upgrade  # noqa: E402, F401
+from setforge.cli import migrate as _migrate  # noqa: E402, F401 (schema migration)
 # isort: on
 
 
