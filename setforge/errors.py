@@ -154,6 +154,21 @@ class ConfirmRequiresInteractive(SetforgeError):
     ``-y``, which short-circuits the prompt for scripted contexts."""
 
 
+class WelcomeRequiresInteractive(SetforgeError):
+    """Raised when ``setforge install`` detects a fresh host but cannot
+    render the welcome panel because stdin is not a TTY and ``--yes``
+    was not passed.
+
+    Sibling of :class:`ConfirmRequiresInteractive` for the
+    :func:`setforge.cli._welcome.prompt_welcome` gate that fires on
+    every fresh-host ``setforge install`` invocation (no transition
+    record present for any profile). The welcome panel is information +
+    consent; a non-TTY caller cannot act on either side, so the gate
+    raises rather than falling back to a default. The escape hatch is
+    ``--yes`` / ``-y``, which skips the welcome entirely (the user has
+    already consented out-of-band)."""
+
+
 class OrphanCleanupRequiresInteractive(SetforgeError):
     """Raised when ``setforge cleanup-orphans --apply`` is invoked
     without a TTY and without ``--yes``.
