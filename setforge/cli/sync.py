@@ -41,22 +41,20 @@ from setforge.cli._confirm import (
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
+    ProfileContext,
     _iter_all_tracked_files,
     _parse_capture_auto,
     _refuse_legacy_live_markers,
     _resolve_drift_paths,
 )
-from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
+from setforge.config import Config, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
 
 
 def _build_capture_plan(
     *,
     drift_report: compare_mod.CompareReport,
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    profile: str,
+    ctx: ProfileContext,
 ) -> AutoPlan:
     """Build an AutoPlan for the live → tracked capture path (sync --auto=use-live).
 
@@ -69,9 +67,7 @@ def _build_capture_plan(
     # capture writes everything that differs into tracked. The shared
     # ``_resolve_drift_paths`` helper already filters to entries with
     # ``unexpected_drift_keys or diff``, which matches sync's intent.
-    for entry, sub_src, sub_dst in _resolve_drift_paths(
-        drift_report, cfg, resolved, repo_root
-    ):
+    for entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
         file_changes.append(
             FileChange(
                 source=sub_dst,
@@ -84,7 +80,7 @@ def _build_capture_plan(
             direction=AutoDirection.LIVE_TO_TRACKED,
             file_changes=(),
             risks=(),
-            revert_command=f"setforge revert --profile={profile}",
+            revert_command=f"setforge revert --profile={ctx.profile}",
         )
     return AutoPlan(
         direction=AutoDirection.LIVE_TO_TRACKED,
@@ -93,7 +89,7 @@ def _build_capture_plan(
             f"tracked-side files on {len(file_changes)} file(s) will be overwritten "
             "with live edits — propagates to all hosts via the tracked repo",
         ),
-        revert_command=f"setforge revert --profile={profile}",
+        revert_command=f"setforge revert --profile={ctx.profile}",
     )
 
 
@@ -149,7 +145,10 @@ def merge(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="merge")
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    _refuse_legacy_live_markers(ctx, command="merge")
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
     if not report.has_unexpected_drift:
@@ -214,7 +213,10 @@ def sync(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="sync")
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    _refuse_legacy_live_markers(ctx, command="sync")
 
     if not no_transition:
         transitions.ensure_state_dir_writable()
@@ -224,10 +226,7 @@ def sync(
         drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
         plan = _build_capture_plan(
             drift_report=drift_report,
-            cfg=cfg,
-            resolved=resolved,
-            repo_root=repo_root,
-            profile=profile,
+            ctx=ctx,
         )
         if not confirm_auto_operation(
             command="sync --auto=use-live",
@@ -237,7 +236,7 @@ def sync(
         ):
             raise typer.Exit(0)
 
-    src_paths = _sync_snapshot_paths(cfg, resolved, repo_root, config)
+    src_paths = _sync_snapshot_paths(ctx, config)
     file_pre = transitions.snapshot_paths(src_paths)
 
     results = _run_capture(cfg, profile, repo_root, config, auto_enum, command="sync")
@@ -258,13 +257,9 @@ def sync(
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
 
-def _sync_snapshot_paths(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, config: Path
-) -> list[Path]:
+def _sync_snapshot_paths(ctx: ProfileContext, config: Path) -> list[Path]:
     """Every tracked src path under the profile plus ``setforge.yaml`` itself."""
-    paths = [
-        sub_src for _, sub_src, _ in _iter_all_tracked_files(cfg, resolved, repo_root)
-    ]
+    paths = [sub_src for _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
     return paths
 

@@ -27,10 +27,11 @@ def test_check_unexpected_drift_no_entries_is_noop() -> None:
     empty = CompareReport(entries=[], has_unexpected_drift=False)
     result = _install_helpers._check_unexpected_drift(
         empty,
-        cfg=None,  # type: ignore[arg-type]  # short-circuits before touching cfg
-        repo_root=Path("/tmp"),
-        config=Path("/tmp/setforge.yaml"),
-        profile="test",
+        # ProfileContext is unreachable in the no-drift short-circuit
+        # path; the type-ignore covers the None-pass that anchors the
+        # short-circuit contract explicitly.
+        None,  # type: ignore[arg-type]
+        Path("/tmp/setforge.yaml"),
         auto_accept_tracked=False,
         auto_accept_live=False,
     )

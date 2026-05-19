@@ -25,6 +25,7 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._helpers import (
+    ProfileContext,
     _extract_live_sections_map,
     _iter_all_tracked_files,
     _parse_section_auto,
@@ -104,6 +105,9 @@ def install(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
 
     if not no_transition:
         transitions.ensure_state_dir_writable()
@@ -118,10 +122,7 @@ def install(
 
     _confirm_legacy_drift_or_exit(
         drift_report=drift_report,
-        cfg=cfg,
-        resolved=resolved,
-        repo_root=repo_root,
-        profile=profile,
+        ctx=ctx,
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
         yes=yes,
@@ -129,19 +130,14 @@ def install(
 
     _check_unexpected_drift(
         drift_report,
-        cfg,
-        repo_root,
+        ctx,
         config,
-        profile,
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
     )
 
     _confirm_section_reconcile_or_exit(
-        cfg=cfg,
-        resolved=resolved,
-        repo_root=repo_root,
-        profile=profile,
+        ctx=ctx,
         section_auto=section_auto,
         yes=yes,
     )
@@ -150,9 +146,7 @@ def install(
     # decisions BEFORE the deploy loop so wizard prompts and the
     # bare-install warning fire once, deterministically.
     section_decisions = _resolve_section_decisions(
-        cfg,
-        resolved,
-        repo_root,
+        ctx,
         section_auto=section_auto,
         interactive=reconcile_user_sections,
     )
@@ -160,19 +154,17 @@ def install(
     # Pre-extract live user-sections for every section-bearing tracked_file
     # so deploy.copy_atomic can skip its own re-read + re-parse pass.
     # See `precomputed_live_sections` on copy_atomic.
-    live_sections_map = _extract_live_sections_map(cfg, resolved, repo_root)
+    live_sections_map = _extract_live_sections_map(ctx)
 
     dst_paths: list[Path] = [
-        sub_dst for _, _, sub_dst in _iter_all_tracked_files(cfg, resolved, repo_root)
+        sub_dst for _, _, sub_dst in _iter_all_tracked_files(ctx)
     ]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 
     file_pre = transitions.snapshot_paths(dst_paths)
 
     _deploy_all_tracked_files(
-        cfg,
-        resolved,
-        repo_root,
+        ctx,
         section_decisions=section_decisions,
         live_sections_map=live_sections_map,
     )

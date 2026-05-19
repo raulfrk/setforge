@@ -10,6 +10,7 @@ that delegate to ``expand_tracked_file`` (``_iter_section_tracked_files``,
 """
 
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import typer
@@ -34,6 +35,29 @@ from setforge.sections import (
     detect_legacy_markers,
     detect_legacy_namespace_markers,
 )
+
+
+@dataclass(slots=True, frozen=True)
+class ProfileContext:
+    """Bundle the ``(cfg, resolved, repo_root, profile)`` data clump.
+
+    Every subcommand's helper chain in ``install`` / ``sync`` / ``compare``
+    needs the parsed :class:`Config`, the resolved profile, the absolute
+    config-repo root, and the profile name; threading them as four
+    positional arguments across 8+ signatures was the canonical data
+    clump. Callers build a single :class:`ProfileContext` once at the
+    command entry point and pass it through every subsequent helper.
+
+    The dataclass is frozen + slotted so it stays a cheap value object;
+    helpers that need only a subset of fields still receive the same
+    context and reach for the field they need (``ctx.cfg``,
+    ``ctx.resolved``, etc.).
+    """
+
+    cfg: Config
+    resolved: ResolvedProfile
+    repo_root: Path
+    profile: str
 
 
 def _parse_capture_auto(auto: str | None) -> CaptureAuto | None:
@@ -87,7 +111,7 @@ def _parse_section_auto(
 
 
 def _iter_section_tracked_files(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+    ctx: ProfileContext,
 ) -> Iterator[tuple[Path, Path]]:
     """Yield ``(sub_src, sub_dst)`` for every section-bearing tracked_file.
 
@@ -104,18 +128,18 @@ def _iter_section_tracked_files(
 
     Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
-    for name in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[name]
+    for name in ctx.resolved.tracked_files:
+        tracked_file = ctx.cfg.tracked_files[name]
         if not tracked_file.preserve_user_sections:
             continue
-        src = resolve_src(tracked_file, repo_root)
+        src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             yield sub_src, sub_dst
 
 
 def _iter_all_tracked_files(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+    ctx: ProfileContext,
 ) -> Iterator[tuple[TrackedFile, Path, Path]]:
     """Yield ``(tracked_file, sub_src, sub_dst)`` for every resolved entry.
 
@@ -128,9 +152,9 @@ def _iter_all_tracked_files(
     ``preserve_user_*`` attributes; callers that only need a path
     destructure as ``_, _, sub_dst`` or ``_, sub_src, _``.
     """
-    for name in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[name]
-        src = resolve_src(tracked_file, repo_root)
+    for name in ctx.resolved.tracked_files:
+        tracked_file = ctx.cfg.tracked_files[name]
+        src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             yield tracked_file, sub_src, sub_dst
@@ -138,9 +162,7 @@ def _iter_all_tracked_files(
 
 def _resolve_drift_paths(
     drift_report: CompareReport,
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
+    ctx: ProfileContext,
 ) -> list[tuple[FileCompare, Path, Path]]:
     """Join ``drift_report.entries`` to tracked-file ``(sub_src, sub_dst)`` paths.
 
@@ -154,9 +176,7 @@ def _resolve_drift_paths(
     behavior.
     """
     paths_by_name: dict[str, tuple[Path, Path]] = {}
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(
-        cfg, resolved, repo_root
-    ):
+    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(ctx):
         # expand_tracked_file's naming convention: plain files use the
         # tracked_file name directly; directory entries use "name/relpath".
         # Register both the bare name and the prefixed form so lookup
@@ -179,9 +199,7 @@ def _resolve_drift_paths(
     return resolved_entries
 
 
-def _refuse_legacy_live_markers(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, *, command: str
-) -> None:
+def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
     """Raise :class:`SetforgeError` if any live ``preserve_user_sections``
     file carries pre-9by markers.
 
@@ -199,7 +217,7 @@ def _refuse_legacy_live_markers(
     point refused. Install must NOT call this — install's job is to
     migrate.
     """
-    for _, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+    for _, sub_dst in _iter_section_tracked_files(ctx):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -271,9 +289,7 @@ def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> Non
 
 
 def _resolve_section_decisions(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
+    ctx: ProfileContext,
     *,
     section_auto: ReconcileAuto | None,
     interactive: bool,
@@ -288,7 +304,7 @@ def _resolve_section_decisions(
     silently skipped; their copy_atomic call gets an empty override.
     """
     decisions: dict[Path, dict[str, str]] = {}
-    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+    for sub_src, sub_dst in _iter_section_tracked_files(ctx):
         if not sub_dst.exists():
             # First install for this file — no live to reconcile.
             continue
@@ -313,9 +329,7 @@ def _resolve_section_decisions(
 
 
 def _extract_live_sections_map(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
+    ctx: ProfileContext,
 ) -> dict[Path, sections_mod.LiveSections]:
     """Pre-extract live user-section bodies for every section-bearing tracked_file.
 
@@ -335,7 +349,7 @@ def _extract_live_sections_map(
     strict parser and refuse legacy via :func:`_refuse_legacy_live_markers`.
     """
     live_sections: dict[Path, sections_mod.LiveSections] = {}
-    for _, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+    for _, sub_dst in _iter_section_tracked_files(ctx):
         if not sub_dst.exists():
             continue
         live_text = sub_dst.read_text(encoding="utf-8")

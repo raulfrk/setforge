@@ -20,11 +20,12 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._helpers import (
+    ProfileContext,
     _iter_section_tracked_files,
     _refuse_legacy_live_markers,
 )
 from setforge.compare import CompareStatus
-from setforge.config import Config, load_config, resolve_profile
+from setforge.config import load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics
 
@@ -61,14 +62,17 @@ def compare(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    _refuse_legacy_live_markers(cfg, resolved, repo_root, command="compare")
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    _refuse_legacy_live_markers(ctx, command="compare")
     report = compare_mod.compare_profile(cfg, profile, repo_root)
 
     console = Console()
     _render_compare_report(report, console, full_diff=full_diff)
 
     if reconcile_user_sections:
-        _print_section_reconcile_dry_run(cfg, profile, repo_root, console)
+        _print_section_reconcile_dry_run(ctx, console)
 
     if check:
         if strict:
@@ -104,7 +108,7 @@ def _render_compare_report(
 
 
 def _print_section_reconcile_dry_run(
-    cfg: Config, profile: str, repo_root: Path, console: Console
+    ctx: ProfileContext, console: Console
 ) -> None:
     """Render the ``compare --reconcile-user-sections`` dry-run output.
 
@@ -117,9 +121,8 @@ def _print_section_reconcile_dry_run(
     e2e suite (variant 18) — each drifted-section line includes the
     file path, section name, and state label.
     """
-    resolved = resolve_profile(cfg, profile)
     any_emitted = False
-    for sub_src, sub_dst in _iter_section_tracked_files(cfg, resolved, repo_root):
+    for sub_src, sub_dst in _iter_section_tracked_files(ctx):
         if not sub_dst.exists() or not sub_src.exists():
             continue
         if _render_drift_file(sub_src, sub_dst, console):
