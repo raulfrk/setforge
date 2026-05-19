@@ -258,7 +258,7 @@ def test_build_upgrade_plan_rejects_invalid_to(
     _patch_notes(monkeypatch, notes=None)
     from setforge.errors import UpgradeError
 
-    with pytest.raises(UpgradeError, match="not a valid X.Y.Z"):
+    with pytest.raises(UpgradeError, match=r"not a valid X\.Y\.Z"):
         _build_upgrade_plan(to="not-a-version", prerelease=False)
 
 
