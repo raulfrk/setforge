@@ -885,16 +885,26 @@ def _pick_latest_transition(candidates: list[Path]) -> Path | None:
     return max(candidates, key=lambda d: d.name)
 
 
-def apply_patch_reverse(transition_dir: Path) -> None:
+def apply_patch_reverse(transition_dir: Path, *, dry_run: bool = False) -> None:
     """Apply ``<transition_dir>/changes.patch`` in reverse via ``patch -R``.
 
     No-op if the patch file is absent (e.g. transition recorded only an
     extension delta).
 
-    Atomicity: a ``--dry-run`` pass runs first so drift on any single
-    file aborts before any file is written. ``--reject-file=-`` discards
-    rejected hunks (would otherwise leave ``.rej`` siblings in the
-    user's tree). On a clean dry-run, the real apply follows.
+    Two modes:
+
+    - ``dry_run=False`` (default, backward-compat): a ``patch -R --dry-run``
+      pass runs first so drift on any single file aborts before any file
+      is written; on a clean dry-run, the real apply follows.
+    - ``dry_run=True``: only the ``patch -R --dry-run`` pass runs; raises
+      :class:`RevertFailed` on failure; returns ``None`` on success
+      without modifying the live tree. Used by multi-step atomic revert
+      (e.g. ``revert --to-before=<id>``) which must dry-run ALL N
+      transitions FIRST before applying ANY of them, so a late-step drift
+      aborts before the chain's first write.
+
+    ``--reject-file=-`` discards rejected hunks (would otherwise leave
+    ``.rej`` siblings in the user's tree).
 
     Raises :class:`RevertFailed` if the ``patch`` binary is missing or
     if either pass fails. The patch's stderr is surfaced verbatim so
@@ -933,6 +943,8 @@ def apply_patch_reverse(transition_dir: Path) -> None:
             f"patch -R dry-run failed (exit {dry.returncode}); no files changed:\n"
             f"{dry.stderr.strip() or dry.stdout.strip()}"
         )
+    if dry_run:
+        return
     result = subprocess.run(
         base_args,
         capture_output=True,

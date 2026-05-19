@@ -666,6 +666,79 @@ def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
     assert rej_files == [], f"unexpected .rej files: {rej_files}"
 
 
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_apply_patch_reverse_dry_run_only_does_not_modify_live(
+    tmp_path: Path,
+) -> None:
+    """``dry_run=True`` verifies the reverse would apply cleanly but
+    leaves the live tree untouched. Used by multi-step atomic revert
+    (``revert --to-before=<id>``) which must dry-run-ALL-N FIRST then
+    apply-ALL-N.
+    """
+    target = tmp_path / "live.txt"
+    target.write_text("after\n", encoding="utf-8")
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch({target: "before\n"}, {target: "after\n"}),
+        encoding="utf-8",
+    )
+
+    apply_patch_reverse(transition, dry_run=True)
+
+    # Live tree unchanged after a successful dry-run.
+    assert target.read_text() == "after\n"
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_apply_patch_reverse_dry_run_failure_raises_revertfailed(
+    tmp_path: Path,
+) -> None:
+    """``dry_run=True`` raises :class:`RevertFailed` on drift, same as
+    the default mode — and the live tree stays untouched (per the
+    no-write contract of dry-run-only)."""
+    target = tmp_path / "live.txt"
+    target.write_text("drifted-content\n", encoding="utf-8")
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch({target: "before\n"}, {target: "after\n"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RevertFailed):
+        apply_patch_reverse(transition, dry_run=True)
+
+    # Live tree unchanged after a failed dry-run too.
+    assert target.read_text() == "drifted-content\n"
+
+
+def test_apply_patch_reverse_dry_run_no_patch_is_noop(tmp_path: Path) -> None:
+    """``dry_run=True`` matches the default-mode no-op shape when the
+    transition has no ``changes.patch`` (extension-only transitions)."""
+    apply_patch_reverse(tmp_path, dry_run=True)
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_apply_patch_reverse_default_mode_still_does_dry_then_apply(
+    tmp_path: Path,
+) -> None:
+    """Backward-compat: ``dry_run=False`` (default) preserves the
+    pre-refactor behavior — dry-run-then-real-apply on one transition."""
+    target = tmp_path / "live.txt"
+    target.write_text("after\n", encoding="utf-8")
+    transition = tmp_path / "transition"
+    transition.mkdir()
+    (transition / "changes.patch").write_text(
+        compute_patch({target: "before\n"}, {target: "after\n"}),
+        encoding="utf-8",
+    )
+
+    apply_patch_reverse(transition)  # default dry_run=False
+
+    assert target.read_text() == "before\n"
+
+
 def _stub_full_transition(
     target: Path,
     *,
