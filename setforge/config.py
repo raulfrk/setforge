@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not-found]
 
 from setforge.errors import ConfigError, ProfileNotFound
 
@@ -86,6 +87,16 @@ class TrackedFile(BaseModel):
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
     preserve_user_keys: list[str] = []
     preserve_user_keys_deep: list[str] = []
+    mode: int | None = None
+    """POSIX file-mode bits (chmod) for the live dst.
+
+    YAML-1.2 octal int literal only (``mode: 0o755``). The validator
+    rejects both bare strings and YAML-1.1-style ``0755`` literals,
+    which ruamel.yaml parses as the string ``"0755"`` under YAML 1.2.
+    Setuid/setgid bits are refused for security; sticky bit (``0o1000``)
+    is allowed. When ``None``, deploy preserves the source file's mode
+    (today's behavior, zero regression).
+    """
     """Paths whose live → tracked overlay does a *deep* merge instead of
     the shallow whole-leaf replace of ``preserve_user_keys``. Tracked
     sub-keys absent on the live side survive. Live-only sub-keys are
@@ -131,6 +142,61 @@ class TrackedFile(BaseModel):
                     f"for list-targeted paths."
                 )
         return v
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, v: object) -> int | None:
+        """Reject every shape EXCEPT YAML-1.2 octal (``0o755``) or a plain int.
+
+        ruamel.yaml round-trip semantics for the value before Pydantic
+        sees it:
+
+        - ``mode: 0o755`` -> :class:`OctalInt(493)` (the intended form).
+        - ``mode: 0755``  -> :class:`ScalarInt(755)` (NOT 0o755! The
+          leading zero is silently stripped under YAML 1.2 — a
+          well-known footgun for users migrating from YAML 1.1).
+        - ``mode: "0755"`` -> ``str("0755")``.
+        - ``mode: 755`` -> plain ``int(755)`` (decimal — almost
+          certainly a typo; 755 = 0o1363, not 0o755).
+
+        The validator accepts :class:`OctalInt` (the canonical form)
+        and the exact ``int`` type (a Pydantic-caller passing the
+        Python literal ``0o755`` == 493 — same value, different
+        provenance). Every other shape — including :class:`ScalarInt`
+        subclasses that are NOT :class:`OctalInt`, ``str``, ``bool`` —
+        is rejected with a message pointing at ``0o755``.
+        ``bool`` deserves special mention: Python's
+        ``isinstance(True, int)`` is True, so without an explicit
+        check ``mode: true`` would silently mean ``0o1``.
+        """
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(
+                f"mode must be YAML-1.2 octal int literal (e.g. 0o755), "
+                f"not bool. Got: {v!r}"
+            )
+        if isinstance(v, ScalarInt) and not isinstance(v, OctalInt):
+            raise ValueError(
+                f"mode {int(v)} appears to use YAML-1.1-style leading-zero "
+                f"octal (e.g. 0755) which YAML 1.2 silently parses as "
+                f"decimal. If you meant the permission bits commonly "
+                f"written as 'octal 755', use the YAML-1.2 literal 0o755. "
+                f"If you literally meant the integer {int(v)}, use "
+                f"0o{int(v):o}."
+            )
+        if type(v) is not int and not isinstance(v, OctalInt):
+            raise ValueError(
+                f"mode must be YAML-1.2 octal int literal (e.g. 0o755), "
+                f"not string or decimal. Got: {v!r}"
+            )
+        if not (0o0 <= v <= 0o7777):
+            raise ValueError(f"mode {oct(v)} out of range 0o0..0o7777")
+        if v & 0o6000:
+            raise ValueError(
+                f"mode {oct(v)} sets setuid/setgid bit — refusing for security."
+            )
+        return int(v)
 
     @field_validator("preserve_user_keys")
     @classmethod
