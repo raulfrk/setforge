@@ -31,7 +31,7 @@ Examples:
 
 \b
   # Non-interactive (cron / CI), skip the secrets scan for speed
-  setforge install --profile=<profile> --auto=use-tracked --yes --quiet
+  setforge install --profile=<profile> --auto=use-tracked --yes --no-secrets-scan
 """
 
 COMPARE_EXAMPLES: str = """\
