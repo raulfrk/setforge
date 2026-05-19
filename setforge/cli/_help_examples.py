@@ -2,15 +2,16 @@
 
 One module-level constant per ``@app.command()`` / ``@<group>.command()``
 registration. Each constant is the literal string passed as
-``epilog=...`` to the Typer decorator; it always ends with ``\\n`` so
-``--help`` output renders cleanly under Click's epilog renderer.
+the ``epilog`` keyword to the Typer decorator; it always ends with a
+trailing newline so ``--help`` output renders cleanly under Click's
+epilog renderer.
 
 Newline preservation uses the Click ``\\b`` idiom (Click issue #56):
 prefix any multi-line block with ``\\b`` on its own line so Click
 does not collapse the embedded line breaks. The placeholder for the
 profile name is ``<profile>`` (neutral, host-independent) — never a
-real profile string like ``vm-headless`` (would leak personal config
-into engine ``--help`` output).
+real profile string from any host (would leak personal config into
+engine ``--help`` output).
 
 Each example references at least one related-bead flag where one
 exists in the command's current surface (e.g. ``install`` mentions
