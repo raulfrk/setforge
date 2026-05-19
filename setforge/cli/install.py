@@ -166,25 +166,15 @@ def install(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
 
-    # Pre-deploy git-status check (setforge-g40x). Fires BEFORE the drift
-    # gate so a dirty / stale source is surfaced before any other slow
-    # work (compare, secrets-scan, deploy). When the source-layer is
-    # configured (--source / SETFORGE_SOURCE / local.yaml), use it so a
-    # git-source's CACHE dir is inspected for staleness; otherwise fall
-    # back to ``repo_root`` (the dir holding the resolved setforge.yaml)
-    # which is the right answer for the legacy explicit-``--config``
-    # invocations the test suite relies on.
-    run_git_check_or_raise(
-        source=resolve_source_for_git_check(repo_root),
-        no_git_check=no_git_check,
-    )
-
     # setforge-7jg4: fresh-host welcome gate. Fires BEFORE every other
-    # phase (dry-run dispatch, state-dir probe, bootstrap, deploy) so a
-    # brand-new host can preview what the install will do and consent
-    # before any mutation. ``--yes`` skips the welcome (the caller has
-    # consented out-of-band); ``--auto=*`` is rejected on a fresh host
-    # because there is no drift yet for the auto-resolver to act on.
+    # phase (git-check, dry-run dispatch, state-dir probe, bootstrap,
+    # deploy) so a brand-new host can preview what the install will do
+    # and consent before any mutation OR diagnostic that depends on a
+    # specific source-tree state (the git-check on a dirty fresh-host
+    # source would otherwise raise before the user ever sees the
+    # welcome). ``--yes`` skips the welcome (the caller has consented
+    # out-of-band); ``--auto=*`` is rejected on a fresh host because
+    # there is no drift yet for the auto-resolver to act on.
     fresh = is_fresh_host()
     if fresh and not dry_run:
         reject_auto_on_fresh_host(auto=auto)
@@ -200,6 +190,19 @@ def install(
         )
         if welcome_choice is not WelcomeChoice.PROCEED:
             return
+
+    # Pre-deploy git-status check (setforge-g40x). Fires BEFORE the drift
+    # gate so a dirty / stale source is surfaced before any other slow
+    # work (compare, secrets-scan, deploy). When the source-layer is
+    # configured (--source / SETFORGE_SOURCE / local.yaml), use it so a
+    # git-source's CACHE dir is inspected for staleness; otherwise fall
+    # back to ``repo_root`` (the dir holding the resolved setforge.yaml)
+    # which is the right answer for the legacy explicit-``--config``
+    # invocations the test suite relies on.
+    run_git_check_or_raise(
+        source=resolve_source_for_git_check(repo_root),
+        no_git_check=no_git_check,
+    )
 
     # setforge-lnvq: boundary-not-leaf dispatch. When `--dry-run` is set,
     # route through `_dry_run_pipeline` which calls only the read-only
