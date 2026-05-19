@@ -91,25 +91,7 @@ def _check_unexpected_drift(
         for e in drift_report.entries
         if e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
     )
-    if auto_accept_tracked:
-        merge_mod.run_wizard(
-            drift_report,
-            ctx.cfg,
-            ctx.repo_root,
-            setforge_yaml_path=config.resolve(),
-            profile=ctx.profile,
-            auto_accept="k",
-        )
-    elif auto_accept_live:
-        merge_mod.run_wizard(
-            drift_report,
-            ctx.cfg,
-            ctx.repo_root,
-            setforge_yaml_path=config.resolve(),
-            profile=ctx.profile,
-            auto_accept="u",
-        )
-    else:
+    if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
             f"unexpected drift in {unexpected_count} file(s): "
             f"run 'setforge merge --profile={ctx.profile}' to resolve, "
@@ -118,6 +100,18 @@ def _check_unexpected_drift(
             fg=typer.colors.RED,
         )
         raise typer.Exit(1)
+    # Both wizard branches share their entire call shape except for the
+    # ``auto_accept`` sentinel ('k' keeps tracked, 'u' adopts live);
+    # collapse the if/elif arms to a single dispatch on the flag.
+    auto_accept = "k" if auto_accept_tracked else "u"
+    merge_mod.run_wizard(
+        drift_report,
+        ctx.cfg,
+        ctx.repo_root,
+        setforge_yaml_path=config.resolve(),
+        profile=ctx.profile,
+        auto_accept=auto_accept,
+    )
 
 
 def _deploy_all_tracked_files(
