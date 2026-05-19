@@ -116,8 +116,7 @@ def _check_unexpected_drift(
     No-op when no ``DRIFTED`` entry carries unexpected-drift keys.
     """
     has_real_unexpected = any(
-        e.status == CompareStatus.DRIFTED
-        and (e.unexpected_drift_keys or e.mode_drift)
+        e.status == CompareStatus.DRIFTED and (e.unexpected_drift_keys or e.mode_drift)
         for e in drift_report.entries
     )
     if not has_real_unexpected:

@@ -22,6 +22,7 @@ many other e2e suites).
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 
 import pytest
@@ -58,7 +59,7 @@ def _setforge(
     args: list[str],
     *,
     check: bool = False,
-) -> object:
+) -> subprocess.CompletedProcess[str]:
     return c.exec(["uv", "run", "setforge", *args], check=check)
 
 
