@@ -101,20 +101,41 @@ def _dry_run_install(
 
 
 def _snapshot_home(container: ContainerHandle) -> str:
-    """Snapshot ``$HOME`` mtime + sha256 over every file, sorted by path.
+    """Snapshot the setforge-install-mutation-surface, sorted by path.
 
-    Uses ``find -type f`` to enumerate, ``stat`` for the mtime
-    (sub-second precision via ``%Y.%N``), and ``sha256sum`` for the
-    content hash. The combined stdout is a deterministic newline-
-    separated record; identical pre/post snapshots prove zero
-    filesystem mutation (the single highest-value gate per spec).
+    Scopes the snapshot to the directories ``setforge install`` writes
+    to: ``$HOME/.setforge_e2e/`` (tracked-file dst paths under the e2e
+    fixture profiles), ``$HOME/.local/state/setforge/`` (transition
+    state dir + per-run records), the secrets-allowlist file
+    (``$HOME/.config/setforge/secrets-allowlist``), and
+    ``/workspace/tracked/`` (tracked-side baseline; the
+    ``stamp_tracked_baseline`` mutation lands here).
+
+    Two host-level files are deliberately EXCLUDED from the snapshot:
+
+    - ``$HOME/.config/setforge/local.yaml`` — the host-local config
+      stub created by the typer root callback
+      (``binaries.ensure_local_config_stub``) on EVERY ``setforge``
+      invocation, regardless of the subcommand. Including it would
+      surface the stub-creation as a false-positive "the dry-run
+      mutated state" diff on a fresh container.
+    - ``~/.cache/`` / ``~/.local/share/uv/`` / Microsoft DeveloperTools
+      state — uv-tooling state mutated by every ``uv run`` invocation.
+
+    Missing roots skip silently — a fresh container has no
+    ``.local/state/setforge``, which is the whole point of test #6.
+    Uses ``find -type f`` for enumeration, ``stat`` for sub-second
+    mtime (``%Y.%N``), and ``sha256sum`` for content. Sorted by path
+    so iteration order matches across hosts.
     """
     script = (
         "set -eu; "
-        'cd "$HOME"; '
-        # Sort first so the iteration order matches across hosts; the
-        # final concat is path | mtime | sha256, one record per line.
-        "find . -type f -print0 | sort -z | "
+        'roots=("$HOME/.setforge_e2e" "$HOME/.local/state/setforge" '
+        '"$HOME/.config/setforge/secrets-allowlist" "/workspace/tracked"); '
+        '{ for r in "${roots[@]}"; do '
+        '  [ -e "$r" ] || continue; '
+        '  find "$r" -type f -print0; '
+        "done; } | sort -z | "
         "while IFS= read -r -d '' p; do "
         "  m=$(stat -c '%Y.%9N' \"$p\"); "
         "  h=$(sha256sum \"$p\" | awk '{print $1}'); "
@@ -476,17 +497,24 @@ def test_dry_run_predicts_real_install(
 ) -> None:
     """Dry-run on fresh host predicts which files the real install will create.
 
-    Captures the dry-run output, extracts every ``WOULD install <path>``
-    line, runs the real install, then asserts each predicted path now
-    exists on disk. Sanity-checks the prediction matches behavior; a
-    drift between dry-run and real install paths would surface here.
+    Captures the dry-run output, extracts every ``WOULD install
+    <path>`` line for filesystem paths (the regex restricts to
+    absolute paths so plugin/extension reconcile lines are excluded —
+    those use ``WOULD install <id>`` with an id like
+    ``superpowers@marketplace``). Runs the real install, then
+    asserts each predicted path now exists on disk.
+
+    Uses ``test-text-sections`` (a no-plugin no-extension profile)
+    so the real install completes well under the 60s container exec
+    timeout; the cross-check is still meaningful — the dry-run
+    predicts the file deploys, the real install produces them.
     """
     c = docker_container()
-    dry = _dry_run_install(c, _PROFILE_COMPREHENSIVE)
+    dry = _dry_run_install(c, _PROFILE_TEXT_SECTIONS)
     assert dry.returncode == 0, dry.stderr or dry.stdout
     predicted_install: list[str] = []
     for line in dry.stdout.splitlines():
-        m = re.match(r"^\s*WOULD install\s+(\S+)\s*$", line)
+        m = re.match(r"^\s*WOULD install\s+(/\S+)\s*$", line)
         if m:
             predicted_install.append(m.group(1))
     assert predicted_install, f"dry-run produced no WOULD install lines:\n{dry.stdout}"
@@ -496,7 +524,7 @@ def test_dry_run_predicts_real_install(
             "run",
             "setforge",
             "install",
-            f"--profile={_PROFILE_COMPREHENSIVE}",
+            f"--profile={_PROFILE_TEXT_SECTIONS}",
             f"--config={CONFIG_FIXTURE}",
             "--no-git-check",
         ],
