@@ -697,7 +697,7 @@ class TestRevert:
         assert live.exists()
 
         reverted = _invoke(
-            ["revert", "--profile=test-minimal", f"--config={fixture_repo}"]
+            ["revert", "--profile=test-minimal", f"--config={fixture_repo}", "--yes"]
         )
         assert reverted.exit_code == 0, reverted.output
         # Revert removes the file (it was created from absence on install).
@@ -734,6 +734,7 @@ class TestRevert:
                 "revert",
                 "--profile=test-comprehensive",
                 f"--config={fixture_repo}",
+                "--yes",
             ]
         )
         assert reverted.exit_code == 0, reverted.output

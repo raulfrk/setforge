@@ -1590,7 +1590,7 @@ def test_install_records_plugin_delta_with_enable_failure(
     monkeypatch.setattr("setforge.claude_plugins.subprocess.run", real_run)
     reverted = runner.invoke(
         app,
-        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}", "--yes"],
     )
     assert reverted.exit_code == 0, reverted.output
     assert fc.uninstall_args() == ["superpowers@claude-plugins-official"]
@@ -1627,7 +1627,7 @@ def test_revert_restores_plugin_state(
 
     reverted = runner.invoke(
         app,
-        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}", "--yes"],
     )
     assert reverted.exit_code == 0, reverted.output
     # plugin uninstalled + marketplace removed.
@@ -1676,7 +1676,7 @@ def test_revert_noop_when_no_plugin_delta(
 
     reverted = runner.invoke(
         app,
-        ["revert", "--profile=test-minimal", f"--config={fixture_yaml}"],
+        ["revert", "--profile=test-minimal", f"--config={fixture_yaml}", "--yes"],
     )
     assert reverted.exit_code == 0, reverted.output
     # File state reversed (file was created on install, so revert deletes it).
@@ -1732,7 +1732,7 @@ def test_revert_partial_failure(
 
     reverted = runner.invoke(
         app,
-        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}", "--yes"],
     )
     # Revert still exits 0 — partial failure is warn-and-continue.
     assert reverted.exit_code == 0, reverted.output
@@ -1792,7 +1792,7 @@ def test_roundtrip_file_and_plugin_state(
 
     reverted = runner.invoke(
         app,
-        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+        ["revert", "--profile=test-comprehensive", f"--config={fixture_yaml}", "--yes"],
     )
     assert reverted.exit_code == 0, reverted.output
 

@@ -174,7 +174,9 @@ def test_install_then_revert_restores_pre_install_state(
     assert dst.exists()
     assert dst.read_text() == "hello\n"
 
-    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
     assert revert_result.exit_code == 0, revert_result.output
     assert not dst.exists(), "stub file should be removed by revert"
 
@@ -264,7 +266,9 @@ def test_revert_restores_extension_state_to_pre_install(
         "example.ext-b",
     ]
 
-    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
     assert revert_result.exit_code == 0, revert_result.output
 
     # End-state assertion: extension set is back to pre-install bytes.
@@ -292,7 +296,9 @@ def test_revert_refuses_when_target_drifted(
     dst.write_text("manually edited content\n", encoding="utf-8")
     drifted_content = dst.read_text()
 
-    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
     assert result.exit_code == 1
     assert isinstance(result.exception, RevertFailed)
     # Drifted content survived — no partial revert.
@@ -313,10 +319,12 @@ def test_install_revert_revert_restores_install_state(
     runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert dst.read_text() == "hello\n"
 
-    runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
     assert not dst.exists()
 
-    redo = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    redo = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
     assert redo.exit_code == 0, redo.output
     assert dst.read_text() == "hello\n"
 
@@ -381,7 +389,9 @@ def test_revert_continues_after_extension_uninstall_failure(
     # Wire the failure for the reverse uninstall.
     state_ext["fail_uninstall"].add("broken.one")
 
-    revert_result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    revert_result = runner.invoke(
+        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
+    )
     assert revert_result.exit_code == 0, revert_result.output
 
     # `good.one` got uninstalled despite `broken.one`'s failure.
