@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ from setforge.source import (
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT_SECONDS: int = 30
-_GIT_LOCALE_ENV: dict[str, str] = {"LANG": "C", "LC_ALL": "C"}
+_GIT_LOCALE_ENV: Mapping[str, str] = {"LANG": "C", "LC_ALL": "C"}
 
 # prompt_toolkit's ``radiolist_dialog`` resolves through this module's
 # lazy ``__getattr__`` below — mirrors :mod:`setforge.cli._confirm` and
@@ -345,7 +346,7 @@ def _ls_remote_sha(cache_dir: Path, ref: str) -> str | None:
 def prompt_git_check_choice(
     *,
     source: Source,
-    dirty_lines: list[str],
+    dirty_lines: Sequence[str],
     detached: bool,
     console: Console | None = None,
 ) -> GitCheckChoice:
@@ -412,7 +413,7 @@ def _choice_labels(*, source: Source) -> tuple[str, str, str]:
 def _render_panel(
     *,
     source: Source,
-    dirty_lines: list[str],
+    dirty_lines: Sequence[str],
     detached: bool,
     console: Console,
 ) -> None:
