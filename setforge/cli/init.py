@@ -298,20 +298,23 @@ def _prompt_force_confirm(*, no_prompt: bool) -> ForceChoice:
     return result
 
 
-def _backup_existing(*, console: Console) -> None:
+def _backup_existing(*, console: Console) -> Path | None:
     """Rename existing local.yaml to ``<file>.bak.<UTC-ISO8601>`` if present.
 
-    Backup files are NEVER auto-deleted — user controls cleanup
-    (research brief §7, scope note). Restore is a copy operation the
-    user runs by hand; we do not ship ``init --restore-backup`` in
-    this bead.
+    Returns the backup file path (so callers can surface a
+    restore-from-backup hint) or ``None`` when no backup was made
+    because no existing file was found. Backup files are NEVER
+    auto-deleted — user controls cleanup (research brief §7, scope
+    note). Restore is a copy operation the user runs by hand; we do
+    not ship ``init --restore-backup`` in this bead.
     """
     if not LOCAL_CONFIG_PATH.exists():
-        return
+        return None
     suffix = backup_suffix_now()
     backup = LOCAL_CONFIG_PATH.with_name(f"{LOCAL_CONFIG_PATH.name}.bak.{suffix}")
     shutil.copy2(LOCAL_CONFIG_PATH, backup)
     console.print(f"  backed up {LOCAL_CONFIG_PATH.name} → {backup.name}")
+    return backup
 
 
 def _build_source_block(spec: SourceSpec) -> str:
@@ -385,9 +388,15 @@ def _apply_bootstrap(
 def _print_completion_report(
     *,
     source_spec: SourceSpec,
+    backup_path: Path | None = None,
     console: Console,
 ) -> None:
-    """Render the ``=== init complete ===`` next-steps block."""
+    """Render the ``=== init complete ===`` next-steps block.
+
+    When ``backup_path`` is supplied (the ``--force`` overwrite+backup
+    branch took a snapshot), surface a copy-back command so the user
+    knows how to roll back without hunting for the backup name.
+    """
     console.print("=== init complete ===")
     if source_spec.choice is SourceChoice.SKIP:
         console.print(
@@ -403,6 +412,10 @@ def _print_completion_report(
     console.print(
         "  to undo: rm -rf ~/.config/setforge ~/.local/share/setforge/host-local"
     )
+    if backup_path is not None:
+        console.print(
+            f"  to restore from backup: cp {backup_path} {LOCAL_CONFIG_PATH}"
+        )
 
 
 def _print_idempotent_reinit_report(probe: EnvProbe, *, console: Console) -> None:
@@ -439,19 +452,22 @@ def _handle_force_mode(
 ) -> int:
     """``--force`` path: confirm + (optional) backup + rewrite. Returns exit code."""
     force_choice = _prompt_force_confirm(no_prompt=no_prompt)
+    backup_path: Path | None = None
     match force_choice:
         case ForceChoice.ABORT:
             console.print("[red]✗ aborted[/red] — no changes")
             return 0
         case ForceChoice.OVERWRITE_WITH_BACKUP:
-            _backup_existing(console=console)
+            backup_path = _backup_existing(console=console)
         case ForceChoice.OVERWRITE_NO_BACKUP:
             pass
         case _ as unreachable:
             assert_never(unreachable)
     probe = probe_environment()
     _apply_bootstrap(probe, source_spec=source_spec, console=console)
-    _print_completion_report(source_spec=source_spec, console=console)
+    _print_completion_report(
+        source_spec=source_spec, backup_path=backup_path, console=console
+    )
     return 0
 
 
