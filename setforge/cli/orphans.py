@@ -41,6 +41,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
 from setforge.compare import OrphanEntry, load_ignored_orphans
 from setforge.config import load_config
 from setforge.errors import OrphanCleanupRequiresInteractive
@@ -354,7 +355,7 @@ def _apply_orphan_cleanup(
     _execute_cleanup(profile, orphans, choice, console)
 
 
-@app.command("cleanup-orphans")
+@app.command("cleanup-orphans", epilog=CLEANUP_ORPHANS_EXAMPLES)
 def cleanup_orphans(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
