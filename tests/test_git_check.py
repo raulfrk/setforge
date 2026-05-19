@@ -20,6 +20,7 @@ from setforge.cli._git_check import (
     GitCheckChoice,
     _format_porcelain_v2_line,
     _git_run,
+    _is_detached_head,
     check_git_source_fresh,
     check_path_source_clean,
     prompt_git_check_choice,
@@ -122,7 +123,9 @@ class TestCheckPathSourceClean:
         )
         assert check_path_source_clean(bare) == []
 
-    def test_ignores_submodule_dirt(self, tmp_path: Path) -> None:
+    def test_ignores_submodule_dirt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """``--ignore-submodules=all`` keeps nested untracked files invisible."""
         # Submodule fixture is complex; assert via stub: confirm the
         # subprocess call carries the flag rather than constructing a
@@ -134,14 +137,8 @@ class TestCheckPathSourceClean:
             captured_cmd.extend(args[0])
             return subprocess.CompletedProcess(args[0], 0, "", "")
 
-        import setforge.cli._git_check as mod
-
-        original = mod.subprocess.run
-        mod.subprocess.run = fake_run  # type: ignore[attr-defined]
-        try:
-            check_path_source_clean(repo)
-        finally:
-            mod.subprocess.run = original  # type: ignore[attr-defined]
+        monkeypatch.setattr("setforge.cli._git_check.subprocess.run", fake_run)
+        check_path_source_clean(repo)
         assert "--ignore-submodules=all" in captured_cmd
 
 
@@ -165,6 +162,45 @@ class TestFormatPorcelainV2Line:
         line = "weird line shape"
         # Untouched (not '?', '!', '1', '2', 'u' as the first token's tag).
         assert _format_porcelain_v2_line(line) == line
+
+
+# ---------------------------------------------------------------------------
+# _is_detached_head
+# ---------------------------------------------------------------------------
+
+
+class TestIsDetachedHead:
+    def test_parses_branch_head_detached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``# branch.head (detached)`` porcelain-v2 line → True."""
+        repo = _git_init(tmp_path / "repo")
+        stdout = (
+            "# branch.oid 0123456789abcdef0123456789abcdef01234567\n"
+            "# branch.head (detached)\n"
+        )
+
+        def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args[0], 0, stdout, "")
+
+        monkeypatch.setattr("setforge.cli._git_check.subprocess.run", fake_run)
+        assert _is_detached_head(repo) is True
+
+    def test_parses_branch_head_named_branch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``# branch.head main`` → False (HEAD is on a branch)."""
+        repo = _git_init(tmp_path / "repo")
+        stdout = (
+            "# branch.oid 0123456789abcdef0123456789abcdef01234567\n"
+            "# branch.head main\n"
+        )
+
+        def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args[0], 0, stdout, "")
+
+        monkeypatch.setattr("setforge.cli._git_check.subprocess.run", fake_run)
+        assert _is_detached_head(repo) is False
 
 
 # ---------------------------------------------------------------------------
