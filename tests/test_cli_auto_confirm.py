@@ -13,10 +13,10 @@ from setforge.cli import app
 from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
-    ConfirmRequiresInteractive,
     FileChange,
     confirm_auto_operation,
 )
+from setforge.errors import ConfirmRequiresInteractive
 
 
 class _FakeDialogResult:

@@ -45,14 +45,9 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Re-export for callers that import via the historical
-# ``setforge.cli._confirm`` path (tests, sibling CLI modules). The
-# canonical home is ``setforge.errors`` alongside
-# ``CaptureRequiresInteractive``.
 __all__ = [
     "AutoDirection",
     "AutoPlan",
-    "ConfirmRequiresInteractive",
     "FileChange",
     "confirm_auto_operation",
 ]
