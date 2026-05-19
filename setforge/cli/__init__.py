@@ -100,6 +100,13 @@ def _root(
         help="Override path to the 'claude' binary. "
         "Takes precedence over SETFORGE_CLAUDE_BIN and ~/.config/setforge/local.yaml.",
     ),
+    gitleaks_bin: str | None = typer.Option(
+        None,
+        "--gitleaks-bin",
+        help="Override path to the 'gitleaks' binary. "
+        "Takes precedence over SETFORGE_GITLEAKS_BIN and "
+        "~/.config/setforge/local.yaml.",
+    ),
     patch_bin: str | None = typer.Option(
         None,
         "--patch-bin",
@@ -154,7 +161,12 @@ def _root(
         force=True,
     )
     LOGGER.debug("logging configured at level %s", logging.getLevelName(level))
-    binaries.set_cli_overrides(code=code_bin, claude=claude_bin, patch=patch_bin)
+    binaries.set_cli_overrides(
+        code=code_bin,
+        claude=claude_bin,
+        gitleaks=gitleaks_bin,
+        patch=patch_bin,
+    )
     binaries.ensure_local_config_stub()
     source_mod.set_cli_source(source)
 

@@ -4,13 +4,14 @@ Production code never calls :func:`shutil.which` directly. Instead it
 calls :func:`resolve_binary`, which walks four layers in order of
 precedence:
 
-1. CLI flags (``--code-bin``, ``--claude-bin``, ``--patch-bin``) —
-   stored in module-level state by :func:`set_cli_overrides`, which the
-   Typer ``@app.callback()`` invokes once at startup.
+1. CLI flags (``--code-bin``, ``--claude-bin``, ``--gitleaks-bin``,
+   ``--patch-bin``) — stored in module-level state by
+   :func:`set_cli_overrides`, which the Typer ``@app.callback()``
+   invokes once at startup.
 2. Environment variables ``SETFORGE_CODE_BIN`` / ``SETFORGE_CLAUDE_BIN``
-   / ``SETFORGE_PATCH_BIN``.
+   / ``SETFORGE_GITLEAKS_BIN`` / ``SETFORGE_PATCH_BIN``.
 3. Host-local config file ``~/.config/setforge/local.yaml`` with shape
-   ``binaries: {code: /p, claude: /p, patch: /p}``.
+   ``binaries: {code: /p, claude: /p, gitleaks: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).
 
 The CLI layer is set once at process start; env and config layers are
@@ -35,7 +36,7 @@ from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
-SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("code", "claude", "patch")
+SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("claude", "code", "gitleaks", "patch")
 _ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
 
@@ -48,6 +49,7 @@ _STUB_TEMPLATE: Final[str] = """\
 # binaries:
 #   code: /custom/path/to/code
 #   claude: /opt/claude/bin/claude
+#   gitleaks: /usr/local/bin/gitleaks
 #   patch: /usr/local/bin/gpatch
 #
 # Claude-specific host-local knobs. Uncomment to opt into offline-capable
@@ -192,6 +194,7 @@ def set_cli_overrides(
     *,
     code: str | None = None,
     claude: str | None = None,
+    gitleaks: str | None = None,
     patch: str | None = None,
 ) -> None:
     """Record CLI-flag overrides; called once by the Typer app callback.
@@ -202,7 +205,12 @@ def set_cli_overrides(
     layers.
     """
     _cli_overrides.clear()
-    for name, value in (("code", code), ("claude", claude), ("patch", patch)):
+    for name, value in (
+        ("code", code),
+        ("claude", claude),
+        ("gitleaks", gitleaks),
+        ("patch", patch),
+    ):
         if value is not None:
             _cli_overrides[name] = value
 

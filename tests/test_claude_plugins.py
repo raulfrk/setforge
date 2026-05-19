@@ -1067,12 +1067,17 @@ def test_claude_bin_override_flows_through_set_cli_overrides(
         *,
         code: str | None = None,
         claude: str | None = None,
+        gitleaks: str | None = None,
         patch: str | None = None,
     ) -> None:
-        calls.append({"code": code, "claude": claude, "patch": patch})
+        calls.append(
+            {"code": code, "claude": claude, "gitleaks": gitleaks, "patch": patch}
+        )
         # Reset claude_bin cache after override change
         cp._get_claude_bin.cache_clear()
-        original_set_cli_overrides(code=code, claude=claude, patch=patch)
+        original_set_cli_overrides(
+            code=code, claude=claude, gitleaks=gitleaks, patch=patch
+        )
 
     # Patch the function on the binaries module itself so that
     # cli.py's `binaries.set_cli_overrides(...)` call goes through our recorder.
