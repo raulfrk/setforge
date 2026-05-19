@@ -263,11 +263,11 @@ def snapshot_restore(
             snap_mod.restore_snapshot(
                 target.snapshot_id,
                 pre_snapshot=True,
-                pre_snapshot_ctx=(
-                    ctx.cfg,
-                    ctx.resolved,
-                    ctx.repo_root,
-                    ctx.profile,
+                pre_snapshot_ctx=snap_mod.PreSnapshotCtx(
+                    cfg=ctx.cfg,
+                    resolved=ctx.resolved,
+                    repo_root=ctx.repo_root,
+                    profile=ctx.profile,
                 ),
             )
             _emit_restore_summary(target, console=console)

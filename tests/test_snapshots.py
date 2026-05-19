@@ -105,8 +105,13 @@ def _create(
     )
 
 
-def _pre_ctx(ctx: _Ctx) -> tuple[Config, ResolvedProfile, Path, str]:
-    return (ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile)
+def _pre_ctx(ctx: _Ctx) -> snap_mod.PreSnapshotCtx:
+    return snap_mod.PreSnapshotCtx(
+        cfg=ctx.cfg,
+        resolved=ctx.resolved,
+        repo_root=ctx.repo_root,
+        profile=ctx.profile,
+    )
 
 
 # ---------------------------------------------------------------------------

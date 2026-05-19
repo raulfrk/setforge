@@ -68,6 +68,23 @@ _SNAPSHOT_TIMESTAMP_FMT: Final[str] = "%Y%m%dT%H%M%SZ"
 
 
 @dataclass(slots=True, frozen=True)
+class PreSnapshotCtx:
+    """Named bundle of the four args needed to capture a pre-restore snapshot.
+
+    ``restore_snapshot(..., pre_snapshot=True)`` writes a fresh snapshot
+    of current live state BEFORE applying the restore. That fresh
+    snapshot needs the same ``(cfg, resolved, repo_root, profile)`` tuple
+    ``create_snapshot`` does; bundling them as a named dataclass keeps
+    the CLI seam readable and the call signature self-documenting.
+    """
+
+    cfg: Config
+    resolved: ResolvedProfile
+    repo_root: Path
+    profile: str
+
+
+@dataclass(slots=True, frozen=True)
 class SnapshotMeta:
     """Metadata for one snapshot. Serialized to ``_meta.json``."""
 
@@ -387,24 +404,41 @@ def _restore_one(src: Path, dst: Path) -> None:
     dst.chmod(stat.S_IMODE(src_mode) & _SETUID_SETGID_MASK)
 
 
+def _run_pre_snapshot(
+    target: SnapshotMeta, pre_snapshot_ctx: PreSnapshotCtx
+) -> SnapshotMeta:
+    """Capture a fresh ``pre-restore-<target.snapshot_id>`` snapshot.
+
+    Returns the new pre-restore snapshot's meta. Called by
+    :func:`restore_snapshot` before the overlay so the user has a
+    single-step undo if the restored state is undesirable.
+    """
+    return create_snapshot(
+        pre_snapshot_ctx.cfg,
+        pre_snapshot_ctx.resolved,
+        pre_snapshot_ctx.repo_root,
+        pre_snapshot_ctx.profile,
+        f"pre-restore-{target.snapshot_id}",
+    )
+
+
 def restore_snapshot(
     snapshot_id_or_label: str,
     *,
     pre_snapshot: bool,
-    pre_snapshot_ctx: tuple[Config, ResolvedProfile, Path, str] | None = None,
+    pre_snapshot_ctx: PreSnapshotCtx | None = None,
 ) -> SnapshotMeta:
-    """Overlay the snapshot's files onto live (additive per Q6).
+    """Overlay the snapshot's files onto live (additive overlay).
 
     When ``pre_snapshot=True``, captures a fresh snapshot of current
     live state BEFORE applying the restore — gives the user a
     single-step undo if the restored state is undesirable. The
     pre-snapshot is labeled ``pre-restore-<snapshot_id>`` and uses
-    the ``(cfg, resolved, repo_root, profile)`` tuple passed via
     ``pre_snapshot_ctx`` (required in that case).
 
-    Restore is strictly additive: files present in the snapshot get
+    Restore is an additive overlay: files present in the snapshot get
     overlaid onto their live destinations; files that exist live but
-    not in the snapshot are left alone (per Q6).
+    not in the snapshot are left alone.
 
     Returns the restored snapshot's :class:`SnapshotMeta`. Raises
     :class:`SetforgeError` on missing/corrupt snapshot or when
@@ -418,14 +452,7 @@ def restore_snapshot(
             raise SetforgeError(
                 "snapshot restore: --pre-snapshot requires a profile context"
             )
-        cfg, resolved, repo_root, profile = pre_snapshot_ctx
-        create_snapshot(
-            cfg,
-            resolved,
-            repo_root,
-            profile,
-            f"pre-restore-{target.snapshot_id}",
-        )
+        _run_pre_snapshot(target, pre_snapshot_ctx)
     for live_path in target.files:
         mirror = _mirror_path(snapshot_dir, live_path)
         if not (mirror.exists() or mirror.is_symlink()):
@@ -525,6 +552,7 @@ def format_size(num_bytes: int) -> str:
 
 __all__ = [
     "DEFAULT_KEEP",
+    "PreSnapshotCtx",
     "SnapshotMeta",
     "create_snapshot",
     "directory_size_bytes",

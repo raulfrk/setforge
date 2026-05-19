@@ -2382,7 +2382,12 @@ def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
         config = Path('{CONFIG_FIXTURE}').resolve()
         cfg = load_config(config)
         resolved = resolve_profile(cfg, 'test-minimal')
-        ctx = (cfg, resolved, config.parent, 'test-minimal')
+        ctx = snapshots.PreSnapshotCtx(
+            cfg=cfg,
+            resolved=resolved,
+            repo_root=config.parent,
+            profile='test-minimal',
+        )
         snapshots.restore_snapshot('baseline', pre_snapshot=True, pre_snapshot_ctx=ctx)
         print('restored', file=sys.stderr)
         """
