@@ -22,6 +22,7 @@ from rich.console import Console
 
 from setforge.binaries import _STUB_TEMPLATE, LOCAL_CONFIG_PATH
 from setforge.cli import app
+from setforge.cli._help_examples import INIT_EXAMPLES
 from setforge.cli._init_helpers import (
     BinaryProbe,
     CapabilityProbe,
@@ -489,7 +490,7 @@ def _handle_fresh_init(
     return 0
 
 
-@app.command()
+@app.command(epilog=INIT_EXAMPLES)
 def init(
     force: bool = typer.Option(
         False,
