@@ -243,17 +243,22 @@ def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
 
 
 def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
-    """Run a compare pass and tally drift counts by category.
+    """Compute approximate drift counts for status rendering.
 
-    ``unexpected`` mirrors :attr:`CompareReport.has_unexpected_drift` —
-    files with non-empty ``unexpected_drift_keys`` OR a non-empty diff
-    body that is not entirely covered by preserve overlays.
-    ``user_section`` is the count of files whose tracked entry has
-    ``preserve_user_sections=True`` AND whose diff is non-empty (a
-    cheap approximation; the precise section drift state requires a
-    full section reconcile pass).
-    ``expected`` counts files where only ``expected_drift_keys`` are
-    non-empty (preserve_user_keys overlays).
+    Counts are split into three buckets:
+
+    - ``user_section``: entries with section markers AND a non-empty
+      diff body.
+    - ``expected``: entries whose drift is fully covered by preserve
+      overlays (``expected_drift_keys`` set, no diff body).
+    - ``unexpected``: anything else (the fallback branch, including
+      entries with ``unexpected_drift_keys`` and diff-bearing entries
+      without section markers).
+
+    This is an approximation — precise section-reconcile
+    classification requires a full reconcile pass which status
+    deliberately skips for cost. Use ``setforge compare`` for the
+    authoritative drift state.
     """
     report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
     unexpected = 0
