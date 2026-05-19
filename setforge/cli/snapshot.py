@@ -84,11 +84,26 @@ def _build_profile_ctx(profile: str, config: Path) -> ProfileContext:
 
 
 def _emit_create_summary(meta: snap_mod.SnapshotMeta, *, console: Console) -> None:
-    """Print the post-create banner used by ``snapshot create``."""
+    """Print the post-create banner used by ``snapshot create``.
+
+    Distinguishes the tracked_files.dst paths from the host-local
+    ``local.yaml`` so the count line reads as the user expects
+    ("capturing N tracked_files.dst paths"). ``LOCAL_CONFIG_PATH`` is
+    read off ``snap_mod`` so tests' monkeypatch of the constant flows
+    through to the banner.
+    """
     size_bytes = snap_mod.directory_size_bytes(meta.snapshot_id)
     root = snap_mod.snapshots_root() / meta.snapshot_id
+    local_yaml = snap_mod.LOCAL_CONFIG_PATH
+    local_yaml_captured = local_yaml in meta.files
+    tracked_count = len(meta.files) - (1 if local_yaml_captured else 0)
     console.print(f"=== creating snapshot {meta.label!r} ===")
-    console.print(f"  capturing {len(meta.files)} paths from profile {meta.profile}")
+    console.print(
+        f"  capturing {tracked_count} tracked_files.dst paths from "
+        f"profile {meta.profile}"
+    )
+    if local_yaml_captured:
+        console.print(f"  capturing {local_yaml}")
     console.print(f"  storing in: {root}/")
     console.print(f"  total size: {snap_mod.format_size(size_bytes)}")
     console.print("=== snapshot complete ===")
@@ -155,6 +170,27 @@ def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
+def _format_overwrite_groups(files: tuple[Path, ...]) -> str:
+    """Render the captured live paths as ``<dir>/* + <dir>/* + ...``.
+
+    Groups files by parent directory; each parent appears once as
+    ``<parent>/*`` if it holds more than one file, or as the bare path
+    if it's the only entry under that parent. Order matches first-seen
+    encounter in ``files`` so the banner stays stable for a given
+    snapshot.
+    """
+    seen: dict[Path, list[Path]] = {}
+    for path in files:
+        seen.setdefault(path.parent, []).append(path)
+    parts: list[str] = []
+    for parent, members in seen.items():
+        if len(members) == 1:
+            parts.append(str(members[0]))
+        else:
+            parts.append(f"{parent}/*")
+    return " + ".join(parts)
+
+
 def _prompt_restore_choice(
     target: snap_mod.SnapshotMeta, *, console: Console
 ) -> RestoreChoice:
@@ -173,8 +209,7 @@ def _prompt_restore_choice(
         )
     console.print(f"[bold]=== restoring snapshot {target.label!r} ===[/bold]")
     console.print(
-        f"  WILL overwrite {len(target.files)} live files "
-        f"captured in {target.snapshot_id}"
+        f"  WILL overwrite live files at: {_format_overwrite_groups(target.files)}"
     )
     console.print(
         "  [yellow]additive overlay[/yellow]: live-only files NOT in this "
