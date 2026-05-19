@@ -36,6 +36,7 @@ import time
 import tty
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import UTC
 from enum import StrEnum
 from pathlib import Path
 from types import FrameType
@@ -49,6 +50,7 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, transitions, yaml_merge
 from setforge._editor import run_editor
+from setforge._redact import redact_argv
 from setforge.transitions import TransitionCommand
 
 # Matches signal.signal's first-arg signature; aliased here so the
@@ -564,8 +566,17 @@ def run_wizard_loop(
 
             file_post = transitions.snapshot_paths(affected_paths)
 
-            # Record one transition for revert symmetry
-            meta = transitions.make_meta(transition_command, profile)
+            # Record one transition for revert symmetry. The wizard
+            # fires specifically for preserve_user_keys deep-merge
+            # drift, so preserve_user_keys_applied=True is the accurate
+            # signal here — the overlay path did run.
+            meta = transitions.make_meta(
+                transition_command,
+                profile,
+                end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+                command_line=redact_argv(sys.argv[1:]),
+                preserve_user_keys_applied=True,
+            )
             transitions.write_transition(meta, file_pre, file_post, None)
 
             snap.discard()

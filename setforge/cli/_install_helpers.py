@@ -23,7 +23,9 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
+from datetime import UTC
 from pathlib import Path
 from typing import assert_never
 
@@ -40,6 +42,7 @@ from setforge import (
 from setforge import (
     merge as merge_mod,
 )
+from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
@@ -56,6 +59,30 @@ from setforge.compare import CompareStatus
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
+
+
+def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
+    """Return whether any tracked_file declares a preserve_user_keys overlay.
+
+    Approximates the SPEC 3 "applied" semantics at the granularity available
+    without instrumenting :func:`setforge.deploy.copy_atomic`:
+
+    - ``None`` — profile has no tracked_files; the concept doesn't apply.
+    - ``True`` — at least one tracked_file declares ``preserve_user_keys``
+      or ``preserve_user_keys_deep``; deploy.copy_atomic will exercise
+      its overlay path for that file (matched or not, the overlay logic
+      ran). Widening to "matched a live key" is a separate bd (per SPEC 3
+      anti-pattern check 7).
+    - ``False`` — tracked_files exist but none declare an overlay.
+    """
+    saw_tracked_file = False
+    for tracked_file, _src, _dst in _iter_all_tracked_files(ctx):
+        saw_tracked_file = True
+        if tracked_file.preserve_user_keys or tracked_file.preserve_user_keys_deep:
+            return True
+    if not saw_tracked_file:
+        return None
+    return False
 
 
 def _check_unexpected_drift(
@@ -153,6 +180,7 @@ def _write_install_transition(
     *,
     source_dir: Path | None = None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
+    preserve_user_keys_applied: bool | None = None,
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -165,12 +193,23 @@ def _write_install_transition(
     ``reconcile_outcomes.json`` alongside ``extensions.json`` /
     ``plugins.json`` so ``install --retry-failed`` can rebuild the
     skipped-ids set on the next invocation).
+
+    ``preserve_user_keys_applied`` is the setforge-8ohd schema-bump
+    kwarg; computed by :func:`_compute_preserve_user_keys_applied` at
+    the install call site. ``command_line`` is captured from
+    ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
+    callers don't have to thread it through, and ``end_timestamp`` is
+    stamped at the moment of write — both align with the spec's
+    "stamp at the point the command body returns successfully" model.
     """
     return transitions.write_transition(
         transitions.make_meta(
             transitions.TransitionCommand.INSTALL,
             profile,
             source_dir=source_dir,
+            end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+            command_line=redact_argv(sys.argv[1:]),
+            preserve_user_keys_applied=preserve_user_keys_applied,
         ),
         file_pre,
         file_post,

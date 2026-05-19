@@ -604,9 +604,23 @@ def transitions_show(
         console.print(f"  host:    {meta['host']}")
     if "version" in meta:
         console.print(f"  version: {meta['version']}")
-    # Mockup-H end_timestamp / command_line / preserve_user_keys_applied:
-    # deferred to bd setforge-8ohd (forward-direction schema bump on
-    # install/sync/revert/wizard make_meta call sites).
+    # setforge-8ohd: render the forward-compat fields populated by
+    # install/sync/revert/wizard make_meta call sites. Each field is
+    # omit-when-None in the on-disk shape, so absence here is the
+    # pre-bump backward-compat path — silently skip.
+    if "end_timestamp" in meta:
+        end_ts = datetime.fromisoformat(meta["end_timestamp"])
+        end_local = end_ts.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        if len(end_local) >= 5 and end_local[-5] in "+-":
+            end_local = end_local[:-2] + ":" + end_local[-2:]
+        console.print(f"  end:     {end_local}")
+    if "command_line" in meta:
+        cmd_line = meta["command_line"]
+        if isinstance(cmd_line, list):
+            console.print(f"  argv:    {' '.join(cmd_line)}")
+    if "preserve_user_keys_applied" in meta:
+        applied = meta["preserve_user_keys_applied"]
+        console.print(f"  overlay: preserve_user_keys_applied={applied}")
 
     _render_files_section_show(target, console)
     _render_plugins_section_show(target, console)

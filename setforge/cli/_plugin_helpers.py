@@ -14,9 +14,10 @@ shape doesn't fit.
 
 import json
 import subprocess
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -24,6 +25,7 @@ import typer
 
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import transitions, vscode_extensions
+from setforge._redact import redact_argv
 from setforge.cli._confirm import FailureAction, prompt_failure_action
 from setforge.config import (
     Config,
@@ -1018,7 +1020,14 @@ def _write_reverse_transition(
             reverse_plugin_delta = None
 
     file_post = transitions.snapshot_paths(touched_paths)
-    reverse_meta = transitions.make_meta(transitions.TransitionCommand.REVERT, profile)
+    reverse_meta = transitions.make_meta(
+        transitions.TransitionCommand.REVERT,
+        profile,
+        end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+        command_line=redact_argv(sys.argv[1:]),
+        # preserve_user_keys_applied left None — concept doesn't apply
+        # to revert (no deploy/overlay path runs in reverse direction).
+    )
     reverse_delta: transitions.ExtensionDelta | None = None
     if reverse_added or reverse_removed:
         reverse_delta = transitions.ExtensionDelta(

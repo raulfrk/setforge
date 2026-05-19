@@ -38,6 +38,7 @@ from setforge.cli._helpers import (
     _resolve_section_decisions,
 )
 from setforge.cli._install_helpers import (
+    _compute_preserve_user_keys_applied,
     _deploy_all_tracked_files,
     _run_predeploy_gates,
     _write_install_transition,
@@ -238,6 +239,7 @@ def install(
             plugin_delta,
             source_dir=ctx.repo_root,
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
+            preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
         )
         typer.echo(f"transition: {target}")
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")

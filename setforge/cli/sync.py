@@ -11,6 +11,8 @@
   is always interactive for the merge subcommand).
 """
 
+import sys
+from datetime import UTC
 from pathlib import Path
 
 import typer
@@ -28,6 +30,7 @@ from setforge import (
     transitions,
     vscode_extensions,
 )
+from setforge._redact import redact_argv
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -47,6 +50,7 @@ from setforge.cli._helpers import (
     _refuse_legacy_live_markers,
     _resolve_drift_paths,
 )
+from setforge.cli._install_helpers import _compute_preserve_user_keys_applied
 from setforge.config import Config, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
 
@@ -248,7 +252,13 @@ def sync(
     file_post = transitions.snapshot_paths(src_paths)
     if not no_transition:
         target = transitions.write_transition(
-            transitions.make_meta(transitions.TransitionCommand.SYNC, profile),
+            transitions.make_meta(
+                transitions.TransitionCommand.SYNC,
+                profile,
+                end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+                command_line=redact_argv(sys.argv[1:]),
+                preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
+            ),
             file_pre,
             file_post,
             None,  # sync's extension change is reflected in the YAML diff
