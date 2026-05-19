@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from setforge import source as source_mod
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
+from setforge.cli._help_examples import FETCH_EXAMPLES, VALIDATE_EXAMPLES
 from setforge.compare import resolve_src
 from setforge.config import (
     Config,
@@ -178,7 +179,7 @@ def _check_marketplaces(
                 )
 
 
-@app.command("validate")
+@app.command("validate", epilog=VALIDATE_EXAMPLES)
 def validate(
     profile: str | None = typer.Option(
         None, "--profile", help="Validate a specific profile."
@@ -233,7 +234,7 @@ def validate(
     typer.echo("ok")
 
 
-@app.command()
+@app.command(epilog=FETCH_EXAMPLES)
 def fetch() -> None:
     """Clone/fetch the configured git source and check out its pinned ref.
 
