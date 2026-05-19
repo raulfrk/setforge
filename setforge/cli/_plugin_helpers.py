@@ -37,6 +37,7 @@ from setforge.errors import (
     PluginToolMissing,
     ReconcileAborted,
 )
+from setforge.transitions import ReconcileKind, ReconcileStatus
 
 
 def _parse_marketplace_from(from_: str) -> MarketplaceSource:
@@ -99,7 +100,7 @@ def _append_extension_success_outcomes(
     *,
     verb: str,
 ) -> None:
-    """Append ``status="ok"`` outcomes for each extension id and echo progress.
+    """Append ``ReconcileStatus.OK`` outcomes for each extension id and echo progress.
 
     ``verb`` is the past-tense action word printed on the progress line
     (``"installed"`` or ``"uninstalled"``) — matches the prior inline
@@ -110,8 +111,8 @@ def _append_extension_success_outcomes(
         outcomes.append(
             transitions.ReconcileOutcome(
                 item_id=ext_id,
-                kind="extension",
-                status="ok",
+                kind=ReconcileKind.EXTENSION,
+                status=ReconcileStatus.OK,
                 error_summary=None,
             )
         )
@@ -168,7 +169,8 @@ def _reconcile_extensions(
 
     On per-extension failure, surfaces
     :func:`prompt_failure_action`. SKIP records a
-    :class:`~transitions.ReconcileOutcome` with ``status="skipped"`` and
+    :class:`~transitions.ReconcileOutcome` with
+    :attr:`ReconcileStatus.SKIPPED` and
     continues. RETRY re-invokes :func:`vscode_extensions.install_one` /
     :func:`vscode_extensions.uninstall_one` once for the same id; on
     second-attempt success the outcome is ``"retried_ok"``, on second
@@ -277,8 +279,8 @@ def _handle_extension_failure(
         return (
             transitions.ReconcileOutcome(
                 item_id=ext_id,
-                kind="extension",
-                status="skipped",
+                kind=ReconcileKind.EXTENSION,
+                status=ReconcileStatus.SKIPPED,
                 error_summary=error_summary,
             ),
             False,
@@ -294,8 +296,8 @@ def _handle_extension_failure(
             return (
                 transitions.ReconcileOutcome(
                     item_id=ext_id,
-                    kind="extension",
-                    status="skipped",
+                    kind=ReconcileKind.EXTENSION,
+                    status=ReconcileStatus.SKIPPED,
                     error_summary=retry_err,
                 ),
                 False,
@@ -304,8 +306,8 @@ def _handle_extension_failure(
         return (
             transitions.ReconcileOutcome(
                 item_id=ext_id,
-                kind="extension",
-                status="retried_ok",
+                kind=ReconcileKind.EXTENSION,
+                status=ReconcileStatus.RETRIED_OK,
                 error_summary=None,
             ),
             True,
@@ -438,9 +440,9 @@ def _format_summary_line(
     """
     if not outcomes:
         return None
-    ok = sum(1 for o in outcomes if o.status == "ok")
-    retried = sum(1 for o in outcomes if o.status == "retried_ok")
-    skipped_ids = [o.item_id for o in outcomes if o.status == "skipped"]
+    ok = sum(1 for o in outcomes if o.status is ReconcileStatus.OK)
+    retried = sum(1 for o in outcomes if o.status is ReconcileStatus.RETRIED_OK)
+    skipped_ids = [o.item_id for o in outcomes if o.status is ReconcileStatus.SKIPPED]
     reconciled = ok + retried
     parts: list[str] = []
     if retried:
@@ -455,7 +457,7 @@ def _append_plugin_success_outcomes(
     outcomes: list[transitions.ReconcileOutcome],
     delta: transitions.PluginDelta,
 ) -> None:
-    """Append ``status="ok"`` outcomes for each landed plugin / marketplace.
+    """Append ``ReconcileStatus.OK`` outcomes for each landed plugin / marketplace.
 
     Iterates the four delta fields whose entries became ``"ok"`` outcomes
     in the original inline form (``installed`` / ``enabled`` /
@@ -473,7 +475,10 @@ def _append_plugin_success_outcomes(
         for pid in items:
             outcomes.append(
                 transitions.ReconcileOutcome(
-                    item_id=pid, kind="plugin", status="ok", error_summary=None
+                    item_id=pid,
+                    kind=ReconcileKind.PLUGIN,
+                    status=ReconcileStatus.OK,
+                    error_summary=None,
                 )
             )
 
@@ -489,8 +494,8 @@ def _reconcile_plugins(
 
     On per-plugin failure, surfaces :func:`prompt_failure_action`. SKIP
     records a :class:`~transitions.ReconcileOutcome` with
-    ``status="skipped"`` and continues. RETRY re-invokes the originating
-    per-item op (``plugin_install`` / ``plugin_enable`` /
+    :attr:`ReconcileStatus.SKIPPED` and continues. RETRY re-invokes the
+    originating per-item op (``plugin_install`` / ``plugin_enable`` /
     ``plugin_disable`` / ``marketplace_add``) once; success → outcome
     ``"retried_ok"``, failure → outcome ``"skipped"``. ABORT triggers
     reverse-reconcile of items landed in THIS install via the existing
@@ -688,8 +693,8 @@ def _handle_plugin_failure(
     if action is FailureAction.SKIP:
         return transitions.ReconcileOutcome(
             item_id=failed_id,
-            kind="plugin",
-            status="skipped",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.SKIPPED,
             error_summary=error_summary,
         )
     if action is FailureAction.RETRY:
@@ -706,14 +711,14 @@ def _handle_plugin_failure(
                 getattr(retried, piece_field).append(failed_id)
             return transitions.ReconcileOutcome(
                 item_id=failed_id,
-                kind="plugin",
-                status="retried_ok",
+                kind=ReconcileKind.PLUGIN,
+                status=ReconcileStatus.RETRIED_OK,
                 error_summary=None,
             )
         return transitions.ReconcileOutcome(
             item_id=failed_id,
-            kind="plugin",
-            status="skipped",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.SKIPPED,
             error_summary=retry_err,
         )
     # ABORT

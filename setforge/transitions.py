@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
 from setforge import __version__
 from setforge.binaries import resolve_binary
@@ -288,6 +287,38 @@ class PluginDelta:
         )
 
 
+class ReconcileKind(StrEnum):
+    """Closed set of item kinds a :class:`ReconcileOutcome` can record.
+
+    StrEnum (not bare ``Literal[...]``) per CLAUDE.md's
+    "StrEnum / IntEnum for closed sets — never bare module-level magic
+    strings" rule. Members compare equal to their string values, so the
+    on-disk ``reconcile_outcomes.json`` shape — and existing tests that
+    assert ``outcome.kind == "plugin"`` — keep working unchanged.
+    """
+
+    PLUGIN = "plugin"
+    EXTENSION = "extension"
+
+
+class ReconcileStatus(StrEnum):
+    """Closed set of per-item outcome statuses on a reconcile pass.
+
+    StrEnum (not bare ``Literal[...]``) for the same reason as
+    :class:`ReconcileKind`. ``OK`` covers first-attempt successes;
+    ``RETRIED_OK`` second-attempt successes after the user picked
+    RETRY at the failure prompt; ``SKIPPED`` items the user opted to
+    leave behind; ``ABORTED`` items that landed before the user picked
+    ABORT and got rolled back as part of the abort path's reverse
+    reconcile.
+    """
+
+    OK = "ok"
+    RETRIED_OK = "retried_ok"
+    SKIPPED = "skipped"
+    ABORTED = "aborted"
+
+
 @dataclass(slots=True, frozen=True)
 class ReconcileOutcome:
     """One per-item outcome from a plugin or extension reconcile pass.
@@ -301,18 +332,29 @@ class ReconcileOutcome:
     Backward compatibility: old transition records written before
     setforge-k0uj have no ``reconcile_outcomes.json`` file;
     :func:`load_reconcile_outcomes` returns ``()`` in that case.
+    Within ``reconcile_outcomes.json``, ``kind`` and ``status``
+    continue to serialize as their string values (``"plugin"`` /
+    ``"ok"`` / ...) because :class:`StrEnum` members ARE strings;
+    deserialization wraps each raw string in the enum constructor
+    inside :func:`_validate_one_outcome`.
     """
 
     item_id: str
-    kind: Literal["plugin", "extension"]
-    status: Literal["ok", "retried_ok", "skipped", "aborted"]
+    kind: ReconcileKind
+    status: ReconcileStatus
     error_summary: str | None
 
 
 def _serialize_reconcile_outcomes(
     outcomes: tuple[ReconcileOutcome, ...],
 ) -> str | None:
-    """Return the ``reconcile_outcomes.json`` body, or ``None`` when empty."""
+    """Return the ``reconcile_outcomes.json`` body, or ``None`` when empty.
+
+    Emits ``kind`` and ``status`` as their underlying string values via
+    explicit ``.value`` access so the on-disk shape is stable
+    regardless of ``json.dumps``'s implementation-defined behavior on
+    :class:`StrEnum` instances.
+    """
     if not outcomes:
         return None
     return (
@@ -321,8 +363,8 @@ def _serialize_reconcile_outcomes(
                 "outcomes": [
                     {
                         "item_id": o.item_id,
-                        "kind": o.kind,
-                        "status": o.status,
+                        "kind": o.kind.value,
+                        "status": o.status.value,
                         "error_summary": o.error_summary,
                     }
                     for o in outcomes
@@ -334,10 +376,8 @@ def _serialize_reconcile_outcomes(
     )
 
 
-_VALID_OUTCOME_KINDS: frozenset[str] = frozenset({"plugin", "extension"})
-_VALID_OUTCOME_STATUSES: frozenset[str] = frozenset(
-    {"ok", "retried_ok", "skipped", "aborted"}
-)
+_VALID_OUTCOME_KINDS: frozenset[str] = frozenset(k.value for k in ReconcileKind)
+_VALID_OUTCOME_STATUSES: frozenset[str] = frozenset(s.value for s in ReconcileStatus)
 
 
 def _validate_one_outcome(entry: object) -> ReconcileOutcome:
@@ -347,7 +387,13 @@ def _validate_one_outcome(entry: object) -> ReconcileOutcome:
     four-field shape. Kept as a free function so
     :func:`reconcile_outcomes_from_json`'s per-entry block flattens to
     one ``append(_validate_one_outcome(entry))`` call (nesting depth 2,
-    not 3).
+    not 3). Wraps the raw string ``kind`` / ``status`` payload in the
+    :class:`ReconcileKind` / :class:`ReconcileStatus` enum constructors
+    after the membership-check guard fires; the explicit guard keeps
+    the error message stable and lets us raise
+    :class:`InvalidTransitionRecord` rather than the bare
+    :class:`ValueError` that would surface from a direct enum
+    constructor on a bogus payload.
     """
     if not isinstance(entry, dict):
         raise InvalidTransitionRecord(
@@ -379,8 +425,8 @@ def _validate_one_outcome(entry: object) -> ReconcileOutcome:
         )
     return ReconcileOutcome(
         item_id=item_id,
-        kind=kind,  # type: ignore[arg-type]
-        status=status,  # type: ignore[arg-type]
+        kind=ReconcileKind(kind),
+        status=ReconcileStatus(status),
         error_summary=err,
     )
 

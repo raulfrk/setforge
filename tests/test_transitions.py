@@ -1064,7 +1064,9 @@ def test_reconcile_outcome_round_trips_through_write_transition(
     ``extensions.json`` siblings, and :func:`load_reconcile_outcomes`
     decodes it back into the same tuple."""
     from setforge.transitions import (
+        ReconcileKind,
         ReconcileOutcome,
+        ReconcileStatus,
         load_reconcile_outcomes,
     )
 
@@ -1073,14 +1075,14 @@ def test_reconcile_outcome_round_trips_through_write_transition(
     outcomes = (
         ReconcileOutcome(
             item_id="superpowers@official",
-            kind="plugin",
-            status="ok",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
             error_summary=None,
         ),
         ReconcileOutcome(
             item_id="work-only-extension",
-            kind="extension",
-            status="skipped",
+            kind=ReconcileKind.EXTENSION,
+            status=ReconcileStatus.SKIPPED,
             error_summary="not found in registry",
         ),
     )

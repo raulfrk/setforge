@@ -19,7 +19,7 @@ from setforge.cli._confirm import (
 )
 from setforge.cli._plugin_helpers import _emit_reconcile_summary
 from setforge.errors import ConfirmRequiresInteractive
-from setforge.transitions import ReconcileOutcome
+from setforge.transitions import ReconcileKind, ReconcileOutcome, ReconcileStatus
 
 
 class _FakeDialogResult:
@@ -282,38 +282,47 @@ def test_emit_reconcile_summary_renders_all_status_columns(
     """
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
         ReconcileOutcome(
-            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+            item_id="alpha@official",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
+            error_summary=None,
         ),
         ReconcileOutcome(
-            item_id="beta@official", kind="plugin", status="ok", error_summary=None
+            item_id="beta@official",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
+            error_summary=None,
         ),
         ReconcileOutcome(
-            item_id="gamma@work", kind="plugin", status="retried_ok", error_summary=None
+            item_id="gamma@work",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.RETRIED_OK,
+            error_summary=None,
         ),
         ReconcileOutcome(
             item_id="delta@work",
-            kind="plugin",
-            status="skipped",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.SKIPPED,
             error_summary="fetch failed",
         ),
     )
     ext_outcomes: tuple[ReconcileOutcome, ...] = (
         ReconcileOutcome(
             item_id="charliermarsh.ruff",
-            kind="extension",
-            status="ok",
+            kind=ReconcileKind.EXTENSION,
+            status=ReconcileStatus.OK,
             error_summary=None,
         ),
         ReconcileOutcome(
             item_id="esbenp.prettier-vscode",
-            kind="extension",
-            status="ok",
+            kind=ReconcileKind.EXTENSION,
+            status=ReconcileStatus.OK,
             error_summary=None,
         ),
         ReconcileOutcome(
             item_id="work-only-extension",
-            kind="extension",
-            status="skipped",
+            kind=ReconcileKind.EXTENSION,
+            status=ReconcileStatus.SKIPPED,
             error_summary="not found in registry",
         ),
     )
@@ -339,7 +348,10 @@ def test_emit_reconcile_summary_omits_zero_only_kind(
     row. Mirrors the spec mockup's no-pad-with-zeros shape."""
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
         ReconcileOutcome(
-            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+            item_id="alpha@official",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
+            error_summary=None,
         ),
     )
     _emit_reconcile_summary(plugin_outcomes, ())
@@ -357,10 +369,16 @@ def test_emit_reconcile_summary_all_clean_omits_parenthetical(
     happy-path install."""
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
         ReconcileOutcome(
-            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+            item_id="alpha@official",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
+            error_summary=None,
         ),
         ReconcileOutcome(
-            item_id="beta@official", kind="plugin", status="ok", error_summary=None
+            item_id="beta@official",
+            kind=ReconcileKind.PLUGIN,
+            status=ReconcileStatus.OK,
+            error_summary=None,
         ),
     )
     _emit_reconcile_summary(plugin_outcomes, ())

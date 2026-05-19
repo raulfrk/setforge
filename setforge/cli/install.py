@@ -46,7 +46,11 @@ from setforge.cli._plugin_helpers import (
 from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.config import load_config, resolve_profile
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
-from setforge.transitions import load_latest, load_reconcile_outcomes
+from setforge.transitions import (
+    ReconcileStatus,
+    load_latest,
+    load_reconcile_outcomes,
+)
 
 
 @app.command()
@@ -275,4 +279,4 @@ def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
     if prev is None:
         return frozenset()
     outcomes = load_reconcile_outcomes(prev)
-    return frozenset(o.item_id for o in outcomes if o.status == "skipped")
+    return frozenset(o.item_id for o in outcomes if o.status is ReconcileStatus.SKIPPED)
