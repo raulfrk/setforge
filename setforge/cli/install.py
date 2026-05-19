@@ -50,6 +50,13 @@ from setforge.cli._plugin_helpers import (
     _reconcile_plugins,
 )
 from setforge.cli._secrets_confirm import prompt_secret_action
+from setforge.cli._welcome import (
+    WelcomeChoice,
+    build_welcome_inventory,
+    is_fresh_host,
+    prompt_welcome,
+    reject_auto_on_fresh_host,
+)
 from setforge.config import load_config, resolve_profile
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
@@ -171,6 +178,28 @@ def install(
         source=resolve_source_for_git_check(repo_root),
         no_git_check=no_git_check,
     )
+
+    # setforge-7jg4: fresh-host welcome gate. Fires BEFORE every other
+    # phase (dry-run dispatch, state-dir probe, bootstrap, deploy) so a
+    # brand-new host can preview what the install will do and consent
+    # before any mutation. ``--yes`` skips the welcome (the caller has
+    # consented out-of-band); ``--auto=*`` is rejected on a fresh host
+    # because there is no drift yet for the auto-resolver to act on.
+    fresh = is_fresh_host()
+    if fresh and not dry_run:
+        reject_auto_on_fresh_host(auto=auto)
+        inventory = build_welcome_inventory(ctx)
+
+        def _welcome_dry_run() -> None:
+            _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
+
+        welcome_choice = prompt_welcome(
+            inventory=inventory,
+            yes=yes,
+            run_dry_run=_welcome_dry_run,
+        )
+        if welcome_choice is not WelcomeChoice.PROCEED:
+            return
 
     # setforge-lnvq: boundary-not-leaf dispatch. When `--dry-run` is set,
     # route through `_dry_run_pipeline` which calls only the read-only
