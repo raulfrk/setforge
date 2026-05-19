@@ -1,13 +1,5 @@
 """``setforge completion install`` — write shell completion scripts.
 
-Mockup K (user-approved 2026-05-18). One subcommand,
-``setforge completion install <shell>``, where ``<shell>`` is
-``zsh``/``bash``/``fish``. Writes the typer-generated completion
-script to ``~/.config/setforge/completions/`` and, for zsh + bash,
-appends the wiring lines to the user's shell rc file behind an
-arrow-key confirm (write+wire / write-only / abort). Fish auto-loads
-its completions dir, so no rc edit is needed.
-
 Idempotency is enforced via a sentinel block
 (``# >>> setforge completion >>>`` / ``# <<< setforge completion <<<``)
 in zsh / bash rc files: re-running the command replaces the body
@@ -34,9 +26,7 @@ from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 # ``prompt_toolkit.shortcuts.radiolist_dialog`` resolves through this
 # module's PEP 562 ``__getattr__`` so cold-start commands (``setforge
 # --help``, ``setforge validate``) skip the ~140ms prompt_toolkit
-# import. Tests monkeypatch ``setforge.cli.completion.radiolist_dialog``
-# through the same attribute path; mirror :mod:`setforge.cli.init` and
-# :mod:`setforge.cli._confirm` exactly.
+# import.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -123,18 +113,10 @@ def _rc_path(shell: ShellKind) -> Path | None:
 
 
 def _render_completion_script(shell: ShellKind) -> str:
-    """Invoke ``setforge --show-completion=<shell>`` and capture stdout.
-
-    Shells out to the same ``setforge`` binary the user invoked so the
-    completion content stays in lock-step with whatever typer version
-    is resolved at runtime. Sets
-    ``_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1`` so typer accepts
-    an explicit shell value via ``--show-completion=<shell>`` instead
-    of auto-detecting from the parent ``SHELL`` env — without the
-    override, ``--show-completion`` is a bool flag and discards any
-    positional, defaulting to whatever the user's login shell happens
-    to be (which is wrong when we're installing for a DIFFERENT shell).
-    """
+    """Shell out to ``setforge --show-completion=<shell>`` and return stdout."""
+    # Without _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1, typer
+    # treats --show-completion as a bool and falls back to the parent
+    # $SHELL — wrong when we're installing for a DIFFERENT shell.
     child_env = {**os.environ, "_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION": "1"}
     # ``shutil.which`` resolves ``setforge`` on PATH the same way the
     # user's shell did when they invoked us; falling back to
@@ -226,14 +208,10 @@ def _write_wiring(rc_path: Path, body: str) -> None:
 
 
 def _stdin_is_tty() -> bool:
-    """Return True iff stdin is connected to a terminal.
-
-    Indirected through a module-level helper so tests can monkeypatch
-    ``setforge.cli.completion._stdin_is_tty`` directly — Typer's
-    ``CliRunner`` replaces ``sys.stdin`` with a non-TTY stream, so a
-    naive ``monkeypatch.setattr('sys.stdin.isatty', ...)`` set on the
-    original ``sys.stdin`` doesn't survive the runner's substitution.
-    """
+    """Return True iff stdin is connected to a terminal."""
+    # Indirected so tests monkeypatch this attribute directly — Typer's
+    # CliRunner swaps sys.stdin for a non-TTY stream and a naive
+    # monkeypatch on the original sys.stdin doesn't survive.
     return sys.stdin.isatty()
 
 
