@@ -30,8 +30,8 @@ from pathlib import Path
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
 from setforge import jsonc, sections, yaml_merge
-from setforge.config import Config, ResolvedProfile
-from setforge.errors import MissingTrackedFile
+from setforge.config import Config, ResolvedProfile, TrackedFile
+from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.section_reconcile import maintain_marker_hashes
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ def copy_atomic(
     if not src.exists():
         raise MissingTrackedFile(f"tracked source not found: {src}")
 
-    real_dst = dst.resolve() if dst.is_symlink() else dst
+    real_dst = _resolve_for_copy(dst)
     real_dst.parent.mkdir(parents=True, exist_ok=True)
     dst_existed = real_dst.exists()
 
@@ -128,6 +128,31 @@ def copy_atomic(
 
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
     return DeployResult(dst=real_dst, action=action, backup_path=backup_path)
+
+
+def _resolve_for_copy(dst: Path) -> Path:
+    """Resolve ``dst`` through any pre-existing symlink for legacy nolink copy.
+
+    Mirrors the legacy ``link_tracked_file_default: nolink`` behavior:
+    when ``dst`` is itself a symlink, write to its target (so the link
+    survives the deploy). When :func:`Path.resolve` fails — broken
+    link, dangling component, or :class:`RuntimeError` from cpython's
+    symlink-loop detection — the original ``dst`` is returned and the
+    caller treats it as a fresh write.
+
+    ``strict=False`` is mandatory: ``Path.resolve(strict=True)`` raises
+    :class:`OSError` on missing targets; ``strict=False`` swallows
+    every :class:`OSError` EXCEPT the rare symlink-loop case (CPython
+    bug #109187), which surfaces as :class:`RuntimeError`. The
+    ``except (OSError, RuntimeError)`` covers both shapes so a hostile
+    symlink layout can't crash deploy.
+    """
+    if not dst.is_symlink():
+        return dst
+    try:
+        return dst.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return dst
 
 
 def _render_with_preserve_keys(
@@ -286,6 +311,109 @@ def _atomic_write(
     finally:
         with contextlib.suppress(OSError):
             tmp_path.unlink(missing_ok=True)
+
+
+def deploy_symlinked_file(
+    src: Path,
+    dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    backup: bool = True,
+) -> DeployResult:
+    """Deploy a tracked_file that declares ``symlink:``.
+
+    Two-phase write:
+
+    1. Render the tracked content to ``Path(tracked_file.symlink).expanduser()``
+       (the target path) via :func:`_atomic_write` — the target file is
+       the one actually carrying bytes.
+    2. Create a symbolic link at ``dst`` pointing at the *raw user
+       string* (``tracked_file.symlink``, NOT expanded) so cross-host
+       portability survives. The link itself is staged at a sibling
+       tempfile and ``os.replace``-d into place — the same atomic
+       pattern :func:`_atomic_write` uses for regular files, closing
+       the TOCTOU window between ``unlink`` and ``symlink``.
+
+    Refusal contract: if ``dst`` already exists as a *regular file*
+    (not a symlink), this function raises :class:`SetforgeError`. The
+    caller should treat that case as drift requiring user intervention
+    rather than silently clobbering local content. A pre-existing
+    symlink at ``dst`` — regardless of where it points — is replaced
+    atomically by :func:`os.replace`.
+
+    Returns a :class:`DeployResult` mirroring :func:`copy_atomic`'s
+    contract. ``backup_path`` is None for symlink deployments: the
+    target-side write produces its own ``.bak`` for the byte content,
+    and a link itself carries no rotateable state.
+    """
+    if tracked_file.symlink is None:
+        raise AssertionError(
+            "deploy_symlinked_file called with tracked_file.symlink == None"
+        )
+    if not src.exists():
+        raise MissingTrackedFile(f"tracked source not found: {src}")
+
+    target = Path(tracked_file.symlink).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    if dst.exists() and not dst.is_symlink():
+        raise SetforgeError(
+            f"refusing to deploy symlink at {dst}: a regular file is "
+            f"already present. Move it aside or remove it before "
+            f"deploying tracked_file with symlink: {tracked_file.symlink!r}."
+        )
+
+    _deploy_target_content(src, target, tracked_file, backup=backup)
+    action = _replace_symlink_atomic(dst, tracked_file.symlink)
+    return DeployResult(dst=dst, action=action, backup_path=None)
+
+
+def _deploy_target_content(
+    src: Path, target: Path, tracked_file: TrackedFile, *, backup: bool
+) -> None:
+    """Write ``src`` content to ``target`` via :func:`_atomic_write`.
+
+    Routes through the same content-render path as :func:`copy_atomic`
+    so preserve_user_keys / preserve_user_sections still compose with
+    symlink-deployed tracked_files. ``mode`` rides through unchanged.
+    """
+    target_existed = target.exists()
+    content = _compute_content(
+        src,
+        target,
+        target_existed,
+        tracked_file.preserve_user_sections,
+        tracked_file.preserve_user_keys or None,
+        tracked_file.preserve_user_keys_deep or None,
+        None,
+    )
+    _atomic_write(content, src, target, target_existed, backup, tracked_file.mode)
+
+
+def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
+    """Place a symlink at ``dst`` pointing at ``raw_target`` via tmp+replace.
+
+    ``raw_target`` is the *unexpanded* user string (e.g. ``~/foo``);
+    :func:`os.symlink` writes it verbatim into the link's metadata so
+    a subsequent :func:`os.readlink` returns exactly that string —
+    cross-host portability invariant. ``os.replace`` atomically swaps
+    the staged link over any pre-existing link at ``dst`` (the
+    regular-file case is refused by the caller).
+
+    Returns :attr:`DeployAction.CREATED` when ``dst`` had no prior
+    symlink, otherwise :attr:`DeployAction.UPDATED` (matching the
+    symlink-deploy NOOP-isn't-applicable shape: even when the prior
+    link pointed at the same target, the replace-and-relink semantics
+    are intentional).
+    """
+    dst_was_link = dst.is_symlink()
+    tmp_link = dst.parent / f".{dst.name}.setforge-symlink-tmp"
+    with contextlib.suppress(FileNotFoundError):
+        tmp_link.unlink()
+    os.symlink(raw_target, tmp_link)
+    os.replace(tmp_link, dst)
+    return DeployAction.UPDATED if dst_was_link else DeployAction.CREATED
 
 
 def bootstrap_local(paths: list[Path]) -> None:
