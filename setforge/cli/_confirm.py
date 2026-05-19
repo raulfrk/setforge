@@ -42,9 +42,89 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 __all__ = [
     "AutoDirection",
     "AutoPlan",
+    "FailureAction",
     "FileChange",
     "confirm_auto_operation",
+    "prompt_failure_action",
 ]
+
+
+class FailureAction(StrEnum):
+    """User's choice from the per-item reconcile-failure prompt.
+
+    Mirrors the four arrow-key rows in mockup E:
+
+    - ``SKIP``    — continue with the rest of the reconcile.
+    - ``RETRY``   — re-attempt the same operation in-place once.
+    - ``ABORT``   — roll back items landed in THIS install, then raise.
+    - ``DIAGNOSE`` — print full subprocess trace + re-prompt; the
+      :func:`prompt_failure_action` function never returns this value.
+    """
+
+    SKIP = "skip"
+    RETRY = "retry"
+    ABORT = "abort"
+    DIAGNOSE = "diagnose"
+
+
+def prompt_failure_action(
+    *,
+    message: str,
+    full_stderr: str | None = None,
+    default: FailureAction = FailureAction.SKIP,
+    yes: bool = False,
+    console: Console | None = None,
+) -> FailureAction:
+    """Render an arrow-key picker for a reconcile failure; return the choice.
+
+    ``yes=True`` short-circuits to ``default`` (``FailureAction.SKIP``).
+    ``None`` from the dialog (user pressed Esc) is treated as
+    :attr:`FailureAction.ABORT` — consistent with
+    :func:`confirm_auto_operation`'s Esc-as-abort handling.
+
+    After :attr:`FailureAction.DIAGNOSE` is chosen, the function prints
+    ``full_stderr`` (or a placeholder when ``None``) and re-prompts —
+    so the function itself never returns ``DIAGNOSE``. The re-prompt
+    loop terminates when the user picks any other option.
+
+    Raises :class:`ConfirmRequiresInteractive` when stdin is not a TTY
+    and ``yes`` is ``False`` — same posture as
+    :func:`confirm_auto_operation`. The escape hatch is ``--yes`` /
+    ``-y`` which short-circuits to the default.
+    """
+    if yes:
+        return default
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge reconcile failure prompt requires --yes when stdin is not a TTY"
+        )
+    if console is None:
+        console = Console()
+    console.print(f"[bold red]=== reconcile failure ===[/bold red]\n{message}")
+    while True:
+        # ``radiolist_dialog`` resolves through the module-level
+        # ``__getattr__`` (lazy prompt_toolkit import); tests monkeypatch
+        # the same attribute path.
+        from setforge.cli import _confirm as _self  # local alias for monkeypatch
+
+        choice = _self.radiolist_dialog(
+            title="setforge reconcile failure",
+            text="What would you like to do?",
+            values=[
+                (FailureAction.SKIP, "skip this item, continue with the rest"),
+                (FailureAction.RETRY, "retry now (re-attempt the same operation)"),
+                (FailureAction.ABORT, "abort install (roll back actions so far)"),
+                (FailureAction.DIAGNOSE, "diagnose (show full failure trace)"),
+            ],
+            default=default,
+        ).run()
+        if choice is None:
+            return FailureAction.ABORT
+        if choice is FailureAction.DIAGNOSE:
+            trace = full_stderr if full_stderr else "(no captured trace available)"
+            console.print(f"[bold]=== failure trace ===[/bold]\n{trace}")
+            continue
+        return choice
 
 
 class AutoDirection(StrEnum):

@@ -1562,12 +1562,20 @@ def test_install_records_plugin_delta_with_enable_failure(
     monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     runner = CliRunner()
+    # --yes short-circuits the per-item failure prompt added in
+    # setforge-k0uj to its default (SKIP), preserving the historic
+    # warn-and-continue behavior this regression test exercises.
     installed = runner.invoke(
         app,
-        ["install", "--profile=test-comprehensive", f"--config={fixture_yaml}"],
+        [
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={fixture_yaml}",
+            "--yes",
+        ],
     )
     # Install command exits 0 even when a reconcile step fails (warn-
-    # and-continue), so the transition still lands on disk.
+    # and-continue with default SKIP), so the transition still lands.
     assert installed.exit_code == 0, installed.output
 
     # Plugin landed on disk per fake-claude (install succeeded).

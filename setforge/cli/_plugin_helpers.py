@@ -15,7 +15,8 @@ shape doesn't fit.
 import json
 import subprocess
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import typer
 
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import transitions, vscode_extensions
+from setforge.cli._confirm import FailureAction, prompt_failure_action
 from setforge.config import (
     Config,
     MarketplaceSource,
@@ -33,6 +35,7 @@ from setforge.errors import (
     ExtensionInstallFailed,
     ExtensionToolMissing,
     PluginToolMissing,
+    ReconcileAborted,
 )
 
 
@@ -58,14 +61,67 @@ def _parse_marketplace_from(from_: str) -> MarketplaceSource:
     raise typer.Exit(code=1)
 
 
+@dataclass(slots=True, frozen=True)
+class ReconcileAttempt:
+    """One per-item reconcile attempt recorded as we walk the work list.
+
+    ``source`` is a human-tag describing where the item came from
+    (``"from profile"`` or ``"from local.yaml"``); today we always set
+    ``"from profile"`` since the per-source provenance split is
+    setforge-7dav scope. ``full_stderr`` carries the full captured
+    subprocess trace for the DIAGNOSE branch of
+    :func:`prompt_failure_action`.
+    """
+
+    item_id: str
+    started_at: datetime
+    ended_at: datetime
+    success: bool
+    error_summary: str | None
+    full_stderr: str | None
+    source: str
+
+
+def _stderr_full_from_failed(error_summary: str) -> str:
+    """Return ``error_summary`` as the full trace stand-in.
+
+    Today ``claude_plugins.reconcile`` / ``vscode_extensions.reconcile``
+    surface only the tail of stderr in their failure list; this helper
+    exists so a future change that captures the full trace can swap one
+    callsite without touching the prompt path.
+    """
+    return error_summary
+
+
 def _reconcile_extensions(
     resolved: ResolvedProfile,
-) -> transitions.ExtensionDelta | None:
-    """Reconcile VSCode extensions for ``resolved`` and emit progress lines.
+    *,
+    retry_failed_ids: frozenset[str] = frozenset(),
+    yes: bool = False,
+) -> tuple[transitions.ExtensionDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
+    """Reconcile VSCode extensions with per-item skip / retry / abort UX.
 
-    Returns the :class:`ExtensionDelta` describing what landed on disk, or
-    ``None`` when the underlying tool is missing (warn-and-skip). Pure
-    data in/out so :func:`install` can stay a thin orchestrator.
+    On per-extension failure, surfaces
+    :func:`prompt_failure_action`. SKIP records a
+    :class:`~transitions.ReconcileOutcome` with ``status="skipped"`` and
+    continues. RETRY re-invokes :func:`vscode_extensions.install_one` /
+    :func:`vscode_extensions.uninstall_one` once for the same id; on
+    second-attempt success the outcome is ``"retried_ok"``, on second
+    failure it's ``"skipped"``. ABORT raises
+    :class:`ReconcileAborted` after recording ``"aborted"`` outcomes for
+    every successfully-reconciled extension so the caller can roll back.
+    DIAGNOSE prints the captured stderr and re-prompts (handled inside
+    :func:`prompt_failure_action`).
+
+    Returns the :class:`ExtensionDelta` describing what landed on disk
+    (or ``None`` when the underlying ``code`` binary is missing —
+    warn-and-skip) plus the per-item outcomes tuple.
+
+    ``retry_failed_ids`` filters the work list to only those ids: items
+    not in the set are silently skipped from the reconcile pass when
+    the set is non-empty. Today's full-pass behavior is restored when
+    the set is empty (the default). ``yes=True`` short-circuits the
+    prompt to its default :attr:`FailureAction.SKIP`.
     """
     try:
         report = vscode_extensions.reconcile(resolved.extensions)
@@ -75,22 +131,173 @@ def _reconcile_extensions(
             err=True,
             fg=typer.colors.YELLOW,
         )
-        return None
-    failed_ids = {ext_id for ext_id, _ in report.failed}
-    for ext_id in report.to_install:
-        if ext_id not in failed_ids:
-            typer.echo(f"installed  {ext_id}")
-    for ext_id in report.to_uninstall:
-        if ext_id not in failed_ids:
-            typer.echo(f"uninstalled  {ext_id}")
+        return None, ()
+
+    initial_failed: dict[str, str] = dict(report.failed)
+    successful_install = [i for i in report.to_install if i not in initial_failed]
+    successful_uninstall = [i for i in report.to_uninstall if i not in initial_failed]
+
+    outcomes: list[transitions.ReconcileOutcome] = []
+    for ext_id in successful_install:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=ext_id,
+                kind="extension",
+                status="ok",
+                error_summary=None,
+            )
+        )
+        typer.echo(f"installed  {ext_id}")
+    for ext_id in successful_uninstall:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=ext_id,
+                kind="extension",
+                status="ok",
+                error_summary=None,
+            )
+        )
+        typer.echo(f"uninstalled  {ext_id}")
+
+    final_added = list(successful_install)
+    final_removed = list(successful_uninstall)
+
     for ext_id, err in report.failed:
-        typer.secho(f"FAILED  {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
+        if retry_failed_ids and ext_id not in retry_failed_ids:
+            continue
+        # The originating op was either install (in to_install) or
+        # uninstall (in to_uninstall). Pick the right inverse for RETRY.
+        is_install = ext_id in report.to_install
+        outcome, retry_ok = _handle_extension_failure(
+            ext_id=ext_id,
+            error_summary=err,
+            is_install=is_install,
+            yes=yes,
+            successful_added=tuple(final_added),
+            successful_removed=tuple(final_removed),
+        )
+        outcomes.append(outcome)
+        if retry_ok:
+            if is_install:
+                final_added.append(ext_id)
+            else:
+                final_removed.append(ext_id)
+
     if not report:
         typer.echo("extensions: nothing to reconcile")
-    return transitions.ExtensionDelta(
-        added=[i for i in report.to_install if i not in failed_ids],
-        removed=[i for i in report.to_uninstall if i not in failed_ids],
+    delta = transitions.ExtensionDelta(
+        added=final_added,
+        removed=final_removed,
     )
+    return delta, tuple(outcomes)
+
+
+def _handle_extension_failure(
+    *,
+    ext_id: str,
+    error_summary: str,
+    is_install: bool,
+    yes: bool,
+    successful_added: tuple[str, ...],
+    successful_removed: tuple[str, ...],
+) -> tuple[transitions.ReconcileOutcome, bool]:
+    """Surface the failure prompt for one extension; return (outcome, retry_ok).
+
+    ``retry_ok`` is ``True`` only when the user picked RETRY and the
+    second attempt succeeded — the caller uses that signal to fold the
+    item into the successful-added / -removed lists for the
+    :class:`ExtensionDelta`.
+
+    On ABORT, calls :func:`_abort_reverse_reconcile_extensions` to roll
+    back items landed so far this install, then raises
+    :class:`ReconcileAborted`.
+    """
+    typer.secho(f"FAILED  {ext_id} — {error_summary}", err=True, fg=typer.colors.YELLOW)
+    action = prompt_failure_action(
+        message=f"failed: {ext_id}\n{error_summary}",
+        full_stderr=_stderr_full_from_failed(error_summary),
+        yes=yes,
+    )
+    if action is FailureAction.SKIP:
+        typer.echo(f"skipped   {ext_id}")
+        return (
+            transitions.ReconcileOutcome(
+                item_id=ext_id,
+                kind="extension",
+                status="skipped",
+                error_summary=error_summary,
+            ),
+            False,
+        )
+    if action is FailureAction.RETRY:
+        try:
+            if is_install:
+                vscode_extensions.install_one(ext_id)
+            else:
+                vscode_extensions.uninstall_one(ext_id)
+        except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
+            typer.secho(
+                f"FAILED  retry {ext_id} — {exc}", err=True, fg=typer.colors.YELLOW
+            )
+            return (
+                transitions.ReconcileOutcome(
+                    item_id=ext_id,
+                    kind="extension",
+                    status="skipped",
+                    error_summary=str(exc),
+                ),
+                False,
+            )
+        typer.echo(f"retried   {ext_id}")
+        return (
+            transitions.ReconcileOutcome(
+                item_id=ext_id,
+                kind="extension",
+                status="retried_ok",
+                error_summary=None,
+            ),
+            True,
+        )
+    # ABORT
+    _abort_reverse_reconcile_extensions(
+        successful_added=successful_added,
+        successful_removed=successful_removed,
+    )
+    raise ReconcileAborted(
+        f"install aborted during extension reconcile (failed item: {ext_id!r})"
+    )
+
+
+def _abort_reverse_reconcile_extensions(
+    *,
+    successful_added: tuple[str, ...],
+    successful_removed: tuple[str, ...],
+) -> None:
+    """Reverse extensions landed so far this install (ABORT path).
+
+    Best-effort: a per-item failure during the reverse pass is logged
+    via :func:`typer.secho` but does not abort the rollback — mirrors
+    :func:`_reverse_extensions`'s warn-and-continue posture so the user
+    sees every conflicting id rather than only the first.
+    """
+    for ext_id in successful_added:
+        try:
+            vscode_extensions.uninstall_one(ext_id)
+        except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
+            typer.secho(
+                f"warning: rollback uninstall of {ext_id} failed — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    for ext_id in successful_removed:
+        try:
+            vscode_extensions.install_one(ext_id)
+        except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
+            typer.secho(
+                f"warning: rollback install of {ext_id} failed — {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
 
 
 def _emit_plugin_report(
@@ -134,31 +341,275 @@ def _warn_skip_reconcile(exc: PluginToolMissing) -> None:
 def _reconcile_plugins(
     cfg: Config,
     resolved: ResolvedProfile,
-) -> transitions.PluginDelta | None:
-    """Reconcile Claude plugins and compute the install-time :class:`PluginDelta`.
+    *,
+    retry_failed_ids: frozenset[str] = frozenset(),
+    yes: bool = False,
+) -> tuple[transitions.PluginDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
+    """Reconcile Claude plugins with per-item skip / retry / abort UX.
 
-    Snapshots disk state pre/post so the delta reflects ground truth:
-    install-then-enable-fail plugins still appear in
-    :attr:`PluginDelta.installed` and survive revert. Returns ``None``
-    when the ``claude`` binary is absent (warn-and-skip).
+    On per-plugin failure, surfaces :func:`prompt_failure_action`. SKIP
+    records a :class:`~transitions.ReconcileOutcome` with
+    ``status="skipped"`` and continues. RETRY re-invokes the originating
+    per-item op (``plugin_install`` / ``plugin_enable`` /
+    ``plugin_disable`` / ``marketplace_add``) once; success → outcome
+    ``"retried_ok"``, failure → outcome ``"skipped"``. ABORT triggers
+    reverse-reconcile of items landed in THIS install via the existing
+    :data:`_REVERSE_PLUGIN_DISPATCH` dispatch table, then raises
+    :class:`ReconcileAborted`. DIAGNOSE prints captured stderr and
+    re-prompts inside :func:`prompt_failure_action`.
+
+    Returns the :class:`PluginDelta` describing what landed on disk (or
+    ``None`` when the ``claude`` binary is missing — warn-and-skip)
+    plus the per-item outcomes tuple.
+
+    ``retry_failed_ids`` filters the work list to only those ids: today
+    we cannot pre-filter ``claude_plugins.reconcile`` (it's batch-only),
+    so the filter applies AFTER first reconcile: only failed-ids that
+    appear in the set surface the prompt; others are silently dropped
+    from the outcomes. When the set is empty (the default), all
+    failures surface. ``yes=True`` short-circuits to the default
+    :attr:`FailureAction.SKIP`.
     """
     try:
         pre_plugins = claude_plugins_mod.list_installed()
         pre_marketplaces = claude_plugins_mod.list_marketplaces()
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
-        return None
+        return None, ()
     try:
         plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
-        return None
+        return None, ()
     _emit_plugin_report(plugin_report)
     post_plugins = claude_plugins_mod.list_installed()
     post_marketplaces = claude_plugins_mod.list_marketplaces()
-    return _compute_plugin_delta(
+    delta_first = _compute_plugin_delta(
         pre_plugins, pre_marketplaces, post_plugins, post_marketplaces
     )
+
+    outcomes: list[transitions.ReconcileOutcome] = []
+    failed_ids = {pid for pid, _ in plugin_report.failed}
+    # Successful per-item outcomes ("ok" for everything that landed).
+    for pid in delta_first.installed:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=pid, kind="plugin", status="ok", error_summary=None
+            )
+        )
+    for pid in delta_first.enabled:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=pid, kind="plugin", status="ok", error_summary=None
+            )
+        )
+    for pid in delta_first.disabled:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=pid, kind="plugin", status="ok", error_summary=None
+            )
+        )
+    for mp in delta_first.marketplaces_added:
+        outcomes.append(
+            transitions.ReconcileOutcome(
+                item_id=mp, kind="plugin", status="ok", error_summary=None
+            )
+        )
+
+    retried_delta_pieces = _PluginRetriedPieces()
+    for failed_id, err in plugin_report.failed:
+        if retry_failed_ids and failed_id not in retry_failed_ids:
+            continue
+        op_kind = _classify_plugin_failure(plugin_report, failed_id)
+        outcome = _handle_plugin_failure(
+            cfg=cfg,
+            failed_id=failed_id,
+            error_summary=err,
+            op_kind=op_kind,
+            yes=yes,
+            delta_so_far=delta_first,
+            retried=retried_delta_pieces,
+        )
+        outcomes.append(outcome)
+        # Stale ids guard: failed_ids set is referenced only for cache
+        # consistency in future paths; keep here for symmetry.
+        _ = failed_ids
+
+    final_delta = _merge_retried_plugin_delta(delta_first, retried_delta_pieces)
+    return final_delta, tuple(outcomes)
+
+
+@dataclass(slots=True)
+class _PluginRetriedPieces:
+    """Mutable accumulator for plugin retries that succeeded second time.
+
+    Folded into the final :class:`PluginDelta` so a retried-OK plugin
+    install lands in the delta exactly like a first-attempt success
+    — ``revert`` can roll it back via the same path.
+    """
+
+    installed: list[str] = field(default_factory=list)
+    enabled: list[str] = field(default_factory=list)
+    disabled: list[str] = field(default_factory=list)
+    marketplaces_added: list[str] = field(default_factory=list)
+
+
+def _merge_retried_plugin_delta(
+    delta_first: transitions.PluginDelta,
+    retried: _PluginRetriedPieces,
+) -> transitions.PluginDelta:
+    """Fold retry-success ids into a fresh :class:`PluginDelta`.
+
+    Preserves the immutability of ``delta_first`` (frozen dataclass)
+    and the tuple-of-str invariant on each field — the retry path
+    cannot append into the original's tuples in place.
+    """
+    return transitions.PluginDelta(
+        installed=tuple(list(delta_first.installed) + retried.installed),
+        enabled=tuple(list(delta_first.enabled) + retried.enabled),
+        disabled=tuple(list(delta_first.disabled) + retried.disabled),
+        marketplaces_added=tuple(
+            list(delta_first.marketplaces_added) + retried.marketplaces_added
+        ),
+        marketplaces_removed=delta_first.marketplaces_removed,
+    )
+
+
+def _classify_plugin_failure(
+    report: "claude_plugins_mod.ReconcileReport", failed_id: str
+) -> str:
+    """Map a failed-id back to its originating op for the RETRY branch.
+
+    Returns one of ``"install"``, ``"enable"``, ``"disable"``,
+    ``"marketplace_add"``, or ``"unknown"``. The to_install field on
+    :class:`~claude_plugins.ReconcileReport` is a list of
+    ``(name, marketplace)`` tuples; we reassemble the ``name@marketplace``
+    pid before comparison. ``"unknown"`` reaches the RETRY branch only
+    when ``claude_plugins.reconcile`` introduces a new failure category
+    without updating this classifier — surfaces as a SKIP-equivalent
+    (the retry is a no-op).
+    """
+    install_pids = {f"{n}@{m}" for n, m in report.to_install}
+    if failed_id in install_pids:
+        return "install"
+    if failed_id in set(report.to_enable):
+        return "enable"
+    if failed_id in set(report.to_disable):
+        return "disable"
+    if failed_id in set(report.marketplaces_added):
+        return "marketplace_add"
+    return "unknown"
+
+
+def _retry_plugin_op(
+    cfg: Config,
+    failed_id: str,
+    op_kind: str,
+) -> str | None:
+    """Re-attempt one per-plugin op; return error string on failure, None on success.
+
+    Dispatched by ``op_kind`` from :func:`_classify_plugin_failure`.
+    ``marketplace_add`` looks up the source from ``cfg.marketplaces``;
+    other kinds parse ``name@marketplace`` from ``failed_id``.
+    ``"unknown"`` returns a placeholder error string so the outcome
+    records ``"skipped"`` rather than a misleading ``"retried_ok"``.
+    """
+    try:
+        if op_kind == "install":
+            name, mp = failed_id.split("@", 1)
+            claude_plugins_mod.plugin_install(name, mp)
+        elif op_kind == "enable":
+            claude_plugins_mod.plugin_enable(failed_id)
+        elif op_kind == "disable":
+            claude_plugins_mod.plugin_disable(failed_id)
+        elif op_kind == "marketplace_add":
+            source = cfg.marketplaces.get(failed_id)
+            if source is None:
+                return f"marketplace {failed_id!r} not in cfg.marketplaces"
+            claude_plugins_mod.marketplace_add(failed_id, source)
+        else:
+            return f"unknown op kind {op_kind!r} for retry"
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        return claude_plugins_mod.stderr_of(exc)
+    except PluginToolMissing as exc:
+        return str(exc)
+    return None
+
+
+def _handle_plugin_failure(
+    *,
+    cfg: Config,
+    failed_id: str,
+    error_summary: str,
+    op_kind: str,
+    yes: bool,
+    delta_so_far: transitions.PluginDelta,
+    retried: _PluginRetriedPieces,
+) -> transitions.ReconcileOutcome:
+    """Surface the failure prompt for one plugin; return the outcome.
+
+    On RETRY, mutates ``retried`` to record the second-attempt success
+    so the caller can fold it into the final :class:`PluginDelta`. On
+    ABORT, calls :func:`_abort_reverse_reconcile_plugins` with the
+    plugins/marketplaces landed so far this install, then raises
+    :class:`ReconcileAborted`.
+    """
+    action = prompt_failure_action(
+        message=f"failed: {failed_id}\n{error_summary}",
+        full_stderr=_stderr_full_from_failed(error_summary),
+        yes=yes,
+    )
+    if action is FailureAction.SKIP:
+        return transitions.ReconcileOutcome(
+            item_id=failed_id,
+            kind="plugin",
+            status="skipped",
+            error_summary=error_summary,
+        )
+    if action is FailureAction.RETRY:
+        retry_err = _retry_plugin_op(cfg, failed_id, op_kind)
+        if retry_err is None:
+            # Record the retry success in the appropriate piece so the
+            # final delta reflects ground truth.
+            if op_kind == "install":
+                retried.installed.append(failed_id)
+            elif op_kind == "enable":
+                retried.enabled.append(failed_id)
+            elif op_kind == "disable":
+                retried.disabled.append(failed_id)
+            elif op_kind == "marketplace_add":
+                retried.marketplaces_added.append(failed_id)
+            return transitions.ReconcileOutcome(
+                item_id=failed_id,
+                kind="plugin",
+                status="retried_ok",
+                error_summary=None,
+            )
+        return transitions.ReconcileOutcome(
+            item_id=failed_id,
+            kind="plugin",
+            status="skipped",
+            error_summary=retry_err,
+        )
+    # ABORT
+    _abort_reverse_reconcile_plugins(delta_so_far)
+    raise ReconcileAborted(
+        f"install aborted during plugin reconcile (failed item: {failed_id!r})"
+    )
+
+
+def _abort_reverse_reconcile_plugins(delta: transitions.PluginDelta) -> None:
+    """Reverse plugin/marketplace items landed so far this install (ABORT path).
+
+    Reuses :func:`_reverse_plugins` to avoid duplicating the four
+    uniform-inverse-op dispatch table — that function already runs the
+    correct inverse for each delta field with per-item warn-and-continue
+    semantics so the rollback completes even if a single inverse op
+    fails. The reverse delta and failure list are discarded; the
+    caller's :class:`ReconcileAborted` carries the abort reason and
+    SetforgeError handler surfaces it.
+    """
+    _reverse_plugins(delta)
 
 
 def _compute_plugin_delta(

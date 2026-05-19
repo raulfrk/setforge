@@ -42,6 +42,7 @@ from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugi
 from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.config import load_config, resolve_profile
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
+from setforge.transitions import load_latest, load_reconcile_outcomes
 
 
 @app.command()
@@ -92,6 +93,15 @@ def install(
         False,
         "--no-secrets-scan",
         help="Skip pre-deploy secrets scan (gitleaks) for automation.",
+    ),
+    retry_failed: bool = typer.Option(
+        False,
+        "--retry-failed",
+        help=(
+            "Re-attempt only the items skipped during the previous install's "
+            "reconcile (per the prior transition's reconcile_outcomes). "
+            "Other reconcile work is suppressed for this run."
+        ),
     ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
@@ -171,14 +181,26 @@ def install(
         live_sections_map=live_sections_map,
     )
 
-    ext_delta = _reconcile_extensions(resolved)
-    plugin_delta = _reconcile_plugins(cfg, resolved)
+    retry_failed_ids = (
+        _collect_retry_failed_ids(profile) if retry_failed else frozenset()
+    )
+    ext_delta, ext_outcomes = _reconcile_extensions(
+        resolved, retry_failed_ids=retry_failed_ids, yes=yes
+    )
+    plugin_delta, plugin_outcomes = _reconcile_plugins(
+        cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes
+    )
 
     file_post = transitions.snapshot_paths(dst_paths)
 
     if not no_transition:
         target = _write_install_transition(
-            profile, file_pre, file_post, ext_delta, plugin_delta
+            profile,
+            file_pre,
+            file_post,
+            ext_delta,
+            plugin_delta,
+            reconcile_outcomes=plugin_outcomes + ext_outcomes,
         )
         typer.echo(f"transition: {target}")
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")
@@ -233,3 +255,18 @@ def _resolve_one_finding(
             return True
         case _:
             assert_never(action)
+def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
+    """Read the previous transition's ``reconcile_outcomes`` and return
+    the set of items whose status was ``"skipped"``.
+
+    Returns an empty :class:`frozenset` when there's no prior transition
+    or the previous transition has no ``reconcile_outcomes.json`` file
+    (backward-compat path for transitions written before setforge-k0uj).
+    Used by ``setforge install --retry-failed`` to filter the reconcile
+    work list to only those previously-failed ids.
+    """
+    prev = load_latest(profile)
+    if prev is None:
+        return frozenset()
+    outcomes = load_reconcile_outcomes(prev)
+    return frozenset(o.item_id for o in outcomes if o.status == "skipped")

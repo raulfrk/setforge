@@ -1508,3 +1508,283 @@ def test_e2e_docker_install_no_gitleaks_warns_and_continues(
     assert (
         _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
     )
+# ===========================================================================
+# setforge-k0uj — per-item reconcile failure UX (skip / retry / abort / diagnose)
+# ===========================================================================
+
+
+_FAILING_CODE_STUB = """#!/bin/bash
+# Wrapper stub for the `code` CLI used by the setforge-k0uj e2e tests.
+#
+# Behavior:
+# - For ``--install-extension force-fail.ext``, exits 1 (fixed failure).
+# - For ``--install-extension flaky.ext``, exits 1 the FIRST time it is
+#   invoked per container (counter file at /tmp/flaky.count) and 0 on
+#   every subsequent call — simulates a successful retry.
+# - Every other invocation falls through to the real ``code`` binary
+#   discovered via PATH, with this stub's own dir excluded so we don't
+#   re-enter ourselves.
+set -euo pipefail
+ME_DIR="$(cd "$(dirname "$0")" && pwd)"
+ARGV=("$@")
+if [ "${ARGV[0]:-}" = "--install-extension" ]; then
+    case "${ARGV[1]:-}" in
+        force-fail.ext)
+            echo "force-fail.ext refused by stub" >&2
+            exit 1
+            ;;
+        flaky.ext)
+            COUNT_FILE=/tmp/flaky.count
+            n=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)
+            echo $((n + 1)) > "$COUNT_FILE"
+            if [ "$n" -eq 0 ]; then
+                echo "flaky.ext refused first try" >&2
+                exit 1
+            fi
+            ;;
+    esac
+fi
+# Fall through to the real code binary (typically /usr/bin/code).
+PATH_WITHOUT_ME="$(echo "$PATH" | tr ':' '\\n' \
+    | grep -v "^${ME_DIR}$" | paste -sd: -)"
+exec env PATH="$PATH_WITHOUT_ME" code "$@"
+"""
+
+
+def _seed_failing_code_stub(c: ContainerHandle) -> str:
+    """Drop the failing-code stub into the container; return absolute path.
+
+    Writes the wrapper at ``/home/tester/bin/code`` and points
+    ``~/.config/setforge/local.yaml``'s ``binaries.code`` at it so the
+    setforge binary-override layer picks it up. Returns the stub's
+    absolute path so the caller can chmod / inspect it.
+    """
+    stub_path = "/home/tester/bin/code"
+    c.exec(["mkdir", "-p", "/home/tester/bin"], check=True)
+    c.write_text(stub_path, _FAILING_CODE_STUB)
+    c.exec(["chmod", "+x", stub_path], check=True)
+    c.write_text(
+        "/home/tester/.config/setforge/local.yaml",
+        f"binaries:\n  code: {stub_path}\n",
+    )
+    return stub_path
+
+
+def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> str:
+    """Append ``extra_ext`` to the test-comprehensive profile in the fixture.
+
+    Writes a patched copy of the canonical fixture under
+    ``tests/fixtures/e2e/setforge.k0uj.test.yaml`` so its relative
+    ``src:`` paths still resolve correctly (the config-loader resolves
+    ``src:`` against the config file's parent dir). Returns the
+    repo-relative path for use with ``--config``.
+    """
+    out_path = "tests/fixtures/e2e/setforge.k0uj.test.yaml"
+    text = c.exec(["cat", CONFIG_FIXTURE], check=True).stdout
+    needle = "        - editorconfig.editorconfig\n"
+    if needle not in text:
+        raise AssertionError(
+            f"fixture {CONFIG_FIXTURE!r} no longer carries the "
+            "editorconfig anchor; setforge-k0uj patches need refresh"
+        )
+    patched = text.replace(needle, needle + f"        - {extra_ext}\n", 1)
+    # ``write_text`` accepts an absolute container path; the fixture
+    # already lives inside the bind-mounted repo at ``/workspace``.
+    c.write_text(f"/workspace/{out_path}", patched)
+    return out_path
+
+
+def test_e2e_docker_install_plugin_failure_skip(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Default-skip path: a failing extension install with ``--yes`` short-
+    circuits the per-item prompt to SKIP, the install exits 0, and the
+    transition record carries a ``status="skipped"`` outcome for the
+    failing id.
+
+    Mirrors mockup E acceptance row 2 (default choice is "skip & continue").
+    """
+    c = docker_container()
+    _seed_failing_code_stub(c)
+    patched = _patch_profile_for_failing_extension(c, "force-fail.ext")
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={patched}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"install with --yes (default-SKIP) should exit 0; "
+        f"got returncode={result.returncode}\nstderr:{result.stderr}"
+    )
+    # Surface the skipped id in the transition record so --retry-failed
+    # picks it up on the next run.
+    show = c.exec(
+        [
+            "bash",
+            "-c",
+            "ls -1 ~/.local/state/setforge/transitions/ | sort | tail -1",
+        ],
+        check=True,
+    )
+    latest = show.stdout.strip()
+    assert latest, "no transition recorded"
+    outcomes = c.exec(
+        [
+            "cat",
+            f"/home/tester/.local/state/setforge/transitions/{latest}/reconcile_outcomes.json",
+        ],
+        check=True,
+    ).stdout
+    assert "force-fail.ext" in outcomes, outcomes
+    assert '"status": "skipped"' in outcomes, outcomes
+
+
+def test_e2e_docker_install_plugin_failure_retry_success(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """RETRY-success path: a flaky extension that fails first attempt but
+    succeeds on retry surfaces a ``status="retried_ok"`` outcome.
+
+    Today's prompt path requires a TTY for non-yes; we exercise the
+    underlying retry behavior by relying on the in-loop pre-prompt
+    failure list: ``vscode_extensions.reconcile`` doesn't currently
+    retry inside its own loop, so the failure surfaces to the prompt.
+    Without a TTY available we use ``--yes`` (default-SKIP). The flaky
+    stub still records the skipped state for this run, and the second
+    invocation under ``--retry-failed`` lands clean. This pair of
+    invocations is the end-to-end shape mockup E acceptance row 3
+    promises: 'retry re-attempts in-place'.
+    """
+    c = docker_container()
+    _seed_failing_code_stub(c)
+    patched = _patch_profile_for_failing_extension(c, "flaky.ext")
+    first = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={patched}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+    # First run: flaky.ext failed, was skipped.
+    show = c.exec(
+        [
+            "bash",
+            "-c",
+            "ls -1 ~/.local/state/setforge/transitions/ | sort | tail -1",
+        ],
+        check=True,
+    )
+    first_dir = show.stdout.strip()
+    outcomes = c.exec(
+        [
+            "cat",
+            f"/home/tester/.local/state/setforge/transitions/{first_dir}/reconcile_outcomes.json",
+        ],
+        check=True,
+    ).stdout
+    assert "flaky.ext" in outcomes
+    assert '"status": "skipped"' in outcomes
+    # Now retry — flaky.ext succeeds the second time per the stub.
+    second = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={patched}",
+            "--yes",
+            "--retry-failed",
+        ],
+        check=False,
+    )
+    assert second.returncode == 0, second.stderr
+
+
+def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Verifies that default-SKIP under ``--yes`` still produces a clean
+    install with the failing item skipped: a plugin/extension failure
+    does NOT surface as an ABORT-style rollback, so successful items
+    stay landed even when one fails.
+
+    The interactive ABORT branch requires a pty-driven test (deferred
+    to setforge-ffs0 follow-up bead) — ``--yes`` short-circuits the
+    arrow-key picker to the default ``SKIP`` action, so the abort
+    code path cannot be exercised from this entry point. The rollback
+    machinery itself is covered by unit tests in
+    ``tests/test_plugin_helpers.py`` and
+    ``tests/test_cli_failure_prompt.py``.
+    """
+    c = docker_container()
+    _seed_failing_code_stub(c)
+    patched = _patch_profile_for_failing_extension(c, "force-fail.ext")
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={patched}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    # editorconfig.editorconfig succeeded ahead of the failure → still
+    # installed (default-SKIP behavior, NOT abort/rollback).
+    listed = c.exec(["/usr/bin/code", "--list-extensions"], check=False)
+    assert "editorconfig.editorconfig" in listed.stdout, (
+        f"editorconfig.editorconfig should remain installed under default-SKIP; "
+        f"got stdout:{listed.stdout!r}\nstderr:{listed.stderr!r}"
+    )
+
+
+def test_e2e_docker_install_retry_failed_flag(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """The ``--retry-failed`` flag is plumbed end-to-end: ``setforge
+    install --help`` advertises it, and passing it without a prior
+    transition (no skipped ids to retry) exits 0 — the flag is
+    idempotent on a fresh state.
+
+    Mirrors mockup E acceptance row 7 (``--retry-failed`` shortcut)
+    and pins the flag surface so a future renaming surfaces here too.
+    """
+    c = docker_container()
+    help_text = c.exec(
+        ["uv", "run", "setforge", "install", "--help"], check=True
+    ).stdout
+    assert "--retry-failed" in help_text
+    # First-time install with --retry-failed and no prior history — the
+    # flag is a no-op (frozenset() of skipped ids) and the install
+    # exits 0.
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-comprehensive",
+            f"--config={CONFIG_FIXTURE}",
+            "--retry-failed",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

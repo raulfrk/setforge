@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from setforge import __version__
 from setforge.binaries import resolve_binary
@@ -287,6 +288,135 @@ class PluginDelta:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ReconcileOutcome:
+    """One per-item outcome from a plugin or extension reconcile pass.
+
+    Serialized alongside ``ExtensionDelta`` / ``PluginDelta`` into the
+    transition record's ``reconcile_outcomes.json`` sibling, so the
+    ``install --retry-failed`` flag can rebuild the set of skipped
+    items on the next invocation and a future ``revert`` step can see
+    which items landed only partially.
+
+    Backward compatibility: old transition records written before
+    setforge-k0uj have no ``reconcile_outcomes.json`` file;
+    :func:`load_reconcile_outcomes` returns ``()`` in that case.
+    """
+
+    item_id: str
+    kind: Literal["plugin", "extension"]
+    status: Literal["ok", "retried_ok", "skipped", "aborted"]
+    error_summary: str | None
+
+
+def _serialize_reconcile_outcomes(
+    outcomes: tuple[ReconcileOutcome, ...],
+) -> str | None:
+    """Return the ``reconcile_outcomes.json`` body, or ``None`` when empty."""
+    if not outcomes:
+        return None
+    return (
+        json.dumps(
+            {
+                "outcomes": [
+                    {
+                        "item_id": o.item_id,
+                        "kind": o.kind,
+                        "status": o.status,
+                        "error_summary": o.error_summary,
+                    }
+                    for o in outcomes
+                ]
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def reconcile_outcomes_from_json(
+    raw: dict[str, object],
+) -> tuple[ReconcileOutcome, ...]:
+    """Reconstruct ``tuple[ReconcileOutcome, ...]`` from a JSON payload.
+
+    Validates each entry against the four-field shape; raises
+    :class:`InvalidTransitionRecord` on any deviation. The empty
+    ``{"outcomes": []}`` payload returns ``()`` so the boundary is
+    backward-compat-safe with old transition records (no file → empty
+    tuple at the loader; valid-but-empty payload → same shape).
+    """
+    raw_list = raw.get("outcomes", [])
+    if not isinstance(raw_list, list):
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: outcomes must be a list, got "
+            f"{type(raw_list).__name__}"
+        )
+    validated: list[ReconcileOutcome] = []
+    valid_kinds = {"plugin", "extension"}
+    valid_statuses = {"ok", "retried_ok", "skipped", "aborted"}
+    for entry in raw_list:
+        if not isinstance(entry, dict):
+            raise InvalidTransitionRecord(
+                f"reconcile_outcomes.json: entry must be a dict, got "
+                f"{type(entry).__name__}"
+            )
+        item_id = entry.get("item_id")
+        kind = entry.get("kind")
+        status = entry.get("status")
+        err = entry.get("error_summary")
+        if not isinstance(item_id, str):
+            raise InvalidTransitionRecord(
+                f"reconcile_outcomes.json: item_id must be str, got "
+                f"{type(item_id).__name__}"
+            )
+        if kind not in valid_kinds:
+            raise InvalidTransitionRecord(
+                f"reconcile_outcomes.json: kind must be in {sorted(valid_kinds)}, "
+                f"got {kind!r}"
+            )
+        if status not in valid_statuses:
+            raise InvalidTransitionRecord(
+                f"reconcile_outcomes.json: status must be in "
+                f"{sorted(valid_statuses)}, got {status!r}"
+            )
+        if err is not None and not isinstance(err, str):
+            raise InvalidTransitionRecord(
+                f"reconcile_outcomes.json: error_summary must be str | None, "
+                f"got {type(err).__name__}"
+            )
+        validated.append(
+            ReconcileOutcome(
+                item_id=item_id,
+                kind=kind,  # type: ignore[arg-type]
+                status=status,  # type: ignore[arg-type]
+                error_summary=err,
+            )
+        )
+    return tuple(validated)
+
+
+def load_reconcile_outcomes(
+    transition_dir: Path,
+) -> tuple[ReconcileOutcome, ...]:
+    """Return the reconcile-outcome tuple for a transition directory.
+
+    Returns ``()`` when the ``reconcile_outcomes.json`` file is absent —
+    the backward-compat path for transitions written before setforge-k0uj.
+    Raises :class:`InvalidTransitionRecord` when the file exists but its
+    shape is corrupt (delegated to :func:`reconcile_outcomes_from_json`).
+    """
+    path = transition_dir / "reconcile_outcomes.json"
+    if not path.exists():
+        return ()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise InvalidTransitionRecord(
+            f"reconcile_outcomes.json: top-level must be a dict, got "
+            f"{type(raw).__name__}"
+        )
+    return reconcile_outcomes_from_json(raw)
+
+
 def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
     """Return a validated ``list[str]`` built from ``raw``.
 
@@ -408,6 +538,7 @@ def write_transition(
     file_post: Mapping[Path, str | None],
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
+    reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
 ) -> Path:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -416,13 +547,18 @@ def write_transition(
     :func:`load_latest`.
 
     Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
-    (if delta non-empty), and ``plugins.json`` (if delta non-empty) into a
-    ``.pending-<dirname>/`` staging dir; ``os.rename(pending, target)`` —
-    atomic POSIX rename, same fs; write ``meta.json`` inside the now-real
-    ``target/`` dir as the commit point. A crash before that final
-    ``meta.json`` write leaves either a ``.pending-<dirname>/`` (skipped by
-    :func:`load_latest` via the ``.pending-`` name guard) or a ``<dirname>/``
-    without ``meta.json`` (skipped by the existing meta.json filter).
+    (if delta non-empty), ``plugins.json`` (if delta non-empty), and
+    ``reconcile_outcomes.json`` (if non-empty) into a ``.pending-<dirname>/``
+    staging dir; ``os.rename(pending, target)`` — atomic POSIX rename,
+    same fs; write ``meta.json`` inside the now-real ``target/`` dir as
+    the commit point. A crash before that final ``meta.json`` write
+    leaves either a ``.pending-<dirname>/`` (skipped by
+    :func:`load_latest` via the ``.pending-`` name guard) or a
+    ``<dirname>/`` without ``meta.json`` (skipped by the existing
+    meta.json filter).
+
+    ``reconcile_outcomes`` defaults to an empty tuple so the
+    pre-setforge-k0uj call shape stays backward-compatible.
 
     Returns the absolute path of the committed directory.
     """
@@ -445,6 +581,12 @@ def write_transition(
     plugin_payload = _serialize_plugin_payload(plugin_delta)
     if plugin_payload is not None:
         (pending / "plugins.json").write_text(plugin_payload, encoding="utf-8")
+
+    outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
+    if outcomes_payload is not None:
+        (pending / "reconcile_outcomes.json").write_text(
+            outcomes_payload, encoding="utf-8"
+        )
 
     os.rename(pending, target)
 

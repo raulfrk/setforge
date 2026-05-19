@@ -1049,3 +1049,147 @@ def test_extension_delta_from_json_accepts_valid() -> None:
     assert rebuilt == ExtensionDelta(
         added=["ms-python.python"], removed=["ms-other.thing"]
     )
+
+
+# ---------------------------------------------------------------------------
+# setforge-k0uj — ReconcileOutcome serialization + backward-compat
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_outcome_round_trips_through_write_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-empty ``reconcile_outcomes`` tuple lands at
+    ``reconcile_outcomes.json`` next to ``plugins.json`` /
+    ``extensions.json`` siblings, and :func:`load_reconcile_outcomes`
+    decodes it back into the same tuple."""
+    from setforge.transitions import (
+        ReconcileOutcome,
+        load_reconcile_outcomes,
+    )
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    meta = make_meta(TransitionCommand.INSTALL, "vmh")
+    outcomes = (
+        ReconcileOutcome(
+            item_id="superpowers@official",
+            kind="plugin",
+            status="ok",
+            error_summary=None,
+        ),
+        ReconcileOutcome(
+            item_id="work-only-extension",
+            kind="extension",
+            status="skipped",
+            error_summary="not found in registry",
+        ),
+    )
+    target = write_transition(
+        meta,
+        {},
+        {},
+        ext_delta=None,
+        plugin_delta=None,
+        reconcile_outcomes=outcomes,
+    )
+    assert (target / "reconcile_outcomes.json").exists()
+    rebuilt = load_reconcile_outcomes(target)
+    assert rebuilt == outcomes
+
+
+def test_load_reconcile_outcomes_missing_file_returns_empty_tuple(
+    tmp_path: Path,
+) -> None:
+    """Backward-compat: a transition dir without ``reconcile_outcomes.json``
+    (every install pre-setforge-k0uj) decodes to ``()`` — not an exception.
+
+    This is the load-side anchor for the design's backward-compat
+    guarantee. ``install --retry-failed`` against an old transition
+    must observe an empty set of skipped ids, not crash."""
+    from setforge.transitions import load_reconcile_outcomes
+
+    # No reconcile_outcomes.json on disk — simulates a pre-setforge-k0uj
+    # transition record.
+    assert load_reconcile_outcomes(tmp_path) == ()
+
+
+def test_write_transition_backward_compat_without_reconcile_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The setforge-k0uj backward-compat invariant: calling
+    :func:`write_transition` WITHOUT the ``reconcile_outcomes`` kwarg
+    (every callsite pre-setforge-k0uj) must NOT write the file, and
+    :func:`load_reconcile_outcomes` on the result returns ``()``."""
+    from setforge.transitions import load_reconcile_outcomes
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    meta = make_meta(TransitionCommand.INSTALL, "vmh")
+    # Use the legacy call shape — no reconcile_outcomes kwarg.
+    target = write_transition(
+        meta,
+        {},
+        {},
+        ext_delta=None,
+        plugin_delta=None,
+    )
+    assert not (target / "reconcile_outcomes.json").exists()
+    assert load_reconcile_outcomes(target) == ()
+
+
+def test_write_transition_empty_reconcile_outcomes_skips_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit empty tuple is equivalent to omission — the file is
+    NOT written. Mirrors the ``ExtensionDelta`` / ``PluginDelta``
+    empty-skip pattern so empty installs don't accumulate empty
+    sibling files in the transition dir."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    meta = make_meta(TransitionCommand.INSTALL, "vmh")
+    target = write_transition(
+        meta, {}, {}, ext_delta=None, plugin_delta=None, reconcile_outcomes=()
+    )
+    assert not (target / "reconcile_outcomes.json").exists()
+
+
+def test_reconcile_outcomes_from_json_rejects_unknown_kind() -> None:
+    """The ``kind`` Literal is closed: anything outside
+    {plugin, extension} raises :class:`InvalidTransitionRecord`.
+
+    Hand-edited or corrupted ``reconcile_outcomes.json`` surfaces a
+    clean SetforgeError at the JSON boundary rather than a TypeError
+    deep in the retry-filter path."""
+    from setforge.transitions import reconcile_outcomes_from_json
+
+    with pytest.raises(InvalidTransitionRecord, match="kind"):
+        reconcile_outcomes_from_json(
+            {
+                "outcomes": [
+                    {
+                        "item_id": "x",
+                        "kind": "bogus",
+                        "status": "skipped",
+                        "error_summary": None,
+                    }
+                ]
+            }
+        )
+
+
+def test_reconcile_outcomes_from_json_rejects_unknown_status() -> None:
+    """The ``status`` Literal is closed: anything outside the four
+    documented values raises :class:`InvalidTransitionRecord`."""
+    from setforge.transitions import reconcile_outcomes_from_json
+
+    with pytest.raises(InvalidTransitionRecord, match="status"):
+        reconcile_outcomes_from_json(
+            {
+                "outcomes": [
+                    {
+                        "item_id": "x",
+                        "kind": "plugin",
+                        "status": "halfway",
+                        "error_summary": None,
+                    }
+                ]
+            }
+        )
