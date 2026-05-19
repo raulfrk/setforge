@@ -16,6 +16,7 @@ between the markers rather than appending a second copy.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -121,20 +122,26 @@ def _rc_path(shell: ShellKind) -> Path | None:
 
 
 def _render_completion_script(shell: ShellKind) -> str:
-    """Invoke ``setforge --show-completion <shell>`` and capture stdout.
+    """Invoke ``setforge --show-completion=<shell>`` and capture stdout.
 
     Shells out to the same ``setforge`` binary the user invoked so the
     completion content stays in lock-step with whatever typer version
-    is resolved at runtime. ``check=True`` propagates non-zero exits;
-    callers see :class:`subprocess.CalledProcessError` surfaced as a
-    :class:`SetforgeError` via the helper wrapper above.
+    is resolved at runtime. Sets
+    ``_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1`` so typer accepts
+    an explicit shell value via ``--show-completion=<shell>`` instead
+    of auto-detecting from the parent ``SHELL`` env — without the
+    override, ``--show-completion`` is a bool flag and discards any
+    positional, defaulting to whatever the user's login shell happens
+    to be (which is wrong when we're installing for a DIFFERENT shell).
     """
+    child_env = {**os.environ, "_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION": "1"}
     result = subprocess.run(
-        ["setforge", "--show-completion", shell.value],
+        ["setforge", f"--show-completion={shell.value}"],
         check=False,
         capture_output=True,
         text=True,
         timeout=30,
+        env=child_env,
     )
     if result.returncode != 0:
         raise SetforgeError(

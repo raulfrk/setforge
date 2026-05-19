@@ -52,15 +52,19 @@ def fake_show_completion(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         capture_output: bool = False,
         text: bool = False,
         timeout: float | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        del check, capture_output, text, timeout  # unused in fake
+        del check, capture_output, text, timeout, env  # unused in fake
         captured.append(list(argv))
+        # argv shape: ["setforge", "--show-completion=<shell>"].
+        last = argv[-1]
+        shell_value = last.partition("=")[2] if "=" in last else last
         body_for = {
             "zsh": _FAKE_ZSH_SCRIPT,
             "bash": _FAKE_BASH_SCRIPT,
             "fish": _FAKE_FISH_SCRIPT,
         }
-        stdout = body_for.get(argv[-1], "")
+        stdout = body_for.get(shell_value, "")
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr("setforge.cli.completion.subprocess.run", fake_run)
@@ -194,7 +198,7 @@ def test_completion_install_zsh_virgin_writes_files_and_appends_rc(
     assert "# >>> setforge completion >>>" in text
     assert "# user content" in text
     # subprocess.run was called with the correct shell value
-    assert any("zsh" in argv for argv in fake_show_completion)
+    assert any(any("zsh" in arg for arg in argv) for argv in fake_show_completion)
 
 
 def test_completion_install_zsh_yes_only_skips_rc_edit(
