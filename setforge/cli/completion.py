@@ -318,6 +318,66 @@ def _post_install_test_line(shell: ShellKind) -> str:
     assert_never(shell)
 
 
+def _install_fish(script_path: Path, content: str, console: Console) -> None:
+    """Fish branch of ``completion install``: write script + print test line.
+
+    Fish auto-loads from ``~/.config/fish/completions/``, so no rc edit
+    is required — just drop the script and tell the user to open a new
+    fish shell.
+    """
+    wrote = _write_script(script_path, content)
+    verb = "wrote" if wrote else "unchanged"
+    console.print(f"[green]✓[/green] {verb} {script_path}")
+    console.print("=== install complete ===")
+    console.print(_post_install_test_line(ShellKind.FISH))
+
+
+def _install_zsh_or_bash(
+    shell: ShellKind,
+    rc: Path | None,
+    content: str,
+    script_path: Path,
+    *,
+    non_interactive: bool,
+    no_wire: bool,
+    console: Console,
+) -> None:
+    """Zsh/bash branch of ``completion install``: confirm + script + wiring.
+
+    Resolves the install-confirm choice (dialog or non-interactive
+    short-circuit), writes the completion script when the user did not
+    abort, and rewrites the sentinel-bracketed wiring block in ``rc``
+    unless the user picked ``YES_ONLY``.
+    """
+    choice = _prompt_install_choice(
+        shell=shell,
+        non_interactive=non_interactive,
+        no_wire=no_wire,
+    )
+    if choice is CompletionChoice.ABORT:
+        console.print("[red]✗ aborted[/red] — no changes made")
+        raise typer.Exit(code=1)
+
+    wrote_script = _write_script(script_path, content)
+    script_verb = "wrote" if wrote_script else "unchanged"
+    console.print(f"[green]✓[/green] {script_verb} {script_path}")
+
+    if choice is CompletionChoice.YES_ONLY:
+        console.print(f"[yellow]ⓘ[/yellow] skipped rc-file edit; wire {rc} yourself")
+        console.print("=== install complete ===")
+        console.print(_post_install_test_line(shell))
+        return
+
+    assert rc is not None  # zsh + bash always have an rc path
+    already_wired = _detect_wiring(rc)
+    body = _wiring_body_for(shell)
+    _write_wiring(rc, body)
+    rc_verb = "already wired (no-op)" if already_wired else f"appended block to {rc}"
+    console.print(f"[green]✓[/green] {rc_verb}")
+    console.print("=== install complete ===")
+    console.print(_post_install_test_line(shell))
+
+
 @completion_app.command("install")
 def completion_install(
     shell: ShellKind = typer.Argument(
@@ -352,40 +412,18 @@ def completion_install(
     rc = rc_file if rc_file is not None else _rc_path(shell)
     content = _render_completion_script(shell)
 
-    # Fish auto-loads: write the script, print the test line, done.
-    if shell is ShellKind.FISH:
-        wrote = _write_script(script_path, content)
-        verb = "wrote" if wrote else "unchanged"
-        console.print(f"[green]✓[/green] {verb} {script_path}")
-        console.print("=== install complete ===")
-        console.print(_post_install_test_line(shell))
-        return
-
-    # zsh / bash share the confirm + sentinel-block path.
-    choice = _prompt_install_choice(
-        shell=shell,
-        non_interactive=non_interactive,
-        no_wire=no_wire,
-    )
-    if choice is CompletionChoice.ABORT:
-        console.print("[red]✗ aborted[/red] — no changes made")
-        raise typer.Exit(code=1)
-
-    wrote_script = _write_script(script_path, content)
-    script_verb = "wrote" if wrote_script else "unchanged"
-    console.print(f"[green]✓[/green] {script_verb} {script_path}")
-
-    if choice is CompletionChoice.YES_ONLY:
-        console.print(f"[yellow]ⓘ[/yellow] skipped rc-file edit; wire {rc} yourself")
-        console.print("=== install complete ===")
-        console.print(_post_install_test_line(shell))
-        return
-
-    assert rc is not None  # zsh + bash always have an rc path
-    already_wired = _detect_wiring(rc)
-    body = _wiring_body_for(shell)
-    _write_wiring(rc, body)
-    rc_verb = "already wired (no-op)" if already_wired else f"appended block to {rc}"
-    console.print(f"[green]✓[/green] {rc_verb}")
-    console.print("=== install complete ===")
-    console.print(_post_install_test_line(shell))
+    match shell:
+        case ShellKind.FISH:
+            _install_fish(script_path, content, console)
+        case ShellKind.ZSH | ShellKind.BASH:
+            _install_zsh_or_bash(
+                shell,
+                rc,
+                content,
+                script_path,
+                non_interactive=non_interactive,
+                no_wire=no_wire,
+                console=console,
+            )
+        case _:
+            assert_never(shell)
