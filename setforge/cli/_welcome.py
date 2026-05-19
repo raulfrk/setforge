@@ -232,7 +232,9 @@ def _render_panel(inventory: WelcomeInventory, *, console: Console) -> None:
     summary.add_row(str(inventory.plugin_count), "claude plugin(s)")
     summary.add_row(str(inventory.extension_count), "vscode extension(s)")
     summary.add_row(str(inventory.bootstrap_count), "bootstrap stub file(s)")
-    summary.add_row(_format_overlay_row(inventory.overlay_delta), "applied local.yaml overlay(s)")
+    summary.add_row(
+        _format_overlay_row(inventory.overlay_delta), "applied local.yaml overlay(s)"
+    )
     console.print(summary)
 
 
@@ -255,13 +257,16 @@ def _format_overlay_row(delta: OverlayDelta) -> str:
 def _make_signal_handler(
     prev_state: dict[int, Any],
 ) -> Callable[[int, FrameType | None], None]:
-    """Return a SIGINT/SIGTERM handler that restores terminal state then re-raises.
+    """Return SIGINT/SIGTERM/SIGHUP handler that restores terminal state, re-raises.
 
     Mirrors :func:`setforge.wizard._make_signal_handler`: prompt_toolkit
     leaves the terminal in raw mode if interrupted mid-render. The
     handler resets previously-installed handlers, prints a one-line
     cancellation marker, then re-kills the process with the same signal
     so the parent shell sees the correct exit status (128 + signum).
+    SIGHUP is covered for Remote-SSH disconnects — a dropped session
+    must restore the terminal so the next shell connect isn't left in
+    raw mode.
     """
 
     def _handler(signum: int, _frame: FrameType | None) -> None:
@@ -275,7 +280,7 @@ def _make_signal_handler(
 
 
 def _install_terminal_restore(signums: tuple[int, ...]) -> dict[int, Any]:
-    """Install temporary SIGINT/SIGTERM handlers; return prior handlers."""
+    """Install temporary SIGINT/SIGTERM/SIGHUP handlers; return prior handlers."""
     prev: dict[int, Any] = {}
     handler = _make_signal_handler(prev)
     for sig in signums:
@@ -325,11 +330,14 @@ def _run_dialog(
     # spawn the dialog against a non-TTY stdin and hang. The assert
     # documents the invariant + makes a regression loud.
     assert sys.stdin.isatty(), "_run_dialog requires a TTY; caller must gate"
-    prev = _install_terminal_restore((signal.SIGINT, signal.SIGTERM))
+    prev = _install_terminal_restore((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
     try:
-        from setforge.cli import _welcome as _self  # monkeypatch path
-
-        choice = _self.radiolist_dialog(
+        # Resolve ``radiolist_dialog`` through the module so the PEP 562
+        # ``__getattr__`` lazy-import fires AND tests can monkeypatch the
+        # attribute. ``sys.modules[__name__]`` keeps the lookup local
+        # without re-importing this file.
+        dialog = sys.modules[__name__].radiolist_dialog
+        choice = dialog(
             title="setforge install — fresh host",
             text="What would you like to do?",
             values=list(values),
