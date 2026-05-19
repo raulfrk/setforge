@@ -196,7 +196,7 @@ def test_install_reconcile_use_tracked_deploys_shared_drift(
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
     # Run with --auto=use-tracked
-    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked"])
+    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"])
     live = c.read_text(_LIVE_SHARED)
     assert "rule B (new in tracked)" in live
     # Hash invariant: embedded hash matches body.
@@ -299,7 +299,7 @@ def test_install_reconcile_use_tracked_then_revert_restores_live(
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
     pre_text = c.read_text(_LIVE_SHARED)
-    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked"])
+    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"])
     revert = c.exec(
         [
             "uv",
@@ -597,7 +597,7 @@ def test_install_auto_use_tracked_overwrites_even_with_live_edits(
         _LIVE_SHARED,
         _shared_section("- rule A\n- live edited\n", _sha256(baseline)),
     )
-    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked"])
+    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"])
     live = c.read_text(_LIVE_SHARED)
     # Tracked body wins.
     assert "rule B (new in tracked)" in live

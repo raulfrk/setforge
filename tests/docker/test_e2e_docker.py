@@ -608,7 +608,7 @@ def test_sync_auto_use_live_silent_absorb(
     c = docker_container()
     _install(c, "test-minimal")
     c.write_text("/home/tester/.setforge_e2e/minimal/text.txt", "live-only-content\n")
-    _sync(c, "test-minimal", extra=["--auto=use-live"])
+    _sync(c, "test-minimal", extra=["--auto=use-live", "--yes"])
     tracked = c.read_text("/workspace/tests/fixtures/e2e/tracked/minimal/text.txt")
     assert "live-only-content" in tracked
 
