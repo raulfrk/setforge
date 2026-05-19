@@ -37,11 +37,6 @@ from pathlib import Path
 import pexpect  # type: ignore[import-untyped]
 import pytest
 
-# xdist auto-activation moved to project-root ``conftest.py:pytest_configure``
-# — a subdir ``pytest_configure(tryfirst=True)`` here fires AFTER xdist consumes
-# ``numprocesses`` (xdist#917), so the activation was silently ignored.
-
-
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
 """Shared fixture path for the setforge test config used by every Docker e2e test."""
 
@@ -56,45 +51,6 @@ can queue behind 3 sibling-worker calls before its budget burns. The
 test over. 120s leaves headroom without slowing the green-path case
 (``docker exec`` for the e2e suite completes in 5-15s typical).
 """
-
-
-def run_docker_exec_with_retry(
-    args: list[str],
-    *,
-    input_text: str | None = None,
-    check: bool,
-    timeout: int = DOCKER_EXEC_TIMEOUT_S,
-) -> subprocess.CompletedProcess[str]:
-    """Run ``docker exec``/``docker cp``-style argv with one retry on Timeout.
-
-    On the first ``subprocess.TimeoutExpired``, the helper retries
-    exactly once with the same timeout. A second timeout propagates the
-    original exception so the test still fails — the retry covers the
-    "Docker daemon momentarily wedged under xdist contention" case
-    without masking a real hang.
-
-    All other ``subprocess`` exceptions propagate unmodified —
-    ``CalledProcessError`` (non-zero exit with ``check=True``) is a
-    test-meaningful signal and must not be silently swallowed.
-    """
-    try:
-        return subprocess.run(
-            args,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.run(
-            args,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=timeout,
-        )
 
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -358,18 +314,24 @@ class ContainerHandle:
         if input_text is not None:
             argv += ["-i"]
         argv += [self.cid, *cmd]
-        return run_docker_exec_with_retry(
+        return subprocess.run(
             argv,
-            input_text=input_text,
+            input=input_text,
+            capture_output=True,
+            text=True,
             check=check,
+            timeout=DOCKER_EXEC_TIMEOUT_S,
         )
 
     def copy_out(self, src_in_container: str, host_dst: Path) -> None:
         """Copy a file out of the container to the host filesystem."""
         host_dst.parent.mkdir(parents=True, exist_ok=True)
-        run_docker_exec_with_retry(
+        subprocess.run(
             ["docker", "cp", f"{self.cid}:{src_in_container}", str(host_dst)],
             check=True,
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_EXEC_TIMEOUT_S,
         )
 
     def write_text(self, path_in_container: str, content: str) -> None:
@@ -386,9 +348,12 @@ class ContainerHandle:
             # Ensure parent dir exists in the container.
             parent = posixpath.dirname(path_in_container) or "/"
             self.exec(["mkdir", "-p", parent], check=True)
-            run_docker_exec_with_retry(
+            subprocess.run(
                 ["docker", "cp", staging, f"{self.cid}:{path_in_container}"],
                 check=True,
+                capture_output=True,
+                text=True,
+                timeout=DOCKER_EXEC_TIMEOUT_S,
             )
         finally:
             Path(staging).unlink(missing_ok=True)
@@ -433,7 +398,13 @@ def docker_container(
         argv += [docker_image]
         if cmd is not None:
             argv += cmd
-        proc = run_docker_exec_with_retry(argv, check=True)
+        proc = subprocess.run(
+            argv,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_EXEC_TIMEOUT_S,
+        )
         cid = proc.stdout.strip()
         spawned.append(cid)
         return ContainerHandle(cid=cid)
