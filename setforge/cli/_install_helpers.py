@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import assert_never
 
 import typer
 
@@ -197,10 +198,13 @@ def _build_unexpected_drift_plan(
         # body fall through to the bare-install warning path.
         if not entry.unexpected_drift_keys:
             continue
-        if direction is AutoDirection.TRACKED_TO_LIVE:
-            source, dest = sub_src, sub_dst
-        else:
-            source, dest = sub_dst, sub_src
+        match direction:
+            case AutoDirection.TRACKED_TO_LIVE:
+                source, dest = sub_src, sub_dst
+            case AutoDirection.LIVE_TO_TRACKED:
+                source, dest = sub_dst, sub_src
+            case _ as never:
+                assert_never(never)
         file_changes.append(
             FileChange(
                 source=source,
