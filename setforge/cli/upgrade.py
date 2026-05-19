@@ -47,6 +47,7 @@ from setforge import __version__ as _CURRENT_VERSION
 from setforge._changelog_parser import parse_changelog
 from setforge._pypi_client import PyPIVersionInfo, fetch_latest_version
 from setforge.cli import app
+from setforge.cli._help_examples import UPGRADE_EXAMPLES
 from setforge.errors import PyPIFetchError, UpgradeError
 
 # Lazy radiolist import — mirrors ``setforge/cli/_confirm.py:34-39``.
@@ -565,7 +566,7 @@ def _print_completion_report(plan: UpgradePlan) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(epilog=UPGRADE_EXAMPLES)
 def upgrade(
     check: bool = typer.Option(
         False,
