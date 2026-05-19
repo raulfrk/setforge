@@ -296,9 +296,7 @@ def test_revert_refuses_when_target_drifted(
     dst.write_text("manually edited content\n", encoding="utf-8")
     drifted_content = dst.read_text()
 
-    result = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
-    )
+    result = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
     assert result.exit_code == 1
     assert isinstance(result.exception, RevertFailed)
     # Drifted content survived — no partial revert.
@@ -322,9 +320,7 @@ def test_install_revert_revert_restores_install_state(
     runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
     assert not dst.exists()
 
-    redo = runner.invoke(
-        app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"]
-    )
+    redo = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}", "--yes"])
     assert redo.exit_code == 0, redo.output
     assert dst.read_text() == "hello\n"
 

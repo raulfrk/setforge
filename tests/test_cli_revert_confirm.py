@@ -20,7 +20,6 @@ from setforge.cli._revert_confirm import (
 )
 from setforge.errors import ConfirmRequiresInteractive
 
-
 # ---------------------------------------------------------------------------
 # Fakes — mirror the shape from tests/test_cli_auto_confirm.py
 # ---------------------------------------------------------------------------
@@ -69,9 +68,7 @@ def _patch_dialog(
     recorder = _DialogRecorder(
         _FakeDialogResult(return_value=return_value, side_effect=side_effect)
     )
-    monkeypatch.setattr(
-        "setforge.cli._revert_confirm.radiolist_dialog", recorder
-    )
+    monkeypatch.setattr("setforge.cli._revert_confirm.radiolist_dialog", recorder)
     return recorder
 
 
@@ -157,9 +154,7 @@ def test_revert_plan_frozen_slots() -> None:
 
 def test_yes_short_circuits_to_apply(monkeypatch: pytest.MonkeyPatch) -> None:
     dlg = _patch_dialog(monkeypatch)
-    assert (
-        confirm_revert_operation(plan=_make_plan(), yes=True) is RevertChoice.APPLY
-    )
+    assert confirm_revert_operation(plan=_make_plan(), yes=True) is RevertChoice.APPLY
     assert dlg.call_count == 0
 
 
@@ -292,9 +287,7 @@ def test_panel_includes_diff_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_dialog(monkeypatch, return_value=RevertChoice.APPLY)
     console = Console(record=True, width=200)
     plan = _make_plan(
-        file_mutations=(
-            FileMutation(path=Path("/x/a.md"), diff_summary="+14 -3"),
-        ),
+        file_mutations=(FileMutation(path=Path("/x/a.md"), diff_summary="+14 -3"),),
     )
     confirm_revert_operation(plan=plan, yes=False, console=console)
     text = console.export_text()
@@ -449,13 +442,9 @@ def test_revert_yes_short_circuits_no_dialog_call(
         encoding="utf-8",
     )
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     recorder = _DialogRecorder(_FakeDialogResult(return_value=RevertChoice.APPLY))
-    monkeypatch.setattr(
-        "setforge.cli._revert_confirm.radiolist_dialog", recorder
-    )
+    monkeypatch.setattr("setforge.cli._revert_confirm.radiolist_dialog", recorder)
 
     install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_res.exit_code == 0, install_res.output
@@ -497,9 +486,7 @@ def test_revert_abort_leaves_files_untouched(
         encoding="utf-8",
     )
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
 
     # CliRunner's stdin is not a TTY, so we stub confirm_revert_operation
     # directly at the revert.py call site (mirrors the
@@ -510,9 +497,7 @@ def test_revert_abort_leaves_files_untouched(
         confirm_calls.append(plan)
         return RevertChoice.ABORT
 
-    monkeypatch.setattr(
-        "setforge.cli.revert.confirm_revert_operation", fake_confirm
-    )
+    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
 
     install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_res.exit_code == 0, install_res.output
@@ -553,9 +538,7 @@ def test_revert_apply_with_editor_opens_editor_then_reprompts(
         encoding="utf-8",
     )
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
 
     # First confirm() → APPLY_WITH_EDITOR; second confirm() → APPLY.
     return_sequence = [RevertChoice.APPLY_WITH_EDITOR, RevertChoice.APPLY]
@@ -566,9 +549,7 @@ def test_revert_apply_with_editor_opens_editor_then_reprompts(
         call_count["n"] += 1
         return return_sequence[idx]
 
-    monkeypatch.setattr(
-        "setforge.cli.revert.confirm_revert_operation", fake_confirm
-    )
+    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
 
     editor_calls: list[Path] = []
 
@@ -616,9 +597,7 @@ def test_revert_apply_with_editor_then_abort_leaves_files(
         encoding="utf-8",
     )
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary", lambda _: None
-    )
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
 
     return_sequence = [RevertChoice.APPLY_WITH_EDITOR, RevertChoice.ABORT]
     call_count = {"n": 0}
@@ -628,9 +607,7 @@ def test_revert_apply_with_editor_then_abort_leaves_files(
         call_count["n"] += 1
         return return_sequence[idx]
 
-    monkeypatch.setattr(
-        "setforge.cli.revert.confirm_revert_operation", fake_confirm
-    )
+    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
     monkeypatch.setattr("setforge.cli.revert.run_editor", lambda _: None)
 
     install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])

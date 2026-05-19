@@ -70,9 +70,7 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
     for line in patch_text.splitlines():
         if line.startswith("--- "):
             from_path = line[4:].split("\t", 1)[0]
-            current_path = (
-                "/" + from_path if from_path != "/dev/null" else None
-            )
+            current_path = "/" + from_path if from_path != "/dev/null" else None
             continue
         if line.startswith("+++ "):
             to_path = line[4:].split("\t", 1)[0]

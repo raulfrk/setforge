@@ -125,8 +125,7 @@ def _format_collision_ranges(ranges: tuple[tuple[int, int], ...]) -> str:
     if not ranges:
         return ""
     return "lines " + ", ".join(
-        f"{start}-{end}" if start != end else f"{start}"
-        for start, end in ranges
+        f"{start}-{end}" if start != end else f"{start}" for start, end in ranges
     )
 
 
@@ -160,9 +159,7 @@ def _render_extensions_section(plan: RevertPlan, console: Console) -> None:
 def _render_risks_section(plan: RevertPlan, console: Console) -> None:
     """Render the RISKS panel with patch-reverse-collision callouts."""
     console.print("[bold red]=== RISKS ===[/bold red]")
-    collisions = [
-        fm for fm in plan.file_mutations if fm.user_edit_collision
-    ]
+    collisions = [fm for fm in plan.file_mutations if fm.user_edit_collision]
     if collisions:
         console.print(
             "  - Live edits since the transition collide with the reverse-patch on:"
@@ -172,7 +169,8 @@ def _render_risks_section(plan: RevertPlan, console: Console) -> None:
                 f"      {fm.path} ({_format_collision_ranges(fm.user_edit_collision)})"
             )
         console.print(
-            "    setforge will refuse cleanly on collision; resolve manually then re-run."
+            "    setforge will refuse cleanly on collision; "
+            "resolve manually then re-run."
         )
     else:
         console.print(
@@ -189,9 +187,7 @@ def _render_risks_section(plan: RevertPlan, console: Console) -> None:
 
 def _render_panel(plan: RevertPlan, console: Console) -> None:
     """Print the full mockup-A panel to ``console``."""
-    header = (
-        f"[bold]setforge revert[/bold] profile=[yellow]{plan.profile}[/yellow]"
-    )
+    header = f"[bold]setforge revert[/bold] profile=[yellow]{plan.profile}[/yellow]"
     console.print(Panel.fit(header, title="resolving most-recent transition"))
     console.print(f"transition: {plan.transition_id}")
     console.print(f"  type:    {plan.transition_type}")
@@ -206,9 +202,7 @@ def _render_panel(plan: RevertPlan, console: Console) -> None:
         "using stored patch-reverse data."
     )
     if plan.plugin_reconciles:
-        console.print(
-            f"  Reverse {len(plan.plugin_reconciles)} plugin reconcile(s)."
-        )
+        console.print(f"  Reverse {len(plan.plugin_reconciles)} plugin reconcile(s).")
     if plan.extension_reconciles:
         console.print(
             f"  Reverse {len(plan.extension_reconciles)} extension reconcile(s)."
@@ -220,9 +214,7 @@ def _render_panel(plan: RevertPlan, console: Console) -> None:
         f"{plan.transition_type} — run:"
     )
     console.print(f"      [cyan]{plan.redo_command}[/cyan]")
-    console.print(
-        "  again. Second invocation re-applies the original mutations."
-    )
+    console.print("  again. Second invocation re-applies the original mutations.")
 
 
 def _prompt_choice(plan: RevertPlan) -> RevertChoice:
