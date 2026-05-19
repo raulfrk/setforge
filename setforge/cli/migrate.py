@@ -98,12 +98,16 @@ def migrate(
     Mutually exclusive: ``--check`` + ``--apply``. ``--pin`` short-
     circuits both. ``--yes`` collapses the arrow-key confirm to the
     ``APPLY_WITH_BACKUP`` outcome — required when stdin is not a TTY.
+
+    Thin router: each branch delegates to a ``_dispatch_*`` helper so
+    the Typer-decorated entry point stays focused on flag-shape and
+    mutual-exclusion handling.
     """
     if check and apply_flag:
         raise typer.BadParameter("--check and --apply are mutually exclusive")
     cfg_path = _resolve_config_arg(config)
     if pin is not None:
-        _write_pin(cfg_path=cfg_path, pin=pin)
+        _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return
 
     current = detect_current_schema(cfg_path)
@@ -111,14 +115,58 @@ def migrate(
     chain = find_migration_path(from_v=current, to_v=expected)
 
     if check or not apply_flag:
-        _print_check_report(
-            cfg_path=cfg_path, current=current, expected=expected, chain=chain
+        _dispatch_check(
+            cfg_path=cfg_path,
+            current=current,
+            expected=expected,
+            chain=chain,
+            bare=not check and not apply_flag,
         )
-        if not check and not apply_flag:
-            typer.echo("specify --check, --apply, or --pin=X.Y.")
         return
 
-    # --apply path below.
+    _dispatch_apply(cfg_path=cfg_path, chain=chain, yes=yes)
+
+
+def _dispatch_pin(*, cfg_path: Path, pin: str) -> None:
+    """Handle the ``--pin=X.Y`` branch.
+
+    Delegates to :func:`_write_pin`, which performs the round-trip
+    YAML edit. Kept as a thin wrapper so the top-level router has a
+    uniform ``_dispatch_*`` shape across the three branches.
+    """
+    _write_pin(cfg_path=cfg_path, pin=pin)
+
+
+def _dispatch_check(
+    *,
+    cfg_path: Path,
+    current: str,
+    expected: str,
+    chain: Sequence[Migration],
+    bare: bool,
+) -> None:
+    """Handle the ``--check`` (and bare-invocation) branch.
+
+    Prints the inventory report and, when invoked without any of
+    ``--check`` / ``--apply`` / ``--pin``, appends the ``specify ...``
+    hint so the user knows which flag to add next.
+    """
+    _print_check_report(
+        cfg_path=cfg_path, current=current, expected=expected, chain=chain
+    )
+    if bare:
+        typer.echo("specify --check, --apply, or --pin=X.Y.")
+
+
+def _dispatch_apply(
+    *, cfg_path: Path, chain: Sequence[Migration], yes: bool
+) -> None:
+    """Handle the ``--apply`` branch.
+
+    Short-circuits with ``"nothing to apply"`` when the chain is
+    empty, otherwise stages the preview / confirm / execute /
+    post-apply-validate sequence end-to-end.
+    """
     if not chain:
         typer.echo("nothing to apply: no migrations available for this version.")
         return
