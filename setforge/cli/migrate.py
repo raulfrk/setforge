@@ -24,7 +24,7 @@ import difflib
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -34,14 +34,14 @@ import typer
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.migrations import (
-    MIGRATIONS,
     Migration,
     MigrationRoots,
+    _fs_ops,
+    _yaml_ops,
     current_expected_schema_version,
     detect_current_schema,
     find_migration_path,
 )
-from setforge.migrations import _fs_ops, _yaml_ops
 
 # ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via
 # the module-level ``__getattr__`` below — non-interactive callers and
@@ -173,8 +173,7 @@ def _print_check_report(
             typer.echo(line)
     typer.echo("=== to apply: setforge migrate --apply ===")
     typer.echo(
-        "=== to skip + pin: setforge migrate --pin=X.Y "
-        "(works for 1 major version) ==="
+        "=== to skip + pin: setforge migrate --pin=X.Y (works for 1 major version) ==="
     )
 
 
@@ -386,9 +385,7 @@ def _execute_chain(
             typer.echo(f"  backup:  {affected.name} → {backup.name}")
     for migration in chain:
         migration.apply(roots=roots)
-        typer.echo(
-            f"  applied: {migration.from_version} → {migration.to_version}"
-        )
+        typer.echo(f"  applied: {migration.from_version} → {migration.to_version}")
 
 
 def _run_post_apply_validate(*, cfg_path: Path) -> None:
@@ -406,7 +403,7 @@ def _run_post_apply_validate(*, cfg_path: Path) -> None:
         typer.echo("  (skipped: `setforge` binary not on PATH)")
         return
     cmd = [setforge_bin, "validate", "--all", f"--config={cfg_path}"]
-    result = subprocess.run(  # noqa: PLW1510 — explicit check=False handled below
+    result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
@@ -435,10 +432,7 @@ def _print_completion_report(
     to_version = chain[-1].to_version
     affected = _all_affected_paths(chain=chain, roots=roots)
     if affected:
-        typer.echo(
-            "  to undo: restore each <file>.pre-"
-            f"{to_version}.bak sibling, e.g."
-        )
+        typer.echo(f"  to undo: restore each <file>.pre-{to_version}.bak sibling, e.g.")
         first = affected[0]
         backup = _fs_ops.backup_path(first, to_version)
         typer.echo(f"           mv {backup} {first}")
@@ -469,13 +463,3 @@ def _write_pin(*, cfg_path: Path, pin: str) -> None:
     data["schema_version"] = pin
     _yaml_ops.atomic_write_yaml(cfg_path, data)
     typer.echo(f"pinned schema_version={pin} in {cfg_path}")
-
-
-# ---------------------------------------------------------------------------
-# Type helpers
-# ---------------------------------------------------------------------------
-
-
-def _iter_chain(chain: Iterable[Migration]) -> Iterable[Migration]:
-    """Identity-iter wrapper retained for forward-compat with chain branching."""
-    return iter(chain)

@@ -37,7 +37,6 @@ from setforge.migrations import (
 from setforge.migrations._fs_ops import atomic_replace, backup_path
 from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 
-
 # ---------------------------------------------------------------------------
 # Registry shape
 # ---------------------------------------------------------------------------
@@ -96,7 +95,7 @@ def test_detect_current_schema_empty_file_returns_default(tmp_path: Path) -> Non
 
 @dataclass(slots=True, frozen=True)
 class _NoopMigration:
-    """Minimal Migration impl — covers Protocol shape without filesystem side effects."""
+    """Minimal Migration impl — Protocol shape only, no filesystem side effects."""
 
     from_version: str
     to_version: str
@@ -273,15 +272,15 @@ def test_multi_file_migration_full_lifecycle(tmp_path: Path) -> None:
     assert "# comment above old_key" in cfg_after
     assert "# eol" in cfg_after
 
-    local_after = (
-        roots.home / ".config" / "setforge" / "local.yaml"
-    ).read_text(encoding="utf-8")
+    local_after = (roots.home / ".config" / "setforge" / "local.yaml").read_text(
+        encoding="utf-8"
+    )
     assert "fresh_local_field" in local_after
     assert "added-by-migration" in local_after
 
-    tracked_after = (
-        roots.repo_root / "tracked" / "claude" / "CLAUDE.md"
-    ).read_text(encoding="utf-8")
+    tracked_after = (roots.repo_root / "tracked" / "claude" / "CLAUDE.md").read_text(
+        encoding="utf-8"
+    )
     assert "migrated" in tracked_after
     assert "legacy" not in tracked_after
 

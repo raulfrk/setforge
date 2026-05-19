@@ -65,8 +65,10 @@ class ManifestType(StrEnum):
 
     Used by the ``setforge migrate --check`` report and the ``--apply``
     diff-preview header to mark the kind of change each entry
-    represents. Mirrors git-diff conventions (``+`` add, ``−`` remove)
-    plus dedicated symbols for renames and in-place content edits.
+    represents. ``+`` add and ``~`` rename pair with the dedicated
+    Unicode MINUS SIGN (U+2212) for remove — distinct from the ASCII
+    HYPHEN-MINUS so a glance at the manifest separates removals from
+    bullet-style hyphens or rename markers.
     """
 
     ADD = "+"
@@ -75,7 +77,7 @@ class ManifestType(StrEnum):
     RENAME = "~"
     """Field rename / file move."""
 
-    REMOVE = "−"
+    REMOVE = "−"  # noqa: RUF001 — U+2212 MINUS SIGN, intentional (see docstring).
     """Field removed / file deleted."""
 
     EDIT = "M"

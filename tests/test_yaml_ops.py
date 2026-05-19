@@ -71,10 +71,7 @@ def test_rename_key_simple() -> None:
 
 def test_rename_key_preserves_above_key_comment() -> None:
     source = (
-        "alpha: 1\n"
-        "# this comment sits above the key being renamed\n"
-        "beta: 2\n"
-        "gamma: 3\n"
+        "alpha: 1\n# this comment sits above the key being renamed\nbeta: 2\ngamma: 3\n"
     )
     data = yaml_rt().load(source)
     rename_key(data, "beta", "renamed_beta")
@@ -150,12 +147,7 @@ def test_atomic_write_yaml_leaves_no_tmp_on_success(tmp_path: Path) -> None:
 
 def test_atomic_write_yaml_round_trips_comments(tmp_path: Path) -> None:
     target = tmp_path / "out.yaml"
-    source = (
-        "# header\n"
-        "version: 1\n"
-        "# above\n"
-        "alpha: 1  # eol\n"
-    )
+    source = "# header\nversion: 1\n# above\nalpha: 1  # eol\n"
     data = yaml_rt().load(source)
     atomic_write_yaml(target, data)
     out = target.read_text(encoding="utf-8")

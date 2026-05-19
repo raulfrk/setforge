@@ -32,7 +32,6 @@ from setforge.migrations import (
     MigrationRoots,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
@@ -125,12 +124,8 @@ def test_check_lists_chain_when_registry_populated(
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
     monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
-    monkeypatch.setattr(
-        "setforge.migrations.current_expected_schema_version", "1.1"
-    )
-    monkeypatch.setattr(
-        "setforge.cli.migrate.current_expected_schema_version", "1.1"
-    )
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
@@ -161,20 +156,14 @@ def test_apply_with_yes_applies_with_backup(
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
     monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
-    monkeypatch.setattr(
-        "setforge.migrations.current_expected_schema_version", "1.1"
-    )
-    monkeypatch.setattr(
-        "setforge.cli.migrate.current_expected_schema_version", "1.1"
-    )
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     # Stub the post-apply validate shell-out so the test never depends
     # on the on-PATH ``setforge`` binary being current with the worktree.
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
 
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["migrate", "--apply", "--yes", f"--config={cfg}"]
-    )
+    result = runner.invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "preview of changes" in result.output
     assert "applying" in result.output
@@ -193,17 +182,14 @@ def test_apply_radiolist_abort_writes_nothing(
     pre_bytes = cfg.read_bytes()
     chain = (_SetforgeYamlEditMigration(),)
     monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
-    monkeypatch.setattr(
-        "setforge.migrations.current_expected_schema_version", "1.1"
-    )
-    monkeypatch.setattr(
-        "setforge.cli.migrate.current_expected_schema_version", "1.1"
-    )
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     from setforge.cli.migrate import MigrateChoice
 
     monkeypatch.setattr(
         "setforge.cli.migrate.radiolist_dialog", _FakeDialog(MigrateChoice.ABORT)
     )
+
     # CliRunner installs a non-TTY StringIO as sys.stdin; we need the
     # ``_confirm_migrate`` TTY check to pass through so the radiolist
     # stub fires. Patch the module's ``sys`` to a stand-in whose
@@ -234,18 +220,15 @@ def test_apply_radiolist_no_backup_skips_backup_files(
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)
     monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
-    monkeypatch.setattr(
-        "setforge.migrations.current_expected_schema_version", "1.1"
-    )
-    monkeypatch.setattr(
-        "setforge.cli.migrate.current_expected_schema_version", "1.1"
-    )
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
     from setforge.cli.migrate import MigrateChoice
 
     monkeypatch.setattr(
         "setforge.cli.migrate.radiolist_dialog",
         _FakeDialog(MigrateChoice.APPLY_NO_BACKUP),
     )
+
     # CliRunner installs a non-TTY StringIO as sys.stdin; we need the
     # ``_confirm_migrate`` TTY check to pass through so the radiolist
     # stub fires. Patch the module's ``sys`` to a stand-in whose
@@ -272,9 +255,7 @@ def test_apply_mutually_exclusive_with_check(tmp_path: Path) -> None:
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["migrate", "--check", "--apply", f"--config={cfg}"]
-    )
+    result = runner.invoke(app, ["migrate", "--check", "--apply", f"--config={cfg}"])
     assert result.exit_code != 0
 
 
@@ -286,10 +267,7 @@ def test_apply_mutually_exclusive_with_check(tmp_path: Path) -> None:
 def test_pin_writes_schema_version_into_yaml(tmp_path: Path) -> None:
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
-        "# header\n"
-        "version: 1\n"
-        "tracked_files: {}\n"
-        "profiles: {p: {}}\n",
+        "# header\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
         encoding="utf-8",
     )
     runner = CliRunner()

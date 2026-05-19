@@ -63,9 +63,7 @@ def test_iter_tracked_text_files_skips_binary_suffixes(tmp_path: Path) -> None:
 
 def test_iter_tracked_text_files_recurses_subdirs(tmp_path: Path) -> None:
     (tmp_path / "tracked" / "claude").mkdir(parents=True)
-    (tmp_path / "tracked" / "claude" / "CLAUDE.md").write_text(
-        "hi", encoding="utf-8"
-    )
+    (tmp_path / "tracked" / "claude" / "CLAUDE.md").write_text("hi", encoding="utf-8")
     (tmp_path / "top.md").write_text("top", encoding="utf-8")
     out = set(iter_tracked_text_files(tmp_path))
     assert tmp_path / "tracked" / "claude" / "CLAUDE.md" in out
