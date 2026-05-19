@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -87,17 +88,25 @@ def prompt_failure_action(
     so the function itself never returns ``DIAGNOSE``. The re-prompt
     loop terminates when the user picks any other option.
 
-    Raises :class:`ConfirmRequiresInteractive` when stdin is not a TTY
-    and ``yes`` is ``False`` — same posture as
-    :func:`confirm_auto_operation`. The escape hatch is ``--yes`` /
-    ``-y`` which short-circuits to the default.
+    Non-interactive (non-TTY) callers without ``--yes`` fall back to
+    ``default`` (``FailureAction.SKIP``) with a yellow warning to stderr.
+    This is INTENTIONALLY different from :func:`confirm_auto_operation`,
+    which RAISES on non-TTY+no-yes: ``confirm_auto_operation`` gates
+    mutating writes that need explicit consent, but a reconcile failure
+    is downstream of an already-attempted operation, and the safe default
+    (SKIP-and-continue) preserves the pre-setforge-k0uj warn-and-skip
+    semantics that CI / non-interactive install runs depend on.
     """
     if yes:
         return default
     if not sys.stdin.isatty():
-        raise ConfirmRequiresInteractive(
-            "setforge reconcile failure prompt requires --yes when stdin is not a TTY"
+        typer.secho(
+            f"warning: non-interactive reconcile failure — "
+            f"auto-{default.value}: {message}",
+            err=True,
+            fg=typer.colors.YELLOW,
         )
+        return default
     if console is None:
         console = Console()
     console.print(f"[bold red]=== reconcile failure ===[/bold red]\n{message}")

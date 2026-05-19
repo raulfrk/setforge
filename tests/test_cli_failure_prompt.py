@@ -18,7 +18,6 @@ from setforge.cli._confirm import (
     prompt_failure_action,
 )
 from setforge.cli._plugin_helpers import _emit_reconcile_summary
-from setforge.errors import ConfirmRequiresInteractive
 from setforge.transitions import ReconcileKind, ReconcileOutcome, ReconcileStatus
 
 
@@ -118,16 +117,47 @@ def test_yes_short_circuits_to_custom_default(monkeypatch: pytest.MonkeyPatch) -
 # --- non-TTY behavior ----------------------------------------------------
 
 
-def test_non_tty_without_yes_raises_confirm_requires_interactive(
+def test_non_tty_without_yes_falls_back_to_default_with_warning(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Mirror :func:`confirm_auto_operation`'s non-interactive gate: no
-    TTY + no ``--yes`` raises so the global handler surfaces a clean
-    ``error: ... requires --yes`` line."""
+    """Non-interactive (non-TTY) callers without ``--yes`` fall back to the
+    ``default`` action (SKIP) with a yellow warning on stderr.
+
+    INTENTIONALLY differs from :func:`confirm_auto_operation`, which
+    RAISES on non-TTY+no-yes: ``confirm_auto_operation`` gates mutating
+    writes that need explicit consent, but a reconcile failure is
+    downstream of an already-attempted operation, and the safe default
+    (SKIP-and-continue) preserves the pre-setforge-k0uj warn-and-skip
+    semantics that non-interactive install runs (CI, scripts) depend on.
+    """
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    with pytest.raises(ConfirmRequiresInteractive) as exc:
-        prompt_failure_action(message="failed", yes=False)
-    assert "--yes" in str(exc.value)
+    result = prompt_failure_action(message="failed: plugin X", yes=False)
+    assert result is FailureAction.SKIP  # the default
+    captured = capsys.readouterr()
+    assert "non-interactive reconcile failure" in captured.err
+    assert "auto-skip" in captured.err
+    assert "failed: plugin X" in captured.err
+
+
+def test_non_tty_without_yes_honors_non_default_default(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the caller passes a non-SKIP ``default``, the non-TTY fallback
+    returns that value (and the warning names it correctly).
+
+    This guards against the obvious mis-implementation of hard-coding
+    ``FailureAction.SKIP`` in the non-TTY branch instead of returning
+    the parameter.
+    """
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    result = prompt_failure_action(
+        message="failed: extension Y", yes=False, default=FailureAction.ABORT
+    )
+    assert result is FailureAction.ABORT
+    captured = capsys.readouterr()
+    assert "auto-abort" in captured.err
 
 
 # --- TTY + arrow-key picker ----------------------------------------------
