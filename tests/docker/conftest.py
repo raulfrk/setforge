@@ -394,7 +394,16 @@ def docker_container(
             "-w",
             "/workspace",
         ]
-        argv += _env_args(env)
+        # Suppress the setforge-7jg4 fresh-host welcome panel by default
+        # for the Docker e2e suite. The welcome's spec behavior raises
+        # WelcomeRequiresInteractive on non-TTY + no --yes, which would
+        # trip every existing install-touching test on the fresh
+        # containers the suite uses. The welcome-specific tests in
+        # ``tests/docker/test_e2e_docker_fresh_host.py`` override this
+        # by passing ``env={"SETFORGE_NO_WELCOME": ""}`` to exercise the
+        # welcome path end-to-end.
+        merged_env = {"SETFORGE_NO_WELCOME": "1"} | (env or {})
+        argv += _env_args(merged_env)
         argv += [docker_image]
         if cmd is not None:
             argv += cmd

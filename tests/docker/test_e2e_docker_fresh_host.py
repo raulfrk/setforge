@@ -46,7 +46,7 @@ def test_no_tty_raises(
     inside the per-call docker timeout. A hang would surface as
     :class:`subprocess.TimeoutExpired` raised by ``ContainerHandle.exec``.
     """
-    c = docker_container()
+    c = docker_container(env={"SETFORGE_NO_WELCOME": ""})
     result = c.exec(
         [
             "uv",
@@ -79,7 +79,7 @@ def test_yes_skips_welcome_in_docker(
     on a brand-new host must work with ``--yes`` and without the user
     ever seeing the welcome panel.
     """
-    c = docker_container()
+    c = docker_container(env={"SETFORGE_NO_WELCOME": ""})
     result = c.exec(
         [
             "uv",
@@ -113,7 +113,7 @@ def test_auto_on_fresh_host_rejected(
     fresh host (no drift exists yet) and must be rejected even when
     ``--yes`` is passed alongside.
     """
-    c = docker_container()
+    c = docker_container(env={"SETFORGE_NO_WELCOME": ""})
     result = c.exec(
         [
             "uv",
@@ -148,7 +148,7 @@ def test_welcome_panel_rendered_on_tty(
     radiolist dialog's rendering varies by terminal emulator and we
     don't want to assert against ANSI escape minutiae.
     """
-    c = docker_container()
+    c = docker_container(env={"SETFORGE_NO_WELCOME": ""})
     pty = docker_pty_session(
         c,
         [

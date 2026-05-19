@@ -145,7 +145,16 @@ def is_fresh_host() -> bool:
     welcome (the safer fail mode — re-show consent rather than silently
     suppress it). Host-wide signal — no profile context needed; the
     welcome fires once per host across all profiles, not per profile.
+
+    Honors the ``SETFORGE_NO_WELCOME=1`` env var as an explicit opt-out
+    for CI / Docker e2e contexts where the existing test corpus invokes
+    ``setforge install`` non-interactively without ``--yes`` and would
+    otherwise trip the welcome's TTY-or-yes gate. The welcome-specific
+    e2e tests at :mod:`tests.docker.test_e2e_docker_fresh_host` unset
+    the env var so they still exercise the welcome path end-to-end.
     """
+    if os.environ.get("SETFORGE_NO_WELCOME") == "1":
+        return False
     root = transitions.transitions_root()
     if not root.is_dir():
         return True
