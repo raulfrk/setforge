@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 import typer
 from rich.console import Console
@@ -260,6 +260,8 @@ def _read_body(*, body_source: BodySource, body_file: Path | None) -> str:
                 )
                 raise typer.Exit(1)
             return body
+        case _ as never:
+            assert_never(never)
 
 
 def _count_total_lines(text: str) -> int:
