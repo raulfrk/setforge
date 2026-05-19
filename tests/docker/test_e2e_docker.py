@@ -1788,3 +1788,153 @@ def test_e2e_docker_install_retry_failed_flag(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+# Section: `setforge init` bootstrap (setforge-n2la, mockup J)
+# ===========================================================================
+#
+# Four scenarios from mockup J:
+#   - fresh init creates the three bootstrap paths + writes local.yaml
+#   - reinit (sentinel already present + host-local dir already exists)
+#     is idempotent — no overwrite, no backup file
+#   - --force --no-prompt produces a timestamped backup AND rewrites
+#     local.yaml to the canonical stub
+#   - --check is read-only: prints the env/dirs/capabilities health
+#     report and never creates host-local/
+
+
+def _init(
+    container: ContainerHandle,
+    *,
+    extra: list[str] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``setforge init`` inside the container; return CompletedProcess."""
+    cmd = ["uv", "run", "setforge", "init"]
+    if extra:
+        cmd.extend(extra)
+    result = container.exec(cmd, check=False)
+    if check:
+        assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_e2e_docker_init_fresh(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """n2la: fresh --no-prompt init creates all three bootstrap paths.
+
+    Wipes the local.yaml stub that the Typer root callback writes on
+    every invocation, then asserts that init creates the canonical
+    config dir, the local.yaml template, and the host-local share
+    directory in one shot.
+    """
+    c = docker_container()
+    # Strip any pre-existing setforge state so this exercises the
+    # fresh-init branch (root callback re-writes local.yaml, but the
+    # host-local dir staying absent triggers the bootstrap path).
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
+    result = _init(c, extra=["--no-prompt"])
+    assert "init complete" in result.stdout, result.stdout
+    cfg_check = c.exec(
+        ["test", "-f", "/home/tester/.config/setforge/local.yaml"], check=False
+    )
+    assert cfg_check.returncode == 0, "local.yaml missing post-init"
+    host_local_check = c.exec(
+        ["test", "-d", "/home/tester/.local/share/setforge/host-local"], check=False
+    )
+    assert host_local_check.returncode == 0, "host-local dir missing post-init"
+
+
+def test_e2e_docker_init_reinit_idempotent(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """n2la: rerunning init after a clean bootstrap is a no-op.
+
+    First run creates the bootstrap state; the second run takes the
+    idempotent branch (sentinel + host-local dir both present) and
+    reports ``nothing to create`` without overwriting customizations.
+    """
+    c = docker_container()
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
+    _init(c, extra=["--no-prompt"])
+    # Seed a user customization that must survive the second init.
+    c.write_text(
+        "/home/tester/.config/setforge/local.yaml",
+        "# setforge host-local config\nuser_marker: preserved\n",
+    )
+    result = _init(c, extra=["--no-prompt"])
+    assert "nothing to create" in result.stdout, result.stdout
+    after = c.read_text("/home/tester/.config/setforge/local.yaml")
+    assert "user_marker: preserved" in after, (
+        "reinit overwrote user customization (must be idempotent)"
+    )
+
+
+def test_e2e_docker_init_force_with_backup(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """n2la: --force --no-prompt produces a timestamped backup.
+
+    Seeds a user-marker local.yaml + the host-local dir so we hit the
+    --force branch (not the fresh-init branch), then asserts the backup
+    file lands at ``local.yaml.bak.<UTC-ISO8601>`` and the rewritten
+    local.yaml carries the canonical stub.
+    """
+    c = docker_container()
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
+    _init(c, extra=["--no-prompt"])
+    c.write_text(
+        "/home/tester/.config/setforge/local.yaml",
+        "# setforge host-local config\nuser_marker: backup-me\n",
+    )
+    result = _init(c, extra=["--force", "--no-prompt"])
+    assert "init complete" in result.stdout, result.stdout
+    ls = c.exec(
+        ["bash", "-lc", "ls /home/tester/.config/setforge/local.yaml.bak.* 2>&1"],
+        check=False,
+    )
+    assert ls.returncode == 0, f"no backup file found: {ls.stdout}{ls.stderr}"
+    backup_lines = [
+        line for line in ls.stdout.strip().splitlines() if line.endswith("Z")
+    ]
+    assert len(backup_lines) == 1, (
+        f"expected exactly one timestamped backup, got: {backup_lines!r}"
+    )
+    # Verify the backup carries the pre-overwrite content.
+    backup_content = c.exec(["cat", backup_lines[0]]).stdout
+    assert "user_marker: backup-me" in backup_content, (
+        "backup file is missing the pre-overwrite marker"
+    )
+    # Verify the new local.yaml is the canonical stub.
+    new = c.read_text("/home/tester/.config/setforge/local.yaml")
+    assert "setforge host-local config" in new
+    assert "user_marker: backup-me" not in new, (
+        "--force did not actually rewrite local.yaml"
+    )
+
+
+def test_e2e_docker_init_check_readonly(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """n2la: --check prints the env/dirs/capabilities report; no side effects.
+
+    Wipes setforge state, runs --check, and asserts the host-local
+    share directory does NOT appear (the root callback writes the
+    local.yaml stub regardless; --check must not create anything
+    BEYOND that).
+    """
+    c = docker_container()
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
+    result = _init(c, extra=["--check"])
+    assert "checking environment" in result.stdout, result.stdout
+    assert "checking config directories" in result.stdout, result.stdout
+    assert "check complete" in result.stdout, result.stdout
+    host_local_check = c.exec(
+        ["test", "-d", "/home/tester/.local/share/setforge/host-local"], check=False
+    )
+    assert host_local_check.returncode != 0, (
+        "--check must NOT create the host-local share directory"
+    )
