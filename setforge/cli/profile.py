@@ -7,10 +7,11 @@ Two subcommands:
   users see the inheritance structure without opening the YAML.
 - ``setforge profile show <name>`` resolves the profile through
   :func:`setforge.config.resolve_profile` and renders every effective
-  list (tracked_files / claude_plugins / marketplaces / bootstrap /
-  extensions / preserve_user_keys) with per-entry provenance tags. The
-  provenance tags answer "where did this item come from?" — a base
-  profile in the extends chain or the host-local ``local.yaml`` overlay.
+  list (tracked_files / claude_plugins / marketplaces /
+  host_local_sections / bootstrap / extensions / preserve_user_keys)
+  with per-entry provenance tags. The provenance tags answer "where
+  did this item come from?" — a base profile in the extends chain or
+  the host-local ``local.yaml`` overlay.
 
 The command is read-only: no live mutation, no subprocess invocation,
 no network. Errors surface as :class:`SetforgeError` so the outer
@@ -25,6 +26,9 @@ bd setforge-lgvp lands the overlay machinery, ``profile show`` reports
 the local.yaml-driven surfaces as "(overlay surface lands when bd
 setforge-lgvp ships)" placeholders instead of forging false
 provenance.
+
+The placeholder string is exposed as :data:`_OVERLAY_PENDING_NOTE` so
+the surfaces that print it stay in sync.
 """
 
 from __future__ import annotations
@@ -50,7 +54,7 @@ from setforge.errors import SetforgeError
 # Provenance placeholder for surfaces whose overlay machinery has not
 # shipped yet. Cited bd id is the contract; do NOT replace with a TODO
 # comment.
-_OVERLAY_PENDING_NOTE: str = "(overlay +N/-M diff lands when bd setforge-lgvp ships)"
+_OVERLAY_PENDING_NOTE: str = "(overlay surface lands when bd setforge-lgvp ships)"
 
 
 def _build_console() -> Console:
