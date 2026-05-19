@@ -170,6 +170,9 @@ def _zsh_wiring_body() -> str:
     Guards the ``compinit`` call with an ``if`` so the snippet is a
     safe-no-op when the user has already configured compinit upstream.
     """
+    # Deviation from mockup K: $HOME-quoted fpath + compinit guard
+    # prevent dirty-zshrc regression when the user already wires
+    # compinit themselves.
     return (
         'fpath=("$HOME/.config/setforge/completions" $fpath)\n'
         "if ! command -v compinit >/dev/null 2>&1; then\n"
@@ -383,8 +386,22 @@ def _install_zsh_or_bash(
     Resolves the install-confirm choice (dialog or non-interactive
     short-circuit), writes the completion script when the user did not
     abort, and rewrites the sentinel-bracketed wiring block in ``rc``
-    unless the user picked ``YES_ONLY``.
+    unless the user picked ``YES_ONLY``. Banner strings ("=== <shell>
+    completion install ===", "detected completion location:",
+    "checking fpath wiring...", "=== this install will ===") mirror
+    mockup K's verbatim text so the install flow reads as the spec
+    described.
     """
+    console.print(f"=== {shell.value} completion install ===")
+    console.print(f"detected completion location: {script_path}")
+    if shell is ShellKind.ZSH and rc is not None:
+        console.print(f"checking fpath wiring... ({rc})")
+    console.print("=== this install will ===")
+    console.print(f"  - write completion script to {script_path}")
+    if not no_wire and rc is not None:
+        console.print(f"  - append sentinel-wrapped wiring block to {rc}")
+    console.print("=== confirm ===")
+
     choice = _prompt_install_choice(
         shell=shell,
         non_interactive=non_interactive,
