@@ -5,9 +5,6 @@ flags, builds a :class:`ProfileContext` when needed, calls the domain
 helper, and renders the result. Restore presents an arrow-key three-way
 choice (abort / restore / restore-with-pre-snapshot); ``--yes`` /
 ``--non-interactive`` short-circuits to plain "restore".
-
-Mockup S (user-approved 2026-05-19). See bd ``setforge-of3a`` for the
-full design.
 """
 
 from __future__ import annotations

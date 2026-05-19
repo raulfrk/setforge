@@ -1,12 +1,12 @@
-"""Directory-copy snapshot/restore primitives for setforge (setforge-of3a).
+"""Directory-copy snapshot/restore primitives for setforge.
 
 Captures the profile-resolved ``tracked_files.dst`` set plus
 ``~/.config/setforge/local.yaml`` into a sortable, atomically-finalized
 directory under ``~/.local/share/setforge/snapshots/<id>/``. Restore is
-strictly additive (per Q6): only files present in the snapshot are
-overlaid onto live; live-only files added since the snapshot are left
-untouched. Auto-prune fires AFTER successful create (per Q15) — a
-failed create keeps the prior good snapshot.
+an additive overlay: only files present in the snapshot are overlaid
+onto live; live-only files added since the snapshot are left
+untouched. Auto-prune fires AFTER successful create — a failed create
+keeps the prior good snapshot.
 
 Storage layout::
 
@@ -17,10 +17,10 @@ Storage layout::
     │   ├── home/raul/.config/setforge/local.yaml
     │   └── ...
 
-Atomicity: create writes to ``<id>.partial/``, fsyncs each file, writes
-``_meta.json`` LAST as the commit marker, then ``os.replace(partial,
-final)`` atomically renames. Restore refuses any snapshot missing
-``_meta.json``.
+Atomicity: create writes to ``<id>.partial/``, fsyncs each regular
+file, writes ``_meta.json`` LAST as the commit marker, then
+``os.replace(partial, final)`` atomically renames. Restore refuses any
+snapshot missing ``_meta.json``.
 
 Symlink discipline: snapshots preserve symlinks AS symlinks
 (``os.symlink(os.readlink(src), dst)``); ``os.walk(followlinks=False)``
@@ -52,7 +52,7 @@ from setforge.errors import SetforgeError
 from setforge.transitions import now_utc
 
 DEFAULT_KEEP: Final[int] = 10
-"""Default retention count for auto-prune (per Q15)."""
+"""Default retention count for auto-prune."""
 
 _META_FILENAME: Final[str] = "_meta.json"
 """Commit marker written LAST inside the snapshot dir."""
@@ -140,7 +140,7 @@ def _resolve_dst_paths(
     Mirrors the existing ``expand_tracked_file`` walk so directory-shaped
     tracked entries contribute one path per contained file. ``local.yaml``
     is appended last when it exists; it is NOT a tracked file but is the
-    host-local config surface snapshots must capture (per Q3).
+    host-local config surface snapshots must capture.
     """
     dst_paths: list[Path] = []
     seen: set[Path] = set()
@@ -195,9 +195,7 @@ def _copy_one(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
         target = os.readlink(src)
-        # The destination is fresh inside the .partial dir, so a stale
-        # entry should never exist — but unlink defensively to keep
-        # the call idempotent against caller-driven retries.
+        # Idempotent: defensively unlink in case a retry hit the same target.
         if dst.exists() or dst.is_symlink():
             dst.unlink()
         os.symlink(target, dst)
