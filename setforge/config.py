@@ -87,16 +87,6 @@ class TrackedFile(BaseModel):
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
     preserve_user_keys: list[str] = []
     preserve_user_keys_deep: list[str] = []
-    mode: int | None = None
-    """POSIX file-mode bits (chmod) for the live dst.
-
-    YAML-1.2 octal int literal only (``mode: 0o755``). The validator
-    rejects both bare strings and YAML-1.1-style ``0755`` literals,
-    which ruamel.yaml parses as the string ``"0755"`` under YAML 1.2.
-    Setuid/setgid bits are refused for security; sticky bit (``0o1000``)
-    is allowed. When ``None``, deploy preserves the source file's mode
-    (today's behavior, zero regression).
-    """
     """Paths whose live → tracked overlay does a *deep* merge instead of
     the shallow whole-leaf replace of ``preserve_user_keys``. Tracked
     sub-keys absent on the live side survive. Live-only sub-keys are
@@ -107,6 +97,16 @@ class TrackedFile(BaseModel):
     appear in at most one of the two lists. ``[*]`` / ``[]`` list
     suffixes are not supported on this list — use the shallow list for
     list-targeted paths.
+    """
+    mode: int | None = None
+    """POSIX file-mode bits (chmod) for the live dst.
+
+    YAML-1.2 octal int literal only (``mode: 0o755``). The validator
+    rejects both bare strings and YAML-1.1-style ``0755`` literals,
+    which ruamel.yaml parses as the string ``"0755"`` under YAML 1.2.
+    Setuid/setgid bits are refused for security; sticky bit (``0o1000``)
+    is allowed. When ``None``, deploy preserves the source file's mode
+    (today's behavior, zero regression).
     """
 
     @model_validator(mode="after")
@@ -187,8 +187,8 @@ class TrackedFile(BaseModel):
             )
         if type(v) is not int and not isinstance(v, OctalInt):
             raise ValueError(
-                f"mode must be YAML-1.2 octal int literal (e.g. 0o755), "
-                f"not string or decimal. Got: {v!r}"
+                f"mode must be a YAML-1.2 octal int literal (e.g. 0o755); "
+                f"strings, floats, and other types are rejected. Got: {v!r}"
             )
         if not (0o0 <= v <= 0o7777):
             raise ValueError(f"mode {oct(v)} out of range 0o0..0o7777")
