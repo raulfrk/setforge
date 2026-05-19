@@ -116,7 +116,8 @@ def _check_unexpected_drift(
     No-op when no ``DRIFTED`` entry carries unexpected-drift keys.
     """
     has_real_unexpected = any(
-        e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+        e.status == CompareStatus.DRIFTED
+        and (e.unexpected_drift_keys or e.mode_drift)
         for e in drift_report.entries
     )
     if not has_real_unexpected:
@@ -125,7 +126,8 @@ def _check_unexpected_drift(
     unexpected_count = sum(
         1
         for e in drift_report.entries
-        if e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+        if e.status == CompareStatus.DRIFTED
+        and (e.unexpected_drift_keys or e.mode_drift)
     )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(

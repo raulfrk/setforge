@@ -170,9 +170,9 @@ def _resolve_drift_paths(
     ``sync._build_capture_plan`` need the same ``name → (sub_src, sub_dst)``
     map keyed by both the expanded name and the bare ``tracked_file.src``
     string. Returns one ``(entry, sub_src, sub_dst)`` tuple per DRIFTED
-    entry with drift content (either ``unexpected_drift_keys`` or
-    ``diff`` non-empty). Entries with no path match fall back to the
-    entry name in both positions, preserving the pre-extraction
+    entry with drift content (``unexpected_drift_keys``, ``diff``, or
+    ``mode_drift`` non-empty). Entries with no path match fall back to
+    the entry name in both positions, preserving the pre-extraction
     behavior.
     """
     paths_by_name: dict[str, tuple[Path, Path]] = {}
@@ -187,7 +187,7 @@ def _resolve_drift_paths(
     for entry in drift_report.entries:
         if entry.status is not CompareStatus.DRIFTED:
             continue
-        if not (entry.unexpected_drift_keys or entry.diff):
+        if not (entry.unexpected_drift_keys or entry.diff or entry.mode_drift):
             continue
         paths = paths_by_name.get(entry.name)
         if paths is None:

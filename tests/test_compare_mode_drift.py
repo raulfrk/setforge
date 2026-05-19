@@ -16,9 +16,16 @@ The contract:
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+import typer
+
+from setforge.cli import _install_helpers
 from setforge.compare import (
+    CompareReport,
     CompareStatus,
+    FileCompare,
     _compare_one,
 )
 from setforge.config import TrackedFile
@@ -111,3 +118,38 @@ def test_content_drift_and_mode_drift_compose(tmp_path: Path) -> None:
     assert entry.mode_drift is True  # mode drift
     assert entry.status is CompareStatus.DRIFTED
     assert unexpected is True
+
+
+def test_install_gate_catches_mode_drift_only() -> None:
+    """A DRIFTED entry whose only drift channel is ``mode_drift`` (no
+    content diff, no unexpected_drift_keys) MUST still trip the install
+    drift gate. Pre-fix the gate keyed only on ``unexpected_drift_keys``
+    and silently let mode-only drift through (declared mode + matching
+    content + wrong live mode would deploy without surfacing the
+    perms-drift).
+    """
+    entry = FileCompare(
+        name="hook_script",
+        status=CompareStatus.DRIFTED,
+        diff="",
+        expected_drift_keys=[],
+        unexpected_drift_keys=[],
+        mode_drift=True,
+    )
+    report = CompareReport(entries=[entry], has_unexpected_drift=True)
+
+    # The gate only reaches ctx.profile when rendering the actionable
+    # error message; a SimpleNamespace stub anchors the attribute access
+    # without forcing a full ProfileContext construction in unit scope.
+    ctx_stub = SimpleNamespace(profile="test-mode")
+
+    with pytest.raises(typer.Exit) as excinfo:
+        _install_helpers._check_unexpected_drift(
+            report,
+            ctx_stub,  # type: ignore[arg-type]
+            Path("/tmp/setforge.yaml"),
+            auto_accept_tracked=False,
+            auto_accept_live=False,
+        )
+
+    assert excinfo.value.exit_code == 1
