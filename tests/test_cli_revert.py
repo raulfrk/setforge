@@ -400,3 +400,238 @@ def test_revert_continues_after_extension_uninstall_failure(
     assert len(revert_dirs) == 1
     # FAILED is surfaced in stderr (CliRunner mixes by default).
     assert "FAILED" in revert_result.output
+
+
+# ---------------------------------------------------------------------------
+# sqcw: --to-before=<id> multi-step atomic revert
+# ---------------------------------------------------------------------------
+
+
+def _two_install_sequence(
+    cfg: Path, runner: CliRunner
+) -> tuple[Path, Path, Path]:
+    """Run install twice with a content change between them.
+
+    Returns ``(dst, transition_a_dir, transition_b_dir)`` in chronological
+    order so callers can target the oldest transition with ``--to-before``
+    and assert the chain unwinds both steps.
+    """
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install_result.exit_code == 0, install_result.output
+
+    # Edit the tracked src so the second install records a content delta
+    # (modifies the live file from "hello\n" to "hello world\n").
+    src = cfg.parent / "tracked" / "greeting.md"
+    src.write_text("hello world\n", encoding="utf-8")
+    install_result_b = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install_result_b.exit_code == 0, install_result_b.output
+
+    # Resolve transitions chronologically.
+    state = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
+    transition_dirs = sorted(
+        d for d in (state / "transitions").iterdir() if d.is_dir()
+    )
+    # 2 install transitions land first.
+    install_transitions = [d for d in transition_dirs if "install" in d.name]
+    assert len(install_transitions) == 2
+    return (
+        cfg.parent.parent / "live" / "greeting.md",
+        install_transitions[0],
+        install_transitions[1],
+    )
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_two_step_dry_runs_all_before_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two install transitions; --to-before=<oldest> unwinds both
+    transitions atomically. The dry-run-ALL-FIRST contract is asserted
+    indirectly: both files are restored, no .rej leaks anywhere."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
+    assert live.exists()
+
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition_a.name}",
+            "--yes",
+        ],
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+
+    # Two reverse transitions were recorded — one per real-apply step.
+    state_dir = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
+    revert_dirs = [
+        d for d in (state_dir / "transitions").iterdir() if "-revert-vmh" in d.name
+    ]
+    assert len(revert_dirs) == 2
+
+    # Live file is gone (rolled all the way back to pre-install).
+    assert not dst.exists()
+    # No .rej leakage anywhere.
+    assert list(tmp_path.rglob("*.rej")) == []
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_dry_run_failure_aborts_with_no_live_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the dry-run pass fails on ANY step, the chain aborts with NO
+    live mutations — the file stays drifted."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
+    pre = live.read_text()
+    # Drift the live file so the dry-run will fail.
+    live.write_text("manually edited\n", encoding="utf-8")
+    drifted = live.read_text()
+
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition_a.name}",
+            "--yes",
+        ],
+    )
+    # Non-zero exit; live unchanged.
+    assert revert_result.exit_code == 1
+    assert live.read_text() == drifted
+    assert live.read_text() != pre
+    # No reverse transitions written — the dry-run pass aborted first.
+    state_dir = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
+    revert_dirs = [
+        d for d in (state_dir / "transitions").iterdir() if "-revert-vmh" in d.name
+    ]
+    assert revert_dirs == []
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_single_target_acts_like_bare_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When --to-before points at the most-recent transition, the chain
+    is length-1 and behaves identically to bare ``revert``."""
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install_result.exit_code == 0
+    assert dst.exists()
+
+    state_dir = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
+    transition = next(
+        d for d in (state_dir / "transitions").iterdir() if "install" in d.name
+    )
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition.name}",
+            "--yes",
+        ],
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+    assert not dst.exists()
+    # Exactly one reverse transition.
+    revert_dirs = [
+        d for d in (state_dir / "transitions").iterdir() if "-revert-vmh" in d.name
+    ]
+    assert len(revert_dirs) == 1
+
+
+def test_revert_to_before_resolves_prefix_to_full_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--to-before accepts a unique-prefix match per resolve_transition_prefix.
+    Ambiguous prefix surfaces the error from resolve_transition_prefix."""
+    cfg, _ = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    # Need to install to produce a transition we can address.
+    install_result = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install_result.exit_code == 0
+    transition_dir = next(
+        d for d in (state / "transitions").iterdir() if "install" in d.name
+    )
+
+    if shutil.which("patch") is None:
+        pytest.skip("GNU patch not on PATH")
+
+    # First 12 chars of the YYYYMMDDTHHMMSS prefix should be unique
+    # (only one transition exists).
+    prefix = transition_dir.name[:12]
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={prefix}",
+            "--yes",
+        ],
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+
+
+def test_revert_to_before_wrong_profile_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If --to-before points at a transition recorded under a different
+    profile, refuse rather than silently revert another profile's state."""
+    from setforge.errors import SetforgeError
+
+    cfg, _ = _setup_repo(tmp_path)
+    state = _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    # Manually plant a different-profile transition.
+    other = state / "transitions" / "20300101T000000000000Z-install-other"
+    other.mkdir(parents=True)
+    (other / "meta.json").write_text(
+        json.dumps(
+            {
+                "command": "install",
+                "profile": "other",
+                "timestamp": "2030-01-01T00:00:00+00:00",
+                "host": "h",
+                "version": "0.1.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={other.name}",
+            "--yes",
+        ],
+    )
+    assert revert_result.exit_code == 1
+    assert isinstance(revert_result.exception, SetforgeError)
+    assert "for profile 'other'" in str(revert_result.exception)

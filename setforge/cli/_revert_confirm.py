@@ -365,8 +365,10 @@ def _render_multi_step_panel(
         f"({len(plan.steps)} steps total)."
     )
     console.print(
-        "  All dry-runs have already passed; abort is still safe here "
-        "— nothing has been written."
+        "  The newest step's reverse has been pre-flight dry-run-checked "
+        "against live; mid-stream failure on a later step (rare) leaves "
+        "partial state and exits 1. Abort is still safe here — nothing "
+        "has been written yet."
     )
 
 

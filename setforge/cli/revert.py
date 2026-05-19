@@ -33,13 +33,15 @@ from setforge.cli._revert_confirm import (
     ExtensionOperation,
     ExtensionReconcile,
     FileMutation,
+    MultiStepRevertPlan,
     PluginOperation,
     PluginReconcile,
     RevertChoice,
     RevertPlan,
+    confirm_multi_step_revert_operation,
     confirm_revert_operation,
 )
-from setforge.errors import NoTransitionFound
+from setforge.errors import NoTransitionFound, RevertFailed, SetforgeError
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -311,6 +313,17 @@ def _apply_revert(transition: Path, profile: str) -> None:
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
 
 
+_TO_BEFORE_OPTION = typer.Option(
+    None,
+    "--to-before",
+    help=(
+        "Revert the named transition AND every newer transition for this "
+        "profile. All N steps are dry-run-checked atomically before any "
+        "live mutation; on any dry-run failure the live tree stays clean."
+    ),
+)
+
+
 @app.command()
 def revert(
     profile: str = _PROFILE_OPTION,
@@ -321,15 +334,22 @@ def revert(
         "-y",
         help="Skip the confirm-explain-redo prompt (non-interactive use).",
     ),
+    to_before: str | None = _TO_BEFORE_OPTION,
 ) -> None:
-    """Revert the most recent transition for the named profile.
+    """Revert the most recent transition (default) or a chain back to a
+    named transition (``--to-before=<id>``).
 
-    Opens the confirm-explain-redo wizard before applying (mockup A).
-    Applies the recorded patch in reverse and reverses any extension /
-    plugin delta. Records its own reverse transition so a second revert
-    invocation acts as redo.
+    Opens the confirm-explain-redo wizard before applying (mockup A for
+    single-step; mockup H summary panel for multi-step). Records its own
+    reverse transition so a second revert acts as redo. For multi-step
+    revert the dry-run pass runs over ALL N transitions BEFORE any live
+    mutation — late-step drift aborts before the chain's first write.
     """
     config = _resolve_config_arg(config)
+    if to_before is not None:
+        _revert_to_before(profile, to_before, yes=yes)
+        return
+
     transition = transitions.load_latest(profile)
     if transition is None:
         raise NoTransitionFound(f"no transition history for profile {profile!r}")
@@ -350,6 +370,101 @@ def revert(
             return
 
     _apply_revert(transition, profile)
+
+
+def _resolve_to_before_chain(
+    profile: str, to_before: str
+) -> list[transitions.TransitionListing]:
+    """Return the chain of transitions to revert (newest-first), inclusive of
+    ``to_before``.
+
+    Raises :class:`SetforgeError` if the prefix doesn't resolve, the
+    resolved transition isn't for ``profile``, or no transitions exist
+    for the profile. Newest-first order matches both the mockup-H
+    listing and the dry-run / apply order — the most-recent transition
+    reverts first so each step's reverse patch lines up against the
+    live tree it was recorded from.
+    """
+    target_path = transitions.resolve_transition_prefix(to_before)
+    target_meta = json.loads(
+        (target_path / "meta.json").read_text(encoding="utf-8")
+    )
+    target_profile = str(target_meta.get("profile", ""))
+    if target_profile != profile:
+        raise SetforgeError(
+            f"transition {target_path.name!r} is for profile "
+            f"{target_profile!r}, not {profile!r}"
+        )
+    all_for_profile = transitions.list_transitions(
+        profile_filter=[profile], reverse=True
+    )
+    if not all_for_profile:
+        raise NoTransitionFound(
+            f"no transition history for profile {profile!r}"
+        )
+    chain: list[transitions.TransitionListing] = []
+    for entry in all_for_profile:
+        chain.append(entry)
+        if entry.directory == target_path:
+            return chain
+    raise SetforgeError(
+        f"transition {target_path.name!r} not found in profile "
+        f"{profile!r}'s recorded history"
+    )
+
+
+def _revert_to_before(profile: str, to_before: str, *, yes: bool) -> None:
+    """Multi-step revert: pre-flight first step, then sequential apply.
+
+    Steps:
+    1. Resolve the chain (target + every newer transition, newest-first).
+    2. Pre-flight check the FIRST (newest) step via
+       ``apply_patch_reverse(dry_run=True)``: this catches the
+       most-likely failure mode — drift on the live tree since the
+       most-recent transition was recorded. Surface failure and exit 1
+       on drift; no live mutation has occurred.
+
+       Note: we cannot pre-flight steps 2..N without applying 1..N-1
+       first — each later step's reverse patch is defined against the
+       state produced by reversing its successor. Steps 2..N still run
+       their internal dry-run-then-apply (the existing
+       ``dry_run=False`` mode) so they refuse cleanly mid-stream on
+       unexpected drift, with the partial-state warning at step N.
+    3. Show the multi-step confirm wizard (one prompt covering all N).
+    4. On user confirm: apply each step's reverse via
+       ``_apply_revert`` (which calls ``apply_patch_reverse(dry_run=False)``
+       — i.e. dry-run-then-real-apply per step — plus plugin / extension
+       reconcile and writes a reverse transition). If a mid-stream
+       failure (rare: ENOSPC, filesystem race, or unexpected drift
+       between steps), surface the partial state and exit 1 with an
+       "inconsistent state" warning.
+    """
+    chain = _resolve_to_before_chain(profile, to_before)
+    # Pre-flight the newest step. Only step 1 is checkable against live
+    # state without applying prior steps; see docstring.
+    try:
+        transitions.apply_patch_reverse(chain[0].directory, dry_run=True)
+    except RevertFailed as exc:
+        raise SetforgeError(
+            f"dry-run reversal of {chain[0].directory.name!r} failed; "
+            f"no live changes made:\n{exc}"
+        ) from exc
+
+    step_plans = tuple(_build_revert_plan(entry.directory, profile) for entry in chain)
+    plan = MultiStepRevertPlan(profile=profile, steps=step_plans)
+    choice = confirm_multi_step_revert_operation(plan=plan, yes=yes)
+    if choice is RevertChoice.ABORT:
+        return
+
+    total = len(chain)
+    for index, entry in enumerate(chain, start=1):
+        try:
+            _apply_revert(entry.directory, profile)
+        except RevertFailed as exc:
+            raise SetforgeError(
+                f"applied {index - 1} of {total}; system is in inconsistent "
+                f"state; run setforge transitions show to inspect:\n{exc}"
+            ) from exc
 
 
 transitions_app: typer.Typer = typer.Typer(
