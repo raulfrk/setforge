@@ -1,0 +1,12 @@
+{
+  "command": "install",
+  "profile": "vm-headless",
+  "timestamp": "2026-05-10T14:23:17.123456+00:00",
+  "host": "test-host.example",
+  "version": "0.1.42",
+  "source_sha": "abc123def456789abcdef0123456789abcdef012",
+  "paths": [
+    "/home/tester/.claude/CLAUDE.md",
+    "/home/tester/.config/setforge/setforge.yaml"
+  ]
+}

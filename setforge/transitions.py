@@ -112,6 +112,14 @@ class TransitionMeta:
     schema bump and for transitions whose source directory is not a git
     repo; :meth:`to_dict` omits the key entirely when ``None`` so old
     meta.json files round-trip byte-identically through load + re-dump.
+
+    The trailing three fields (``end_timestamp``, ``command_line``,
+    ``preserve_user_keys_applied``) were added in setforge-8ohd so
+    ``setforge transitions show`` can display per-invocation duration,
+    the exact argv, and whether any preserve_user_keys overlay matched
+    a live key during deploy. All three follow the same omit-when-None
+    pattern as ``source_sha`` so old meta.json files (recorded before
+    the bump) still round-trip byte-identically.
     """
 
     command: TransitionCommand
@@ -120,9 +128,15 @@ class TransitionMeta:
     host: str  # platform.node()
     version: str  # setforge.__version__
     source_sha: str | None = None  # config-repo HEAD at install time; None pre-xra8
+    # setforge-8ohd: all None pre-bump. List/bool/str all use the None sentinel
+    # (NOT default_factory=list) so the omit-when-None invariant holds for every
+    # field and slots=True doesn't allocate a per-instance default container.
+    end_timestamp: str | None = None
+    command_line: list[str] | None = None
+    preserve_user_keys_applied: bool | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        out: dict[str, str] = {
+    def to_dict(self) -> dict[str, object]:
+        out: dict[str, object] = {
             "command": self.command.value,
             "profile": self.profile,
             "timestamp": self.timestamp.astimezone(UTC).isoformat(),
@@ -131,6 +145,15 @@ class TransitionMeta:
         }
         if self.source_sha is not None:
             out["source_sha"] = self.source_sha
+        if self.end_timestamp is not None:
+            out["end_timestamp"] = self.end_timestamp
+        if self.command_line is not None:
+            # Defensive copy: ``command_line`` is ``list[str]`` and
+            # ``frozen=True`` only freezes attribute *rebinding*, not
+            # list mutation through the attribute reference.
+            out["command_line"] = list(self.command_line)
+        if self.preserve_user_keys_applied is not None:
+            out["preserve_user_keys_applied"] = self.preserve_user_keys_applied
         return out
 
 
@@ -167,6 +190,9 @@ def make_meta(
     profile: str,
     *,
     source_dir: Path | None = None,
+    end_timestamp: str | None = None,
+    command_line: list[str] | None = None,
+    preserve_user_keys_applied: bool | None = None,
 ) -> TransitionMeta:
     """Build a TransitionMeta with current host + version + UTC timestamp.
 
@@ -176,6 +202,12 @@ def make_meta(
     ``source_sha`` as ``None``; callers that don't have a source dir
     handy (revert, plugin reconcile sub-record) keep the pre-bump call
     shape.
+
+    The three trailing kwargs (``end_timestamp``, ``command_line``,
+    ``preserve_user_keys_applied``) are the setforge-8ohd schema bump.
+    All default to ``None`` so pre-bump callers compile unchanged;
+    each field is omitted from ``meta.json`` when ``None`` so old
+    records still round-trip byte-identically.
     """
     source_sha = _git_head(source_dir) if source_dir is not None else None
     return TransitionMeta(
@@ -185,6 +217,9 @@ def make_meta(
         host=platform.node(),
         version=__version__,
         source_sha=source_sha,
+        end_timestamp=end_timestamp,
+        command_line=command_line,
+        preserve_user_keys_applied=preserve_user_keys_applied,
     )
 
 
@@ -219,6 +254,12 @@ def load_meta(transition_dir: Path) -> TransitionMeta:
             host=str(payload["host"]),
             version=str(payload["version"]),
             source_sha=payload.get("source_sha"),
+            # setforge-8ohd: optional, all None pre-bump. .get() (NOT
+            # payload[<field>]) so dozens of existing transition records
+            # written before the bump still load cleanly.
+            end_timestamp=payload.get("end_timestamp"),
+            command_line=payload.get("command_line"),
+            preserve_user_keys_applied=payload.get("preserve_user_keys_applied"),
         )
     except (KeyError, ValueError) as exc:
         raise InvalidTransitionRecord(
