@@ -284,8 +284,8 @@ def test_apply_yes_writes_transition_first(
     """`--apply --yes` → `_write_orphan_transition` must fire BEFORE any unlink.
 
     Probes the transition-first invariant directly on
-    :func:`_apply_cleanup` so the test doesn't depend on prompt_toolkit
-    being available or on CliRunner stdin behavior.
+    :func:`_execute_cleanup` so the test doesn't depend on
+    prompt_toolkit being available or on CliRunner stdin behavior.
     """
     live_orphan = tmp_path / "live" / "orphan.txt"
     live_orphan.parent.mkdir(parents=True, exist_ok=True)
@@ -311,7 +311,7 @@ def test_apply_yes_writes_transition_first(
     )
     monkeypatch.setattr(Path, "unlink", _spy_unlink)
 
-    orphans_mod._apply_cleanup(
+    orphans_mod._execute_cleanup(
         "p",
         [orphan_entry],
         orphans_mod.ApplyChoice.DELETE_AND_TRANSITION,
@@ -324,7 +324,7 @@ def test_apply_yes_writes_transition_first(
 def test_apply_default_branch_uses_yes(monkeypatch: pytest.MonkeyPatch) -> None:
     """`--apply --yes` short-circuits to DELETE_AND_TRANSITION (safe default)."""
     assert (
-        orphans_mod._resolve_apply_choice(yes=True)
+        orphans_mod._pick_cleanup_branch(yes=True)
         is orphans_mod.ApplyChoice.DELETE_AND_TRANSITION
     )
 
@@ -339,7 +339,7 @@ def test_apply_non_tty_resolver_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("sys.stdin", _FakeStdin)
     with pytest.raises(OrphanCleanupRequiresInteractive):
-        orphans_mod._resolve_apply_choice(yes=False)
+        orphans_mod._pick_cleanup_branch(yes=False)
 
 
 # ---------------------------------------------------------------------------
@@ -491,17 +491,17 @@ def test_no_shutil_rmtree_or_removedirs() -> None:
 def test_no_resolve_in_orphan_unlink_helpers() -> None:
     """Calling `.resolve()` on a symlink before `.unlink()` torches the
     pointed-to file. None of the per-orphan helpers
-    (`_unlink_orphan_path`, `_rmdir_empty_parents`, `_apply_cleanup`,
+    (`_unlink_orphan_path`, `_rmdir_empty_parents`, `_execute_cleanup`,
     `_write_orphan_transition`, `_read_orphan_content`,
-    `_lstat_safe`) may call `.resolve()`. The top-level
-    `cleanup_orphans` command is allowed to call `config.resolve()`
-    for source-dir normalization (Typer config path, not an orphan
-    path)."""
+    `_lstat_safe`) may call `.resolve()`. The
+    `_detect_orphans_live` helper is allowed to call
+    `config_path.resolve()` for source-dir normalization (Typer config
+    path, not an orphan path)."""
     tree = _orphans_module_ast()
     helper_names = {
         "_unlink_orphan_path",
         "_rmdir_empty_parents",
-        "_apply_cleanup",
+        "_execute_cleanup",
         "_write_orphan_transition",
         "_read_orphan_content",
         "_lstat_safe",
@@ -523,23 +523,42 @@ def test_no_resolve_in_orphan_unlink_helpers() -> None:
 
 def test_apply_path_calls_detect_orphans() -> None:
     """The `--apply` code path MUST re-compute orphans live (via
-    `compare_profile(transitions_dir=...)` which dispatches to
-    `detect_orphans`), NOT cache from a prior `compare` call."""
+    `_detect_orphans_live`, which dispatches to `compare_profile`
+    AND `detect_orphans`), NOT cache from a prior `compare` call.
+
+    Mirrors the SPEC 2 robust acceptance command — the FIRST function
+    whose name contains "apply" (case-insensitive) must transitively
+    reach `detect_orphans`.
+    """
     tree = _orphans_module_ast()
     apply_fn = next(
         n
         for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "cleanup_orphans"
+        if isinstance(n, ast.FunctionDef) and "apply" in n.name.lower()
     )
-    # The body of cleanup_orphans must call compare_mod.compare_profile,
-    # which transitively calls detect_orphans. Detecting either name as a
-    # call inside the function body is sufficient.
-    calls = {
-        getattr(c.func, "attr", None)
+    # Direct calls inside apply_fn.
+    direct_calls = {
+        getattr(c.func, "attr", None) or getattr(c.func, "id", None)
         for c in ast.walk(apply_fn)
         if isinstance(c, ast.Call)
     }
-    assert "compare_profile" in calls or "detect_orphans" in calls
+    # Transitive call set: include the bodies of any helper called by
+    # apply_fn that is also defined in this module (e.g.
+    # `_detect_orphans_live`).
+    transitive_names = {n for n in direct_calls if isinstance(n, str)}
+    transitive_calls: set[str] = set(transitive_names)
+    helper_fns = {
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name in transitive_names
+    }
+    for helper in helper_fns:
+        for c in ast.walk(helper):
+            if isinstance(c, ast.Call):
+                attr = getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+                if attr is not None:
+                    transitive_calls.add(attr)
+    assert "detect_orphans" in transitive_calls or "compare_profile" in transitive_calls
 
 
 # ---------------------------------------------------------------------------

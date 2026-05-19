@@ -22,6 +22,7 @@ from setforge.cli import app
 EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "install",
     "compare",
+    "cleanup-orphans",
     "capture",
     "merge",
     "sync",

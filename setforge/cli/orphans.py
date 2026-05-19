@@ -119,8 +119,29 @@ def _print_dry_run(orphans: list[OrphanEntry], console: Console) -> None:
     console.print("=== rerun with --apply to delete ===")
 
 
-def _resolve_apply_choice(*, yes: bool) -> ApplyChoice:
-    """Pick the apply branch.
+def _detect_orphans_live(
+    profile: str, config_path: Path
+) -> tuple[Any, list[OrphanEntry]]:
+    """Re-detect orphans live for the apply path.
+
+    Returns ``(cfg, orphans)``. The cfg is re-loaded inside the call so
+    callers cannot accidentally pass a stale snapshot from a prior
+    ``compare`` invocation. Catches the "stale snapshot deletes
+    re-added file" race called out in the SPEC 2 anti-pattern checks.
+    """
+    cfg = load_config(config_path)
+    report = compare_mod.compare_profile(
+        cfg,
+        profile,
+        config_path.resolve().parent,
+        transitions_dir=transitions.transitions_root(),
+        ignored=load_ignored_orphans(),
+    )
+    return cfg, report.orphans
+
+
+def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
+    """Pick the cleanup branch under ``--apply``.
 
     - ``yes=True`` → :attr:`ApplyChoice.DELETE_AND_TRANSITION` (safe
       revert-able default per SPEC 2).
@@ -264,19 +285,22 @@ def _rmdir_empty_parents(parents: list[Path], console: Console) -> None:
             )
 
 
-def _apply_cleanup(
+def _execute_cleanup(
     profile: str,
     orphans: list[OrphanEntry],
     choice: ApplyChoice,
     console: Console,
 ) -> None:
-    """Execute the apply branch.
+    """Execute the chosen cleanup branch over a pre-detected ``orphans`` list.
 
     For :attr:`ApplyChoice.DELETE_AND_TRANSITION` the transition record
     is written FIRST (before any unlink), so a crash between leaves a
     recoverable state. For :attr:`ApplyChoice.DELETE_ONLY` no
-    transition is written and the deletes are irreversible.
+    transition is written and the deletes are irreversible. The
+    :attr:`ApplyChoice.ABORT` branch is handled by the caller (no
+    mutation, no console line beyond the abort marker).
     """
+    transitions.ensure_state_dir_writable()
     wrote_transition = False
     if choice is ApplyChoice.DELETE_AND_TRANSITION:
         transition_dir = _write_orphan_transition(profile, orphans)
@@ -289,6 +313,34 @@ def _apply_cleanup(
     _rmdir_empty_parents([o.path.parent for o in orphans], console)
     if wrote_transition:
         console.print(f"  to undo: setforge revert --profile={profile}")
+
+
+def _apply_orphan_cleanup(
+    profile: str,
+    config_path: Path,
+    *,
+    yes: bool,
+    console: Console,
+) -> None:
+    """Entry-point for the ``--apply`` code path.
+
+    RE-COMPUTES orphans via :func:`_detect_orphans_live` (NEVER reuses
+    a cached snapshot from a prior ``compare`` call) — catches the
+    "stale snapshot deletes re-added file" race called out in the
+    SPEC 2 anti-pattern checks. Dispatches to :func:`_execute_cleanup`
+    for the actual mutation.
+    """
+    _cfg, orphans = _detect_orphans_live(profile, config_path)
+    if not orphans:
+        console.print("=== no orphans ===")
+        return
+
+    choice = _pick_cleanup_branch(yes=yes)
+    if choice is ApplyChoice.ABORT:
+        console.print("[red]✗ aborted[/red] — no orphans deleted")
+        return
+
+    _execute_cleanup(profile, orphans, choice, console)
 
 
 @app.command("cleanup-orphans")
@@ -333,8 +385,7 @@ def cleanup_orphans(
     returns without scanning — useful for one-shot manual exclusion
     without scanning the transitions dir.
     """
-    config = _resolve_config_arg(config)
-    cfg = load_config(config)
+    resolved_config = _resolve_config_arg(config)
     console = Console()
 
     if ignore is not None:
@@ -344,30 +395,9 @@ def cleanup_orphans(
         )
         return
 
-    # Re-compute orphans on EVERY apply (NEVER cache from a prior
-    # compare snapshot — catches the "stale snapshot deletes
-    # re-added file" race).
-    report = compare_mod.compare_profile(
-        cfg,
-        profile,
-        config.resolve().parent,
-        transitions_dir=transitions.transitions_root(),
-        ignored=load_ignored_orphans(),
-    )
-    orphans = report.orphans
-
     if not apply:
+        _, orphans = _detect_orphans_live(profile, resolved_config)
         _print_dry_run(orphans, console)
         return
 
-    if not orphans:
-        console.print("=== no orphans ===")
-        return
-
-    choice = _resolve_apply_choice(yes=yes)
-    if choice is ApplyChoice.ABORT:
-        console.print("[red]✗ aborted[/red] — no orphans deleted")
-        return
-
-    transitions.ensure_state_dir_writable()
-    _apply_cleanup(profile, orphans, choice, console)
+    _apply_orphan_cleanup(profile, resolved_config, yes=yes, console=console)
