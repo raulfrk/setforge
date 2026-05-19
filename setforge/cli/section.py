@@ -384,6 +384,10 @@ def _interactive_pick_semantics() -> str:
     if result is None:
         typer.echo("aborted.")
         raise typer.Exit(0)
+    # prompt_toolkit's dialog .run() is typed as Any; the values= tuples
+    # above guarantee a ``str`` return on a non-None path, so narrow
+    # explicitly to satisfy ``mypy --strict``'s no-any-return check.
+    assert isinstance(result, str)
     return result
 
 
@@ -406,6 +410,9 @@ def _interactive_pick_name() -> str:
         result = _self.input_dialog(title="section name", text=hint).run()
         if result is None:
             raise typer.Exit(0)
+        # input_dialog's .run() is typed Any; narrow to str so the
+        # validator below and the return type both stay in spec.
+        assert isinstance(result, str)
         try:
             _validate_name(result)
         except typer.BadParameter as exc:
@@ -434,6 +441,8 @@ def _interactive_pick_body_source() -> str:
     ).run()
     if result is None:
         raise typer.Exit(0)
+    # radiolist_dialog's .run() is typed Any; narrow to str.
+    assert isinstance(result, str)
     return result
 
 
