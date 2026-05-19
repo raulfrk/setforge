@@ -38,10 +38,10 @@ Profiles are defined in the USER's config repo's `setforge.yaml`. The author's d
 
 A 100+ test end-to-end suite at `tests/docker/` exercises `install`/`sync`/`compare`/`revert`/`validate`/`init`/`migrate`/`upgrade` and the new secrets-scan + reconcile-failure UX surfaces against a fresh Debian 12 container with real `claude`/`code`/`gitleaks` binaries — the canonical behavior-preservation gate for this project.
 
-- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -n auto -v`
-- **Parallel execution:** PASS `-n auto` EXPLICITLY. The nested conftest at `tests/docker/conftest.py` carries a `pytest_configure(tryfirst=True)` hook that *attempts* to auto-activate xdist, but in pytest 9.0 / xdist 3.8 the activation is not reliably picked up — xdist's `pytest_configure(trylast=True)` reads `numprocesses` early in the configure phase and the in-conftest set is too late. Empirical: explicit `-n auto` spawns 6/6 workers on a 6-core host; bare `pytest -m e2e_docker -v` spins a single process and runs serial. Tracked as a v0.2.0 release blocker.
-- **Runtime with `-n auto`:** ~11-12 min on a 6-core host (107 tests, ~20 transient subprocess.TimeoutExpired flakes due to Docker daemon contention under 6-way parallel — also tracked).
-- **Runtime serial (`-n 0` or no `-n`):** ~15+ min.
+- **Invocation:** `uv run pytest tests/docker/ -m e2e_docker -v` (bare — xdist auto-activates with `-n 2`).
+- **Parallel execution:** auto-activated by the project-root `conftest.py:pytest_configure` hook when `-m e2e_docker` is selected and `-n` was not passed explicitly. Capped at **2 workers** — empirically validated as the stable maximum for this host's Docker daemon (~109 tests in ~6:30 wall, zero `TimeoutExpired` flakes). Earlier attempts at `-n 4` saturated the daemon AND the host VM under sustained load; `-n auto` (= 6 on a 6-core host) produces ~20 transient timeouts per run. Override the cap with `-n N` on the CLI when running on a host with different daemon throughput; `-n 0` opts out of xdist for serial-mode debugging.
+- **Runtime with `-n 2` (default):** ~6:30 on a 6-core host (~109 tests).
+- **Runtime serial (`-n 0`):** ~15+ min.
 - **When to run:** required whenever Phase 7 fires (post-merge cross-cutting review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH and `gitleaks` on PATH (or `--gitleaks-bin` override) for the secrets-scan e2e cases; the suite skips containers missing docker.
 
@@ -53,7 +53,7 @@ After merging a non-trivial branch into `main`, both of these must exit 0:
 
 ```sh
 pre-commit run --all-files
-uv run pytest tests/docker/ -m e2e_docker -n auto -v
+uv run pytest tests/docker/ -m e2e_docker -v
 ```
 
 `pre-commit` catches tool-version skew (e.g. the ruff mismatch the cxj batch
