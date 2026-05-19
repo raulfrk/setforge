@@ -251,6 +251,88 @@ def test_apply_radiolist_no_backup_skips_backup_files(
     assert not (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
 
 
+def test_apply_backup_failure_aborts_before_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing ``shutil.copy2`` during backup aborts BEFORE ``apply()``.
+
+    SPEC 4 forbids shortcutting on the first failure: when even one
+    backup raises, the driver must collect failures across the full
+    path list, then abort with exit code 1 WITHOUT touching any
+    migration's ``apply()`` — better to leave files untouched than
+    to mutate with an incomplete safety net.
+    """
+    cfg = tmp_path / "setforge.yaml"
+    _write_minimal_setforge_yaml(cfg, with_old_key=True)
+
+    # The preview pass calls apply() against a shadow tree; we only
+    # care about calls against the REAL cfg_path (the user's file).
+    real_apply_calls: list[str] = []
+
+    @dataclass(slots=True, frozen=True)
+    class _TrackingMigration:
+        from_version: str = "1.0"
+        to_version: str = "1.1"
+        _real_cfg: Path = cfg
+
+        def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+            return (
+                ManifestEntry(
+                    type=ManifestType.RENAME,
+                    description="rename old_key → new_key",
+                    affected_path=roots.cfg_path,
+                ),
+            )
+
+        def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+            return (roots.cfg_path,)
+
+        def apply(self, *, roots: MigrationRoots) -> None:
+            if roots.cfg_path == self._real_cfg:
+                real_apply_calls.append(f"{self.from_version}→{self.to_version}")
+
+    chain = (_TrackingMigration(),)
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
+
+    # Force the backup-loop copy2 call to raise. The preview pass uses
+    # copy2 too — patch only the second call (the real backup pass)
+    # by routing through a counter so the preview render succeeds.
+    import shutil as _shutil
+
+    real_copy2 = _shutil.copy2
+    call_count = {"n": 0}
+
+    def _failing_copy2(src: Any, dst: Any, *args: Any, **kwargs: Any) -> Any:
+        call_count["n"] += 1
+        # The preview pass copies into the tmp shadow tree first; let
+        # those succeed. The .pre-1.1.bak sibling lives next to the
+        # config file, so we detect the backup pass by destination path.
+        if str(dst).endswith(".pre-1.1.bak"):
+            raise OSError("simulated backup failure")
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("setforge.cli.migrate.shutil.copy2", _failing_copy2)
+    monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "backup FAILED" in result.output
+    assert "aborting migration" in result.output
+    # apply() against the REAL cfg must NEVER fire when a backup
+    # failed — only the preview pass (shadow roots) may have run.
+    assert real_apply_calls == [], (
+        f"expected no real apply() calls on backup failure; got {real_apply_calls!r}"
+    )
+    # The .pre-1.1.bak sibling must not exist (the copy2 call raised).
+    assert not (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
+    # Original file must be untouched.
+    assert "old_key:" in cfg.read_text(encoding="utf-8")
+    assert "new_key:" not in cfg.read_text(encoding="utf-8")
+
+
 def test_apply_mutually_exclusive_with_check(tmp_path: Path) -> None:
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)

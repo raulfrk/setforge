@@ -441,15 +441,41 @@ def _execute_chain(
     roots: MigrationRoots,
     choice: MigrateChoice,
 ) -> None:
-    """Backup every affected file (if requested), then ``apply()`` the chain."""
+    """Backup every affected file (if requested), then ``apply()`` the chain.
+
+    Backup-loop posture: principled-fail. Iterate every affected path
+    first, collecting any per-file backup failures into a list. If
+    ANY backup fails, print each failure, abort with ``typer.Exit(1)``,
+    and DO NOT call ``migration.apply()`` — better to leave the user's
+    files untouched than to mutate with an incomplete safety net.
+    SPEC 4 explicitly forbids shortcutting on the first failure: the
+    user gets the full failure inventory in one pass.
+    """
     typer.echo("=== applying ===")
     if choice is MigrateChoice.APPLY_WITH_BACKUP:
+        backup_failures: list[tuple[Path, OSError]] = []
         for affected in _all_affected_paths(chain=chain, roots=roots):
             if not affected.exists():
                 continue
             backup = _fs_ops.backup_path(affected, chain[-1].to_version)
-            shutil.copy2(affected, backup)
+            try:
+                shutil.copy2(affected, backup)
+            except OSError as exc:
+                backup_failures.append((affected, exc))
+                typer.secho(
+                    f"  backup FAILED: {affected} — {exc}",
+                    err=True,
+                    fg=typer.colors.RED,
+                )
+                continue
             typer.echo(f"  backup:  {affected.name} → {backup.name}")
+        if backup_failures:
+            typer.secho(
+                f"aborting migration — {len(backup_failures)} backup(s) failed",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
     for migration in chain:
         migration.apply(roots=roots)
         typer.echo(f"  applied: {migration.from_version} → {migration.to_version}")
