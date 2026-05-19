@@ -11,17 +11,25 @@ import typer
 
 from setforge import vscode_extensions
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli._help_examples import (
+    EXT_ADD_EXAMPLES,
+    EXT_LIST_EXAMPLES,
+    EXT_RECONCILE_EXAMPLES,
+    EXT_REMOVE_EXAMPLES,
+)
 from setforge.config import ReconcilePolicy, load_config, resolve_profile
 from setforge.errors import ExtensionToolMissing
 
 ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(ext_app, name="ext")
 
 
-@ext_app.command("list")
+@ext_app.command("list", epilog=EXT_LIST_EXAMPLES)
 def ext_list(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -56,7 +64,7 @@ def ext_list(
         typer.echo(f"{ext_id:<{width}}{declared:<12}{is_installed:<10}")
 
 
-@ext_app.command("add")
+@ext_app.command("add", epilog=EXT_ADD_EXAMPLES)
 def ext_add(
     extension_id: str = typer.Argument(..., help="VSCode extension ID."),
     profile: str = _PROFILE_OPTION,
@@ -85,7 +93,7 @@ def ext_add(
             )
 
 
-@ext_app.command("remove")
+@ext_app.command("remove", epilog=EXT_REMOVE_EXAMPLES)
 def ext_remove(
     extension_id: str = typer.Argument(..., help="VSCode extension ID."),
     profile: str = _PROFILE_OPTION,
@@ -107,7 +115,7 @@ def ext_remove(
         typer.echo(f"no change: {extension_id} not in include list")
 
 
-@ext_app.command("reconcile")
+@ext_app.command("reconcile", epilog=EXT_RECONCILE_EXAMPLES)
 def ext_reconcile(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
