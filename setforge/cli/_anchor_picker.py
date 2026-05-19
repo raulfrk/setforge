@@ -94,30 +94,37 @@ def _status_text(buffer: Buffer, filename: str) -> str:
 
 
 def _bind_motion_keys(kb: KeyBindings, buffer: Buffer) -> None:
-    """Cursor-motion keys: ↑/↓ / PgUp/PgDn / Home/End."""
+    """Cursor-motion keys: ↑/↓ / PgUp/PgDn / Home/End.
+
+    Each callback's ``event`` parameter is mandated by prompt_toolkit's
+    ``KeyBindings.add`` decorator signature; the motion handlers never
+    read the event itself, so the parameter is prefixed with ``_`` to
+    mark it explicitly-unused (the framework does not introspect the
+    parameter name).
+    """
 
     @kb.add("up")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         buffer.cursor_up(count=1)
 
     @kb.add("down")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         _move_down_clamped(buffer, count=1)
 
     @kb.add("pageup")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         buffer.cursor_up(count=_PAGE_LINES)
 
     @kb.add("pagedown")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         _move_down_clamped(buffer, count=_PAGE_LINES)
 
     @kb.add("home")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         buffer.cursor_position = 0
 
     @kb.add("end")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
         _jump_to_last_content_row(buffer)
 
 
@@ -131,7 +138,9 @@ def _bind_terminal_keys(
     """Keys that exit or open auxiliary UI: ``/`` / Enter / Esc / Ctrl-C."""
 
     @kb.add("/")
-    def _(event: KeyPressEvent) -> None:
+    def _(_event: KeyPressEvent) -> None:
+        # ``/`` only triggers the search toolbar — no need to read the
+        # event itself; underscore-prefix marks it explicitly-unused.
         start_search(buffer_control)
 
     @kb.add("enter")
