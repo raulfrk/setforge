@@ -36,14 +36,19 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def fake_show_completion(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def fake_show_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[list[str], dict[str, str] | None]]:
     """Replace ``subprocess.run`` so ``--show-completion`` returns a fixture body.
 
-    Returns a list that captures every argv passed to ``subprocess.run``
-    via the completion module's attribute path; tests can assert on it
-    to verify the shell value reached the subprocess.
+    Returns a list that captures every (argv, env) pair passed to
+    ``subprocess.run`` via the completion module's attribute path;
+    tests can assert on it to verify the shell value reached the
+    subprocess AND that the typer env override (commit 9bbcb36's
+    ``_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1``) is set on the
+    child env.
     """
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], dict[str, str] | None]] = []
 
     def fake_run(
         argv: list[str],
@@ -54,9 +59,9 @@ def fake_show_completion(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         timeout: float | None = None,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        del check, capture_output, text, timeout, env  # unused in fake
-        captured.append(list(argv))
-        # argv shape: ["setforge", "--show-completion=<shell>"].
+        del check, capture_output, text, timeout  # unused in fake
+        captured.append((list(argv), dict(env) if env is not None else None))
+        # argv shape: [<setforge-binary>, "--show-completion=<shell>"].
         last = argv[-1]
         shell_value = last.partition("=")[2] if "=" in last else last
         body_for = {
@@ -180,7 +185,7 @@ def test_write_wiring_ensures_trailing_newline_before_block(tmp_path: Path) -> N
 def test_completion_install_zsh_virgin_writes_files_and_appends_rc(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# user content\nalias ls=ls\n")
@@ -198,13 +203,20 @@ def test_completion_install_zsh_virgin_writes_files_and_appends_rc(
     assert "# >>> setforge completion >>>" in text
     assert "# user content" in text
     # subprocess.run was called with the correct shell value
-    assert any(any("zsh" in arg for arg in argv) for argv in fake_show_completion)
+    assert any(any("zsh" in arg for arg in argv) for argv, _env in fake_show_completion)
+    # And the typer env override (commit 9bbcb36) reached the child env
+    # so --show-completion=<shell> is parsed as a value, not a bool flag.
+    assert all(
+        env is not None
+        and env.get("_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION") == "1"
+        for _argv, env in fake_show_completion
+    )
 
 
 def test_completion_install_zsh_yes_only_skips_rc_edit(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -220,7 +232,7 @@ def test_completion_install_zsh_yes_only_skips_rc_edit(
 def test_completion_install_zsh_abort_writes_nothing(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -236,7 +248,7 @@ def test_completion_install_zsh_abort_writes_nothing(
 def test_completion_install_zsh_dialog_escape_treated_as_abort(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -251,7 +263,7 @@ def test_completion_install_zsh_dialog_escape_treated_as_abort(
 def test_completion_install_zsh_already_wired_is_idempotent(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     # Pre-seed with a sentinel block; second install must replace its
@@ -271,7 +283,7 @@ def test_completion_install_zsh_already_wired_is_idempotent(
 def test_completion_install_zsh_non_tty_without_flag_raises_mutate_gate(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -288,7 +300,7 @@ def test_completion_install_zsh_non_tty_without_flag_raises_mutate_gate(
 
 def test_completion_install_zsh_non_interactive_writes_and_wires(
     home: Path,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# user content\n")
@@ -301,7 +313,7 @@ def test_completion_install_zsh_non_interactive_writes_and_wires(
 
 def test_completion_install_zsh_non_interactive_no_wire_skips_rc(
     home: Path,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
@@ -317,7 +329,7 @@ def test_completion_install_zsh_non_interactive_no_wire_skips_rc(
 def test_completion_install_zsh_refuses_when_rc_missing(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     # No ~/.zshrc on disk.
     _stub_dialog(monkeypatch, CompletionChoice.YES_AND_WIRE)
@@ -331,7 +343,7 @@ def test_completion_install_zsh_refuses_when_rc_missing(
 def test_completion_install_zsh_rc_file_override(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     custom_rc = home / "custom.zshrc"
     custom_rc.write_text("# custom rc\n")
@@ -357,7 +369,7 @@ def test_completion_install_zsh_rc_file_override(
 def test_completion_install_bash_idempotent_source_line(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".bashrc"
     rc.write_text("# user content\n")
@@ -378,7 +390,7 @@ def test_completion_install_bash_idempotent_source_line(
 
 def test_completion_install_bash_non_interactive_writes_files(
     home: Path,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     rc = home / ".bashrc"
     rc.write_text("# user content\n")
@@ -396,7 +408,7 @@ def test_completion_install_bash_non_interactive_writes_files(
 
 def test_completion_install_fish_writes_to_fish_dir_no_rc_edit(
     home: Path,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     # No bashrc / zshrc and no dialog stub — fish must skip both paths.
     result = _RUNNER.invoke(app, ["completion", "install", "fish"])
@@ -409,7 +421,7 @@ def test_completion_install_fish_writes_to_fish_dir_no_rc_edit(
 
 def test_completion_install_fish_idempotent_no_op_second_run(
     home: Path,
-    fake_show_completion: list[list[str]],
+    fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
     target = home / ".config/fish/completions/setforge.fish"
     first = _RUNNER.invoke(app, ["completion", "install", "fish"])
