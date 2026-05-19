@@ -277,13 +277,27 @@ def test_git_run_returns_127_when_binary_missing(
 # ---------------------------------------------------------------------------
 
 
-def _patch_git_for_clean_repo(monkeypatch: pytest.MonkeyPatch) -> _FakeGitRunner:
-    """Install a happy-path git runner that resolves every status query."""
+def _patch_git_for_clean_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    extra_cases: tuple[tuple[tuple[str, ...], int, str], ...] = (),
+) -> _FakeGitRunner:
+    """Install a happy-path git runner that resolves every status query.
+
+    Tests that need ``status`` to issue git queries beyond the four
+    happy-path cases (e.g. a ``<source_sha>..HEAD`` rev-list when a
+    transition records a ``source_sha``) pass ``extra_cases`` as a
+    tuple of ``(suffix, returncode, stdout)`` triples. They are added
+    to the runner BEFORE :func:`subprocess.run` is patched so the
+    runner is fully assembled up front — no post-patch reach-in.
+    """
     runner = _FakeGitRunner()
     runner.add(("--is-inside-work-tree",), returncode=0, stdout="true\n")
     runner.add(("HEAD",), returncode=0, stdout="1f37cb1\n")
     runner.add(("origin/main",), returncode=0, stdout="abc\n")
     runner.add(("origin/main..HEAD",), returncode=0, stdout="0\n")
+    for suffix, returncode, stdout in extra_cases:
+        runner.add(suffix, returncode=returncode, stdout=stdout)
     monkeypatch.setattr(status_mod.subprocess, "run", runner)
     monkeypatch.setattr(status_mod.shutil, "which", lambda name: "/usr/bin/git")
     return runner
@@ -303,13 +317,12 @@ def test_status_renders_5_sections(
         dirname="20260518T070015000000Z-install-vm-headless",
         source_sha="deadbeef",
     )
-    _patch_git_for_clean_repo(monkeypatch)
-
-    # When source_sha is present, status will also try `<sha>..HEAD`.
-    # Inject the matching case onto the same patched runner.
-    captured_runner = status_mod.subprocess.run
-    assert isinstance(captured_runner, _FakeGitRunner)
-    captured_runner.add(("deadbeef..HEAD",), returncode=0, stdout="0\n")
+    # source_sha = deadbeef triggers an extra `deadbeef..HEAD` git query;
+    # register it up front so the runner is fully assembled before patch.
+    _patch_git_for_clean_repo(
+        monkeypatch,
+        extra_cases=((("deadbeef..HEAD",), 0, "0\n"),),
+    )
 
     result = _invoke_status(source_dir=tmp_path, config_path=config_path)
 
@@ -456,9 +469,12 @@ def test_status_skips_later_sync_for_last_install_line(
         timestamp="2026-05-18T08:00:15+00:00",
         command="sync",
     )
-    runner = _patch_git_for_clean_repo(monkeypatch)
-    # source_sha = deadbeef triggers an extra `deadbeef..HEAD` git query.
-    runner.add(("deadbeef..HEAD",), returncode=0, stdout="0\n")
+    # source_sha = deadbeef triggers an extra `deadbeef..HEAD` git query;
+    # register it up front so the runner is fully assembled before patch.
+    _patch_git_for_clean_repo(
+        monkeypatch,
+        extra_cases=((("deadbeef..HEAD",), 0, "0\n"),),
+    )
 
     result = _invoke_status(source_dir=tmp_path, config_path=config_path)
 
