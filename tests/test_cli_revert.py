@@ -639,6 +639,86 @@ def test_revert_to_before_resolves_prefix_to_full_id(
     assert revert_result.exit_code == 0, revert_result.output
 
 
+@pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
+def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Multi-step revert wizard returning ABORT must leave the live tree
+    and the transitions history untouched.
+
+    Mocks ``setforge.cli._revert_confirm.radiolist_dialog`` to return
+    :class:`RevertChoice.ABORT`, drives ``revert --to-before`` (no
+    ``--yes``) under an isatty stub, and asserts exit 0 + no live
+    mutation + no reverse-transition dir.
+    """
+    cfg, dst = _setup_repo(tmp_path)
+    _state_root(tmp_path, monkeypatch)
+    _no_code(monkeypatch)
+
+    runner = CliRunner()
+    live, transition_a, _transition_b = _two_install_sequence(cfg, runner)
+    assert live.exists()
+    pre = live.read_text(encoding="utf-8")
+
+    state_dir = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
+    pre_revert_dirs = [
+        d for d in (state_dir / "transitions").iterdir() if "-revert-vmh" in d.name
+    ]
+    assert pre_revert_dirs == []
+
+    # Make the wizard think it's interactive (typer's CliRunner swaps
+    # sys.stdin to a non-TTY pipe AT invoke time, so we cannot just
+    # patch the underlying sys.stdin). Swap the entire `sys` module
+    # reference inside _revert_confirm with a stub that exposes a TTY
+    # stdin. Then have radiolist_dialog return ABORT.
+    from setforge.cli import _revert_confirm as _rc_module
+    from setforge.cli._revert_confirm import RevertChoice as _RC
+
+    class _FakeStdin:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    class _FakeSys:
+        stdin = _FakeStdin()
+
+    monkeypatch.setattr(_rc_module, "sys", _FakeSys)
+
+    class _FakeDialog:
+        def __init__(self, return_value: object) -> None:
+            self._return_value = return_value
+
+        def run(self) -> object:
+            return self._return_value
+
+    def _fake_radiolist(**_kwargs: object) -> _FakeDialog:
+        return _FakeDialog(_RC.ABORT)
+
+    monkeypatch.setattr(
+        "setforge.cli._revert_confirm.radiolist_dialog", _fake_radiolist
+    )
+
+    revert_result = runner.invoke(
+        app,
+        [
+            "revert",
+            "--profile=vmh",
+            f"--config={cfg}",
+            f"--to-before={transition_a.name}",
+        ],
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+
+    # Live unchanged.
+    assert live.exists()
+    assert live.read_text(encoding="utf-8") == pre
+    # No reverse transition recorded.
+    post_revert_dirs = [
+        d for d in (state_dir / "transitions").iterdir() if "-revert-vmh" in d.name
+    ]
+    assert post_revert_dirs == []
+
+
 def test_revert_to_before_wrong_profile_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
