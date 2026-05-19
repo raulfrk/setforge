@@ -386,9 +386,7 @@ def _resolve_to_before_chain(
     live tree it was recorded from.
     """
     target_path = transitions.resolve_transition_prefix(to_before)
-    target_meta = json.loads(
-        (target_path / "meta.json").read_text(encoding="utf-8")
-    )
+    target_meta = json.loads((target_path / "meta.json").read_text(encoding="utf-8"))
     target_profile = str(target_meta.get("profile", ""))
     if target_profile != profile:
         raise SetforgeError(
@@ -399,9 +397,7 @@ def _resolve_to_before_chain(
         profile_filter=[profile], reverse=True
     )
     if not all_for_profile:
-        raise NoTransitionFound(
-            f"no transition history for profile {profile!r}"
-        )
+        raise NoTransitionFound(f"no transition history for profile {profile!r}")
     chain: list[transitions.TransitionListing] = []
     for entry in all_for_profile:
         chain.append(entry)
@@ -598,9 +594,7 @@ def transitions_show(
     _render_extensions_section_show(target, console)
 
     console.print("=== reverse this transition ===")
-    console.print(
-        f"  setforge revert --profile={profile} --to-before={target.name}"
-    )
+    console.print(f"  setforge revert --profile={profile} --to-before={target.name}")
     console.print(
         "    (will undo this transition AND every newer transition for this profile)"
     )

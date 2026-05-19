@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 
-
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -114,12 +113,8 @@ def test_list_renders_columns_newest_first_by_default(
     assert "files" in header_line
     assert "plugins" in header_line
     assert "ext" in header_line
-    install_idx = next(
-        i for i, line in enumerate(lines) if "install-vmh" in line
-    )
-    sync_idx = next(
-        i for i, line in enumerate(lines) if "sync-vmh" in line
-    )
+    install_idx = next(i for i, line in enumerate(lines) if "install-vmh" in line)
+    sync_idx = next(i for i, line in enumerate(lines) if "sync-vmh" in line)
     # Newest-first default: sync (17:00) before install (09:00).
     assert sync_idx < install_idx
     # Footer suggestions are rendered.
@@ -146,12 +141,8 @@ def test_list_oldest_first_flips_order(
 
     assert result.exit_code == 0, result.output
     lines = _strip_ansi(result.output).splitlines()
-    install_idx = next(
-        i for i, line in enumerate(lines) if "install-vmh" in line
-    )
-    sync_idx = next(
-        i for i, line in enumerate(lines) if "sync-vmh" in line
-    )
+    install_idx = next(i for i, line in enumerate(lines) if "install-vmh" in line)
+    sync_idx = next(i for i, line in enumerate(lines) if "sync-vmh" in line)
     assert install_idx < sync_idx
 
 
@@ -350,9 +341,7 @@ def test_show_renders_command_and_profile_per_mockup(
         ),
     )
 
-    result = CliRunner().invoke(
-        app, ["transitions", "show", "20260518T2030"]
-    )
+    result = CliRunner().invoke(app, ["transitions", "show", "20260518T2030"])
 
     assert result.exit_code == 0, result.output
     clean = _strip_ansi(result.output)

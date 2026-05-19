@@ -341,9 +341,7 @@ class MultiStepRevertPlan:
             raise ValueError("MultiStepRevertPlan must have at least one step")
 
 
-def _render_multi_step_panel(
-    plan: MultiStepRevertPlan, console: Console
-) -> None:
+def _render_multi_step_panel(plan: MultiStepRevertPlan, console: Console) -> None:
     """Print the multi-step summary panel; one row per transition step."""
     header = (
         f"[bold]setforge revert[/bold] profile=[yellow]{plan.profile}[/yellow] "

@@ -407,9 +407,7 @@ def test_revert_continues_after_extension_uninstall_failure(
 # ---------------------------------------------------------------------------
 
 
-def _two_install_sequence(
-    cfg: Path, runner: CliRunner
-) -> tuple[Path, Path, Path]:
+def _two_install_sequence(cfg: Path, runner: CliRunner) -> tuple[Path, Path, Path]:
     """Run install twice with a content change between them.
 
     Returns ``(dst, transition_a_dir, transition_b_dir)`` in chronological
@@ -423,14 +421,14 @@ def _two_install_sequence(
     # (modifies the live file from "hello\n" to "hello world\n").
     src = cfg.parent / "tracked" / "greeting.md"
     src.write_text("hello world\n", encoding="utf-8")
-    install_result_b = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    install_result_b = runner.invoke(
+        app, ["install", "--profile=vmh", f"--config={cfg}"]
+    )
     assert install_result_b.exit_code == 0, install_result_b.output
 
     # Resolve transitions chronologically.
     state = Path(__import__("os").environ["SETFORGE_STATE_DIR"])
-    transition_dirs = sorted(
-        d for d in (state / "transitions").iterdir() if d.is_dir()
-    )
+    transition_dirs = sorted(d for d in (state / "transitions").iterdir() if d.is_dir())
     # 2 install transitions land first.
     install_transitions = [d for d in transition_dirs if "install" in d.name]
     assert len(install_transitions) == 2
@@ -487,7 +485,7 @@ def test_revert_to_before_dry_run_failure_aborts_with_no_live_changes(
 ) -> None:
     """If the dry-run pass fails on ANY step, the chain aborts with NO
     live mutations — the file stays drifted."""
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
 
