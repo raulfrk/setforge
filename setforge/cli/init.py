@@ -402,8 +402,7 @@ def init(
         False,
         "--check",
         help=(
-            "Read-only health check — print env / dirs / capabilities; "
-            "make no changes."
+            "Read-only health check — print env / dirs / capabilities; make no changes."
         ),
     ),
     no_prompt: bool = typer.Option(
@@ -418,16 +417,14 @@ def init(
         None,
         "--path-source",
         help=(
-            "Pre-select the 'path' source-config option "
-            "(skips the source sub-prompt)."
+            "Pre-select the 'path' source-config option (skips the source sub-prompt)."
         ),
     ),
     git_source: str | None = typer.Option(
         None,
         "--git-source",
         help=(
-            "Pre-select the 'git' source-config option "
-            "(skips the source sub-prompt)."
+            "Pre-select the 'git' source-config option (skips the source sub-prompt)."
         ),
     ),
     git_ref: str = typer.Option(

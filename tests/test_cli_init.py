@@ -11,20 +11,6 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-# Typer's rich help renderer interleaves ANSI escapes between option-name
-# characters (`\x1b[36m-\x1b[0m\x1b[36m-force\x1b[0m`); strip ANSI before
-# substring assertions so `--force` resolves bit-for-bit.
-_ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-
-def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
-
-
-# CliRunner formats help text into a terminal-width column; tighten the
-# wrap so option-name substring assertions don't run afoul of wrapping.
-_HELP_RUNNER = CliRunner(env={"COLUMNS": "200"})
-
 from setforge.cli import app
 from setforge.cli._init_helpers import (
     BinaryProbe,
@@ -40,6 +26,19 @@ from setforge.cli._init_helpers import (
     probe_environment,
 )
 
+# Typer's rich help renderer interleaves ANSI escapes between option-name
+# characters (`\x1b[36m-\x1b[0m\x1b[36m-force\x1b[0m`); strip ANSI before
+# substring assertions so `--force` resolves bit-for-bit.
+_ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+# CliRunner formats help text into a terminal-width column; tighten the
+# wrap so option-name substring assertions don't run afoul of wrapping.
+_HELP_RUNNER = CliRunner(env={"COLUMNS": "200"})
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -184,20 +183,14 @@ def test_probe_environment_dirs_reflect_existence(home: Path) -> None:
 def test_probe_environment_capabilities_disabled_when_binary_missing(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "setforge.cli._init_helpers.resolve_binary", lambda name: None
-    )
+    monkeypatch.setattr("setforge.cli._init_helpers.resolve_binary", lambda name: None)
     monkeypatch.setattr("setforge.cli._init_helpers._resolve_uv", lambda: None)
     probe = probe_environment()
     caps_by_label = {c.label: c for c in probe.capabilities}
-    assert (
-        caps_by_label["claude_plugins reconcile"].state
-        is CapabilityState.DISABLED
-    )
+    assert caps_by_label["claude_plugins reconcile"].state is CapabilityState.DISABLED
     assert "claude binary missing" in caps_by_label["claude_plugins reconcile"].reason
     assert (
-        caps_by_label["vscode_extensions reconcile"].state
-        is CapabilityState.DISABLED
+        caps_by_label["vscode_extensions reconcile"].state is CapabilityState.DISABLED
     )
 
 
@@ -213,12 +206,8 @@ def test_probe_environment_capabilities_enabled_when_binary_present(
     )
     probe = probe_environment()
     caps_by_label = {c.label: c for c in probe.capabilities}
-    assert (
-        caps_by_label["claude_plugins reconcile"].state is CapabilityState.ENABLED
-    )
-    assert (
-        caps_by_label["vscode_extensions reconcile"].state is CapabilityState.ENABLED
-    )
+    assert caps_by_label["claude_plugins reconcile"].state is CapabilityState.ENABLED
+    assert caps_by_label["vscode_extensions reconcile"].state is CapabilityState.ENABLED
 
 
 def test_probe_environment_marks_newly_enabled_against_prev_state(
@@ -226,7 +215,9 @@ def test_probe_environment_marks_newly_enabled_against_prev_state(
 ) -> None:
     prev = EnvProbe(
         binaries=(
-            BinaryProbe(name="uv", required=True, resolved_path=Path("/u"), fix_hint=""),
+            BinaryProbe(
+                name="uv", required=True, resolved_path=Path("/u"), fix_hint=""
+            ),
             BinaryProbe(name="claude", required=False, resolved_path=None, fix_hint=""),
             BinaryProbe(name="code", required=False, resolved_path=None, fix_hint=""),
         ),
@@ -237,9 +228,7 @@ def test_probe_environment_marks_newly_enabled_against_prev_state(
         "setforge.cli._init_helpers.resolve_binary",
         lambda name: Path("/fake") / name if name == "claude" else None,
     )
-    monkeypatch.setattr(
-        "setforge.cli._init_helpers._resolve_uv", lambda: Path("/u")
-    )
+    monkeypatch.setattr("setforge.cli._init_helpers._resolve_uv", lambda: Path("/u"))
     probe = probe_environment(prev_state=prev)
     caps = {c.label: c for c in probe.capabilities}
     assert caps["claude_plugins reconcile"].newly_enabled is True
@@ -295,9 +284,7 @@ def test_is_initialized_false_when_host_local_missing(home: Path) -> None:
     """Stub-only state (root callback wrote local.yaml) doesn't count as initialized."""
     cfg = home / ".config" / "setforge"
     cfg.mkdir(parents=True)
-    (cfg / "local.yaml").write_text(
-        "# setforge host-local config\n", encoding="utf-8"
-    )
+    (cfg / "local.yaml").write_text("# setforge host-local config\n", encoding="utf-8")
     probe = probe_environment()
     assert is_initialized(probe) is False
 
@@ -307,7 +294,9 @@ def test_config_dir_path_under_home(home: Path) -> None:
 
 
 def test_host_local_dir_path_under_home(home: Path) -> None:
-    assert host_local_dir_path() == home / ".local" / "share" / "setforge" / "host-local"
+    assert (
+        host_local_dir_path() == home / ".local" / "share" / "setforge" / "host-local"
+    )
 
 
 def test_mkdir_with_retry_creates_parents(home: Path) -> None:

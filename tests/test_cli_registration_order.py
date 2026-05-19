@@ -28,6 +28,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "revert",
     "validate",
     "fetch",
+    "init",
 )
 
 EXPECTED_SUBGROUPS: tuple[str, ...] = (
