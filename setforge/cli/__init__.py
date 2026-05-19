@@ -25,6 +25,9 @@ app: typer.Typer = typer.Typer(
     help="setforge: tracked file + extension + Claude plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
+    # Pin help-output column width so CliRunner snapshot assertions
+    # stay byte-for-byte stable across CI vs local (Click #2253).
+    context_settings={"max_content_width": 100, "terminal_width": 100},
 )
 
 
