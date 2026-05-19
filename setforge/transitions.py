@@ -351,8 +351,7 @@ def _validate_one_outcome(entry: object) -> ReconcileOutcome:
     """
     if not isinstance(entry, dict):
         raise InvalidTransitionRecord(
-            f"reconcile_outcomes.json: entry must be a dict, got "
-            f"{type(entry).__name__}"
+            f"reconcile_outcomes.json: entry must be a dict, got {type(entry).__name__}"
         )
     item_id = entry.get("item_id")
     kind = entry.get("kind")
