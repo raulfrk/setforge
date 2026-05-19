@@ -322,7 +322,7 @@ def _render_config_repo(
         typer.echo(f"                  ↳ commits-since-install: (— {reason})")
     else:
         count = git_info.commits_since_install
-        tail = "(up to date)" if count == 0 else f"({count} new since last install)"
+        tail = "(up to date)" if count == 0 else "(install lag)"
         typer.echo(
             f"                  ↳ {count} commit{'s' if count != 1 else ''} "
             f"ahead of last-installed state {tail}"
