@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from enum import StrEnum
@@ -135,8 +136,14 @@ def _render_completion_script(shell: ShellKind) -> str:
     to be (which is wrong when we're installing for a DIFFERENT shell).
     """
     child_env = {**os.environ, "_TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION": "1"}
+    # ``shutil.which`` resolves ``setforge`` on PATH the same way the
+    # user's shell did when they invoked us; falling back to
+    # ``sys.argv[0]`` lets the command still work when called via an
+    # absolute path that isn't on PATH (e.g. ``uv run setforge ...``
+    # inside a venv whose bin dir wasn't activated).
+    bin_path = shutil.which("setforge") or sys.argv[0]
     result = subprocess.run(
-        ["setforge", f"--show-completion={shell.value}"],
+        [bin_path, f"--show-completion={shell.value}"],
         check=False,
         capture_output=True,
         text=True,
