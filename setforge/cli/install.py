@@ -26,11 +26,11 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
-from setforge.cli._help_examples import INSTALL_EXAMPLES
 from setforge.cli._git_check import (
     resolve_source_for_git_check,
     run_git_check_or_raise,
 )
+from setforge.cli._help_examples import INSTALL_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
     _extract_live_sections_map,

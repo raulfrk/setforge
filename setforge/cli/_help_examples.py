@@ -206,7 +206,8 @@ Examples:
 
 \b
   # YAML-only edit (skip the 'claude plugin install' call)
-  setforge plugin add my-plugin --from=github:owner/repo --profile=<profile> --no-install
+  setforge plugin add my-plugin --from=github:owner/repo \\
+      --profile=<profile> --no-install
 """
 
 PLUGIN_REMOVE_EXAMPLES: str = """\
@@ -416,7 +417,8 @@ Examples:
 
 \b
   # Non-interactive (CI / cron): skip the confirm and pre-restore snapshot
-  setforge snapshot restore before-experiment --profile=<profile> --yes --non-interactive
+  setforge snapshot restore before-experiment --profile=<profile> \\
+      --yes --non-interactive
 """
 
 COMPLETION_INSTALL_EXAMPLES: str = """\

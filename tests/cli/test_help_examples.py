@@ -23,8 +23,7 @@ import re
 import pytest
 from typer.testing import CliRunner
 
-from setforge.cli import _help_examples
-from setforge.cli import app
+from setforge.cli import _help_examples, app
 
 # Leaf-command invocation paths — each entry is a path list that drives
 # ``setforge <path...> --help`` end-to-end. Order matches the source
@@ -184,9 +183,7 @@ def test_no_personal_config_in_help_examples_module() -> None:
 @pytest.mark.parametrize(
     "leaf_path", LEAF_COMMANDS, ids=[_id_for(p) for p in LEAF_COMMANDS]
 )
-def test_every_leaf_help_parses(
-    runner: CliRunner, leaf_path: tuple[str, ...]
-) -> None:
+def test_every_leaf_help_parses(runner: CliRunner, leaf_path: tuple[str, ...]) -> None:
     """``setforge <leaf-path> --help`` exits 0 — verifies registration is wired."""
     result = runner.invoke(app, [*leaf_path, "--help"], env={"COLUMNS": "100"})
     assert result.exit_code == 0, (
