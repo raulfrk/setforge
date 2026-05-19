@@ -277,7 +277,7 @@ def test_byte_identical_roundtrip(
     latest = _latest_transition_dirname(c)
     roundtrip = textwrap.dedent(
         f"""
-        python3 - <<'PY'
+        uv run python3 - <<'PY'
         import json, pathlib
         from setforge.transitions import load_meta
         meta_path = pathlib.Path("{_TRANSITIONS_DIR}/{latest}/meta.json")
@@ -297,7 +297,7 @@ def test_byte_identical_roundtrip(
         PY
         """
     )
-    result = c.exec(["bash", "-c", f"cd /workspace && uv run {roundtrip}"], check=False)
+    result = c.exec(["bash", "-c", f"cd /workspace && {roundtrip}"], check=False)
     assert result.returncode == 0, result.stderr
     assert "OK: byte-identical" in result.stdout
 
