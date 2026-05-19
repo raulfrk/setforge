@@ -28,6 +28,8 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
+from setforge.cli._install_helpers import revert_symlink_deployment
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
     ExtensionOperation,
@@ -41,6 +43,7 @@ from setforge.cli._revert_confirm import (
     confirm_multi_step_revert_operation,
     confirm_revert_operation,
 )
+from setforge.config import load_config, resolve_profile
 from setforge.errors import NoTransitionFound, RevertFailed, SetforgeError
 
 
@@ -300,8 +303,17 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
     return target
 
 
-def _apply_revert(transition: Path, profile: str) -> None:
-    """Apply the reverse transition and print the post-success summary."""
+def _apply_revert(transition: Path, profile: str, config: Path) -> None:
+    """Apply the reverse transition and print the post-success summary.
+
+    For tracked_files declared with ``symlink:`` the per-path
+    ``patch -R`` loop reverses target-file content only — the symlink
+    itself at ``dst`` is a separate object that must be unlinked
+    explicitly via :func:`revert_symlink_deployment`. This wiring closes
+    the symlink-revert side of the m483 contract; the helper refuses
+    cleanly on user-mutated links (target retargeted or replaced with
+    a regular file) so user data is never deleted.
+    """
     transitions.ensure_state_dir_writable()
     typer.echo(f"reverting: {transition}")
 
@@ -310,10 +322,35 @@ def _apply_revert(transition: Path, profile: str) -> None:
     file_pre = transitions.snapshot_paths(touched_paths)
 
     transitions.apply_patch_reverse(transition)
+    _revert_symlink_deployments(config=config, profile=profile)
 
     target = _write_reverse_transition(transition, profile, touched_paths, file_pre)
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
+
+
+def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
+    """Unlink every symlink-deployed tracked_file in the resolved profile.
+
+    Loads the resolved profile via the same path the install side uses
+    (``load_config`` + ``resolve_profile``) so the iteration order and
+    expansion semantics match. For each tracked_file with
+    ``symlink is not None``, invokes
+    :func:`setforge.cli._install_helpers.revert_symlink_deployment` on
+    the resolved ``sub_dst`` (the link path). The helper is idempotent
+    on absent links (returns False) and refuses on user-mutated state
+    (raises :class:`setforge.errors.SetforgeError`).
+    """
+    cfg = load_config(config)
+    repo_root = config.resolve().parent
+    resolved = resolve_profile(cfg, profile)
+    ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+    for tracked_file, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
+        if tracked_file.symlink is None:
+            continue
+        revert_symlink_deployment(sub_dst, tracked_file.symlink)
 
 
 _TO_BEFORE_OPTION = typer.Option(
@@ -356,7 +393,7 @@ def revert(
     """
     config = _resolve_config_arg(config)
     if to_before is not None:
-        _revert_to_before(profile, to_before, yes=yes)
+        _revert_to_before(profile, to_before, config=config, yes=yes)
         return
 
     transition = transitions.load_latest(profile)
@@ -378,7 +415,7 @@ def revert(
         if choice is RevertChoice.ABORT:
             return
 
-    _apply_revert(transition, profile)
+    _apply_revert(transition, profile, config)
 
 
 def _resolve_to_before_chain(
@@ -418,7 +455,9 @@ def _resolve_to_before_chain(
     )
 
 
-def _revert_to_before(profile: str, to_before: str, *, yes: bool) -> None:
+def _revert_to_before(
+    profile: str, to_before: str, *, config: Path, yes: bool
+) -> None:
     """Multi-step revert: pre-flight first step, then sequential apply.
 
     Steps:
@@ -464,7 +503,7 @@ def _revert_to_before(profile: str, to_before: str, *, yes: bool) -> None:
     total = len(chain)
     for index, entry in enumerate(chain, start=1):
         try:
-            _apply_revert(entry.directory, profile)
+            _apply_revert(entry.directory, profile, config)
         except RevertFailed as exc:
             raise SetforgeError(
                 f"applied {index - 1} of {total}; system is in inconsistent "

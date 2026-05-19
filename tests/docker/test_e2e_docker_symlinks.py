@@ -277,3 +277,47 @@ def test_symlink_e2e_revert_reverses_target_content(
         check=False,
     )
     assert revert.returncode == 0, revert.stdout + revert.stderr
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: revert UNLINKS the symlink (m483 spec acceptance #4)
+# ---------------------------------------------------------------------------
+
+
+def test_symlink_e2e_revert_unlinks_symlink(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge revert`` removes the symlink at ``dst`` (not just target content).
+
+    Spec acceptance #4: revert must reverse the install for symlink-
+    deployed tracked_files — i.e. the LINK itself must be gone after
+    revert, not just the target-file content. Wires
+    :func:`setforge.cli._install_helpers.revert_symlink_deployment`
+    through the revert pipeline.
+    """
+    c = docker_container()
+    _bootstrap(c, cfg_text=_BASE_CFG, src_text="payload\n")
+
+    install = _setforge(
+        c, ["install", "--profile=test-symlink", f"--config={_CFG}"], check=False
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    assert c.exec(["test", "-L", _DST], check=False).returncode == 0
+
+    revert = _setforge(
+        c,
+        ["revert", "--profile=test-symlink", f"--config={_CFG}", "--yes"],
+        check=False,
+    )
+    assert revert.returncode == 0, revert.stdout + revert.stderr
+
+    # The symlink at dst MUST be gone after revert.
+    link_check = c.exec(["test", "-L", _DST], check=False)
+    assert link_check.returncode != 0, (
+        f"symlink at {_DST} still present after revert"
+    )
+    # And no regular file took its place either.
+    exists_check = c.exec(["test", "-e", _DST], check=False)
+    assert exists_check.returncode != 0, (
+        f"something exists at {_DST} after revert (expected nothing)"
+    )
