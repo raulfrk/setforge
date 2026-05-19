@@ -349,6 +349,61 @@ def _emit_abort(*, show_docs: bool, console: Console) -> None:
         console.print(_DOCS_HINT)
 
 
+def _handle_initial_choice(
+    choice: WelcomeChoice,
+    *,
+    run_dry_run: Callable[[], None] | None,
+    console: Console,
+) -> WelcomeChoice | None:
+    """Handle the first dialog's selection.
+
+    Returns the terminal :class:`WelcomeChoice` (``PROCEED``, ``ABORT``,
+    or ``ABORT_SHOW_DOCS``) when the user's pick ends the flow, or
+    ``None`` when the user picked ``DRY_RUN_FIRST`` and the caller must
+    re-prompt. Invokes ``run_dry_run`` in the ``DRY_RUN_FIRST`` branch
+    so the dry-run pipeline runs before the reprompt; passing ``None``
+    while ``DRY_RUN_FIRST`` is reachable raises :class:`RuntimeError`
+    (caller bug — :func:`prompt_welcome`'s contract documents that the
+    callback is required whenever the dialog can return that choice).
+    """
+    if choice is WelcomeChoice.PROCEED:
+        return choice
+    if choice is WelcomeChoice.ABORT:
+        _emit_abort(show_docs=False, console=console)
+        return choice
+    if choice is WelcomeChoice.ABORT_SHOW_DOCS:
+        _emit_abort(show_docs=True, console=console)
+        return choice
+    if run_dry_run is None:
+        raise RuntimeError(
+            "prompt_welcome: DRY_RUN_FIRST chosen but no run_dry_run "
+            "callback was supplied"
+        )
+    run_dry_run()
+    return None
+
+
+def _handle_reprompt(
+    *,
+    inventory: WelcomeInventory,
+    console: Console,
+) -> WelcomeChoice:
+    """Re-render the panel + run the three-choice reprompt; return the choice.
+
+    The reprompt drops :attr:`WelcomeChoice.DRY_RUN_FIRST` from the
+    options so recursion is impossible by construction. Used only after
+    :func:`_handle_initial_choice` returned ``None`` (the user picked
+    ``DRY_RUN_FIRST`` on the first dialog).
+    """
+    _render_panel(inventory, console=console)
+    choice = _run_dialog(values=_PROMPT_VALUES_REPROMPT, default=WelcomeChoice.ABORT)
+    if choice is WelcomeChoice.ABORT:
+        _emit_abort(show_docs=False, console=console)
+    elif choice is WelcomeChoice.ABORT_SHOW_DOCS:
+        _emit_abort(show_docs=True, console=console)
+    return choice
+
+
 def prompt_welcome(
     *,
     inventory: WelcomeInventory,
@@ -384,29 +439,11 @@ def prompt_welcome(
     if console is None:
         console = Console()
     _render_panel(inventory, console=console)
-    choice = _run_dialog(values=_PROMPT_VALUES_FULL, default=WelcomeChoice.ABORT)
-    if choice is WelcomeChoice.PROCEED:
-        return choice
-    if choice is WelcomeChoice.ABORT:
-        _emit_abort(show_docs=False, console=console)
-        return choice
-    if choice is WelcomeChoice.ABORT_SHOW_DOCS:
-        _emit_abort(show_docs=True, console=console)
-        return choice
-    # choice is DRY_RUN_FIRST — invoke the dry-run callback then reprompt.
-    if run_dry_run is None:
-        raise RuntimeError(
-            "prompt_welcome: DRY_RUN_FIRST chosen but no run_dry_run "
-            "callback was supplied"
-        )
-    run_dry_run()
-    _render_panel(inventory, console=console)
-    choice = _run_dialog(values=_PROMPT_VALUES_REPROMPT, default=WelcomeChoice.ABORT)
-    if choice is WelcomeChoice.ABORT:
-        _emit_abort(show_docs=False, console=console)
-    elif choice is WelcomeChoice.ABORT_SHOW_DOCS:
-        _emit_abort(show_docs=True, console=console)
-    return choice
+    initial = _run_dialog(values=_PROMPT_VALUES_FULL, default=WelcomeChoice.ABORT)
+    resolved = _handle_initial_choice(initial, run_dry_run=run_dry_run, console=console)
+    if resolved is not None:
+        return resolved
+    return _handle_reprompt(inventory=inventory, console=console)
 
 
 def reject_auto_on_fresh_host(*, auto: str | None) -> None:
