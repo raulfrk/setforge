@@ -32,6 +32,7 @@ from typing import Any
 import typer
 
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
+from setforge.cli._help_examples import MIGRATE_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.migrations import (
     Migration,
@@ -71,7 +72,7 @@ class MigrateChoice(StrEnum):
     APPLY_NO_BACKUP = "apply-no-backup"
 
 
-@app.command()
+@app.command(epilog=MIGRATE_EXAMPLES)
 def migrate(
     check: bool = typer.Option(
         False, "--check", help="Inventory migrations needed; no mutations."
