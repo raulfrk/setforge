@@ -390,6 +390,67 @@ def _warn_skip_reconcile(exc: PluginToolMissing) -> None:
     )
 
 
+def _emit_reconcile_summary(
+    plugin_outcomes: tuple[transitions.ReconcileOutcome, ...],
+    ext_outcomes: tuple[transitions.ReconcileOutcome, ...],
+) -> None:
+    """Render the post-reconcile ``summary:`` block per acceptance #6.
+
+    Emits one line per kind (``plugin`` / ``extension``) of the shape::
+
+        N <kind>s reconciled (M required retry, K skipped: <ids>)
+
+    where ``N`` counts items that landed (``ok`` + ``retried_ok``), ``M``
+    counts ``retried_ok`` only, and ``K`` counts ``skipped`` with the
+    comma-separated ids appended for ``--retry-failed`` discoverability.
+    The parenthetical drops to ``""`` when both ``M`` and ``K`` are
+    zero, keeping happy-path output compact. ``aborted`` outcomes are
+    excluded from ``N``: they represent rollback bookkeeping for items
+    the user explicitly abandoned, not items reconciled this pass.
+
+    An empty outcome tuple suppresses the corresponding line (no
+    misleading ``0 <kind>s reconciled`` row); when BOTH tuples are
+    empty the function emits nothing at all so a tracked-files-only
+    install does not surface a bare ``summary:`` header.
+    """
+    plugin_line = _format_summary_line(plugin_outcomes, "plugin")
+    ext_line = _format_summary_line(ext_outcomes, "extension")
+    if plugin_line is None and ext_line is None:
+        return
+    typer.echo("summary:")
+    if plugin_line is not None:
+        typer.echo(f"  {plugin_line}")
+    if ext_line is not None:
+        typer.echo(f"  {ext_line}")
+
+
+def _format_summary_line(
+    outcomes: tuple[transitions.ReconcileOutcome, ...],
+    kind_label: str,
+) -> str | None:
+    """Format one ``N <kind>s reconciled (...)`` line, or return ``None``
+    when ``outcomes`` is empty so the caller can suppress the row.
+
+    Pluralization is naive — every kind label gets a trailing ``s`` to
+    match the spec mockup (``plugins reconciled`` / ``extensions
+    reconciled``); both supported labels already end in a consonant so
+    the mockup phrasing falls out without special-casing.
+    """
+    if not outcomes:
+        return None
+    ok = sum(1 for o in outcomes if o.status == "ok")
+    retried = sum(1 for o in outcomes if o.status == "retried_ok")
+    skipped_ids = [o.item_id for o in outcomes if o.status == "skipped"]
+    reconciled = ok + retried
+    parts: list[str] = []
+    if retried:
+        parts.append(f"{retried} required retry")
+    if skipped_ids:
+        parts.append(f"{len(skipped_ids)} skipped: {', '.join(skipped_ids)}")
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return f"{reconciled} {kind_label}s reconciled{suffix}"
+
+
 def _append_plugin_success_outcomes(
     outcomes: list[transitions.ReconcileOutcome],
     delta: transitions.PluginDelta,

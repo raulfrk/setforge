@@ -17,7 +17,9 @@ from setforge.cli._confirm import (
     FailureAction,
     prompt_failure_action,
 )
+from setforge.cli._plugin_helpers import _emit_reconcile_summary
 from setforge.errors import ConfirmRequiresInteractive
+from setforge.transitions import ReconcileOutcome
 
 
 class _FakeDialogResult:
@@ -256,3 +258,102 @@ def test_prompt_includes_failure_message(monkeypatch: pytest.MonkeyPatch) -> Non
     text = console.export_text()
     assert "secure-code-review@work-internal" in text
     assert "fetch timed out" in text
+
+
+# --- reconcile summary tally (acceptance #6) -----------------------------
+
+
+def test_emit_reconcile_summary_renders_all_status_columns(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``_emit_reconcile_summary`` tallies per-kind status counts and
+    emits the ``summary:`` block per spec acceptance #6 / mockup E.
+
+    Mixed-status outcome tuples must render:
+    - ``N plugins reconciled (M required retry, K skipped: <ids>)``
+    - ``N extensions reconciled (M required retry, K skipped: <ids>)``
+
+    ``N`` = ``ok`` + ``retried_ok`` (items that landed); ``M`` =
+    ``retried_ok`` only; ``K`` = ``skipped``. ``aborted`` outcomes are
+    excluded from the totals — they represent rollback bookkeeping for
+    items the user explicitly abandoned, not items reconciled. The
+    ``K skipped`` parenthetical lists ids comma-separated so the user
+    can spot which item to re-target with ``--retry-failed``.
+    """
+    plugin_outcomes: tuple[ReconcileOutcome, ...] = (
+        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
+                         error_summary=None),
+        ReconcileOutcome(item_id="beta@official", kind="plugin", status="ok",
+                         error_summary=None),
+        ReconcileOutcome(item_id="gamma@work", kind="plugin", status="retried_ok",
+                         error_summary=None),
+        ReconcileOutcome(item_id="delta@work", kind="plugin", status="skipped",
+                         error_summary="fetch failed"),
+    )
+    ext_outcomes: tuple[ReconcileOutcome, ...] = (
+        ReconcileOutcome(item_id="charliermarsh.ruff", kind="extension",
+                         status="ok", error_summary=None),
+        ReconcileOutcome(item_id="esbenp.prettier-vscode", kind="extension",
+                         status="ok", error_summary=None),
+        ReconcileOutcome(item_id="work-only-extension", kind="extension",
+                         status="skipped",
+                         error_summary="not found in registry"),
+    )
+    _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
+    out = capsys.readouterr().out
+    assert "summary:" in out
+    # Plugin line: 3 reconciled (2 ok + 1 retried_ok), 1 retry, 1 skipped.
+    assert "3 plugins reconciled" in out
+    assert "1 required retry" in out
+    assert "1 skipped: delta@work" in out
+    # Extension line: 2 reconciled, 0 retries, 1 skipped.
+    assert "2 extensions reconciled" in out
+    assert "1 skipped: work-only-extension" in out
+
+
+def test_emit_reconcile_summary_omits_zero_only_kind(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Empty outcome tuples skip the corresponding ``N <kind>s reconciled``
+    line entirely — a profile with no extensions shouldn't render a
+    misleading ``0 extensions reconciled`` row, and a profile with no
+    plugin work shouldn't render a misleading ``0 plugins reconciled``
+    row. Mirrors the spec mockup's no-pad-with-zeros shape."""
+    plugin_outcomes: tuple[ReconcileOutcome, ...] = (
+        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
+                         error_summary=None),
+    )
+    _emit_reconcile_summary(plugin_outcomes, ())
+    out = capsys.readouterr().out
+    assert "summary:" in out
+    assert "1 plugins reconciled" in out
+    assert "extensions reconciled" not in out
+
+
+def test_emit_reconcile_summary_all_clean_omits_parenthetical(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When no retries or skips occurred, the per-kind line drops the
+    parenthetical entirely — keeps the summary compact for the
+    happy-path install."""
+    plugin_outcomes: tuple[ReconcileOutcome, ...] = (
+        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
+                         error_summary=None),
+        ReconcileOutcome(item_id="beta@official", kind="plugin", status="ok",
+                         error_summary=None),
+    )
+    _emit_reconcile_summary(plugin_outcomes, ())
+    out = capsys.readouterr().out
+    assert "2 plugins reconciled" in out
+    assert "(" not in out  # no parenthetical when no retry / no skip
+
+
+def test_emit_reconcile_summary_empty_outcomes_emits_nothing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two empty tuples → no output at all. An install that reconciled
+    nothing (e.g. tracked-files-only profile, or `claude` / `code`
+    binaries missing) should not surface a bare ``summary:`` header."""
+    _emit_reconcile_summary((), ())
+    out = capsys.readouterr().out
+    assert out == ""

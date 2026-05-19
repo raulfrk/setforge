@@ -38,7 +38,11 @@ from setforge.cli._install_helpers import (
     _run_predeploy_gates,
     _write_install_transition,
 )
-from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugins
+from setforge.cli._plugin_helpers import (
+    _emit_reconcile_summary,
+    _reconcile_extensions,
+    _reconcile_plugins,
+)
 from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.config import load_config, resolve_profile
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
@@ -192,6 +196,8 @@ def install(
     )
 
     file_post = transitions.snapshot_paths(dst_paths)
+
+    _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
 
     if not no_transition:
         target = _write_install_transition(
