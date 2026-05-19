@@ -22,6 +22,7 @@ from setforge import snapshots as snap_mod
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
+    _TYPER_KWARGS,
     _resolve_config_arg,
     app,
 )
@@ -65,10 +66,7 @@ snapshot_app: typer.Typer = typer.Typer(
         "profile-resolved tracked_files.dst set plus local.yaml."
     ),
     no_args_is_help=True,
-    # Disable Rich-rendered --help so the Click `\b` epilog idiom
-    # preserves newlines; ``rich_markup_mode`` does NOT inherit from
-    # the root Typer.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(snapshot_app, name="snapshot")
 

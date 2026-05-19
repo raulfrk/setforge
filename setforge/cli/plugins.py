@@ -12,7 +12,7 @@ import typer
 
 from setforge import binaries
 from setforge import claude_plugins as claude_plugins_mod
-from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _TYPER_KWARGS, app
 from setforge.cli._help_examples import (
     MARKETPLACE_ADD_EXAMPLES,
     MARKETPLACE_REMOVE_EXAMPLES,
@@ -40,8 +40,7 @@ from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
 plugin_app: typer.Typer = typer.Typer(
     help="Manage Claude plugins in setforge.yaml.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(plugin_app, name="plugin")
 
@@ -338,8 +337,7 @@ def sync_cache(
 marketplace_app: typer.Typer = typer.Typer(
     help="Manage Claude plugin marketplaces in setforge.yaml.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(marketplace_app, name="marketplace")
 

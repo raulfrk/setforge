@@ -22,7 +22,7 @@ from typing import Any, assert_never
 import typer
 from rich.console import Console
 
-from setforge.cli import app
+from setforge.cli import _TYPER_KWARGS, app
 from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
@@ -87,8 +87,7 @@ class CompletionChoice(StrEnum):
 completion_app: typer.Typer = typer.Typer(
     help="Install shell completion scripts.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(completion_app, name="completion")
 

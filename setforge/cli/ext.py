@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 
 from setforge import vscode_extensions
-from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _TYPER_KWARGS, app
 from setforge.cli._help_examples import (
     EXT_ADD_EXAMPLES,
     EXT_LIST_EXAMPLES,
@@ -23,8 +23,7 @@ from setforge.errors import ExtensionToolMissing
 ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(ext_app, name="ext")
 

@@ -22,6 +22,18 @@ from setforge.errors import SetforgeError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
+# Shared ``typer.Typer(...)`` kwargs spread onto every sub-Typer
+# constructor under ``setforge/cli/``. ``rich_markup_mode=None``
+# disables Rich-rendered --help so the Click ``\b`` epilog idiom
+# preserves newlines AND so CliRunner substring asserts on flag
+# names (e.g. ``'--dry-run' in result.stdout``) survive without ANSI
+# injection breaking the match. The mode does NOT propagate from the
+# root Typer to sub-Typers, so each sub-Typer must spread these
+# kwargs; centralising them here means future sub-Typer additions
+# automatically inherit the right rendering mode.
+_TYPER_KWARGS: dict[str, object] = {"rich_markup_mode": None}
+
+
 app: typer.Typer = typer.Typer(
     help="setforge: tracked file + extension + Claude plugin orchestration.",
     no_args_is_help=True,
@@ -36,13 +48,7 @@ app: typer.Typer = typer.Typer(
         "max_content_width": 100,
         "terminal_width": min(100, shutil.get_terminal_size().columns),
     },
-    # Disable Rich-rendered --help so Click's `\b` epilog idiom
-    # preserves newlines AND so CliRunner substring asserts on flag
-    # names (e.g. `'--dry-run' in result.stdout`) survive without ANSI
-    # injection breaking the match. ``rich_markup_mode`` does NOT
-    # propagate to sub-Typers, so the same kwarg is repeated on every
-    # ``typer.Typer(...)`` constructor under setforge/cli/.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 
 

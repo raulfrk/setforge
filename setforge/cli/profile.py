@@ -24,7 +24,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
+from setforge.cli import _CONFIG_OPTION, _TYPER_KWARGS, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
 from setforge.config import (
@@ -56,8 +56,7 @@ def _build_console() -> Console:
 profile_app: typer.Typer = typer.Typer(
     help="Inspect profile definitions and resolved overlays.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(profile_app, name="profile")
 

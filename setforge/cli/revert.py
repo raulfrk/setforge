@@ -25,6 +25,7 @@ from setforge._editor import run_editor
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
+    _TYPER_KWARGS,
     _resolve_config_arg,
     app,
 )
@@ -517,8 +518,7 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
 transitions_app: typer.Typer = typer.Typer(
     help="Inspect transition history for install/sync/revert.",
     no_args_is_help=True,
-    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
-    rich_markup_mode=None,
+    **_TYPER_KWARGS,
 )
 app.add_typer(transitions_app, name="transitions")
 
