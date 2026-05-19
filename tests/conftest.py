@@ -37,4 +37,17 @@ def _isolated_local_config(
         "setforge.source.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )
+    # setforge.compare imports LOCAL_CONFIG_PATH for orphan_ignore reads
+    # (setforge-o3h8); redirect that re-export too so tests don't read
+    # the dev host's local.yaml mid-compare.
+    monkeypatch.setattr(
+        "setforge.compare.LOCAL_CONFIG_PATH",
+        tmp_path / "local.yaml",
+    )
+    # setforge.cli.orphans imports LOCAL_CONFIG_PATH for orphan_ignore
+    # writes (setforge-o3h8); redirect that re-export too.
+    monkeypatch.setattr(
+        "setforge.cli.orphans.LOCAL_CONFIG_PATH",
+        tmp_path / "local.yaml",
+    )
     monkeypatch.setattr("setforge.source._cli_source", None)
