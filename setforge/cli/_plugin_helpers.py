@@ -375,6 +375,33 @@ def _warn_skip_reconcile(exc: PluginToolMissing) -> None:
     )
 
 
+def _append_plugin_success_outcomes(
+    outcomes: list[transitions.ReconcileOutcome],
+    delta: transitions.PluginDelta,
+) -> None:
+    """Append ``status="ok"`` outcomes for each landed plugin / marketplace.
+
+    Iterates the four delta fields whose entries became ``"ok"`` outcomes
+    in the original inline form (``installed`` / ``enabled`` /
+    ``disabled`` / ``marketplaces_added``). ``marketplaces_removed`` is
+    excluded — today's ``_compute_plugin_delta`` always returns ``()``
+    for that field on install, so there is nothing to record there.
+    """
+    field_pairs: tuple[tuple[str, Sequence[str]], ...] = (
+        ("installed", delta.installed),
+        ("enabled", delta.enabled),
+        ("disabled", delta.disabled),
+        ("marketplaces_added", delta.marketplaces_added),
+    )
+    for _field_name, items in field_pairs:
+        for pid in items:
+            outcomes.append(
+                transitions.ReconcileOutcome(
+                    item_id=pid, kind="plugin", status="ok", error_summary=None
+                )
+            )
+
+
 def _reconcile_plugins(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -427,31 +454,7 @@ def _reconcile_plugins(
 
     outcomes: list[transitions.ReconcileOutcome] = []
     failed_ids = {pid for pid, _ in plugin_report.failed}
-    # Successful per-item outcomes ("ok" for everything that landed).
-    for pid in delta_first.installed:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=pid, kind="plugin", status="ok", error_summary=None
-            )
-        )
-    for pid in delta_first.enabled:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=pid, kind="plugin", status="ok", error_summary=None
-            )
-        )
-    for pid in delta_first.disabled:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=pid, kind="plugin", status="ok", error_summary=None
-            )
-        )
-    for mp in delta_first.marketplaces_added:
-        outcomes.append(
-            transitions.ReconcileOutcome(
-                item_id=mp, kind="plugin", status="ok", error_summary=None
-            )
-        )
+    _append_plugin_success_outcomes(outcomes, delta_first)
 
     retried_delta_pieces = _PluginRetriedPieces()
     for failed_id, err in plugin_report.failed:
