@@ -108,6 +108,43 @@ class TrackedFile(BaseModel):
     is allowed. When ``None``, deploy preserves the source file's mode
     (today's behavior, zero regression).
     """
+    symlink: str | None = None
+    """When set, deploy creates a symbolic link at ``dst`` whose target is
+    this raw user string (e.g. ``~/.config/foo/bar``); the tracked
+    content is written to ``Path(symlink).expanduser()`` so the target
+    actually carries the deployed bytes.
+
+    The string is stored *verbatim* (no :func:`Path.expanduser`,
+    no :func:`Path.resolve`) so the on-disk symlink target survives
+    cross-host portability: ``~/foo`` remains ``~/foo`` in
+    ``os.readlink(dst)`` rather than baking in ``/home/<user>/foo``.
+
+    The model validator refuses a self-loop where the (expanded)
+    target equals the (expanded) ``dst`` — config-time guard against
+    a tracked_file pointing at itself.
+    """
+
+    @model_validator(mode="after")
+    def _symlink_no_self_loop(self) -> Self:
+        """Refuse ``symlink:`` whose expanded target equals expanded ``dst``.
+
+        Cross-host portability requires the symlink string itself stay
+        raw (``~/foo``, never ``/home/<user>/foo``), so the equality
+        comparison happens on :func:`Path.expanduser` of both sides —
+        a user who writes ``dst: ~/x`` and ``symlink: ~/x`` MUST be
+        refused regardless of whether the strings are textually equal
+        (``$HOME/x`` vs ``~/x`` resolve to the same path).
+        """
+        if self.symlink is None:
+            return self
+        target = Path(self.symlink).expanduser()
+        dst = Path(self.dst).expanduser()
+        if target == dst:
+            raise ValueError(
+                f"symlink target {self.symlink!r} equals dst {self.dst!r} "
+                f"after expansion — refusing self-loop."
+            )
+        return self
 
     @model_validator(mode="after")
     def _no_preserve_path_overlap(self) -> Self:
