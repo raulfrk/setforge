@@ -23,6 +23,7 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Mapping
 from datetime import UTC
@@ -165,6 +166,16 @@ def _deploy_all_tracked_files(
     classifier has a baseline on the next install.
     """
     for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(ctx):
+        if tracked_file.symlink is not None:
+            # Symlink-deployed: the link lands at ``sub_dst`` and the
+            # tracked content lands at ``Path(tracked_file.symlink).expanduser()``.
+            # preserve_user_{sections,keys} still composes; deploy.deploy_symlinked_file
+            # routes through the same _compute_content path as copy_atomic.
+            result = deploy.deploy_symlinked_file(sub_src, sub_dst, tracked_file)
+            typer.echo(f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}")
+            if tracked_file.preserve_user_sections:
+                section_reconcile.stamp_tracked_baseline(sub_src)
+            continue
         override = section_decisions.get(sub_dst)
         precomputed = live_sections_map.get(sub_dst)
         result = deploy.copy_atomic(
@@ -438,6 +449,52 @@ def _run_predeploy_gates(
         section_auto=section_auto,
         yes=yes,
     )
+
+
+def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
+    """Unlink a symlink installed by setforge — refusing if the user mutated it.
+
+    Contract for ``setforge revert`` of a tracked_file deployed with
+    ``symlink:`` declared:
+
+    - If ``dst`` does not exist as a symlink AND does not exist as a
+      regular file, return ``False`` — nothing to revert (install
+      never landed, or revert already ran). Idempotency.
+    - If ``dst`` is a *regular file*, raise :class:`SetforgeError` —
+      the user replaced setforge's symlink with their own content;
+      revert refuses to delete user data.
+    - If ``dst`` is a symlink whose ``os.readlink`` does NOT equal
+      ``expected_target``, raise :class:`SetforgeError` — the user
+      retargeted setforge's symlink; revert refuses to unlink an
+      object that is no longer what setforge installed.
+    - Otherwise (``dst`` is a symlink with the expected target):
+      :func:`Path.unlink` with ``missing_ok=False``. Returns ``True``
+      to signal the link was removed.
+
+    ``missing_ok=False`` (NOT ``True``) is intentional: a successful
+    ``is_symlink()`` probe means the link MUST be unlink-able, and
+    swallowing :class:`FileNotFoundError` here would mask a TOCTOU
+    race (something deleted the link between the probe and the
+    unlink) that the caller should see.
+    """
+    if dst.is_symlink():
+        actual = os.readlink(dst)
+        if actual != expected_target:
+            raise SetforgeError(
+                f"refusing to unlink {dst}: symlink target changed since "
+                f"deploy ({actual!r} != {expected_target!r}). Re-point or "
+                f"remove the link manually if you want revert to proceed."
+            )
+        dst.unlink(missing_ok=False)
+        return True
+    if dst.exists():
+        raise SetforgeError(
+            f"refusing to unlink {dst}: a regular file is present where "
+            f"setforge previously installed a symlink "
+            f"(target {expected_target!r}). Remove the file manually if "
+            f"you want revert to proceed."
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------

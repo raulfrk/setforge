@@ -261,7 +261,14 @@ def install(
     # See `precomputed_live_sections` on copy_atomic.
     live_sections_map = _extract_live_sections_map(ctx)
 
-    dst_paths: list[Path] = [sub_dst for _, _, sub_dst in _iter_all_tracked_files(ctx)]
+    # For symlink-deployed tracked_files the recorded "touched path" is
+    # the symlink's TARGET (where bytes actually land), not the link
+    # path itself: GNU patch refuses to patch a symlink as a regular
+    # file, so a transition recording the link path would brick revert.
+    dst_paths: list[Path] = [
+        Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
+        for tf, _, sub_dst in _iter_all_tracked_files(ctx)
+    ]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 
     file_pre = transitions.snapshot_paths(dst_paths)
