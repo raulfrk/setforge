@@ -392,9 +392,8 @@ def _restore_one(src: Path, dst: Path) -> None:
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_symlink() or dst.exists():
-        # ``unlink`` follows the link only when missing_ok is unused
-        # on a symlinked dst; ``is_symlink`` is checked first so the
-        # symlink itself (not its target) is removed.
+        # remove pre-existing dst (incl. symlinks) so copy2 lands on a
+        # fresh inode.
         dst.unlink()
     if src.is_symlink():
         os.symlink(os.readlink(src), dst)
@@ -506,6 +505,8 @@ def directory_size_bytes(snapshot_id: str) -> int:
         for name in filenames:
             file_path = dir_path / name
             try:
+                # lstat() returns symlink-string size for symlinks;
+                # mirrors on-disk footprint, not target file size.
                 total += file_path.lstat().st_size
             except FileNotFoundError:
                 continue
