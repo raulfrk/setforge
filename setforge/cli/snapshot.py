@@ -74,9 +74,9 @@ class RestoreChoice(StrEnum):
 
 def _build_profile_ctx(profile: str, config: Path) -> ProfileContext:
     """Resolve ``--profile`` / ``--config`` into a :class:`ProfileContext`."""
-    config = _resolve_config_arg(config)
-    cfg = load_config(config)
-    repo_root = config.resolve().parent
+    resolved_config = _resolve_config_arg(config)
+    cfg = load_config(resolved_config)
+    repo_root = resolved_config.resolve().parent
     resolved = resolve_profile(cfg, profile)
     return ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile

@@ -290,14 +290,23 @@ def test_list_snapshots_newest_first(
     assert [s.label for s in listed] == ["third", "second", "first"]
 
 
-def test_list_snapshots_ignores_partial_and_corrupt(
+def test_list_snapshots_ignores_partial_dirs(
     fake_home: Path,
 ) -> None:
-    """``.partial`` dirs and meta-less dirs do NOT surface in list."""
+    """``.partial`` dirs do NOT surface in list."""
     root = snap_mod.snapshots_root()
     root.mkdir(parents=True)
-    (root / "20260101T000000Z-broken").mkdir()  # no _meta.json
-    (root / "20260102T000000Z-partial.partial").mkdir()  # partial suffix
+    (root / "20260102T000000Z-partial.partial").mkdir()
+    assert snap_mod.list_snapshots() == []
+
+
+def test_list_snapshots_ignores_meta_missing_dirs(
+    fake_home: Path,
+) -> None:
+    """Dirs without ``_meta.json`` (incomplete / corrupt) are skipped."""
+    root = snap_mod.snapshots_root()
+    root.mkdir(parents=True)
+    (root / "20260101T000000Z-broken").mkdir()
     assert snap_mod.list_snapshots() == []
 
 
@@ -352,16 +361,20 @@ def test_restore_snapshot_overlays_only_files_in_snapshot(
     assert sibling.read_text() == "untouched live-only body\n"
 
 
-def test_restore_snapshot_refuses_when_meta_missing(
+def test_resolve_snapshot_skips_meta_missing_dirs(
     fake_home: Path,
 ) -> None:
-    """Hand-corrupted snapshot dir without ``_meta.json`` is unreadable."""
+    """``resolve_snapshot`` does not match a hand-corrupted dir without ``_meta.json``.
+
+    ``list_snapshots`` filters meta-less dirs out, so ``resolve_snapshot``
+    (which iterates over its result) never sees them and raises
+    ``not found`` rather than returning a half-built ``SnapshotMeta``.
+    """
     root = snap_mod.snapshots_root()
     root.mkdir(parents=True)
     bad = root / "20260101T000000Z-broken"
     bad.mkdir()
     with pytest.raises(SetforgeError, match="not found"):
-        # ``list_snapshots`` filters this out, so resolve fails first.
         snap_mod.resolve_snapshot("broken")
 
 
