@@ -13,9 +13,9 @@ profile name is ``<profile>`` (neutral, host-independent) — never a
 real profile string from any host (would leak personal config into
 engine ``--help`` output).
 
-Each example references at least one related-bead flag where one
-exists in the command's current surface (e.g. ``install`` mentions
-``--dry-run`` from lnvq and ``--auto=*`` from bviv).
+Each example references at least one flag from the command's
+current surface (e.g. ``install`` mentions ``--dry-run`` and
+``--auto=*``).
 """
 
 INSTALL_EXAMPLES: str = """\
@@ -26,7 +26,7 @@ Examples:
   setforge install --profile=<profile> --auto=use-tracked --yes
 
 \b
-  # Preview without mutating the filesystem (lnvq dry-run)
+  # Preview without mutating the filesystem
   setforge install --profile=<profile> --dry-run
 
 \b
