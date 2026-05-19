@@ -185,6 +185,31 @@ class MarketplaceCacheMiss(SetforgeError):
     online, or fall back to ``claude.install_mode: regular``)."""
 
 
+class PyPIFetchError(SetforgeError):
+    """Raised when ``setforge upgrade`` cannot fetch latest-version metadata
+    from the PyPI JSON API.
+
+    Triggered by :func:`setforge._pypi_client.fetch_latest_version` on
+    network failure, HTTP non-200/304 responses, JSON decode errors, or
+    on cache-disk failures when reading/writing the ETag sidecar.
+    Message is suitable for direct surface to the user — the CLI top-
+    level handler renders it as ``error: <message>`` and exits 1.
+    """
+
+
+class UpgradeError(SetforgeError):
+    """Raised when ``setforge upgrade`` cannot complete its wrapped
+    ``uv tool upgrade`` invocation.
+
+    Triggered by :mod:`setforge.cli.upgrade` when the ``uv`` binary is
+    missing from ``PATH``, the ``uv tool upgrade`` subprocess exits
+    non-zero, the post-upgrade ``uv tool list`` verification step does
+    not see the expected version pinned, or the user-supplied
+    ``--to=<version>`` cannot be located on PyPI. Distinct from
+    :class:`PyPIFetchError` (purely-fetch-time concerns).
+    """
+
+
 class BinaryOverrideInvalid(SetforgeError):
     """Raised when a host-local binary override (CLI flag, env var, or
     ``~/.config/setforge/local.yaml``) points at a path that does not
