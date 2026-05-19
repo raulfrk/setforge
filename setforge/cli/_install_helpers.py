@@ -227,10 +227,11 @@ def _build_shared_section_plan(*, ctx: ProfileContext) -> AutoPlan:
     """
     file_changes: list[FileChange] = []
     for sub_src, sub_dst in _iter_section_tracked_files(ctx):
-        if not sub_dst.exists():
+        try:
+            live_text = sub_dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
             continue
         tracked_text = sub_src.read_text(encoding="utf-8")
-        live_text = sub_dst.read_text(encoding="utf-8")
         drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
         shared_drifted = [
             d

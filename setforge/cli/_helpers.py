@@ -218,9 +218,10 @@ def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
     migrate.
     """
     for _, sub_dst in _iter_section_tracked_files(ctx):
-        if not sub_dst.exists():
+        try:
+            live_text = sub_dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
             continue
-        live_text = sub_dst.read_text(encoding="utf-8")
         if detect_legacy_namespace_markers(live_text):
             raise SetforgeError(
                 f"{sub_dst}: legacy 'my-setup:user-section' marker namespace "
@@ -305,11 +306,12 @@ def _resolve_section_decisions(
     """
     decisions: dict[Path, dict[str, str]] = {}
     for sub_src, sub_dst in _iter_section_tracked_files(ctx):
-        if not sub_dst.exists():
+        try:
+            live_text = sub_dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
             # First install for this file — no live to reconcile.
             continue
         tracked_text = sub_src.read_text(encoding="utf-8")
-        live_text = sub_dst.read_text(encoding="utf-8")
         drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
         if not drifts:
             continue
@@ -350,8 +352,9 @@ def _extract_live_sections_map(
     """
     live_sections: dict[Path, sections_mod.LiveSections] = {}
     for _, sub_dst in _iter_section_tracked_files(ctx):
-        if not sub_dst.exists():
+        try:
+            live_text = sub_dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
             continue
-        live_text = sub_dst.read_text(encoding="utf-8")
         live_sections[sub_dst] = sections_mod.extract_live_sections(live_text)
     return live_sections
