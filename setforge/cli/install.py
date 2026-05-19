@@ -18,6 +18,7 @@ from setforge import (
     deploy,
     transitions,
 )
+from setforge import secrets as secrets_mod
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -37,7 +38,9 @@ from setforge.cli._install_helpers import (
     _write_install_transition,
 )
 from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugins
+from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.config import load_config, resolve_profile
+from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 
 
 @app.command()
@@ -84,6 +87,11 @@ def install(
         "-y",
         help="Skip the --auto* confirmation prompt (for non-interactive use).",
     ),
+    no_secrets_scan: bool = typer.Option(
+        False,
+        "--no-secrets-scan",
+        help="Skip pre-deploy secrets scan (gitleaks) for automation.",
+    ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
     config = _resolve_config_arg(config)
@@ -128,6 +136,15 @@ def install(
         yes=yes,
     )
 
+    tracked_root = config.resolve().parent / "tracked"
+    scan_result = secrets_mod.run_pre_deploy_scan(
+        tracked_root=tracked_root,
+        skip=no_secrets_scan,
+    )
+    if scan_result.findings and not _handle_secret_findings(scan_result, yes=yes):
+        typer.secho("install aborted by secrets scan", err=True, fg=typer.colors.RED)
+        return
+
     # Resolve user-section drift (shared sections) into per-tracked_file
     # decisions BEFORE the deploy loop so wizard prompts and the
     # bare-install warning fire once, deterministically.
@@ -164,3 +181,52 @@ def install(
         )
         typer.echo(f"transition: {target}")
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+
+
+def _handle_secret_findings(
+    scan_result: SecretsScanResult,
+    *,
+    yes: bool,
+    allowlist_path: Path | None = None,
+) -> bool:
+    """Prompt the user once per unique snippet-hash; return ``True`` to proceed.
+
+    Returns ``False`` as soon as any finding resolves to
+    :data:`SecretAction.ABORT` so the install loop short-circuits before
+    mutating live state. :data:`SecretAction.ALLOWLIST` appends the
+    finding's ``snippet_hash`` to the allowlist file via
+    :func:`secrets_mod.append_to_allowlist`;
+    :data:`SecretAction.SILENCE_ONE_SHOT` skips this finding for the
+    current install only.
+    """
+    if allowlist_path is None:
+        allowlist_path = Path.home() / ".config" / "setforge" / "secrets-allowlist"
+    seen_hashes: set[str] = set()
+    for finding in scan_result.findings:
+        if finding.snippet_hash in seen_hashes:
+            continue
+        seen_hashes.add(finding.snippet_hash)
+        if not _resolve_one_finding(finding, yes=yes, allowlist_path=allowlist_path):
+            return False
+    return True
+
+
+def _resolve_one_finding(
+    finding: SecretFinding,
+    *,
+    yes: bool,
+    allowlist_path: Path,
+) -> bool:
+    """Prompt for one finding's action; return ``False`` on ABORT."""
+    action = prompt_secret_action(finding, yes=yes)
+    match action:
+        case SecretAction.ABORT:
+            return False
+        case SecretAction.ALLOWLIST:
+            secrets_mod.append_to_allowlist(
+                snippet_hash=finding.snippet_hash,
+                allowlist_path=allowlist_path,
+            )
+            return True
+        case SecretAction.SILENCE_ONE_SHOT:
+            return True
