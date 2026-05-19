@@ -128,23 +128,37 @@ def test_profile_show_includes_all_sections(tmp_path: Path) -> None:
 
 
 def test_profile_show_provenance_tags_base_vs_derived(tmp_path: Path) -> None:
-    """Items defined in the base profile are tagged as such; leaf items too."""
+    """Items defined in the base profile are tagged as such; leaf items too.
+
+    Covers all four list-shaped sections that carry provenance tags:
+    tracked_files, claude_plugins, bootstrap, and extensions.include.
+    Each has one base-inherited entry and one derived-leaf entry in
+    the fixture so the same root-first chain walk is exercised on
+    every renderer.
+    """
     cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
     result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
-    # base_tracked is inherited from `base`; derived_tracked is from `derived`.
-    base_line = next(
-        (line for line in result.output.splitlines() if "base_tracked" in line),
-        None,
-    )
-    assert base_line is not None, result.output
-    assert "[from profile base]" in base_line
-    derived_line = next(
-        (line for line in result.output.splitlines() if "derived_tracked" in line),
-        None,
-    )
-    assert derived_line is not None, result.output
-    assert "[from profile derived]" in derived_line
+
+    def _line_for(token: str) -> str:
+        line = next(
+            (entry for entry in result.output.splitlines() if token in entry),
+            None,
+        )
+        assert line is not None, f"missing {token!r} in output: {result.output}"
+        return line
+
+    # tracked_files: base_tracked inherited, derived_tracked leaf.
+    assert "[from profile base]" in _line_for("base_tracked")
+    assert "[from profile derived]" in _line_for("derived_tracked")
+    # claude_plugins: base-plugin inherited, derived-plugin leaf.
+    assert "[from profile base]" in _line_for("base-plugin")
+    assert "[from profile derived]" in _line_for("derived-plugin")
+    # bootstrap: header.md is only defined on `base`.
+    assert "[from profile base]" in _line_for("header.md")
+    # extensions.include: ms-python.python on base, ms-vscode.cpptools on leaf.
+    assert "[from profile base]" in _line_for("ms-python.python")
+    assert "[from profile derived]" in _line_for("ms-vscode.cpptools")
 
 
 def test_profile_show_unknown_name_exits_nonzero(tmp_path: Path) -> None:
