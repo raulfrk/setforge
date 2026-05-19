@@ -13,6 +13,16 @@ import typer
 from setforge import binaries
 from setforge import claude_plugins as claude_plugins_mod
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli._help_examples import (
+    MARKETPLACE_ADD_EXAMPLES,
+    MARKETPLACE_REMOVE_EXAMPLES,
+    MARKETPLACE_UPDATE_EXAMPLES,
+    PLUGIN_ADD_EXAMPLES,
+    PLUGIN_LIST_EXAMPLES,
+    PLUGIN_RECONCILE_EXAMPLES,
+    PLUGIN_REMOVE_EXAMPLES,
+    PLUGIN_SYNC_CACHE_EXAMPLES,
+)
 from setforge.cli._plugin_helpers import _parse_marketplace_from
 from setforge.config import (
     ClaudeInstallMode,
@@ -30,11 +40,13 @@ from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
 plugin_app: typer.Typer = typer.Typer(
     help="Manage Claude plugins in setforge.yaml.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(plugin_app, name="plugin")
 
 
-@plugin_app.command("list")
+@plugin_app.command("list", epilog=PLUGIN_LIST_EXAMPLES)
 def plugin_list(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -70,7 +82,7 @@ def plugin_list(
         typer.echo(f"{pid:<{width}}{is_declared:<12}{status:<22}")
 
 
-@plugin_app.command("add")
+@plugin_app.command("add", epilog=PLUGIN_ADD_EXAMPLES)
 def plugin_add(
     name: str = typer.Argument(
         ...,
@@ -193,7 +205,7 @@ def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
     typer.echo(f"enabled plugin: {pid}")
 
 
-@plugin_app.command("remove")
+@plugin_app.command("remove", epilog=PLUGIN_REMOVE_EXAMPLES)
 def plugin_remove(
     name: str = typer.Argument(..., help="Plugin name (bare or <name>@<marketplace>)."),
     profile: str = _PROFILE_OPTION,
@@ -221,7 +233,7 @@ def plugin_remove(
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
 
-@plugin_app.command("reconcile")
+@plugin_app.command("reconcile", epilog=PLUGIN_RECONCILE_EXAMPLES)
 def plugin_reconcile(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -278,7 +290,7 @@ def _render_reconcile_report(
         typer.secho(f"FAILED  {pid} — {err}", err=True, fg=typer.colors.YELLOW)
 
 
-@plugin_app.command("sync-cache")
+@plugin_app.command("sync-cache", epilog=PLUGIN_SYNC_CACHE_EXAMPLES)
 def sync_cache(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -326,11 +338,13 @@ def sync_cache(
 marketplace_app: typer.Typer = typer.Typer(
     help="Manage Claude plugin marketplaces in setforge.yaml.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(marketplace_app, name="marketplace")
 
 
-@marketplace_app.command("add")
+@marketplace_app.command("add", epilog=MARKETPLACE_ADD_EXAMPLES)
 def marketplace_add_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
     from_: str = typer.Option(
@@ -356,7 +370,7 @@ def marketplace_add_cmd(
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
 
-@marketplace_app.command("remove")
+@marketplace_app.command("remove", epilog=MARKETPLACE_REMOVE_EXAMPLES)
 def marketplace_remove_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
     config: Path = _CONFIG_OPTION,
@@ -375,7 +389,7 @@ def marketplace_remove_cmd(
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
 
-@marketplace_app.command("update")
+@marketplace_app.command("update", epilog=MARKETPLACE_UPDATE_EXAMPLES)
 def marketplace_update_cmd(
     name: str = typer.Argument(..., help="Marketplace name."),
     config: Path = _CONFIG_OPTION,
