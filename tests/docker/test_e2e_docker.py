@@ -2216,8 +2216,10 @@ def test_e2e_docker_migrate_multi_file_fake(
     assert "legacy" in c.read_text(tracked_path)
 
 
-# ====================================================================# Section: snapshot create / list / restore (setforge-of3a)
-# ====================================================================#
+# ===========================================================================
+# Section: snapshot create / list / restore (setforge-of3a)
+# ===========================================================================
+#
 # Directory-copy snapshots of the profile-resolved tracked_files.dst set
 # plus host-local local.yaml. Three named cases per the spec:
 #   1. create -> list -> restore round-trip (additive overlay verified)
@@ -2237,20 +2239,6 @@ def test_e2e_docker_snapshot_create_list_restore_roundtrip(
     ``_meta.json`` commit marker, (2) ``snapshot list`` surfaces the
     label, (3) ``snapshot restore --yes`` overlays the live destination
     additively (live-only sibling file is NOT touched).
-=======
-# --- sqcw: revert --to-before atomic multi-step ---------------------------
-
-
-def test_e2e_docker_revert_to_before_two_step_atomic_apply(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """sqcw: two install transitions; --to-before=<oldest> unwinds both
-    atomically. Live tree returns to the absent-file pre-install state.
-
-    The flow: install (writes minimal/text.txt). Edit the tracked
-    src so the second install mutates the live file. Then
-    `revert --to-before=<first install id>` walks both reverse-patches
-    in newest-first order — the file is removed.
     """
     c = docker_container()
     _install(c, "test-minimal")
@@ -2283,29 +2271,6 @@ def test_e2e_docker_revert_to_before_two_step_atomic_apply(
     c.write_text(sibling, "sibling untouched\n")
 
     restore = c.exec(
-    assert c.exec(["test", "-f", target], check=False).returncode == 0
-
-    # Drift the tracked src in-container; second install records a delta.
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "hello (drifted by test)\n")
-    _install(c, "test-minimal")
-    assert "drifted" in c.read_text(target)
-
-    # Look up the chronologically-first install transition id.
-    ls = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
-        ],
-        check=False,
-    )
-    assert ls.returncode == 0
-    first_id = ls.stdout.strip()
-    assert first_id, ls.stdout
-
-    revert = c.exec(
         [
             "uv",
             "run",
@@ -2315,73 +2280,6 @@ def test_e2e_docker_revert_to_before_two_step_atomic_apply(
             "before-edit",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
-            "revert",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            f"--to-before={first_id}",
-            "--yes",
-        ]
-    )
-    assert revert.returncode == 0, revert.stderr
-    # File removed — both transitions unwound.
-    assert c.exec(["test", "-f", target], check=False).returncode != 0
-    # Two reverse transitions written (one per applied step).
-    reverts = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep revert-test-minimal | wc -l",
-        ],
-        check=False,
-    )
-    assert reverts.returncode == 0
-    assert int(reverts.stdout.strip()) == 2
-
-
-def test_e2e_docker_revert_to_before_dry_run_failure_keeps_live_clean(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """sqcw: if the newest step's reverse-patch dry-run fails (live drift),
-    the chain aborts with NO live changes and NO new reverse transition.
-
-    Workflow: install twice (so the chain has two steps). Drift the
-    live file so the newest step's reverse can't apply cleanly.
-    revert --to-before=<oldest> must exit non-zero with the live file
-    still drifted (no partial mutation).
-    """
-    c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "second install body\n")
-    _install(c, "test-minimal")
-    # Drift the live file: now patch -R for the newest install cannot
-    # cleanly reverse the second install's edit.
-    drifted = "manually edited\n"
-    c.write_text(target, drifted)
-
-    ls = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
-        ],
-        check=False,
-    )
-    first_id = ls.stdout.strip()
-
-    revert = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "revert",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            f"--to-before={first_id}",
             "--yes",
         ],
         check=False,
@@ -2405,6 +2303,112 @@ def test_e2e_docker_snapshot_auto_prune_keeps_n(
     _install(c, "test-minimal")
     for label in ("s1", "s2", "s3", "s4"):
         result = c.exec(
+            [
+                "uv",
+                "run",
+                "setforge",
+                "snapshot",
+                "create",
+                label,
+                "--profile=test-minimal",
+                f"--config={CONFIG_FIXTURE}",
+                "--keep=2",
+            ],
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        # One-second resolution guarantees a fresh snapshot id per loop.
+        c.exec(["sleep", "1"])
+
+    listing = c.exec(["ls", _SNAPSHOTS_ROOT], check=False).stdout
+    surviving = [line for line in listing.splitlines() if line.strip()]
+    # Two retained snapshot dirs; no `.partial` lingering.
+    assert len(surviving) == 2, f"expected 2 snapshots, got {surviving!r}"
+    assert all(not s.endswith(".partial") for s in surviving)
+    # Oldest two removed: only s3 + s4 must remain.
+    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
+    assert "s4" in listed.stdout
+    assert "s3" in listed.stdout
+    assert "s1" not in listed.stdout
+    assert "s2" not in listed.stdout
+
+
+def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Interactive RESTORE_WITH_PRE_SNAPSHOT path writes a pre-restore snapshot.
+
+    Drives the radiolist via ``setforge`` CLI's ``--yes`` shortcut is
+    NOT enough — that path always skips pre-snapshot per spec. Instead,
+    invoke the domain helper directly via ``python -c`` inside the
+    container to exercise the ``pre_snapshot=True`` branch (the wizard
+    surface is covered by the unit + CLI tests).
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+
+    # Create the baseline snapshot via the public CLI.
+    create = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "snapshot",
+            "create",
+            "baseline",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr + create.stdout
+
+    # Drift the live state so the restore is a no-op-on-bytes check
+    # for the baseline but the pre-restore snapshot captures v2.
+    c.write_text(target, "drifted v2 body\n")
+
+    # Drive restore_snapshot(..., pre_snapshot=True) via python -c so the
+    # interactive RESTORE_WITH_PRE_SNAPSHOT path is exercised on the real
+    # filesystem (CliRunner monkeypatch covers it for unit; this is the
+    # cross-process variant).
+    pre_restore_script = textwrap.dedent(
+        f"""
+        import sys
+        from pathlib import Path
+        from setforge import snapshots
+        from setforge.config import load_config, resolve_profile
+
+        config = Path('{CONFIG_FIXTURE}').resolve()
+        cfg = load_config(config)
+        resolved = resolve_profile(cfg, 'test-minimal')
+        ctx = snapshots.PreSnapshotCtx(
+            cfg=cfg,
+            resolved=resolved,
+            repo_root=config.parent,
+            profile='test-minimal',
+        )
+        snapshots.restore_snapshot('baseline', pre_snapshot=True, pre_snapshot_ctx=ctx)
+        print('restored', file=sys.stderr)
+        """
+    ).strip()
+    result = c.exec(
+        ["uv", "run", "python", "-c", pre_restore_script],
+        workdir="/workspace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    # Snapshot list now contains both the baseline AND a pre-restore-<id>.
+    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
+    assert "baseline" in listed.stdout
+    assert "pre-restore-" in listed.stdout
+    # Live target is now back to the original install body.
+    pre_install_body = c.read_text(target)
+    assert "drifted v2" not in pre_install_body
+
+
+# ===========================================================================
 # Section: setforge completion install (setforge-wx8y)
 # ===========================================================================
 #
@@ -2511,150 +2515,6 @@ def test_e2e_docker_completion_install_bash_idempotent(
                 "uv",
                 "run",
                 "setforge",
-                "snapshot",
-                "create",
-                label,
-                "--profile=test-minimal",
-                f"--config={CONFIG_FIXTURE}",
-                "--keep=2",
-            ],
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        # One-second resolution guarantees a fresh snapshot id per loop.
-        c.exec(["sleep", "1"])
-
-    listing = c.exec(["ls", _SNAPSHOTS_ROOT], check=False).stdout
-    surviving = [line for line in listing.splitlines() if line.strip()]
-    # Two retained snapshot dirs; no `.partial` lingering.
-    assert len(surviving) == 2, f"expected 2 snapshots, got {surviving!r}"
-    assert all(not s.endswith(".partial") for s in surviving)
-    # Oldest two removed: only s3 + s4 must remain.
-    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
-    assert "s4" in listed.stdout
-    assert "s3" in listed.stdout
-    assert "s1" not in listed.stdout
-    assert "s2" not in listed.stdout
-
-
-def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """Interactive RESTORE_WITH_PRE_SNAPSHOT path writes a pre-restore snapshot.
-
-    Drives the radiolist via ``setforge`` CLI's ``--yes`` shortcut is
-    NOT enough — that path always skips pre-snapshot per spec. Instead,
-    invoke the domain helper directly via ``python -c`` inside the
-    container to exercise the ``pre_snapshot=True`` branch (the wizard
-    surface is covered by the unit + CLI tests).
-=======
-    assert revert.returncode != 0, revert.stdout + revert.stderr
-    # Live file is still the drifted body — no partial mutation occurred.
-    assert c.read_text(target) == drifted
-    # No revert-* transition was written.
-    reverts = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep revert-test-minimal | wc -l",
-        ],
-        check=False,
-    )
-    assert int(reverts.stdout.strip()) == 0
-
-
-def test_e2e_docker_revert_to_before_abort_via_confirm_dialog(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """sqcw: without --yes against a non-TTY stdin, the multi-step
-    confirm wizard refuses (mutate-gate). No live mutation, no revert
-    transitions written.
-    """
-    c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-
-    # Create the baseline snapshot via the public CLI.
-    create = c.exec(
-    src_in_container = (
-        "/home/tester/setforge/tests/fixtures/e2e/tracked/minimal/text.txt"
-    )
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "second install body for abort case\n")
-    _install(c, "test-minimal")
-    post_second = c.read_text(target)
-    assert "second install body" in post_second
-
-    ls = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
-        ],
-        check=False,
-    )
-    first_id = ls.stdout.strip()
-
-    # Non-TTY (docker exec without -t) + no --yes => wizard must refuse.
-    revert = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "snapshot",
-            "create",
-            "baseline",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-        check=False,
-    )
-    assert create.returncode == 0, create.stderr + create.stdout
-
-    # Drift the live state so the restore is a no-op-on-bytes check
-    # for the baseline but the pre-restore snapshot captures v2.
-    c.write_text(target, "drifted v2 body\n")
-
-    # Drive restore_snapshot(..., pre_snapshot=True) via python -c so the
-    # interactive RESTORE_WITH_PRE_SNAPSHOT path is exercised on the real
-    # filesystem (CliRunner monkeypatch covers it for unit; this is the
-    # cross-process variant).
-    pre_restore_script = textwrap.dedent(
-        f"""
-        import sys
-        from pathlib import Path
-        from setforge import snapshots
-        from setforge.config import load_config, resolve_profile
-
-        config = Path('{CONFIG_FIXTURE}').resolve()
-        cfg = load_config(config)
-        resolved = resolve_profile(cfg, 'test-minimal')
-        ctx = snapshots.PreSnapshotCtx(
-            cfg=cfg,
-            resolved=resolved,
-            repo_root=config.parent,
-            profile='test-minimal',
-        )
-        snapshots.restore_snapshot('baseline', pre_snapshot=True, pre_snapshot_ctx=ctx)
-        print('restored', file=sys.stderr)
-        """
-    ).strip()
-    result = c.exec(
-        ["uv", "run", "python", "-c", pre_restore_script],
-        workdir="/workspace",
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
-
-    # Snapshot list now contains both the baseline AND a pre-restore-<id>.
-    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
-    assert "baseline" in listed.stdout
-    assert "pre-restore-" in listed.stdout
-    # Live target is now back to the original install body.
-    pre_install_body = c.read_text(target)
-    assert "drifted v2" not in pre_install_body
                 "completion",
                 "install",
                 "bash",
@@ -2688,6 +2548,173 @@ def test_e2e_docker_revert_to_before_abort_via_confirm_dialog(
     assert rc_after_second == rc_after_first, "rc file changed on second install"
     # And the sentinel block appears exactly once.
     assert rc_after_second.count("# >>> setforge completion >>>") == 1
+
+
+# --- sqcw: revert --to-before atomic multi-step ---------------------------
+
+
+def test_e2e_docker_revert_to_before_two_step_atomic_apply(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """sqcw: two install transitions; --to-before=<oldest> unwinds both
+    atomically. Live tree returns to the absent-file pre-install state.
+
+    The flow: install (writes minimal/text.txt). Edit the tracked
+    src so the second install mutates the live file. Then
+    `revert --to-before=<first install id>` walks both reverse-patches
+    in newest-first order — the file is removed.
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+    assert c.exec(["test", "-f", target], check=False).returncode == 0
+
+    # Drift the tracked src in-container; second install records a delta.
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
+    c.write_text(src_in_container, "hello (drifted by test)\n")
+    _install(c, "test-minimal")
+    assert "drifted" in c.read_text(target)
+
+    # Look up the chronologically-first install transition id.
+    ls = c.exec(
+        [
+            "sh",
+            "-c",
+            "ls /home/tester/.local/state/setforge/transitions "
+            "| grep install-test-minimal | sort | head -n 1",
+        ],
+        check=False,
+    )
+    assert ls.returncode == 0
+    first_id = ls.stdout.strip()
+    assert first_id, ls.stdout
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+            f"--to-before={first_id}",
+            "--yes",
+        ]
+    )
+    assert revert.returncode == 0, revert.stderr
+    # File removed — both transitions unwound.
+    assert c.exec(["test", "-f", target], check=False).returncode != 0
+    # Two reverse transitions written (one per applied step).
+    reverts = c.exec(
+        [
+            "sh",
+            "-c",
+            "ls /home/tester/.local/state/setforge/transitions "
+            "| grep revert-test-minimal | wc -l",
+        ],
+        check=False,
+    )
+    assert reverts.returncode == 0
+    assert int(reverts.stdout.strip()) == 2
+
+
+def test_e2e_docker_revert_to_before_dry_run_failure_keeps_live_clean(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """sqcw: if the newest step's reverse-patch dry-run fails (live drift),
+    the chain aborts with NO live changes and NO new reverse transition.
+
+    Workflow: install twice (so the chain has two steps). Drift the
+    live file so the newest step's reverse can't apply cleanly.
+    revert --to-before=<oldest> must exit non-zero with the live file
+    still drifted (no partial mutation).
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
+    c.write_text(src_in_container, "second install body\n")
+    _install(c, "test-minimal")
+    # Drift the live file: now patch -R for the newest install cannot
+    # cleanly reverse the second install's edit.
+    drifted = "manually edited\n"
+    c.write_text(target, drifted)
+
+    ls = c.exec(
+        [
+            "sh",
+            "-c",
+            "ls /home/tester/.local/state/setforge/transitions "
+            "| grep install-test-minimal | sort | head -n 1",
+        ],
+        check=False,
+    )
+    first_id = ls.stdout.strip()
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+            f"--to-before={first_id}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert revert.returncode != 0, revert.stdout + revert.stderr
+    # Live file is still the drifted body — no partial mutation occurred.
+    assert c.read_text(target) == drifted
+    # No revert-* transition was written.
+    reverts = c.exec(
+        [
+            "sh",
+            "-c",
+            "ls /home/tester/.local/state/setforge/transitions "
+            "| grep revert-test-minimal | wc -l",
+        ],
+        check=False,
+    )
+    assert int(reverts.stdout.strip()) == 0
+
+
+def test_e2e_docker_revert_to_before_abort_via_confirm_dialog(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """sqcw: without --yes against a non-TTY stdin, the multi-step
+    confirm wizard refuses (mutate-gate). No live mutation, no revert
+    transitions written.
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
+    c.write_text(src_in_container, "second install body for abort case\n")
+    _install(c, "test-minimal")
+    post_second = c.read_text(target)
+    assert "second install body" in post_second
+
+    ls = c.exec(
+        [
+            "sh",
+            "-c",
+            "ls /home/tester/.local/state/setforge/transitions "
+            "| grep install-test-minimal | sort | head -n 1",
+        ],
+        check=False,
+    )
+    first_id = ls.stdout.strip()
+
+    # Non-TTY (docker exec without -t) + no --yes => wizard must refuse.
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
             "revert",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",

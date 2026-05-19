@@ -651,7 +651,7 @@ def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
     ``--yes``) under an isatty stub, and asserts exit 0 + no live
     mutation + no reverse-transition dir.
     """
-    cfg, dst = _setup_repo(tmp_path)
+    cfg, _dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)
 
