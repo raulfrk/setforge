@@ -55,6 +55,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["setforge"]
+# Vendored shell completion templates under setforge/cli/completions/
+# (_setforge / setforge.bash / setforge.fish) ship as package data so the
+# importlib.resources fallback in setforge/cli/completion.py works when
+# `setforge --show-completion=<shell>` fails (typer regression / binary
+# missing / subprocess timeout / empty stdout). Hatchling picks them up
+# automatically as non-Python files under a packaged directory; the empty
+# __init__.py keeps them discoverable via importlib.resources.files().
 
 [tool.ruff]
 target-version = "py312"

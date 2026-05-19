@@ -1,0 +1,1 @@
+complete --command setforge --no-files --arguments "(env _SETFORGE_COMPLETE=complete_fish _TYPER_COMPLETE_FISH_ACTION=get-args _TYPER_COMPLETE_ARGS=(commandline -cp) setforge)" --condition "env _SETFORGE_COMPLETE=complete_fish _TYPER_COMPLETE_FISH_ACTION=is-args _TYPER_COMPLETE_ARGS=(commandline -cp) setforge"
