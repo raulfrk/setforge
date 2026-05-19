@@ -189,3 +189,66 @@ def test_every_leaf_help_parses(runner: CliRunner, leaf_path: tuple[str, ...]) -
     assert result.exit_code == 0, (
         f"--help for {' '.join(leaf_path)} exited {result.exit_code}:\n{result.stdout}"
     )
+
+
+# Regex for a long-option flag inside an epilog example. Conservative
+# (lowercase + digits + hyphen) — matches every flag that appears in the
+# current help-examples corpus and any future flag that follows Typer /
+# Click conventions. Short flags (``-p``) are intentionally excluded:
+# they alias a long flag, and the long flag is what the epilog cites.
+_FLAG_RE: re.Pattern[str] = re.compile(r"--[a-z][a-z0-9-]+")
+
+# Flags that may legitimately appear in an epilog example but be
+# globally provided (root-callback) or auto-injected by Click rather
+# than declared on the specific leaf's Options block. ``--help`` is
+# always present. ``--profile`` / ``--config`` are on most subcommands.
+# ``--yes`` and ``--no-git-check`` ship with the mutating verbs that
+# tend to be the ones with epilog examples. The whitelist is generous
+# on purpose: a false-positive (leaf without flag X but epilog cites X)
+# would fail loudly anyway when a user copy-pastes the example.
+_UNIVERSAL_FLAGS: frozenset[str] = frozenset(
+    {"--profile", "--help", "--yes", "--config", "--no-git-check"}
+)
+
+
+def _epilog_for(leaf_path: tuple[str, ...]) -> str:
+    """Resolve the ``_help_examples`` constant for a leaf invocation path.
+
+    Mirror of the naming convention in :mod:`setforge.cli._help_examples`:
+    UPPER_SNAKE of the leaf path joined by ``_``, suffix ``_EXAMPLES``.
+    Examples: ``("install",)`` → ``INSTALL_EXAMPLES``,
+    ``("cleanup-orphans",)`` → ``CLEANUP_ORPHANS_EXAMPLES``,
+    ``("transitions", "list")`` → ``TRANSITIONS_LIST_EXAMPLES``.
+    """
+    key = "_".join(p.replace("-", "_") for p in leaf_path).upper() + "_EXAMPLES"
+    return getattr(_help_examples, key)
+
+
+@pytest.mark.parametrize(
+    "leaf_path", LEAF_COMMANDS, ids=[_id_for(p) for p in LEAF_COMMANDS]
+)
+def test_epilog_flags_exist(
+    runner: CliRunner, leaf_path: tuple[str, ...]
+) -> None:
+    """Every flag cited in a leaf's epilog must exist on that leaf's ``--help``.
+
+    Regression guard for the ``--quiet`` bug: a flag from a not-yet-merged
+    bead snuck into the install epilog because no test cross-referenced
+    epilog text against the actual command surface. Tokenize the epilog
+    for long-option flags, drop universal Typer flags, then assert each
+    remaining flag appears in the leaf's ``--help`` Options block.
+    """
+    epilog = _epilog_for(leaf_path)
+    cited = set(_FLAG_RE.findall(epilog))
+    to_check = cited - _UNIVERSAL_FLAGS
+    if not to_check:
+        return
+    result = runner.invoke(app, [*leaf_path, "--help"], env={"COLUMNS": "100"})
+    assert result.exit_code == 0, result.stdout
+    help_text = _strip_ansi(result.stdout)
+    missing = sorted(flag for flag in to_check if flag not in help_text)
+    assert not missing, (
+        f"{' '.join(leaf_path)} epilog references flags that "
+        f"command --help does not expose: {missing}\n"
+        f"--help output:\n{help_text}"
+    )
