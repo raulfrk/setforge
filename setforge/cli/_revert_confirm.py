@@ -91,7 +91,17 @@ class FileMutation:
     (e.g. ``"+14 -3"``) shown in the per-file listing. ``user_edit_collision``
     is the sorted tuple of ``(start_line, end_line)`` inclusive ranges that
     were edited live since the transition was recorded AND overlap with the
-    reverse-patch hunks. Empty tuple means no collision risk for this file.
+    reverse-patch hunks. Empty tuple means no collision risk has been
+    pre-detected for this file.
+
+    **v1 contract.** ``user_edit_collision`` is always empty in v1 —
+    :func:`setforge.cli.revert._build_revert_plan` does not pre-compute
+    overlap ranges. Real collision detection happens at apply time
+    via ``patch --dry-run -R`` inside
+    :func:`setforge.transitions.apply_patch_reverse`, which refuses
+    cleanly on conflict. The empty default exists so the panel can
+    surface conflict ranges in a future version that pre-walks the
+    reverse-hunks against live state (e.g. diff vs. recorded baseline).
     """
 
     path: Path
@@ -201,9 +211,10 @@ def _render_risks_section(plan: RevertPlan, console: Console) -> None:
         )
     else:
         console.print(
-            "  - Live edits made since the transition are preserved "
-            "(revert uses patch-reverse, not whole-file overwrite); revert "
-            "refuses cleanly if any reverse-hunk collides with a live edit."
+            "  - Collision check happens at apply time "
+            "(``patch --dry-run -R`` inside apply_patch_reverse); revert "
+            "uses patch-reverse, not whole-file overwrite, and refuses "
+            "cleanly if any reverse-hunk collides with a live edit."
         )
     if plan.plugin_reconciles or plan.extension_reconciles:
         console.print(

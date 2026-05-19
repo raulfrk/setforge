@@ -29,8 +29,10 @@ from setforge.cli import (
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
     ExtensionOperation,
+    ExtensionReconcile,
     FileMutation,
     PluginOperation,
+    PluginReconcile,
     RevertChoice,
     RevertPlan,
     confirm_revert_operation,
@@ -93,17 +95,110 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
     return summaries
 
 
+def _plugin_reconciles_from_transition(
+    transition: Path,
+) -> tuple[PluginReconcile, ...]:
+    """Build :class:`PluginReconcile` tuple from a transition's plugins.json.
+
+    Maps the forward ``PluginDelta`` to the post-revert state that the
+    panel surfaces (matches the dispatch semantics in
+    :data:`setforge.cli._plugin_helpers._REVERSE_PLUGIN_DISPATCH`):
+
+    - forward ``installed`` → revert uninstalls → :attr:`PluginOperation.DISABLED`
+      (panel marker ``-``).
+    - forward ``enabled``   → revert disables   → :attr:`PluginOperation.DISABLED`.
+    - forward ``disabled``  → revert re-enables → :attr:`PluginOperation.ENABLED`
+      (panel marker ``+``).
+
+    ``marketplaces_added`` / ``marketplaces_removed`` are intentionally
+    NOT projected into the panel listing — the wizard's plugin section
+    is per-plugin; marketplace ops are a separate axis and would need
+    their own renderer.
+    """
+    plugin_file = transition / "plugins.json"
+    if not plugin_file.exists():
+        return ()
+    payload = json.loads(plugin_file.read_text(encoding="utf-8"))
+    delta = transitions.plugin_delta_from_json(payload)
+    source = "[from transition record]"
+    reconciles: list[PluginReconcile] = []
+    for plugin_id in delta.installed:
+        reconciles.append(
+            PluginReconcile(
+                plugin_id=plugin_id,
+                operation=PluginOperation.DISABLED,
+                source=source,
+            )
+        )
+    for plugin_id in delta.enabled:
+        reconciles.append(
+            PluginReconcile(
+                plugin_id=plugin_id,
+                operation=PluginOperation.DISABLED,
+                source=source,
+            )
+        )
+    for plugin_id in delta.disabled:
+        reconciles.append(
+            PluginReconcile(
+                plugin_id=plugin_id,
+                operation=PluginOperation.ENABLED,
+                source=source,
+            )
+        )
+    return tuple(reconciles)
+
+
+def _extension_reconciles_from_transition(
+    transition: Path,
+) -> tuple[ExtensionReconcile, ...]:
+    """Build :class:`ExtensionReconcile` tuple from a transition's extensions.json.
+
+    Maps the forward ``ExtensionDelta`` to the post-revert state:
+
+    - forward ``added``   → revert uninstalls → :attr:`ExtensionOperation.UNINSTALLED`
+      (panel marker ``-``).
+    - forward ``removed`` → revert reinstalls → :attr:`ExtensionOperation.INSTALLED`
+      (panel marker ``+``).
+    """
+    ext_file = transition / "extensions.json"
+    if not ext_file.exists():
+        return ()
+    payload = json.loads(ext_file.read_text(encoding="utf-8"))
+    delta = transitions.extension_delta_from_json(payload)
+    source = "[from transition record]"
+    reconciles: list[ExtensionReconcile] = []
+    for ext_id in delta.added:
+        reconciles.append(
+            ExtensionReconcile(
+                extension_id=ext_id,
+                operation=ExtensionOperation.UNINSTALLED,
+                source=source,
+            )
+        )
+    for ext_id in delta.removed:
+        reconciles.append(
+            ExtensionReconcile(
+                extension_id=ext_id,
+                operation=ExtensionOperation.INSTALLED,
+                source=source,
+            )
+        )
+    return tuple(reconciles)
+
+
 def _build_revert_plan(transition: Path, profile: str) -> RevertPlan:
     """Read ``transition`` + compute per-file diff summaries → RevertPlan.
 
     The plan reflects what the FORWARD transition did; revert will
     reverse each item. Plugin / extension reconciles are inferred from
     the transition's ``plugins.json`` / ``extensions.json`` payloads when
-    present. ``user_edit_collision`` is left empty for v1 — collision
-    detection runs at apply time via ``patch --dry-run -R`` (see
-    :func:`transitions.apply_patch_reverse`); refusing-on-collision
-    preserves the safety contract without re-implementing hunk parsing
-    here.
+    present (via :func:`_plugin_reconciles_from_transition` and
+    :func:`_extension_reconciles_from_transition`). ``user_edit_collision``
+    is left empty for v1 — collision detection runs at apply time via
+    ``patch --dry-run -R`` (see :func:`transitions.apply_patch_reverse`);
+    refusing-on-collision preserves the safety contract without
+    re-implementing hunk parsing here.
     """
     meta_payload = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
     timestamp = datetime.fromisoformat(meta_payload["timestamp"])
@@ -131,8 +226,8 @@ def _build_revert_plan(transition: Path, profile: str) -> RevertPlan:
         profile=profile,
         age_human=age,
         file_mutations=file_mutations,
-        plugin_reconciles=(),
-        extension_reconciles=(),
+        plugin_reconciles=_plugin_reconciles_from_transition(transition),
+        extension_reconciles=_extension_reconciles_from_transition(transition),
         redo_command=f"setforge revert --profile={profile}",
     )
 
