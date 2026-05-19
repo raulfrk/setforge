@@ -239,6 +239,19 @@ class Config(BaseModel):
     model_config = _STRICT
 
     version: int = 1
+    schema_version: str = "1.0"
+    """User-declared schema version for ``setforge migrate`` compatibility checks.
+
+    Defaults to ``"1.0"`` when absent so every pre-versioning
+    ``setforge.yaml`` continues to load unchanged. The matching value
+    setforge expects for the running build lives in
+    :data:`setforge.migrations.current_expected_schema_version`; the
+    ``setforge migrate --check`` command compares the two and surfaces
+    the chain of migrations needed when they diverge. The field is
+    intentionally a free-form string (e.g. ``"1.0"``, ``"1.1"``,
+    ``"2.0"``) rather than the integer ``version`` field, which
+    enumerates the YAML file format itself and is owned by the engine.
+    """
     tracked_files: dict[str, TrackedFile]
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
@@ -331,6 +344,14 @@ def load_config(path: Path) -> Config:
     a name absent from the top-level ``claude_plugins:`` registry).
     Pydantic validation errors are propagated unchanged so the caller
     sees the full field-level message.
+
+    When the loaded :attr:`Config.schema_version` does not match
+    :data:`setforge.migrations.current_expected_schema_version`, a
+    single yellow warning is written to stderr pointing the user at
+    ``setforge migrate --check``. The mismatch is NOT a hard error —
+    the user may have explicitly pinned an older schema via
+    ``setforge migrate --pin=X.Y``; raising would block every other
+    subcommand on a soft signal.
     """
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
@@ -341,7 +362,28 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"config file is empty: {path}")
     config = Config.model_validate(data)
     _validate_plugin_references(config)
+    _warn_on_schema_mismatch(config)
     return config
+
+
+def _warn_on_schema_mismatch(config: Config) -> None:
+    """Emit a one-line yellow stderr warning when schema_version diverges.
+
+    Imported lazily to avoid a circular import — ``setforge.migrations``
+    is conceptually a downstream consumer of the loaded ``Config``.
+    """
+    import sys
+
+    from setforge.migrations import current_expected_schema_version
+
+    if config.schema_version == current_expected_schema_version:
+        return
+    sys.stderr.write(
+        f"\033[33mwarning:\033[0m setforge.yaml declares "
+        f"schema_version={config.schema_version!r} "
+        f"but this setforge expects {current_expected_schema_version!r}; "
+        f"run `setforge migrate --check` for details\n"
+    )
 
 
 def _validate_plugin_references(config: Config) -> None:
