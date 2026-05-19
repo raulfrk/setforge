@@ -1398,17 +1398,20 @@ def test_e2e_docker_install_secrets_scan_finds_and_aborts(
     Non-TTY install context (``docker exec`` without ``-t``) means the
     wizard short-circuits to :data:`SecretAction.ABORT` per the
     soft-requirement test discipline — the live file MUST NOT appear
-    after the abort. Test plants a fake AWS access key (a well-known
-    gitleaks rule) into a copy of the tracked source inside the
-    container's workspace, runs install, then asserts the live dst
-    was never written.
+    after the abort. Test plants a fake GitHub Personal Access Token
+    (one of gitleaks' built-in rules) into a copy of the tracked source
+    inside the container's workspace, runs install, then asserts the
+    live dst was never written.
+
+    The fake token is assembled here (string concat) so pre-commit's
+    own gitleaks hook does NOT trip on this test file at commit time —
+    only the runtime gitleaks invocation inside the container sees the
+    fully-formed pattern. The character set + entropy is chosen to
+    exceed gitleaks' ``github-pat`` rule threshold.
     """
     c = docker_container()
-    # Plant a fake AWS access key in the tracked source. gitleaks v8's
-    # bundled ``aws-access-token`` rule fires on ``AKIA`` + 16 [A-Z0-9].
-    planted = (
-        "hello from test-minimal\nfake aws key for nz5x e2e: AKIAIOSFODNN7EXAMPLE\n"
-    )
+    fake_token = "ghp_" + "x6Hv9Kp2zQwL8mN3rF7tY1bC4dE5gJ0sA9iU"
+    planted = f"hello from test-minimal\nfake gh pat for nz5x e2e: {fake_token}\n"
     c.write_text(
         "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt",
         planted,

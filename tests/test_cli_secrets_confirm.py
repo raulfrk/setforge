@@ -62,9 +62,7 @@ def _patch_dialog(
 ) -> _DialogRecorder:
     """Install a ``_DialogRecorder`` at the lazy-import seam."""
     recorder = _DialogRecorder(return_value=return_value)
-    monkeypatch.setattr(
-        "setforge.cli._secrets_confirm.radiolist_dialog", recorder
-    )
+    monkeypatch.setattr("setforge.cli._secrets_confirm.radiolist_dialog", recorder)
     return recorder
 
 
