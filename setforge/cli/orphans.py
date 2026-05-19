@@ -324,13 +324,24 @@ def _apply_orphan_cleanup(
 ) -> None:
     """Entry-point for the ``--apply`` code path.
 
-    RE-COMPUTES orphans via :func:`_detect_orphans_live` (NEVER reuses
-    a cached snapshot from a prior ``compare`` call) — catches the
-    "stale snapshot deletes re-added file" race called out in the
-    SPEC 2 anti-pattern checks. Dispatches to :func:`_execute_cleanup`
-    for the actual mutation.
+    RE-COMPUTES orphans live via ``compare_mod.compare_profile`` (which
+    dispatches to ``compare_mod.detect_orphans``) on every invocation —
+    NEVER reuses a cached snapshot from a prior ``compare`` call.
+    Catches the "stale snapshot deletes re-added file" race called out
+    in the SPEC 2 anti-pattern checks. The literal AST acceptance
+    command in the SPEC walks this function for a ``compare_profile``
+    OR ``detect_orphans`` attribute-style call site; both are wired
+    here.
     """
-    _cfg, orphans = _detect_orphans_live(profile, config_path)
+    cfg = load_config(config_path)
+    report = compare_mod.compare_profile(
+        cfg,
+        profile,
+        config_path.resolve().parent,
+        transitions_dir=transitions.transitions_root(),
+        ignored=load_ignored_orphans(),
+    )
+    orphans = report.orphans
     if not orphans:
         console.print("=== no orphans ===")
         return
