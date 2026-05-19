@@ -442,42 +442,9 @@ def test_completion_install_unknown_shell_exits_2(home: Path) -> None:
     assert result.exit_code == 2, result.output
 
 
-def test_completion_install_show_completion_failure_raises_setforge_error(
-    home: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (home / ".zshrc").write_text("# x\n")
-
-    def fail_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        del kwargs
-        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
-
-    monkeypatch.setattr("setforge.cli.completion.subprocess.run", fail_run)
-
-    result = _RUNNER.invoke(app, ["completion", "install", "zsh", "--non-interactive"])
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, SetforgeError)
-    assert "boom" in str(result.exception)
-
-
-def test_completion_install_show_completion_empty_output_raises(
-    home: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (home / ".zshrc").write_text("# x\n")
-
-    def empty_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        del kwargs
-        return subprocess.CompletedProcess(argv, 0, stdout="   \n", stderr="")
-
-    monkeypatch.setattr("setforge.cli.completion.subprocess.run", empty_run)
-
-    result = _RUNNER.invoke(app, ["completion", "install", "zsh", "--non-interactive"])
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, SetforgeError)
-    assert "empty output" in str(result.exception)
+# Note: subprocess returncode != 0 / empty stdout no longer raise SetforgeError —
+# they fall back to the vendored template per setforge-gtqv. Coverage for the
+# fallback path lives in tests/test_completion_fallback.py.
 
 
 # ---------------------------------------------------------------------------
