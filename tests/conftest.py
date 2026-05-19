@@ -119,11 +119,40 @@ def _isolate_home(
     return home
 
 
+@pytest.fixture(autouse=True)
+def _suppress_fresh_host_welcome(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force :func:`setforge.cli._welcome.is_fresh_host` to return ``False``.
+
+    Every CliRunner ``install`` invocation in the inner test ring runs
+    under :func:`_isolate_home` with a transitions-free sandboxed HOME.
+    Without this fixture, the fresh-host welcome gate (setforge-7jg4)
+    would either raise :class:`WelcomeRequiresInteractive` (non-TTY
+    CliRunner stdin) or reject ``--auto=*`` for every install test in
+    the suite.
+
+    We monkeypatch the symbol directly rather than planting a transition
+    record because many tests redirect ``SETFORGE_STATE_DIR`` themselves
+    (e.g. tests/test_cli_revert.py) and would clobber a planted marker.
+    The symbol-patch overrides the welcome gate regardless of where the
+    state dir resolves to.
+
+    The welcome's behavior under fresh-host conditions is exercised
+    explicitly by ``tests/test_welcome.py``, which opts out via the
+    ``fresh_host`` marker.
+    """
+    if request.node.get_closest_marker("fresh_host") is not None:
+        return
+    monkeypatch.setattr("setforge.cli.install.is_fresh_host", lambda: False)
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config,
     items: Sequence[pytest.Item],
 ) -> None:
-    """Register the ``no_home_isolation`` marker for ``--strict-markers``.
+    """Register custom markers for ``--strict-markers``.
 
     Registration via ``config.addinivalue_line`` keeps
     ``pytest --strict-markers`` happy without forcing every test author
@@ -134,4 +163,9 @@ def pytest_collection_modifyitems(
     config.addinivalue_line(
         "markers",
         "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
+    )
+    config.addinivalue_line(
+        "markers",
+        "fresh_host: opt this test out of the autouse fresh-host suppression "
+        "fixture so the install welcome gate fires.",
     )
