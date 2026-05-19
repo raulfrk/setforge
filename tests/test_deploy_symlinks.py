@@ -13,8 +13,8 @@ Contract for :func:`setforge.deploy.deploy_symlinked_file`:
 - Updates a pre-existing symlink at ``dst`` atomically via
   ``tmp + os.replace`` (no unlink/symlink gap).
 
-The corresponding revert helper (:func:`setforge.cli._install_helpers.revert_symlink_deployment`)
-contract:
+The corresponding revert helper
+(:func:`setforge.cli._install_helpers.revert_symlink_deployment`) contract:
 
 - Refuses to unlink when the user retargeted the symlink (target
   drift since deploy).
