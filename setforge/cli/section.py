@@ -25,6 +25,7 @@ from rich.markup import escape as rich_escape
 
 from setforge._editor import run_editor
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
+from setforge.cli._help_examples import SECTION_ADD_EXAMPLES, SECTION_EMIT_EXAMPLES
 from setforge.compare import resolve_src
 from setforge.config import load_config
 from setforge.sections import (
@@ -68,6 +69,8 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 section_app: typer.Typer = typer.Typer(
     help="Manage user-section markers in tracked markdown files.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(section_app, name="section")
 
@@ -162,7 +165,7 @@ def _stamp_section_hashes(text: str) -> str:
     return set_marker_hashes(text, hashes, allow_legacy=True)
 
 
-@section_app.command("emit")
+@section_app.command("emit", epilog=SECTION_EMIT_EXAMPLES)
 def section_emit(
     semantics: str = typer.Argument(..., help="shared|host-local"),
     name: str = typer.Argument(..., help="lowercase-with-dashes section name"),
@@ -553,7 +556,7 @@ def _section_add_interactive(
     _apply_section_add(inputs, body=body)
 
 
-@section_app.command("add")
+@section_app.command("add", epilog=SECTION_ADD_EXAMPLES)
 def section_add(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
