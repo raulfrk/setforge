@@ -210,6 +210,7 @@ def install(
             file_post,
             ext_delta,
             plugin_delta,
+            source_dir=ctx.repo_root,
             reconcile_outcomes=plugin_outcomes + ext_outcomes,
         )
         typer.echo(f"transition: {target}")

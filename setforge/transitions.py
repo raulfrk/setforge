@@ -104,33 +104,126 @@ def transition_dirname(timestamp: datetime, command: str, profile: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class TransitionMeta:
-    """Metadata for one transition. Serialized to ``meta.json``."""
+    """Metadata for one transition. Serialized to ``meta.json``.
+
+    ``source_sha`` records the config-repo HEAD at install time so
+    ``setforge status`` can compute ``commits-since-last-install``
+    (setforge-xra8). It is ``None`` for transitions recorded before the
+    schema bump and for transitions whose source directory is not a git
+    repo; :meth:`to_dict` omits the key entirely when ``None`` so old
+    meta.json files round-trip byte-identically through load + re-dump.
+    """
 
     command: TransitionCommand
     profile: str
     timestamp: datetime  # UTC; serialized as ISO 8601
     host: str  # platform.node()
     version: str  # setforge.__version__
+    source_sha: str | None = None  # config-repo HEAD at install time; None pre-xra8
 
     def to_dict(self) -> dict[str, str]:
-        return {
+        out: dict[str, str] = {
             "command": self.command.value,
             "profile": self.profile,
             "timestamp": self.timestamp.astimezone(UTC).isoformat(),
             "host": self.host,
             "version": self.version,
         }
+        if self.source_sha is not None:
+            out["source_sha"] = self.source_sha
+        return out
 
 
-def make_meta(command: TransitionCommand, profile: str) -> TransitionMeta:
-    """Build a TransitionMeta with current host + version + UTC timestamp."""
+def _git_head(source_dir: Path) -> str | None:
+    """Return the HEAD commit sha of ``source_dir`` or ``None``.
+
+    Used by :func:`make_meta` to record the config-repo state at install
+    time (setforge-xra8). Returns ``None`` when ``source_dir`` is not a
+    git repo, when ``git`` is not on ``PATH``, or when the subprocess
+    fails for any reason — the field is informational, not load-bearing,
+    and a missing value is the documented "no provenance" state.
+    """
+    git_bin = shutil.which("git")
+    if git_bin is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git_bin, "-C", str(source_dir), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def make_meta(
+    command: TransitionCommand,
+    profile: str,
+    *,
+    source_dir: Path | None = None,
+) -> TransitionMeta:
+    """Build a TransitionMeta with current host + version + UTC timestamp.
+
+    When ``source_dir`` is provided AND is a git repo, records its HEAD
+    commit sha as ``source_sha`` so ``setforge status`` can compute
+    ``commits-since-last-install`` (setforge-xra8). Otherwise leaves
+    ``source_sha`` as ``None``; callers that don't have a source dir
+    handy (revert, plugin reconcile sub-record) keep the pre-bump call
+    shape.
+    """
+    source_sha = _git_head(source_dir) if source_dir is not None else None
     return TransitionMeta(
         command=command,
         profile=profile,
         timestamp=now_utc(),
         host=platform.node(),
         version=__version__,
+        source_sha=source_sha,
     )
+
+
+def load_meta(transition_dir: Path) -> TransitionMeta:
+    """Load and parse ``<transition_dir>/meta.json`` into a :class:`TransitionMeta`.
+
+    Reads the JSON payload written by :func:`write_meta` and reconstructs
+    the dataclass. Falls back to ``source_sha = None`` for transitions
+    recorded before the setforge-xra8 schema bump (no ``source_sha`` key
+    in the payload). Raises :class:`InvalidTransitionRecord` on missing
+    or malformed required fields; on ``ValueError`` from
+    :class:`TransitionCommand` membership or
+    :func:`datetime.fromisoformat`, the raised error wraps the original
+    exception so the caller sees both.
+    """
+    payload_path = transition_dir / "meta.json"
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read meta.json at {payload_path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise InvalidTransitionRecord(
+            f"meta.json at {payload_path} is not a JSON object"
+        )
+    try:
+        return TransitionMeta(
+            command=TransitionCommand(payload["command"]),
+            profile=str(payload["profile"]),
+            timestamp=datetime.fromisoformat(payload["timestamp"]),
+            host=str(payload["host"]),
+            version=str(payload["version"]),
+            source_sha=payload.get("source_sha"),
+        )
+    except (KeyError, ValueError) as exc:
+        raise InvalidTransitionRecord(
+            f"meta.json at {payload_path} is missing or malformed: {exc}"
+        ) from exc
 
 
 def write_meta(

@@ -151,10 +151,15 @@ def _write_install_transition(
     ext_delta: transitions.ExtensionDelta | None,
     plugin_delta: transitions.PluginDelta | None,
     *,
+    source_dir: Path | None = None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
+    ``source_dir`` is the config-repo root (``ctx.repo_root``); when
+    provided AND it is a git repo, :func:`transitions.make_meta` records
+    its HEAD commit sha so ``setforge status`` can compute
+    ``commits-since-last-install`` (setforge-xra8).
     ``reconcile_outcomes`` defaults to an empty tuple so callers that
     pre-date setforge-k0uj keep working. When non-empty, the tuple is
     serialized to ``reconcile_outcomes.json`` next to the existing
@@ -163,7 +168,11 @@ def _write_install_transition(
     next invocation.
     """
     return transitions.write_transition(
-        transitions.make_meta(transitions.TransitionCommand.INSTALL, profile),
+        transitions.make_meta(
+            transitions.TransitionCommand.INSTALL,
+            profile,
+            source_dir=source_dir,
+        ),
         file_pre,
         file_post,
         ext_delta,

@@ -20,6 +20,7 @@ from setforge.transitions import (
     extension_delta_from_json,
     list_transitions,
     load_latest,
+    load_meta,
     make_meta,
     now_utc,
     plugin_delta_from_json,
@@ -159,6 +160,143 @@ def test_make_meta_uses_current_host_and_version() -> None:
     assert meta.profile == "vm-headless"
     assert meta.host  # not empty
     assert meta.version  # not empty
+
+
+def test_make_meta_source_sha_none_when_source_dir_omitted() -> None:
+    """``source_dir`` defaulting to None must leave ``source_sha`` unset."""
+    meta = make_meta(TransitionCommand.INSTALL, "vm-headless")
+    assert meta.source_sha is None
+
+
+def test_make_meta_source_sha_none_when_source_dir_is_not_git_repo(
+    tmp_path: Path,
+) -> None:
+    """A non-git directory must not crash; ``source_sha`` stays None."""
+    meta = make_meta(
+        TransitionCommand.INSTALL, "vm-headless", source_dir=tmp_path
+    )
+    assert meta.source_sha is None
+
+
+def test_make_meta_records_source_sha_when_source_dir_is_git_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When ``git rev-parse HEAD`` succeeds, ``source_sha`` is its stdout."""
+    captured_args: list[list[str]] = []
+    import subprocess as sp
+
+    def fake_run(args: list[str], **kwargs: object) -> sp.CompletedProcess[str]:
+        captured_args.append(list(args))
+        return sp.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="1f37cb1abcdef1234567890abcdef1234567890ab\n",
+            stderr="",
+        )
+
+    import setforge.transitions as transitions_mod
+
+    monkeypatch.setattr(transitions_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(transitions_mod.shutil, "which", lambda name: "/usr/bin/git")
+    meta = make_meta(TransitionCommand.INSTALL, "vmh", source_dir=tmp_path)
+    assert meta.source_sha == "1f37cb1abcdef1234567890abcdef1234567890ab"
+    assert any(part == "rev-parse" for part in captured_args[-1])
+    assert any(part == "HEAD" for part in captured_args[-1])
+
+
+def test_make_meta_source_sha_none_when_git_binary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """If ``git`` is not on PATH, _git_head returns None without exception."""
+    import setforge.transitions as transitions_mod
+
+    monkeypatch.setattr(transitions_mod.shutil, "which", lambda name: None)
+    meta = make_meta(TransitionCommand.INSTALL, "vmh", source_dir=tmp_path)
+    assert meta.source_sha is None
+
+
+def test_to_dict_omits_source_sha_when_none() -> None:
+    """Old transitions must round-trip byte-identically: no ``source_sha`` key."""
+    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=UTC)
+    meta = TransitionMeta(
+        command=TransitionCommand.INSTALL,
+        profile="vmh",
+        timestamp=ts,
+        host="h",
+        version="0.1.0",
+    )
+    payload = meta.to_dict()
+    assert "source_sha" not in payload
+    assert payload == {
+        "command": "install",
+        "profile": "vmh",
+        "timestamp": "2026-05-07T12:30:45+00:00",
+        "host": "h",
+        "version": "0.1.0",
+    }
+
+
+def test_to_dict_includes_source_sha_when_set() -> None:
+    """When ``source_sha`` is populated, it must appear in the serialized dict."""
+    ts = datetime(2026, 5, 7, 12, 30, 45, tzinfo=UTC)
+    meta = TransitionMeta(
+        command=TransitionCommand.INSTALL,
+        profile="vmh",
+        timestamp=ts,
+        host="h",
+        version="0.1.0",
+        source_sha="abc123",
+    )
+    payload = meta.to_dict()
+    assert payload["source_sha"] == "abc123"
+
+
+def test_load_meta_old_record_without_source_sha_round_trips_to_none(
+    tmp_path: Path,
+) -> None:
+    """meta.json written before setforge-xra8 must deserialize cleanly."""
+    target = tmp_path / "20260507T120000000000Z-install-vmh"
+    target.mkdir()
+    # Hand-craft a pre-xra8 payload — no ``source_sha`` key.
+    payload = {
+        "command": "install",
+        "profile": "vmh",
+        "timestamp": "2026-05-07T12:00:00+00:00",
+        "host": "h",
+        "version": "0.1.0",
+    }
+    (target / "meta.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    meta = load_meta(target)
+    assert meta.source_sha is None
+    assert meta.command is TransitionCommand.INSTALL
+    assert meta.profile == "vmh"
+
+
+def test_load_meta_new_record_with_source_sha(tmp_path: Path) -> None:
+    """meta.json carrying ``source_sha`` must round-trip the value."""
+    target = tmp_path / "20260518T120000000000Z-install-vmh"
+    write_meta(
+        target,
+        TransitionMeta(
+            command=TransitionCommand.INSTALL,
+            profile="vmh",
+            timestamp=datetime(2026, 5, 18, 12, 0, 0, tzinfo=UTC),
+            host="h",
+            version="0.2.0",
+            source_sha="deadbeef",
+        ),
+    )
+    meta = load_meta(target)
+    assert meta.source_sha == "deadbeef"
+
+
+def test_load_meta_raises_on_missing_file(tmp_path: Path) -> None:
+    """Missing meta.json must surface a clear InvalidTransitionRecord."""
+    with pytest.raises(InvalidTransitionRecord, match=r"cannot read meta\.json"):
+        load_meta(tmp_path / "nonexistent")
 
 
 def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
