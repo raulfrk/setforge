@@ -891,17 +891,18 @@ def apply_patch_reverse(transition_dir: Path, *, dry_run: bool = False) -> None:
     No-op if the patch file is absent (e.g. transition recorded only an
     extension delta).
 
-    Two modes:
+    When ``dry_run=False`` (default, backward-compat): a ``--dry-run`` pass
+    runs first so drift on any single file aborts before any file is
+    written; on a clean dry-run, the real apply follows.
 
-    - ``dry_run=False`` (default, backward-compat): a ``patch -R --dry-run``
-      pass runs first so drift on any single file aborts before any file
-      is written; on a clean dry-run, the real apply follows.
-    - ``dry_run=True``: only the ``patch -R --dry-run`` pass runs; raises
-      :class:`RevertFailed` on failure; returns ``None`` on success
-      without modifying the live tree. Used by multi-step atomic revert
-      (e.g. ``revert --to-before=<id>``) which must dry-run ALL N
-      transitions FIRST before applying ANY of them, so a late-step drift
-      aborts before the chain's first write.
+    When ``dry_run=True``: only the dry-run pass runs; raises
+    :class:`RevertFailed` on failure; returns ``None`` on success without
+    modifying the live tree. Used as a building block for multi-step
+    revert chains.
+
+    The function is single-transition; multi-step coordination (including
+    the partial-state failure model) belongs to the caller (see
+    :func:`_revert_to_before` in :mod:`setforge.cli.revert`).
 
     ``--reject-file=-`` discards rejected hunks (would otherwise leave
     ``.rej`` siblings in the user's tree).
