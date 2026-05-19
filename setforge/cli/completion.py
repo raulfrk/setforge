@@ -400,9 +400,7 @@ def _install_zsh_or_bash(
         return
 
     if rc is None:  # zsh + bash always resolve an rc path; survive python -O
-        raise SetforgeError(
-            f"internal: no rc path resolved for shell {shell.value!r}"
-        )
+        raise SetforgeError(f"internal: no rc path resolved for shell {shell.value!r}")
     already_wired = _detect_wiring(rc)
     body = _wiring_body_for(shell)
     _write_wiring(rc, body)
