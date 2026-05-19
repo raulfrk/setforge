@@ -28,6 +28,11 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import (
+    REVERT_EXAMPLES,
+    TRANSITIONS_LIST_EXAMPLES,
+    TRANSITIONS_SHOW_EXAMPLES,
+)
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
 from setforge.cli._install_helpers import revert_symlink_deployment
 from setforge.cli._plugin_helpers import _write_reverse_transition
@@ -365,7 +370,7 @@ _TO_BEFORE_OPTION = typer.Option(
 )
 
 
-@app.command()
+@app.command(epilog=REVERT_EXAMPLES)
 def revert(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -512,6 +517,8 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
 transitions_app: typer.Typer = typer.Typer(
     help="Inspect transition history for install/sync/revert.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(transitions_app, name="transitions")
 
@@ -529,7 +536,7 @@ _TRANSITIONS_LIST_OLDEST_FIRST_OPTION = typer.Option(
 )
 
 
-@transitions_app.command("list")
+@transitions_app.command("list", epilog=TRANSITIONS_LIST_EXAMPLES)
 def transitions_list(
     profile: list[str] | None = _TRANSITIONS_LIST_PROFILE_OPTION,
     oldest_first: bool = _TRANSITIONS_LIST_OLDEST_FIRST_OPTION,
@@ -616,7 +623,7 @@ def _render_transitions_table(
     )
 
 
-@transitions_app.command("show")
+@transitions_app.command("show", epilog=TRANSITIONS_SHOW_EXAMPLES)
 def transitions_show(
     prefix: str = typer.Argument(..., help="Dirname or unique-prefix match."),
 ) -> None:
