@@ -460,7 +460,7 @@ def _compare_one(
     # so dangling links surface as DRIFTED (target drift / broken link)
     # rather than MISSING.
     if tracked_file.symlink is not None:
-        return _compare_symlinked(name, dst, tracked_file)
+        return _compare_symlinked(name, src, dst, tracked_file)
 
     if not dst.exists():
         return (
@@ -527,7 +527,7 @@ def _compare_one(
 
 
 def _compare_symlinked(
-    name: str, dst: Path, tracked_file: TrackedFile
+    name: str, src: Path, dst: Path, tracked_file: TrackedFile
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
 
@@ -535,18 +535,20 @@ def _compare_symlinked(
     a dangling symlink (``exists()`` returns False on broken links) as
     MISSING — the existing-bug surface m483 fixes.
 
-    Three drift shapes count as DRIFTED (returns ``(entry, True)``):
+    Four drift shapes count as DRIFTED (returns ``(entry, True)``):
 
     - ``dst`` is a regular file (not a symlink) but exists: user
       replaced setforge's symlink with their own content.
     - ``dst`` is a symlink whose ``os.readlink`` does not match the
       declared :attr:`TrackedFile.symlink` (raw string) — target drift.
-    - ``dst`` is a symlink (correct or broken target) and matches the
-      declared target: classified UNCHANGED. Content drift at the
-      target is out of scope for this helper; the caller's compare
-      report does not re-diff the target path because the symlink
-      dispatch lives BEFORE the content-diff branch (anti-pattern
-      check #7 in the research findings).
+    - ``dst`` is a correct symlink but the target file's CONTENT has
+      drifted from ``src`` — surfaced via :func:`diff_file` against the
+      expanded target path. Broken links (target absent) are silent
+      here because :func:`diff_file` returns ``""`` when ``dst`` doesn't
+      exist.
+    - ``dst`` is a correct symlink to a non-existent target (broken
+      link): classified UNCHANGED. The link metadata matches what
+      setforge installed; the user separately removed the target.
 
     MISSING is reserved for "no symlink, no regular file at dst" — the
     deploy hasn't happened (or was removed) and there is no user file
@@ -593,6 +595,25 @@ def _compare_symlinked(
             ),
             True,
         )
+
+    # Link metadata is correct; probe the target's CONTENT for drift.
+    # ``diff_file`` returns ``""`` when its second argument does not
+    # exist, so a broken link (target absent) naturally lands UNCHANGED
+    # here — the link itself is still what setforge installed.
+    target_path = Path(tracked_file.symlink).expanduser()
+    target_diff = diff_file(src, target_path)
+    if target_diff:
+        return (
+            FileCompare(
+                name=name,
+                status=CompareStatus.DRIFTED,
+                diff=target_diff,
+                expected_drift_keys=[],
+                unexpected_drift_keys=[],
+            ),
+            True,
+        )
+
     return (
         FileCompare(
             name=name,

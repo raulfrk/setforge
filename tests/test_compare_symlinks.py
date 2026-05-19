@@ -148,11 +148,12 @@ def test_symlink_target_drift_is_drifted(tmp_path: Path) -> None:
 
 
 def test_correct_symlink_is_unchanged(tmp_path: Path) -> None:
-    """Symlink at dst matches declared target — UNCHANGED, no drift."""
+    """Symlink at dst points at the declared target AND content matches
+    — UNCHANGED, no drift."""
     src = tmp_path / "src"
-    src.write_text("x\n")
+    src.write_text("payload\n")
     target = tmp_path / "real-target"
-    target.write_text("body\n")
+    target.write_text("payload\n")  # equal to src — no content drift.
     dst = tmp_path / "link"
     declared = str(target)
     os.symlink(declared, dst)
@@ -162,6 +163,34 @@ def test_correct_symlink_is_unchanged(tmp_path: Path) -> None:
     assert entry.status is CompareStatus.UNCHANGED
     assert was_drifted is False
     assert entry.diff == ""
+
+
+def test_correct_symlink_with_target_content_drift_is_drifted(
+    tmp_path: Path,
+) -> None:
+    """Symlink metadata is correct but the target file's content has
+    drifted from tracked ``src`` — DRIFTED with a content diff body.
+
+    Pre-fix surface: ``_compare_symlinked`` returned UNCHANGED on every
+    correct-target symlink regardless of what the target file held,
+    silently hiding target-content drift from the user. The fix routes
+    through :func:`compare.diff_file` against the expanded target path
+    so post-deploy target-content edits surface as DRIFTED.
+    """
+    src = tmp_path / "src"
+    src.write_text("tracked-payload\n")
+    target = tmp_path / "real-target"
+    target.write_text("user-edited-payload\n")  # diverges from tracked src.
+    dst = tmp_path / "link"
+    declared = str(target)
+    os.symlink(declared, dst)
+    tf = _make(src, dst, symlink=declared)
+
+    entry, was_drifted = _compare_one("foo", src, dst, tf)
+    assert entry.status is CompareStatus.DRIFTED
+    assert was_drifted is True
+    assert "tracked-payload" in entry.diff
+    assert "user-edited-payload" in entry.diff
 
 
 def test_symlink_dispatch_runs_before_not_exists_branch(tmp_path: Path) -> None:
