@@ -468,7 +468,6 @@ def _reconcile_plugins(
     )
 
     outcomes: list[transitions.ReconcileOutcome] = []
-    failed_ids = {pid for pid, _ in plugin_report.failed}
     _append_plugin_success_outcomes(outcomes, delta_first)
 
     retried_delta_pieces = _PluginRetriedPieces()
@@ -486,9 +485,6 @@ def _reconcile_plugins(
             retried=retried_delta_pieces,
         )
         outcomes.append(outcome)
-        # Stale ids guard: failed_ids set is referenced only for cache
-        # consistency in future paths; keep here for symmetry.
-        _ = failed_ids
 
     final_delta = _merge_retried_plugin_delta(delta_first, retried_delta_pieces)
     return final_delta, tuple(outcomes)
