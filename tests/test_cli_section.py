@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -14,6 +15,91 @@ from setforge.cli import app
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
+
+
+# --- prompt_toolkit dialog test doubles (pytest monkeypatch style) ---
+
+
+class _FakeDialog:
+    """Stand-in for prompt_toolkit's ``Dialog`` return object.
+
+    ``radiolist_dialog`` / ``input_dialog`` / ``yes_no_dialog`` each
+    return a Dialog whose ``.run()`` yields the user's choice. Tests
+    configure ``.run()`` to return a fixed value or walk an iterator
+    of values (``side_effect``).
+    """
+
+    def __init__(
+        self,
+        *,
+        return_value: object = None,
+        side_effect: list[object] | None = None,
+    ) -> None:
+        self._return_value = return_value
+        self._side_effect: Iterator[object] | None = (
+            iter(side_effect) if side_effect is not None else None
+        )
+        self.run_calls = 0
+
+    def run(self) -> object:
+        self.run_calls += 1
+        if self._side_effect is not None:
+            return next(self._side_effect)
+        return self._return_value
+
+
+class _DialogRecorder:
+    """Callable replacement for a prompt_toolkit dialog factory.
+
+    Each call returns the same ``_FakeDialog`` so test setup can stage
+    a sequence of ``.run()`` returns via ``side_effect`` and still
+    introspect the dialog's invocation count.
+    """
+
+    def __init__(self, fake: _FakeDialog) -> None:
+        self.fake = fake
+        self.call_count = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialog:
+        self.call_count += 1
+        return self.fake
+
+
+def _patch_section_dialogs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    radiolist_returns: list[object] | object = None,
+    input_returns: list[object] | object = None,
+    yes_no_returns: list[object] | object = None,
+    pick_anchor_return: object = None,
+) -> dict[str, _DialogRecorder]:
+    """Install fakes for the four prompt_toolkit boundaries used by section add.
+
+    Returns a dict keyed by dialog name so tests can introspect
+    ``call_count`` / ``run_calls``. ``pick_anchor_line`` is a plain
+    function (not a Dialog factory), so it gets a separate lambda
+    patch and is not recorded here.
+    """
+    recorders: dict[str, _DialogRecorder] = {}
+    for key, target, value in (
+        ("radiolist", "setforge.cli.section.radiolist_dialog", radiolist_returns),
+        ("input", "setforge.cli.section.input_dialog", input_returns),
+        ("yes_no", "setforge.cli.section.yes_no_dialog", yes_no_returns),
+    ):
+        fake = (
+            _FakeDialog(side_effect=value)
+            if isinstance(value, list)
+            else _FakeDialog(return_value=value)
+        )
+        rec = _DialogRecorder(fake)
+        monkeypatch.setattr(target, rec)
+        recorders[key] = rec
+    monkeypatch.setattr(
+        "setforge.cli.section.pick_anchor_line",
+        lambda *_a, **_kw: pick_anchor_return,
+    )
+    monkeypatch.setattr("typer.prompt", lambda *_a, **_kw: "1")
+    return recorders
 
 
 # --- section emit ---
@@ -539,19 +625,16 @@ def test_section_add_interactive_walks_all_prompts(
 ) -> None:
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("setforge.cli.section.input_dialog") as ip,
-        patch("setforge.cli.section.yes_no_dialog") as yn,
-        patch("setforge.cli.section.pick_anchor_line", return_value=2),
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.side_effect = ["shared", "empty"]
-        ip.return_value.run.return_value = "foo"
-        yn.return_value.run.return_value = True
-        result = runner.invoke(
-            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
-        )
+    _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns=["shared", "empty"],
+        input_returns="foo",
+        yes_no_returns=True,
+        pick_anchor_return=2,
+    )
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
     assert result.exit_code == 0
     assert "shared foo" in tracked.read_text()
 
@@ -563,17 +646,15 @@ def test_section_add_interactive_aborts_on_anchor_cancel(
 ) -> None:
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("setforge.cli.section.input_dialog") as ip,
-        patch("setforge.cli.section.pick_anchor_line", return_value=None),
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.return_value = "shared"
-        ip.return_value.run.return_value = "foo"
-        result = runner.invoke(
-            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
-        )
+    _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns="shared",
+        input_returns="foo",
+        pick_anchor_return=None,
+    )
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
     assert result.exit_code == 0
     assert "shared foo" not in tracked.read_text()
 
@@ -585,19 +666,16 @@ def test_section_add_interactive_aborts_on_confirm_no(
 ) -> None:
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("setforge.cli.section.input_dialog") as ip,
-        patch("setforge.cli.section.yes_no_dialog") as yn,
-        patch("setforge.cli.section.pick_anchor_line", return_value=2),
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.side_effect = ["shared", "empty"]
-        ip.return_value.run.return_value = "foo"
-        yn.return_value.run.return_value = False
-        result = runner.invoke(
-            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
-        )
+    _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns=["shared", "empty"],
+        input_returns="foo",
+        yes_no_returns=False,
+        pick_anchor_return=2,
+    )
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
     assert result.exit_code == 0
     assert "shared foo" not in tracked.read_text()
 
@@ -609,14 +687,10 @@ def test_section_add_interactive_aborts_on_semantics_cancel(
 ) -> None:
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.return_value = None
-        result = runner.invoke(
-            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
-        )
+    _patch_section_dialogs(monkeypatch, radiolist_returns=None)
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
     assert result.exit_code == 0
     assert "shared" not in tracked.read_text()
 
@@ -628,22 +702,23 @@ def test_section_add_interactive_with_yes_skips_final_confirm(
 ) -> None:
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("setforge.cli.section.input_dialog") as ip,
-        patch("setforge.cli.section.yes_no_dialog") as yn,
-        patch("setforge.cli.section.pick_anchor_line", return_value=2),
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.side_effect = ["shared", "empty"]
-        ip.return_value.run.return_value = "foo"
-        result = runner.invoke(
-            app,
-            ["section", "add", "--profile=testp", f"--config={yaml_path}", "--yes"],
-        )
+    recs = _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns=["shared", "empty"],
+        input_returns="foo",
+        yes_no_returns=True,
+        pick_anchor_return=2,
+    )
+    result = runner.invoke(
+        app,
+        ["section", "add", "--profile=testp", f"--config={yaml_path}", "--yes"],
+    )
     assert result.exit_code == 0
     assert "shared foo" in tracked.read_text()
-    yn.return_value.run.assert_not_called()
+    # --yes short-circuits the final confirm dialog; yes_no_dialog must
+    # never have been called.
+    assert recs["yes_no"].fake.run_calls == 0
+    assert recs["yes_no"].call_count == 0
 
 
 def test_section_add_interactive_non_tty_falls_back_to_error(
@@ -667,22 +742,19 @@ def test_section_add_interactive_validates_user_name_input(
     """Invalid name from input_dialog re-prompts; second (valid) try wins."""
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    with (
-        patch("setforge.cli.section.radiolist_dialog") as rd,
-        patch("setforge.cli.section.input_dialog") as ip,
-        patch("setforge.cli.section.yes_no_dialog") as yn,
-        patch("setforge.cli.section.pick_anchor_line", return_value=2),
-        patch("typer.prompt", return_value="1"),
-    ):
-        rd.return_value.run.side_effect = ["shared", "empty"]
+    recs = _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns=["shared", "empty"],
         # First call returns an invalid name; second call returns a valid one.
-        ip.return_value.run.side_effect = ["BadName", "good-name"]
-        yn.return_value.run.return_value = True
-        result = runner.invoke(
-            app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
-        )
+        input_returns=["BadName", "good-name"],
+        yes_no_returns=True,
+        pick_anchor_return=2,
+    )
+    result = runner.invoke(
+        app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
+    )
     assert result.exit_code == 0
     assert "shared good-name" in tracked.read_text()
     # input_dialog().run() was called twice — once with the invalid name,
     # once with the valid one (proving the re-prompt loop fired).
-    assert ip.return_value.run.call_count == 2
+    assert recs["input"].fake.run_calls == 2
