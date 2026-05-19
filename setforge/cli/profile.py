@@ -1,34 +1,19 @@
 """``setforge profile`` subgroup — read-only profile introspection.
 
-Two subcommands:
+``profile list`` enumerates profiles in ``setforge.yaml`` with each
+``extends:`` chain; ``profile show <name>`` resolves the profile and
+renders every effective list (tracked_files / claude_plugins /
+marketplaces / host_local_sections / bootstrap / extensions /
+preserve_user_keys) with per-entry provenance tags answering "where
+did this item come from?".
 
-- ``setforge profile list`` enumerates the profiles defined in
-  ``setforge.yaml`` together with each profile's ``extends:`` chain so
-  users see the inheritance structure without opening the YAML.
-- ``setforge profile show <name>`` resolves the profile through
-  :func:`setforge.config.resolve_profile` and renders every effective
-  list (tracked_files / claude_plugins / marketplaces /
-  host_local_sections / bootstrap / extensions / preserve_user_keys)
-  with per-entry provenance tags. The provenance tags answer "where
-  did this item come from?" — a base profile in the extends chain or
-  the host-local ``local.yaml`` overlay.
+Read-only: no live mutation, no subprocess, no network.
+:class:`SetforgeError` propagates to ``main()`` for ``exit 1``.
 
-The command is read-only: no live mutation, no subprocess invocation,
-no network. Errors surface as :class:`SetforgeError` so the outer
-``main()`` wrapper turns them into ``exit 1`` with a red error line.
-
-Overlay coverage today: profile-level provenance only. The
-``local.yaml`` overlay surfaces sketched in the spec's mockup
-(plugin overrides, marketplaces overrides, host_local_sections,
-extensions overrides, preserve_user_keys overlay diff) are not yet
-loadable through :class:`setforge.binaries.HostLocalConfig`. Until
-bd setforge-lgvp lands the overlay machinery, ``profile show`` reports
-the local.yaml-driven surfaces as "(overlay surface lands when bd
-setforge-lgvp ships)" placeholders instead of forging false
-provenance.
-
-The placeholder string is exposed as :data:`_OVERLAY_PENDING_NOTE` so
-the surfaces that print it stay in sync.
+``local.yaml`` overlay surfaces (plugin / marketplaces / extensions
+overrides, host_local_sections, preserve_user_keys overlay diff) land
+with bd setforge-lgvp; until then the affected blocks print
+:data:`_OVERLAY_PENDING_NOTE` instead of forging false provenance.
 """
 
 from __future__ import annotations
