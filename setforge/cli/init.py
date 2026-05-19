@@ -405,17 +405,14 @@ def _print_completion_report(
         )
     else:
         console.print(
-            "  next steps: setforge validate --list-profiles; "
-            "(source: pre-configured)"
+            "  next steps: setforge validate --list-profiles; (source: pre-configured)"
         )
     console.print("              setforge install --profile=<name> --dry-run")
     console.print(
         "  to undo: rm -rf ~/.config/setforge ~/.local/share/setforge/host-local"
     )
     if backup_path is not None:
-        console.print(
-            f"  to restore from backup: cp {backup_path} {LOCAL_CONFIG_PATH}"
-        )
+        console.print(f"  to restore from backup: cp {backup_path} {LOCAL_CONFIG_PATH}")
 
 
 def _print_idempotent_reinit_report(probe: EnvProbe, *, console: Console) -> None:
