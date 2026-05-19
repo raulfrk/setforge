@@ -15,7 +15,7 @@ when CliRunner tests share ``$HOME`` (setforge-hpd4):
 """
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -145,7 +145,18 @@ def _suppress_fresh_host_welcome(
     """
     if request.node.get_closest_marker("fresh_host") is not None:
         return
-    monkeypatch.setattr("setforge.cli.install.is_fresh_host", lambda: False)
+    # Patch BOTH the source module and ``setforge.cli.install``'s
+    # import-site binding. ``install.py`` does
+    # ``from setforge.cli._welcome import is_fresh_host``, so the
+    # source-module patch alone would not reach install's bound name;
+    # patching the import-site keeps the existing install gate
+    # suppressed. The source-module patch covers any future call site
+    # that imports ``is_fresh_host`` (e.g. a new ``setforge status``
+    # branch) — single point of truth for "this test ring treats the
+    # host as non-fresh".
+    fake_is_fresh_host: Callable[[], bool] = lambda: False
+    monkeypatch.setattr("setforge.cli._welcome.is_fresh_host", fake_is_fresh_host)
+    monkeypatch.setattr("setforge.cli.install.is_fresh_host", fake_is_fresh_host)
 
 
 def pytest_collection_modifyitems(
