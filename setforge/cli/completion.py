@@ -23,6 +23,7 @@ import typer
 from rich.console import Console
 
 from setforge.cli import app
+from setforge.cli._help_examples import COMPLETION_INSTALL_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -86,6 +87,8 @@ class CompletionChoice(StrEnum):
 completion_app: typer.Typer = typer.Typer(
     help="Install shell completion scripts.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(completion_app, name="completion")
 
@@ -506,7 +509,7 @@ def _install_zsh_or_bash(
     console.print(_post_install_test_line(shell))
 
 
-@completion_app.command("install")
+@completion_app.command("install", epilog=COMPLETION_INSTALL_EXAMPLES)
 def completion_install(
     shell: ShellKind = typer.Argument(
         ...,
