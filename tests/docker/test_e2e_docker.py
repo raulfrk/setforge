@@ -2217,524 +2217,244 @@ def test_e2e_docker_migrate_multi_file_fake(
 
 
 # ===========================================================================
-# Section: snapshot create / list / restore (setforge-of3a)
+# setforge-g40x — pre-deploy git-status check on the config source
 # ===========================================================================
-#
-# Directory-copy snapshots of the profile-resolved tracked_files.dst set
-# plus host-local local.yaml. Three named cases per the spec:
-#   1. create -> list -> restore round-trip (additive overlay verified)
-#   2. auto-prune on create keeps N most-recent snapshots
-#   3. restore choosing "yes + write a pre-restore snapshot" first
 
 
-_SNAPSHOTS_ROOT = "/home/tester/.local/share/setforge/snapshots"
+def _git_init_workspace(container: ContainerHandle) -> None:
+    """Initialize ``/workspace`` as a git repo with one commit on ``main``.
 
-
-def test_e2e_docker_snapshot_create_list_restore_roundtrip(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """Snapshot a freshly-installed profile, drift live, restore — body returns.
-
-    Asserts (1) ``snapshot create`` writes a finalized snapshot dir with
-    ``_meta.json`` commit marker, (2) ``snapshot list`` surfaces the
-    label, (3) ``snapshot restore --yes`` overlays the live destination
-    additively (live-only sibling file is NOT touched).
+    Sets a local identity (``setforge-tests <test@example.com>``) so
+    ``git commit`` doesn't error on the container's default missing
+    identity; then adds + commits every tracked-fixture file so the
+    workspace starts in a clean baseline state. Subsequent tests dirty
+    or freshen the working tree to exercise the new check.
     """
-    c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-    pre = c.read_text(target)
-
-    create = c.exec(
+    container.exec(["git", "-C", "/workspace", "init", "-q", "-b", "main"], check=True)
+    container.exec(
+        ["git", "-C", "/workspace", "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    container.exec(
+        ["git", "-C", "/workspace", "config", "user.name", "setforge-tests"],
+        check=True,
+    )
+    container.exec(["git", "-C", "/workspace", "add", "-A"], check=True)
+    container.exec(
         [
-            "uv",
-            "run",
-            "setforge",
-            "snapshot",
-            "create",
-            "before-edit",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
+            "git",
+            "-C",
+            "/workspace",
+            "commit",
+            "-q",
+            "-m",
+            "initial fixture state",
         ],
-        check=False,
+        check=True,
     )
-    assert create.returncode == 0, create.stderr + create.stdout
-    assert "snapshot complete" in create.stdout
-
-    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
-    assert listed.returncode == 0
-    assert "before-edit" in listed.stdout
-
-    # Drift the live file AND add a live-only sibling.
-    c.write_text(target, "drifted body\n")
-    sibling = "/home/tester/.setforge_e2e/minimal/live-only.txt"
-    c.write_text(sibling, "sibling untouched\n")
-
-    restore = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "snapshot",
-            "restore",
-            "before-edit",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            "--yes",
-        ],
-        check=False,
-    )
-    assert restore.returncode == 0, restore.stderr + restore.stdout
-    assert c.read_text(target) == pre
-    # Additive overlay (Q6): the live-only sibling is untouched.
-    assert c.read_text(sibling) == "sibling untouched\n"
 
 
-def test_e2e_docker_snapshot_auto_prune_keeps_n(
+def test_e2e_docker_install_path_source_clean_no_warn(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Creating 4 snapshots with ``--keep=2`` leaves exactly 2 on disk.
+    """setforge-g40x: clean path source → install proceeds with no warning.
 
-    Verifies the prune-on-create retention contract (Q15) end-to-end: the
-    oldest snapshots are removed after a successful create — the newest
-    ``--keep`` survive.
+    Initializes the workspace as a git repo, commits the fixture state,
+    then runs ``setforge install`` WITHOUT ``--no-git-check``. The new
+    pre-deploy check must observe a clean tree and emit no warning —
+    install lands the dst file normally.
     """
     c = docker_container()
-    _install(c, "test-minimal")
-    for label in ("s1", "s2", "s3", "s4"):
-        result = c.exec(
-            [
-                "uv",
-                "run",
-                "setforge",
-                "snapshot",
-                "create",
-                label,
-                "--profile=test-minimal",
-                f"--config={CONFIG_FIXTURE}",
-                "--keep=2",
-            ],
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        # One-second resolution guarantees a fresh snapshot id per loop.
-        c.exec(["sleep", "1"])
-
-    listing = c.exec(["ls", _SNAPSHOTS_ROOT], check=False).stdout
-    surviving = [line for line in listing.splitlines() if line.strip()]
-    # Two retained snapshot dirs; no `.partial` lingering.
-    assert len(surviving) == 2, f"expected 2 snapshots, got {surviving!r}"
-    assert all(not s.endswith(".partial") for s in surviving)
-    # Oldest two removed: only s3 + s4 must remain.
-    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
-    assert "s4" in listed.stdout
-    assert "s3" in listed.stdout
-    assert "s1" not in listed.stdout
-    assert "s2" not in listed.stdout
+    _git_init_workspace(c)
+    result = _install(c, "test-minimal")
+    assert "uncommitted changes" not in result.stdout
+    assert "uncommitted changes" not in result.stderr
+    assert (
+        _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
+    )
 
 
-def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
+def test_e2e_docker_install_path_source_dirty_warns_abort(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Interactive RESTORE_WITH_PRE_SNAPSHOT path writes a pre-restore snapshot.
+    """setforge-g40x: dirty path source + non-TTY install → ABORT via mutate-gate.
 
-    Drives the radiolist via ``setforge`` CLI's ``--yes`` shortcut is
-    NOT enough — that path always skips pre-snapshot per spec. Instead,
-    invoke the domain helper directly via ``python -c`` inside the
-    container to exercise the ``pre_snapshot=True`` branch (the wizard
-    surface is covered by the unit + CLI tests).
+    Initializes the workspace as a git repo, commits the fixture state,
+    then **modifies a tracked fixture file** so ``git status`` reports
+    uncommitted changes. The install runs without ``--no-git-check``
+    on a non-TTY stdin → the mutate-gate raises
+    :class:`ConfirmRequiresInteractive` and the dst MUST NOT land.
     """
     c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-
-    # Create the baseline snapshot via the public CLI.
-    create = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "snapshot",
-            "create",
-            "baseline",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-        check=False,
-    )
-    assert create.returncode == 0, create.stderr + create.stdout
-
-    # Drift the live state so the restore is a no-op-on-bytes check
-    # for the baseline but the pre-restore snapshot captures v2.
-    c.write_text(target, "drifted v2 body\n")
-
-    # Drive restore_snapshot(..., pre_snapshot=True) via python -c so the
-    # interactive RESTORE_WITH_PRE_SNAPSHOT path is exercised on the real
-    # filesystem (CliRunner monkeypatch covers it for unit; this is the
-    # cross-process variant).
-    pre_restore_script = textwrap.dedent(
-        f"""
-        import sys
-        from pathlib import Path
-        from setforge import snapshots
-        from setforge.config import load_config, resolve_profile
-
-        config = Path('{CONFIG_FIXTURE}').resolve()
-        cfg = load_config(config)
-        resolved = resolve_profile(cfg, 'test-minimal')
-        ctx = snapshots.PreSnapshotCtx(
-            cfg=cfg,
-            resolved=resolved,
-            repo_root=config.parent,
-            profile='test-minimal',
-        )
-        snapshots.restore_snapshot('baseline', pre_snapshot=True, pre_snapshot_ctx=ctx)
-        print('restored', file=sys.stderr)
-        """
-    ).strip()
-    result = c.exec(
-        ["uv", "run", "python", "-c", pre_restore_script],
-        workdir="/workspace",
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
-
-    # Snapshot list now contains both the baseline AND a pre-restore-<id>.
-    listed = c.exec(["uv", "run", "setforge", "snapshot", "list"], check=False)
-    assert "baseline" in listed.stdout
-    assert "pre-restore-" in listed.stdout
-    # Live target is now back to the original install body.
-    pre_install_body = c.read_text(target)
-    assert "drifted v2" not in pre_install_body
-
-
-# ===========================================================================
-# Section: setforge completion install (setforge-wx8y)
-# ===========================================================================
-#
-# Three named cases cover the user-facing contract from mockup K:
-#
-#  (i)  ``test_e2e_docker_completion_install_zsh_virgin_rc`` — fresh
-#       container, ~/.zshrc seeded with a single user line. The
-#       --non-interactive default writes _setforge to the canonical
-#       completions dir AND appends the sentinel-bracketed fpath +
-#       compinit guard block to ~/.zshrc.
-#  (ii) ``test_e2e_docker_completion_install_zsh_existing_compinit``
-#       — ~/.zshrc already has a compinit invocation upstream of where
-#       the sentinel block lands. The wiring's ``if ! command -v
-#       compinit ...`` guard makes the second compinit a no-op; the
-#       sentinel block still appears exactly once.
-#  (iii) ``test_e2e_docker_completion_install_bash_idempotent`` —
-#       run ``install bash`` twice; the second invocation is a no-op
-#       (same file bytes for _setforge_bash; same ~/.bashrc bytes).
-
-
-def test_e2e_docker_completion_install_zsh_virgin_rc(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """wx8y: zsh install on a virgin rc writes script + appends wiring block.
-
-    Seeds ~/.zshrc with a user line, runs ``completion install zsh
-    --non-interactive``, then asserts (a) the completion script lands
-    at ``~/.config/setforge/completions/_setforge``, (b) the rc file
-    gains a sentinel-bracketed block with fpath + compinit, and (c)
-    the user's pre-existing content is preserved.
-    """
-    c = docker_container()
-    c.write_text("/home/tester/.zshrc", "# user content\nalias ll=ls\n")
-    result = c.exec(
-        ["uv", "run", "setforge", "completion", "install", "zsh", "--non-interactive"],
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"completion install zsh exit={result.returncode}\n"
-        f"stdout:{result.stdout}\nstderr:{result.stderr}"
-    )
-    script = c.read_text("/home/tester/.config/setforge/completions/_setforge")
-    assert "#compdef setforge" in script, script
-    rc = c.read_text("/home/tester/.zshrc")
-    assert "# user content" in rc, rc
-    assert "alias ll=ls" in rc, rc
-    assert "# >>> setforge completion >>>" in rc, rc
-    assert "# <<< setforge completion <<<" in rc, rc
-    assert "fpath=" in rc, rc
-    assert "compinit" in rc, rc
-
-
-def test_e2e_docker_completion_install_zsh_existing_compinit(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """wx8y: zsh install on rc with an upstream compinit still wires cleanly.
-
-    Seeds ~/.zshrc with a user-supplied ``autoload -U compinit &&
-    compinit`` invocation BEFORE the setforge block; the install
-    appends the block at the end and the ``if ! command -v compinit``
-    guard inside the block makes the second compinit a safe no-op.
-    The sentinel block appears exactly once even on this layout.
-    """
-    c = docker_container()
+    _git_init_workspace(c)
+    # Dirty the tracked source.
     c.write_text(
-        "/home/tester/.zshrc",
-        "# pre-existing setup\nautoload -U compinit && compinit\nalias g=git\n",
+        "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt",
+        "hello from test-minimal — DIRTY edit\n",
     )
+    # Ensure dst doesn't pre-exist.
+    c.exec(["rm", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False)
     result = c.exec(
-        ["uv", "run", "setforge", "completion", "install", "zsh", "--non-interactive"],
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"completion install zsh exit={result.returncode}\n"
-        f"stdout:{result.stdout}\nstderr:{result.stderr}"
-    )
-    rc = c.read_text("/home/tester/.zshrc")
-    # The pre-existing compinit line is preserved verbatim.
-    assert "autoload -U compinit && compinit" in rc, rc
-    # The sentinel block appears exactly once with the fpath line and
-    # the conditional compinit guard inside.
-    assert rc.count("# >>> setforge completion >>>") == 1, rc
-    assert rc.count("# <<< setforge completion <<<") == 1, rc
-    assert "fpath=" in rc, rc
-    assert "command -v compinit" in rc, rc
-
-
-def test_e2e_docker_completion_install_bash_idempotent(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """wx8y: bash install is idempotent — second run leaves files unchanged.
-
-    Runs ``install bash --non-interactive`` twice; the second
-    invocation must be a no-op for BOTH the completion script and
-    ~/.bashrc (sentinel-block detection short-circuits a duplicate
-    append). Files are compared byte-for-byte.
-    """
-    c = docker_container()
-    c.write_text("/home/tester/.bashrc", "# user content\nexport FOO=1\n")
-
-    def _install_bash() -> subprocess.CompletedProcess[str]:
-        return c.exec(
-            [
-                "uv",
-                "run",
-                "setforge",
-                "completion",
-                "install",
-                "bash",
-                "--non-interactive",
-            ],
-            check=False,
-        )
-
-    first = _install_bash()
-    assert first.returncode == 0, (
-        f"first install exit={first.returncode}\n"
-        f"stdout:{first.stdout}\nstderr:{first.stderr}"
-    )
-    script_after_first = c.read_text(
-        "/home/tester/.config/setforge/completions/setforge.bash"
-    )
-    rc_after_first = c.read_text("/home/tester/.bashrc")
-    assert "source " in rc_after_first, rc_after_first
-    assert "setforge.bash" in rc_after_first, rc_after_first
-
-    second = _install_bash()
-    assert second.returncode == 0, (
-        f"second install exit={second.returncode}\n"
-        f"stdout:{second.stdout}\nstderr:{second.stderr}"
-    )
-    script_after_second = c.read_text(
-        "/home/tester/.config/setforge/completions/setforge.bash"
-    )
-    rc_after_second = c.read_text("/home/tester/.bashrc")
-    assert script_after_second == script_after_first, "completion script changed"
-    assert rc_after_second == rc_after_first, "rc file changed on second install"
-    # And the sentinel block appears exactly once.
-    assert rc_after_second.count("# >>> setforge completion >>>") == 1
-
-
-# --- sqcw: revert --to-before atomic multi-step ---------------------------
-
-
-def test_e2e_docker_revert_to_before_two_step_atomic_apply(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """sqcw: two install transitions; --to-before=<oldest> unwinds both
-    atomically. Live tree returns to the absent-file pre-install state.
-
-    The flow: install (writes minimal/text.txt). Edit the tracked
-    src so the second install mutates the live file. Then
-    `revert --to-before=<first install id>` walks both reverse-patches
-    in newest-first order — the file is removed.
-    """
-    c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-    assert c.exec(["test", "-f", target], check=False).returncode == 0
-
-    # Drift the tracked src in-container; second install records a delta.
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "hello (drifted by test)\n")
-    _install(c, "test-minimal")
-    assert "drifted" in c.read_text(target)
-
-    # Look up the chronologically-first install transition id.
-    ls = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
-        ],
-        check=False,
-    )
-    assert ls.returncode == 0
-    first_id = ls.stdout.strip()
-    assert first_id, ls.stdout
-
-    revert = c.exec(
         [
             "uv",
             "run",
             "setforge",
-            "revert",
+            "install",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
-            f"--to-before={first_id}",
-            "--yes",
-        ]
-    )
-    assert revert.returncode == 0, revert.stderr
-    # File removed — both transitions unwound.
-    assert c.exec(["test", "-f", target], check=False).returncode != 0
-    # Two reverse transitions written (one per applied step).
-    reverts = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep revert-test-minimal | wc -l",
         ],
         check=False,
     )
-    assert reverts.returncode == 0
-    assert int(reverts.stdout.strip()) == 2
+    assert result.returncode != 0, (
+        f"expected non-zero exit on dirty non-TTY install; stderr={result.stderr!r}"
+    )
+    assert "stdin is not a TTY" in result.stderr, (
+        f"expected mutate-gate message on stderr; got: {result.stderr!r}"
+    )
+    # Dst MUST NOT exist — the abort fired before deploy.
+    exists = c.exec(
+        ["test", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False
+    )
+    assert exists.returncode != 0, (
+        "live dst must not be created when install aborts on git-check"
+    )
 
 
-def test_e2e_docker_revert_to_before_dry_run_failure_keeps_live_clean(
+def test_e2e_docker_install_path_source_dirty_no_git_check_bypasses(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """sqcw: if the newest step's reverse-patch dry-run fails (live drift),
-    the chain aborts with NO live changes and NO new reverse transition.
+    """setforge-g40x: dirty path source + ``--no-git-check`` → install proceeds.
 
-    Workflow: install twice (so the chain has two steps). Drift the
-    live file so the newest step's reverse can't apply cleanly.
-    revert --to-before=<oldest> must exit non-zero with the live file
-    still drifted (no partial mutation).
+    Same dirty-tree setup as the prior test, but the install passes
+    ``--no-git-check``; the new gate is skipped entirely and the
+    install lands the (dirty) tracked content on the dst as designed.
+    Confirms the automation escape hatch works end-to-end.
     """
     c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "second install body\n")
-    _install(c, "test-minimal")
-    # Drift the live file: now patch -R for the newest install cannot
-    # cleanly reverse the second install's edit.
-    drifted = "manually edited\n"
-    c.write_text(target, drifted)
-
-    ls = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
-        ],
-        check=False,
+    _git_init_workspace(c)
+    c.write_text(
+        "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt",
+        "hello from test-minimal — DIRTY but bypassed\n",
     )
-    first_id = ls.stdout.strip()
-
-    revert = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "revert",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            f"--to-before={first_id}",
-            "--yes",
-        ],
-        check=False,
+    result = _install(c, "test-minimal", extra=["--no-git-check"])
+    assert result.returncode == 0, result.stderr
+    assert (
+        _read_live(c, ".setforge_e2e/minimal/text.txt")
+        == "hello from test-minimal — DIRTY but bypassed\n"
     )
-    assert revert.returncode != 0, revert.stdout + revert.stderr
-    # Live file is still the drifted body — no partial mutation occurred.
-    assert c.read_text(target) == drifted
-    # No revert-* transition was written.
-    reverts = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep revert-test-minimal | wc -l",
-        ],
-        check=False,
-    )
-    assert int(reverts.stdout.strip()) == 0
 
 
-def test_e2e_docker_revert_to_before_abort_via_confirm_dialog(
+def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """sqcw: without --yes against a non-TTY stdin, the multi-step
-    confirm wizard refuses (mutate-gate). No live mutation, no revert
-    transitions written.
+    """setforge-g40x: git-source cache lagging behind origin → mutate-gate aborts.
+
+    Sets up a bare "remote" repo + a clone "cache" inside the
+    container, advances the remote by one commit, then configures
+    ``~/.config/setforge/local.yaml`` with a ``source:`` block pointing
+    at the cache. Running ``setforge install`` on a non-TTY stdin
+    without ``--no-git-check`` must surface the freshness warning AND
+    raise via the mutate-gate (dst MUST NOT land).
+
+    Uses a minimal copy of the test-minimal fixture content inside the
+    cache so install has something to deploy if the gate is bypassed.
     """
     c = docker_container()
-    _install(c, "test-minimal")
-    target = "/home/tester/.setforge_e2e/minimal/text.txt"
-
-    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
-    c.write_text(src_in_container, "second install body for abort case\n")
-    _install(c, "test-minimal")
-    post_second = c.read_text(target)
-    assert "second install body" in post_second
-
-    ls = c.exec(
+    # Set up bare remote with one commit + fixture tree.
+    c.exec(["mkdir", "-p", "/tmp/g40x-remote.git"], check=True)
+    c.exec(["git", "init", "-q", "--bare", "/tmp/g40x-remote.git"], check=True)
+    c.exec(["mkdir", "-p", "/tmp/g40x-seed"], check=True)
+    c.exec(["git", "-C", "/tmp/g40x-seed", "init", "-q", "-b", "main"], check=True)
+    c.exec(["git", "-C", "/tmp/g40x-seed", "config", "user.email", "x@y"], check=True)
+    c.exec(["git", "-C", "/tmp/g40x-seed", "config", "user.name", "x"], check=True)
+    # Copy fixture in.
+    c.exec(
         [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep install-test-minimal | sort | head -n 1",
+            "cp",
+            "-r",
+            "/workspace/tests/fixtures/e2e/tracked",
+            "/tmp/g40x-seed/tracked",
         ],
+        check=True,
+    )
+    c.exec(
+        [
+            "cp",
+            "/workspace/tests/fixtures/e2e/setforge.test.yaml",
+            "/tmp/g40x-seed/setforge.yaml",
+        ],
+        check=True,
+    )
+    c.exec(["git", "-C", "/tmp/g40x-seed", "add", "-A"], check=True)
+    c.exec(["git", "-C", "/tmp/g40x-seed", "commit", "-q", "-m", "v1"], check=True)
+    c.exec(
+        [
+            "git",
+            "-C",
+            "/tmp/g40x-seed",
+            "push",
+            "-q",
+            "/tmp/g40x-remote.git",
+            "main",
+        ],
+        check=True,
+    )
+    # Clone to cache (this is the "behind" state).
+    c.exec(
+        [
+            "git",
+            "clone",
+            "-q",
+            "/tmp/g40x-remote.git",
+            "/home/tester/cache",
+        ],
+        check=True,
+    )
+    # Advance the remote by one commit so cache is behind.
+    c.write_text("/tmp/g40x-seed/tracked/minimal/text.txt", "v2 content\n")
+    c.exec(["git", "-C", "/tmp/g40x-seed", "add", "-A"], check=True)
+    c.exec(["git", "-C", "/tmp/g40x-seed", "commit", "-q", "-m", "v2"], check=True)
+    c.exec(
+        [
+            "git",
+            "-C",
+            "/tmp/g40x-seed",
+            "push",
+            "-q",
+            "/tmp/g40x-remote.git",
+            "main",
+        ],
+        check=True,
+    )
+    # Configure setforge with a GIT source so check_git_source_fresh fires.
+    # clone_dest points at the cache we just clone-ed (kind: git, behind).
+    local_yaml = (
+        "source:\n"
+        "  kind: git\n"
+        "  url: file:///tmp/g40x-remote.git\n"
+        "  ref: main\n"
+        "  clone_dest: /home/tester/cache\n"
+    )
+    c.write_text("/home/tester/.config/setforge/local.yaml", local_yaml)
+    # Ensure dst doesn't pre-exist.
+    c.exec(["rm", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False)
+    # Run install WITHOUT --config (so source layer fires) on non-TTY.
+    result = c.exec(
+        ["uv", "run", "setforge", "install", "--profile=test-minimal"],
         check=False,
     )
-    first_id = ls.stdout.strip()
-
-    # Non-TTY (docker exec without -t) + no --yes => wizard must refuse.
-    revert = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "revert",
-            "--profile=test-minimal",
-            f"--config={CONFIG_FIXTURE}",
-            f"--to-before={first_id}",
-        ],
-        check=False,
+    # Non-TTY + git-source cache behind remote: mutate-gate raises → non-zero.
+    assert result.returncode != 0, (
+        f"expected non-zero exit on stale-cache non-TTY install; "
+        f"stderr={result.stderr!r}"
     )
-    assert revert.returncode != 0, revert.stdout
-    combined = revert.stderr + revert.stdout
-    assert "requires --yes" in combined, combined
-    # Live file unchanged from the post-second-install state.
-    assert c.read_text(target) == post_second
-    # No revert-* transition written.
-    reverts = c.exec(
-        [
-            "sh",
-            "-c",
-            "ls /home/tester/.local/state/setforge/transitions "
-            "| grep revert-test-minimal | wc -l",
-        ],
-        check=False,
+    assert "stdin is not a TTY" in result.stderr, (
+        f"expected mutate-gate message on stderr; got: {result.stderr!r}"
     )
-    assert int(reverts.stdout.strip()) == 0
+    # Dst MUST NOT exist — abort fired before deploy.
+    exists = c.exec(
+        ["test", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False
+    )
+    assert exists.returncode != 0, (
+        "live dst must not be created when install aborts on stale git source"
+    )

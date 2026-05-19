@@ -26,6 +26,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._git_check import run_git_check_or_raise
 from setforge.cli._helpers import (
     ProfileContext,
     _extract_live_sections_map,
@@ -45,7 +46,9 @@ from setforge.cli._plugin_helpers import (
 )
 from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.config import load_config, resolve_profile
+from setforge.errors import NoSourceConfigured
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
+from setforge.source import PathSource, Source, get_resolved_source
 from setforge.transitions import (
     ReconcileStatus,
     load_latest,
@@ -111,6 +114,15 @@ def install(
             "Other reconcile work is suppressed for this run."
         ),
     ),
+    no_git_check: bool = typer.Option(
+        False,
+        "--no-git-check",
+        help=(
+            "Skip the pre-deploy git-status check on the config source. "
+            "Intended for CI / cron — bypasses the dirty-tree / "
+            "cache-lag warning on path / git sources respectively."
+        ),
+    ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
     config = _resolve_config_arg(config)
@@ -132,6 +144,19 @@ def install(
     resolved = resolve_profile(cfg, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+    )
+
+    # Pre-deploy git-status check (setforge-g40x). Fires BEFORE the drift
+    # gate so a dirty / stale source is surfaced before any other slow
+    # work (compare, secrets-scan, deploy). When the source-layer is
+    # configured (--source / SETFORGE_SOURCE / local.yaml), use it so a
+    # git-source's CACHE dir is inspected for staleness; otherwise fall
+    # back to ``repo_root`` (the dir holding the resolved setforge.yaml)
+    # which is the right answer for the legacy explicit-``--config``
+    # invocations the test suite relies on.
+    run_git_check_or_raise(
+        source=_resolve_source_for_git_check(repo_root),
+        no_git_check=no_git_check,
     )
 
     if not no_transition:
@@ -215,6 +240,22 @@ def install(
         )
         typer.echo(f"transition: {target}")
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+
+
+def _resolve_source_for_git_check(repo_root: Path) -> Source:
+    """Return the Source to inspect for the pre-deploy git check.
+
+    Prefers the configured source-layer (``--source`` / ``SETFORGE_SOURCE``
+    / ``~/.config/setforge/local.yaml``) so a git-source's CACHE dir is
+    inspected for staleness. Falls back to a synthetic
+    :class:`PathSource` rooted at ``repo_root`` when no source layer is
+    configured — covers the legacy explicit-``--config`` invocation
+    shape that the existing test suite relies on.
+    """
+    try:
+        return get_resolved_source()
+    except NoSourceConfigured:
+        return PathSource(path=repo_root)
 
 
 def _handle_secret_findings(
