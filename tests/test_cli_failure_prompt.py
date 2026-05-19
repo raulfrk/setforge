@@ -281,23 +281,41 @@ def test_emit_reconcile_summary_renders_all_status_columns(
     can spot which item to re-target with ``--retry-failed``.
     """
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
-        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
-                         error_summary=None),
-        ReconcileOutcome(item_id="beta@official", kind="plugin", status="ok",
-                         error_summary=None),
-        ReconcileOutcome(item_id="gamma@work", kind="plugin", status="retried_ok",
-                         error_summary=None),
-        ReconcileOutcome(item_id="delta@work", kind="plugin", status="skipped",
-                         error_summary="fetch failed"),
+        ReconcileOutcome(
+            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+        ),
+        ReconcileOutcome(
+            item_id="beta@official", kind="plugin", status="ok", error_summary=None
+        ),
+        ReconcileOutcome(
+            item_id="gamma@work", kind="plugin", status="retried_ok", error_summary=None
+        ),
+        ReconcileOutcome(
+            item_id="delta@work",
+            kind="plugin",
+            status="skipped",
+            error_summary="fetch failed",
+        ),
     )
     ext_outcomes: tuple[ReconcileOutcome, ...] = (
-        ReconcileOutcome(item_id="charliermarsh.ruff", kind="extension",
-                         status="ok", error_summary=None),
-        ReconcileOutcome(item_id="esbenp.prettier-vscode", kind="extension",
-                         status="ok", error_summary=None),
-        ReconcileOutcome(item_id="work-only-extension", kind="extension",
-                         status="skipped",
-                         error_summary="not found in registry"),
+        ReconcileOutcome(
+            item_id="charliermarsh.ruff",
+            kind="extension",
+            status="ok",
+            error_summary=None,
+        ),
+        ReconcileOutcome(
+            item_id="esbenp.prettier-vscode",
+            kind="extension",
+            status="ok",
+            error_summary=None,
+        ),
+        ReconcileOutcome(
+            item_id="work-only-extension",
+            kind="extension",
+            status="skipped",
+            error_summary="not found in registry",
+        ),
     )
     _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
     out = capsys.readouterr().out
@@ -320,8 +338,9 @@ def test_emit_reconcile_summary_omits_zero_only_kind(
     plugin work shouldn't render a misleading ``0 plugins reconciled``
     row. Mirrors the spec mockup's no-pad-with-zeros shape."""
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
-        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
-                         error_summary=None),
+        ReconcileOutcome(
+            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+        ),
     )
     _emit_reconcile_summary(plugin_outcomes, ())
     out = capsys.readouterr().out
@@ -337,10 +356,12 @@ def test_emit_reconcile_summary_all_clean_omits_parenthetical(
     parenthetical entirely — keeps the summary compact for the
     happy-path install."""
     plugin_outcomes: tuple[ReconcileOutcome, ...] = (
-        ReconcileOutcome(item_id="alpha@official", kind="plugin", status="ok",
-                         error_summary=None),
-        ReconcileOutcome(item_id="beta@official", kind="plugin", status="ok",
-                         error_summary=None),
+        ReconcileOutcome(
+            item_id="alpha@official", kind="plugin", status="ok", error_summary=None
+        ),
+        ReconcileOutcome(
+            item_id="beta@official", kind="plugin", status="ok", error_summary=None
+        ),
     )
     _emit_reconcile_summary(plugin_outcomes, ())
     out = capsys.readouterr().out
