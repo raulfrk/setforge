@@ -42,6 +42,7 @@ EXPECTED_SUBGROUPS: tuple[str, ...] = (
     "section",
     "profile",
     "snapshot",
+    "completion",
 )
 
 
