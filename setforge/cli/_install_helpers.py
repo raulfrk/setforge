@@ -332,3 +332,45 @@ def _confirm_section_reconcile_or_exit(
         yes=yes,
     ):
         raise typer.Exit(0)
+
+
+def _run_predeploy_gates(
+    *,
+    drift_report: compare_mod.CompareReport,
+    ctx: ProfileContext,
+    config: Path,
+    auto_accept_tracked: bool,
+    auto_accept_live: bool,
+    section_auto: ReconcileAuto | None,
+    yes: bool,
+) -> None:
+    """Run the three pre-deploy confirm/reject gates in their fixed order.
+
+    Bundles the unexpected-drift confirm (``--auto-accept-{tracked,live}``)
+    + the legacy unexpected-drift wizard hand-off + the section-reconcile
+    confirm (``--auto=use-tracked``) into one orchestrator so
+    :func:`install` reads as a high-level pipeline rather than 50+ LoC
+    of three nearly-identical confirm shells. Each gate is independent
+    and short-circuits when its triggering flag is unset; the order
+    matches the pre-extraction body verbatim so flag interactions stay
+    unchanged.
+    """
+    _confirm_legacy_drift_or_exit(
+        drift_report=drift_report,
+        ctx=ctx,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+        yes=yes,
+    )
+    _check_unexpected_drift(
+        drift_report,
+        ctx,
+        config,
+        auto_accept_tracked=auto_accept_tracked,
+        auto_accept_live=auto_accept_live,
+    )
+    _confirm_section_reconcile_or_exit(
+        ctx=ctx,
+        section_auto=section_auto,
+        yes=yes,
+    )

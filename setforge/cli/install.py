@@ -32,10 +32,8 @@ from setforge.cli._helpers import (
     _resolve_section_decisions,
 )
 from setforge.cli._install_helpers import (
-    _check_unexpected_drift,
-    _confirm_legacy_drift_or_exit,
-    _confirm_section_reconcile_or_exit,
     _deploy_all_tracked_files,
+    _run_predeploy_gates,
     _write_install_transition,
 )
 from setforge.cli._plugin_helpers import _reconcile_extensions, _reconcile_plugins
@@ -120,24 +118,12 @@ def install(
     # first install and are handled by deploy below.
     drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
 
-    _confirm_legacy_drift_or_exit(
+    _run_predeploy_gates(
         drift_report=drift_report,
         ctx=ctx,
+        config=config,
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
-        yes=yes,
-    )
-
-    _check_unexpected_drift(
-        drift_report,
-        ctx,
-        config,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
-    )
-
-    _confirm_section_reconcile_or_exit(
-        ctx=ctx,
         section_auto=section_auto,
         yes=yes,
     )
