@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.table import Table
 
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
+from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
 from setforge.config import (
     Config,
@@ -55,11 +56,13 @@ def _build_console() -> Console:
 profile_app: typer.Typer = typer.Typer(
     help="Inspect profile definitions and resolved overlays.",
     no_args_is_help=True,
+    # See setforge/cli/__init__.py — rich_markup_mode does not inherit.
+    rich_markup_mode=None,
 )
 app.add_typer(profile_app, name="profile")
 
 
-@profile_app.command("list")
+@profile_app.command("list", epilog=PROFILE_LIST_EXAMPLES)
 def profile_list(config: Path = _CONFIG_OPTION) -> None:
     """List every profile in ``setforge.yaml`` with its ``extends:`` chain.
 
@@ -84,7 +87,7 @@ def profile_list(config: Path = _CONFIG_OPTION) -> None:
     console.print(table)
 
 
-@profile_app.command("show")
+@profile_app.command("show", epilog=PROFILE_SHOW_EXAMPLES)
 def profile_show(
     name: str = typer.Argument(..., help="Profile name from setforge.yaml."),
     config: Path = _CONFIG_OPTION,
