@@ -1938,3 +1938,73 @@ def test_e2e_docker_init_check_readonly(
     assert host_local_check.returncode != 0, (
         "--check must NOT create the host-local share directory"
     )
+# --- Variant U (setforge upgrade --check via fake PyPI) ---------------------
+
+
+def test_e2e_docker_upgrade_check_mode(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge upgrade --check`` against a fake-PyPI fixture (no real net).
+
+    Spins a ``python -m http.server`` inside the container on port
+    8765, serves a hand-crafted ``setforge/json`` body asserting a
+    newer release (``99.0.0``), then runs ``setforge upgrade --check``
+    with ``SETFORGE_PYPI_BASE`` overriding the JSON-API base URL. The
+    check-mode path is read-only — no ``uv tool upgrade`` is invoked,
+    no network egress is attempted, and the exit code is 0.
+
+    The fake-PyPI fixture body shape mirrors the real PyPI JSON API
+    (``info`` + ``releases`` dict) so the unit-tested filter logic in
+    :mod:`setforge._pypi_client` lights up identically.
+    """
+    c = docker_container()
+    fake_pypi_body = json.dumps(
+        {
+            "info": {"version": "99.0.0"},
+            "releases": {
+                "0.1.0": [{"yanked": False}],
+                "0.2.0": [{"yanked": False}],
+                "99.0.0": [{"yanked": False}],
+            },
+        }
+    )
+    # Lay out the JSON body at the URL shape `/setforge/json` so a plain
+    # static `python -m http.server` serves it at the exact path the
+    # client requests.
+    c.exec(["mkdir", "-p", "/tmp/fakepypi/setforge"])
+    c.write_text("/tmp/fakepypi/setforge/json", fake_pypi_body)
+    # Launch the HTTP server in the background; redirect output away from
+    # the exec stream so the call returns immediately.
+    c.exec(
+        [
+            "sh",
+            "-c",
+            (
+                "cd /tmp/fakepypi && "
+                "nohup python3 -m http.server 8765 "
+                ">/tmp/fakepypi.log 2>&1 & "
+                "sleep 0.5"
+            ),
+        ],
+    )
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "upgrade",
+            "--check",
+        ],
+        env={"SETFORGE_PYPI_BASE": "http://127.0.0.1:8765"},
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"expected exit 0 for upgrade --check; got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    assert "99.0.0" in result.stdout, (
+        f"expected target version 99.0.0 in stdout; got: {result.stdout!r}"
+    )
+    assert "=== schema impact ===" in result.stdout, (
+        f"expected always-on schema impact panel; got: {result.stdout!r}"
+    )
