@@ -478,6 +478,7 @@ def test_install_auto_use_tracked_revert_roundtrip(
             "revert",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
+            "--yes",
         ],
         check=False,
     )

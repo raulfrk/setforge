@@ -308,6 +308,7 @@ def test_install_reconcile_use_tracked_then_revert_restores_live(
             "revert",
             "--profile=test-reconcile-sections",
             f"--config={CONFIG_FIXTURE}",
+            "--yes",
         ],
         check=False,
     )

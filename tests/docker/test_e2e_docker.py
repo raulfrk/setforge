@@ -831,6 +831,7 @@ def test_install_then_revert_restores_state(
             "revert",
             "--profile=test-minimal",
             f"--config={CONFIG_FIXTURE}",
+            "--yes",
         ]
     )
     assert revert.returncode == 0
@@ -841,6 +842,78 @@ def test_install_then_revert_restores_state(
         ).returncode
         != 0
     )
+
+
+# --- p1vl: revert confirm-explain-redo wizard (mockup A) ------------------
+
+
+def test_e2e_docker_revert_confirm_aborted(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """p1vl: revert without --yes against a non-TTY stdin refuses with
+    ConfirmRequiresInteractive and leaves the deployed file untouched.
+
+    The non-TTY refusal is the wizard's safety contract: without a TTY
+    and without --yes, revert cannot prompt and must abort cleanly
+    rather than silently apply. Files installed by the prior `install`
+    remain in place — the install delta is NOT reversed.
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+    assert c.exec(["test", "-f", target], check=False).returncode == 0
+    pre = c.read_text(target)
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+    # Non-zero exit because the wizard refuses without --yes on non-TTY stdin.
+    assert revert.returncode != 0, revert.stdout
+    assert "requires --yes" in (revert.stderr + revert.stdout)
+    # File still exists, content unchanged — no mutation applied.
+    assert c.exec(["test", "-f", target], check=False).returncode == 0
+    assert c.read_text(target) == pre
+
+
+def test_e2e_docker_revert_confirm_applied(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """p1vl: revert --yes short-circuits the wizard and applies cleanly,
+    removing the file `install` created and writing a reverse transition.
+    """
+    c = docker_container()
+    _install(c, "test-minimal")
+    target = "/home/tester/.setforge_e2e/minimal/text.txt"
+    assert c.exec(["test", "-f", target], check=False).returncode == 0
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ]
+    )
+    assert revert.returncode == 0, revert.stderr
+    # File removed — install's stub-creation has been reversed.
+    assert c.exec(["test", "-f", target], check=False).returncode != 0
+    # A reverse transition (command=revert) was written.
+    transitions_ls = c.exec(
+        ["ls", "/home/tester/.local/state/setforge/transitions"], check=False
+    )
+    assert transitions_ls.returncode == 0
+    assert "revert-test-minimal" in transitions_ls.stdout
 
 
 # --- Variant V ------------------------------------------------------------
@@ -1114,6 +1187,7 @@ def test_revert_after_install_removes_new_agents_and_skill(
             "revert",
             "--profile=test-prose-reviewers",
             f"--config={CONFIG_FIXTURE}",
+            "--yes",
         ]
     )
     assert revert.returncode == 0, revert.stderr
