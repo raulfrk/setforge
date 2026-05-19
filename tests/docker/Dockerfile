@@ -41,6 +41,9 @@ ARG VSCODE_VERSION=1.95.3
 ARG CLAUDE_CODE_VERSION=2.1.126
 ARG NODE_MAJOR=20
 ARG PYTHON_VERSION=3.13
+# Gitleaks v8.x — used by setforge-nz5x's pre-deploy secrets scan
+# Docker e2e cases. Pinned to a recent stable release.
+ARG GITLEAKS_VERSION=8.21.2
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -73,6 +76,16 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+# ----------------------------------------------------------------------
+# Layer 4b: gitleaks (pinned) — supports setforge install's pre-deploy
+# secrets scan e2e cases. Installed to /usr/local/bin so it lives on
+# PATH for the `tester` user. The "no-gitleaks" case removes/renames
+# this binary at test time.
+# ----------------------------------------------------------------------
+RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+        | tar -xz -C /usr/local/bin gitleaks \
+    && chmod +x /usr/local/bin/gitleaks
 
 # ----------------------------------------------------------------------
 # Create non-root user; everything from here on runs as `tester`.

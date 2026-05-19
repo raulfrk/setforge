@@ -1352,3 +1352,156 @@ def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
     assert "git mv my_setup.yaml setforge.yaml" in result.stderr, (
         f"expected 'git mv' recipe in stderr; got: {result.stderr!r}"
     )
+
+
+# ===========================================================================
+# Section: Pre-deploy secrets scan (setforge-nz5x)
+# ===========================================================================
+
+
+# --- Variant: scan clean (gitleaks present, no findings) -------------------
+
+
+def test_e2e_docker_install_secrets_scan_clean(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """nz5x: gitleaks on PATH + clean tracked → install succeeds normally.
+
+    The ``test-minimal`` fixture's tracked tree carries the single
+    ``minimal/text.txt`` file (``hello from test-minimal``); gitleaks
+    cannot match a secret rule against it, so the pre-deploy scan
+    returns an empty result and the install proceeds without prompting.
+    """
+    c = docker_container()
+    # Sanity: gitleaks is on PATH inside the image.
+    which = c.exec(["which", "gitleaks"], check=False)
+    assert which.returncode == 0, (
+        f"gitleaks missing from image PATH; stderr={which.stderr!r}"
+    )
+    result = _install(c, "test-minimal")
+    assert (
+        _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
+    )
+    # No "POTENTIAL SECRET" panel + no abort message.
+    assert "POTENTIAL SECRET" not in result.stdout
+    assert "install aborted by secrets scan" not in result.stderr
+
+
+# --- Variant: gitleaks finds + aborts (default non-TTY ABORT) -------------
+
+
+def test_e2e_docker_install_secrets_scan_finds_and_aborts(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """nz5x: planting a secret in tracked aborts the install cleanly.
+
+    Non-TTY install context (``docker exec`` without ``-t``) means the
+    wizard short-circuits to :data:`SecretAction.ABORT` per the
+    soft-requirement test discipline — the live file MUST NOT appear
+    after the abort. Test plants a fake AWS access key (a well-known
+    gitleaks rule) into a copy of the tracked source inside the
+    container's workspace, runs install, then asserts the live dst
+    was never written.
+    """
+    c = docker_container()
+    # Plant a fake AWS access key in the tracked source. gitleaks v8's
+    # bundled ``aws-access-token`` rule fires on ``AKIA`` + 16 [A-Z0-9].
+    planted = (
+        "hello from test-minimal\nfake aws key for nz5x e2e: AKIAIOSFODNN7EXAMPLE\n"
+    )
+    c.write_text(
+        "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt",
+        planted,
+    )
+    # Ensure the live dst does NOT pre-exist (so the post-abort assertion
+    # cannot be satisfied by a previous-install leftover).
+    c.exec(["rm", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False)
+
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "install",
+            "--profile=test-minimal",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+
+    # Install returns 0 (no exception); the wizard's ABORT path emits a
+    # red "install aborted by secrets scan" line on stderr and returns
+    # cleanly without deploying.
+    assert "install aborted by secrets scan" in result.stderr, (
+        f"expected abort line on stderr; stderr={result.stderr!r}"
+    )
+    # Live dst MUST NOT exist — the abort fired before deploy.
+    exists = c.exec(
+        ["test", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False
+    )
+    assert exists.returncode != 0, (
+        "live dst must not be created when install aborts on secret finding"
+    )
+
+
+# --- Variant: gitleaks missing → warn-and-continue (soft-requirement) ----
+
+
+def test_e2e_docker_install_no_gitleaks_warns_and_continues(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """nz5x soft-requirement: missing gitleaks → yellow warning + install OK.
+
+    Removes the gitleaks binary from /usr/local/bin inside the
+    container (the only location it lives on PATH), then runs install.
+    The pre-deploy scan must emit the install-hint warning on stderr
+    and the install must still produce the live dst — this is the
+    canonical soft-requirement assertion (no hard-error, no exception
+    surfaced to the user).
+    """
+    c = docker_container()
+    # Remove gitleaks from PATH (cwd-based fallback only; the binary
+    # was installed by the Dockerfile at /usr/local/bin/gitleaks).
+    c.exec(["sudo", "true"], check=False)  # no-op; we use rm via tester perms
+    rm = c.exec(["rm", "-f", "/usr/local/bin/gitleaks"], check=False)
+    # tester may not own /usr/local/bin — fall back to PATH shadowing.
+    if rm.returncode != 0:
+        # Shadow gitleaks via an empty PATH override. Move/rename also OK.
+        c.exec(["mkdir", "-p", "/home/tester/empty-bin"], check=True)
+        result = c.exec(
+            [
+                "env",
+                "PATH=/home/tester/empty-bin:/home/tester/.local/bin:/usr/bin:/bin",
+                "uv",
+                "run",
+                "setforge",
+                "install",
+                "--profile=test-minimal",
+                f"--config={CONFIG_FIXTURE}",
+            ],
+            check=False,
+        )
+    else:
+        result = c.exec(
+            [
+                "uv",
+                "run",
+                "setforge",
+                "install",
+                "--profile=test-minimal",
+                f"--config={CONFIG_FIXTURE}",
+            ],
+            check=False,
+        )
+
+    assert result.returncode == 0, (
+        f"install must succeed when gitleaks is absent (soft-requirement); "
+        f"stderr={result.stderr!r}"
+    )
+    assert "gitleaks not found on PATH" in result.stderr, (
+        f"expected soft-requirement warning on stderr; got: {result.stderr!r}"
+    )
+    # Live dst lands despite missing scanner — install continued.
+    assert (
+        _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
+    )
