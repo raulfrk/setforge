@@ -236,10 +236,17 @@ def _read_body(*, body_source: BodySource, body_file: Path | None) -> str:
                 raise typer.BadParameter("--body-source=file requires --body-file")
             return body_file.read_text()
         case BodySource.EDITOR:
-            with tempfile.NamedTemporaryFile(
+            # Build the Path BEFORE entering the try: block so a
+            # KeyboardInterrupt in the (very small) window between
+            # tempfile creation and the try: body still falls into the
+            # cleanup branch. NamedTemporaryFile(delete=False) returns
+            # an open file handle; close it immediately and treat the
+            # filesystem path as the durable handle.
+            tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — see comment above
                 mode="w+", suffix=".md", delete=False
-            ) as tmp:
-                tmp_path = Path(tmp.name)
+            )
+            tmp.close()
+            tmp_path = Path(tmp.name)
             try:
                 run_editor(tmp_path)
                 body = tmp_path.read_text()
