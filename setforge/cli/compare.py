@@ -19,6 +19,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import COMPARE_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
     _iter_section_tracked_files,
@@ -30,7 +31,7 @@ from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics
 
 
-@app.command()
+@app.command(epilog=COMPARE_EXAMPLES)
 def compare(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
