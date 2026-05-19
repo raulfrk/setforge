@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, assert_never
@@ -51,7 +52,7 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["ApplyChoice", "ForceChoice", "SourceChoice", "init"]
+__all__ = ["ApplyChoice", "ForceChoice", "SourceChoice", "SourceSpec", "init"]
 
 
 class SourceChoice(StrEnum):
@@ -75,6 +76,22 @@ class ForceChoice(StrEnum):
     ABORT = "abort"
     OVERWRITE_WITH_BACKUP = "overwrite-with-backup"
     OVERWRITE_NO_BACKUP = "overwrite-no-backup"
+
+
+@dataclass(slots=True, frozen=True)
+class SourceSpec:
+    """Outcome of source-config resolution: choice plus per-kind fields.
+
+    ``choice`` is the user-facing decision; ``path`` is set for
+    :attr:`SourceChoice.PATH`; ``url`` and ``ref`` are set for
+    :attr:`SourceChoice.GIT`. :attr:`SourceChoice.SKIP` leaves all
+    optional fields ``None``/default.
+    """
+
+    choice: SourceChoice
+    path: Path | None = None
+    url: str | None = None
+    ref: str = "main"
 
 
 def _render_env_section(probe: EnvProbe, *, console: Console) -> None:
@@ -167,21 +184,37 @@ def _prompt_source_config(
     no_prompt: bool,
     path_source: Path | None,
     git_source: str | None,
-) -> SourceChoice:
-    """Resolve the source-config sub-prompt → SourceChoice.
+    git_ref: str,
+) -> SourceSpec:
+    """Resolve the source-config sub-prompt → SourceSpec.
 
     Non-interactive precedence: ``--path-source`` > ``--git-source`` >
     default ``SKIP`` (when ``--no-prompt`` is set without a source flag,
     the user opted out of configuring a source). Interactive flow goes
     through :func:`radiolist_dialog` with arrow-key selection per
     mockup J line 553.
+
+    Returns a :class:`SourceSpec` carrying both the choice and the
+    per-kind fields (path / url+ref) needed to write a ``source:``
+    block into ``local.yaml``. Interactive PATH/GIT branches are not
+    yet implemented (the prompt currently only yields the choice; an
+    inline URL/path entry would need a separate input dialog) — they
+    fall through to :attr:`SourceChoice.SKIP` with a warning unless
+    the user passed ``--path-source`` / ``--git-source`` explicitly.
     """
     if path_source is not None:
-        return SourceChoice.PATH
+        return SourceSpec(
+            choice=SourceChoice.PATH,
+            path=path_source,
+        )
     if git_source is not None:
-        return SourceChoice.GIT
+        return SourceSpec(
+            choice=SourceChoice.GIT,
+            url=git_source,
+            ref=git_ref,
+        )
     if no_prompt:
-        return SourceChoice.SKIP
+        return SourceSpec(choice=SourceChoice.SKIP)
     from setforge.cli import init as _self
 
     result = _self.radiolist_dialog(
@@ -198,10 +231,13 @@ def _prompt_source_config(
         ],
         default=SourceChoice.SKIP,
     ).run()
-    if result is None:
-        return SourceChoice.SKIP
-    assert isinstance(result, SourceChoice)
-    return result
+    # Interactive PATH/GIT yields the choice only; the user did not
+    # supply path / URL inline. Fall back to SKIP so the stub stays
+    # editable rather than half-written. (Full interactive entry is a
+    # follow-up bead.) ``None`` (cancel/escape) also collapses to SKIP.
+    if result is None or result is not SourceChoice.SKIP:
+        return SourceSpec(choice=SourceChoice.SKIP)
+    return SourceSpec(choice=SourceChoice.SKIP)
 
 
 def _prompt_apply_confirm(*, no_prompt: bool) -> ApplyChoice:
@@ -278,19 +314,66 @@ def _backup_existing(*, console: Console) -> None:
     console.print(f"  backed up {LOCAL_CONFIG_PATH.name} → {backup.name}")
 
 
-def _apply_bootstrap(probe: EnvProbe, *, console: Console) -> None:
+def _build_source_block(spec: SourceSpec) -> str:
+    """Render the ``source:`` block to append to the local.yaml stub.
+
+    Returns an empty string for :attr:`SourceChoice.SKIP` (the stub's
+    existing instructions tell the user how to edit ``source:`` by
+    hand). For PATH/GIT, returns a leading blank line plus a literal
+    YAML mapping that matches the
+    :class:`setforge.source._LocalSourceConfig` schema. We do not
+    round-trip through ruamel.yaml because the stub is a heavily
+    commented template that a YAML emitter would not reproduce
+    faithfully — appending a literal snippet is the lower-risk shape.
+    """
+    match spec.choice:
+        case SourceChoice.SKIP:
+            return ""
+        case SourceChoice.PATH:
+            assert spec.path is not None, "PATH choice requires path"
+            return (
+                "\n"
+                "# Pre-configured by `setforge init --path-source`:\n"
+                "source:\n"
+                "  kind: path\n"
+                f"  path: {spec.path}\n"
+            )
+        case SourceChoice.GIT:
+            assert spec.url is not None, "GIT choice requires url"
+            return (
+                "\n"
+                "# Pre-configured by `setforge init --git-source`:\n"
+                "source:\n"
+                "  kind: git\n"
+                f"  url: {spec.url}\n"
+                f"  ref: {spec.ref}\n"
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _apply_bootstrap(
+    probe: EnvProbe,
+    *,
+    source_spec: SourceSpec,
+    console: Console,
+) -> None:
     """Create the three init paths + write the local.yaml stub.
 
     Uses :func:`_mkdir_with_retry` for the TOCTOU-resilient idempotent
     mkdir per research brief §7. The root callback's
     ``ensure_local_config_stub`` may have already created
     ``LOCAL_CONFIG_PATH``; this function rewrites it unconditionally
-    (callers gate on ``--force`` semantics upstream).
+    (callers gate on ``--force`` semantics upstream). When
+    ``source_spec`` carries a PATH or GIT choice, appends a
+    pre-configured ``source:`` block to the stub.
     """
     console.print("=== applying ===")
     _mkdir_with_retry(config_dir_path())
     _mkdir_with_retry(host_local_dir_path())
-    LOCAL_CONFIG_PATH.write_text(_STUB_TEMPLATE, encoding="utf-8")
+    LOCAL_CONFIG_PATH.write_text(
+        _STUB_TEMPLATE + _build_source_block(source_spec), encoding="utf-8"
+    )
     created = [d.path for d in probe.dirs if d.will_create]
     if created:
         names = " + ".join(str(p) for p in created)
@@ -301,20 +384,25 @@ def _apply_bootstrap(probe: EnvProbe, *, console: Console) -> None:
 
 def _print_completion_report(
     *,
-    source_choice: SourceChoice,
+    source_spec: SourceSpec,
     console: Console,
 ) -> None:
     """Render the ``=== init complete ===`` next-steps block."""
     console.print("=== init complete ===")
-    console.print(
-        "  next steps: edit local.yaml source: block; "
-        "setforge validate --list-profiles;"
-    )
+    if source_spec.choice is SourceChoice.SKIP:
+        console.print(
+            "  next steps: edit local.yaml source: block; "
+            "setforge validate --list-profiles;"
+        )
+    else:
+        console.print(
+            "  next steps: setforge validate --list-profiles; "
+            "(source: pre-configured)"
+        )
     console.print("              setforge install --profile=<name> --dry-run")
     console.print(
         "  to undo: rm -rf ~/.config/setforge ~/.local/share/setforge/host-local"
     )
-    _ = source_choice  # source-config wiring is a follow-up bead (n2la out-of-scope)
 
 
 def _print_idempotent_reinit_report(probe: EnvProbe, *, console: Console) -> None:
@@ -346,7 +434,7 @@ def _handle_check_mode(*, console: Console) -> None:
 def _handle_force_mode(
     *,
     no_prompt: bool,
-    source_choice: SourceChoice,
+    source_spec: SourceSpec,
     console: Console,
 ) -> int:
     """``--force`` path: confirm + (optional) backup + rewrite. Returns exit code."""
@@ -362,15 +450,15 @@ def _handle_force_mode(
         case _ as unreachable:
             assert_never(unreachable)
     probe = probe_environment()
-    _apply_bootstrap(probe, console=console)
-    _print_completion_report(source_choice=source_choice, console=console)
+    _apply_bootstrap(probe, source_spec=source_spec, console=console)
+    _print_completion_report(source_spec=source_spec, console=console)
     return 0
 
 
 def _handle_fresh_init(
     *,
     no_prompt: bool,
-    source_choice: SourceChoice,
+    source_spec: SourceSpec,
     console: Console,
 ) -> int:
     """Fresh-init path: render plan, confirm, apply. Returns exit code."""
@@ -383,8 +471,8 @@ def _handle_fresh_init(
     if apply_choice is ApplyChoice.ABORT:
         console.print("[red]✗ aborted[/red] — no changes")
         return 0
-    _apply_bootstrap(probe, console=console)
-    _print_completion_report(source_choice=source_choice, console=console)
+    _apply_bootstrap(probe, source_spec=source_spec, console=console)
+    _print_completion_report(source_spec=source_spec, console=console)
     return 0
 
 
@@ -450,23 +538,23 @@ def init(
         _print_idempotent_reinit_report(probe, console=console)
         return
 
-    source_choice = _prompt_source_config(
+    source_spec = _prompt_source_config(
         no_prompt=no_prompt,
         path_source=path_source,
         git_source=git_source,
+        git_ref=git_ref,
     )
-    _ = git_ref  # consumed downstream when source-config plumbing lands
 
     if force:
         exit_code = _handle_force_mode(
             no_prompt=no_prompt,
-            source_choice=source_choice,
+            source_spec=source_spec,
             console=console,
         )
     else:
         exit_code = _handle_fresh_init(
             no_prompt=no_prompt,
-            source_choice=source_choice,
+            source_spec=source_spec,
             console=console,
         )
     if exit_code != 0:
