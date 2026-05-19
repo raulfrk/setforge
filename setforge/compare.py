@@ -493,7 +493,10 @@ def _compare_one(
 
     mode_drift = False
     if tracked_file.mode is not None:
-        live_mode = stat.S_IMODE(dst.stat().st_mode)
+        # lstat (not stat) for symlink-posture parity with snapshots.py:
+        # a symlink dst reports drift on the LINK's own mode, never the
+        # target's — setforge never deploys through a live symlink.
+        live_mode = stat.S_IMODE(dst.lstat().st_mode)
         mode_drift = live_mode != tracked_file.mode
 
     is_drifted = (
