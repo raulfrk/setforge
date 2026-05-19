@@ -180,6 +180,7 @@ def _root(
 # isort: off
 from setforge.cli import install as _install  # noqa: E402, F401
 from setforge.cli import compare as _compare  # noqa: E402, F401
+from setforge.cli import orphans as _orphans  # noqa: E402, F401 (cleanup-orphans — o3h8)
 from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
 from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
 from setforge.cli import ext as _ext  # noqa: E402, F401

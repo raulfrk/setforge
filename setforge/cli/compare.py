@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from setforge import compare as compare_mod
-from setforge import section_reconcile, section_wizard
+from setforge import section_reconcile, section_wizard, transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -24,7 +24,7 @@ from setforge.cli._helpers import (
     _iter_section_tracked_files,
     _refuse_legacy_live_markers,
 )
-from setforge.compare import CompareStatus
+from setforge.compare import CompareStatus, load_ignored_orphans
 from setforge.config import load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics
@@ -66,7 +66,13 @@ def compare(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(ctx, command="compare")
-    report = compare_mod.compare_profile(cfg, profile, repo_root)
+    report = compare_mod.compare_profile(
+        cfg,
+        profile,
+        repo_root,
+        transitions_dir=transitions.transitions_root(),
+        ignored=load_ignored_orphans(),
+    )
 
     console = Console()
     _render_compare_report(report, console, full_diff=full_diff)
@@ -88,7 +94,8 @@ def _render_compare_report(
     *,
     full_diff: bool,
 ) -> None:
-    """Print the summary table, per-status counts, and optional unified diff bodies."""
+    """Print the summary table, per-status counts, optional unified diffs,
+    and the orphans block (when any)."""
     table = compare_mod.compare_summary_table(report)
     console.print(table)
 
@@ -100,6 +107,15 @@ def _render_compare_report(
         console.print(f"UNCHANGED: {unchanged_count} files")
     if missing_count:
         console.print(f"MISSING: {missing_count} files")
+
+    if report.orphans:
+        console.print(f"\nOrphans ({len(report.orphans)}):")
+        for orphan in report.orphans:
+            console.print(f"  {orphan.path}")
+        console.print(
+            "[dim]run `setforge cleanup-orphans --profile=<name>` "
+            "to review and remove.[/dim]"
+        )
 
     if full_diff:
         for entry in report.entries:
