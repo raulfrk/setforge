@@ -589,7 +589,14 @@ def transitions_show(
     console.print(f"  type:    {meta.get('command', '')}")
     console.print(f"  profile: {profile}")
     if "timestamp" in meta:
-        console.print(f"  start:   {meta['timestamp']}")
+        timestamp = datetime.fromisoformat(meta["timestamp"])
+        # Render in the user's local timezone per mockup H
+        # (e.g. "2026-05-17 18:47:33 +0100"); insert a colon into the
+        # %z offset for readability.
+        local_strftime = timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        if len(local_strftime) >= 5 and local_strftime[-5] in "+-":
+            local_strftime = local_strftime[:-2] + ":" + local_strftime[-2:]
+        console.print(f"  start:   {local_strftime}")
     if "host" in meta:
         console.print(f"  host:    {meta['host']}")
     if "version" in meta:
