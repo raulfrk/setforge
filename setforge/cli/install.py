@@ -8,6 +8,7 @@ the bottom for the side effect.
 """
 
 from pathlib import Path
+from typing import assert_never
 
 import typer
 
@@ -230,3 +231,5 @@ def _resolve_one_finding(
             return True
         case SecretAction.SILENCE_ONE_SHOT:
             return True
+        case _:
+            assert_never(action)
