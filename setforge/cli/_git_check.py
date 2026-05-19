@@ -75,8 +75,9 @@ def _git_run(
     Locale is pinned to ``C`` on every invocation because non-porcelain
     output (``rev-parse``, ``log``, ``ls-remote``) is locale-sensitive.
     ``check=False`` so callers inspect ``returncode`` and ``stderr``
-    explicitly — git's exit code carries signal (e.g. ``128`` for
-    "not a git repository") that must not be masked by an exception.
+    explicitly — git's exit code carries diagnostic information
+    (e.g. ``128`` for "not a git repository") that must not be masked
+    by an exception.
     """
     env = {**os.environ, **_GIT_LOCALE_ENV}
     return subprocess.run(
@@ -328,11 +329,10 @@ def prompt_git_check_choice(
 ) -> GitCheckChoice:
     """Render the 3-option pre-deploy choice prompt; return the user's choice.
 
-    Mutate-gate semantics (per
-    ``feedback_mutate_gate_vs_failure_prompt`` memory): RAISES
-    :class:`ConfirmRequiresInteractive` when stdin is not a TTY, since
-    install is about to mutate live state and the user MUST consent
-    explicitly. ``--no-git-check`` is the automation escape hatch.
+    Non-TTY + mutating op = raise (consent for mutation; not
+    fall-back) — RAISES :class:`ConfirmRequiresInteractive` when
+    stdin is not a TTY, since install is about to mutate live state.
+    ``--no-git-check`` is the automation escape hatch.
 
     Returns :data:`GitCheckChoice.ABORT` on Esc/None (consistent with
     :func:`setforge.cli._confirm.confirm_auto_operation`'s Esc-as-abort
@@ -354,8 +354,6 @@ def prompt_git_check_choice(
         detached=detached,
         console=console,
     )
-    # ``radiolist_dialog`` resolves through the module-level ``__getattr__``
-    # lazy import; tests monkeypatch the same attribute path.
     from setforge.cli import _git_check as _self  # local alias for monkeypatch
 
     abort_label, proceed_label, show_label = _choice_labels(source=source)
