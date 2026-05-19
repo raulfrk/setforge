@@ -245,6 +245,12 @@ def _run_dialog(
     try/finally so the prior signal handlers are restored even if
     ``radiolist_dialog`` raises.
     """
+    # Defense-in-depth TTY guard: ``prompt_welcome`` already raises
+    # WelcomeRequiresInteractive when stdin is non-TTY, but a future
+    # caller that wires _run_dialog without that gate would silently
+    # spawn the dialog against a non-TTY stdin and hang. The assert
+    # documents the invariant + makes a regression loud.
+    assert sys.stdin.isatty(), "_run_dialog requires a TTY; caller must gate"
     prev = _install_terminal_restore((signal.SIGINT, signal.SIGTERM))
     try:
         from setforge.cli import _welcome as _self  # monkeypatch path
