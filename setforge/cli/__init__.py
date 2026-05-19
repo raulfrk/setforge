@@ -10,6 +10,7 @@ block that wires each ``@app.command()`` registration.
 
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -25,9 +26,16 @@ app: typer.Typer = typer.Typer(
     help="setforge: tracked file + extension + Claude plugin orchestration.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
-    # Pin help-output column width so CliRunner snapshot assertions
-    # stay byte-for-byte stable across CI vs local (Click #2253).
-    context_settings={"max_content_width": 100, "terminal_width": 100},
+    # Cap help-output column width at 100 so CliRunner snapshot
+    # assertions stay byte-for-byte stable (CliRunner pins COLUMNS=100,
+    # so min(100, 100) = 100; Click #2253). Soften unconditional 100
+    # for real terminals narrower than 100 cols (e.g. an 80-col SSH
+    # session): degrade gracefully to the actual terminal width so the
+    # help text wraps at the user's column limit instead of overflowing.
+    context_settings={
+        "max_content_width": 100,
+        "terminal_width": min(100, shutil.get_terminal_size().columns),
+    },
     # Disable Rich-rendered --help so Click's `\b` epilog idiom
     # preserves newlines AND so CliRunner substring asserts on flag
     # names (e.g. `'--dry-run' in result.stdout`) survive without ANSI
