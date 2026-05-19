@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from setforge.cli import app
 from setforge.cli._helpers import ProfileContext
@@ -78,9 +78,7 @@ def sandboxed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def no_external_bins(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub ``code`` and ``claude`` resolution so reconcilers no-op."""
-    monkeypatch.setattr(
-        "setforge.vscode_extensions.resolve_binary", lambda _name: None
-    )
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _name: None)
     from setforge import claude_plugins as cp
 
     cp._get_claude_bin.cache_clear()
@@ -127,9 +125,7 @@ class _DialogRecorder:
         return _FakeDialogResult(return_value=value)
 
 
-def _patch_dialog(
-    monkeypatch: pytest.MonkeyPatch, *returns: object
-) -> _DialogRecorder:
+def _patch_dialog(monkeypatch: pytest.MonkeyPatch, *returns: object) -> _DialogRecorder:
     """Replace ``radiolist_dialog`` with a recorder; return it for assertions."""
     recorder = _DialogRecorder(*returns)
     monkeypatch.setattr("setforge.cli._welcome.radiolist_dialog", recorder)
@@ -171,15 +167,11 @@ def test_is_fresh_host_returns_false_when_meta_present(
     """Transition record present → not fresh."""
     txn = tmp_path / "state" / "transitions" / "20260519T120000000000Z-install-x"
     txn.mkdir(parents=True)
-    (txn / "meta.json").write_text(
-        json.dumps(_VALID_META_PAYLOAD), encoding="utf-8"
-    )
+    (txn / "meta.json").write_text(json.dumps(_VALID_META_PAYLOAD), encoding="utf-8")
     assert is_fresh_host() is False
 
 
-def test_is_fresh_host_skips_corrupt_meta(
-    sandboxed_home: Path, tmp_path: Path
-) -> None:
+def test_is_fresh_host_skips_corrupt_meta(sandboxed_home: Path, tmp_path: Path) -> None:
     """Corrupt meta.json doesn't count — host stays fresh.
 
     A partial-write / corrupt transition record (e.g. a setforge process
@@ -347,9 +339,7 @@ def test_tty_proceed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, WelcomeChoice.PROCEED)
     console = Console(record=True)
-    choice = prompt_welcome(
-        inventory=_empty_inventory(), yes=False, console=console
-    )
+    choice = prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
     assert choice is WelcomeChoice.PROCEED
     text = console.export_text()
     assert "fresh-host detected" in text
@@ -361,9 +351,7 @@ def test_tty_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, WelcomeChoice.ABORT)
     console = Console(record=True)
-    choice = prompt_welcome(
-        inventory=_empty_inventory(), yes=False, console=console
-    )
+    choice = prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
     assert choice is WelcomeChoice.ABORT
     assert "aborted" in console.export_text()
 
@@ -372,9 +360,7 @@ def test_tty_abort_show_docs_prints_hint(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, WelcomeChoice.ABORT_SHOW_DOCS)
     console = Console(record=True)
-    choice = prompt_welcome(
-        inventory=_empty_inventory(), yes=False, console=console
-    )
+    choice = prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
     assert choice is WelcomeChoice.ABORT_SHOW_DOCS
     text = console.export_text()
     assert "aborted" in text
@@ -386,9 +372,7 @@ def test_tty_esc_falls_back_to_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, None)
     console = Console(record=True)
-    choice = prompt_welcome(
-        inventory=_empty_inventory(), yes=False, console=console
-    )
+    choice = prompt_welcome(inventory=_empty_inventory(), yes=False, console=console)
     assert choice is WelcomeChoice.ABORT
 
 
@@ -480,7 +464,7 @@ def _invoke_install(
     profile: str = "test-minimal",
     extra: list[str] | None = None,
     input_text: str | None = None,
-) -> object:
+) -> Result:
     args = [
         "install",
         f"--profile={profile}",
@@ -562,9 +546,7 @@ def test_install_after_first_run_skips_welcome(
     # Plant a transition record so is_fresh_host returns False.
     txn = tmp_path / "state" / "transitions" / "20260519T100000000000Z-install-x"
     txn.mkdir(parents=True)
-    (txn / "meta.json").write_text(
-        json.dumps(_VALID_META_PAYLOAD), encoding="utf-8"
-    )
+    (txn / "meta.json").write_text(json.dumps(_VALID_META_PAYLOAD), encoding="utf-8")
     dlg = _patch_dialog(monkeypatch)
     # No --yes; the welcome should NOT fire because the host is not fresh.
     result = _invoke_install(fixture_repo)

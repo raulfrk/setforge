@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pexpect  # type: ignore[import-untyped]
 import pytest
 
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
@@ -98,8 +99,7 @@ def test_yes_skips_welcome_in_docker(
     )
     # The welcome panel header should NOT be present when --yes skips it.
     assert "fresh-host detected" not in result.stdout, (
-        f"welcome panel rendered under --yes (expected to skip):\n"
-        f"{result.stdout}"
+        f"welcome panel rendered under --yes (expected to skip):\n{result.stdout}"
     )
 
 
@@ -137,7 +137,7 @@ def test_auto_on_fresh_host_rejected(
 
 def test_welcome_panel_rendered_on_tty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., object],
+    docker_pty_session: Callable[..., pexpect.spawn],
 ) -> None:
     """On a real TTY, the welcome panel renders before the radiolist dialog.
 
@@ -148,8 +148,6 @@ def test_welcome_panel_rendered_on_tty(
     radiolist dialog's rendering varies by terminal emulator and we
     don't want to assert against ANSI escape minutiae.
     """
-    import pexpect  # type: ignore[import-untyped]
-
     c = docker_container()
     pty = docker_pty_session(
         c,
