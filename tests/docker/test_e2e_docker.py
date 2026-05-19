@@ -2286,9 +2286,7 @@ def test_e2e_docker_revert_to_before_two_step_atomic_apply(
     assert c.exec(["test", "-f", target], check=False).returncode == 0
 
     # Drift the tracked src in-container; second install records a delta.
-    src_in_container = (
-        "/home/tester/setforge/tests/fixtures/e2e/tracked/minimal/text.txt"
-    )
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
     c.write_text(src_in_container, "hello (drifted by test)\n")
     _install(c, "test-minimal")
     assert "drifted" in c.read_text(target)
@@ -2356,9 +2354,7 @@ def test_e2e_docker_revert_to_before_dry_run_failure_keeps_live_clean(
     _install(c, "test-minimal")
     target = "/home/tester/.setforge_e2e/minimal/text.txt"
 
-    src_in_container = (
-        "/home/tester/setforge/tests/fixtures/e2e/tracked/minimal/text.txt"
-    )
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
     c.write_text(src_in_container, "second install body\n")
     _install(c, "test-minimal")
     # Drift the live file: now patch -R for the newest install cannot
@@ -2584,6 +2580,7 @@ def test_e2e_docker_revert_to_before_abort_via_confirm_dialog(
     src_in_container = (
         "/home/tester/setforge/tests/fixtures/e2e/tracked/minimal/text.txt"
     )
+    src_in_container = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
     c.write_text(src_in_container, "second install body for abort case\n")
     _install(c, "test-minimal")
     post_second = c.read_text(target)
