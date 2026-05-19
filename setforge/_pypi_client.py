@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
@@ -70,7 +71,7 @@ def _etag_cache_path(*, cache_dir: Path, package: str) -> Path:
     return cache_dir / f"pypi-etag-{package}.json"
 
 
-def _read_etag_cache(path: Path) -> tuple[str, dict] | None:
+def _read_etag_cache(path: Path) -> tuple[str, dict[str, Any]] | None:
     """Read ``(etag, body_json)`` from ``path``; return ``None`` on any failure.
 
     Cache misses are not exceptional — the function silently returns
@@ -96,7 +97,7 @@ def _read_etag_cache(path: Path) -> tuple[str, dict] | None:
     return etag, body
 
 
-def _write_etag_cache(path: Path, *, etag: str, body: dict) -> None:
+def _write_etag_cache(path: Path, *, etag: str, body: dict[str, Any]) -> None:
     """Write ``{"etag": ..., "body": ...}`` to ``path`` atomically-ish.
 
     Best-effort: failures swallow silently (cache write is an
@@ -117,7 +118,7 @@ def _build_user_agent(*, current_version: str) -> str:
 
 
 def _select_latest(
-    *, releases: dict[str, list[dict]], include_prereleases: bool
+    *, releases: dict[str, list[dict[str, Any]]], include_prereleases: bool
 ) -> str | None:
     """Pick the highest non-yanked (and optionally non-prerelease) release.
 
@@ -149,7 +150,7 @@ def _fetch_json(
     user_agent: str,
     timeout: tuple[float, float],
     cached_etag: str | None,
-) -> tuple[dict, str | None, bool]:
+) -> tuple[dict[str, Any], str | None, bool]:
     """Issue the GET; return ``(body, new_etag, used_304)``.
 
     Connect-timeout / read-timeout are not separately tunable in
@@ -250,7 +251,7 @@ def fetch_latest_version(
     )
 
 
-def _yanked_state(*, body: dict, selected: str) -> tuple[bool, str | None]:
+def _yanked_state(*, body: dict[str, Any], selected: str) -> tuple[bool, str | None]:
     """Compute ``(yanked, yanked_reason)`` for ``selected`` from PyPI body."""
     releases_raw = body.get("releases", {})
     files_for_selected = (
