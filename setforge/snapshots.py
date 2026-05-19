@@ -39,6 +39,7 @@ import json
 import os
 import shutil
 import stat
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -227,6 +228,37 @@ def _load_meta(snapshot_dir: Path) -> SnapshotMeta:
     return SnapshotMeta.from_dict(data)
 
 
+def _capture_files(partial_dir: Path, paths: Sequence[Path]) -> list[Path]:
+    """Copy every live path that exists into ``partial_dir``; return captured list.
+
+    Missing live files (e.g. first-install profile with no live yet) are
+    skipped silently — snapshot fidelity is "files that exist now" and
+    restore is additive, so absence stays absence.
+    """
+    captured: list[Path] = []
+    for live_path in paths:
+        if not live_path.exists() and not live_path.is_symlink():
+            continue
+        mirror = _mirror_path(partial_dir, live_path)
+        _copy_one(live_path, mirror)
+        captured.append(live_path)
+    return captured
+
+
+def _finalize(
+    partial_dir: Path, final_dir: Path, meta: SnapshotMeta, keep: int
+) -> None:
+    """Write the commit marker, atomically rename partial → final, then prune.
+
+    Prune fires AFTER ``os.replace`` so a crashed create never deletes
+    the prior good snapshot — retention only kicks in once the new
+    snapshot is fully on disk.
+    """
+    _write_meta(partial_dir, meta)
+    os.replace(partial_dir, final_dir)
+    prune_snapshots(keep)
+
+
 def create_snapshot(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -260,23 +292,16 @@ def create_snapshot(
     if final_dir.exists():
         raise SetforgeError(
             f"snapshot {snapshot_id} already exists at {final_dir}; "
-            f"choose a different --label or wait one second"
+            f"choose a different --label or wait a moment"
         )
     if partial_dir.exists():
         shutil.rmtree(partial_dir)
     partial_dir.mkdir(parents=True)
 
-    captured: list[Path] = []
     try:
-        for live_path in _resolve_dst_paths(cfg, resolved, repo_root):
-            if not live_path.exists() and not live_path.is_symlink():
-                # Live file not present (e.g. first-install profile) —
-                # skip silently. Snapshot fidelity is "files that exist
-                # now"; restore is additive so absence stays absence.
-                continue
-            mirror = _mirror_path(partial_dir, live_path)
-            _copy_one(live_path, mirror)
-            captured.append(live_path)
+        captured = _capture_files(
+            partial_dir, _resolve_dst_paths(cfg, resolved, repo_root)
+        )
         meta = SnapshotMeta(
             snapshot_id=snapshot_id,
             label=label,
@@ -284,18 +309,12 @@ def create_snapshot(
             profile=profile,
             files=tuple(captured),
         )
-        _write_meta(partial_dir, meta)
+        _finalize(partial_dir, final_dir, meta, keep)
     except BaseException:
         # On any failure during write: remove the .partial dir so a
         # subsequent attempt sees a clean slate. Re-raise unchanged.
         shutil.rmtree(partial_dir, ignore_errors=True)
         raise
-
-    os.replace(partial_dir, final_dir)
-    # Prune AFTER successful create — a failed create above never
-    # reaches this line, so retention only ever deletes when the new
-    # snapshot is fully on disk.
-    prune_snapshots(keep)
     return meta
 
 
