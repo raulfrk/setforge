@@ -601,6 +601,9 @@ def transitions_show(
         console.print(f"  host:    {meta['host']}")
     if "version" in meta:
         console.print(f"  version: {meta['version']}")
+    # Mockup-H end_timestamp / command_line / preserve_user_keys_applied:
+    # deferred to bd setforge-8ohd (forward-direction schema bump on
+    # install/sync/revert/wizard make_meta call sites).
 
     _render_files_section_show(target, console)
     _render_plugins_section_show(target, console)
