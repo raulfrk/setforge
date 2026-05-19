@@ -14,9 +14,8 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from prompt_toolkit.shortcuts import radiolist_dialog
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -28,6 +27,23 @@ from setforge.errors import ConfirmRequiresInteractive
 if TYPE_CHECKING:
     from setforge.compare import CompareReport, FileCompare
     from setforge.config import Config, ResolvedProfile
+
+# ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via the
+# module-level ``__getattr__`` below so non-interactive callers (and the
+# cold-start path of ``setforge --help`` / ``validate`` / ``compare``)
+# never pay the ~140ms cost. The TUI fires only when ``yes=False`` and
+# stdin is a TTY. Module-level ``__getattr__`` keeps the attribute-on-
+# module access path that the test suite's ``monkeypatch.setattr(
+# "setforge.cli._confirm.radiolist_dialog", ...)`` relies on.
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
+    if name == "radiolist_dialog":
+        from prompt_toolkit.shortcuts import radiolist_dialog
+
+        return radiolist_dialog
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Re-export for callers that import via the historical
 # ``setforge.cli._confirm`` path (tests, sibling CLI modules). The
@@ -193,9 +209,14 @@ def confirm_auto_operation(
     if console is None:
         console = Console()
     _render_panel(command=command, profile=profile, plan=plan, console=console)
+    # ``radiolist_dialog`` resolves through the module-level
+    # ``__getattr__`` (lazy prompt_toolkit import); tests monkeypatch
+    # the same attribute path.
+    from setforge.cli import _confirm as _self  # local alias for monkeypatch path
+
     # prompt_toolkit 3.0.x yes_no_dialog has no default= kwarg; radiolist
     # with default=False gives default-No behavior.
-    choice = radiolist_dialog(
+    choice = _self.radiolist_dialog(
         title=f"setforge {command}",
         text="Proceed with the mutation above?",
         values=[

@@ -16,15 +16,14 @@ import sys
 import tempfile
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import typer
-from prompt_toolkit.shortcuts import input_dialog, radiolist_dialog, yes_no_dialog
 from rich.console import Console
 from rich.markup import escape as rich_escape
 
 from setforge._editor import run_editor
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
-from setforge.cli._anchor_picker import pick_anchor_line
 from setforge.compare import resolve_src
 from setforge.config import load_config
 from setforge.sections import (
@@ -33,6 +32,37 @@ from setforge.sections import (
     hash_sections,
     set_marker_hashes,
 )
+
+# prompt_toolkit symbols (``input_dialog`` / ``radiolist_dialog`` /
+# ``yes_no_dialog``) and the bespoke ``pick_anchor_line`` (which pulls in
+# the full prompt_toolkit ``Application`` stack) resolve through the
+# module-level ``__getattr__`` below — lazy-import lets
+# ``setforge --help`` / ``validate`` / ``compare`` skip the ~140ms
+# cold-start cost since they never touch the interactive dialogs. The
+# module-attribute path is preserved so test monkeypatching
+# (``monkeypatch.setattr("setforge.cli.section.radiolist_dialog", ...)``)
+# keeps working unchanged.
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
+    if name == "radiolist_dialog":
+        from prompt_toolkit.shortcuts import radiolist_dialog
+
+        return radiolist_dialog
+    if name == "input_dialog":
+        from prompt_toolkit.shortcuts import input_dialog
+
+        return input_dialog
+    if name == "yes_no_dialog":
+        from prompt_toolkit.shortcuts import yes_no_dialog
+
+        return yes_no_dialog
+    if name == "pick_anchor_line":
+        from setforge.cli._anchor_picker import pick_anchor_line
+
+        return pick_anchor_line
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 section_app: typer.Typer = typer.Typer(
     help="Manage user-section markers in tracked markdown files.",
@@ -321,7 +351,13 @@ def _interactive_pick_tracked_file(*, config_path: Path) -> str:
 
 
 def _interactive_pick_semantics() -> str:
-    result = radiolist_dialog(
+    # ``radiolist_dialog`` resolves through this module's ``__getattr__``
+    # (lazy prompt_toolkit import); tests monkeypatch the same attribute
+    # path. ``import setforge.cli.section`` would be circular, so we
+    # import the module via the package path.
+    from setforge.cli import section as _self
+
+    result = _self.radiolist_dialog(
         title="user-section semantics",
         text=(
             "shared = propagates across hosts via tracked repo\n"
@@ -346,9 +382,13 @@ def _interactive_pick_name() -> str:
     infinite loop when the user keeps entering invalid input; exits
     cleanly on user-cancel (``None`` return from ``input_dialog``).
     """
+    # ``input_dialog`` resolves through this module's ``__getattr__``
+    # (lazy prompt_toolkit import); tests monkeypatch the same attribute path.
+    from setforge.cli import section as _self
+
     hint = "lowercase-dashes, <=63 chars"
     for _ in range(_MAX_NAME_PROMPT_ATTEMPTS):
-        result = input_dialog(title="section name", text=hint).run()
+        result = _self.input_dialog(title="section name", text=hint).run()
         if result is None:
             raise typer.Exit(0)
         try:
@@ -363,7 +403,11 @@ def _interactive_pick_name() -> str:
 
 
 def _interactive_pick_body_source() -> str:
-    result = radiolist_dialog(
+    # ``radiolist_dialog`` resolves through this module's ``__getattr__``
+    # (lazy prompt_toolkit import); tests monkeypatch the same attribute path.
+    from setforge.cli import section as _self
+
+    result = _self.radiolist_dialog(
         title="body source",
         text="how should the section body be filled?",
         values=[
@@ -379,8 +423,12 @@ def _interactive_pick_body_source() -> str:
 
 
 def _interactive_confirm(*, target: Path, anchor_line: int) -> bool:
+    # ``yes_no_dialog`` resolves through this module's ``__getattr__``
+    # (lazy prompt_toolkit import); tests monkeypatch the same attribute path.
+    from setforge.cli import section as _self
+
     return bool(
-        yes_no_dialog(
+        _self.yes_no_dialog(
             title="confirm",
             text=f"insert marker pair into {target} after line {anchor_line}?",
         ).run()
@@ -448,7 +496,12 @@ def _section_add_interactive(
     _check_duplicate_name(file_text=text, name=name)
 
     if anchor_line is None:
-        anchor_line = pick_anchor_line(file_text=text, filename=str(target))
+        # ``pick_anchor_line`` resolves through this module's
+        # ``__getattr__`` (lazy import of the prompt_toolkit Application
+        # stack); tests monkeypatch the same attribute path.
+        from setforge.cli import section as _self
+
+        anchor_line = _self.pick_anchor_line(file_text=text, filename=str(target))
         if anchor_line is None:
             typer.echo("aborted.")
             raise typer.Exit(0)
