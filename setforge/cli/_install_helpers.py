@@ -32,6 +32,9 @@ from typing import assert_never
 import typer
 
 from setforge import (
+    claude_plugins as claude_plugins_mod,
+)
+from setforge import (
     compare as compare_mod,
 )
 from setforge import (
@@ -42,6 +45,9 @@ from setforge import (
 from setforge import (
     merge as merge_mod,
 )
+from setforge import (
+    vscode_extensions as vscode_extensions_mod,
+)
 from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
@@ -51,11 +57,14 @@ from setforge.cli._confirm import (
 )
 from setforge.cli._helpers import (
     ProfileContext,
+    _extract_live_sections_map,
     _iter_all_tracked_files,
     _iter_section_tracked_files,
     _resolve_drift_paths,
+    _resolve_section_decisions,
 )
 from setforge.compare import CompareStatus
+from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
@@ -427,3 +436,288 @@ def _run_predeploy_gates(
         section_auto=section_auto,
         yes=yes,
     )
+
+
+# ---------------------------------------------------------------------------
+# setforge-lnvq: dry-run pipeline.
+#
+# ``_dry_run_pipeline`` is the orchestrator-level branch entered when
+# ``setforge install --dry-run`` is invoked. It reuses every read-only
+# helper the real pipeline calls (``compare_mod.compare_profile``,
+# ``_extract_live_sections_map``, ``_resolve_section_decisions``,
+# ``claude_plugins.reconcile(dry_run=True)``,
+# ``vscode_extensions.reconcile(dry_run=True)``) and emits ``WOULD ``-
+# prefixed lines for every mutating verb the real pipeline would invoke.
+#
+# Anti-pattern guards (per spec SPEC 4):
+#
+# - Boundary-not-leaf: the ``if dry_run:`` branch lives in
+#   :func:`setforge.cli.install.install` exactly once. ``dry_run`` is
+#   NOT threaded into ``deploy`` / ``transitions`` / ``compare`` /
+#   ``merge`` — the dry-run path bypasses those modules entirely
+#   (``deploy.bootstrap_local`` / ``transitions.ensure_state_dir_writable`` /
+#   ``transitions.write_transition`` / ``secrets_mod.append_to_allowlist`` /
+#   ``section_reconcile.stamp_tracked_baseline`` are all unreachable).
+# - No new ``_simulate_*`` / ``_dry_*`` diff-or-merge function: every
+#   compute step here delegates to the same shared helpers the real
+#   pipeline uses, so a future change to the diff algorithm reflects
+#   in dry-run output automatically.
+# - WOULD only on mutating verbs (``deploy`` / ``inject`` / ``install`` /
+#   ``uninstall`` / ``enable`` / ``disable``); section headers and read
+#   counts go unprefixed.
+# - No ``confirm_auto_operation`` call from the dry-run path: the two
+#   call sites in :func:`_confirm_legacy_drift_or_exit` /
+#   :func:`_confirm_section_reconcile_or_exit` are inside
+#   :func:`_run_predeploy_gates`, which the dry-run pipeline never
+#   invokes — even under ``--auto=*`` + ``--dry-run``.
+# ---------------------------------------------------------------------------
+
+_DRY_RUN_HEADER: str = "=== DRY-RUN MODE — NOTHING WILL BE MUTATED ==="
+"""First line of every dry-run invocation. Unambiguous opener for users + log
+scanners."""
+
+_DRY_RUN_FINAL_LINE: str = "=== rerun without --dry-run to apply for real ==="
+"""Last line of every dry-run invocation. Exact-match string the acceptance
+gate `tail -1 | rg -q '...'` checks against; do NOT reformat without
+updating the spec + every consumer."""
+
+
+def _dry_run_pipeline(
+    *,
+    ctx: ProfileContext,
+    section_auto: ReconcileAuto | None,
+) -> None:
+    """Simulate every install phase without mutating filesystem or state.
+
+    Called from :func:`setforge.cli.install.install` when ``--dry-run``
+    is set. Walks the same 8 phases the real pipeline performs (profile
+    resolve, host overlay, drift gate, file deploys, section reconcile,
+    plugin reconcile, extension reconcile, transition record) and prints
+    a ``WOULD ``-prefixed action line per mutating verb. Calls only
+    read-only helpers; never writes files, never touches the transition
+    state dir, never invokes the bviv confirm wizard, never runs git
+    fetch (the source-layer git check runs BEFORE this function but is
+    itself read-only).
+    """
+    typer.echo(_DRY_RUN_HEADER)
+    _dry_run_emit_profile_summary(ctx)
+    drift_report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
+    # Pre-extract live user-sections via the SAME helper the real
+    # pipeline calls (anti-pattern check #3 — no parallel compute).
+    # In dry-run the map is informational (a count surface); the real
+    # pipeline forwards it to ``deploy.copy_atomic`` for the
+    # ``precomputed_live_sections`` fast path. Calling it here keeps
+    # the dry-run output's section-aware tracked_file count consistent
+    # with what the real pipeline observes on this profile.
+    live_sections_map = _extract_live_sections_map(ctx)
+    _dry_run_emit_drift_gate(drift_report, live_sections_map=live_sections_map)
+    _dry_run_emit_deploys(ctx, drift_report)
+    _dry_run_emit_section_reconcile(ctx, section_auto=section_auto)
+    _dry_run_emit_plugin_reconcile(ctx)
+    _dry_run_emit_extension_reconcile(ctx)
+    _dry_run_emit_transition_path(ctx)
+    typer.echo(_DRY_RUN_FINAL_LINE)
+
+
+def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
+    """Emit the ``=== resolving profile + host overlay ===`` block.
+
+    Two phases of the spec's 8-phase walk: ``profile resolve`` and
+    ``host overlay``. ``host overlay`` is a placeholder block today
+    (the current build has no ``~/.config/setforge/local.yaml`` host
+    overlay surface) so it reports zero overlays — the line shape stays
+    stable for the day the overlay layer lands. Counts are READ
+    operations and stay unprefixed; the section headers are unprefixed
+    per the WOULD-rule.
+    """
+    typer.echo("=== resolving profile + host overlay ===")
+    typer.echo(f"profile {ctx.profile}")
+    typer.echo(f"  tracked_files:  {len(ctx.resolved.tracked_files)}")
+    typer.echo(
+        "  extensions:     "
+        f"{len(ctx.resolved.extensions.include)} declared "
+        f"({len(ctx.resolved.extensions.exclude)} excluded)"
+    )
+    typer.echo(f"  claude_plugins: {len(ctx.resolved.claude_plugins)}")
+    typer.echo(f"  bootstrap:      {len(ctx.resolved.bootstrap)}")
+    typer.echo("  host overlay:   none (host-local layer not yet enabled)")
+
+
+def _dry_run_emit_drift_gate(
+    drift_report: compare_mod.CompareReport,
+    *,
+    live_sections_map: Mapping[Path, LiveSections],
+) -> None:
+    """Emit the ``=== would-be drift gate ===`` block.
+
+    The drift gate is a READ in the real pipeline too (it computes
+    unexpected drift over the existing live tree) — counts stay
+    unprefixed. When unexpected drift IS present, surface the count so
+    users can see what the real install would gate on, but do NOT
+    invoke the bviv confirm wizard (the dry-run path is the preview;
+    short-circuiting before the confirm is a hard requirement per spec).
+    ``live_sections_map`` is the read-only output of
+    :func:`_extract_live_sections_map`; the count is informational.
+    """
+    typer.echo("=== would-be drift gate ===")
+    unexpected = sum(
+        1
+        for e in drift_report.entries
+        if e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+    )
+    typer.echo(f"unexpected drift in {unexpected} file(s)")
+    typer.echo(
+        f"section-aware tracked_files with live present: {len(live_sections_map)}"
+    )
+
+
+def _dry_run_emit_deploys(
+    ctx: ProfileContext, drift_report: compare_mod.CompareReport
+) -> None:
+    """Emit the ``=== would-be deploy ===`` block.
+
+    One WOULD line per tracked_file entry, keyed off the same
+    :class:`CompareStatus` the real pipeline uses (MISSING / DRIFTED /
+    UNCHANGED). The shared compare report is the single source of
+    truth — there is no parallel ``_dry_run_compute_deploys`` function
+    re-implementing the diff (anti-pattern check #3).
+
+    The compare report's entries iterate in the same order
+    :func:`_iter_all_tracked_files` does (both walk
+    ``ctx.resolved.tracked_files`` then ``expand_tracked_file``), so a
+    pair-wise zip joins them deterministically — no name-suffix
+    heuristic needed.
+    """
+    typer.echo("=== would-be deploy ===")
+    walk = list(_iter_all_tracked_files(ctx))
+    if len(walk) != len(drift_report.entries):
+        # Defensive: a future expand_tracked_file divergence between
+        # the two callers would silently mis-pair entries. Surface the
+        # mismatch loudly rather than print a half-correct report.
+        raise SetforgeError(
+            f"dry-run: tracked-file walk length ({len(walk)}) does not match "
+            f"compare report length ({len(drift_report.entries)}); refusing "
+            f"to render a deploy preview against an inconsistent join"
+        )
+    for (_tracked, _sub_src, sub_dst), entry in zip(
+        walk, drift_report.entries, strict=True
+    ):
+        match entry.status:
+            case CompareStatus.MISSING:
+                typer.echo(f"  WOULD install   {sub_dst}")
+            case CompareStatus.DRIFTED:
+                typer.echo(f"  WOULD update    {sub_dst}")
+            case CompareStatus.UNCHANGED:
+                typer.echo(f"  WOULD noop      {sub_dst}")
+            case _ as never:
+                assert_never(never)
+    for raw in ctx.resolved.bootstrap:
+        path = Path(str(raw)).expanduser()
+        if not path.exists():
+            typer.echo(f"  WOULD bootstrap {path}")
+
+
+def _dry_run_emit_section_reconcile(
+    ctx: ProfileContext, *, section_auto: ReconcileAuto | None
+) -> None:
+    """Emit the ``=== would-be section reconcile ===`` block.
+
+    Reuses the read-only :func:`_resolve_section_decisions` helper from
+    the shared CLI surface so the dry-run output draws on the SAME
+    classifier the real pipeline uses (anti-pattern check #3). When
+    ``section_auto`` is :data:`ReconcileAuto.USE_TRACKED`, surface every
+    shared-drifted section that WOULD be overwritten by the tracked
+    body; under ``KEEP_LIVE`` and ``None``, no shared section would
+    change (the bare-install default keeps live silently).
+    """
+    typer.echo("=== would-be section reconcile ===")
+    # ``interactive=False`` keeps the section wizard quiet under
+    # dry-run; the helper still emits the bare-install warning per
+    # section-drifted file when ``section_auto`` is None, which is
+    # informational stderr output, not a mutation.
+    decisions = _resolve_section_decisions(
+        ctx, section_auto=section_auto, interactive=False
+    )
+    if not decisions:
+        typer.echo("  no shared-section drift to reconcile")
+        return
+    for dst_path, body_map in decisions.items():
+        for section_name in body_map:
+            typer.echo(
+                f"  WOULD inject  '{section_name}' into {dst_path} (tracked body)"
+            )
+
+
+def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
+    """Emit the ``=== would-be plugin reconcile ===`` block.
+
+    Reuses :func:`setforge.claude_plugins.reconcile` with
+    ``dry_run=True`` so the dry-run report mirrors what the real
+    reconciler would compute. When ``claude`` is not on PATH the
+    reconcile raises :class:`PluginToolMissing`; surface that as a
+    skip-warn line (no failure exit — dry-run is informational).
+    """
+    typer.echo("=== would-be plugin reconcile ===")
+    try:
+        report = claude_plugins_mod.reconcile(ctx.cfg, ctx.resolved, dry_run=True)
+    except PluginToolMissing as exc:
+        typer.echo(f"  skipped (plugin tool unavailable: {exc})")
+        return
+    for mp_name in report.marketplaces_added:
+        typer.echo(f"  WOULD add-marketplace {mp_name}")
+    for plugin, marketplace in report.to_install:
+        typer.echo(f"  WOULD install  {plugin}@{marketplace}")
+    for pid in report.to_enable:
+        typer.echo(f"  WOULD enable   {pid}")
+    for pid in report.to_disable:
+        typer.echo(f"  WOULD disable  {pid}")
+    if not (
+        report.marketplaces_added
+        or report.to_install
+        or report.to_enable
+        or report.to_disable
+    ):
+        typer.echo("  nothing to reconcile")
+
+
+def _dry_run_emit_extension_reconcile(ctx: ProfileContext) -> None:
+    """Emit the ``=== would-be extension reconcile ===`` block.
+
+    Reuses :func:`setforge.vscode_extensions.reconcile` with
+    ``dry_run=True``. When the ``code`` binary is missing the
+    reconciler raises :class:`ExtensionToolMissing`; surface that as a
+    skip-warn line (parallel to :func:`_dry_run_emit_plugin_reconcile`).
+    """
+    typer.echo("=== would-be extension reconcile ===")
+    try:
+        report = vscode_extensions_mod.reconcile(ctx.resolved.extensions, dry_run=True)
+    except ExtensionToolMissing as exc:
+        typer.echo(f"  skipped (extension tool unavailable: {exc})")
+        return
+    for ext_id in report.to_install:
+        typer.echo(f"  WOULD install   {ext_id}")
+    for ext_id in report.to_uninstall:
+        typer.echo(f"  WOULD uninstall {ext_id}")
+    if not (report.to_install or report.to_uninstall):
+        typer.echo("  nothing to reconcile")
+
+
+def _dry_run_emit_transition_path(ctx: ProfileContext) -> None:
+    """Emit the ``=== would-be transition record ===`` block.
+
+    Computes the would-be transition directory PATH (one line, prefixed
+    ``WOULD record``) without ever calling
+    :func:`transitions.ensure_state_dir_writable`,
+    :func:`transitions.write_meta`, or
+    :func:`transitions.write_transition`. The state dir is NOT created
+    on disk; the path is computed via
+    :func:`transitions.transition_dirname` against ``now_utc()``.
+    """
+    typer.echo("=== would-be transition record ===")
+    dirname = transitions.transition_dirname(
+        transitions.now_utc(),
+        transitions.TransitionCommand.INSTALL.value,
+        ctx.profile,
+    )
+    target = transitions.transitions_root() / dirname
+    typer.echo(f"  WOULD record  {target}")

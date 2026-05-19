@@ -40,6 +40,7 @@ from setforge.cli._helpers import (
 from setforge.cli._install_helpers import (
     _compute_preserve_user_keys_applied,
     _deploy_all_tracked_files,
+    _dry_run_pipeline,
     _run_predeploy_gates,
     _write_install_transition,
 )
@@ -125,6 +126,16 @@ def install(
             "cache-lag warning on path / git sources respectively."
         ),
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help=(
+            "Simulate every install phase without mutating the filesystem, "
+            "transition state, or extension/plugin reconcilers. Output is "
+            "WOULD-prefixed for mutating verbs; the final line is "
+            "'=== rerun without --dry-run to apply for real ==='."
+        ),
+    ),
 ) -> None:
     """Deploy tracked → live for every tracked_file in the profile."""
     config = _resolve_config_arg(config)
@@ -160,6 +171,19 @@ def install(
         source=resolve_source_for_git_check(repo_root),
         no_git_check=no_git_check,
     )
+
+    # setforge-lnvq: boundary-not-leaf dispatch. When `--dry-run` is set,
+    # route through `_dry_run_pipeline` which calls only the read-only
+    # shared helpers (compare_profile, _extract_live_sections_map,
+    # _resolve_section_decisions, vscode_extensions.reconcile(dry_run=True),
+    # claude_plugins.reconcile(dry_run=True)). The real pipeline below is
+    # provably unreachable: zero mutating subprocess calls, zero file
+    # writes, zero transition record. The boolean is NOT threaded into
+    # deploy / transitions / compare / merge — those modules stay
+    # leaf-pure and the dry-run path bypasses them entirely.
+    if dry_run:
+        _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
+        return
 
     if not no_transition:
         transitions.ensure_state_dir_writable()
