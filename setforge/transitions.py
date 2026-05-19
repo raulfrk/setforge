@@ -965,8 +965,7 @@ def apply_patch_reverse(transition_dir: Path, *, dry_run: bool = False) -> None:
 class TransitionListing:
     """One row of ``setforge transitions list``. Decoded from a transition
     directory's ``meta.json`` (canonical) plus optional ``extensions.json``
-    and ``plugins.json`` siblings. Read-only — does not represent any
-    in-flight state."""
+    and ``plugins.json`` siblings."""
 
     directory: Path
     timestamp: datetime

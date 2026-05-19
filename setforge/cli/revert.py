@@ -267,6 +267,10 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
     plan-editor.
     """
     fd, name = tempfile.mkstemp(prefix="setforge-revert-plan-", suffix=".txt")
+    # Close the OS-level fd immediately; we'll use Path.write_text below.
+    # Closing here (rather than after write_text) keeps the fd from
+    # leaking on any exception that fires during line building.
+    os.close(fd)
     target = Path(name)
     lines = [
         f"transition: {plan.transition_id}",
@@ -293,7 +297,6 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
     lines.append("")
     lines.append(f"REDO: {plan.redo_command}")
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.close(fd)
     return target
 
 
@@ -560,7 +563,7 @@ def _render_transitions_table(
             str(entry.ext_count),
         )
     if profile_filter:
-        header = "=== transitions for profile " + ", ".join(profile_filter) + " ==="
+        header = f"=== transitions for profile {', '.join(profile_filter)} ==="
     else:
         header = "=== transitions (all profiles) ==="
     console.print(header)
