@@ -2008,3 +2008,201 @@ def test_e2e_docker_upgrade_check_mode(
     assert "=== schema impact ===" in result.stdout, (
         f"expected always-on schema impact panel; got: {result.stdout!r}"
     )
+# Section: setforge migrate — schema migration registry (setforge-s5pq)
+# ===========================================================================
+#
+# Two variants pin the v0.2.0 contract:
+#
+# (i)  ``test_e2e_docker_migrate_check_no_migrations_available`` — today's
+#      empty-registry state: ``--check`` reports ``no migrations available``
+#      and exits 0.
+# (ii) ``test_e2e_docker_migrate_multi_file_fake`` — the broadened-scope
+#      assertion: injects a fake Migration into the registry via a
+#      runtime monkeypatch script that touches setforge.yaml + a tracked
+#      content file simultaneously, then drives the full apply flow with
+#      ``--yes`` and verifies backup + apply + rollback all work
+#      end-to-end at multi-file granularity.
+
+
+def test_e2e_docker_migrate_check_no_migrations_available(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """--check reports no migrations available in the v0.2.0 empty-registry state."""
+    c = docker_container()
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--check",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"migrate --check should exit 0 with empty registry; "
+        f"got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    assert "no migrations available" in result.stdout, (
+        f"expected 'no migrations available' in stdout; got: {result.stdout!r}"
+    )
+
+
+_FAKE_MIGRATION_HARNESS = textwrap.dedent(
+    """\
+    \"\"\"Inject a fake Migration into setforge.migrations.MIGRATIONS, then
+    invoke the setforge CLI. Used by the docker e2e to prove the
+    broadened-scope Migration Protocol (multi-file apply + backup +
+    rollback) works end-to-end against a real subprocess.
+    \"\"\"
+    from __future__ import annotations
+
+    import sys
+    from dataclasses import dataclass
+    from pathlib import Path
+
+    import setforge.migrations as migrations_mod
+    from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+    from setforge.migrations._fs_ops import atomic_replace
+    from setforge.migrations._yaml_ops import (
+        atomic_write_yaml,
+        rename_key,
+        yaml_rt,
+    )
+
+
+    @dataclass(slots=True, frozen=True)
+    class _FakeMultiFileMigration:
+        from_version: str = "1.0"
+        to_version: str = "1.1"
+
+        def manifest(self, *, roots):
+            return (
+                ManifestEntry(
+                    type=ManifestType.RENAME,
+                    description="rename old_key -> new_key",
+                    affected_path=roots.cfg_path,
+                ),
+                ManifestEntry(
+                    type=ManifestType.EDIT,
+                    description="rewrite legacy sentinel",
+                    affected_path=roots.repo_root / "tracked" / "fake.md",
+                ),
+            )
+
+        def affected_paths(self, *, roots):
+            return (
+                roots.cfg_path,
+                roots.repo_root / "tracked" / "fake.md",
+            )
+
+        def apply(self, *, roots) -> None:
+            with roots.cfg_path.open("r", encoding="utf-8") as fh:
+                data = yaml_rt().load(fh)
+            rename_key(data, "old_key", "new_key")
+            atomic_write_yaml(roots.cfg_path, data)
+
+            tracked = roots.repo_root / "tracked" / "fake.md"
+            tmp = tracked.with_suffix(".md.migration.tmp")
+            tracked.parent.mkdir(parents=True, exist_ok=True)
+            before = tracked.read_text(encoding="utf-8") if tracked.exists() else ""
+            tmp.write_text(before.replace("legacy", "migrated"), encoding="utf-8")
+            atomic_replace(tmp, tracked)
+
+
+    migrations_mod.MIGRATIONS = (_FakeMultiFileMigration(),)
+    migrations_mod.current_expected_schema_version = "1.1"
+    import setforge.cli.migrate as migrate_mod
+
+    migrate_mod.current_expected_schema_version = "1.1"
+
+    from setforge.cli import main
+
+    sys.argv = ["setforge"] + sys.argv[1:]
+    main()
+    """
+)
+
+
+def test_e2e_docker_migrate_multi_file_fake(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Inject a fake multi-file Migration; --apply backs up + mutates 2 files.
+
+    Proves the broadened Migration Protocol scope: a single migration
+    can touch setforge.yaml AND a tracked content file in one apply
+    call; per-file backups land for both; rolling each backup back
+    restores the pre-migration state.
+    """
+    c = docker_container()
+    # Lay down a setforge.yaml the fake migration can rename a key in.
+    yaml_path = "/home/tester/migrate_e2e/setforge.yaml"
+    tracked_path = "/home/tester/migrate_e2e/tracked/fake.md"
+    c.write_text(
+        yaml_path,
+        textwrap.dedent(
+            """\
+            # top
+            version: 1
+            # comment above old_key
+            old_key: stays-for-rename  # eol
+            tracked_files: {}
+            profiles: {p: {}}
+            """
+        ),
+    )
+    c.write_text(tracked_path, "This is a legacy marker.\n")
+
+    # Write the harness script + drive it via `uv run python`.
+    harness_path = "/home/tester/migrate_e2e/run_with_fake_migration.py"
+    c.write_text(harness_path, _FAKE_MIGRATION_HARNESS)
+
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "--with",
+            "setforge",
+            "python",
+            harness_path,
+            "migrate",
+            "--apply",
+            "--yes",
+            f"--config={yaml_path}",
+        ],
+        workdir="/workspace",
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"migrate --apply (fake migration) should exit 0; "
+        f"got returncode={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+
+    # setforge.yaml was rewritten — old_key gone, new_key present, comments survived.
+    yaml_after = c.read_text(yaml_path)
+    assert "new_key:" in yaml_after, yaml_after
+    assert "old_key:" not in yaml_after, yaml_after
+    assert "# top" in yaml_after, yaml_after
+    assert "# comment above old_key" in yaml_after, yaml_after
+    assert "# eol" in yaml_after, yaml_after
+
+    # Tracked content file was rewritten via atomic_replace.
+    tracked_after = c.read_text(tracked_path)
+    assert "migrated" in tracked_after, tracked_after
+    assert "legacy" not in tracked_after, tracked_after
+
+    # Per-file backups exist for BOTH affected paths (broadened-scope assertion).
+    yaml_backup = c.read_text(f"{yaml_path}.pre-1.1.bak")
+    assert "old_key:" in yaml_backup, yaml_backup
+    tracked_backup = c.read_text(f"{tracked_path}.pre-1.1.bak")
+    assert "legacy" in tracked_backup, tracked_backup
+
+    # Rollback: mv each backup back over its file, content restored.
+    c.exec(["mv", f"{yaml_path}.pre-1.1.bak", yaml_path])
+    c.exec(["mv", f"{tracked_path}.pre-1.1.bak", tracked_path])
+    assert c.read_text(yaml_path).strip().endswith("profiles: {p: {}}")
+    assert "old_key:" in c.read_text(yaml_path)
+    assert "legacy" in c.read_text(tracked_path)
