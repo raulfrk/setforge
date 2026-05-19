@@ -42,14 +42,24 @@ def _make(src: Path, dst: Path, *, symlink: str | None) -> TrackedFile:
     )
 
 
-def test_broken_symlink_is_drifted(tmp_path: Path) -> None:
-    """A symlink whose target does not exist is DRIFTED, not MISSING.
+def test_broken_symlink_is_not_missing(tmp_path: Path) -> None:
+    """A broken symlink (link present, target absent) is NOT MISSING.
 
-    Existing-bug surface fixed: pre-m483 ``compare.py:_compare_one``
+    The spec acceptance #3 invariant: pre-m483 ``compare.py:_compare_one``
     used ``if not dst.exists()`` as the existence probe; ``exists()``
     returns False on a broken link, so dangling tracked symlinks
-    classified as MISSING. The new dispatch via ``is_symlink()``
-    catches the link, then probes ``os.readlink`` for target match.
+    classified as MISSING. The m483 dispatch via ``is_symlink()`` (BEFORE
+    the ``exists()`` branch) catches the link, then probes ``os.readlink``
+    for target match — so the link's classification is decoupled from the
+    target's reachability.
+
+    For a broken-but-target-matching link this yields UNCHANGED (the
+    link is exactly as setforge installed it; the target's absence is a
+    target-side concern, not link-side drift). The companion test
+    :func:`test_broken_symlink_with_correct_target_is_unchanged` asserts
+    that precise classification; this test guards the broader spec
+    invariant (NOT MISSING) against future re-introductions of the
+    ``exists()``-only probe.
     """
     src = tmp_path / "src"
     src.write_text("hello\n")
@@ -62,19 +72,10 @@ def test_broken_symlink_is_drifted(tmp_path: Path) -> None:
     tf = _make(src, dst, symlink=str(target))
     entry, was_drifted = _compare_one("foo", src, dst, tf)
 
-    # DRIFTED — NOT MISSING. The link IS there; the target is gone.
-    # Without the m483 dispatch this would land in `if not dst.exists()`
-    # and return MISSING.
-    assert entry.status is CompareStatus.UNCHANGED, (
-        f"broken symlink with matching target should be UNCHANGED "
-        f"(link is as setforge installed it; target absence is a "
-        f"target-side problem, not a link-side drift); got {entry.status}"
+    assert entry.status is not CompareStatus.MISSING, (
+        f"broken symlink must NOT classify as MISSING (spec acceptance "
+        f"#3 invariant; existing-bug surface fix); got {entry.status}"
     )
-    # Wait — actually per spec, a broken-but-correct-target link is
-    # not "drift" of the LINK itself. The spec calls out broken-link
-    # classification: it must NOT be MISSING (existing-bug surface).
-    # Re-asserting the precise contract: status is decoupled from
-    # exists() — the link being correct is what matters here.
     assert was_drifted is False
 
 

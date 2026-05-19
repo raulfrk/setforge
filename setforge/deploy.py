@@ -345,6 +345,17 @@ def deploy_symlinked_file(
     contract. ``backup_path`` is None for symlink deployments: the
     target-side write produces its own ``.bak`` for the byte content,
     and a link itself carries no rotateable state.
+
+    Ordering window: target write precedes the link swap, so a
+    concurrent reader following the *old* link (or the new link, if
+    the dst path is racing with a sibling process) may briefly observe
+    the new target bytes via the OLD link's path before this function
+    swings the dst link onto its new target. Not exploitable in a
+    security sense — the caller controls both paths — but worth
+    knowing if a setforge install races with another tool reading the
+    same tracked symlinks. Same-host single-setforge-process model
+    serializes deploys, so this is theoretical for the canonical
+    install/sync/revert flow.
     """
     if tracked_file.symlink is None:
         raise AssertionError(
