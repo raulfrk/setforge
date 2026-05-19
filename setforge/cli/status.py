@@ -42,6 +42,7 @@ from setforge.cli import (
     _resolve_config_arg,
     app,
 )
+from setforge.cli._help_examples import STATUS_EXAMPLES
 from setforge.cli._helpers import ProfileContext
 from setforge.cli._init_helpers import (
     CapabilityProbe,
@@ -392,7 +393,7 @@ def _render_capabilities(capabilities: tuple[CapabilityProbe, ...]) -> None:
     typer.echo(f"capabilities:   {formatted}")
 
 
-@app.command()
+@app.command(epilog=STATUS_EXAMPLES)
 def status(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
