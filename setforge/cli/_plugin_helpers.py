@@ -229,6 +229,23 @@ def _reconcile_extensions(
     return delta, tuple(outcomes)
 
 
+def _retry_extension_op(ext_id: str, *, is_install: bool) -> str | None:
+    """Re-attempt one per-extension op; return error string on failure, None on success.
+
+    Mirrors :func:`_retry_plugin_op`'s signature shape so the RETRY
+    branch in :func:`_handle_extension_failure` has the same
+    ``retry_err is None`` predicate as :func:`_handle_plugin_failure`.
+    """
+    try:
+        if is_install:
+            vscode_extensions.install_one(ext_id)
+        else:
+            vscode_extensions.uninstall_one(ext_id)
+    except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
+        return str(exc)
+    return None
+
+
 def _handle_extension_failure(
     *,
     ext_id: str,
@@ -267,21 +284,19 @@ def _handle_extension_failure(
             False,
         )
     if action is FailureAction.RETRY:
-        try:
-            if is_install:
-                vscode_extensions.install_one(ext_id)
-            else:
-                vscode_extensions.uninstall_one(ext_id)
-        except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
+        retry_err = _retry_extension_op(ext_id, is_install=is_install)
+        if retry_err is not None:
             typer.secho(
-                f"FAILED  retry {ext_id} — {exc}", err=True, fg=typer.colors.YELLOW
+                f"FAILED  retry {ext_id} — {retry_err}",
+                err=True,
+                fg=typer.colors.YELLOW,
             )
             return (
                 transitions.ReconcileOutcome(
                     item_id=ext_id,
                     kind="extension",
                     status="skipped",
-                    error_summary=str(exc),
+                    error_summary=retry_err,
                 ),
                 False,
             )
