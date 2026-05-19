@@ -165,10 +165,12 @@ def test_symlink_e2e_compare_detects_broken_link(
     )
     assert compare.returncode == 0, compare.stdout + compare.stderr
     combined = compare.stdout + compare.stderr
-    # Must not classify as MISSING (the existing-bug surface).
-    assert "MISSING" not in combined.upper() or "missing" not in combined.lower() or (
-        "0 missing" in combined.lower()
-    ), combined
+    # Must not classify as MISSING (the existing-bug surface). The compare
+    # CLI prints ``MISSING: <N> files`` only when ``missing_count > 0``;
+    # the broken-link case ought to land as UNCHANGED (matching target
+    # string) or DRIFTED (target-content drift, post-m483 IMPORTANT #4),
+    # so the ``MISSING:`` line must NOT appear at all.
+    assert "MISSING:" not in combined, combined
 
 
 # ---------------------------------------------------------------------------
