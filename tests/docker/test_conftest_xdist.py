@@ -1,9 +1,20 @@
-"""Unit tests for the ``pytest_configure`` hook in tests/docker/conftest.py.
+"""Unit tests for the ``pytest_configure(tryfirst=True)`` hook in tests/docker/conftest.py.
 
 The hook auto-activates pytest-xdist with ``-n auto`` whenever the
 markexpr contains ``e2e_docker`` and the user has not set ``-n`` on the
-CLI. These tests drive the hook with a minimal fake ``pytest.Config``
-so we can assert the resulting ``config.option.numprocesses`` without
+CLI. The ``tryfirst=True`` ordering is load-bearing: it makes our
+``pytest_configure`` fire BEFORE xdist's own ``pytest_configure(trylast=True)``,
+so xdist sees the ``numprocesses="auto"`` value when it decides whether to
+spawn workers.
+
+The previous incarnation used a default-priority ``pytest_configure``
+without ``tryfirst=True``. In some pytest plugin-load orderings this
+fired AFTER xdist's, so xdist silently decided "no workers" despite
+the docs claiming auto-activation — the Phase 7 e2e gate would spin a
+single pytest process and run serially.
+
+These tests drive the hook with a minimal fake ``pytest.Config`` so we
+can assert the resulting ``config.option.numprocesses`` without
 spinning up a real pytest session.
 """
 
@@ -36,7 +47,7 @@ class _FakeConfig:
     _values: dict[str, Any] = field(default_factory=dict)
     option: _FakeOption = field(default_factory=_FakeOption)
 
-    def getoption(self, name: str, default: Any = None) -> Any:
+    def getoption(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
         return self._values.get(name, default)
 
 
@@ -58,8 +69,6 @@ def test_pytest_configure_respects_explicit_n() -> None:
 
     pytest_configure(cast(pytest.Config, config))
 
-    # Hook saw the explicit value via getoption and returned early —
-    # option.numprocesses stays at the user-supplied "0".
     assert config.option.numprocesses == "0"
 
 
@@ -87,3 +96,5 @@ def test_pytest_configure_compound_markexpr() -> None:
     pytest_configure(cast(pytest.Config, config))
 
     assert config.option.numprocesses == "auto"
+
+
