@@ -656,8 +656,20 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     reconciler would compute. When ``claude`` is not on PATH the
     reconcile raises :class:`PluginToolMissing`; surface that as a
     skip-warn line (no failure exit — dry-run is informational).
+
+    Short-circuits the subprocess work entirely when neither the
+    profile NOR the top-level config declares anything plugin-related
+    (no ``claude_plugins`` entries, no ``marketplaces``). The
+    underlying ``claude_plugins.reconcile`` calls ``list_installed``
+    + ``list_marketplaces`` unconditionally — each subprocess can
+    block up to 30s on a misconfigured ``claude``; the short-circuit
+    keeps dry-run snappy on profiles that don't touch the plugin
+    layer at all.
     """
     typer.echo("=== would-be plugin reconcile ===")
+    if not ctx.resolved.claude_plugins and not ctx.cfg.marketplaces:
+        typer.echo("  nothing declared")
+        return
     try:
         report = claude_plugins_mod.reconcile(ctx.cfg, ctx.resolved, dry_run=True)
     except PluginToolMissing as exc:
@@ -687,10 +699,19 @@ def _dry_run_emit_extension_reconcile(ctx: ProfileContext) -> None:
     ``dry_run=True``. When the ``code`` binary is missing the
     reconciler raises :class:`ExtensionToolMissing`; surface that as a
     skip-warn line (parallel to :func:`_dry_run_emit_plugin_reconcile`).
+
+    Short-circuits the ``code --list-extensions`` subprocess when the
+    profile declares no extensions (parallel to the plugin
+    short-circuit — same rationale: keep dry-run snappy on profiles
+    that don't touch the extension layer at all).
     """
     typer.echo("=== would-be extension reconcile ===")
+    ext = ctx.resolved.extensions
+    if not (ext.include or ext.exclude):
+        typer.echo("  nothing declared")
+        return
     try:
-        report = vscode_extensions_mod.reconcile(ctx.resolved.extensions, dry_run=True)
+        report = vscode_extensions_mod.reconcile(ext, dry_run=True)
     except ExtensionToolMissing as exc:
         typer.echo(f"  skipped (extension tool unavailable: {exc})")
         return
