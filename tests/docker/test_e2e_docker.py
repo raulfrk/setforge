@@ -2218,8 +2218,7 @@ def test_e2e_docker_migrate_multi_file_fake(
 
 # ===========================================================================
 # Section: snapshot create / list / restore (setforge-of3a)
-# ===========================================================================
-#
+# ====================================================================#
 # Directory-copy snapshots of the profile-resolved tracked_files.dst set
 # plus host-local local.yaml. Three named cases per the spec:
 #   1. create -> list -> restore round-trip (additive overlay verified)
@@ -2303,6 +2302,109 @@ def test_e2e_docker_snapshot_auto_prune_keeps_n(
     _install(c, "test-minimal")
     for label in ("s1", "s2", "s3", "s4"):
         result = c.exec(
+=======
+# Section: setforge completion install (setforge-wx8y)
+# ===========================================================================
+#
+# Three named cases cover the user-facing contract from mockup K:
+#
+#  (i)  ``test_e2e_docker_completion_install_zsh_virgin_rc`` — fresh
+#       container, ~/.zshrc seeded with a single user line. The
+#       --non-interactive default writes _setforge to the canonical
+#       completions dir AND appends the sentinel-bracketed fpath +
+#       compinit guard block to ~/.zshrc.
+#  (ii) ``test_e2e_docker_completion_install_zsh_existing_compinit``
+#       — ~/.zshrc already has a compinit invocation upstream of where
+#       the sentinel block lands. The wiring's ``if ! command -v
+#       compinit ...`` guard makes the second compinit a no-op; the
+#       sentinel block still appears exactly once.
+#  (iii) ``test_e2e_docker_completion_install_bash_idempotent`` —
+#       run ``install bash`` twice; the second invocation is a no-op
+#       (same file bytes for _setforge_bash; same ~/.bashrc bytes).
+
+
+def test_e2e_docker_completion_install_zsh_virgin_rc(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """wx8y: zsh install on a virgin rc writes script + appends wiring block.
+
+    Seeds ~/.zshrc with a user line, runs ``completion install zsh
+    --non-interactive``, then asserts (a) the completion script lands
+    at ``~/.config/setforge/completions/_setforge``, (b) the rc file
+    gains a sentinel-bracketed block with fpath + compinit, and (c)
+    the user's pre-existing content is preserved.
+    """
+    c = docker_container()
+    c.write_text("/home/tester/.zshrc", "# user content\nalias ll=ls\n")
+    result = c.exec(
+        ["uv", "run", "setforge", "completion", "install", "zsh", "--non-interactive"],
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"completion install zsh exit={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    script = c.read_text("/home/tester/.config/setforge/completions/_setforge")
+    assert "#compdef setforge" in script, script
+    rc = c.read_text("/home/tester/.zshrc")
+    assert "# user content" in rc, rc
+    assert "alias ll=ls" in rc, rc
+    assert "# >>> setforge completion >>>" in rc, rc
+    assert "# <<< setforge completion <<<" in rc, rc
+    assert "fpath=" in rc, rc
+    assert "compinit" in rc, rc
+
+
+def test_e2e_docker_completion_install_zsh_existing_compinit(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """wx8y: zsh install on rc with an upstream compinit still wires cleanly.
+
+    Seeds ~/.zshrc with a user-supplied ``autoload -U compinit &&
+    compinit`` invocation BEFORE the setforge block; the install
+    appends the block at the end and the ``if ! command -v compinit``
+    guard inside the block makes the second compinit a safe no-op.
+    The sentinel block appears exactly once even on this layout.
+    """
+    c = docker_container()
+    c.write_text(
+        "/home/tester/.zshrc",
+        "# pre-existing setup\nautoload -U compinit && compinit\nalias g=git\n",
+    )
+    result = c.exec(
+        ["uv", "run", "setforge", "completion", "install", "zsh", "--non-interactive"],
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"completion install zsh exit={result.returncode}\n"
+        f"stdout:{result.stdout}\nstderr:{result.stderr}"
+    )
+    rc = c.read_text("/home/tester/.zshrc")
+    # The pre-existing compinit line is preserved verbatim.
+    assert "autoload -U compinit && compinit" in rc, rc
+    # The sentinel block appears exactly once with the fpath line and
+    # the conditional compinit guard inside.
+    assert rc.count("# >>> setforge completion >>>") == 1, rc
+    assert rc.count("# <<< setforge completion <<<") == 1, rc
+    assert "fpath=" in rc, rc
+    assert "command -v compinit" in rc, rc
+
+
+def test_e2e_docker_completion_install_bash_idempotent(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """wx8y: bash install is idempotent — second run leaves files unchanged.
+
+    Runs ``install bash --non-interactive`` twice; the second
+    invocation must be a no-op for BOTH the completion script and
+    ~/.bashrc (sentinel-block detection short-circuits a duplicate
+    append). Files are compared byte-for-byte.
+    """
+    c = docker_container()
+    c.write_text("/home/tester/.bashrc", "# user content\nexport FOO=1\n")
+
+    def _install_bash() -> subprocess.CompletedProcess[str]:
+        return c.exec(
             [
                 "uv",
                 "run",
@@ -2406,3 +2508,36 @@ def test_e2e_docker_snapshot_restore_with_pre_restore_snapshot(
     # Live target is now back to the original install body.
     pre_install_body = c.read_text(target)
     assert "drifted v2" not in pre_install_body
+                "completion",
+                "install",
+                "bash",
+                "--non-interactive",
+            ],
+            check=False,
+        )
+
+    first = _install_bash()
+    assert first.returncode == 0, (
+        f"first install exit={first.returncode}\n"
+        f"stdout:{first.stdout}\nstderr:{first.stderr}"
+    )
+    script_after_first = c.read_text(
+        "/home/tester/.config/setforge/completions/setforge.bash"
+    )
+    rc_after_first = c.read_text("/home/tester/.bashrc")
+    assert "source " in rc_after_first, rc_after_first
+    assert "setforge.bash" in rc_after_first, rc_after_first
+
+    second = _install_bash()
+    assert second.returncode == 0, (
+        f"second install exit={second.returncode}\n"
+        f"stdout:{second.stdout}\nstderr:{second.stderr}"
+    )
+    script_after_second = c.read_text(
+        "/home/tester/.config/setforge/completions/setforge.bash"
+    )
+    rc_after_second = c.read_text("/home/tester/.bashrc")
+    assert script_after_second == script_after_first, "completion script changed"
+    assert rc_after_second == rc_after_first, "rc file changed on second install"
+    # And the sentinel block appears exactly once.
+    assert rc_after_second.count("# >>> setforge completion >>>") == 1
