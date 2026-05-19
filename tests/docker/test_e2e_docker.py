@@ -2362,7 +2362,15 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     c = docker_container()
     # Set up bare remote with one commit + fixture tree.
     c.exec(["mkdir", "-p", "/tmp/g40x-remote.git"], check=True)
-    c.exec(["git", "init", "-q", "--bare", "/tmp/g40x-remote.git"], check=True)
+    # ``-b main`` pins the bare repo's HEAD to ``refs/heads/main``; without
+    # it, the bare HEAD defaults to ``master`` (or whatever ``init.defaultBranch``
+    # resolves to on the host). A later ``git clone`` would then check out
+    # an empty working tree because the bare's HEAD references a branch
+    # that the seed's push didn't create.
+    c.exec(
+        ["git", "init", "-q", "-b", "main", "--bare", "/tmp/g40x-remote.git"],
+        check=True,
+    )
     c.exec(["mkdir", "-p", "/tmp/g40x-seed"], check=True)
     c.exec(["git", "-C", "/tmp/g40x-seed", "init", "-q", "-b", "main"], check=True)
     c.exec(["git", "-C", "/tmp/g40x-seed", "config", "user.email", "x@y"], check=True)
