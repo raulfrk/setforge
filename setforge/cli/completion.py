@@ -404,7 +404,10 @@ def _install_zsh_or_bash(
         console.print(_post_install_test_line(shell))
         return
 
-    assert rc is not None  # zsh + bash always have an rc path
+    if rc is None:  # zsh + bash always resolve an rc path; survive python -O
+        raise SetforgeError(
+            f"internal: no rc path resolved for shell {shell.value!r}"
+        )
     already_wired = _detect_wiring(rc)
     body = _wiring_body_for(shell)
     _write_wiring(rc, body)
@@ -445,7 +448,7 @@ def completion_install(
     """
     console = Console()
     script_path = _script_path(shell)
-    rc = rc_file if rc_file is not None else _rc_path(shell)
+    rc = rc_file.expanduser() if rc_file is not None else _rc_path(shell)
     content = _render_completion_script(shell)
 
     match shell:
