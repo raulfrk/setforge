@@ -295,7 +295,8 @@ def _render_chain_previews(
         # in the shadow tree — preview falls back to "no diff" for those
         # paths and the real apply step does the work.
         for migration in chain:
-            with _suppress_preview_errors():
+            label = f"{migration.from_version} → {migration.to_version}"
+            with _suppress_preview_errors(label=label):
                 migration.apply(roots=shadow_roots)
         triples: list[tuple[Path, str, str]] = []
         for original, shadow in mapping.items():
@@ -323,13 +324,24 @@ def _read_or_empty(p: Path) -> str:
 
 
 class _suppress_preview_errors:
-    """Context manager: swallow exceptions raised inside the preview pass.
+    """Context manager: swallow :class:`Exception` raised inside the preview pass.
 
     The preview's "after" image is a best-effort render. If a migration
     branches on filesystem layout we did not faithfully shadow, the
     actual apply still runs against the real tree — the diff just
     shows ``no change`` for the unshadowable file.
+
+    Narrowed to :class:`Exception` so :class:`KeyboardInterrupt` and
+    :class:`SystemExit` (both :class:`BaseException` subclasses) keep
+    propagating: the user's Ctrl-C and Typer's ``raise typer.Exit``
+    must NOT be masked by a best-effort preview pass. When the manager
+    DOES suppress an exception, it emits a one-line ``preview
+    unavailable`` notice so silent shadow failures surface in the
+    output instead of hiding under a "no diff" rendering.
     """
+
+    def __init__(self, *, label: str) -> None:
+        self._label = label
 
     def __enter__(self) -> None:
         return None
@@ -340,7 +352,14 @@ class _suppress_preview_errors:
         exc: BaseException | None,
         tb: object,
     ) -> bool:
-        return True  # swallow whatever the migration raised
+        if exc_type is None:
+            return False
+        if not issubclass(exc_type, Exception):
+            return False  # let KeyboardInterrupt / SystemExit propagate
+        typer.echo(
+            f"(preview unavailable for {self._label}: {exc_type.__name__})"
+        )
+        return True  # suppress Exception subclasses
 
 
 def _all_affected_paths(
