@@ -231,19 +231,17 @@ def _format_porcelain_v2_line(line: str) -> str:
 
 
 def check_git_source_fresh(cache_dir: Path) -> tuple[str, ...]:
-    """Return a shortlog of commits the local cache is missing from origin.
+    """Return the shortlog of commits the local cache lags behind remote by.
 
-    Walks three subprocess steps:
-
-    1. ``git ls-remote origin <ref>`` — fetch the remote head SHA.
-    2. ``git rev-parse <ref>`` — local cache's head SHA.
-    3. ``git log --oneline <local>..<remote>`` — enumerate missing commits.
-
-    Returns an empty tuple when the cache is up-to-date OR the
-    network failed (warn-and-proceed; do not block install on a
-    transient ls-remote failure). Returns an empty tuple when the
-    cache is not a git repo (a non-cloned source shouldn't reach this
-    helper, but defensively log-and-skip).
+    Empty tuple if the cache is up-to-date OR ``git ls-remote`` failed
+    (network / timeout — warn-and-proceed so a transient remote outage
+    does not block install). Subsequent local ``git rev-parse`` /
+    ``git log`` failures propagate as
+    :class:`subprocess.CalledProcessError` or
+    :class:`subprocess.TimeoutExpired` — those are local-only and
+    should not fail under normal conditions; surfacing them as
+    exceptions is intentional. Also returns an empty tuple when
+    ``cache_dir`` is not a git repo (defensive log-and-skip).
     """
     if not (cache_dir / ".git").exists():
         LOGGER.debug(
