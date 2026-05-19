@@ -313,9 +313,7 @@ def test_symlink_e2e_revert_unlinks_symlink(
 
     # The symlink at dst MUST be gone after revert.
     link_check = c.exec(["test", "-L", _DST], check=False)
-    assert link_check.returncode != 0, (
-        f"symlink at {_DST} still present after revert"
-    )
+    assert link_check.returncode != 0, f"symlink at {_DST} still present after revert"
     # And no regular file took its place either.
     exists_check = c.exec(["test", "-e", _DST], check=False)
     assert exists_check.returncode != 0, (

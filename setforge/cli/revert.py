@@ -455,9 +455,7 @@ def _resolve_to_before_chain(
     )
 
 
-def _revert_to_before(
-    profile: str, to_before: str, *, config: Path, yes: bool
-) -> None:
+def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) -> None:
     """Multi-step revert: pre-flight first step, then sequential apply.
 
     Steps:
