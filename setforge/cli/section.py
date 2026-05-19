@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import sys
 import tempfile
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,29 @@ class BodySource(StrEnum):
     EMPTY = "empty"
     EDITOR = "editor"
     FILE = "file"
+
+
+@dataclass(slots=True, frozen=True)
+class SectionAddInputs:
+    """Resolved ``setforge section add`` inputs the helpers thread through.
+
+    Captures the fully validated post-prompt state shared by the
+    scripted entry point, the interactive entry point's final apply
+    call, and the per-tracked-file ``_apply_section_add`` core. Built
+    once after every required value is present (CLI flag or
+    prompt_toolkit dialog return); helpers reach for fields rather than
+    taking 7-9 individual keyword arguments.
+    """
+
+    config: Path
+    profile: str
+    tracked_file: str
+    semantics: SectionSemantics
+    name: str
+    anchor_line: int
+    body_source: BodySource
+    body_file: Path | None
+    yes: bool
 
 
 def _stdin_is_tty() -> bool:
@@ -203,8 +227,8 @@ def _validate_body_source(body_source: str) -> BodySource:
         raise typer.BadParameter(f"--body-source must be one of {choices}") from exc
 
 
-def _read_body(*, body_source: str, body_file: Path | None) -> str:
-    match _validate_body_source(body_source):
+def _read_body(*, body_source: BodySource, body_file: Path | None) -> str:
+    match body_source:
         case BodySource.EMPTY:
             return ""
         case BodySource.FILE:
@@ -275,72 +299,51 @@ def _print_next_steps(*, console: Console, target: Path, profile: str) -> None:
     console.print(f"  setforge install --profile={profile}")
 
 
-def _apply_section_add(
-    *,
-    config_path: Path,
-    profile: str,
-    tracked_file: str,
-    semantics: str,
-    name: str,
-    anchor_line: int,
-    body: str,
-) -> None:
+def _apply_section_add(inputs: SectionAddInputs, *, body: str) -> None:
     """Insert a marker pair into the resolved tracked file.
 
     The shared post-validation flow: resolve path, suffix-check,
     duplicate-name guard, anchor-line bound-check, insert, write,
     next-steps print. Both the scripted and interactive entry points
     converge here AFTER they've turned their respective input shapes
-    (CLI flags vs prompt_toolkit dialogs) into the seven concrete
-    arguments this helper consumes.
+    (CLI flags vs prompt_toolkit dialogs) into a :class:`SectionAddInputs`
+    plus the computed marker body.
     """
     target = _resolve_tracked_file_path(
-        config_path=config_path, tracked_file_key=tracked_file
+        config_path=inputs.config, tracked_file_key=inputs.tracked_file
     )
     _check_markdown_suffix(target=target)
     text = target.read_text()
-    _validate_anchor_line(anchor_line=anchor_line, total_lines=_count_total_lines(text))
-    _check_duplicate_name(file_text=text, name=name)
+    _validate_anchor_line(
+        anchor_line=inputs.anchor_line, total_lines=_count_total_lines(text)
+    )
+    _check_duplicate_name(file_text=text, name=inputs.name)
     updated = _insert_marker_pair(
         file_text=text,
-        anchor_line=anchor_line,
-        semantics=semantics,
-        name=name,
+        anchor_line=inputs.anchor_line,
+        semantics=inputs.semantics,
+        name=inputs.name,
         body=body,
     )
     target.write_text(updated)
-    _print_next_steps(console=Console(), target=target, profile=profile)
+    _print_next_steps(console=Console(), target=target, profile=inputs.profile)
 
 
-def _section_add_scripted(
-    *,
-    config_path: Path,
-    profile: str,
-    tracked_file: str,
-    semantics: str,
-    name: str,
-    anchor_line: int,
-    body_source: str,
-    body_file: Path | None,
-) -> None:
-    """Apply ``section add`` without any prompts."""
-    _validate_semantics(semantics)
-    _validate_name(name)
-    body_source_enum = _validate_body_source(body_source)
-    if body_source_enum is BodySource.EMPTY and body_file is not None:
+def _section_add_scripted(inputs: SectionAddInputs) -> None:
+    """Apply ``section add`` without any prompts.
+
+    ``inputs.semantics`` / ``inputs.body_source`` are already enum-typed
+    by the entry point (or typer's enum parser), so we only run the
+    ``--name`` validator and the ``body-source=empty + body-file`` mutex
+    that the CLI surface itself does not cover.
+    """
+    _validate_name(inputs.name)
+    if inputs.body_source is BodySource.EMPTY and inputs.body_file is not None:
         raise typer.BadParameter(
             "--body-source=empty is mutually exclusive with --body-file"
         )
-    body = _read_body(body_source=body_source, body_file=body_file)
-    _apply_section_add(
-        config_path=config_path,
-        profile=profile,
-        tracked_file=tracked_file,
-        semantics=semantics,
-        name=name,
-        anchor_line=anchor_line,
-        body=body,
-    )
+    body = _read_body(body_source=inputs.body_source, body_file=inputs.body_file)
+    _apply_section_add(inputs, body=body)
 
 
 def _interactive_pick_tracked_file(*, config_path: Path) -> str:
@@ -512,20 +515,24 @@ def _section_add_interactive(
             raise typer.Exit(0)
     if body_source is None:
         body_source = _interactive_pick_body_source()
-    body = _read_body(body_source=body_source, body_file=body_file)
+    body_source_enum = _validate_body_source(body_source)
+    body = _read_body(body_source=body_source_enum, body_file=body_file)
     if not yes and not _interactive_confirm(target=target, anchor_line=anchor_line):
         typer.echo("aborted.")
         raise typer.Exit(0)
 
-    _apply_section_add(
-        config_path=config_path,
+    inputs = SectionAddInputs(
+        config=config_path,
         profile=profile,
         tracked_file=tracked_file,
-        semantics=semantics,
+        semantics=SectionSemantics(semantics),
         name=name,
         anchor_line=anchor_line,
-        body=body,
+        body_source=body_source_enum,
+        body_file=body_file,
+        yes=yes,
     )
+    _apply_section_add(inputs, body=body)
 
 
 @section_app.command("add")
@@ -564,14 +571,17 @@ def section_add(
     # routing through the interactive fallback below.
     if tracked_file and semantics and name and anchor_line is not None and body_source:
         _section_add_scripted(
-            config_path=config_path,
-            profile=profile,
-            tracked_file=tracked_file,
-            semantics=semantics,
-            name=name,
-            anchor_line=anchor_line,
-            body_source=body_source,
-            body_file=body_file,
+            SectionAddInputs(
+                config=config_path,
+                profile=profile,
+                tracked_file=tracked_file,
+                semantics=SectionSemantics(semantics),
+                name=name,
+                anchor_line=anchor_line,
+                body_source=BodySource(body_source),
+                body_file=body_file,
+                yes=yes,
+            )
         )
         return
 
