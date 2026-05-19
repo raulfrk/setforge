@@ -1508,6 +1508,8 @@ def test_e2e_docker_install_no_gitleaks_warns_and_continues(
     assert (
         _read_live(c, ".setforge_e2e/minimal/text.txt") == "hello from test-minimal\n"
     )
+
+
 # ===========================================================================
 # setforge-k0uj — per-item reconcile failure UX (skip / retry / abort / diagnose)
 # ===========================================================================
@@ -1788,6 +1790,8 @@ def test_e2e_docker_install_retry_failed_flag(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
 # Section: `setforge init` bootstrap (setforge-n2la, mockup J)
 # ===========================================================================
 #
@@ -1938,6 +1942,8 @@ def test_e2e_docker_init_check_readonly(
     assert host_local_check.returncode != 0, (
         "--check must NOT create the host-local share directory"
     )
+
+
 # --- Variant U (setforge upgrade --check via fake PyPI) ---------------------
 
 
@@ -2008,6 +2014,8 @@ def test_e2e_docker_upgrade_check_mode(
     assert "=== schema impact ===" in result.stdout, (
         f"expected always-on schema impact panel; got: {result.stdout!r}"
     )
+
+
 # Section: setforge migrate — schema migration registry (setforge-s5pq)
 # ===========================================================================
 #

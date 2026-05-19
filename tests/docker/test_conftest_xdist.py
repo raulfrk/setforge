@@ -1,4 +1,4 @@
-"""Unit tests for the ``pytest_configure(tryfirst=True)`` hook in tests/docker/conftest.py.
+"""Unit tests for ``pytest_configure(tryfirst=True)`` in tests/docker/conftest.py.
 
 The hook auto-activates pytest-xdist with ``-n auto`` whenever the
 markexpr contains ``e2e_docker`` and the user has not set ``-n`` on the
@@ -47,7 +47,7 @@ class _FakeConfig:
     _values: dict[str, Any] = field(default_factory=dict)
     option: _FakeOption = field(default_factory=_FakeOption)
 
-    def getoption(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
+    def getoption(self, name: str, default: Any = None) -> Any:
         return self._values.get(name, default)
 
 
@@ -96,5 +96,3 @@ def test_pytest_configure_compound_markexpr() -> None:
     pytest_configure(cast(pytest.Config, config))
 
     assert config.option.numprocesses == "auto"
-
-

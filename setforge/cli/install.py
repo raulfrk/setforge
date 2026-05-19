@@ -265,6 +265,8 @@ def _resolve_one_finding(
             return True
         case _:
             assert_never(action)
+
+
 def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
     """Read the previous transition's ``reconcile_outcomes`` and return
     the set of items whose status was ``"skipped"``.
