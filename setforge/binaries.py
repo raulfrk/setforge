@@ -316,8 +316,30 @@ def ensure_local_config_stub() -> None:
     touched. Creates parent directories as needed. Called from the
     Typer ``@app.callback()`` so a fresh install gets the discoverable
     file on first invocation of any subcommand.
+
+    TOCTOU-safe under concurrent invocation. The previous shape used
+    ``if LOCAL_CONFIG_PATH.exists(): return`` followed by
+    ``write_text(...)`` — two parallel processes that ran the
+    ``exists()`` check between each other's writes would both proceed
+    to the write, racing on the file content. Under
+    ``pytest -n auto`` this surfaced as the unit-suite-race symptom
+    behind setforge-hpd4. The atomic ``open("x")`` mode raises
+    ``FileExistsError`` for any other process that won the race; we
+    swallow it (the file's existence is the invariant, not which
+    process wrote it).
+
+    Opt-out via the ``SETFORGE_SKIP_LOCAL_STUB=1`` environment
+    variable. Useful in headless / read-only-home contexts where
+    creating the stub is undesirable (e.g. CI containers that mount
+    ``$HOME`` read-only).
     """
-    if LOCAL_CONFIG_PATH.exists():
+    if os.environ.get("SETFORGE_SKIP_LOCAL_STUB") == "1":
         return
     LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOCAL_CONFIG_PATH.write_text(_STUB_TEMPLATE, encoding="utf-8")
+    try:
+        with LOCAL_CONFIG_PATH.open("x", encoding="utf-8") as fh:
+            fh.write(_STUB_TEMPLATE)
+    except FileExistsError:
+        # Another process (or this test run's earlier invocation) created it.
+        # The file's existence is the invariant; we're done.
+        pass

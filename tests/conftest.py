@@ -1,5 +1,26 @@
-"""Shared pytest fixtures for the setforge test suite."""
+"""Shared pytest fixtures for the setforge test suite.
 
+Two autouse fixtures here form a defense-in-depth around the
+``~/.config/setforge/local.yaml`` stub-creation race that surfaces
+under ``-n auto`` (setforge-hpd4):
+
+- :func:`_isolated_local_config` redirects the ``LOCAL_CONFIG_PATH``
+  module constants in ``setforge.binaries`` and ``setforge.source`` to
+  a per-test ``tmp_path`` directory.
+- :func:`_isolate_home` monkeypatches ``$HOME`` and ``pathlib.Path.home``
+  to a per-test tmp directory. Catches any production code path that
+  resolves ``Path.home()`` lazily (completion, snapshots, transitions,
+  migrations) — without this, parallel workers would still race on the
+  dev-host home for those code paths.
+
+The xdist auto-activation hook lives in the **project-root**
+``conftest.py``; it can't live here because ``pytest_configure`` at a
+subdir conftest fires too late for xdist (see the root conftest's
+module docstring for the timing analysis).
+"""
+
+import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -51,3 +72,71 @@ def _isolated_local_config(
         tmp_path / "local.yaml",
     )
     monkeypatch.setattr("setforge.source._cli_source", None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_home(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path | None:
+    """Redirect ``$HOME`` + ``Path.home()`` to a per-test tmp directory.
+
+    Belt-and-suspenders against parallel-worker races on the shared
+    ``~/.config/setforge/local.yaml`` stub that the Typer root callback
+    writes via :func:`setforge.binaries.ensure_local_config_stub`.
+    :func:`_isolated_local_config` already redirects the
+    ``LOCAL_CONFIG_PATH`` module constants — but any other production
+    code path that resolves ``Path.home()`` lazily (completion,
+    snapshots, transitions, migrations) would still race on the real
+    dev-host home. Monkeypatching at the ``Path.home`` level catches
+    every reachable site.
+
+    Skip on tests carrying the ``no_home_isolation`` marker — used by
+    tests that legitimately need the live ``$HOME``. The marker is a
+    forward escape hatch; no test ships with it today.
+
+    The home dir lives under a per-test ``tmp_path_factory.mktemp``
+    directory, NOT under the test's ``tmp_path``. This matters because
+    some tests pass their ``tmp_path`` to production code and then
+    assert it is empty (e.g.
+    ``test_claude_plugins.test_resolve_marketplace_source_regular_returns_input``
+    on its ``cache_root=tmp_path`` argument). If the autouse fixture
+    seeded a subdir into ``tmp_path``, those assertions would
+    false-fail. ``tmp_path_factory`` gives a separate per-test dir
+    that doesn't collide with anything the test author wrote.
+
+    The fixture returns the redirected home so a test can request it
+    via parameter and inspect the contents of the sandboxed
+    ``~/.config/setforge/`` directly.
+    """
+    if request.node.get_closest_marker("no_home_isolation") is not None:
+        return None
+    home = tmp_path_factory.mktemp("_autoisolated_home")
+    monkeypatch.setenv("HOME", str(home))
+    # ``Path.home`` is monkeypatched to read ``$HOME`` dynamically so a
+    # downstream fixture that does ``monkeypatch.setenv("HOME", ...)``
+    # still propagates to ``Path.home()`` calls. A captured-value lambda
+    # (``lambda: home``) would ignore later env changes and silently break
+    # tests that re-isolate HOME for their own purposes (e.g.
+    # ``tests/test_completion.py:home``).
+    monkeypatch.setattr(Path, "home", lambda: Path(os.environ["HOME"]))
+    return home
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: Sequence[pytest.Item],
+) -> None:
+    """Register the ``no_home_isolation`` marker for ``--strict-markers``.
+
+    Registration via ``config.addinivalue_line`` keeps
+    ``pytest --strict-markers`` happy without forcing every test author
+    to remember the marker name in pyproject.toml. The collection hook
+    fires once per session, so the registration cost is negligible.
+    """
+    del items  # collection hook accepts items; we don't filter here.
+    config.addinivalue_line(
+        "markers",
+        "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
+    )
