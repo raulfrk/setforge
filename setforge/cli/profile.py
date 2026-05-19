@@ -33,7 +33,6 @@ the surfaces that print it stay in sync.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 
 import typer
@@ -180,8 +179,8 @@ def _tag_provenance[T](
     item: T,
     *,
     chain_resolved_by_name: list[tuple[str, set[T]]],
-    overlay_add: Iterable[T] = (),
-    overlay_remove: Iterable[T] = (),
+    overlay_add: frozenset[T] = frozenset(),
+    overlay_remove: frozenset[T] = frozenset(),
     leaf_name: str,
 ) -> str:
     """Return the provenance tag for one resolved-list item.
@@ -197,10 +196,16 @@ def _tag_provenance[T](
        walked root-first; the first hit wins.
     4. Otherwise (introduced by the leaf profile) — tag
        ``[from profile <leaf_name>]``.
+
+    ``overlay_add`` and ``overlay_remove`` are typed as
+    :class:`frozenset` so callers build the set ONCE above their
+    per-item loop instead of paying ``O(items * overlay)`` to
+    re-materialize on every call. The default ``frozenset()`` is safe
+    as a mutable-default avatar (frozensets are immutable).
     """
-    if item in set(overlay_remove):
+    if item in overlay_remove:
         return "[removed via local.yaml]"
-    if item in set(overlay_add):
+    if item in overlay_add:
         return "[from local.yaml]"
     for ancestor_name, ancestor_items in chain_resolved_by_name:
         if item in ancestor_items:
