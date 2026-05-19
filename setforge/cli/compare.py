@@ -107,9 +107,7 @@ def _render_compare_report(
                 console.print(Syntax(entry.diff, "diff"))
 
 
-def _print_section_reconcile_dry_run(
-    ctx: ProfileContext, console: Console
-) -> None:
+def _print_section_reconcile_dry_run(ctx: ProfileContext, console: Console) -> None:
     """Render the ``compare --reconcile-user-sections`` dry-run output.
 
     For every tracked_file with ``preserve_user_sections=True`` that exists

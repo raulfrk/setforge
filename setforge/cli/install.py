@@ -142,9 +142,7 @@ def install(
     # See `precomputed_live_sections` on copy_atomic.
     live_sections_map = _extract_live_sections_map(ctx)
 
-    dst_paths: list[Path] = [
-        sub_dst for _, _, sub_dst in _iter_all_tracked_files(ctx)
-    ]
+    dst_paths: list[Path] = [sub_dst for _, _, sub_dst in _iter_all_tracked_files(ctx)]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 
     file_pre = transitions.snapshot_paths(dst_paths)
