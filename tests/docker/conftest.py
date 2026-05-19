@@ -45,6 +45,58 @@ import pytest
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
 """Shared fixture path for the setforge test config used by every Docker e2e test."""
 
+DOCKER_EXEC_TIMEOUT_S: int = 120
+"""Per-call wall timeout for ``docker exec`` / ``docker cp`` subprocesses.
+
+Raised from 60s after the 6-core test host showed transient
+``subprocess.TimeoutExpired`` failures under ``-n 4`` xdist parallel
+load — the daemon serializes parallel ``exec`` calls and a single test
+can queue behind 3 sibling-worker calls before its budget burns. The
+60s budget was tight enough that any docker daemon hiccup tipped a
+test over. 120s leaves headroom without slowing the green-path case
+(``docker exec`` for the e2e suite completes in 5-15s typical).
+"""
+
+
+def run_docker_exec_with_retry(
+    args: list[str],
+    *,
+    input_text: str | None = None,
+    check: bool,
+    timeout: int = DOCKER_EXEC_TIMEOUT_S,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``docker exec``/``docker cp``-style argv with one retry on Timeout.
+
+    On the first ``subprocess.TimeoutExpired``, the helper retries
+    exactly once with the same timeout. A second timeout propagates the
+    original exception so the test still fails — the retry covers the
+    "Docker daemon momentarily wedged under xdist contention" case
+    without masking a real hang.
+
+    All other ``subprocess`` exceptions propagate unmodified —
+    ``CalledProcessError`` (non-zero exit with ``check=True``) is a
+    test-meaningful signal and must not be silently swallowed.
+    """
+    try:
+        return subprocess.run(
+            args,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            check=check,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.run(
+            args,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            check=check,
+            timeout=timeout,
+        )
+
+
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DOCKERFILE: Path = REPO_ROOT / "tests" / "docker" / "Dockerfile"
 IMAGE_TAG_PREFIX: str = "setforge-e2e:test"
@@ -306,24 +358,18 @@ class ContainerHandle:
         if input_text is not None:
             argv += ["-i"]
         argv += [self.cid, *cmd]
-        return subprocess.run(
+        return run_docker_exec_with_retry(
             argv,
-            input=input_text,
-            capture_output=True,
-            text=True,
+            input_text=input_text,
             check=check,
-            timeout=60,
         )
 
     def copy_out(self, src_in_container: str, host_dst: Path) -> None:
         """Copy a file out of the container to the host filesystem."""
         host_dst.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
+        run_docker_exec_with_retry(
             ["docker", "cp", f"{self.cid}:{src_in_container}", str(host_dst)],
             check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
         )
 
     def write_text(self, path_in_container: str, content: str) -> None:
@@ -340,12 +386,9 @@ class ContainerHandle:
             # Ensure parent dir exists in the container.
             parent = posixpath.dirname(path_in_container) or "/"
             self.exec(["mkdir", "-p", parent], check=True)
-            subprocess.run(
+            run_docker_exec_with_retry(
                 ["docker", "cp", staging, f"{self.cid}:{path_in_container}"],
                 check=True,
-                capture_output=True,
-                text=True,
-                timeout=60,
             )
         finally:
             Path(staging).unlink(missing_ok=True)
@@ -390,13 +433,7 @@ def docker_container(
         argv += [docker_image]
         if cmd is not None:
             argv += cmd
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=60,
-        )
+        proc = run_docker_exec_with_retry(argv, check=True)
         cid = proc.stdout.strip()
         spawned.append(cid)
         return ContainerHandle(cid=cid)
