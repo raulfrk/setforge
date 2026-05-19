@@ -1,4 +1,4 @@
-"""Project-root conftest: auto-activate pytest-xdist with ``-n 2`` for ``-m e2e_docker``.
+"""Project-root conftest: auto-activate xdist with ``-n 2`` for ``-m e2e_docker``.
 
 Sole responsibility of this file is the xdist auto-activation. Per-test
 fixtures (HOME isolation, LOCAL_CONFIG_PATH redirect) live in
