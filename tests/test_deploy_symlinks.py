@@ -114,6 +114,32 @@ def test_deploy_symlink_replaces_pre_existing_link(tmp_path: Path) -> None:
     assert new_target.read_text() == "new-payload\n"
 
 
+def test_deploy_symlink_noop_on_equal_target(tmp_path: Path) -> None:
+    """Re-deploy of an already-correct symlink short-circuits to NOOP.
+
+    Pre-fix: every re-install re-symlinked + ``os.replace``-d the link,
+    showing ``UPDATED`` in install output and burning a syscall pair
+    even when the link already pointed at the declared target. Fix:
+    fast-path returns :attr:`DeployAction.NOOP` when
+    ``os.readlink(dst) == raw_target``.
+    """
+    src = tmp_path / "src"
+    src.write_text("payload\n")
+    target = tmp_path / "target"
+    dst = tmp_path / "link"
+    raw_target = str(target)
+    tf = _make(src, dst, symlink=raw_target)
+
+    first = deploy.deploy_symlinked_file(src, dst, tf)
+    assert first.action is deploy.DeployAction.CREATED
+
+    # Second deploy: link is already correct; expect NOOP.
+    second = deploy.deploy_symlinked_file(src, dst, tf)
+    assert second.action is deploy.DeployAction.NOOP
+    assert dst.is_symlink()
+    assert os.readlink(dst) == raw_target
+
+
 def test_deploy_symlink_no_tmp_leftover(tmp_path: Path) -> None:
     """The staging tmp file at ``.<name>.setforge-symlink-tmp`` is removed."""
     src = tmp_path / "src"

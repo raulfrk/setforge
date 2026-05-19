@@ -401,12 +401,18 @@ def _replace_symlink_atomic(dst: Path, raw_target: str) -> DeployAction:
     the staged link over any pre-existing link at ``dst`` (the
     regular-file case is refused by the caller).
 
+    Fast-path: when ``dst`` is already a symlink with ``raw_target``
+    verbatim, skip the tmp+replace dance entirely and return
+    :attr:`DeployAction.NOOP` — a re-install of an already-correct
+    link should not show ``UPDATED`` in the install summary nor
+    spend an :func:`os.symlink` + :func:`os.replace` syscall pair.
+
     Returns :attr:`DeployAction.CREATED` when ``dst`` had no prior
-    symlink, otherwise :attr:`DeployAction.UPDATED` (matching the
-    symlink-deploy NOOP-isn't-applicable shape: even when the prior
-    link pointed at the same target, the replace-and-relink semantics
-    are intentional).
+    symlink, :attr:`DeployAction.NOOP` when the prior symlink already
+    pointed at ``raw_target``, otherwise :attr:`DeployAction.UPDATED`.
     """
+    if dst.is_symlink() and os.readlink(dst) == raw_target:
+        return DeployAction.NOOP
     dst_was_link = dst.is_symlink()
     tmp_link = dst.parent / f".{dst.name}.setforge-symlink-tmp"
     with contextlib.suppress(FileNotFoundError):
