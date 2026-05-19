@@ -549,7 +549,10 @@ def section_add(
         None, "--body-file", help="Path to a file whose contents go between markers."
     ),
     yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip the final confirm prompt."
+        False,
+        "--yes",
+        "-y",
+        help="Skip the final confirm prompt (for non-interactive use).",
     ),
 ) -> None:
     """Add a user-section marker pair to a tracked markdown file."""
