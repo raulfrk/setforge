@@ -54,6 +54,22 @@ from __future__ import annotations
 
 import pytest
 
+# Cap rationale (per setforge-hpd4 + setforge-pfqe investigation, 2026-05-20):
+# -n 2 is the empirically-validated stable equilibrium on this host (109 tests,
+# zero TimeoutExpired flakes, zero daemon crashes). The original hpd4 spec
+# target of < 6 min wall-time was aspirational, set pre-daemon-saturation;
+# current measurements span ~6:30 to ~7:45 wall depending on host load
+# (idle host ≈ 6:30; under concurrent ambient load ≈ 7:45). That slip is
+# the cost of stability, not a regression to fix at the cap level.
+#
+# Earlier -n 4 attempts saturated the Docker daemon AND the host VM (the cap
+# was reverted in 6874cfe / 1bf1d18); -n auto (= 6 on a 6-core host) produces
+# ~20 transient timeouts per run. Safely raising the cap above 2 requires
+# per-host profiling of overlay2 disk-IO starvation, container cgroup memory
+# pressure, and fixture-setup GIL contention — deferred to v0.3.x. See
+# CLAUDE.md "## Docker e2e tests" for operator instructions. Override the
+# cap at the CLI with `-n N` for hosts with different daemon throughput;
+# `-n 0` opts out of xdist for serial debugging.
 _XDIST_WORKER_CAP: int = 2
 
 
