@@ -121,7 +121,7 @@ addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-mis
 [tool.coverage.run]
 source = ["setforge"]
 branch = true
-omit = ["setforge/migrations/*", "tests/*"]
+omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
