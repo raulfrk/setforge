@@ -24,6 +24,7 @@ import difflib
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
@@ -274,8 +275,6 @@ def _render_chain_previews(
     isolated tmp tree mirroring the affected paths. The user's actual
     filesystem is never mutated by the preview step.
     """
-    import tempfile
-
     with tempfile.TemporaryDirectory(prefix="setforge-migrate-preview-") as tmp:
         tmp_root = Path(tmp)
         mapping: dict[Path, Path] = {}
