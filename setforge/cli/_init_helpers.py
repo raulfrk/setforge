@@ -9,6 +9,7 @@ called from :mod:`setforge.cli.init` after the user confirms.
 
 from __future__ import annotations
 
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -150,8 +151,6 @@ def _resolve_uv() -> Path | None:
     only). The init probe reports its presence on PATH; users who
     relocate ``uv`` already need a PATH fix.
     """
-    import shutil
-
     which = shutil.which("uv")
     return Path(which) if which is not None else None
 
