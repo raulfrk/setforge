@@ -125,17 +125,50 @@ class GitSource(BaseModel):
 Source = Annotated[PathSource | GitSource, Field(discriminator="kind")]
 
 
+class PreserveUserKeysOverlay(BaseModel):
+    """One tracked_file's ``preserve_user_keys`` add/remove overlay block.
+
+    Carried under ``local.yaml`` `tracked_files.<id>.preserve_user_keys`
+    per mockup B (SPEC 8). Both lists default to empty so a partial
+    overlay (only ``add`` or only ``remove``) is a valid shape — the
+    resolver merges them with the profile chain at load time.
+    """
+
+    model_config = _STRICT
+
+    add: list[str] = []
+    remove: list[str] = []
+
+
+class _LocalTrackedFileOverlay(BaseModel):
+    """One tracked_file's worth of host-local overlay knobs.
+
+    Today carries a single nested ``preserve_user_keys`` overlay; this
+    model is the home for future per-tracked_file local overrides (e.g.
+    host-local ``mode``, host-local ``dst`` retargeting) when they land.
+    """
+
+    model_config = _STRICT
+
+    preserve_user_keys: PreserveUserKeysOverlay | None = None
+
+
 class _LocalSourceConfig(BaseModel):
-    """Just the ``source:`` block of ``~/.config/setforge/local.yaml``.
+    """Just the ``source:`` + ``tracked_files:`` blocks of ``local.yaml``.
 
     Loaded separately from :class:`setforge.binaries.HostLocalConfig` so
     the source-discovery layer and the binary-override layer can each
-    parse the file independently without coupling.
+    parse the file independently without coupling. Carries the
+    ``tracked_files:`` overlay block (per-tracked_file host-local knobs;
+    today only the ``preserve_user_keys`` add/remove overlay from
+    SPEC 8) so the loader can apply the overlay at profile-resolution
+    time via :mod:`setforge.preserved_keys.resolve_overlay`.
     """
 
     model_config = _STRICT
 
     source: Source | None = None
+    tracked_files: dict[str, _LocalTrackedFileOverlay] = {}
 
     @model_validator(mode="before")
     @classmethod
@@ -175,11 +208,29 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
         return _LocalSourceConfig()
     if not isinstance(data, Mapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
-    # Extract only the source: key; ignore other blocks (binaries:, claude:)
-    # which belong to other loaders.
-    if "source" not in data:
+    # Extract only the keys this loader owns; ignore other blocks
+    # (binaries:, claude:, orphan_ignore:) which belong to other loaders.
+    payload: dict[str, object] = {}
+    if "source" in data:
+        payload["source"] = data["source"]
+    if "tracked_files" in data:
+        payload["tracked_files"] = data["tracked_files"]
+    if not payload:
         return _LocalSourceConfig()
-    return _LocalSourceConfig.model_validate({"source": data["source"]})
+    return _LocalSourceConfig.model_validate(payload)
+
+
+def load_local_tracked_file_overlays(
+    path: Path = LOCAL_CONFIG_PATH,
+) -> dict[str, _LocalTrackedFileOverlay]:
+    """Return the ``tracked_files:`` overlay block from ``local.yaml``.
+
+    Empty dict when the file is absent, the block is missing, or the
+    block is an empty mapping. Lazy-loaded — callers (the config-layer
+    overlay applier) invoke this at profile-resolution time, never at
+    import time, per the SPEC 8 anti-smell discipline.
+    """
+    return _load_local_source_config(path).tracked_files
 
 
 _cli_source: Path | None = None
@@ -388,6 +439,7 @@ __all__ = [
     "LOCAL_CONFIG_PATH",
     "GitSource",
     "PathSource",
+    "PreserveUserKeysOverlay",
     "Source",
     "SourceKind",
     "check_source_clean",

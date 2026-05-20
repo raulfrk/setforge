@@ -10,13 +10,21 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not-found]
 
 from setforge.errors import ConfigError, ProfileNotFound
+from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -85,7 +93,23 @@ class TrackedFile(BaseModel):
     template: bool = False
     preserve_user_sections: bool = False
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
-    preserve_user_keys: list[str] = []
+    preserve_user_keys_resolved: list[ResolvedPreservedKey] = Field(default_factory=list)
+    """Resolved preserve_user_keys list with per-key provenance tags.
+
+    Seeded from the YAML ``preserve_user_keys:`` list at load time
+    (each entry tagged :attr:`KeyOrigin.FROM_PROFILE` with
+    ``source_profile=None`` — the profile context is filled in at
+    profile-resolution time by
+    :func:`setforge.config.apply_preserve_user_keys_overlay`). May be
+    overwritten in-bulk (NOT in-place — Pydantic v2 frozen-on-copy
+    semantics) by the loader once the local.yaml overlay is known.
+
+    Mockup B's compare/install formatters read this list to emit
+    per-key provenance lines. The legacy :attr:`preserve_user_keys`
+    surface remains available as a :func:`computed_field` derived
+    view for every existing consumer (yaml_merge / jsonc / merge /
+    sync / revert / etc.) — back-compat is automatic.
+    """
     preserve_user_keys_deep: list[str] = []
     """Paths whose live → tracked overlay does a *deep* merge instead of
     the shallow whole-leaf replace of ``preserve_user_keys``. Tracked
@@ -123,6 +147,100 @@ class TrackedFile(BaseModel):
     target equals the (expanded) ``dst`` — config-time guard against
     a tracked_file pointing at itself.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _seed_preserve_user_keys_resolved(cls, data: object) -> object:
+        """Convert YAML ``preserve_user_keys: [...]`` input into seeded
+        ``preserve_user_keys_resolved`` entries.
+
+        Each entry from the input list becomes a
+        :class:`ResolvedPreservedKey` tagged
+        :attr:`KeyOrigin.FROM_PROFILE` with ``source_profile=None``.
+        The profile context (which profile in the chain declared the
+        key) is filled in at profile-resolution time by
+        :func:`apply_preserve_user_keys_overlay`, which rebuilds the
+        list with the leaf-profile name + applies any local.yaml
+        overlay.
+
+        Refuses the malformed shape where BOTH
+        ``preserve_user_keys`` and ``preserve_user_keys_resolved``
+        appear in the input mapping — the YAML surface is single-shape
+        only (``preserve_user_keys``); ``preserve_user_keys_resolved``
+        is the loader-populated derived shape.
+        """
+        if not isinstance(data, dict):
+            return data
+        has_input = "preserve_user_keys" in data
+        has_resolved = "preserve_user_keys_resolved" in data
+        if has_resolved:
+            # Resolved wins — drop any computed-field round-trip
+            # artifact under the same name (model_dump() includes the
+            # computed field; re-validating that dump must round-trip
+            # cleanly without rejecting the seed-from-input path).
+            if has_input:
+                new_data = dict(data)
+                new_data.pop("preserve_user_keys")
+                return new_data
+            return data
+        if not has_input:
+            return data
+        raw_list = data["preserve_user_keys"]
+        if not isinstance(raw_list, list):
+            # Let Pydantic surface the standard "Input should be a valid
+            # list" message rather than pre-empting it here.
+            return data
+        # Apply the same well-formed-path checks that historically lived
+        # on the @field_validator for the now-computed
+        # ``preserve_user_keys`` field. Empty strings and whitespace-only
+        # segments inside the " > " separator are rejected before the
+        # entries land in ``preserve_user_keys_resolved``.
+        for path in raw_list:
+            if path == "":
+                raise ValueError("preserve_user_keys entry cannot be empty string")
+            if not isinstance(path, str):
+                continue
+            if _PRESERVE_PATH_SEPARATOR not in path:
+                continue
+            segments = path.split(_PRESERVE_PATH_SEPARATOR)
+            for seg in segments:
+                if seg == "" or seg.strip() == "":
+                    raise ValueError(
+                        f"preserve_user_keys path {path!r} has an empty or "
+                        f"whitespace-only segment (no leading/trailing "
+                        f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
+                        f"separators)"
+                    )
+        seeded = [
+            ResolvedPreservedKey(str(item), KeyOrigin.FROM_PROFILE, None)
+            for item in raw_list
+        ]
+        # Replace the input key with the seeded resolved list; the
+        # original `preserve_user_keys` no longer maps onto a real
+        # model field (it is a computed_field below).
+        new_data = dict(data)
+        new_data.pop("preserve_user_keys")
+        new_data["preserve_user_keys_resolved"] = seeded
+        return new_data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def preserve_user_keys(self) -> list[str]:
+        """Effective preserve_user_keys list (back-compat derived view).
+
+        Returns ``[k.key for k in preserve_user_keys_resolved if k.origin
+        != REMOVED_VIA_LOCAL]`` — the set of keys whose live values
+        deploy/install should overlay onto tracked. Every pre-overlay
+        consumer (yaml_merge / jsonc / merge / sync / revert / etc.)
+        reads this property; the underlying provenance lives on
+        :attr:`preserve_user_keys_resolved` for mockup-B-aware
+        formatters in compare/deploy.
+        """
+        return [
+            k.key
+            for k in self.preserve_user_keys_resolved
+            if k.origin != KeyOrigin.REMOVED_VIA_LOCAL
+        ]
 
     @model_validator(mode="after")
     def _symlink_no_self_loop(self) -> Self:
@@ -234,32 +352,6 @@ class TrackedFile(BaseModel):
                 f"mode {oct(v)} sets setuid/setgid bit — refusing for security."
             )
         return int(v)
-
-    @field_validator("preserve_user_keys")
-    @classmethod
-    def _well_formed_preserve_paths(cls, v: list[str]) -> list[str]:
-        """Reject malformed nested paths in ``preserve_user_keys``.
-
-        Single-segment names (no ``" > "`` separator) are v1 literal
-        top-level keys — accepted as-is. Multi-segment paths split on
-        ``" > "`` and every segment must be non-empty and not
-        whitespace-only. The empty string is rejected outright.
-        """
-        for path in v:
-            if path == "":
-                raise ValueError("preserve_user_keys entry cannot be empty string")
-            if _PRESERVE_PATH_SEPARATOR not in path:
-                continue
-            segments = path.split(_PRESERVE_PATH_SEPARATOR)
-            for seg in segments:
-                if seg == "" or seg.strip() == "":
-                    raise ValueError(
-                        f"preserve_user_keys path {path!r} has an empty or "
-                        f"whitespace-only segment (no leading/trailing "
-                        f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
-                        f"separators)"
-                    )
-        return v
 
     @field_validator("src", "dst", mode="before")
     @classmethod
