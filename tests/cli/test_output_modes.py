@@ -407,36 +407,28 @@ def test_setforge_log_level_env_precedence(
 def test_redacts_token_env(
     runner: CliRunner, minimal_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """-vv + a SETFORGE_GITHUB_TOKEN debug log → token value never in stderr.
+    """End-to-end: `-vv` + SETFORGE_GITHUB_TOKEN in env → token redacted on stderr.
 
-    Emits a debug log via :mod:`setforge.cli` to prove the
-    setforge-namespace RedactingFilter is wired at the root callback.
-    The token value (``ghp_FAKE_TOKEN_FOR_TEST``) must not appear
-    anywhere in captured stderr.
+    The root callback (``setforge.cli._root``) logs a ``-vv`` debug
+    breadcrumb that names ``SETFORGE_GITHUB_TOKEN=<value>``; the
+    RedactingFilter wired on the ``setforge`` namespace logger must
+    rewrite the value to ``<REDACTED>`` before the record reaches the
+    handler. This test fails if the ``addFilter`` call is removed from
+    the root callback — exactly the regression the synthesized-filter
+    style hid before.
     """
-    monkeypatch.setenv("SETFORGE_GITHUB_TOKEN", "ghp_FAKE_TOKEN_FOR_TEST")
-
-    # Invoke -vv first so the filter is registered, then emit a log that
-    # mentions the token. We pipe through a fresh CliRunner that runs a
-    # tiny subcommand which also exits clean — `validate --all` covers that.
+    monkeypatch.setenv("SETFORGE_GITHUB_TOKEN", "ghp_FAKE_TOKEN_FOR_TEST_VALUE")
     result = runner.invoke(
         app, ["-vv", "validate", "--config", str(minimal_config), "--all"]
     )
     assert result.exit_code == 0, result.output
-
-    # Now log a synthetic record via the setforge namespace logger,
-    # mimicking what an over-eager debug print of os.environ would do.
-    setforge_logger = logging.getLogger("setforge")
-    setforge_logger.debug("env dump: SETFORGE_GITHUB_TOKEN=ghp_FAKE_TOKEN_FOR_TEST")
-
-    # Re-invoke to capture the now-emitted record. We do not assert
-    # capture order; instead we synthesise a record directly through
-    # the filter to prove the redaction contract end-to-end:
-    filt = RedactingFilter()
-    record = _make_record("env dump: SETFORGE_GITHUB_TOKEN=ghp_FAKE_TOKEN_FOR_TEST")
-    filt.filter(record)
-    assert "ghp_FAKE_TOKEN_FOR_TEST" not in record.msg
-    assert "<REDACTED>" in record.msg
+    # End-to-end contract: the literal token NEVER lands on stderr,
+    # AND the redaction marker IS present (proves the filter fired,
+    # not just that nothing logged the value at all).
+    assert "ghp_FAKE_TOKEN_FOR_TEST_VALUE" not in result.stderr
+    assert "<REDACTED>" in result.stderr
+    # The breadcrumb key prefix survives (only the value is masked).
+    assert "SETFORGE_GITHUB_TOKEN" in result.stderr
 
 
 # ---------------------------------------------------------------------------

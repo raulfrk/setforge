@@ -210,8 +210,8 @@ def _root(
     """Wire host-local binary overrides + source-layer override + logging + local stub.
 
     Side effects (in order): mutex-check ``--quiet`` + ``-v``, resolve
-    effective log level, install :class:`RedactingFilter` on the
-    ``setforge`` namespace logger, set CLI binary overrides via
+    effective log level, install :class:`RedactingFilter` on the root
+    logger's stderr handler, set CLI binary overrides via
     ``binaries.set_cli_overrides``, ensure ``~/.config/setforge/local.yaml``
     stub exists via ``binaries.ensure_local_config_stub``, set the
     ``--source`` override via ``source_mod.set_cli_source``, wire
@@ -229,15 +229,32 @@ def _root(
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         force=True,
     )
-    # Attach RedactingFilter at the "setforge" namespace root so every
-    # child logger inherits it; basicConfig only configures the root
-    # logger, so attaching here covers logs from setforge.cli.*,
-    # setforge.compare, setforge.transitions, etc. without per-module
-    # wiring.
-    setforge_logger = logging.getLogger("setforge")
-    if not any(isinstance(f, RedactingFilter) for f in setforge_logger.filters):
-        setforge_logger.addFilter(RedactingFilter())
+    # Attach RedactingFilter to the root logger's handler (the one
+    # basicConfig just installed on sys.stderr). Filters live on the
+    # logger or handler that ACTUALLY emits a record — a filter on a
+    # namespace-parent logger (e.g. `setforge`) is bypassed during
+    # propagation up to root unless that parent also owns the handler.
+    # We attach to the handler itself so EVERY record formatted through
+    # this stderr handler — setforge.* and any third-party noise that
+    # happens to log a setforge-shaped token — gets redacted before
+    # emission.
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
+            handler.addFilter(RedactingFilter())
     LOGGER.debug("logging configured at level %s", logging.getLevelName(level))
+    # Emit a `-vv` debug breadcrumb that mentions credential-bearing env
+    # vars by value. The RedactingFilter above rewrites the value before
+    # the record reaches the handler, so the literal token never lands
+    # on stderr — but the breadcrumb stays useful for diagnosing "why
+    # did setforge see no GitHub token here". The f-string (instead of
+    # `%s` lazy-format) is deliberate: the filter only rewrites
+    # already-interpolated `record.msg`. The test suite asserts the
+    # redaction end-to-end via this exact log site (see
+    # tests/cli/test_output_modes.py:test_redacts_token_env).
+    github_token = os.environ.get("SETFORGE_GITHUB_TOKEN")
+    if github_token:
+        LOGGER.debug(f"env credential: SETFORGE_GITHUB_TOKEN={github_token}")
     binaries.set_cli_overrides(
         code=code_bin,
         claude=claude_bin,
