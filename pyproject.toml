@@ -99,6 +99,10 @@ ignore = [
 # is allowed because tests legitimately use `print` as a callable
 # fixture for dispatch tests (see tests/cli/test_output_modes.py).
 "tests/**" = ["ANN001", "ANN401", "C901", "T20"]
+# scripts/ holds CLI utilities (e.g. release_preflight.py) that print
+# status messages to stdout as part of their primary contract — they
+# are tools, not library code. T20 (no print) does not apply.
+"scripts/**" = ["T20"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
