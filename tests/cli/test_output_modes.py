@@ -13,7 +13,8 @@ Coverage matrix:
   ``test_transitions_list_json_envelope`` /
   ``test_status_json_envelope`` /
   ``test_profile_show_json_envelope`` — ``--format=json`` returns the
-  versioned envelope with ``schema_version: 1``, ``command``, ``data``.
+  versioned envelope with ``schema_version`` = ``OUTPUT_SCHEMA_VERSION``,
+  ``command``, ``data``.
 - ``test_json_no_ansi_on_stdout`` — JSON-mode stdout parses as JSON and
   contains no ANSI escape sequences.
 - ``test_redacts_token_env`` — ``-vv`` plus a token-shaped log message
@@ -38,7 +39,13 @@ from typer.testing import CliRunner
 
 from setforge._log_filter import RedactingFilter
 from setforge.cli import app
-from setforge.cli._output import OutputContext, OutputFormat, render, wrap_json
+from setforge.cli._output import (
+    OUTPUT_SCHEMA_VERSION,
+    OutputContext,
+    OutputFormat,
+    render,
+    wrap_json,
+)
 
 _ANSI_RE = re.compile(r"\x1b\[")
 
@@ -81,10 +88,14 @@ def minimal_config(tmp_path: Path) -> Path:
 
 
 def test_wrap_json_emits_versioned_envelope() -> None:
-    """wrap_json always carries schema_version=1 and the command name."""
+    """wrap_json always carries OUTPUT_SCHEMA_VERSION and the command name."""
     payload = wrap_json("compare", {"a": 1})
     parsed = json.loads(payload)
-    assert parsed == {"schema_version": 1, "command": "compare", "data": {"a": 1}}
+    assert parsed == {
+        "schema_version": OUTPUT_SCHEMA_VERSION,
+        "command": "compare",
+        "data": {"a": 1},
+    }
 
 
 def test_wrap_json_includes_errors_when_nonempty() -> None:
@@ -126,7 +137,7 @@ def test_render_json_emits_envelope_and_skips_closure(
     captured = capsys.readouterr()
     assert called == []
     parsed = json.loads(captured.out)
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert parsed["command"] == "compare"
 
 

@@ -14,7 +14,8 @@ Three pieces:
   onto ``ctx.obj`` by the root callback (``--format`` /
   ``--quiet`` / ``--verbose`` count).
 - :func:`wrap_json` / :func:`render` — the JSON envelope (with
-  ``schema_version: 1``) and the dispatch boundary.
+  ``schema_version`` = :data:`OUTPUT_SCHEMA_VERSION`) and the dispatch
+  boundary.
 
 Subcommand integration: compute the result, then call
 ``_output.render(ctx_obj, "<command>", data, human_fn=<human_renderer>)``
@@ -29,6 +30,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+
+
+OUTPUT_SCHEMA_VERSION: int = 1
+"""Cross-tool contract version for the JSON envelope.
+
+Downstream ``jq`` consumers branch on ``schema_version``; bump this
+constant on any breaking change to the ``data`` shapes.
+"""
 
 
 class OutputFormat(StrEnum):
@@ -62,17 +71,15 @@ def wrap_json(
 ) -> str:
     """Return the versioned JSON envelope as a UTF-8 string.
 
-    The envelope shape is ``{"schema_version": 1, "command": <command>,
-    "data": <data>}``; ``errors`` is included only when non-empty. The
-    ``schema_version`` int is the cross-tool contract for downstream
-    ``jq`` consumers — bump it on any breaking change to ``data``
-    shapes.
+    The envelope shape is ``{"schema_version": OUTPUT_SCHEMA_VERSION,
+    "command": <command>, "data": <data>}``; ``errors`` is included only
+    when non-empty.
 
     ``default=str`` keeps :class:`pathlib.Path` / :class:`datetime`
     serialisable without per-callsite coercion.
     """
     envelope: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": OUTPUT_SCHEMA_VERSION,
         "command": command,
         "data": data,
     }
