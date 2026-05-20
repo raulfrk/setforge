@@ -115,7 +115,7 @@ def test_wrap_json_omits_errors_when_none_or_empty() -> None:
 
 def test_render_human_invokes_closure(capsys: pytest.CaptureFixture[str]) -> None:
     """HUMAN format dispatches to the closure; no JSON on stdout."""
-    ctx = OutputContext(format=OutputFormat.HUMAN, quiet=False, verbose=0)
+    ctx = OutputContext(format=OutputFormat.HUMAN)
     render(ctx, "compare", {"a": 1}, human_fn=lambda: print("HUMAN"))
     captured = capsys.readouterr()
     assert "HUMAN" in captured.out
@@ -126,7 +126,7 @@ def test_render_json_emits_envelope_and_skips_closure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """JSON format writes the envelope to stdout; closure NOT invoked."""
-    ctx = OutputContext(format=OutputFormat.JSON, quiet=False, verbose=0)
+    ctx = OutputContext(format=OutputFormat.JSON)
     called: list[bool] = []
     render(
         ctx,

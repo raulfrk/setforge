@@ -11,8 +11,7 @@ Three pieces:
   ``StrEnum`` so Typer renders it as ``--format=human|json`` and the
   values stay typed end-to-end.
 - :class:`OutputContext` — the immutable per-invocation envelope wired
-  onto ``ctx.obj`` by the root callback (``--format`` /
-  ``--quiet`` / ``--verbose`` count).
+  onto ``ctx.obj`` by the root callback (``--format``).
 - :func:`wrap_json` / :func:`render` — the JSON envelope (with
   ``schema_version`` = :data:`OUTPUT_SCHEMA_VERSION`) and the dispatch
   boundary.
@@ -70,17 +69,13 @@ class OutputFormat(StrEnum):
 class OutputContext:
     """Per-invocation output-mode envelope wired onto ``ctx.obj``.
 
-    ``format`` is the rendering mode; ``quiet`` and ``verbose`` are the
-    raw flag values from the root callback (``--quiet`` is bool;
-    ``-v``/``--verbose`` is a count via ``count=True``). The mutex
-    check (``quiet and verbose``) runs in the root callback before the
-    context is built, so both can be non-default here only across
-    mutually-exclusive invocations from different processes.
+    Carries the rendering mode selected by ``--format/-o``. The root
+    callback's ``--quiet`` / ``-v`` flags configure logging directly
+    (see :func:`setforge.cli._resolve_level`); they do not flow through
+    this envelope because no subcommand reads them off ``ctx.obj``.
     """
 
     format: OutputFormat
-    quiet: bool
-    verbose: int
 
 
 def wrap_json(
@@ -139,7 +134,7 @@ def render(
                 "render() called with ctx_obj=None outside test context — "
                 "subcommand must thread ctx.obj from root callback"
             )
-        ctx_obj = OutputContext(format=OutputFormat.HUMAN, quiet=False, verbose=0)
+        ctx_obj = OutputContext(format=OutputFormat.HUMAN)
     if ctx_obj.format is OutputFormat.JSON:
         sys.stdout.write(wrap_json(command, data))
         sys.stdout.write("\n")

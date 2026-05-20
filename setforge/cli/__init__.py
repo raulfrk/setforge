@@ -246,7 +246,7 @@ def _root(
     )
     binaries.ensure_local_config_stub()
     source_mod.set_cli_source(source)
-    ctx.obj = OutputContext(format=output_format, quiet=quiet, verbose=verbose)
+    ctx.obj = OutputContext(format=output_format)
 
 
 # Subcommand modules — imported for the side effect of @app.command()
