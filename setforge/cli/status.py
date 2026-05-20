@@ -45,12 +45,12 @@ from setforge.cli import (
 )
 from setforge.cli._help_examples import STATUS_EXAMPLES
 from setforge.cli._helpers import ProfileContext
-from setforge.cli._output import render
 from setforge.cli._init_helpers import (
     CapabilityProbe,
     CapabilityState,
     probe_environment,
 )
+from setforge.cli._output import render
 from setforge.compare import CompareStatus
 from setforge.config import load_config, resolve_profile
 from setforge.errors import InvalidTransitionRecord

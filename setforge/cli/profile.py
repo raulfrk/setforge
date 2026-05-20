@@ -125,7 +125,9 @@ def profile_show(
         _render_extensions(profile_ctx, console)
         _render_preserve_user_keys(profile_ctx, console)
 
-    render(ctx.obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human)
+    render(
+        ctx.obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
+    )
 
 
 def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:

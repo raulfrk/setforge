@@ -254,7 +254,7 @@ def test_quiet_v_mutex_exits_2(runner: CliRunner, minimal_config: Path) -> None:
 def test_setforge_log_level_env_precedence(
     runner: CliRunner, minimal_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Explicit -vv overrides SETFORGE_LOG_LEVEL=WARNING; env alone wins over default."""
+    """Explicit -vv overrides SETFORGE_LOG_LEVEL=WARNING; env alone wins over default."""  # noqa: E501
     monkeypatch.setenv("SETFORGE_LOG_LEVEL", "WARNING")
     flag_result = runner.invoke(
         app, ["-vv", "validate", "--config", str(minimal_config), "--all"]
@@ -392,12 +392,33 @@ def test_profile_show_json_envelope(runner: CliRunner, minimal_config: Path) -> 
 def test_json_no_ansi_on_stdout(runner: CliRunner, minimal_config: Path) -> None:
     """All four JSON-emitting commands keep stdout free of ANSI escapes."""
     invocations = [
-        ["--format=json", "compare", "--config", str(minimal_config), "--profile", "vm-headless"],
+        [
+            "--format=json",
+            "compare",
+            "--config",
+            str(minimal_config),
+            "--profile",
+            "vm-headless",
+        ],
         ["--format=json", "transitions", "list"],
-        ["--source", str(minimal_config.parent), "--format=json", "status",
-         "--config", str(minimal_config), "--profile", "vm-headless"],
-        ["--format=json", "profile", "show", "vm-headless",
-         "--config", str(minimal_config)],
+        [
+            "--source",
+            str(minimal_config.parent),
+            "--format=json",
+            "status",
+            "--config",
+            str(minimal_config),
+            "--profile",
+            "vm-headless",
+        ],
+        [
+            "--format=json",
+            "profile",
+            "show",
+            "vm-headless",
+            "--config",
+            str(minimal_config),
+        ],
     ]
     for argv in invocations:
         result = runner.invoke(app, argv)
