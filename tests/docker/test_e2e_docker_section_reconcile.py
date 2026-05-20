@@ -414,6 +414,7 @@ def test_install_reconcile_with_no_drift_exits_silently(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_reconcile_interactive_keep_live(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],

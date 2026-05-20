@@ -113,6 +113,7 @@ def _sync(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_use_tracked_with_yes(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -246,6 +247,7 @@ def test_install_auto_use_tracked_non_tty_no_yes_exit_1(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_accept_tracked_with_yes(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -416,6 +418,7 @@ def test_install_bare_no_auto_no_confirm(
     assert "Proceed with the mutation" not in combined
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_keep_live_no_confirm(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -460,6 +463,7 @@ def test_sync_auto_keep_tracked_no_confirm(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_use_tracked_revert_roundtrip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
