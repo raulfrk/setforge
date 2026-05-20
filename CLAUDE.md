@@ -53,13 +53,25 @@ After merging a non-trivial branch into `main`, both of these must exit 0:
 
 ```sh
 pre-commit run --all-files
-uv run pytest tests/docker/ -m e2e_docker -v
+uv run pytest tests/docker/ -m e2e_docker -v --no-cov
 ```
 
 `pre-commit` catches tool-version skew (e.g. the ruff mismatch the cxj batch
 only hit on first push to main); the Docker e2e suite catches
 integration-emergent install / sync / revert / plugin / extension regressions
 that unit tests cannot exercise.
+
+**Why `--no-cov` on the Docker e2e invocation:** pytest-cov's controller is
+selected at master `pytest_configure` time (before xdist worker setup). With
+`--cov` in default addopts (per setforge-fp0i) and the conftest auto-xdist
+hook setting `numprocesses=2`, pytest-cov picks the `Central` controller and
+then crashes at `pytest_configure_node` when xdist tries to set up workers
+with `AttributeError: 'Central' object has no attribute 'configure_node'`.
+`[tool.coverage.run].parallel=true` doesn't fix it because controller
+selection happens before our conftest's `tryfirst` hook can intervene.
+Coverage is meaningful for unit tests, not for behavior/e2e tests anyway —
+the explicit `--no-cov` opts out cleanly. See memory
+`feedback_pytest_cov_xdist_parallel` for the full diagnostic.
 
 This is the canonical Phase 7 (post-merge cross-cutting review) gate for
 this project. See `tracked/claude/superpowers-prefs.md` Phase 7.
