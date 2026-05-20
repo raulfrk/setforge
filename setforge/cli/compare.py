@@ -28,7 +28,11 @@ from setforge.cli._helpers import (
 )
 from setforge.cli._output import render
 from setforge.compare import CompareStatus, load_ignored_orphans
-from setforge.config import apply_preserve_user_keys_overlay, load_config, resolve_profile
+from setforge.config import (
+    apply_preserve_user_keys_overlay,
+    load_config,
+    resolve_profile,
+)
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics
 
@@ -90,9 +94,7 @@ def compare(
         # drift summary so its provenance display sits adjacent to the
         # configured-keys-on-this-host context, not buried below the
         # per-file diff bodies.
-        for line in compare_mod.render_preserve_user_keys_overlay_block(
-            cfg, resolved
-        ):
+        for line in compare_mod.render_preserve_user_keys_overlay_block(cfg, resolved):
             # markup=False — mockup-B provenance tags use square brackets
             # (e.g. ``[from local.yaml]``) which Rich would otherwise
             # interpret as markup spans and silently strip.

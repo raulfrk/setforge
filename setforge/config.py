@@ -85,6 +85,32 @@ class SectionMode(StrEnum):
     STRIP = "strip"
 
 
+def _check_well_formed_preserve_paths(paths: list[object]) -> None:
+    """Reject empty strings and malformed nested paths in preserve_user_keys.
+
+    Mirrors the historical ``@field_validator`` checks that lived on
+    the ``preserve_user_keys`` field before it became a computed_field.
+    Single-segment names are accepted as-is; multi-segment paths split
+    on ``" > "`` and every segment must be non-empty and not
+    whitespace-only.
+    """
+    for path in paths:
+        if path == "":
+            raise ValueError("preserve_user_keys entry cannot be empty string")
+        if not isinstance(path, str):
+            continue
+        if _PRESERVE_PATH_SEPARATOR not in path:
+            continue
+        for seg in path.split(_PRESERVE_PATH_SEPARATOR):
+            if seg == "" or seg.strip() == "":
+                raise ValueError(
+                    f"preserve_user_keys path {path!r} has an empty or "
+                    f"whitespace-only segment (no leading/trailing "
+                    f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
+                    f"separators)"
+                )
+
+
 class TrackedFile(BaseModel):
     model_config = _STRICT
 
@@ -93,7 +119,9 @@ class TrackedFile(BaseModel):
     template: bool = False
     preserve_user_sections: bool = False
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
-    preserve_user_keys_resolved: list[ResolvedPreservedKey] = Field(default_factory=list)
+    preserve_user_keys_resolved: list[ResolvedPreservedKey] = Field(
+        default_factory=list
+    )
     """Resolved preserve_user_keys list with per-key provenance tags.
 
     Seeded from the YAML ``preserve_user_keys:`` list at load time
@@ -190,27 +218,7 @@ class TrackedFile(BaseModel):
             # Let Pydantic surface the standard "Input should be a valid
             # list" message rather than pre-empting it here.
             return data
-        # Apply the same well-formed-path checks that historically lived
-        # on the @field_validator for the now-computed
-        # ``preserve_user_keys`` field. Empty strings and whitespace-only
-        # segments inside the " > " separator are rejected before the
-        # entries land in ``preserve_user_keys_resolved``.
-        for path in raw_list:
-            if path == "":
-                raise ValueError("preserve_user_keys entry cannot be empty string")
-            if not isinstance(path, str):
-                continue
-            if _PRESERVE_PATH_SEPARATOR not in path:
-                continue
-            segments = path.split(_PRESERVE_PATH_SEPARATOR)
-            for seg in segments:
-                if seg == "" or seg.strip() == "":
-                    raise ValueError(
-                        f"preserve_user_keys path {path!r} has an empty or "
-                        f"whitespace-only segment (no leading/trailing "
-                        f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
-                        f"separators)"
-                    )
+        _check_well_formed_preserve_paths(raw_list)
         seeded = [
             ResolvedPreservedKey(str(item), KeyOrigin.FROM_PROFILE, None)
             for item in raw_list

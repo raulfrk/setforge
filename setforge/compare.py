@@ -657,9 +657,7 @@ def render_preserve_user_keys_overlay_block(
         return []
 
     lines: list[str] = []
-    lines.append(
-        "=== applying host overlay (~/.config/setforge/local.yaml) ==="
-    )
+    lines.append("=== applying host overlay (~/.config/setforge/local.yaml) ===")
     plural = "s" if len(affected) != 1 else ""
     lines.append(f"tracked_files overlays: {len(affected)} file{plural} affected")
     for name, tf in affected:
@@ -673,7 +671,7 @@ def render_preserve_user_keys_overlay_block(
                     # Unicode minus sign (mockup B uses U+2212), keeps
                     # the column-width parity with the + and = markers
                     # for the multi-line rendering.
-                    marker = "−"
+                    marker = "−"  # noqa: RUF001 — U+2212 MINUS SIGN per mockup B.
                 case KeyOrigin.FROM_PROFILE:
                     marker = "="
             lines.append(f"      {marker} {key.key}  {display_tag(key)}")

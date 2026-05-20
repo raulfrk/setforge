@@ -212,9 +212,7 @@ def _echo_preserve_user_keys_provenance(tracked_file: TrackedFile) -> None:
     resolved_list = tracked_file.preserve_user_keys_resolved
     if not has_local_yaml_overlay(resolved_list):
         return
-    effective = [
-        k for k in resolved_list if k.origin != KeyOrigin.REMOVED_VIA_LOCAL
-    ]
+    effective = [k for k in resolved_list if k.origin != KeyOrigin.REMOVED_VIA_LOCAL]
     typer.echo(f"    preserved keys ({len(effective)} effective):")
     for key in resolved_list:
         if key.origin == KeyOrigin.REMOVED_VIA_LOCAL:

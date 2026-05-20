@@ -90,10 +90,9 @@ def test_compare_emits_host_overlay_block_with_add_and_remove(
         ],
     )
     assert rc == 0, stderr
-    assert (
-        "=== applying host overlay (~/.config/setforge/local.yaml) ==="
-        in stdout
-    ), stdout
+    assert "=== applying host overlay (~/.config/setforge/local.yaml) ===" in stdout, (
+        stdout
+    )
     assert "tracked_files overlays: 1 file affected" in stdout, stdout
     assert "jsonc_shallow:" in stdout, stdout
     assert "preserve_user_keys effective set:" in stdout, stdout
@@ -162,9 +161,7 @@ def test_install_shows_removed_via_local_audit_row(
     assert rc == 0, stderr
     # ✗ marker + key + removal tag with overwrite explanation per mockup B.
     assert "✗ userKeyA" in stdout, stdout
-    assert (
-        "[removed via local.yaml — overwritten with tracked value]" in stdout
-    ), stdout
+    assert "[removed via local.yaml — overwritten with tracked value]" in stdout, stdout
     # Effective count reflects the removal (userKeyB only).
     assert "preserved keys (1 effective):" in stdout, stdout
 

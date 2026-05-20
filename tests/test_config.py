@@ -465,11 +465,7 @@ def test_local_tracked_files_overlay_partial_add_only() -> None:
     from setforge.source import _LocalSourceConfig
 
     cfg = _LocalSourceConfig.model_validate(
-        {
-            "tracked_files": {
-                "vscode": {"preserve_user_keys": {"add": ["x"]}}
-            }
-        }
+        {"tracked_files": {"vscode": {"preserve_user_keys": {"add": ["x"]}}}}
     )
     overlay = cfg.tracked_files["vscode"].preserve_user_keys
     assert overlay is not None

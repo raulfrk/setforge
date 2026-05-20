@@ -2,8 +2,9 @@
 
 Resolves a TrackedFile's effective preserve_user_keys list from
 ``profile.preserve_user_keys`` and the optional ``local.yaml`` overlay
-(``profile ∪ local.add − local.remove``), tagging each key with its
-origin so compare/deploy output can display provenance per mockup B.
+(``profile UNION local.add MINUS local.remove``), tagging each key
+with its origin so compare/deploy output can display provenance per
+mockup B.
 
 The resolver is loader-driven — see
 :func:`setforge.config.load_config_with_overlay`. Per anti-smell
@@ -124,15 +125,15 @@ def resolve_overlay(
     removed = set(overlay_remove)
     resolved: list[ResolvedPreservedKey] = []
     for key in profile_keys:
-        origin = KeyOrigin.REMOVED_VIA_LOCAL if key in removed else KeyOrigin.FROM_PROFILE
+        origin = (
+            KeyOrigin.REMOVED_VIA_LOCAL if key in removed else KeyOrigin.FROM_PROFILE
+        )
         resolved.append(ResolvedPreservedKey(key, origin, profile_name))
     for key in overlay_add:
         if key in profile_set:
             # Redundant add — already covered by FROM_PROFILE above.
             continue
-        resolved.append(
-            ResolvedPreservedKey(key, KeyOrigin.FROM_LOCAL_YAML, None)
-        )
+        resolved.append(ResolvedPreservedKey(key, KeyOrigin.FROM_LOCAL_YAML, None))
     return resolved
 
 

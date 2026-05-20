@@ -58,7 +58,11 @@ from setforge.cli._welcome import (
     prompt_welcome,
     reject_auto_on_fresh_host,
 )
-from setforge.config import apply_preserve_user_keys_overlay, load_config, resolve_profile
+from setforge.config import (
+    apply_preserve_user_keys_overlay,
+    load_config,
+    resolve_profile,
+)
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
