@@ -571,7 +571,7 @@ def test_install_verbose_emits_setforge_debug(
             """
         ),
     )
-    result = _install(c, "test-comprehensive", root_args=["-v"])
+    result = _install(c, "test-comprehensive", root_args=["-vv"])
     assert "setforge.claude_plugins DEBUG:" in result.stderr, (
         f"expected 'setforge.claude_plugins DEBUG:' in stderr; "
         f"first 800 chars: {result.stderr[:800]}"
