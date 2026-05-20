@@ -383,11 +383,16 @@ def test_config_rejects_unknown_field_in_nested_tracked_file() -> None:
 
 def test_tracked_file_rejects_path_in_both_preserve_lists() -> None:
     with pytest.raises(ValidationError, match="declared in both"):
-        TrackedFile(
-            src=Path("a"),
-            dst="b",
-            preserve_user_keys=["a.b"],
-            preserve_user_keys_deep=["a.b"],
+        # ``preserve_user_keys`` is now a ``@computed_field`` so it is not
+        # a constructor kwarg; route through ``model_validate`` so the
+        # ``mode="before"`` seed validator picks the list up.
+        TrackedFile.model_validate(
+            {
+                "src": Path("a"),
+                "dst": "b",
+                "preserve_user_keys": ["a.b"],
+                "preserve_user_keys_deep": ["a.b"],
+            }
         )
 
 
@@ -505,7 +510,12 @@ def test_tracked_file_preserve_user_keys_explicit_yaml_seeds_resolved() -> None:
     this is the back-compat path for every existing TrackedFile."""
     from setforge.preserved_keys import KeyOrigin
 
-    tf = TrackedFile(src=Path("a"), dst="b", preserve_user_keys=["x", "y"])
+    # ``preserve_user_keys`` is now a ``@computed_field``; pass it via
+    # ``model_validate`` so the seed-validator routes the list through
+    # ``preserve_user_keys_resolved``.
+    tf = TrackedFile.model_validate(
+        {"src": Path("a"), "dst": "b", "preserve_user_keys": ["x", "y"]}
+    )
     # The list-shaped declaration seeds the resolved field with
     # provenance=None (no profile context yet — overlay applier fills
     # that in at profile-resolution time).
