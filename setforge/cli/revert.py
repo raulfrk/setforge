@@ -224,7 +224,9 @@ def _extension_reconciles_from_transition(
     return tuple(reconciles)
 
 
-def _build_revert_plan(transition: transitions.TransitionDir, profile: str) -> RevertPlan:
+def _build_revert_plan(
+    transition: transitions.TransitionDir, profile: str
+) -> RevertPlan:
     """Read ``transition`` + compute per-file diff summaries → RevertPlan.
 
     The plan reflects what the FORWARD transition did; revert will
@@ -717,7 +719,9 @@ def transitions_show(
     )
 
 
-def _render_files_section_show(target: transitions.TransitionDir, console: Console) -> None:
+def _render_files_section_show(
+    target: transitions.TransitionDir, console: Console
+) -> None:
     """Render the ``files mutated (N):`` block with per-file diff stats."""
     file_actions = transitions.summarize_transition(target)
     if not file_actions:
@@ -738,7 +742,9 @@ def _render_files_section_show(target: transitions.TransitionDir, console: Conso
         console.print(f"    {marker}  {path}{suffix}")
 
 
-def _render_plugins_section_show(target: transitions.TransitionDir, console: Console) -> None:
+def _render_plugins_section_show(
+    target: transitions.TransitionDir, console: Console
+) -> None:
     """Render the ``plugins:`` block if a plugins.json sidecar exists."""
     plugin_file = target / "plugins.json"
     if not plugin_file.exists():
@@ -761,7 +767,9 @@ def _render_plugins_section_show(target: transitions.TransitionDir, console: Con
         console.print(f"    - marketplace:{name}")
 
 
-def _render_extensions_section_show(target: transitions.TransitionDir, console: Console) -> None:
+def _render_extensions_section_show(
+    target: transitions.TransitionDir, console: Console
+) -> None:
     """Render the ``extensions:`` block if an extensions.json sidecar exists."""
     ext_file = target / "extensions.json"
     if not ext_file.exists():
