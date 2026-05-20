@@ -233,7 +233,7 @@ def make_meta(
     )
 
 
-def load_meta(transition_dir: Path) -> TransitionMeta:
+def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
     """Load and parse ``<transition_dir>/meta.json`` into a :class:`TransitionMeta`.
 
     Reads the JSON payload written by :func:`write_meta` and reconstructs
@@ -278,7 +278,7 @@ def load_meta(transition_dir: Path) -> TransitionMeta:
 
 
 def write_meta(
-    transition_dir: Path,
+    transition_dir: TransitionDir,
     meta: TransitionMeta,
     paths: list[Path] | None = None,
 ) -> None:
@@ -596,7 +596,7 @@ def reconcile_outcomes_from_json(
 
 
 def load_reconcile_outcomes(
-    transition_dir: Path,
+    transition_dir: TransitionDir,
 ) -> tuple[ReconcileOutcome, ...]:
     """Return the reconcile-outcome tuple for a transition directory.
 
@@ -764,7 +764,7 @@ def write_transition(
     """
     root = transitions_root()
     dirname = transition_dirname(meta.timestamp, meta.command.value, meta.profile)
-    target = root / dirname
+    target = TransitionDir(root / dirname)
     pending = root / f".pending-{dirname}"
 
     root.mkdir(parents=True, exist_ok=True)
@@ -793,7 +793,7 @@ def write_transition(
     touched = _touched_paths(file_pre, file_post)
     write_meta(target, meta, paths=touched)
 
-    return TransitionDir(target)
+    return target
 
 
 def _serialize_ext_payload(ext_delta: ExtensionDelta | None) -> str | None:
@@ -1170,7 +1170,7 @@ def resolve_transition_prefix(prefix: str) -> TransitionDir:
     return TransitionDir(matches[0])
 
 
-def summarize_transition(transition_dir: Path) -> dict[str, str]:
+def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
     """Map every absolute path touched by ``transition_dir`` to one of
     ``"created"``, ``"deleted"``, ``"modified"``.
 

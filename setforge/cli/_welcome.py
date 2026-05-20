@@ -164,7 +164,7 @@ def is_fresh_host() -> bool:
         if not (child / "meta.json").is_file():
             continue
         with contextlib.suppress(InvalidTransitionRecord):
-            transitions.load_meta(child)
+            transitions.load_meta(transitions.TransitionDir(child))
             return False
     return True
 

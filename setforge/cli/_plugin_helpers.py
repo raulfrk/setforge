@@ -996,7 +996,7 @@ def _reverse_plugins(
 
 
 def _write_reverse_transition(
-    transition: Path,
+    transition: transitions.TransitionDir,
     profile: str,
     touched_paths: Sequence[Path],
     file_pre: Mapping[Path, str | None],
