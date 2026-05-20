@@ -128,6 +128,13 @@ addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-mis
 source = ["setforge"]
 branch = true
 omit = ["tests/*"]
+# Required for pytest-xdist compatibility: each worker writes its own
+# .coverage.<host>.<pid>.<random> file. Without this, pytest_configure_node
+# fails with `AttributeError: 'Central' object has no attribute
+# 'configure_node'` when --cov is active during -m e2e_docker runs (auto
+# -n 2 via the conftest.py hook).
+parallel = true
+sigterm = true
 
 [tool.coverage.report]
 show_missing = true
