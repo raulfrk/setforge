@@ -135,9 +135,12 @@ def _resolve_level(verbose: int, quiet: bool) -> int:
     if verbose >= 1:
         return logging.INFO
     env_value = os.environ.get("SETFORGE_LOG_LEVEL", "WARNING")
-    # `getattr(logging, "Logger", None)` returns the Logger class, not None;
-    # restrict to known int level constants so a non-level module attribute
-    # falls back to WARNING instead of crashing inside basicConfig.
+    # `getattr(logging, env_value.upper(), None)` looks up a module
+    # attribute by name; the logging module exposes both int level
+    # constants (e.g. ``logging.DEBUG``) AND non-level attributes
+    # (e.g. the ``Logger`` class). Restrict to ``int`` so a non-level
+    # attribute or a typo falls back to WARNING instead of crashing
+    # inside ``basicConfig``.
     resolved = getattr(logging, env_value.upper(), None)
     if not isinstance(resolved, int):
         sys.stderr.write(
