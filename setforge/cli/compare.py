@@ -6,6 +6,7 @@ per-file rich diff bodies.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -25,6 +26,7 @@ from setforge.cli._helpers import (
     _iter_section_tracked_files,
     _refuse_legacy_live_markers,
 )
+from setforge.cli._output import render
 from setforge.compare import CompareStatus, load_ignored_orphans
 from setforge.config import load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
@@ -33,6 +35,7 @@ from setforge.sections import SectionSemantics
 
 @app.command(epilog=COMPARE_EXAMPLES)
 def compare(
+    ctx: typer.Context,
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
     full_diff: bool = typer.Option(
@@ -63,10 +66,10 @@ def compare(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    ctx = ProfileContext(
+    profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    _refuse_legacy_live_markers(ctx, command="compare")
+    _refuse_legacy_live_markers(profile_ctx, command="compare")
     report = compare_mod.compare_profile(
         cfg,
         profile,
@@ -76,10 +79,13 @@ def compare(
     )
 
     console = Console()
-    _render_compare_report(report, console, full_diff=full_diff)
 
-    if reconcile_user_sections:
-        _print_section_reconcile_dry_run(ctx, console)
+    def _human() -> None:
+        _render_compare_report(report, console, full_diff=full_diff)
+        if reconcile_user_sections:
+            _print_section_reconcile_dry_run(profile_ctx, console)
+
+    render(ctx.obj, "compare", _compare_json_data(report), human_fn=_human)
 
     if check:
         if strict:
@@ -87,6 +93,33 @@ def compare(
                 raise typer.Exit(code=1)
         elif report.has_unexpected_drift:
             raise typer.Exit(code=1)
+
+
+def _compare_json_data(report: compare_mod.CompareReport) -> dict[str, Any]:
+    """Build the JSON-mode payload for ``setforge compare``.
+
+    Renders the same report the human view shows, projected as plain
+    dict/list/string shapes so ``json.dumps`` can serialise without
+    custom encoders. Per-entry fields: ``name``, ``status`` (StrEnum
+    value), ``unexpected_drift_keys`` (sorted), ``expected_drift_keys``
+    (sorted). Orphans surface as a list of strings. No diff bodies in
+    JSON mode — they belong to the human view; ``compare --full-diff``
+    is a human-oriented surface.
+    """
+    entries = [
+        {
+            "name": entry.name,
+            "status": entry.status.value,
+            "unexpected_drift_keys": sorted(entry.unexpected_drift_keys),
+            "expected_drift_keys": sorted(entry.expected_drift_keys),
+        }
+        for entry in report.entries
+    ]
+    return {
+        "entries": entries,
+        "orphans": [str(orphan.path) for orphan in report.orphans],
+        "has_unexpected_drift": report.has_unexpected_drift,
+    }
 
 
 def _render_compare_report(

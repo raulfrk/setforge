@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -44,6 +45,7 @@ from setforge.cli import (
 )
 from setforge.cli._help_examples import STATUS_EXAMPLES
 from setforge.cli._helpers import ProfileContext
+from setforge.cli._output import render
 from setforge.cli._init_helpers import (
     CapabilityProbe,
     CapabilityState,
@@ -395,6 +397,7 @@ def _render_capabilities(capabilities: tuple[CapabilityProbe, ...]) -> None:
 
 @app.command(epilog=STATUS_EXAMPLES)
 def status(
+    ctx: typer.Context,
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
 ) -> None:
@@ -412,31 +415,93 @@ def status(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    ctx = ProfileContext(
+    profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     source = get_resolved_source()
     source_dir = resolve_source_dir(source)
     host = platform.node() or "unknown-host"
-
-    typer.echo(f"=== setforge status — {profile} on {host} ===")
-
     meta = _load_last_install_meta(profile)
     git_info = _resolve_git_info(
         source_dir, meta.source_sha if meta is not None else None
     )
-    _render_config_repo(source_dir=source_dir, git_info=git_info)
-
     now = datetime.now(UTC)
-    _render_last_install(profile=profile, meta=meta, now=now)
-
-    drift = _compute_drift_counts(ctx)
-    _render_drift(drift)
-
+    drift = _compute_drift_counts(profile_ctx)
     overlay_counts = _read_overlay_counts(LOCAL_CONFIG_PATH)
-    _render_overlay(overlay_counts)
-
     probe = probe_environment(prev_state=None)
-    _render_capabilities(probe.capabilities)
 
-    typer.echo("=== ready: run install if any drift surfaces or after fetch ===")
+    def _human() -> None:
+        typer.echo(f"=== setforge status — {profile} on {host} ===")
+        _render_config_repo(source_dir=source_dir, git_info=git_info)
+        _render_last_install(profile=profile, meta=meta, now=now)
+        _render_drift(drift)
+        _render_overlay(overlay_counts)
+        _render_capabilities(probe.capabilities)
+        typer.echo("=== ready: run install if any drift surfaces or after fetch ===")
+
+    data = _status_json_data(
+        profile=profile,
+        host=host,
+        source_dir=source_dir,
+        git_info=git_info,
+        meta=meta,
+        drift=drift,
+        overlay_counts=overlay_counts,
+        capabilities=probe.capabilities,
+    )
+    render(ctx.obj, "status", data, human_fn=_human)
+
+
+def _status_json_data(
+    *,
+    profile: str,
+    host: str,
+    source_dir: Path,
+    git_info: _GitInfo,
+    meta: transitions.TransitionMeta | None,
+    drift: _DriftCounts,
+    overlay_counts: Mapping[str, int],
+    capabilities: tuple[CapabilityProbe, ...],
+) -> dict[str, Any]:
+    """Build the JSON-mode payload for ``setforge status``.
+
+    Mirrors the five human sections (config-repo / last install / drift
+    / overlay / capabilities) as plain dict/list shapes so ``json.dumps``
+    serialises without custom encoders. Timestamps are ISO-8601 UTC.
+    """
+    last_install: dict[str, Any] | None = None
+    if meta is not None:
+        last_install = {
+            "transition_id": transitions.transition_dirname(
+                meta.timestamp, meta.command.value, meta.profile
+            ),
+            "timestamp": meta.timestamp.astimezone(UTC).isoformat(),
+            "command": meta.command.value,
+        }
+    return {
+        "profile": profile,
+        "host": host,
+        "config_repo": {
+            "source_dir": str(source_dir),
+            "head_short": git_info.head_short,
+            "commits_since_install": git_info.commits_since_install,
+            "commits_since_install_reason": git_info.commits_since_install_reason,
+            "commits_vs_origin": git_info.commits_vs_origin,
+            "commits_vs_origin_reason": git_info.commits_vs_origin_reason,
+        },
+        "last_install": last_install,
+        "drift": {
+            "unexpected": drift.unexpected,
+            "user_section": drift.user_section,
+            "expected": drift.expected,
+        },
+        "overlay": dict(overlay_counts),
+        "capabilities": [
+            {
+                "label": cap.label,
+                "enabled": cap.state is CapabilityState.ENABLED,
+                "reason": cap.reason,
+            }
+            for cap in capabilities
+        ],
+    }

@@ -19,6 +19,7 @@ with bd setforge-lgvp; until then the affected blocks print
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -27,6 +28,7 @@ from rich.table import Table
 from setforge.cli import _CONFIG_OPTION, _TYPER_KWARGS, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
+from setforge.cli._output import render
 from setforge.config import (
     Config,
     Profile,
@@ -88,6 +90,7 @@ def profile_list(config: Path = _CONFIG_OPTION) -> None:
 
 @profile_app.command("show", epilog=PROFILE_SHOW_EXAMPLES)
 def profile_show(
+    ctx: typer.Context,
     name: str = typer.Argument(..., help="Profile name from setforge.yaml."),
     config: Path = _CONFIG_OPTION,
 ) -> None:
@@ -106,17 +109,65 @@ def profile_show(
         )
     resolved = resolve_profile(cfg, name)
     repo_root = config.resolve().parent
-    ctx = ProfileContext(cfg=cfg, resolved=resolved, repo_root=repo_root, profile=name)
+    profile_ctx = ProfileContext(
+        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=name
+    )
     console = _build_console()
-    header = _format_show_header(cfg, name)
-    console.print(header)
-    _render_tracked_files(ctx, console)
-    _render_plugins(ctx, console)
-    _render_marketplaces(ctx, console)
-    _render_host_local_sections(ctx, console)
-    _render_bootstrap(ctx, console)
-    _render_extensions(ctx, console)
-    _render_preserve_user_keys(ctx, console)
+
+    def _human() -> None:
+        header = _format_show_header(cfg, name)
+        console.print(header)
+        _render_tracked_files(profile_ctx, console)
+        _render_plugins(profile_ctx, console)
+        _render_marketplaces(profile_ctx, console)
+        _render_host_local_sections(profile_ctx, console)
+        _render_bootstrap(profile_ctx, console)
+        _render_extensions(profile_ctx, console)
+        _render_preserve_user_keys(profile_ctx, console)
+
+    render(ctx.obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human)
+
+
+def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
+    """Build the JSON-mode payload for ``setforge profile show``.
+
+    Surfaces the resolved profile's seven blocks (tracked_files,
+    claude_plugins, marketplaces, host_local_sections, bootstrap,
+    extensions, preserve_user_keys) as plain dict/list shapes. Names
+    only — provenance tags belong to the human-readable Rich table view
+    and are intentionally not part of the v1 JSON envelope; tooling
+    that needs provenance should parse ``setforge.yaml`` directly.
+    """
+    resolved = profile_ctx.resolved
+    preserve_keys: dict[str, list[str]] = {}
+    for tf_name in resolved.tracked_files:
+        tracked_file = profile_ctx.cfg.tracked_files.get(tf_name)
+        if tracked_file is None:
+            continue
+        keys = list(tracked_file.preserve_user_keys) + list(
+            tracked_file.preserve_user_keys_deep
+        )
+        if keys:
+            preserve_keys[tf_name] = keys
+    marketplaces_payload: list[dict[str, str]] = []
+    for mp_name, src in profile_ctx.cfg.marketplaces.items():
+        target = src.repo if src.repo is not None else str(src.path)
+        marketplaces_payload.append(
+            {"name": mp_name, "kind": src.source.value, "target": target}
+        )
+    return {
+        "profile": profile_ctx.profile,
+        "tracked_files": list(resolved.tracked_files),
+        "claude_plugins": list(resolved.claude_plugins),
+        "marketplaces": marketplaces_payload,
+        "host_local_sections": [],
+        "bootstrap": [str(p) for p in resolved.bootstrap],
+        "extensions": {
+            "include": list(resolved.extensions.include),
+            "exclude": list(resolved.extensions.exclude),
+        },
+        "preserve_user_keys": preserve_keys,
+    }
 
 
 # ---------------------------------------------------------------------------

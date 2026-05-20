@@ -15,6 +15,7 @@ import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -36,6 +37,7 @@ from setforge.cli._help_examples import (
 )
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
 from setforge.cli._install_helpers import revert_symlink_deployment
+from setforge.cli._output import render
 from setforge.cli._plugin_helpers import _write_reverse_transition
 from setforge.cli._revert_confirm import (
     ExtensionOperation,
@@ -538,6 +540,7 @@ _TRANSITIONS_LIST_OLDEST_FIRST_OPTION = typer.Option(
 
 @transitions_app.command("list", epilog=TRANSITIONS_LIST_EXAMPLES)
 def transitions_list(
+    ctx: typer.Context,
     profile: list[str] | None = _TRANSITIONS_LIST_PROFILE_OPTION,
     oldest_first: bool = _TRANSITIONS_LIST_OLDEST_FIRST_OPTION,
 ) -> None:
@@ -551,11 +554,46 @@ def transitions_list(
         profile_filter=list(profile) if profile else None,
         reverse=not oldest_first,
     )
-    if not listings:
-        typer.echo("(no transitions)")
-        return
     profile_filter = list(profile) if profile else None
-    _render_transitions_table(listings, profile_filter=profile_filter)
+
+    def _human() -> None:
+        if not listings:
+            typer.echo("(no transitions)")
+            return
+        _render_transitions_table(listings, profile_filter=profile_filter)
+
+    data = _transitions_list_json_data(listings, profile_filter=profile_filter)
+    render(ctx.obj, "transitions list", data, human_fn=_human)
+
+
+def _transitions_list_json_data(
+    listings: list[transitions.TransitionListing],
+    *,
+    profile_filter: list[str] | None,
+) -> dict[str, Any]:
+    """Build the JSON-mode payload for ``setforge transitions list``.
+
+    Each transition surfaces as ``{id, type, profile, timestamp, files,
+    plugins, ext}``; ``timestamp`` is ISO-8601 UTC. The ``profile_filter``
+    is echoed back so downstream tooling can confirm which filter was
+    applied (mirrors the human header's ``=== transitions for profile X ===``).
+    """
+    entries = [
+        {
+            "id": entry.directory.name,
+            "type": entry.command,
+            "profile": entry.profile,
+            "timestamp": entry.timestamp.astimezone(UTC).isoformat(),
+            "files": entry.file_count,
+            "plugins": entry.plugin_count,
+            "ext": entry.ext_count,
+        }
+        for entry in listings
+    ]
+    return {
+        "profile_filter": list(profile_filter) if profile_filter else None,
+        "transitions": entries,
+    }
 
 
 def _wide_console() -> Console:
