@@ -26,10 +26,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import NewType
 
 from setforge import __version__
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
+
+TransitionDir = NewType("TransitionDir", Path)
+"""A directory containing transition metadata (``meta.json``, ``changes.patch``, etc.).
+
+Constructed only by ``setforge.transitions`` factory functions. Consumers
+accepting a ``TransitionDir`` get type-check protection that raw ``Path``
+values are rejected at static-analysis time.
+"""
 
 
 class TransitionCommand(StrEnum):
@@ -730,7 +739,7 @@ def write_transition(
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
-) -> Path:
+) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
     Uses a two-phase write with atomic ``os.rename`` as the commit marker so
@@ -784,7 +793,7 @@ def write_transition(
     touched = _touched_paths(file_pre, file_post)
     write_meta(target, meta, paths=touched)
 
-    return target
+    return TransitionDir(target)
 
 
 def _serialize_ext_payload(ext_delta: ExtensionDelta | None) -> str | None:
@@ -844,7 +853,7 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
 
 def load_latest(
     profile: str, *, command: TransitionCommand | None = None
-) -> Path | None:
+) -> TransitionDir | None:
     """Return the most recent transition directory for ``profile``,
     or ``None`` if no history exists.
 
@@ -875,7 +884,8 @@ def load_latest(
 
     _sweep_stale_pending(root)
     candidates = _filter_transition_entries(root, profile, command=command)
-    return _pick_latest_transition(candidates)
+    latest = _pick_latest_transition(candidates)
+    return TransitionDir(latest) if latest is not None else None
 
 
 def _sweep_stale_pending(root: Path) -> None:
@@ -927,7 +937,9 @@ def _pick_latest_transition(candidates: list[Path]) -> Path | None:
     return max(candidates, key=lambda d: d.name)
 
 
-def apply_patch_reverse(transition_dir: Path, *, dry_run: bool = False) -> None:
+def apply_patch_reverse(
+    transition_dir: TransitionDir, *, dry_run: bool = False
+) -> None:
     """Apply ``<transition_dir>/changes.patch`` in reverse via ``patch -R``.
 
     No-op if the patch file is absent (e.g. transition recorded only an
@@ -1009,7 +1021,7 @@ class TransitionListing:
     directory's ``meta.json`` (canonical) plus optional ``extensions.json``
     and ``plugins.json`` siblings."""
 
-    directory: Path
+    directory: TransitionDir
     timestamp: datetime
     command: str
     profile: str
@@ -1072,7 +1084,7 @@ def _load_listing(transition_dir: Path) -> TransitionListing | None:
             plugin_count = 0
 
     return TransitionListing(
-        directory=transition_dir,
+        directory=TransitionDir(transition_dir),
         timestamp=timestamp,
         command=command,
         profile=profile,
@@ -1121,7 +1133,7 @@ def list_transitions(
     return listings
 
 
-def resolve_transition_prefix(prefix: str) -> Path:
+def resolve_transition_prefix(prefix: str) -> TransitionDir:
     """Resolve a dirname prefix (or full dirname) to one transition directory.
 
     Resolution rules:
@@ -1139,7 +1151,7 @@ def resolve_transition_prefix(prefix: str) -> Path:
         raise SetforgeError(f"no transition matching prefix {prefix!r}")
     exact = root / prefix
     if exact.is_dir() and (exact / "meta.json").exists():
-        return exact
+        return TransitionDir(exact)
     matches = sorted(
         child
         for child in root.iterdir()
@@ -1155,7 +1167,7 @@ def resolve_transition_prefix(prefix: str) -> Path:
         raise SetforgeError(
             f"prefix {prefix!r} matches {len(matches)} transitions:\n  {joined}"
         )
-    return matches[0]
+    return TransitionDir(matches[0])
 
 
 def summarize_transition(transition_dir: Path) -> dict[str, str]:

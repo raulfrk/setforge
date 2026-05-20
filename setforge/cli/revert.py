@@ -311,7 +311,9 @@ def _render_plan_to_editor(plan: RevertPlan) -> Path:
     return target
 
 
-def _apply_revert(transition: Path, profile: str, config: Path) -> None:
+def _apply_revert(
+    transition: transitions.TransitionDir, profile: str, config: Path
+) -> None:
     """Apply the reverse transition and print the post-success summary.
 
     For tracked_files declared with ``symlink:`` the per-path

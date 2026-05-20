@@ -13,6 +13,7 @@ from setforge.transitions import (
     ExtensionDelta,
     PluginDelta,
     TransitionCommand,
+    TransitionDir,
     TransitionListing,
     TransitionMeta,
     apply_patch_reverse,
@@ -600,7 +601,7 @@ def test_load_latest_filters_by_command(
 
 
 def test_apply_patch_reverse_no_patch_is_noop(tmp_path: Path) -> None:
-    apply_patch_reverse(tmp_path)  # no changes.patch → silent no-op
+    apply_patch_reverse(TransitionDir(tmp_path))  # no changes.patch → silent no-op
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
@@ -608,7 +609,7 @@ def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
     """Forward content edit, then apply_patch_reverse restores original."""
     target = tmp_path / "live.txt"
     target.write_text("after\n", encoding="utf-8")
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch({target: "before\n"}, {target: "after\n"}),
@@ -624,7 +625,7 @@ def test_apply_patch_reverse_round_trips(tmp_path: Path) -> None:
 def test_apply_patch_reverse_raises_on_drift(tmp_path: Path) -> None:
     target = tmp_path / "live.txt"
     target.write_text("drifted-content\n", encoding="utf-8")
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch({target: "before\n"}, {target: "after\n"}),
@@ -645,7 +646,7 @@ def test_apply_patch_reverse_atomic_on_multifile_drift(tmp_path: Path) -> None:
     a.write_text("after-a\n", encoding="utf-8")  # clean — would reverse OK
     b.write_text("DRIFTED-b\n", encoding="utf-8")  # drifted
 
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch(
@@ -677,7 +678,7 @@ def test_apply_patch_reverse_dry_run_only_does_not_modify_live(
     """
     target = tmp_path / "live.txt"
     target.write_text("after\n", encoding="utf-8")
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch({target: "before\n"}, {target: "after\n"}),
@@ -699,7 +700,7 @@ def test_apply_patch_reverse_dry_run_failure_raises_revertfailed(
     no-write contract of dry-run-only)."""
     target = tmp_path / "live.txt"
     target.write_text("drifted-content\n", encoding="utf-8")
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch({target: "before\n"}, {target: "after\n"}),
@@ -716,7 +717,7 @@ def test_apply_patch_reverse_dry_run_failure_raises_revertfailed(
 def test_apply_patch_reverse_dry_run_no_patch_is_noop(tmp_path: Path) -> None:
     """``dry_run=True`` matches the default-mode no-op shape when the
     transition has no ``changes.patch`` (extension-only transitions)."""
-    apply_patch_reverse(tmp_path, dry_run=True)
+    apply_patch_reverse(TransitionDir(tmp_path), dry_run=True)
 
 
 @pytest.mark.skipif(shutil.which("patch") is None, reason="GNU patch not on PATH")
@@ -727,7 +728,7 @@ def test_apply_patch_reverse_default_mode_still_does_dry_then_apply(
     pre-refactor behavior — dry-run-then-real-apply on one transition."""
     target = tmp_path / "live.txt"
     target.write_text("after\n", encoding="utf-8")
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch({target: "before\n"}, {target: "after\n"}),
@@ -990,7 +991,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
     """The listing struct is a value object — defending the frozen invariant
     so callers don't accidentally mutate cached entries."""
     listing = TransitionListing(
-        directory=Path("/x"),
+        directory=TransitionDir(Path("/x")),
         timestamp=datetime(2026, 5, 7, tzinfo=UTC),
         command="install",
         profile="vmh",
