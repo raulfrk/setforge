@@ -123,6 +123,11 @@ def pytest_configure(config: pytest.Config) -> None:
     if hasattr(config, "workerinput"):
         return
     config.option.numprocesses = _XDIST_WORKER_CAP
+    # Use ``loadgroup`` (not ``load``) so ``@pytest.mark.xdist_group(...)`` is
+    # honored: tests sharing a group label are routed to the same worker.
+    # Under ``load``, ``xdist_group`` markers are silently ignored — the
+    # ``docker_daemon`` sweep (six daemon-heavy tests) would not serialize.
+    # See setforge-hdlu review fix.
     if config.option.dist == "no":
-        config.option.dist = "load"
+        config.option.dist = "loadgroup"
     config.option.tx = ["popen"] * _XDIST_WORKER_CAP
