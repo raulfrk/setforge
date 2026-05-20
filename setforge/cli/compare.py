@@ -28,7 +28,7 @@ from setforge.cli._helpers import (
 )
 from setforge.cli._output import render
 from setforge.compare import CompareStatus, load_ignored_orphans
-from setforge.config import load_config, resolve_profile
+from setforge.config import apply_preserve_user_keys_overlay, load_config, resolve_profile
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics
 
@@ -66,6 +66,11 @@ def compare(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    # Apply local.yaml preserve_user_keys overlay (mockup B / SPEC 8).
+    # See setforge/cli/install.py for the rationale; both commands must
+    # apply the overlay so the renderer can read preserve_user_keys_resolved
+    # for the mockup-B provenance display.
+    apply_preserve_user_keys_overlay(cfg, profile)
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
@@ -81,6 +86,14 @@ def compare(
     console = Console()
 
     def _human() -> None:
+        # Mockup B / SPEC 8 — emit the host-overlay block BEFORE the
+        # drift summary so its provenance display sits adjacent to the
+        # configured-keys-on-this-host context, not buried below the
+        # per-file diff bodies.
+        for line in compare_mod.render_preserve_user_keys_overlay_block(
+            cfg, resolved
+        ):
+            console.print(line)
         _render_compare_report(report, console, full_diff=full_diff)
         if reconcile_user_sections:
             _print_section_reconcile_dry_run(profile_ctx, console)

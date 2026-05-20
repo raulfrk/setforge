@@ -65,6 +65,7 @@ from setforge.cli._helpers import (
     _resolve_section_decisions,
 )
 from setforge.compare import CompareStatus
+from setforge.config import TrackedFile
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
@@ -173,6 +174,7 @@ def _deploy_all_tracked_files(
             # routes through the same _compute_content path as copy_atomic.
             result = deploy.deploy_symlinked_file(sub_src, sub_dst, tracked_file)
             typer.echo(f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}")
+            _echo_preserve_user_keys_provenance(tracked_file)
             if tracked_file.preserve_user_sections:
                 section_reconcile.stamp_tracked_baseline(sub_src)
             continue
@@ -189,8 +191,39 @@ def _deploy_all_tracked_files(
             mode=tracked_file.mode,
         )
         typer.echo(f"{result.action.value:>8}  {sub_dst}")
+        _echo_preserve_user_keys_provenance(tracked_file)
         if tracked_file.preserve_user_sections:
             section_reconcile.stamp_tracked_baseline(sub_src)
+
+
+def _echo_preserve_user_keys_provenance(tracked_file: TrackedFile) -> None:
+    """Emit mockup-B install-output provenance lines for a tracked_file.
+
+    Suppressed when no resolved key originated in local.yaml (i.e.
+    today's setforge.yaml-only behavior). Otherwise prints one
+    ``preserved keys (N effective):`` header + one ``• key  [tag]``
+    line per FROM_PROFILE / FROM_LOCAL_YAML entry, plus a ``✗ key
+    [removed via local.yaml — overwritten with tracked value]`` line
+    for each REMOVED_VIA_LOCAL entry (the auditable
+    would-have-been-preserved row mockup B requires).
+    """
+    from setforge.preserved_keys import KeyOrigin, display_tag, has_local_yaml_overlay
+
+    resolved_list = tracked_file.preserve_user_keys_resolved
+    if not has_local_yaml_overlay(resolved_list):
+        return
+    effective = [
+        k for k in resolved_list if k.origin != KeyOrigin.REMOVED_VIA_LOCAL
+    ]
+    typer.echo(f"    preserved keys ({len(effective)} effective):")
+    for key in resolved_list:
+        if key.origin == KeyOrigin.REMOVED_VIA_LOCAL:
+            typer.echo(
+                f"      ✗ {key.key}  "
+                f"[removed via local.yaml — overwritten with tracked value]"
+            )
+        else:
+            typer.echo(f"      • {key.key}  {display_tag(key)}")
 
 
 def _write_install_transition(

@@ -626,6 +626,60 @@ def _compare_symlinked(
     )
 
 
+def render_preserve_user_keys_overlay_block(
+    config: Config, resolved: ResolvedProfile
+) -> list[str]:
+    """Build mockup-B compare-output lines for the preserve_user_keys overlay.
+
+    Returns an empty list when no tracked_file in the resolved profile
+    carries any FROM_LOCAL_YAML or REMOVED_VIA_LOCAL entry — the
+    overlay block is suppressed when local.yaml introduces no change.
+    Otherwise returns the verbatim lines mockup B specifies (SPEC 8
+    spec lines 109-118): a top-level ``=== applying host overlay`` header,
+    a count line, then one indented block per affected tracked_file
+    with one provenance-tagged row per key.
+
+    Pure function — the caller (compare/install CLI) prints each line
+    so test fixtures can assert on string content directly.
+    """
+    from setforge.preserved_keys import (
+        KeyOrigin,
+        display_tag,
+        has_local_yaml_overlay,
+    )
+
+    affected: list[tuple[str, TrackedFile]] = []
+    for name in resolved.tracked_files:
+        tf = config.tracked_files[name]
+        if has_local_yaml_overlay(tf.preserve_user_keys_resolved):
+            affected.append((name, tf))
+    if not affected:
+        return []
+
+    lines: list[str] = []
+    lines.append(
+        "=== applying host overlay (~/.config/setforge/local.yaml) ==="
+    )
+    plural = "s" if len(affected) != 1 else ""
+    lines.append(f"tracked_files overlays: {len(affected)} file{plural} affected")
+    for name, tf in affected:
+        lines.append(f"  {name}:")
+        lines.append("    preserve_user_keys effective set:")
+        for key in tf.preserve_user_keys_resolved:
+            match key.origin:
+                case KeyOrigin.FROM_LOCAL_YAML:
+                    marker = "+"
+                case KeyOrigin.REMOVED_VIA_LOCAL:
+                    # Unicode minus sign (mockup B uses U+2212), keeps
+                    # the column-width parity with the + and = markers
+                    # for the multi-line rendering.
+                    marker = "−"
+                case KeyOrigin.FROM_PROFILE:
+                    marker = "="
+            lines.append(f"      {marker} {key.key}  {display_tag(key)}")
+    return lines
+
+
 def compare_summary_table(report: CompareReport) -> Table:
     """Build a rich :class:`~rich.table.Table` summarising the compare report.
 

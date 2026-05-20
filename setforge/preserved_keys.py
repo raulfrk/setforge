@@ -136,9 +136,43 @@ def resolve_overlay(
     return resolved
 
 
+def display_tag(resolved: ResolvedPreservedKey) -> str:
+    """Render one :class:`ResolvedPreservedKey`'s mockup-B provenance tag.
+
+    Exhaustive over :class:`KeyOrigin` — adding a new variant requires
+    extending this match. Anti-smell: callers must NOT string-parse
+    this output back into origins; ``resolved.origin`` carries the
+    canonical wire shape.
+    """
+    match resolved.origin:
+        case KeyOrigin.FROM_PROFILE:
+            return f"[from profile {resolved.source_profile}]"
+        case KeyOrigin.FROM_LOCAL_YAML:
+            return "[from local.yaml]"
+        case KeyOrigin.REMOVED_VIA_LOCAL:
+            return "[removed via local.yaml]"
+
+
+def has_local_yaml_overlay(resolved_list: list[ResolvedPreservedKey]) -> bool:
+    """Return True iff at least one resolved key originated in local.yaml.
+
+    Drives mockup B's "applying host overlay" output gate — the
+    overlay block is suppressed when no tracked_file's resolved list
+    carries any FROM_LOCAL_YAML or REMOVED_VIA_LOCAL entry. (Anti-smell:
+    do NOT suppress on empty profile chain — the gate is data-driven,
+    not configuration-shape-driven.)
+    """
+    return any(
+        k.origin in (KeyOrigin.FROM_LOCAL_YAML, KeyOrigin.REMOVED_VIA_LOCAL)
+        for k in resolved_list
+    )
+
+
 __all__ = [
     "KeyOrigin",
     "PreserveUserKeysOverlayError",
     "ResolvedPreservedKey",
+    "display_tag",
+    "has_local_yaml_overlay",
     "resolve_overlay",
 ]
