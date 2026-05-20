@@ -227,9 +227,7 @@ def _epilog_for(leaf_path: tuple[str, ...]) -> str:
 @pytest.mark.parametrize(
     "leaf_path", LEAF_COMMANDS, ids=[_id_for(p) for p in LEAF_COMMANDS]
 )
-def test_epilog_flags_exist(
-    runner: CliRunner, leaf_path: tuple[str, ...]
-) -> None:
+def test_epilog_flags_exist(runner: CliRunner, leaf_path: tuple[str, ...]) -> None:
     """Every flag cited in a leaf's epilog must exist on that leaf's ``--help``.
 
     Regression guard for the ``--quiet`` bug: a flag from a not-yet-merged
