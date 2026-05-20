@@ -33,6 +33,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -436,12 +437,18 @@ def test_redacts_token_env(
 # ---------------------------------------------------------------------------
 
 
-def _assert_json_envelope(stdout: str, *, expected_command: str) -> dict[str, object]:
-    """Parse stdout as JSON, assert envelope shape, return the parsed dict."""
+def _assert_json_envelope(stdout: str, *, expected_command: str) -> dict[str, Any]:
+    """Parse stdout as JSON, assert envelope shape, return the parsed dict.
+
+    Return type is ``dict[str, Any]`` (not ``dict[str, object]``) so callers
+    can subscript ``parsed["data"]`` and apply ``in``/``len`` to nested
+    values without per-call ``cast(...)``. ``json.loads`` produces
+    arbitrarily-nested Python primitives — ``Any`` is the honest shape.
+    """
     assert _ANSI_RE.search(stdout) is None, "ANSI escapes leaked into JSON stdout"
     parsed = json.loads(stdout)
     assert isinstance(parsed, dict)
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert parsed["command"] == expected_command
     assert "data" in parsed
     return parsed

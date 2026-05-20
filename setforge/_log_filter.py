@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import override
 
 
 class RedactingFilter(logging.Filter):
@@ -86,6 +87,7 @@ class RedactingFilter(logging.Filter):
         r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
     )
 
+    @override
     def filter(self, record: logging.LogRecord) -> bool:
         """Rewrite secret-shaped substrings in ``record.msg`` in-place."""
         if not isinstance(record.msg, str):
