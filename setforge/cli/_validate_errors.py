@@ -21,9 +21,10 @@ strings as "matches"); Levenshtein alone over a long candidate list is
 slower than the difflib-first pipeline. The combination is fast AND
 free of false-positive "Did you mean" suggestions.
 
-ANSI handling lives in :func:`setforge.cli.validate._check_local_yaml`,
-NOT here — the formatters return plain strings; the caller wraps them
-when ``sys.stdout.isatty()``.
+The formatters emit plain text only — no ANSI codes. The unicode
+glyphs (``✗``, ``←───``) are literal characters, not escape
+sequences; a non-TTY consumer (CI logs, redirected output) sees
+them as-is.
 """
 
 from __future__ import annotations
