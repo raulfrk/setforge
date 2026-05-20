@@ -17,6 +17,14 @@ Three fixtures:
 Only :mod:`tests.test_e2e_docker` consumes these fixtures. They live
 under ``tests/docker/`` (not ``tests/``) to keep the Docker-specific
 helpers segregated from the inner-ring CliRunner tests.
+
+xdist_group convention
+----------------------
+Heavy install/sync/revert/reconcile tests that hit the shared docker
+daemon are tagged ``@pytest.mark.xdist_group("docker_daemon")``. pytest-xdist
+routes same-group tests to one worker, serializing daemon contention while
+unrelated tests still parallelize. Only tag tests that share daemon state
+(container lifecycle, exec queuing); do NOT tag a test just for being slow.
 """
 
 from __future__ import annotations
