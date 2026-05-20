@@ -144,10 +144,27 @@ def test_render_json_emits_envelope_and_skips_closure(
 def test_render_none_ctx_falls_back_to_human(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When ctx.obj is None (test harness bypass), human renderer runs."""
+    """When ctx.obj is None under pytest, human renderer runs (test bypass).
+
+    ``PYTEST_CURRENT_TEST`` is set by pytest for the duration of every
+    test, so this exercise hits the bypass branch.
+    """
     render(None, "compare", {"a": 1}, human_fn=lambda: print("HUMAN"))
     captured = capsys.readouterr()
     assert "HUMAN" in captured.out
+
+
+def test_render_none_ctx_raises_outside_pytest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``PYTEST_CURRENT_TEST``, render(None, ...) raises RuntimeError.
+
+    Guards against a future subcommand silently downgrading JSON mode
+    to human output by forgetting to declare ``ctx: typer.Context``.
+    """
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with pytest.raises(RuntimeError, match="ctx_obj=None outside test context"):
+        render(None, "compare", {"a": 1}, human_fn=lambda: None)
 
 
 # ---------------------------------------------------------------------------
