@@ -98,15 +98,9 @@ class RedactingFilter(logging.Filter):
         msg = self._JWT_RE.sub("<REDACTED-JWT>", msg)
         msg = self._GITHUB_PAT_RE.sub("gh<REDACTED>", msg)
         msg = self._AWS_KEY_RE.sub("AKIA<REDACTED>", msg)
-        msg = self._BEARER_RE.sub(
-            lambda m: f"{m.group(1)} <REDACTED>", msg
-        )
-        msg = self._SECRET_KEY_RE.sub(
-            lambda m: f"{m.group(1)}=<REDACTED>", msg
-        )
-        msg = self._SECRET_FLAG_RE.sub(
-            lambda m: f"{m.group(1)} <REDACTED>", msg
-        )
+        msg = self._BEARER_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", msg)
+        msg = self._SECRET_KEY_RE.sub(lambda m: f"{m.group(1)}=<REDACTED>", msg)
+        msg = self._SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", msg)
         msg = self._CRED_URL_RE.sub(lambda m: f"{m.group(1)}<REDACTED>@", msg)
         record.msg = msg
         return True

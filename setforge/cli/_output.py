@@ -31,7 +31,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypedDict
 
-
 OUTPUT_SCHEMA_VERSION: int = 1
 """Cross-tool contract version for the JSON envelope.
 
