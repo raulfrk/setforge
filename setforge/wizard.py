@@ -26,6 +26,7 @@ POSIX-only: the single-keypress prompter uses ``tty`` + ``termios`` and
 is intentionally not ported to Windows (Debian VM, headless).
 """
 
+import hashlib
 import io
 import os
 import shutil
@@ -205,8 +206,6 @@ class Snapshot:
         Uses a flattened encoding: sha256 first-8-chars prefix + basename to
         avoid collisions between files with the same name in different dirs.
         """
-        import hashlib
-
         hex_prefix = hashlib.sha256(str(original).encode()).hexdigest()[:8]
         return self.snapshot_dir / f"{hex_prefix}_{original.name}"
 
