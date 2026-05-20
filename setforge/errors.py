@@ -5,6 +5,35 @@ handler can render them as ``error: <message>`` and exit 1, while
 unexpected exceptions bubble with a traceback.
 """
 
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationErrorWithContext:
+    """Structured carrier for a single mockup-D validate failure.
+
+    Surfaces the file:line + snippet + offending-value column + Fix
+    hint + optional close-match suggestion through the
+    :mod:`setforge.cli._validate_errors` formatters. Not an
+    :class:`Exception` — validate collects these into a ``list`` and
+    renders all of them before exiting non-zero (mockup D's
+    report-all-then-refuse contract).
+
+    ``snippet_lines`` carries the rendered snippet rows in display
+    order; the last row is the one the ``←─── line N`` marker
+    annotates. ``column`` is 1-indexed to match ruamel.yaml's
+    ``.lc.value`` convention (line, column) tuple.
+    """
+
+    file_path: Path
+    line: int
+    column: int
+    snippet_lines: list[str]
+    field_value: str
+    fix_hint: str
+    suggestion: str | None = None
+
 
 class SetforgeError(Exception):
     """Base class for all setforge recoverable failures."""
