@@ -807,8 +807,16 @@ class TestVerbosity:
     re-initializes the handlers cleanly across tests.
     """
 
-    def test_root_v_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
+    def test_root_v_flag_enables_info_stderr(self, fixture_repo: Path) -> None:
+        """-v sets INFO level per setforge-a1tn (count=True)."""
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
+        assert result.exit_code == 0, result.output
+        # -v is INFO; the DEBUG message is filtered out.
+        assert "setforge.cli DEBUG: logging configured at level" not in result.stderr
+
+    def test_root_vv_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
+        """-vv sets DEBUG level per setforge-a1tn (count=True)."""
+        result = _invoke(["-vv", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 
@@ -837,8 +845,9 @@ class TestVerbosity:
         fixture_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """-vv overrides SETFORGE_LOG_LEVEL=WARNING (flag > env > default)."""
         monkeypatch.setenv("SETFORGE_LOG_LEVEL", "WARNING")
-        result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
+        result = _invoke(["-vv", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr
 

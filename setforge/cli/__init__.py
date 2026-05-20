@@ -18,6 +18,8 @@ import typer
 
 from setforge import binaries
 from setforge import source as source_mod
+from setforge._log_filter import RedactingFilter
+from setforge.cli._output import OutputContext, OutputFormat
 from setforge.errors import SetforgeError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -110,8 +112,45 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _resolve_level(verbose: int, quiet: bool) -> int:
+    """Resolve the effective root-logger level from flags + env.
+
+    Precedence (highest first):
+
+    1. ``--quiet`` → ``ERROR``.
+    2. ``-vv`` (count ≥ 2) → ``DEBUG``.
+    3. ``-v`` (count == 1) → ``INFO``.
+    4. ``SETFORGE_LOG_LEVEL`` env (when no -v/-q) → the named level;
+       garbage values fall back to ``WARNING`` with a stderr warning.
+    5. Default → ``WARNING``.
+
+    The env-precedence rule (flag > env > default) is the existing
+    behaviour from the bool ``--verbose`` path; this function carries
+    it forward unchanged so backward-compat callers keep working.
+    """
+    if quiet:
+        return logging.ERROR
+    if verbose >= 2:
+        return logging.DEBUG
+    if verbose >= 1:
+        return logging.INFO
+    env_value = os.environ.get("SETFORGE_LOG_LEVEL", "WARNING")
+    # `getattr(logging, "Logger", None)` returns the Logger class, not None;
+    # restrict to known int level constants so a non-level module attribute
+    # falls back to WARNING instead of crashing inside basicConfig.
+    resolved = getattr(logging, env_value.upper(), None)
+    if not isinstance(resolved, int):
+        sys.stderr.write(
+            f"setforge: unknown SETFORGE_LOG_LEVEL={env_value!r}; "
+            f"defaulting to WARNING\n"
+        )
+        return logging.WARNING
+    return resolved
+
+
 @app.callback()
 def _root(
+    ctx: typer.Context,
     code_bin: str | None = typer.Option(
         None,
         "--code-bin",
@@ -138,11 +177,24 @@ def _root(
         "Takes precedence over SETFORGE_PATCH_BIN and ~/.config/setforge/local.yaml.",
     ),
     source: Path | None = _SOURCE_OPTION,
-    verbose: bool = typer.Option(
-        False,
+    verbose: int = typer.Option(
+        0,
         "--verbose",
         "-v",
-        help="Emit DEBUG-level logging to stderr.",
+        count=True,
+        help="Increase verbosity: -v → INFO, -vv → DEBUG (with secret redaction).",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress non-error output (cron/CI use). Errors still emit on stderr.",
+    ),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.HUMAN,
+        "--format",
+        "-o",
+        help="Output rendering: 'human' (default) or 'json' (versioned envelope).",
     ),
     version: bool = typer.Option(
         False,
@@ -154,36 +206,34 @@ def _root(
 ) -> None:
     """Wire host-local binary overrides + source-layer override + logging + local stub.
 
-    Side effects (in order): set CLI binary overrides via
+    Side effects (in order): mutex-check ``--quiet`` + ``-v``, resolve
+    effective log level, install :class:`RedactingFilter` on the
+    ``setforge`` namespace logger, set CLI binary overrides via
     ``binaries.set_cli_overrides``, ensure ``~/.config/setforge/local.yaml``
     stub exists via ``binaries.ensure_local_config_stub``, set the
-    ``--source`` override via ``source_mod.set_cli_source``, configure
-    root logging level.
+    ``--source`` override via ``source_mod.set_cli_source``, wire
+    :class:`OutputContext` onto ``ctx.obj`` for the renderer boundary.
     ``--version`` is wired as an eager callback that prints
     ``setforge.__version__`` and exits before this body runs.
     """
-    if verbose:
-        level = logging.DEBUG
-    else:
-        env_value = os.environ.get("SETFORGE_LOG_LEVEL", "WARNING")
-        # `getattr(logging, "Logger", None)` returns the Logger class, not None;
-        # restrict to known int level constants so a non-level module attribute
-        # falls back to WARNING instead of crashing inside basicConfig.
-        resolved = getattr(logging, env_value.upper(), None)
-        if not isinstance(resolved, int):
-            sys.stderr.write(
-                f"setforge: unknown SETFORGE_LOG_LEVEL={env_value!r}; "
-                f"defaulting to WARNING\n"
-            )
-            level = logging.WARNING
-        else:
-            level = resolved
+    if quiet and verbose:
+        typer.echo("--quiet and --verbose/-v are mutually exclusive", err=True)
+        raise typer.Exit(code=2)
+    level = _resolve_level(verbose, quiet)
     logging.basicConfig(
         level=level,
         stream=sys.stderr,
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         force=True,
     )
+    # Attach RedactingFilter at the "setforge" namespace root so every
+    # child logger inherits it; basicConfig only configures the root
+    # logger, so attaching here covers logs from setforge.cli.*,
+    # setforge.compare, setforge.transitions, etc. without per-module
+    # wiring.
+    setforge_logger = logging.getLogger("setforge")
+    if not any(isinstance(f, RedactingFilter) for f in setforge_logger.filters):
+        setforge_logger.addFilter(RedactingFilter())
     LOGGER.debug("logging configured at level %s", logging.getLevelName(level))
     binaries.set_cli_overrides(
         code=code_bin,
@@ -193,6 +243,7 @@ def _root(
     )
     binaries.ensure_local_config_stub()
     source_mod.set_cli_source(source)
+    ctx.obj = OutputContext(format=output_format, quiet=quiet, verbose=verbose)
 
 
 # Subcommand modules — imported for the side effect of @app.command()
