@@ -30,7 +30,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TypedDict
 
 
 OUTPUT_SCHEMA_VERSION: int = 1
@@ -39,6 +39,24 @@ OUTPUT_SCHEMA_VERSION: int = 1
 Downstream ``jq`` consumers branch on ``schema_version``; bump this
 constant on any breaking change to the ``data`` shapes.
 """
+
+
+class _JsonEnvelope(TypedDict, total=False):
+    """Shape of the dict serialised by :func:`wrap_json`.
+
+    ``schema_version`` / ``command`` / ``data`` are always present in
+    the emitted envelope; ``errors`` is included only when non-empty.
+    ``total=False`` keeps the optional ``errors`` key truthful at the
+    type level (per PEP 655 the cleaner alternative would be
+    ``Required[...]`` / ``NotRequired[...]`` per field, but the loose
+    ``total=False`` shape is enough here since the keys are only read
+    by ``json.dumps``).
+    """
+
+    schema_version: int
+    command: str
+    data: object
+    errors: list[str]
 
 
 class OutputFormat(StrEnum):
@@ -79,7 +97,7 @@ def wrap_json(
     ``default=str`` keeps :class:`pathlib.Path` / :class:`datetime`
     serialisable without per-callsite coercion.
     """
-    envelope: dict[str, Any] = {
+    envelope: _JsonEnvelope = {
         "schema_version": OUTPUT_SCHEMA_VERSION,
         "command": command,
         "data": data,
