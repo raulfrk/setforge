@@ -16,7 +16,7 @@ from typing import Final
 
 import typer
 from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 # ruamel.yaml ships py.typed without resolvable annotations; mirrors the
 # pragma used in setforge.config and setforge.binaries.
@@ -67,12 +67,12 @@ class _LocalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: Source | None = None
-    binaries: dict[str, str] = {}
+    binaries: dict[str, str] = Field(default_factory=dict)
     # ``claude:`` is currently a free-form mapping (install_mode field
     # only, hand-validated by setforge.binaries._parse_claude_block).
     # Validate as a mapping; the hand-validator's deeper schema is
     # exercised by its own load path.
-    claude: dict[str, object] = {}
+    claude: dict[str, object] = Field(default_factory=dict)
 
 
 def _check_profile(
