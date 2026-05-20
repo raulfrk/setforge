@@ -230,6 +230,112 @@ def test_redacting_filter_returns_true_always() -> None:
     assert record.msg == "plain message with no secrets"
 
 
+def test_redacting_filter_masks_token_space_separated() -> None:
+    """`--token abc` (space-separated flag form) → `--token <REDACTED>`."""
+    filt = RedactingFilter()
+    record = _make_record("running with --token ghp_FAKEVALUE other arg")
+    filt.filter(record)
+    assert "ghp_FAKEVALUE" not in record.msg
+    assert "<REDACTED>" in record.msg
+    assert "--token" in record.msg
+
+
+def test_redacting_filter_masks_password_flag_space_separated() -> None:
+    """`--password hunter2` is also masked under the space-separated form."""
+    filt = RedactingFilter()
+    record = _make_record("--password hunter2")
+    filt.filter(record)
+    assert "hunter2" not in record.msg
+    assert "<REDACTED>" in record.msg
+
+
+def test_redacting_filter_masks_bearer_token() -> None:
+    """`Authorization: Bearer <jwt>` → `Bearer <REDACTED>`."""
+    filt = RedactingFilter()
+    record = _make_record("Authorization: Bearer abc123xyzlongenough")
+    filt.filter(record)
+    assert "abc123xyzlongenough" not in record.msg
+    assert "<REDACTED>" in record.msg
+    # Scheme case preserved by group(1) backref.
+    assert "Bearer" in record.msg
+
+
+def test_redacting_filter_masks_basic_auth() -> None:
+    """`Basic <b64-creds>` HTTP scheme also matches the Bearer pattern."""
+    filt = RedactingFilter()
+    record = _make_record("Authorization: Basic dXNlcjpwYXNzd29yZA==")
+    filt.filter(record)
+    assert "dXNlcjpwYXNzd29yZA" not in record.msg
+    assert "<REDACTED>" in record.msg
+
+
+def test_redacting_filter_skips_prose_bearer() -> None:
+    """The 8-char floor avoids rewriting English prose like 'bearer of news'."""
+    filt = RedactingFilter()
+    record = _make_record("bearer of news")
+    filt.filter(record)
+    assert record.msg == "bearer of news"
+
+
+def test_redacting_filter_masks_aws_access_key() -> None:
+    """`AKIA[0-9A-Z]{16}` → `AKIA<REDACTED>` (provider hint preserved)."""
+    filt = RedactingFilter()
+    record = _make_record("aws_access_key_id = AKIAIOSFODNN7EXAMPLE")
+    filt.filter(record)
+    assert "AKIAIOSFODNN7EXAMPLE" not in record.msg
+    assert "AKIA<REDACTED>" in record.msg
+
+
+def test_redacting_filter_masks_github_pat() -> None:
+    """`ghp_<36>` / `ghs_<36>` etc. → `gh<REDACTED>` (provider hint kept)."""
+    filt = RedactingFilter()
+    record = _make_record("token=ghp_abcdefghijklmnopqrstuvwxyz0123456789")
+    filt.filter(record)
+    # Either the GitHub-PAT mask or the generic KEY=VALUE mask kicked
+    # in; the contract is "value never surfaces".
+    assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in record.msg
+    assert "<REDACTED>" in record.msg
+
+
+def test_redacting_filter_masks_github_app_token_standalone() -> None:
+    """A bare GitHub PAT (no surrounding `token=`) still gets masked."""
+    filt = RedactingFilter()
+    record = _make_record("logged in with ghs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    filt.filter(record)
+    assert "ghs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" not in record.msg
+    assert "gh<REDACTED>" in record.msg
+
+
+def test_redacting_filter_masks_jwt() -> None:
+    """A three-segment JWT → `<REDACTED-JWT>`."""
+    filt = RedactingFilter()
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+        ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    record = _make_record(f"jwt payload: {jwt}")
+    filt.filter(record)
+    assert jwt not in record.msg
+    assert "<REDACTED-JWT>" in record.msg
+
+
+def test_redacting_filter_combined_patterns() -> None:
+    """Multiple secret shapes in one message all get masked."""
+    filt = RedactingFilter()
+    record = _make_record(
+        "PASSWORD=hunter2 url https://u:p@h.com Bearer abcdefghij "
+        "AKIAIOSFODNN7EXAMPLE ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    filt.filter(record)
+    assert "hunter2" not in record.msg
+    assert ":p@h" not in record.msg
+    assert "abcdefghij" not in record.msg
+    assert "AKIAIOSFODNN7EXAMPLE" not in record.msg
+    assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in record.msg
+    assert "<REDACTED>" in record.msg
+
+
 # ---------------------------------------------------------------------------
 # Root callback — verbose/quiet semantics + mutex.
 # ---------------------------------------------------------------------------
