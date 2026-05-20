@@ -392,13 +392,16 @@ def test_install_bare_no_drift_no_warning(
     assert "shared section" not in combined
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_reconcile_with_no_drift_exits_silently(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """12: --reconcile-user-sections + no drift exits 0 without hanging.
 
-    Timeout=10s guard catches the failure-mode where the wizard tries to
-    prompt on a no-drift section.
+    Timeout=30s guard catches the failure-mode where the wizard tries to
+    prompt on a no-drift section. The 30s budget (raised from 10s per
+    bd setforge-hdlu) absorbs xdist daemon contention while still
+    catching a hung wizard, which would never complete.
     """
     c = docker_container()
     _install(c, "test-reconcile-sections")
@@ -406,7 +409,7 @@ def test_install_reconcile_with_no_drift_exits_silently(
         c,
         "test-reconcile-sections",
         extra=["--reconcile-user-sections"],
-        timeout=10,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
 
