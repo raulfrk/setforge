@@ -143,9 +143,9 @@ class PreserveUserKeysOverlay(BaseModel):
 class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
-    Today carries a single nested ``preserve_user_keys`` overlay; this
-    model is the home for future per-tracked_file local overrides (e.g.
-    host-local ``mode``, host-local ``dst`` retargeting) when they land.
+    Carries a single nested ``preserve_user_keys`` overlay today.
+    Extension to host-local ``mode`` / ``dst`` / ``symlink`` overrides
+    tracked in setforge-m3qx (file separately when a concrete need lands).
     """
 
     model_config = _STRICT
