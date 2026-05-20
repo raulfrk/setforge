@@ -368,6 +368,30 @@ def test_validate_local_yaml_no_ansi_when_not_tty(
     assert re.search(r"\x1b\[", result.output) is None
 
 
+def test_validate_local_yaml_unreadable_surfaces_as_parse_error(
+    tmp_path: Path, local_yaml_at: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An IO error reading local.yaml (e.g. PermissionError, decode error)
+    surfaces as a YAML PARSE category entry rather than crashing the
+    whole validate run — preserves the report-all-then-refuse contract.
+    """
+    cfg = _write_minimal_config(tmp_path)
+    # Create the file so .exists() is True, then monkeypatch read_text
+    # to raise — a portable way to simulate PermissionError /
+    # UnicodeDecodeError without relying on root-vs-user chmod behavior.
+    local_yaml_at.write_text("source:\n  path: /tmp\n", encoding="utf-8")
+
+    def _boom(*_a: object, **_kw: object) -> str:
+        raise PermissionError("simulated EACCES")
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "✗ YAML PARSE ERROR" in result.output
+    assert "local.yaml" in result.output
+    assert "validation FAILED" in result.output
+
+
 def test_validate_local_yaml_nested_extra_forbidden_bails_to_1_1(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:

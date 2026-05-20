@@ -263,7 +263,16 @@ def _check_local_yaml(
     """
     if not local_yaml_path.exists():
         return
-    raw_text = local_yaml_path.read_text(encoding="utf-8")
+    try:
+        raw_text = local_yaml_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # Permission denied / unreadable / non-UTF-8 bytes — surface
+        # as a YAML PARSE error so the report-all-then-refuse contract
+        # holds (otherwise the exception bubbles past _check_local_yaml
+        # and aborts the whole validate run before sibling failures
+        # are reported).
+        failures.append(format_yaml_parse_error(local_yaml_path, 1, 1, str(exc)))
+        return
     if not raw_text.strip():
         return
     yaml = YAML(typ="rt")
