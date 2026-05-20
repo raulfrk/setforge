@@ -43,6 +43,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Self
 
+import typer
 from rich.console import Console
 from rich.table import Table
 
@@ -225,7 +226,7 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
     Falls back to a simple line-buffered read when stdin has no ``fileno``
     (e.g. during testing with a ``StringIO`` substitute).
     """
-    print(prompt, end="", flush=True)
+    typer.echo(prompt, nl=False)
     try:
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
@@ -240,7 +241,7 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
                 raise KeyboardInterrupt from None
             ch_l = ch.lower()
             if ch_l in choices:
-                print(ch_l)
+                typer.echo(ch_l)
                 return ch_l
             sys.stdout.write("\a")
             sys.stdout.flush()
@@ -255,7 +256,7 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
             if ch_l in choices:
                 # Restore briefly so print goes through cooked stdout
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
-                print(ch_l)
+                typer.echo(ch_l)
                 return ch_l
             sys.stdout.write("\a")
             sys.stdout.flush()
@@ -424,10 +425,7 @@ def _make_signal_handler(
 
     def _handler(signum: int, frame: FrameType | None) -> None:
         n = snapshot.restore()
-        print(
-            f"\nmerge cancelled ({sig_name}); reverted {n} file(s)",
-            file=sys.stderr,
-        )
+        typer.echo(f"\nmerge cancelled ({sig_name}); reverted {n} file(s)", err=True)
         # Reset to default handler and re-raise so the process exits with
         # the expected signal-derived exit code.
         signal.signal(signum, signal.SIG_DFL)
