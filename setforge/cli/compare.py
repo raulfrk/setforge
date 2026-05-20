@@ -93,7 +93,10 @@ def compare(
         for line in compare_mod.render_preserve_user_keys_overlay_block(
             cfg, resolved
         ):
-            console.print(line)
+            # markup=False — mockup-B provenance tags use square brackets
+            # (e.g. ``[from local.yaml]``) which Rich would otherwise
+            # interpret as markup spans and silently strip.
+            console.print(line, markup=False)
         _render_compare_report(report, console, full_diff=full_diff)
         if reconcile_user_sections:
             _print_section_reconcile_dry_run(profile_ctx, console)
