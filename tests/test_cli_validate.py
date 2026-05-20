@@ -487,3 +487,73 @@ profiles:
     assert result.exit_code == 1, result.output
     assert result.output.count("extensions.include duplicate: 'foo.bar'") == 1
     assert result.output.count("claude_plugins duplicate: 'myplugin'") == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 13 / 14: preserve_user_keys overlay (setforge-lgvp).
+# Validate must surface the same collision / unknown-remove failures as
+# install / compare so misconfigured local.yaml is caught offline before
+# the user runs a deploy.
+# ---------------------------------------------------------------------------
+
+
+_PRESERVE_OVERLAY_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: tracked_file.txt
+    dst: ~/.some-tracked_file
+    preserve_user_keys:
+      - kept.key
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+def test_validate_preserve_user_keys_collision_exits_1(tmp_path: Path) -> None:
+    """A local.yaml overlay with a key in BOTH add and remove → exit 1.
+
+    Mirrors the install-side e2e collision case
+    (tests/docker/test_e2e_docker_preserve_user_keys_overlay.py) so
+    ``setforge validate`` flags the same contradiction offline.
+    """
+    cfg = _write_config(tmp_path, _PRESERVE_OVERLAY_YAML)
+    # ``_isolated_local_config`` (tests/conftest.py) redirected
+    # ``setforge.source.LOCAL_CONFIG_PATH`` to ``tmp_path / "local.yaml"``;
+    # write the overlay there so ``apply_preserve_user_keys_overlay``
+    # picks it up.
+    (tmp_path / "local.yaml").write_text(
+        "tracked_files:\n"
+        "  d:\n"
+        "    preserve_user_keys:\n"
+        "      add: [userKeyX]\n"
+        "      remove: [userKeyX]\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "in both add and remove" in result.output, result.output
+    assert "'userKeyX'" in result.output, result.output
+
+
+def test_validate_preserve_user_keys_unknown_remove_exits_1(tmp_path: Path) -> None:
+    """A local.yaml overlay removing a key absent from the profile chain → exit 1.
+
+    Mirrors the install-side e2e unknown-remove case so the same typo /
+    stale-overlay surface fails on ``setforge validate`` rather than
+    only on deploy.
+    """
+    cfg = _write_config(tmp_path, _PRESERVE_OVERLAY_YAML)
+    (tmp_path / "local.yaml").write_text(
+        "tracked_files:\n"
+        "  d:\n"
+        "    preserve_user_keys:\n"
+        "      add: []\n"
+        "      remove: [nonexistentKey]\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "not in profile chain" in result.output, result.output
+    assert "'nonexistentKey'" in result.output, result.output

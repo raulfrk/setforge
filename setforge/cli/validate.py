@@ -37,11 +37,13 @@ from setforge.config import (
     Config,
     ResolvedProfile,
     TrackedFile,
+    apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
 )
 from setforge.errors import SetforgeError, ValidationErrorWithContext
 from setforge.paths import template_context
+from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import Source
 
 _LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = ("source", "binaries", "claude")
@@ -87,6 +89,19 @@ def _check_profile(
     resolved = _check_profile_resolution(cfg, prof_name, ctx, failures)
     if resolved is None:
         return
+
+    # Check 1b (setforge-lgvp): apply the local.yaml preserve_user_keys
+    # overlay so collision (add ∩ remove) and unknown-remove errors
+    # surface during ``setforge validate``. Without this, the errors
+    # only fire on ``install`` / ``compare`` (cf. setforge/cli/install.py
+    # and setforge/cli/compare.py). Catch the overlay-specific
+    # ConfigError subclass and append to ``failures`` so the existing
+    # echo path renders the canonical "in both add and remove" /
+    # "not in profile chain" phrases that the e2e suite keys on.
+    try:
+        apply_preserve_user_keys_overlay(cfg, prof_name)
+    except PreserveUserKeysOverlayError as exc:
+        failures.append(f"{ctx}: {exc}")
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
