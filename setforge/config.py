@@ -581,6 +581,75 @@ def _warn_on_schema_mismatch(config: Config) -> None:
     )
 
 
+def apply_preserve_user_keys_overlay(
+    config: Config,
+    profile_name: str,
+    *,
+    local_config_path: Path | None = None,
+) -> None:
+    """Apply the local.yaml ``preserve_user_keys`` overlay (mockup B).
+
+    For every tracked_file in ``config.tracked_files``, rebuild
+    :attr:`TrackedFile.preserve_user_keys_resolved` against the
+    resolved chain's leaf ``profile_name`` and any matching entry in
+    the local.yaml ``tracked_files.<id>.preserve_user_keys`` overlay.
+    When ``local.yaml`` is absent, or the overlay block is empty for a
+    given tracked_file, the resolved list collapses to identity:
+    every YAML-declared key tagged :attr:`KeyOrigin.FROM_PROFILE`
+    against ``profile_name`` (anti-smell: must NOT special-case the
+    empty-overlay path).
+
+    The :mod:`setforge.source` import is lazy at the call boundary so
+    a circular import (config <-> source <-> config) cannot arise at
+    module-load time per the SPEC 8 discipline. Raises
+    :class:`PreserveUserKeysOverlayError` (a :class:`ConfigError`
+    subclass) when the overlay is contradictory or references an
+    unknown key — surface the violation immediately rather than
+    silently producing a wrong resolved list.
+    """
+    # Lazy-import to avoid a config <-> source cycle and to keep this
+    # path off the import-time graph for every command (compare /
+    # install / sync etc. each import setforge.config at boot).
+    from setforge.source import (
+        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
+    )
+    from setforge.source import (
+        load_local_tracked_file_overlays,
+    )
+
+    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
+    overlays = load_local_tracked_file_overlays(path)
+    for tf_id, tracked_file in config.tracked_files.items():
+        # Today's resolved list (seeded from YAML input by the pre-validator)
+        # carries source_profile=None; the overlay applier re-stamps every
+        # FROM_PROFILE entry with the real profile_name and overlays the
+        # local.yaml add/remove block.
+        profile_keys = [
+            k.key
+            for k in tracked_file.preserve_user_keys_resolved
+            if k.origin == KeyOrigin.FROM_PROFILE
+        ]
+        overlay = overlays.get(tf_id)
+        overlay_add: list[str] = []
+        overlay_remove: list[str] = []
+        if overlay is not None and overlay.preserve_user_keys is not None:
+            overlay_add = list(overlay.preserve_user_keys.add)
+            overlay_remove = list(overlay.preserve_user_keys.remove)
+        resolved = resolve_overlay(
+            profile_keys=profile_keys,
+            profile_name=profile_name,
+            overlay_add=overlay_add,
+            overlay_remove=overlay_remove,
+        )
+        # Anti-smell: do NOT mutate Pydantic models in-place. Pydantic v2
+        # makes field assignment validating-by-default; build a fresh
+        # model and rebind in-place on the Config's mapping so existing
+        # ``config.tracked_files[id]`` callers see the new resolved list.
+        config.tracked_files[tf_id] = tracked_file.model_copy(
+            update={"preserve_user_keys_resolved": resolved}
+        )
+
+
 def _validate_plugin_references(config: Config) -> None:
     """Verify every ``profile.claude_plugins`` entry exists in the
     top-level ``Config.claude_plugins`` registry.

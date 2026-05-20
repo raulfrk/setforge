@@ -58,7 +58,7 @@ from setforge.cli._welcome import (
     prompt_welcome,
     reject_auto_on_fresh_host,
 )
-from setforge.config import load_config, resolve_profile
+from setforge.config import apply_preserve_user_keys_overlay, load_config, resolve_profile
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
@@ -163,6 +163,14 @@ def install(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    # Apply local.yaml preserve_user_keys overlay (mockup B / SPEC 8)
+    # AFTER profile resolution: the overlay needs the profile chain's
+    # leaf name to stamp FROM_PROFILE entries; the resolved profile is
+    # the canonical source of that name. Every TrackedFile is rebuilt
+    # with a fresh preserve_user_keys_resolved list; the @computed_field
+    # preserve_user_keys derived view stays back-compat for callers
+    # that don't read provenance.
+    apply_preserve_user_keys_overlay(cfg, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
