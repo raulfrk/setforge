@@ -95,8 +95,10 @@ ignore = [
 # (especially binary-stub dispatch in tests/test_claude_plugins.py
 # and the e2e Docker fixture in tests/docker/conftest.py) is
 # naturally branchy by design; cyclomatic complexity is a
-# production-code smell, not a test-quality signal.
-"tests/**" = ["ANN001", "ANN401", "C901"]
+# production-code smell, not a test-quality signal. T20 (no print)
+# is allowed because tests legitimately use `print` as a callable
+# fixture for dispatch tests (see tests/cli/test_output_modes.py).
+"tests/**" = ["ANN001", "ANN401", "C901", "T20"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "subprocess.run".msg = "Use `import subprocess` and call `subprocess.run(...)` — required for test monkeypatch path `setforge.<module>.subprocess.run` to resolve correctly."
