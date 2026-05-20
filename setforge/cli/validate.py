@@ -354,10 +354,23 @@ def _resolve_error_position(
     """Map a Pydantic error ``loc`` to (line, col, field_value, suggestion).
 
     Falls back to (1, 1, "", None) when the loc can't be resolved on
-    the ``.lc`` table (e.g. nested ``extra_forbidden`` outside the
-    top-level mapping).
+    the ``.lc`` table — including nested ``extra_forbidden`` errors
+    (``len(loc) > 1``) whose offending site sits inside a nested
+    CommentedMap. Walking arbitrary nested ``.lc`` tables to surface
+    accurate nested line/columns is out of scope for setforge-tmln (the
+    A6 overlay-classes spec deferred to a follow-up bd covers the full
+    nested-shape UX); bailing early keeps the close-match suggestion
+    against ``_LOCAL_YAML_TOP_KEYS`` from mis-firing for non-top-level
+    keys.
     """
     if not isinstance(loc, tuple) or not loc:
+        return 1, 1, "", None
+    # Nested errors (e.g. ``loc=('source','unknown_subkey')`` for an
+    # extra_forbidden inside the ``source:`` block) can't be located on
+    # the top-level CommentedMap and the top-level close-match candidate
+    # list does not apply. Bail to the (1, 1) fallback per the docstring
+    # contract; full nested-shape UX is the A6 follow-up bd.
+    if len(loc) > 1:
         return 1, 1, "", None
     head = str(loc[0])
     # For ``extra_forbidden`` at the top level, Pydantic puts the

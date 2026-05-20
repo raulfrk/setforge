@@ -366,3 +366,40 @@ def test_validate_local_yaml_no_ansi_when_not_tty(
     assert result.exit_code == 1, result.output
     # No ANSI escape sequences in the captured output.
     assert re.search(r"\x1b\[", result.output) is None
+
+
+def test_validate_local_yaml_nested_extra_forbidden_bails_to_1_1(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """Nested ``extra_forbidden`` (``len(loc) > 1``) bails to the (1, 1)
+    fallback per the ``_resolve_error_position`` docstring contract,
+    rather than mis-locating the offending key on the top-level
+    CommentedMap.
+
+    A ``source:`` block with an unknown sub-key produces a Pydantic
+    error with ``loc=('source','<unknown>')``. The top-level
+    close-match list (``_LOCAL_YAML_TOP_KEYS``) does not apply for
+    nested keys; the report must NOT fire a misleading "Did you mean"
+    suggestion, must NOT crash, and must still surface a schema error.
+    """
+    cfg = _write_minimal_config(tmp_path)
+    # ``source:`` is a known top-level key; ``not_a_real_field`` is an
+    # unknown sub-key of ``PathSource`` (Pydantic ``extra="forbid"``
+    # bubbles up at depth 2). The discriminator (``kind: path``) is
+    # provided so Pydantic resolves the union before hitting the extra
+    # sub-key — otherwise we'd get a discriminator error, not the
+    # nested ``extra_forbidden`` we're exercising.
+    local_yaml_at.write_text(
+        "source:\n  kind: path\n  path: /tmp\n  not_a_real_field: oops\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    # Schema error fires (not a crash, not a YAML PARSE).
+    assert "✗ SCHEMA VALIDATION ERROR" in result.output
+    # Bails to line 1 per the docstring contract — nested .lc walking
+    # is the A6 follow-up bd's scope.
+    assert "local.yaml:1" in result.output
+    # No misleading top-level-key close-match suggestion fires for a
+    # nested key.
+    assert "Did you mean" not in result.output
