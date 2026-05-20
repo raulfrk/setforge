@@ -24,6 +24,7 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not-found]
 
 from setforge.errors import ConfigError, ProfileNotFound
+from setforge.migrations import current_expected_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
 
 _STRICT = ConfigDict(extra="forbid")
@@ -570,14 +571,8 @@ def load_config(path: Path) -> Config:
 
 
 def _warn_on_schema_mismatch(config: Config) -> None:
-    """Emit a one-line yellow stderr warning when schema_version diverges.
-
-    Imported lazily to avoid a circular import — ``setforge.migrations``
-    is conceptually a downstream consumer of the loaded ``Config``.
-    """
+    """Emit a one-line yellow stderr warning when schema_version diverges."""
     import sys
-
-    from setforge.migrations import current_expected_schema_version
 
     if config.schema_version == current_expected_schema_version:
         return
