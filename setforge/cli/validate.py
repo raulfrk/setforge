@@ -59,12 +59,20 @@ from setforge.source import (
     validate_host_local_sections_file_type,
 )
 
-_LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = ("source", "binaries", "claude")
+_LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = (
+    "source",
+    "binaries",
+    "claude",
+    "tracked_files",
+    "orphan_ignore",
+)
 """Known top-level keys in ``local.yaml``.
 
-Mirrors the keys consumed by :mod:`setforge.source` (``source:``) and
-:mod:`setforge.binaries` (``binaries:``, ``claude:``). Used as the
-close-match candidate list for typo'd top-level keys (mockup D).
+Mirrors the keys consumed by :mod:`setforge.source` (``source:``,
+``tracked_files:``), :mod:`setforge.binaries` (``binaries:``,
+``claude:``), and :mod:`setforge.compare` (``orphan_ignore:``).
+Used as the close-match candidate list for typo'd top-level keys
+(mockup D).
 """
 
 

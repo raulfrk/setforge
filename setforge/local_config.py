@@ -44,3 +44,15 @@ class LocalConfig(BaseModel):
     # Validate as a mapping; the hand-validator's deeper schema is
     # exercised by its own load path.
     claude: dict[str, object] = Field(default_factory=dict)
+    # ``tracked_files:`` carries per-tracked_file host-local overlay
+    # (preserve_user_keys / host_local_sections). The nested-shape
+    # validation runs through :func:`_check_host_local_sections` and
+    # :func:`apply_preserve_user_keys_overlay`; this layer only asserts
+    # the key is allowed at the top level.
+    tracked_files: dict[str, object] = Field(default_factory=dict)
+    # ``orphan_ignore:`` is a list of tracked_file ids the user has
+    # flagged "keep orphan" via ``cleanup-orphans --ignore``. Free-form
+    # list-of-strings at this layer; the runtime loader in
+    # :mod:`setforge.compare.load_ignored_orphans` does the deeper
+    # validation.
+    orphan_ignore: list[str] = Field(default_factory=list)
