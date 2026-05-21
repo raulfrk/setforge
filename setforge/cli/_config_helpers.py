@@ -246,7 +246,12 @@ def resolve_path(schema: dict[str, FieldNode], dotted: str) -> FieldNode | None:
 
 def scalar_leaf_from_dict_value(parent: FieldNode) -> FieldNode:
     """Synthesize a leaf ``FieldNode`` for a ``dict[str, T]`` value lookup."""
-    args = getattr(parent.annotation, "__args__", ())
+    # mypy infers ``getattr(..., ())`` as ``tuple[()]`` (the literal-empty-tuple
+    # default), so the ``args[1]`` access below is flagged "Tuple index out of
+    # range" even though the runtime guard ``len(args) == 2`` makes the access
+    # safe. Cast to ``tuple[Any, ...]`` so the runtime-guarded index is well-
+    # typed.
+    args = _typing.cast(tuple[Any, ...], getattr(parent.annotation, "__args__", ()))
     if len(args) == 2:
         return node_from_annotation(args[1])
     return FieldNode(
