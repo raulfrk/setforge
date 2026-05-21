@@ -962,10 +962,12 @@ def _resolve_setforge_yaml_error_position(
 
     .. note::
 
-        TODO: superseded by setforge-b1lg's nested ``.lc`` walker
-        extension — b1lg will unify this with
-        :func:`_resolve_error_position` (local.yaml side). The local
-        port here keeps 5twm shippable in Wave 1.
+        Sibling of :func:`_resolve_error_position` (local.yaml side) by
+        design. The two stay separate because the candidate-list
+        dispatch differs (setforge.yaml top-level uses ``Config`` /
+        ``Profile`` / ``TrackedFile`` shapes; local.yaml uses
+        ``LocalConfig`` + 4 overlay-class candidate lists). Unifying
+        would entangle the dispatch tables; keep them split.
     """
     if not loc:
         return 1, 1, "", None
@@ -1000,17 +1002,18 @@ def _resolve_nested_setforge_error(
 ) -> tuple[int, int, str, str | None]:
     """Resolve a nested ``loc`` against the nested ``.lc`` tables.
 
-    TODO: superseded by setforge-b1lg's nested ``.lc`` walker — this
-    local port handles ``profiles.<name>.<key>`` and
-    ``tracked_files.<id>.<key>`` shapes (the common cases for 5twm
-    acceptance) only.
+    Sibling of :func:`_resolve_nested_local_error` (local.yaml side).
+    Handles ``profiles.<name>.<key>`` and ``tracked_files.<id>.<key>``
+    shapes — the common cases for setforge.yaml typo close-match
+    suggestions.
     """
     # Walk down to the parent of the leaf so we can call
     # ``.lc.key(leaf)`` on it. Only mapping shapes are exercised today;
     # integer-keyed list traversal (e.g. ``loc=('profiles', 'p',
     # 'extensions', 'include', 0)``) is not yet wired up and returns
-    # the ``(1, 1, '', None)`` fallback. setforge-b1lg's unified
-    # ``.lc`` walker will extend this to CommentedSeq subscripts.
+    # the ``(1, 1, '', None)`` fallback. Extension to CommentedSeq
+    # subscripts is intentionally deferred — current acceptance does
+    # not exercise list-indexed loc shapes.
     parent: object = raw
     for step in loc[:-1]:
         if isinstance(parent, Mapping) and step in parent:
