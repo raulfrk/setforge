@@ -198,6 +198,33 @@ def _resolve_after_section(text: str, anchor: AnchorAfterSection) -> int:
     return matches[0]
 
 
+def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
+    """Dispatch the anchor match against ``text`` (assumed LF-normalised).
+
+    Internal helper. Callers that have ALREADY normalised the text (e.g.
+    :func:`inject_host_local_section`) skip the redundant normalisation
+    pass by calling this directly. The public :func:`resolve_anchor`
+    wraps this with :func:`_normalise_eol`.
+    """
+    match anchor:
+        case AnchorAfterHeading():
+            return _resolve_after_heading(text, anchor)
+        case AnchorBeforeHeading():
+            return _resolve_before_heading(text, anchor)
+        case AnchorAtStartOfFile():
+            return _resolve_at_start_of_file(text, anchor)
+        case AnchorAtEndOfFile():
+            return _resolve_at_end_of_file(text, anchor)
+        case AnchorAfterSection():
+            return _resolve_after_section(text, anchor)
+        case _ as never:
+            # Exhaustiveness guard: adding a 6th anchor variant to the
+            # discriminated union without extending this match fails at
+            # type-check time (mypy / pyright surface ``never``'s
+            # narrowed type as the unhandled variant).
+            assert_never(never)
+
+
 def resolve_anchor(text: str, anchor: Anchor) -> int:
     """Return the 0-indexed line offset in ``text`` where ``anchor`` resolves.
 
@@ -207,24 +234,7 @@ def resolve_anchor(text: str, anchor: Anchor) -> int:
     when the anchor matches nothing and :class:`AnchorAmbiguousError`
     when it matches more than one candidate.
     """
-    normalised = _normalise_eol(text)
-    match anchor:
-        case AnchorAfterHeading():
-            return _resolve_after_heading(normalised, anchor)
-        case AnchorBeforeHeading():
-            return _resolve_before_heading(normalised, anchor)
-        case AnchorAtStartOfFile():
-            return _resolve_at_start_of_file(normalised, anchor)
-        case AnchorAtEndOfFile():
-            return _resolve_at_end_of_file(normalised, anchor)
-        case AnchorAfterSection():
-            return _resolve_after_section(normalised, anchor)
-        case _ as never:
-            # Exhaustiveness guard: adding a 6th anchor variant to the
-            # discriminated union without extending this match fails at
-            # type-check time (mypy / pyright surface ``never``'s
-            # narrowed type as the unhandled variant).
-            assert_never(never)
+    return _resolve_anchor_lf(_normalise_eol(text), anchor)
 
 
 def _read_body(section: HostLocalSection) -> str:
@@ -288,6 +298,9 @@ def inject_host_local_section(
     )
     from setforge.sections import extract_sections
 
+    # Normalise once at the splice boundary; the inner ``_resolve_anchor_lf``
+    # consumes the already-normalised text without re-running the EOL
+    # collapse (deduped per Phase 6 minor #9).
     normalised = _normalise_eol(text)
     # Defensive duplicate-pair check (anti-smell item 15). The caller
     # of record is :func:`inject_all`, which routes existing names
@@ -301,7 +314,7 @@ def inject_host_local_section(
             "must route through inject_all (body-replace path) instead "
             "of re-injecting a duplicate pair"
         )
-    line_offset = resolve_anchor(normalised, anchor)
+    line_offset = _resolve_anchor_lf(normalised, anchor)
     pair = _format_marker_pair_unstamped(
         semantics=SectionSemantics.HOST_LOCAL.value, name=name, body=body
     )
