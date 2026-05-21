@@ -559,7 +559,7 @@ def _setforge_yaml_error_to_context(
 
 def _resolve_setforge_yaml_error_position(
     raw: Mapping[str, object],
-    loc: tuple[object, ...] | object,
+    loc: tuple[object, ...],
     err_type: object,
     msg: object,
 ) -> tuple[int, int, str, str | None]:
@@ -582,7 +582,7 @@ def _resolve_setforge_yaml_error_position(
         :func:`_resolve_error_position` (local.yaml side). The local
         port here keeps 5twm shippable in Wave 1.
     """
-    if not isinstance(loc, tuple) or not loc:
+    if not loc:
         return 1, 1, "", None
     if len(loc) == 1:
         return _resolve_top_level_setforge_error(raw, loc, err_type, msg)
