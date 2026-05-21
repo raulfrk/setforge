@@ -262,6 +262,8 @@ def _validate_candidate(scope: ConfigScope, doc: CommentedMap) -> None:
             raise SetforgeError(
                 f"setforge.yaml candidate failed validation:\n{exc}"
             ) from exc
+    else:
+        raise SetforgeError(f"_validate_candidate: unexpected scope {scope!r}")
 
 
 # ---------------------------------------------------------------------------
