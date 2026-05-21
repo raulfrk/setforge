@@ -17,6 +17,8 @@ substring asserts at the bottom of this file.
 
 from __future__ import annotations
 
+import ast
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -303,6 +305,142 @@ def test_display_tag_is_exhaustive_over_overlay_origin() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _stringify_joined(node: ast.JoinedStr) -> str:
+    """Render an :class:`ast.JoinedStr` with interpolations as placeholders.
+
+    Concatenates :class:`ast.Constant` ``str`` children verbatim; renders
+    every :class:`ast.FormattedValue` interpolation as ``"{}"``. The
+    rendered form preserves the f-string's *literal-segment shape*,
+    which is what the parity tests scan for tag-assembly smells like
+    ``f"[from {src}]"`` (renders to ``"[from {}]"``).
+    """
+    parts: list[str] = []
+    for v in node.values:
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            parts.append(v.value)
+        elif isinstance(v, ast.FormattedValue):
+            parts.append("{}")
+    return "".join(parts)
+
+
+def _collect_docstring_ids(tree: ast.AST) -> set[int]:
+    """Collect ``id()`` of every module / class / function docstring node."""
+    docstring_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        ):
+            docstring_expr = ast.get_docstring(node, clean=False)
+            if docstring_expr is not None and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(
+                    first.value, ast.Constant
+                ):
+                    docstring_ids.add(id(first.value))
+    return docstring_ids
+
+
+def _scan_for_tag_substring(
+    tree: ast.AST,
+    tag: str,
+    docstring_ids: set[int],
+    *,
+    fstring_smell: Callable[[str], bool] | None = None,
+) -> list[int]:
+    """Return line numbers where ``tag`` substring appears in code.
+
+    Checks THREE shapes:
+
+    - :class:`ast.Constant` ``str`` nodes (regular string literals and
+      atomic f-string segments), skipping docstring positions —
+      catches the full-literal shape ``"[from local.yaml]"``.
+    - :class:`ast.JoinedStr` rendered via :func:`_stringify_joined`
+      with the tag substring present in the rendered text — catches
+      multi-segment f-string assemblies whose literal Constant
+      children together contain the tag.
+    - :class:`ast.JoinedStr` whose rendered text satisfies
+      ``fstring_smell(rendered)`` — catches the regression shape the
+      round-1 parity test missed: ``f"[from {src}]"`` with
+      ``src="local.yaml"`` renders statically to ``"[from {}]"`` and
+      contains no ``local.yaml`` literal, but its *shape* (literal
+      segments with one interpolation slot in the middle) signals tag
+      assembly. The smell predicate filters legitimate non-tag
+      f-strings (e.g. ``f"[from profile {x}]"``).
+    """
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and tag in node.value
+            and id(node) not in docstring_ids
+        ):
+            hits.append(node.lineno)
+        elif isinstance(node, ast.JoinedStr):
+            rendered = _stringify_joined(node)
+            if tag in rendered or (
+                fstring_smell is not None and fstring_smell(rendered)
+            ):
+                hits.append(node.lineno)
+    return hits
+
+
+def _add_tag_fstring_smell(rendered: str) -> bool:
+    """Flag f-strings shaped like a SPEC 2 ADD-tag assembly.
+
+    The ADD tag is ``[from local.yaml]``. The literal-segment shape of
+    a tag-assembling f-string is ``[from {}]`` (interpolation in the
+    middle). Legitimate ``[from profile {x}]`` f-strings contain the
+    word ``profile`` after ``[from `` and are NOT flagged.
+
+    Heuristic: rendered text starts with ``[from `` AND ends with
+    ``]`` AND contains an interpolation placeholder ``{}`` AND does
+    NOT contain the legitimate word ``profile`` between ``[from `` and
+    ``]``. The startswith / endswith check is intentionally loose —
+    a JoinedStr that wraps the tag template inside a larger format
+    (rare) still gets caught by the segment-substring branch above.
+    """
+    if "{}" not in rendered:
+        return False
+    if "[from " not in rendered:
+        return False
+    # Slice the literal between "[from " and the next "]" if present.
+    start = rendered.index("[from ") + len("[from ")
+    end = rendered.find("]", start)
+    if end == -1:
+        return False
+    middle = rendered[start:end]
+    return "profile" not in middle
+
+
+def _remove_tag_fstring_smell(rendered: str) -> bool:
+    """Flag f-strings shaped like a SPEC 2 REMOVE-tag assembly.
+
+    The REMOVE tag is ``[<U+2212> removed via local.yaml]`` — the
+    leading minus is U+2212, NOT U+002D HYPHEN-MINUS. SPEC 8
+    (``preserve_user_keys``) declares its own ``[removed via
+    local.yaml — overwritten with tracked value]`` tag with a U+002D
+    leading character; that variant is SPEC 8's concern and is NOT
+    flagged here.
+
+    Heuristic: rendered text contains ``removed via local.yaml`` AND
+    EITHER contains the U+2212 minus literal OR has an interpolation
+    placeholder ``{}`` immediately preceding the ``removed`` token
+    (signalling a SPEC-2 f-string with the minus interpolated). The
+    U+2212-vs-U+002D distinction is what gives SPEC 2's remove tag
+    its unique identity; without that signal we fall through to the
+    full-literal Constant scan, which already catches the bare-string
+    construction case.
+    """
+    if "removed via local.yaml" not in rendered:
+        return False
+    minus = chr(0x2212)
+    if minus in rendered:
+        return True
+    # f-string with the minus interpolated: ``f"[{m} removed via local.yaml]"``.
+    return "{} removed via local.yaml" in rendered
+
+
 def test_display_tag_single_source_of_truth_in_codebase() -> None:
     """Assert no other module constructs the SPEC 2 ``LOCAL_REMOVE`` tag.
 
@@ -316,19 +454,32 @@ def test_display_tag_single_source_of_truth_in_codebase() -> None:
     :mod:`setforge.preserved_keys` (SPEC 8) declares its own SoT for
     the same wording on a different concern (preserve_user_keys). The
     SPEC-2 tag with the unicode minus is the unique marker we own.
+
+    Hardened (round 4): walks BOTH :class:`ast.Constant` string nodes
+    AND :class:`ast.JoinedStr` rendered via :func:`_stringify_joined`,
+    so f-string assemblies like ``f"[{minus} removed via local.yaml]"``
+    with an interpolated minus (uncommon but defense-in-depth) are
+    caught even when the literal is split across f-string segments.
     """
     import setforge
 
     pkg_root = Path(setforge.__file__).parent
     minus = chr(0x2212)
     remove_tag = f"[{minus} removed via local.yaml]"
-    offenders: list[Path] = []
+    offenders: list[tuple[Path, int]] = []
     for py in pkg_root.rglob("*.py"):
         if py.name == "local_overlay.py":
             continue
         text = py.read_text(encoding="utf-8")
-        if remove_tag in text:
-            offenders.append(py)
+        tree = ast.parse(text, filename=str(py))
+        docstring_ids = _collect_docstring_ids(tree)
+        for lineno in _scan_for_tag_substring(
+            tree,
+            remove_tag,
+            docstring_ids,
+            fstring_smell=_remove_tag_fstring_smell,
+        ):
+            offenders.append((py, lineno))
     assert not offenders, (
         f"SPEC 2 remove tag literal constructed outside display_tag(): "
         f"{offenders}. Route all tag wording through "
@@ -359,15 +510,23 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
     :func:`setforge.local_overlay.display_tag` (or
     :func:`setforge.preserved_keys.display_tag` for SPEC 8 callers).
 
-    Implementation: walks ``ast.Constant`` nodes (``str`` values) per
-    file — that catches string literals AND f-string atom-segments
-    while IGNORING comments and module-level docstrings (which are
-    ``ast.Constant`` reachable as ``Module.body[0].value`` but
-    referenced through Expr → Constant; we filter those by parent
-    Expr-as-docstring detection). Comments are not in the AST at all.
-    """
-    import ast
+    Hardened (round 4): the original implementation walked only
+    :class:`ast.Constant` string nodes and substring-matched ``.value``.
+    That missed the regression shape it was *intended* to catch — an
+    f-string like ``f"[from {src}]"`` with ``src="local.yaml"`` AST-
+    decomposes into a :class:`ast.JoinedStr` whose children are
+    ``Constant("[from ")``, ``FormattedValue(...)``, ``Constant("]")`` —
+    no individual Constant contains the full literal, so substring
+    matching against Constant.value silently passed.
 
+    This version also walks :class:`ast.JoinedStr` nodes via
+    :func:`_stringify_joined` (renders interpolations as ``"{}"``
+    placeholders, concatenates Constant segments) and substring-matches
+    the rendered text. Empirically validated by re-injecting
+    ``f'[from {src}]'`` in ``setforge/cli/profile.py:_tag_provenance``
+    before this change — the original test passed; after this change
+    it correctly fails.
+    """
     import setforge
 
     pkg_root = Path(setforge.__file__).parent
@@ -379,28 +538,14 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
             continue
         text = py.read_text(encoding="utf-8")
         tree = ast.parse(text, filename=str(py))
-        # Collect docstring node IDs to skip (module / class / function).
-        docstring_ids: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(
-                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
-            ):
-                docstring_expr = ast.get_docstring(node, clean=False)
-                if docstring_expr is not None and node.body:
-                    first = node.body[0]
-                    if isinstance(first, ast.Expr) and isinstance(
-                        first.value, ast.Constant
-                    ):
-                        docstring_ids.add(id(first.value))
-        # Scan Constant string nodes for the tag, skipping docstrings.
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
-                and add_tag in node.value
-                and id(node) not in docstring_ids
-            ):
-                offenders.append((py, node.lineno))
+        docstring_ids = _collect_docstring_ids(tree)
+        for lineno in _scan_for_tag_substring(
+            tree,
+            add_tag,
+            docstring_ids,
+            fstring_smell=_add_tag_fstring_smell,
+        ):
+            offenders.append((py, lineno))
     assert not offenders, (
         f"SPEC 2 ADD tag literal constructed outside display_tag(): "
         f"{offenders}. Route all tag wording through "
