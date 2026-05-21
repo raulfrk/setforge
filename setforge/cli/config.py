@@ -744,6 +744,37 @@ def config_add(
     ),
 ) -> None:
     """Append-to-list OR set-scalar at the dotted path."""
+    _run_add(
+        path=path,
+        value=value,
+        local=local,
+        tracked=tracked,
+        profile=profile,
+        yes=yes,
+        source=source,
+        repo=repo,
+    )
+
+
+def _run_add(
+    *,
+    path: str,
+    value: str,
+    local: bool,
+    tracked: bool,
+    profile: str | None,
+    yes: bool,
+    source: str | None,
+    repo: str | None,
+) -> None:
+    """Internal body of ``config_add`` — kept separate from the typer shim.
+
+    The typer.Argument / typer.Option declarations on :func:`config_add`
+    inflate that function's surface area; the actual orchestration
+    lives here so the per-step logic (scope resolution, marketplace
+    special case, schema lookup, git gate, mutate-and-write) stays
+    readable.
+    """
     scope = _resolve_scope(local=local, tracked=tracked)
     _check_profile_arg(path, profile)
     if path == "marketplaces.add":
