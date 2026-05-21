@@ -7,15 +7,17 @@ only post-merge in Phase 7.
 
 Two test classes:
 
-- 4 non-PTY tests cover the deterministic paths: path-completion
-  enumeration via the static fixture, git-clean-check on the tracked
-  side, validate-before-write contract, and round-trip preservation.
+- 4 non-PTY tests (suffix ``_non_pty``) cover the deterministic paths:
+  path-completion enumeration via the static fixture, git-clean-check
+  on the tracked side, validate-before-write contract, and round-trip
+  preservation. These work in any worktree.
 
-- 10 PTY tests cover the interactive surfaces (arrow-key confirm,
-  default-abort behavior, interactive marketplaces.add prompt flow).
-  These require the ``pyte_pty_session`` fixture from setforge-ffs0
-  and will fail to run inside this worktree until ffs0 merges. The
-  Phase 7 post-merge gate validates them.
+- 10 PTY tests (no ``_non_pty`` suffix) cover the interactive surfaces
+  (arrow-key confirm, default-abort behavior, interactive
+  marketplaces.add prompt flow, shell-completion). These require the
+  ``pyte_pty_session`` fixture from setforge-ffs0 and will fail to run
+  inside this worktree until ffs0 merges. The Phase 7 post-merge gate
+  validates them.
 """
 
 from __future__ import annotations
@@ -39,26 +41,39 @@ _TRACKED_YAML: str = f"/workspace/{CONFIG_FIXTURE}"
 
 def test_config_completion_path_works(
     docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
 ) -> None:
-    """``setforge --show-completion=zsh`` includes the config subgroup.
+    """PTY: shell tab-completion on ``setforge config add --local <TAB>``.
 
-    Confirms the new ``config`` typer subgroup is wired into typer's
-    completion generation (Phase 1 of the static-template fallback).
+    Spawns an interactive zsh inside the container, sources the
+    ``setforge --show-completion=zsh`` script, types
+    ``setforge config add --local `` and presses TAB, then asserts a
+    known dotted-path candidate (``binaries.code``) appears in the
+    rendered completion menu. Exercises the END-TO-END shell-completion
+    path (typer's completion machinery → setforge's
+    _complete_path_dispatch callback → shell-rendered candidates).
     """
     c = docker_container()
-    result = c.exec(["uv", "run", "setforge", "--help"], check=False)
-    assert result.returncode == 0
-    assert "config" in result.stdout
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=["zsh", "-i"],
+    )
+    session.send_keys('eval "$(uv run setforge --show-completion=zsh)" 2>/dev/null\r')
+    session.expect_in_display("$", timeout=10)
+    session.send_keys("uv run setforge config add --local \t")
+    session.expect_in_display("binaries.code", timeout=10)
 
 
-def test_config_add_tracked_pty_git_check_aborts(
+def test_config_add_tracked_dirty_repo_refuses_non_pty(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Tracked-side ``add`` refuses on a dirty config repo.
+    """Tracked-side ``add`` refuses on a dirty config repo (non-PTY).
 
-    Despite the PTY-suffixed name (kept for the spec acceptance check),
-    this case is exercised non-interactively: ``--yes`` + dirty repo
-    must still refuse via :func:`run_git_check_or_raise`.
+    Non-interactive variant: ``--yes`` + dirty repo must still refuse
+    via :func:`run_git_check_or_raise`. The PTY variant
+    :func:`test_config_add_tracked_pty_git_check_aborts` (below)
+    exercises the same gate inside a real PTY for the prompt_toolkit
+    code path.
     """
     c = docker_container()
     # Dirty up the config repo by writing an uncommitted file.
@@ -90,14 +105,19 @@ def test_config_add_tracked_pty_git_check_aborts(
     assert result.returncode != 0
 
 
-def test_config_add_invalid_pty_validates_before_write(
+def test_config_add_invalid_value_refuses_write_non_pty(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A schema-invalid mutation refuses without writing the local file."""
+    """A schema-invalid mutation refuses without writing the local file (non-PTY).
+
+    Non-interactive variant. The PTY variant
+    :func:`test_config_add_invalid_pty_validates_before_write` (below)
+    exercises the same validate-before-write gate inside a real PTY.
+    """
     c = docker_container()
     initial = "binaries:\n  code: /usr/bin/code\n"
     c.write_text(_HOME_LOCAL_YAML, initial)
-    # Inject a value that fails Pydantic _LocalConfig validation:
+    # Inject a value that fails Pydantic LocalConfig validation:
     # source.kind must be the discriminator enum (path | git), not
     # a free-form string. Add `source.kind` = "bogus".
     result = c.exec(
@@ -158,14 +178,17 @@ def test_config_add_local_round_trip_preserves_comments(
     assert "/opt/code" in after
 
 
-def test_config_add_non_tty_without_yes_raises(
+def test_config_add_non_tty_without_yes_raises_non_pty(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Non-TTY ``setforge config add`` without ``--yes`` exits non-zero.
+    """Non-TTY ``setforge config add`` without ``--yes`` exits non-zero (non-PTY).
 
     Verifies the mutate-gate posture
     (:class:`ConfirmRequiresInteractive`) holds end-to-end inside a
-    real Debian 12 container.
+    real Debian 12 container. The PTY variant
+    :func:`test_config_add_non_tty_without_yes_raises` (below) drives
+    the same flow from inside an interactive PTY (where stdin
+    redirection still produces a non-TTY for the child).
     """
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, "binaries:\n  code: /usr/bin/code\n")
@@ -349,7 +372,7 @@ def _pty_smoke(session, command: str) -> None:
 # the remaining PTY case names from the spec.
 
 
-def test_config_add_tracked_pty_git_check_aborts_pty(pyte_pty_session) -> None:
+def test_config_add_tracked_pty_git_check_aborts(pyte_pty_session) -> None:
     """PTY counterpart of the non-PTY git-check abort test."""
     _pty_smoke(
         pyte_pty_session,
@@ -358,7 +381,7 @@ def test_config_add_tracked_pty_git_check_aborts_pty(pyte_pty_session) -> None:
     pyte_pty_session.expect_any(["dirty", "aborted", "error"])
 
 
-def test_config_add_invalid_pty_validates_before_write_pty(
+def test_config_add_invalid_pty_validates_before_write(
     pyte_pty_session,
 ) -> None:
     """PTY counterpart of the validate-before-write abort test."""
@@ -369,7 +392,7 @@ def test_config_add_invalid_pty_validates_before_write_pty(
     pyte_pty_session.expect_any(["INVALID", "validation", "error"])
 
 
-def test_config_add_non_tty_without_yes_raises_pty(pyte_pty_session) -> None:
+def test_config_add_non_tty_without_yes_raises(pyte_pty_session) -> None:
     """PTY counterpart of the non-TTY mutate-gate test."""
     _pty_smoke(
         pyte_pty_session,
