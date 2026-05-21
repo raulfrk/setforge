@@ -1,25 +1,33 @@
-"""Docker E2E PTY tests for the dg2a auto-promote feature.
+"""Docker E2E PTY tests for the dg2a sync-wizard ``[p]`` auto-promote.
 
-Exercises the ``setforge promote-section`` CLI surface end-to-end
-against a fresh Debian 12 container. The confirm panel renders via
-prompt_toolkit's full-screen Application; the
-:func:`tests.docker.conftest.pyte_pty_session` fixture (setforge-ffs0)
-captures the emulated screen so we can assert on the rendered title,
-the body preview, the secrets-scan row, the RISKS panel, and the
-arrow-key dialog selection state.
+Exercises the wizard end-to-end against a fresh Debian 12 container:
+
+1. ``setforge install --profile=test-xsco`` injects the host-local
+   section declared in ``local.yaml`` into the live tracked file.
+2. ``setforge sync --profile=test-xsco`` walks promotable host-local
+   sections, renders the ``[k]/[p]/[s]/[q]`` menu, and on ``p``
+   dispatches the all-in-one confirm panel + arrow-key
+   ``radiolist_dialog`` (default=No).
+
+The :func:`tests.docker.conftest.pyte_pty_session` fixture
+(setforge-ffs0) captures the emulated screen so we can assert on the
+rendered prompt, the confirm panel, the secrets-scan row, the RISKS
+block, and the post-promote file mutations.
 
 Five cases per spec dg2a acceptance:
 
-- ``test_promote_pty_confirm_yes`` — user picks Yes, Tab to OK, Enter; promote
-  applies, exit 0, post-state asserts the four-mutation contract.
-- ``test_promote_pty_confirm_no`` — user accepts default-No, Tab to OK, Enter;
+- ``test_promote_pty_confirm_yes`` — user picks ``[p]``, then Yes;
+  promote applies, exit 0, post-state asserts the three-file mutation.
+- ``test_promote_pty_confirm_no`` — user picks ``[p]``, then default-No;
   no mutations, exit 0.
-- ``test_promote_pty_confirm_esc`` — user presses Escape; no mutations, exit 0.
-- ``test_promote_pty_secrets_warned`` — body containing a gitleaks-detectable
-  secret renders the warning in the RISKS panel; user can still pick Yes.
+- ``test_promote_pty_confirm_esc`` — user picks ``[p]``, then Escape on
+  the confirm dialog; no mutations, exit 0.
+- ``test_promote_pty_secrets_warned`` — body containing a
+  gitleaks-detectable secret surfaces the warning in the RISKS panel;
+  user can still proceed.
 - ``test_promote_pty_then_revert`` — full promote applied, then
-  ``setforge revert`` rolls the four mutations back; final state is
-  byte-identical to pre-promote.
+  ``setforge revert`` rolls every mutation back; final bytes match the
+  pre-promote snapshot.
 
 NO skipped or xfailed tests per the A30 (no-gaps) policy.
 """
@@ -69,16 +77,15 @@ def _install_xsco(c: ContainerHandle, *, profile: str = "test-xsco") -> None:
     assert result.returncode == 0, result.stderr or result.stdout
 
 
-def _promote_cmd(section: str) -> list[str]:
+def _sync_cmd() -> list[str]:
+    """Bare ``setforge sync`` — the sync wizard fires the [p] prompt itself."""
     return [
         "uv",
         "run",
         "setforge",
-        "promote-section",
+        "sync",
         "--profile=test-xsco",
         f"--config={CONFIG_FIXTURE}",
-        "--tracked-file=xsco_md",
-        f"--section={section}",
     ]
 
 
@@ -87,7 +94,7 @@ def test_promote_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """User picks Yes + Tab to OK + Enter: promote applies; exit 0."""
+    """User picks [p] + Yes: promote applies; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("promo", "PROMO BODY"))
     _install_xsco(c)
@@ -97,10 +104,14 @@ def test_promote_pty_confirm_yes(
 
     session = pyte_pty_session(
         container=c.cid,
-        cmd=_promote_cmd("promo"),
+        cmd=_sync_cmd(),
         timeout=60.0,
     )
-    # Panel title + dialog title surface in the emulated display.
+    # The sync wizard surfaces the per-section prompt first.
+    session.expect_in_display("promo", timeout=30.0)
+    session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
+    # Send 'p' to pick promote; the confirm panel + dialog render next.
+    session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
     session.expect_in_display("(*) No", timeout=10.0)
     # Arrow-down moves the radio cursor; Enter commits the selection.
@@ -126,7 +137,7 @@ def test_promote_pty_confirm_no(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """Default-No: Tab + Enter accepts the abort; no mutations; exit 0."""
+    """User picks [p] + default-No: no mutations; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("nope", "NOPE BODY"))
     _install_xsco(c)
@@ -135,9 +146,12 @@ def test_promote_pty_confirm_no(
 
     session = pyte_pty_session(
         container=c.cid,
-        cmd=_promote_cmd("nope"),
+        cmd=_sync_cmd(),
         timeout=60.0,
     )
+    session.expect_in_display("nope", timeout=30.0)
+    session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
+    session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
     session.expect_in_display("(*) No", timeout=10.0)
     # No arrow-down — leave selection on No, Tab to OK, Enter.
@@ -146,7 +160,8 @@ def test_promote_pty_confirm_no(
     session.expect_in_display("aborted", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
 
-    # No file changes.
+    # No file changes from the promote.
+    assert "start host-local nope" in c.read_text(_HOST_LIVE)
     assert c.read_text(_HOST_LIVE) == live_pre
     assert c.read_text(_HOME_LOCAL_YAML) == local_yaml_pre
 
@@ -156,7 +171,7 @@ def test_promote_pty_confirm_esc(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """Esc on the radiolist dialog: treated as abort; no mutations; exit 0."""
+    """User picks [p], then Esc on the dialog: treated as abort; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("escape", "ESCAPE BODY"))
     _install_xsco(c)
@@ -165,9 +180,12 @@ def test_promote_pty_confirm_esc(
 
     session = pyte_pty_session(
         container=c.cid,
-        cmd=_promote_cmd("escape"),
+        cmd=_sync_cmd(),
         timeout=60.0,
     )
+    session.expect_in_display("escape", timeout=30.0)
+    session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
+    session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
     # Send raw ESC (radiolist_dialog binds Esc to None-return).
     session.send_keys("\x1b")
@@ -194,9 +212,12 @@ def test_promote_pty_secrets_warned(
 
     session = pyte_pty_session(
         container=c.cid,
-        cmd=_promote_cmd("leaky"),
+        cmd=_sync_cmd(),
         timeout=90.0,
     )
+    session.expect_in_display("leaky", timeout=30.0)
+    session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
+    session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
     # The secrets-scan row surfaces in the panel. The exact rule_id
     # depends on the gitleaks ruleset shipped in the image; assert on
@@ -230,9 +251,12 @@ def test_promote_pty_then_revert(
 
     session = pyte_pty_session(
         container=c.cid,
-        cmd=_promote_cmd("rt"),
+        cmd=_sync_cmd(),
         timeout=60.0,
     )
+    session.expect_in_display("rt", timeout=30.0)
+    session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
+    session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
     session.send_keys("\x1b[B")
     session.send_keys("\r")
