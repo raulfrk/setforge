@@ -33,7 +33,7 @@ import io
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -312,25 +312,25 @@ def _drop_host_local_section_entry(
     yaml = YAML(typ="rt")
     with local_yaml_path.open("r", encoding="utf-8") as fh:
         doc = yaml.load(fh)
-    if not isinstance(doc, Mapping):
+    if not isinstance(doc, MutableMapping):
         raise SetforgeError(
             f"local.yaml at {local_yaml_path} is not a mapping; cannot drop "
             f"host_local_sections.{section_name}"
         )
     tracked_files_node = doc.get("tracked_files")
-    if not isinstance(tracked_files_node, Mapping):
+    if not isinstance(tracked_files_node, MutableMapping):
         raise SetforgeError(
             f"local.yaml missing tracked_files block; cannot drop "
             f"host_local_sections.{section_name}"
         )
     tracked_file_node = tracked_files_node.get(tracked_file_id)
-    if not isinstance(tracked_file_node, Mapping):
+    if not isinstance(tracked_file_node, MutableMapping):
         raise SetforgeError(
             f"local.yaml has no tracked_files.{tracked_file_id} block; cannot drop "
             f"host_local_sections.{section_name}"
         )
     hl_node = tracked_file_node.get("host_local_sections")
-    if not isinstance(hl_node, Mapping) or section_name not in hl_node:
+    if not isinstance(hl_node, MutableMapping) or section_name not in hl_node:
         raise SetforgeError(
             f"local.yaml has no host_local_sections.{section_name} entry under "
             f"tracked_files.{tracked_file_id}; nothing to drop"
