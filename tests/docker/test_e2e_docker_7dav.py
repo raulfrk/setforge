@@ -229,10 +229,25 @@ def test_config_show_effective_smoke_non_pty(
     ``render`` and the human renderer fires cleanly.
     """
     c = docker_container()
-    # Point source-resolution at the in-container fixture config.
+    # Seed a minimal setforge.yaml at /tmp/cfg (source-resolution expects
+    # the file to be named exactly setforge.yaml; the fixtures dir has
+    # setforge.test.yaml which won't be picked up).
+    c.write_text(
+        "/tmp/cfg/setforge.yaml",
+        "version: 1\n"
+        "schema_version: '1.0'\n"
+        "tracked_files:\n"
+        "  foo:\n"
+        "    src: foo.md\n"
+        "    dst: foo.md\n"
+        "profiles:\n"
+        "  base:\n"
+        "    tracked_files:\n"
+        "      - foo\n",
+    )
     c.write_text(
         _HOME_LOCAL_YAML,
-        "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n",
+        "source:\n  kind: path\n  path: /tmp/cfg\n",
     )
     result = c.exec(
         [
@@ -242,13 +257,13 @@ def test_config_show_effective_smoke_non_pty(
             "config",
             "show",
             "--effective",
-            "--profile=test-minimal",
+            "--profile=base",
         ],
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     # The profile-show body prints the resolved profile name.
-    assert "test-minimal" in result.stdout
+    assert "base" in result.stdout
 
 
 def test_config_add_non_tty_without_yes_raises_non_pty(
