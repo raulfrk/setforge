@@ -246,6 +246,45 @@ def test_extension_remove_not_in_profile_errors_via_apply(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# Round-3 boundary fix: empty/malformed plugin ref must NOT mask Check 6
+# ---------------------------------------------------------------------------
+
+
+def test_empty_plugin_pid_raises_local_overlay_error(tmp_path: Path) -> None:
+    """Round-3 regression guard: ``_parse_overlay_plugin_pid`` must raise
+    :class:`LocalOverlayError` (the resolver-phase sentinel), NOT bare
+    :class:`ConfigError`, on an empty / whitespace plugin reference.
+
+    The bare-``ConfigError`` raise path would have routed through the
+    third arm of :func:`_apply_local_overlay_check` and signalled
+    "cross-ref ran" — silently skipping Check 6 even though the
+    mutation phase aborted before the cross-ref invariant could fire.
+    Routing it as ``LocalOverlayError`` keeps the boundary correct:
+    resolver-phase failure → Check 6 fallback executes.
+    """
+    cfg = _make_cfg(
+        plugins={"sp": "official"},
+        marketplaces={
+            "official": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="a/b"
+            )
+        },
+    )
+    rp = _make_resolved(["sp"])
+    local = _write_local(
+        tmp_path,
+        """\
+        plugins:
+          add:
+            - ""
+        """,
+    )
+    with pytest.raises(LocalOverlayError) as exc_info:
+        apply_local_overlay(cfg, rp, "p", local_config_path=local)
+    assert "empty / whitespace plugin reference" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # Mutation: overlay add/remove updates the resolved profile in place
 # ---------------------------------------------------------------------------
 
@@ -398,12 +437,46 @@ def test_apply_local_overlay_check_returns_false_on_load_phase_failure(
     assert any("profile 'p'" in str(f) and "malformed YAML" in str(f) for f in failures)
 
 
+@pytest.mark.parametrize(
+    ("local_body", "expected_phrase"),
+    [
+        pytest.param(
+            """\
+            extensions:
+              remove:
+                - never-installed.foo
+            """,
+            "not in profile-resolved set",
+            id="unknown-remove",
+        ),
+        pytest.param(
+            """\
+            plugins:
+              add:
+                - ""
+            """,
+            "empty / whitespace plugin reference",
+            id="empty-plugin-pid",
+        ),
+    ],
+)
 def test_apply_local_overlay_check_returns_false_on_resolver_error(
     tmp_path: Path,
+    local_body: str,
+    expected_phrase: str,
 ) -> None:
     """Sibling boundary contract: a resolver-phase
-    :class:`LocalOverlayError` (add ∩ remove or unknown-remove) ALSO
-    returns ``False`` because the cross-ref check did NOT execute.
+    :class:`LocalOverlayError` ALSO returns ``False`` because the
+    cross-ref check did NOT execute.
+
+    Parametrized arms:
+    - ``unknown-remove`` — well-formed YAML, but ``extensions.remove``
+      points at an entry absent from the profile-resolved set.
+    - ``empty-plugin-pid`` (round-3 regression guard) — well-formed
+      YAML, but ``plugins.add`` contains an empty string; the parser
+      ``_parse_overlay_plugin_pid`` MUST raise ``LocalOverlayError``
+      (not bare ``ConfigError``) so this arm routes through the
+      ``return False`` branch and Check 6 still runs.
     """
 
     cfg = _make_cfg(
@@ -412,16 +485,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
     )
     rp = _make_resolved(["sp"], extensions=["ms-python.python"])
 
-    # Well-formed YAML but resolver-phase invariant: remove an extension
-    # that's not in the profile's resolved set.
-    local = _write_local(
-        tmp_path,
-        """\
-        extensions:
-          remove:
-            - never-installed.foo
-        """,
-    )
+    local = _write_local(tmp_path, local_body)
 
     failures: list[ValidationErrorWithContext | str] = []
     cross_ref_ran = _apply_local_overlay_check_with_path(
@@ -429,7 +493,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
     )
 
     assert cross_ref_ran is False
-    assert any("not in profile-resolved set" in str(f) for f in failures)
+    assert any(expected_phrase in str(f) for f in failures)
 
 
 def test_apply_local_overlay_check_returns_true_on_cross_ref_error(

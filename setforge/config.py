@@ -699,19 +699,25 @@ def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:
     ``add`` entries use the ``name@marketplace`` shape per SPEC 2
     mockup; ``remove`` entries are bare names. Returns ``(name, None)``
     when no ``@`` separator is present so the same parser drives both
-    list shapes. Empty / whitespace-only refs raise :class:`ConfigError`
-    so a typo'd YAML list entry surfaces immediately.
+    list shapes. Empty / whitespace-only refs raise
+    :class:`setforge.local_overlay.LocalOverlayError` (the resolver-
+    phase sentinel) so a typo'd YAML list entry surfaces under the same
+    error-routing arm as add ∩ remove collisions — load-phase failures
+    are :class:`LocalOverlayLoadError`; this is a resolver-phase failure
+    so Check 6 still runs as a fallback in the validate CLI.
     """
+    from setforge.local_overlay import LocalOverlayError
+
     cleaned = pid.strip()
     if not cleaned:
-        raise ConfigError(
+        raise LocalOverlayError(
             "local.yaml plugins overlay: empty / whitespace plugin reference"
         )
     if "@" not in cleaned:
         return cleaned, None
     name, mp = cleaned.split("@", 1)
     if not name or not mp:
-        raise ConfigError(
+        raise LocalOverlayError(
             f"local.yaml plugins overlay: malformed plugin ref {pid!r} "
             "(expected 'name@marketplace')"
         )
