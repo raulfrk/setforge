@@ -88,3 +88,45 @@ def test_show_local_empty_file_is_ok(
     # path but the file is empty unless created.
     result = runner.invoke(app, ["config", "show", "--local"])
     assert result.exit_code == 0, result.stdout
+
+
+def test_show_effective_does_not_crash_outside_pytest_env(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``config show --effective`` exits 0 without ``PYTEST_CURRENT_TEST``.
+
+    Regression guard for the round-2 _show_effective extraction: the
+    extracted helper used to call ``_run_profile_show(..., ctx_obj=None)``
+    which trips :func:`setforge.cli._output.render`'s production guard
+    (``RuntimeError("render() called with ctx_obj=None outside test
+    context")``) when ``PYTEST_CURRENT_TEST`` is not set. Production
+    users would crash on any ``setforge config show --effective`` call.
+
+    The fix threads ``ctx.obj`` (typer-injected) from ``config_show``
+    into ``_show_effective`` so a real :class:`OutputContext` reaches
+    ``render``. This test deletes ``PYTEST_CURRENT_TEST`` for the
+    duration of the invoke to simulate the production env-shape.
+    """
+    # Seed a tracked setforge.yaml with a 'base' profile and bypass
+    # the source-resolution layer by patching _tracked_yaml_path.
+    tracked = tmp_path / "setforge.yaml"
+    tracked.write_text(
+        "version: 1\n"
+        "schema_version: '1.0'\n"
+        "tracked_files:\n"
+        "  foo:\n"
+        "    src: foo.md\n"
+        "    dst: foo.md\n"
+        "profiles:\n"
+        "  base:\n"
+        "    tracked_files:\n"
+        "      - foo\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("setforge.cli.config._tracked_yaml_path", lambda: tracked)
+    # Critically: delete PYTEST_CURRENT_TEST so render()'s production
+    # guard fires. The fix-up under test threads ctx.obj from typer,
+    # avoiding the None-path that would otherwise raise.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    result = runner.invoke(app, ["config", "show", "--effective", "--profile=base"])
+    assert result.exit_code == 0, (result.stdout or "") + (result.stderr or "")

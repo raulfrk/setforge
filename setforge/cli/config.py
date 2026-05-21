@@ -65,6 +65,7 @@ from setforge.cli._config_helpers import (
     walk_model as _walk_model,
 )
 from setforge.cli._git_check import run_git_check_or_raise
+from setforge.cli._output import OutputContext
 from setforge.config import Config, MarketplaceSource, MarketplaceSourceKind
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
 from setforge.local_config import LocalConfig
@@ -354,6 +355,7 @@ def _slice_doc(doc: CommentedMap, dotted: str | None) -> Any:  # noqa: ANN401 �
 
 @config_app.command("show")
 def config_show(
+    ctx: typer.Context,
     path: str | None = typer.Argument(
         None,
         help="Optional dotted-path to scope output (e.g. plugins.add).",
@@ -384,7 +386,7 @@ def config_show(
     if scope is ConfigScope.EFFECTIVE:
         if profile is None:
             raise typer.BadParameter("--effective requires --profile=NAME")
-        _show_effective(profile)
+        _show_effective(profile, ctx_obj=ctx.obj)
         return
     yaml_path = _scope_yaml_path(scope)
     doc = _load_doc(yaml_path)
@@ -392,18 +394,23 @@ def config_show(
     typer.echo(_dump_to_str(sliced).rstrip())
 
 
-def _show_effective(profile: str) -> None:
+def _show_effective(profile: str, *, ctx_obj: OutputContext | None) -> None:
     """Print the merged profile chain via the existing ``profile show`` body.
 
     Delegates to :func:`_run_profile_show` — the typer-context-free
     inner helper extracted from the ``profile show`` subcommand —
     rather than calling the typer-decorated ``profile_show`` directly,
     which requires a :class:`typer.Context` first positional argument.
+
+    ``ctx_obj`` is threaded from ``config_show``'s typer context so
+    ``render()`` sees a real :class:`OutputContext` outside test runs;
+    passing ``None`` here would trip the production guard in
+    :func:`setforge.cli._output.render`.
     """
     from setforge.cli.profile import _run_profile_show
 
     cfg_path = _tracked_yaml_path()
-    _run_profile_show(name=profile, config=cfg_path, ctx_obj=None)
+    _run_profile_show(name=profile, config=cfg_path, ctx_obj=ctx_obj)
 
 
 # ---------------------------------------------------------------------------

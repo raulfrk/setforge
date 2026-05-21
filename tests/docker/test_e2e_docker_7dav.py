@@ -8,9 +8,11 @@ key verbs are :meth:`send_keys`, :meth:`expect_in_display`, and
 
 Two test classes:
 
-- 5 non-PTY / non-interactive tests cover the deterministic paths:
+- 6 non-PTY / non-interactive tests cover the deterministic paths:
   git-clean-check on the tracked side, validate-before-write contract,
-  round-trip preservation, the non-TTY mutate-gate, and the inner
+  round-trip preservation, the non-TTY mutate-gate, the
+  ``config show --effective`` smoke test (regression guard against
+  the round-2 ``ctx_obj=None`` crash), and the inner
   ``_complete_value`` callback contract invoked through ``python -c``.
 
 - 10 PTY tests cover the interactive surfaces: scalar / list arrow-key
@@ -178,6 +180,47 @@ def test_config_add_local_round_trip_preserves_comments(
     assert "# top-level comment" in after
     assert "# patch tracker (TBD)" in after
     assert "/opt/code" in after
+
+
+def test_config_show_effective_smoke_non_pty(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge config show --effective --profile=test-minimal`` exits 0 (non-PTY).
+
+    Regression guard for the round-2 ``_show_effective`` extraction:
+    the helper used to pass ``ctx_obj=None`` to
+    :func:`setforge.cli._output.render`, which trips the production
+    guard (``RuntimeError("render() called with ctx_obj=None outside
+    test context")``) when ``PYTEST_CURRENT_TEST`` is not set.
+    Subprocess invocation inside the container does NOT inherit
+    ``PYTEST_CURRENT_TEST`` from the host pytest, so this test
+    exercises the real production env-shape.
+
+    The fix threads ``ctx.obj`` (typer-injected) from ``config_show``
+    into ``_show_effective``, so a real :class:`OutputContext` reaches
+    ``render`` and the human renderer fires cleanly.
+    """
+    c = docker_container()
+    # Point source-resolution at the in-container fixture config.
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n",
+    )
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "show",
+            "--effective",
+            "--profile=test-minimal",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The profile-show body prints the resolved profile name.
+    assert "test-minimal" in result.stdout
 
 
 def test_config_add_non_tty_without_yes_raises_non_pty(
