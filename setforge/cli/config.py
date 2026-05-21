@@ -182,59 +182,56 @@ def _walk_model(model: type[BaseModel]) -> dict[str, _FieldNode]:
 def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pydantic annotations are dynamic
     """Build a ``_FieldNode`` for one Pydantic field annotation.
 
-    Recurses into nested BaseModel annotations (``children`` populated)
-    and unwraps ``X | None`` to the non-``None`` arm. ``list[T]`` /
-    ``dict[K, V]`` get ``is_list=True`` (for ``list``) and
-    ``children={}``; downstream sub-paths through dict values resolve
-    at completion time against the live config state.
+    Handles five shapes:
+    1) ``typing.Annotated[T, ...]`` — strip metadata, recurse on T.
+    2) Bare type (BaseModel subclass / StrEnum / scalar).
+    3) Union shapes (``X | None`` / ``X | Y`` / ``Optional[X]``).
+    4) ``list[T]``.
+    5) ``dict[K, V]`` — for ``dict[str, BaseModel]`` we expose the
+       value-model's children so deep paths work.
     """
-    # Unwrap Optional / X | None
+    import types
+    import typing
+
+    # 1) Strip typing.Annotated[T, ...] metadata (Pydantic discriminator hint).
+    if typing.get_origin(ann) is typing.Annotated or hasattr(ann, "__metadata__"):
+        inner_args = typing.get_args(ann)
+        if inner_args:
+            return _node_from_annotation(inner_args[0])
+
     origin = getattr(ann, "__origin__", None)
     args = getattr(ann, "__args__", ())
-    if origin is None:
-        # Bare type: BaseModel subclass, StrEnum, or scalar.
-        if isinstance(ann, type) and issubclass(ann, BaseModel):
-            return _FieldNode(
-                annotation=ann, is_list=False, enum_values=(), children=_walk_model(ann)
-            )
-        if isinstance(ann, type) and issubclass(ann, StrEnum):
-            return _FieldNode(
-                annotation=ann,
-                is_list=False,
-                enum_values=tuple(m.value for m in ann),
-                children={},
-            )
-        return _FieldNode(annotation=ann, is_list=False, enum_values=(), children={})
-    # Unions (X | None / X | Y).
-    import types
 
-    if (
-        isinstance(ann, types.UnionType)
-        or origin is type(None)
-        or (origin is None and len(args) > 1)
-    ):
+    # 3) Union shapes — PEP 604 (X | Y) and typing.Union[X, Y]. Check
+    # BEFORE the bare-type branch because ``types.UnionType`` carries
+    # ``__origin__ = None`` but still has ``__args__`` populated.
+    if isinstance(ann, types.UnionType) or origin is typing.Union:
         non_none = [a for a in args if a is not type(None)]
         if len(non_none) == 1:
             return _node_from_annotation(non_none[0])
-        # Multi-arm union — pick first BaseModel arm for completion;
-        # falls back to first non-None arg.
+        # Multi-arm union — merge children across arms so dotted paths
+        # into either union member resolve via the same dispatch.
+        merged_children: dict[str, _FieldNode] = {}
         for arm in non_none:
-            if isinstance(arm, type) and issubclass(arm, BaseModel):
-                return _node_from_annotation(arm)
+            arm_node = _node_from_annotation(arm)
+            for k, v in arm_node.children.items():
+                merged_children.setdefault(k, v)
+        if merged_children:
+            return _FieldNode(
+                annotation=ann, is_list=False, enum_values=(), children=merged_children
+            )
         return (
             _node_from_annotation(non_none[0])
             if non_none
             else _FieldNode(ann, False, (), {})
         )
-    # list[T] → is_list=True; children empty (list elements are values).
-    if origin in (list,):
+
+    # 4) list[T] → is_list=True; children empty (list elements are values).
+    if origin is list:
         return _FieldNode(annotation=ann, is_list=True, enum_values=(), children={})
-    # dict[K, V] → children are dynamic (resolve at runtime by key);
-    # value type recursion is dropped — completion handles dicts as
-    # opaque mappings, mutate path indexes by key.
-    if origin in (dict,):
-        # For dict[str, BaseModel], expose the value model's children
-        # so dotted-path "<dictkey>.subfield" still type-checks.
+
+    # 5) dict[K, V] — expose value-model children for dict[str, BaseModel].
+    if origin is dict:
         if (
             len(args) == 2
             and isinstance(args[1], type)
@@ -247,6 +244,19 @@ def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pyd
                 children=_walk_model(args[1]),
             )
         return _FieldNode(annotation=ann, is_list=False, enum_values=(), children={})
+
+    # 2) Bare type fallback (BaseModel subclass / StrEnum / scalar).
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        return _FieldNode(
+            annotation=ann, is_list=False, enum_values=(), children=_walk_model(ann)
+        )
+    if isinstance(ann, type) and issubclass(ann, StrEnum):
+        return _FieldNode(
+            annotation=ann,
+            is_list=False,
+            enum_values=tuple(m.value for m in ann),
+            children={},
+        )
     return _FieldNode(annotation=ann, is_list=False, enum_values=(), children={})
 
 
@@ -263,28 +273,66 @@ def _schema_tracked() -> dict[str, _FieldNode]:
     return _walk_model(Config)
 
 
+def _is_dict_typed(node: _FieldNode) -> bool:
+    """True iff this node's annotation is ``dict[...]``.
+
+    Covers ``dict[str, T]`` and ``dict[str, BaseModel]`` uniformly.
+    """
+    origin = getattr(node.annotation, "__origin__", None)
+    return origin is dict
+
+
 def _resolve_path(scope: ConfigScope, dotted: str) -> _FieldNode | None:
     """Resolve a dotted path against the cached schema tree.
 
     Returns ``None`` if the path doesn't resolve (e.g. typo). Dict-value
     segments resolve through the dict's value-model children (so
-    ``profiles.<name>.tracked_files`` reaches into ``Profile``).
+    ``profiles.<name>.tracked_files`` reaches into ``Profile``). For
+    plain ``dict[str, T]`` (no BaseModel value), a one-segment dive
+    yields a scalar leaf typed as ``T``.
     """
     schema = _schema_local() if scope is ConfigScope.LOCAL else _schema_tracked()
     parts = dotted.split(".")
-    current = schema
+    current_tree = schema
     node: _FieldNode | None = None
-    for part in parts:
-        if part not in current:
-            # Try dict-key wildcard: if the parent had children, the
-            # part is a dict-key; node stays the value-model node.
-            if node is not None and node.children:
-                current = node.children
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if part in current_tree:
+            node = current_tree[part]
+            current_tree = node.children
+            i += 1
+            continue
+        # Not a known field — if the parent node is dict-typed, this
+        # segment is a dict key. Two shapes:
+        #   - dict[str, BaseModel]: parent's children were already
+        #     populated; current_tree is the value-model's children →
+        #     re-resolve `part` against that tree (so the inner field
+        #     `tracked_files` resolves under `profiles.<name>`).
+        #   - dict[str, T] (T scalar / list): no children → the path
+        #     ends here. Return the parent node as the leaf.
+        if node is not None and _is_dict_typed(node):
+            if node.children:
+                # Dive into the value-model's children for the next segment.
+                current_tree = node.children
+                i += 1
+                # Continue the loop with the new tree.
                 continue
-            return None
-        node = current[part]
-        current = node.children
+            # Scalar dict value — last-segment lookup. Synthesize a
+            # leaf node from the dict's value-type annotation.
+            return _scalar_leaf_from_dict_value(node)
+        return None
     return node
+
+
+def _scalar_leaf_from_dict_value(parent: _FieldNode) -> _FieldNode:
+    """Synthesize a leaf ``_FieldNode`` for a ``dict[str, T]`` value lookup."""
+    args = getattr(parent.annotation, "__args__", ())
+    if len(args) == 2:
+        return _node_from_annotation(args[1])
+    return _FieldNode(
+        annotation=parent.annotation, is_list=False, enum_values=(), children={}
+    )
 
 
 def _enumerate_paths(scope: ConfigScope, prefix: str = "") -> list[str]:
