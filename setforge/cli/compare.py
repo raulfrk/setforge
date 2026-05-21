@@ -26,15 +26,18 @@ from setforge.cli._helpers import (
     _iter_section_tracked_files,
     _refuse_legacy_live_markers,
 )
+from setforge.cli._install_helpers import _load_validated_host_local_sections
 from setforge.cli._output import render
-from setforge.compare import CompareStatus, load_ignored_orphans
+from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
 from setforge.config import (
+    Config,
     apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
 )
 from setforge.section_reconcile import SectionDriftState
-from setforge.sections import SectionSemantics
+from setforge.sections import SectionSemantics, extract_sections
+from setforge.source import HostLocalSection
 
 
 @app.command(epilog=COMPARE_EXAMPLES)
@@ -79,12 +82,21 @@ def compare(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(profile_ctx, command="compare")
+    # setforge-xsco: load + validate the local.yaml host_local_sections
+    # overlay so ``compare_profile`` threads it into ``diff_file`` —
+    # a live file that already received its host-local sections must
+    # not surface as drift. Same validator install uses (anchors
+    # resolved at deploy time; this layer only sniffs file-type).
+    host_local_sections_map = _load_validated_host_local_sections(
+        cfg, resolved, repo_root
+    )
     report = compare_mod.compare_profile(
         cfg,
         profile,
         repo_root,
         transitions_dir=transitions.transitions_root(),
         ignored=load_ignored_orphans(),
+        host_local_sections=host_local_sections_map,
     )
 
     console = Console()
@@ -100,6 +112,14 @@ def compare(
             # interpret as markup spans and silently strip.
             console.print(line, markup=False)
         _render_compare_report(report, console, full_diff=full_diff)
+        # setforge-xsco SPEC 1 mockup: surface every host-local section
+        # the install would inject, tagged with the canonical provenance
+        # marker. Lives BELOW the drift summary so the diff body and
+        # per-status counts stay grouped, mirroring the mockup's
+        # ordering ("✓ no drift ... + [host-local via local.yaml] X").
+        _render_host_local_preview(
+            host_local_sections_map, cfg, resolved.tracked_files, console
+        )
         if reconcile_user_sections:
             _print_section_reconcile_dry_run(profile_ctx, console)
 
@@ -173,6 +193,62 @@ def _render_compare_report(
         for entry in report.entries:
             if entry.diff:
                 console.print(Syntax(entry.diff, "diff"))
+
+
+def _render_host_local_preview(
+    host_local_sections_map: dict[str, dict[str, HostLocalSection]],
+    cfg: Config,
+    profile_tracked_file_ids: list[str],
+    console: Console,
+) -> None:
+    """Emit the setforge-xsco SPEC 1 host-local would-be-injected preview block.
+
+    Per the mockup: ``+ [host-local via local.yaml] X ← would be injected``.
+    One indented block per tracked_file with at least one host-local
+    section declared in local.yaml. For each section, classifies
+    "would be injected" (section name not present in live file) vs
+    "already injected" (already on disk from a prior install) by
+    re-extracting marker names from the live file. The compare command
+    is read-only — this is the user's preview of what install would do
+    without running it, mirroring the dry-run install output.
+
+    No-op when ``host_local_sections_map`` is empty.
+    """
+    if not host_local_sections_map:
+        return
+    profile_ids = set(profile_tracked_file_ids)
+    rendered_any = False
+    for tf_id, sections_map in host_local_sections_map.items():
+        if tf_id not in profile_ids:
+            continue
+        tracked_file = cfg.tracked_files[tf_id]
+        dst = resolve_dst(tracked_file)
+        # Existing live-section names — used to classify already-injected
+        # vs would-be-injected per section. allow_legacy=True so a pre-9by
+        # live file does not crash the preview.
+        try:
+            live_text = dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            live_names: set[str] = set()
+        else:
+            live_names = set(extract_sections(live_text, allow_legacy=True))
+        if not rendered_any:
+            console.print("")
+            rendered_any = True
+        console.print(f"{dst}  ({tf_id})", markup=False)
+        for section_name in sections_map:
+            if section_name in live_names:
+                console.print(
+                    f"  = [host-local via local.yaml] {section_name}"
+                    "     ← already injected",
+                    markup=False,
+                )
+            else:
+                console.print(
+                    f"  + [host-local via local.yaml] {section_name}"
+                    "     ← would be injected",
+                    markup=False,
+                )
 
 
 def _print_section_reconcile_dry_run(ctx: ProfileContext, console: Console) -> None:

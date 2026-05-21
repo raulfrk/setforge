@@ -70,12 +70,16 @@ from setforge.compare import (
     resolve_dst,
     resolve_src,
 )
-from setforge.config import TrackedFile
+from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
-from setforge.source import HostLocalSection, load_local_host_local_sections
+from setforge.source import (
+    HostLocalSection,
+    load_local_host_local_sections,
+    validate_host_local_sections_file_type,
+)
 
 
 def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
@@ -100,6 +104,38 @@ def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
     if not saw_tracked_file:
         return None
     return False
+
+
+def _load_validated_host_local_sections(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> dict[str, dict[str, HostLocalSection]]:
+    """Load local.yaml host_local_sections + reject non-markdown tracked_files.
+
+    Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
+    every tracked_file in the resolved profile that declares at least
+    one host-local section. tracked_files NOT in the resolved profile
+    are dropped silently (no error — the user may target a different
+    profile on a different host). Non-markdown ``src`` with declared
+    host-local sections raises :class:`ConfigError` via
+    :func:`validate_host_local_sections_file_type` BEFORE any file is
+    written (setforge-xsco anti-smell item: install aborts cleanly).
+
+    Shared between :mod:`setforge.cli.install` and
+    :mod:`setforge.cli.compare` so both surfaces validate identically
+    before threading the overlay through ``deploy.copy_atomic`` /
+    ``compare_profile`` respectively.
+    """
+    overlay = load_local_host_local_sections()
+    result: dict[str, dict[str, HostLocalSection]] = {}
+    profile_ids = set(resolved.tracked_files)
+    for tf_id, sections_map in overlay.items():
+        if tf_id not in profile_ids:
+            continue
+        tracked_file = cfg.tracked_files[tf_id]
+        src = resolve_src(tracked_file, repo_root)
+        validate_host_local_sections_file_type(tf_id, len(sections_map), src)
+        result[tf_id] = sections_map
+    return result
 
 
 def _check_unexpected_drift(

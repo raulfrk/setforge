@@ -429,6 +429,7 @@ def compare_profile(
     *,
     transitions_dir: Path | None = None,
     ignored: frozenset[str] = frozenset(),
+    host_local_sections: Mapping[str, dict[str, HostLocalSection]] | None = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
@@ -439,19 +440,38 @@ def compare_profile(
     ``~/.config/setforge/local.yaml``). When ``transitions_dir`` is
     ``None`` the orphans list is empty — preserves the pre-orphan call
     shape for callers that don't have a transitions dir handy.
+
+    ``host_local_sections`` is the validated local.yaml overlay shaped
+    ``{tracked_file_id: {section_name: HostLocalSection}}`` (setforge-xsco
+    SPEC 1). When provided, the per-tracked_file overlay is threaded
+    into :func:`diff_file` so a live file that already received its
+    host-local sections does NOT show up as drift, AND the post-merge
+    rendered ``src`` mirrors what ``setforge install`` would actually
+    deploy (overlay-aware compare). The CLI surface
+    (:func:`setforge.cli.compare.compare`) loads + validates the map
+    via :func:`setforge.cli._install_helpers._load_validated_host_local_sections`
+    before passing it in; callers that don't carry an overlay (e.g.
+    the orphan-detection and status commands) pass ``None`` and get the
+    pre-xsco behavior.
     """
     resolved = resolve_profile(config, profile_name)
     entries: list[FileCompare] = []
     has_unexpected = False
+    overlay = host_local_sections or {}
 
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
+        host_local = overlay.get(name) or None
 
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             entry, sub_unexpected = _compare_one(
-                sub_name, sub_src, sub_dst, tracked_file
+                sub_name,
+                sub_src,
+                sub_dst,
+                tracked_file,
+                host_local_sections=host_local,
             )
             entries.append(entry)
             if sub_unexpected:
@@ -467,7 +487,12 @@ def compare_profile(
 
 
 def _compare_one(
-    name: str, src: Path, dst: Path, tracked_file: TrackedFile
+    name: str,
+    src: Path,
+    dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
     # False on a dangling symlink, which would otherwise misclassify the
@@ -475,7 +500,9 @@ def _compare_one(
     # so dangling links surface as DRIFTED (target drift / broken link)
     # rather than MISSING.
     if tracked_file.symlink is not None:
-        return _compare_symlinked(name, src, dst, tracked_file)
+        return _compare_symlinked(
+            name, src, dst, tracked_file, host_local_sections=host_local_sections
+        )
 
     if not dst.exists():
         return (
@@ -495,6 +522,7 @@ def _compare_one(
         preserve_user_sections=tracked_file.preserve_user_sections,
         preserve_user_keys=tracked_file.preserve_user_keys or None,
         preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
+        host_local_sections=host_local_sections,
     )
 
     expected_keys: list[str] = []
@@ -542,7 +570,12 @@ def _compare_one(
 
 
 def _compare_symlinked(
-    name: str, src: Path, dst: Path, tracked_file: TrackedFile
+    name: str,
+    src: Path,
+    dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
 
@@ -616,7 +649,14 @@ def _compare_symlinked(
     # exist, so a broken link (target absent) naturally lands UNCHANGED
     # here — the link itself is still what setforge installed.
     target_path = Path(tracked_file.symlink).expanduser()
-    target_diff = diff_file(src, target_path)
+    target_diff = diff_file(
+        src,
+        target_path,
+        preserve_user_sections=tracked_file.preserve_user_sections,
+        preserve_user_keys=tracked_file.preserve_user_keys or None,
+        preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
+        host_local_sections=host_local_sections,
+    )
     if target_diff:
         return (
             FileCompare(

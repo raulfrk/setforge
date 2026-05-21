@@ -42,6 +42,7 @@ from setforge.cli._install_helpers import (
     _compute_preserve_user_keys_applied,
     _deploy_all_tracked_files,
     _dry_run_pipeline,
+    _load_validated_host_local_sections,
     _run_predeploy_gates,
     _write_install_transition,
 )
@@ -58,52 +59,17 @@ from setforge.cli._welcome import (
     prompt_welcome,
     reject_auto_on_fresh_host,
 )
-from setforge.compare import resolve_src
 from setforge.config import (
-    Config,
-    ResolvedProfile,
     apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
 )
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
-from setforge.source import (
-    HostLocalSection,
-    load_local_host_local_sections,
-    validate_host_local_sections_file_type,
-)
 from setforge.transitions import (
     ReconcileStatus,
     load_latest,
     load_reconcile_outcomes,
 )
-
-
-def _load_validated_host_local_sections(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> dict[str, dict[str, HostLocalSection]]:
-    """Load local.yaml host_local_sections + reject non-markdown tracked_files.
-
-    Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
-    every tracked_file in the resolved profile that declares at least
-    one host-local section. tracked_files NOT in the resolved profile
-    are dropped silently (no error — the user may target a different
-    profile on a different host). Non-markdown ``src`` with declared
-    host-local sections raises :class:`ConfigError` via
-    :func:`validate_host_local_sections_file_type` BEFORE any file is
-    written (setforge-xsco anti-smell item: install aborts cleanly).
-    """
-    overlay = load_local_host_local_sections()
-    result: dict[str, dict[str, HostLocalSection]] = {}
-    profile_ids = set(resolved.tracked_files)
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        tracked_file = cfg.tracked_files[tf_id]
-        src = resolve_src(tracked_file, repo_root)
-        validate_host_local_sections_file_type(tf_id, len(sections_map), src)
-        result[tf_id] = sections_map
-    return result
 
 
 @app.command(epilog=INSTALL_EXAMPLES)
