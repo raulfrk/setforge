@@ -120,9 +120,12 @@ def compare(
             console.print(line, markup=False)
         # SPEC 2 — emit the per-axis effective-set block (plugins /
         # extensions / marketplaces) with [from local.yaml] / SPEC-2
-        # remove tags inline, plus the footer summary line.
+        # remove tags inline, plus the footer summary line. soft_wrap
+        # so the footer-summary line (~80+ cols) does not break mid-
+        # phrase under Rich's auto-wrap (would corrupt grep-based
+        # assertions in the e2e suite).
         for line in compare_mod.render_local_overlay_block(cfg, overlay_resolution):
-            console.print(line, markup=False)
+            console.print(line, markup=False, soft_wrap=True)
         _render_compare_report(report, console, full_diff=full_diff)
         # setforge-xsco SPEC 1 mockup: surface every host-local section
         # the install would inject, tagged with the canonical provenance
