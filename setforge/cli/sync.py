@@ -329,7 +329,16 @@ def _write_sync_transition(
     metadata) and the trailing ``transition: ...`` /
     ``↩  revert with: ...`` echoes so the caller body stays a flat
     capture-and-write skeleton.
+
+    Skips the write entirely when capture produced no file mutations
+    (``file_pre == file_post``). An empty SYNC transition would shadow a
+    preceding ``TransitionCommand.PROMOTE`` record in
+    :func:`transitions.load_latest`, so ``setforge revert`` after a
+    sync-with-promote would reverse the no-op SYNC instead of the
+    promote (setforge-dg2a round-4 round-trip regression).
     """
+    if file_pre == file_post:
+        return
     target = transitions.write_transition(
         transitions.make_meta(
             transitions.TransitionCommand.SYNC,
