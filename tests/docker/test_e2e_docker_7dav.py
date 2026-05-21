@@ -51,12 +51,18 @@ def test_config_completion_path_works(
     """PTY: shell tab-completion on ``setforge config add --local <TAB>``.
 
     Spawns an interactive zsh inside the container, sources the
-    ``setforge --show-completion=zsh`` script, types
+    ``setforge --show-completion zsh`` script, types
     ``setforge config add --local `` and presses TAB, then asserts a
-    known dotted-path candidate (``binaries.code``) appears in the
-    rendered completion menu. Exercises the END-TO-END shell-completion
-    path (typer's completion machinery → setforge's
+    known schema-derived dotted-path candidate (``source.kind``)
+    appears in the rendered completion menu. Exercises the END-TO-END
+    shell-completion path (typer's completion machinery → setforge's
     _complete_path_dispatch callback → shell-rendered candidates).
+
+    ``source.kind`` is a known Pydantic schema path (``LocalConfig.source.kind``)
+    so ``_enumerate_paths`` always surfaces it; arbitrary user dict-keys
+    like ``binaries.code`` only appear via the schema walker when the
+    parent field has structured children, which the free-form
+    ``dict[str, str]`` ``binaries`` field does not.
     """
     c = docker_container()
     # Touch ~/.zshrc so `zsh -i` doesn't trigger the zsh-newuser-install
@@ -67,10 +73,27 @@ def test_config_completion_path_works(
         container=c.cid,
         cmd=["zsh", "-i"],
     )
-    session.send_keys('eval "$(uv run setforge --show-completion=zsh)" 2>/dev/null\r')
-    session.expect_in_display("$", timeout=10)
-    session.send_keys("uv run setforge config add --local \t")
-    session.expect_in_display("binaries.code", timeout=10)
+    # Wiring constraints for zsh shell completion:
+    # (1) Put the project venv bin on PATH so bare ``setforge`` resolves
+    #     to the installed CLI (interactive zsh does not see the
+    #     uv-managed venv unless asked). The typer-generated completion
+    #     registers ``compdef _setforge_completion setforge`` — i.e.
+    #     for the literal command word ``setforge``, not ``uv``, so
+    #     invoking via ``uv run setforge`` bypasses the completion.
+    # (2) ``autoload -U compinit && compinit -u`` before the eval so the
+    #     ``compdef`` builtin used by the typer script is defined.
+    # (3) Explicit echo markers (DONE_COMPINIT / DONE_EVAL) — a stale
+    #     ``%`` prompt from initial shell startup would otherwise let
+    #     TAB fire before compinit / eval actually completed.
+    session.send_keys("export PATH=/workspace/.venv/bin:$PATH\r")
+    session.send_keys("autoload -U compinit && compinit -u && echo DONE_COMPINIT\r")
+    session.expect_in_display("DONE_COMPINIT", timeout=15)
+    session.send_keys(
+        'eval "$(setforge --show-completion zsh)" 2>/dev/null && echo DONE_EVAL\r'
+    )
+    session.expect_in_display("DONE_EVAL", timeout=30)
+    session.send_keys("setforge config add --local \t")
+    session.expect_in_display("source.kind", timeout=15)
 
 
 def test_config_add_tracked_dirty_repo_refuses_non_pty(
@@ -531,46 +554,53 @@ def test_config_completion_value_works(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY: shell tab-completion on ``setforge config remove --local plugins.add``.
+    """PTY: shell tab-completion on ``setforge config add --local source.kind``.
 
     Spawns an interactive zsh inside the container, sources the
-    ``setforge --show-completion=zsh`` script, types
-    ``setforge config remove --local plugins.add `` and presses TAB,
-    then asserts the configured plugin names appear in the screen
-    buffer as completion candidates.
+    ``setforge --show-completion zsh`` script, types
+    ``setforge config add --local source.kind `` and presses TAB, then
+    asserts the Literal enum candidate (``path``) appears in the
+    rendered completion menu.
+
+    ``source.kind`` is the only ``LocalConfig`` field with enum_values
+    in the LocalConfig schema today (``Literal[SourceKind.PATH,
+    SourceKind.GIT]``); list-shaped paths only exist tracked-side
+    (``profiles.<name>.tracked_files`` etc.). Asserting the enum branch
+    of ``_complete_value`` here gives end-to-end coverage of the value
+    callback machinery; the list branch is covered by the unit-level
+    ``test_config_completion_value_callback_contract`` plus the PTY
+    list-add test ``test_config_add_local_list_path_*``.
 
     This exercises the END-TO-END shell-completion path (typer's
     completion machinery → setforge's _complete_value callback →
     shell-rendered candidates) rather than the unit-level callback
-    contract that ``test_config_completion_value_callback_contract``
-    covers. The PTY route catches integration breakage that
-    monkeypatched callbacks can't (shell-renderer escapes,
-    completion-script wiring, lazy-import timing).
+    contract — catches integration breakage (shell-renderer escapes,
+    completion-script wiring, lazy-import timing) that monkeypatched
+    callbacks can't.
     """
     c = docker_container()
     # Touch ~/.zshrc so `zsh -i` doesn't trigger the zsh-newuser-install
     # wizard, which intercepts stdin before our completion-eval can run.
     # Same idiom as tests/docker/test_e2e_docker_completion.py.
     c.exec(["touch", "/home/tester/.zshrc"])
-    # Seed a local.yaml with one plugin so TAB has something to complete.
-    c.write_text(
-        _HOME_LOCAL_YAML,
-        "binaries:\n"
-        "  code: /usr/bin/code\n"
-        "plugins:\n"
-        "  add:\n"
-        "    - secure-code-review@official\n",
-    )
     session = pyte_pty_session(
         container=c.cid,
         cmd=["zsh", "-i"],
     )
-    # Source the completion script + tab on the relevant path.
-    session.send_keys('eval "$(uv run setforge --show-completion=zsh)" 2>/dev/null\r')
-    session.expect_in_display("$", timeout=10)
-    session.send_keys("uv run setforge config remove --local plugins.add \t")
-    # The plugin name should appear in the rendered completion menu.
-    session.expect_in_display("secure-code-review@official", timeout=10)
+    # See test_config_completion_path_works for the four wiring
+    # constraints (venv bin on PATH for bare ``setforge``, compinit
+    # before the typer eval, explicit DONE markers, ``compdef setforge``
+    # only matches the literal command word ``setforge``).
+    session.send_keys("export PATH=/workspace/.venv/bin:$PATH\r")
+    session.send_keys("autoload -U compinit && compinit -u && echo DONE_COMPINIT\r")
+    session.expect_in_display("DONE_COMPINIT", timeout=15)
+    session.send_keys(
+        'eval "$(setforge --show-completion zsh)" 2>/dev/null && echo DONE_EVAL\r'
+    )
+    session.expect_in_display("DONE_EVAL", timeout=30)
+    session.send_keys("setforge config add --local source.kind \t")
+    # The enum value should appear in the rendered completion menu.
+    session.expect_in_display("path", timeout=15)
 
 
 def test_config_completion_value_callback_contract(
