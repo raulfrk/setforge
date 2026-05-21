@@ -509,23 +509,30 @@ def _route_setforge_yaml_validation_error(
     :attr:`setforge.config.Config.model_fields` (top-level keys) or the
     nested model's ``model_fields`` for nested ``extra_forbidden`` errors.
 
-    If the re-read fails (race window: file became unreadable between
-    ``load_config``'s parse and this routing), fall back to the
-    top-level placeholder rather than letting an :class:`OSError`
-    replace the original :class:`ValidationError`.
+    If the re-read fails — race window where the file became
+    unreadable (:class:`OSError`) or syntactically invalid
+    (:class:`ruamel.yaml.error.YAMLError`) between ``load_config``'s
+    parse and this routing — fall back to the top-level placeholder
+    rather than letting either exception replace the original
+    :class:`ValidationError`.
     """
     try:
         raw_text = config_path.read_text(encoding="utf-8")
         raw_lines = raw_text.splitlines()
         yaml_rt = YAML(typ="rt")
         raw = yaml_rt.load(raw_text)
-    except OSError:
+    except (OSError, YAMLError):
+        # Either the re-read failed (race window) or the file became
+        # syntactically invalid between ``load_config``'s parse and
+        # this routing. Fall back to the top-level placeholder so the
+        # original ValidationError still surfaces — mirrors the
+        # ``_check_local_yaml`` resilience pattern.
         raw = None
         raw_lines = []
     if raw is None or not isinstance(raw, Mapping):
-        # Malformed top-level shape (or unreadable re-read) — fall back
-        # to top-level (1, 1) placeholder; the error message carries
-        # the diagnostic.
+        # Malformed top-level shape (or unreadable / unparseable
+        # re-read) — fall back to top-level (1, 1) placeholder; the
+        # error message carries the diagnostic.
         for err in exc.errors():
             failures.append(_build_top_level_fallback(config_path, err))
         return
