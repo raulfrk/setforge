@@ -464,6 +464,16 @@ def _build_snippet(raw_lines: list[str], line_1: int) -> list[str]:
     return raw_lines[start : end + 1]
 
 
+def _home_relative(path: Path) -> str:
+    """Return ``path`` with the user's home prefix collapsed to ``~``.
+
+    Mirrors the rendering convention used by the ``Fix:`` action lines
+    (mockup D) — keeps the on-screen prefix short without making the
+    underlying ``Path`` lossy.
+    """
+    return str(path).replace(str(Path.home()), "~", 1)
+
+
 def _build_fix_hint(
     local_yaml_path: Path, line_1: int, err_type: object, field_value: str, msg: object
 ) -> str:
@@ -472,7 +482,7 @@ def _build_fix_hint(
     Different error types get tailored language — ``extra_forbidden``
     gets "unknown key", value-shape errors get the Pydantic message.
     """
-    home_path = str(local_yaml_path).replace(str(Path.home()), "~", 1)
+    home_path = _home_relative(local_yaml_path)
     if err_type == "extra_forbidden":
         return (
             f"edit {home_path}:{line_1} — unknown key {field_value!r} "
@@ -678,7 +688,7 @@ def _build_setforge_fix_hint(
     (display root is the directory of ``setforge.yaml`` itself) and
     "unknown key" wording for ``extra_forbidden``.
     """
-    home_path = str(config_path).replace(str(Path.home()), "~", 1)
+    home_path = _home_relative(config_path)
     if err_type == "extra_forbidden":
         return (
             f"edit {home_path}:{line_1} — unknown key {field_value!r} "
