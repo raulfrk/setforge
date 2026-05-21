@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import difflib
 import functools
+import io
 import sys
 from enum import StrEnum
 from pathlib import Path
@@ -275,8 +276,6 @@ def _dump_to_str(doc: Any) -> str:  # noqa: ANN401 — accepts any YAML-dumpable
     dumps, plus ``CommentedSeq`` / scalar / dict / list for the sliced
     sub-trees produced by :func:`_slice_doc` in ``show``).
     """
-    import io
-
     yaml = yaml_rt()
     buf = io.StringIO()
     yaml.dump(doc, buf)
