@@ -924,13 +924,21 @@ def _scope_from_ctx(ctx: typer.Context) -> ConfigScope | None:
 
 
 def _complete_path_dispatch(ctx: typer.Context, incomplete: str) -> list[str]:
-    """Dispatch path completion based on the resolved scope."""
+    """Dispatch path completion based on the resolved scope.
+
+    Shell-completion contract: NEVER raise on user input — falling back
+    to the static-template top-level list keeps tab from breaking the
+    shell when config parsing / schema-walk surfaces an unexpected
+    failure (per anti-smell #17). Narrow the catch to the exception
+    families the schema walk / Pydantic introspection can plausibly
+    raise so a SystemExit / KeyboardInterrupt still propagates.
+    """
     scope = _scope_from_ctx(ctx) or ConfigScope.LOCAL
     try:
         if scope is ConfigScope.LOCAL:
             return _complete_path_local(ctx, incomplete)
         return _complete_path_tracked(ctx, incomplete)
-    except Exception:
+    except (SetforgeError, KeyError, AttributeError, ValueError, OSError):
         return _static_template_paths(scope)
 
 
@@ -970,7 +978,11 @@ def _complete_value(ctx: typer.Context, incomplete: str) -> list[str]:
     """
     try:
         return _complete_value_impl(ctx, incomplete)
-    except Exception:
+    except (SetforgeError, KeyError, AttributeError, ValueError, OSError):
+        # Shell-completion contract: never raise on user input. Narrow
+        # the catch to plausible failure modes (missing config file,
+        # malformed YAML, half-built typer.Context) so SystemExit /
+        # KeyboardInterrupt still propagates.
         return []
 
 
