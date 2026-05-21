@@ -563,6 +563,7 @@ def test_config_remove_local_list_pty_confirm_yes(
     assert "- ex" not in after
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_config_add_marketplaces_pty_interactive(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
