@@ -44,6 +44,7 @@ A 100+ test end-to-end suite at `tests/docker/` exercises `install`/`sync`/`comp
 - **Runtime serial (`-n 0`):** ~15+ min.
 - **When to run:** required whenever Phase 7 fires (post-merge cross-cutting review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH and `gitleaks` on PATH (or `--gitleaks-bin` override) for the secrets-scan e2e cases; the suite skips containers missing docker.
+- **Full-screen TUI tests (setforge-ffs0):** prompt_toolkit's `radiolist_dialog` / `input_dialog` panels emit cursor-positioning ANSI that pexpect's line matcher cannot anchor on. Use the `pyte_pty_session` fixture in `tests/docker/conftest.py` for those — it feeds the PTY byte stream into a `pyte.HistoryScreen` and exposes `.display: list[str]` for line-by-line asserts. See `tests/docker/pyte_session.py` for the API (anti-smell items: `docker exec -it` is required, arrow keys are `\x1b[A/B/C/D`, Enter is `\r`). The plain-stdout `docker_pty_session` (raw pexpect) still suits non-TUI interactives.
 
 The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pytest` run via `pyproject.toml`'s `addopts = "-m 'not e2e_docker'"`, so plain `uv run pytest` will not run it.
 
