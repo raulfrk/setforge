@@ -651,6 +651,9 @@ def strip_host_local_sections(
         return text
     out_lines: list[str] = []
     drop = False
+    # ``_MarkerEvent`` is a closed StrEnum-tagged union (_BodyLine /
+    # _OutsideLine / _StartMarker / _EndMarker); the cases below cover
+    # every variant — no exhaustiveness sentinel needed.
     for event in _walk_markers(text, allow_legacy=allow_legacy):
         match event:
             case _StartMarker(semantics=SectionSemantics.HOST_LOCAL, name=name) if (
@@ -672,8 +675,6 @@ def strip_host_local_sections(
                 | _EndMarker(line=line)
             ):
                 out_lines.append(line)
-            case _ as never:
-                assert_never(never)
     return "".join(out_lines)
 
 
