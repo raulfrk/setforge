@@ -469,9 +469,20 @@ def _home_relative(path: Path) -> str:
 
     Mirrors the rendering convention used by the ``Fix:`` action lines
     (mockup D) — keeps the on-screen prefix short without making the
-    underlying ``Path`` lossy.
+    underlying ``Path`` lossy. Uses :meth:`Path.relative_to` to anchor
+    the match at the home boundary (avoids the theoretical
+    ``/tmp/home/raul/...`` false-match a substring ``str.replace``
+    would hit).
     """
-    return str(path).replace(str(Path.home()), "~", 1)
+    try:
+        rel = path.relative_to(Path.home())
+    except ValueError:
+        return str(path)
+    rel_str = str(rel)
+    if rel_str == ".":
+        # ``path`` is exactly ``Path.home()`` — render as bare ``~``.
+        return "~"
+    return f"~/{rel_str}"
 
 
 def _build_fix_hint(
