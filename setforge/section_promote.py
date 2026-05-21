@@ -350,6 +350,59 @@ def _drop_host_local_section_entry(
 # ---------------------------------------------------------------------------
 
 
+def _write_tracked_with_shared_section(plan: PromotePlan) -> None:
+    """Step 1: splice a new shared marker pair + body into tracked-file.
+
+    Reads ``plan.tracked_path``, threads it through
+    :func:`inject_host_local_section` (which emits a host-local marker
+    pair),
+    :func:`rewrite_live_markers_to_shared` (flip the just-inserted pair
+    to ``shared``), and :func:`maintain_marker_hashes` (stamp the
+    end-marker hash). The single :func:`_atomic_write_text` call lands
+    everything as one atomic move (anti-smell 2).
+    """
+    tracked_text = plan.tracked_path.read_text(encoding="utf-8")
+    new_tracked = inject_host_local_section(
+        tracked_text, plan.section_name, plan.anchor, plan.body
+    )
+    new_tracked = rewrite_live_markers_to_shared(new_tracked, plan.section_name)
+    new_tracked = maintain_marker_hashes(new_tracked)
+    _atomic_write_text(plan.tracked_path, new_tracked)
+
+
+def _rewrite_live_to_shared(plan: PromotePlan) -> None:
+    """Step 2: rewrite the live-side markers host-local → shared.
+
+    Body bytes between the markers are preserved exactly
+    (anti-smell 4 — :func:`rewrite_live_markers_to_shared` enforces).
+    The post-rewrite text is re-stamped via
+    :func:`maintain_marker_hashes` so the end-marker hash matches the
+    new (now ``shared``) marker keyword set.
+    """
+    live_text = plan.live_path.read_text(encoding="utf-8")
+    new_live = rewrite_live_markers_to_shared(live_text, plan.section_name)
+    new_live = maintain_marker_hashes(new_live)
+    _atomic_write_text(plan.live_path, new_live)
+
+
+def _drop_local_yaml_entry_call(plan: PromotePlan, *, tracked_file_id: str) -> None:
+    """Step 3: drop the ``host_local_sections.<name>`` entry from ``local.yaml``.
+
+    Thin wrapper around :func:`_drop_host_local_section_entry` that
+    binds the call site to ``plan.local_yaml_path`` and
+    ``plan.section_name``. Kept as a separate function so the executor
+    body reads as a three-step skeleton and the rollback tests'
+    monkeypatch on :func:`_drop_host_local_section_entry` still hits the
+    real call site through this wrapper (module-attribute lookup at
+    call time).
+    """
+    _drop_host_local_section_entry(
+        plan.local_yaml_path,
+        tracked_file_id=tracked_file_id,
+        section_name=plan.section_name,
+    )
+
+
 def execute_promote_to_shared(
     plan: PromotePlan,
     *,
@@ -382,29 +435,9 @@ def execute_promote_to_shared(
     snap = Snapshot(files=files, snapshot_base=snapshot_base)
     with snap:
         try:
-            # (1) Splice new shared section into tracked-file.
-            tracked_text = plan.tracked_path.read_text(encoding="utf-8")
-            new_tracked = inject_host_local_section(
-                tracked_text, plan.section_name, plan.anchor, plan.body
-            )
-            # inject_host_local_section emits a host-local marker pair; we want
-            # shared. Rewrite the just-inserted marker pair keywords.
-            new_tracked = rewrite_live_markers_to_shared(new_tracked, plan.section_name)
-            new_tracked = maintain_marker_hashes(new_tracked)
-            _atomic_write_text(plan.tracked_path, new_tracked)
-
-            # (2) Rewrite live-side markers host-local -> shared (body byte-preserved).
-            live_text = plan.live_path.read_text(encoding="utf-8")
-            new_live = rewrite_live_markers_to_shared(live_text, plan.section_name)
-            new_live = maintain_marker_hashes(new_live)
-            _atomic_write_text(plan.live_path, new_live)
-
-            # (3) Drop the local.yaml host_local_sections entry.
-            _drop_host_local_section_entry(
-                plan.local_yaml_path,
-                tracked_file_id=tracked_file_id,
-                section_name=plan.section_name,
-            )
+            _write_tracked_with_shared_section(plan)
+            _rewrite_live_to_shared(plan)
+            _drop_local_yaml_entry_call(plan, tracked_file_id=tracked_file_id)
             snap.discard()
         except BaseException:
             snap.restore()
