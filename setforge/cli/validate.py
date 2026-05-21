@@ -548,7 +548,8 @@ def _setforge_yaml_error_to_context(
     ``.lc`` tables; picks the candidate list for close-match from the
     appropriate Pydantic model at that nesting depth.
     """
-    loc = err.get("loc", ())
+    loc_raw = err.get("loc", ())
+    loc = loc_raw if isinstance(loc_raw, tuple) else ()
     err_type = err.get("type", "")
     msg = err.get("msg", "")
     line_1, col_1, field_value, suggestion = _resolve_setforge_yaml_error_position(
