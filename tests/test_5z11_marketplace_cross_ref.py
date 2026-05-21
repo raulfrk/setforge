@@ -30,7 +30,7 @@ from setforge.config import (
     apply_local_overlay,
 )
 from setforge.errors import ConfigError, ValidationErrorWithContext
-from setforge.local_overlay import LocalOverlayError
+from setforge.local_overlay import LocalOverlayError, OverlayOrigin
 
 
 def _make_cfg(
@@ -155,8 +155,6 @@ def test_overlay_marketplace_add_satisfies_cross_ref(tmp_path: Path) -> None:
     # work-tool@work-internal surfaces in resolution.plugins as LOCAL_ADD —
     # the resolver preserves the raw overlay.add string verbatim so the
     # renderer can print the name@marketplace form unchanged.
-    from setforge.local_overlay import OverlayOrigin
-
     added = [p for p in resolution.plugins if p.origin is OverlayOrigin.LOCAL_ADD]
     assert any(p.value == "work-tool@work-internal" for p in added)
     # And the bare-name dispatch path still works: cfg.claude_plugins
@@ -380,8 +378,6 @@ def test_apply_local_overlay_returns_empty_resolution_for_absent_local_yaml(
         cfg, rp, "p", local_config_path=tmp_path / "absent.yaml"
     )
     # Profile-only resolution — no LOCAL_ADD / LOCAL_REMOVE entries.
-    from setforge.local_overlay import OverlayOrigin
-
     assert all(p.origin is OverlayOrigin.PROFILE for p in resolution.plugins)
     assert all(m.origin is OverlayOrigin.PROFILE for m in resolution.marketplaces)
 
