@@ -58,6 +58,10 @@ def test_config_completion_path_works(
     _complete_path_dispatch callback → shell-rendered candidates).
     """
     c = docker_container()
+    # Touch ~/.zshrc so `zsh -i` doesn't trigger the zsh-newuser-install
+    # wizard, which intercepts stdin before our completion-eval can run.
+    # Same idiom as tests/docker/test_e2e_docker_completion.py.
+    c.exec(["touch", "/home/tester/.zshrc"])
     session = pyte_pty_session(
         container=c.cid,
         cmd=["zsh", "-i"],
@@ -541,6 +545,10 @@ def test_config_completion_value_works(
     completion-script wiring, lazy-import timing).
     """
     c = docker_container()
+    # Touch ~/.zshrc so `zsh -i` doesn't trigger the zsh-newuser-install
+    # wizard, which intercepts stdin before our completion-eval can run.
+    # Same idiom as tests/docker/test_e2e_docker_completion.py.
+    c.exec(["touch", "/home/tester/.zshrc"])
     # Seed a local.yaml with one plugin so TAB has something to complete.
     c.write_text(
         _HOME_LOCAL_YAML,
