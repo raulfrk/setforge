@@ -23,6 +23,8 @@ from __future__ import annotations
 import difflib
 import functools
 import sys
+import types as _types
+import typing as _typing
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -189,101 +191,107 @@ def _walk_model(model: type[BaseModel]) -> dict[str, _FieldNode]:
     return out
 
 
-def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pydantic annotations are dynamic
+def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401 — Pydantic annotations are dynamic
     """Build a ``_FieldNode`` for one Pydantic field annotation.
 
-    Handles five shapes:
-    1) ``typing.Annotated[T, ...]`` — strip metadata, recurse on T.
-    2) Bare type (BaseModel subclass / StrEnum / scalar).
-    3) Union shapes (``X | None`` / ``X | Y`` / ``Optional[X]``).
-    4) ``list[T]``.
-    5) ``dict[K, V]`` — for ``dict[str, BaseModel]`` we expose the
-       value-model's children so deep paths work.
+    Dispatches by annotation shape: strips ``Annotated[T, ...]`` metadata
+    first, then routes to a per-shape helper for Literal / Union / list /
+    dict / BaseModel / StrEnum / bare-type. Each helper is under 25
+    lines so the per-shape logic stays inspectable.
     """
-    import types
-    import typing
-
-    # 1) Strip typing.Annotated[T, ...] metadata (Pydantic discriminator hint).
-    if typing.get_origin(ann) is typing.Annotated or hasattr(ann, "__metadata__"):
-        inner_args = typing.get_args(ann)
+    # Strip typing.Annotated[T, ...] metadata (Pydantic discriminator hint).
+    if _typing.get_origin(ann) is _typing.Annotated or hasattr(ann, "__metadata__"):
+        inner_args = _typing.get_args(ann)
         if inner_args:
             return _node_from_annotation(inner_args[0])
 
     origin = getattr(ann, "__origin__", None)
     args = getattr(ann, "__args__", ())
 
-    # Literal[...] — Pydantic discriminator fields render as
-    # ``Literal[Enum.MEMBER]``. Surface the literal values as
-    # enum_values so value-completion on a discriminator path
-    # (e.g. ``source.kind``) yields the literal options. Run BEFORE
-    # the union check because Literal carries __args__ too.
-    if origin is typing.Literal:
-        literal_values = tuple(
-            (a.value if isinstance(a, StrEnum) else str(a)) for a in args
-        )
-        return _FieldNode(
-            annotation=ann, is_list=False, enum_values=literal_values, children={}
-        )
-
-    # 3) Union shapes — PEP 604 (X | Y) and typing.Union[X, Y]. Check
-    # BEFORE the bare-type branch because ``types.UnionType`` carries
-    # ``__origin__ = None`` but still has ``__args__`` populated.
-    if isinstance(ann, types.UnionType) or origin is typing.Union:
-        non_none = [a for a in args if a is not type(None)]
-        if len(non_none) == 1:
-            return _node_from_annotation(non_none[0])
-        # Multi-arm union — merge children across arms so dotted paths
-        # into either union member resolve via the same dispatch. For
-        # discriminator fields (one ``Literal[...]`` per arm) accumulate
-        # enum_values across arms so completion on the union surfaces
-        # every arm's discriminator value.
-        merged_children: dict[str, _FieldNode] = {}
-        for arm in non_none:
-            arm_node = _node_from_annotation(arm)
-            for k, v in arm_node.children.items():
-                if k in merged_children and v.enum_values:
-                    existing = merged_children[k]
-                    combined = tuple(
-                        dict.fromkeys((*existing.enum_values, *v.enum_values))
-                    )
-                    merged_children[k] = _FieldNode(
-                        annotation=existing.annotation,
-                        is_list=existing.is_list,
-                        enum_values=combined,
-                        children=existing.children,
-                    )
-                else:
-                    merged_children.setdefault(k, v)
-        if merged_children:
-            return _FieldNode(
-                annotation=ann, is_list=False, enum_values=(), children=merged_children
-            )
-        return (
-            _node_from_annotation(non_none[0])
-            if non_none
-            else _FieldNode(ann, False, (), {})
-        )
-
-    # 4) list[T] → is_list=True; children empty (list elements are values).
+    if origin is _typing.Literal:
+        return _node_from_literal(ann, args)
+    if isinstance(ann, _types.UnionType) or origin is _typing.Union:
+        return _node_from_union(ann, args)
     if origin is list:
-        return _FieldNode(annotation=ann, is_list=True, enum_values=(), children={})
-
-    # 5) dict[K, V] — expose value-model children for dict[str, BaseModel].
+        return _node_from_list(ann)
     if origin is dict:
-        if (
-            len(args) == 2
-            and isinstance(args[1], type)
-            and issubclass(args[1], BaseModel)
-        ):
-            return _FieldNode(
-                annotation=ann,
-                is_list=False,
-                enum_values=(),
-                children=_walk_model(args[1]),
-            )
-        return _FieldNode(annotation=ann, is_list=False, enum_values=(), children={})
+        return _node_from_dict(ann, args)
+    return _node_from_base(ann)
 
-    # 2) Bare type fallback (BaseModel subclass / StrEnum / scalar).
+
+def _node_from_literal(ann: Any, args: tuple[Any, ...]) -> _FieldNode:  # noqa: ANN401
+    """Pydantic discriminator fields render as ``Literal[Enum.MEMBER]``.
+
+    Surface the literal values as ``enum_values`` so value-completion
+    on a discriminator path (e.g. ``source.kind``) yields the literal
+    options. Must run BEFORE the union check because ``Literal`` carries
+    ``__args__`` too.
+    """
+    literal_values = tuple(
+        (a.value if isinstance(a, StrEnum) else str(a)) for a in args
+    )
+    return _FieldNode(
+        annotation=ann, is_list=False, enum_values=literal_values, children={}
+    )
+
+
+def _node_from_union(ann: Any, args: tuple[Any, ...]) -> _FieldNode:  # noqa: ANN401
+    """PEP 604 / typing.Union shape (``X | None`` / ``X | Y`` / ``Optional[X]``).
+
+    Single non-None arm collapses to ``Optional[X]`` and recurses. Multi-arm
+    unions merge children across arms so dotted paths into either member
+    resolve via the same dispatch. For discriminator fields (one
+    ``Literal[...]`` per arm) ``enum_values`` accumulates across arms so
+    completion on the union surfaces every arm's discriminator value.
+    """
+    non_none = [a for a in args if a is not type(None)]
+    if len(non_none) == 1:
+        return _node_from_annotation(non_none[0])
+    merged_children: dict[str, _FieldNode] = {}
+    for arm in non_none:
+        arm_node = _node_from_annotation(arm)
+        for k, v in arm_node.children.items():
+            if k in merged_children and v.enum_values:
+                existing = merged_children[k]
+                combined = tuple(dict.fromkeys((*existing.enum_values, *v.enum_values)))
+                merged_children[k] = _FieldNode(
+                    annotation=existing.annotation,
+                    is_list=existing.is_list,
+                    enum_values=combined,
+                    children=existing.children,
+                )
+            else:
+                merged_children.setdefault(k, v)
+    if merged_children:
+        return _FieldNode(
+            annotation=ann, is_list=False, enum_values=(), children=merged_children
+        )
+    return (
+        _node_from_annotation(non_none[0])
+        if non_none
+        else _FieldNode(ann, False, (), {})
+    )
+
+
+def _node_from_list(ann: Any) -> _FieldNode:  # noqa: ANN401
+    """``list[T]`` → is_list=True; children empty (list elements are values)."""
+    return _FieldNode(annotation=ann, is_list=True, enum_values=(), children={})
+
+
+def _node_from_dict(ann: Any, args: tuple[Any, ...]) -> _FieldNode:  # noqa: ANN401
+    """``dict[K, V]`` — expose value-model children for ``dict[str, BaseModel]``."""
+    if len(args) == 2 and isinstance(args[1], type) and issubclass(args[1], BaseModel):
+        return _FieldNode(
+            annotation=ann,
+            is_list=False,
+            enum_values=(),
+            children=_walk_model(args[1]),
+        )
+    return _FieldNode(annotation=ann, is_list=False, enum_values=(), children={})
+
+
+def _node_from_base(ann: Any) -> _FieldNode:  # noqa: ANN401
+    """Bare-type fallback: BaseModel subclass / StrEnum / scalar."""
     if isinstance(ann, type) and issubclass(ann, BaseModel):
         return _FieldNode(
             annotation=ann, is_list=False, enum_values=(), children=_walk_model(ann)
