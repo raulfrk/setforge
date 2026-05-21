@@ -290,6 +290,7 @@ from setforge.cli import profile as _profile  # noqa: E402, F401 (profile subgro
 from setforge.cli import snapshot as _snapshot  # noqa: E402, F401 (of3a)
 from setforge.cli import completion as _completion  # noqa: E402, F401
 from setforge.cli import config as _config  # noqa: E402, F401 (setforge-7dav)
+from setforge.cli import promote as _promote  # noqa: E402, F401 (setforge-dg2a)
 # isort: on
 
 
