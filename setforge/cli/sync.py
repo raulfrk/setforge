@@ -257,17 +257,13 @@ def sync(
 
     _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
 
-    promote_outcomes = _run_promote_wizard(
+    _run_promote_wizard(
         ctx,
         auto_enum=auto_enum,
         no_transition=no_transition,
     )
-    any_promoted = any(
-        outcome.action is section_wizard.SectionAction.PROMOTE
-        for outcome in promote_outcomes
-    )
 
-    src_paths = _sync_snapshot_paths(ctx, config, include_local_yaml=any_promoted)
+    src_paths = _sync_snapshot_paths(ctx, config)
     file_pre = transitions.snapshot_paths(src_paths)
 
     results = _run_capture(cfg, profile, repo_root, config, auto_enum, command="sync")
@@ -353,22 +349,19 @@ def _write_sync_transition(
 def _sync_snapshot_paths(
     ctx: ProfileContext,
     config: Path,
-    *,
-    include_local_yaml: bool = False,
 ) -> list[Path]:
     """Every tracked src path under the profile plus ``setforge.yaml`` itself.
 
-    When ``include_local_yaml`` is ``True``, also include
-    :data:`LOCAL_CONFIG_PATH` so the sync transition snapshot captures
-    the host_local_sections drop the dg2a promote wizard just applied
-    (setforge-dg2a anti-smell 6). ``setforge revert`` reads the snapshot
-    list off the transition; missing local.yaml here would silently
-    skip restoring the dropped entry on revert.
+    Excludes :data:`LOCAL_CONFIG_PATH`: the promote wizard fires (and
+    mutates local.yaml) BEFORE this function is called, so any
+    file_pre/file_post snapshot captured here would be byte-identical.
+    The promote path's own ``TransitionCommand.PROMOTE`` record
+    (written inside ``_run_promote_wizard``) snapshots local.yaml
+    pre-mutation, so ``revert`` rolls the drop back independently of
+    the surrounding SYNC transition.
     """
     paths = [sub_src for _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
-    if include_local_yaml:
-        paths.append(LOCAL_CONFIG_PATH)
     return paths
 
 
