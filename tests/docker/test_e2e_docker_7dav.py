@@ -1,5 +1,9 @@
-# Gated on setforge-ffs0 merge — see batch ε spec
 """Docker e2e tests for ``setforge config`` (setforge-7dav).
+
+Gated on setforge-ffs0 merge — see batch ε spec. The PTY half of this
+file consumes the ``pyte_pty_session`` fixture from ffs0; until ffs0
+lands on main, those tests fail to resolve the fixture and are run
+only post-merge in Phase 7.
 
 Two test classes:
 
