@@ -25,7 +25,7 @@ import functools
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import typer
 from pydantic import ValidationError
@@ -87,6 +87,21 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 
         return input_dialog
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _module_self() -> Any:  # noqa: ANN401
+    """Return this module so callers can resolve monkeypatched PEP 562 attrs.
+
+    The :func:`_prompt_confirm` / :func:`_prompt_marketplace_kind`
+    helpers reach for ``radiolist_dialog`` / ``input_dialog`` via this
+    module so tests that monkeypatch
+    ``setforge.cli.config.radiolist_dialog`` intercept the live
+    reference. Defining the indirection once at module scope keeps
+    the per-call sites tight.
+    """
+    import sys as _sys
+
+    return _sys.modules[__name__]
 
 
 __all__ = [
@@ -291,8 +306,7 @@ def _prompt_confirm(
     console.print(Panel.fit(f"About to update [cyan]{yaml_path}[/cyan]:"))
     console.print(diff_text or "(no diff)")
     console.print("[green]Validate result: ✓ clean.[/green]")
-    from setforge.cli import config as _self  # local alias for monkeypatch path
-
+    _self = _module_self()
     choice = _self.radiolist_dialog(
         title="setforge config",
         text="Apply the mutation above?",
@@ -539,7 +553,7 @@ def _mutate_and_write(
     yaml_path: Path,
     dotted: str,
     op_value: str | None,
-    op: str,
+    op: Literal["add", "remove"],
     is_list: bool,
     yes: bool,
 ) -> None:
@@ -679,8 +693,7 @@ def _prompt_marketplace_kind() -> tuple[str, str | None, str | None]:
     monkeypatch indirection from the unit tests still resolves through
     the live module object.
     """
-    from setforge.cli import config as _self
-
+    _self = _module_self()
     chosen = _self.radiolist_dialog(
         title="setforge config add marketplaces.add",
         text="Pick the source kind for this marketplace:",
