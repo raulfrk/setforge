@@ -1,6 +1,6 @@
-"""Docker fixtures for the E2E test ring (setforge-nen.9).
+"""Docker fixtures for the E2E test ring (setforge-nen.9, setforge-ffs0).
 
-Three fixtures:
+Four fixtures:
 
 - :func:`docker_image` — session-scoped: builds the image once per
   pytest session via ``docker/build-push-action``-equivalent CLI. Skips
@@ -11,8 +11,16 @@ Three fixtures:
   ``.copy_out()``, ``.write_text()`` / ``.write_bytes()``. Tears down
   on test end.
 - :func:`docker_pty_session` — function-scoped factory: wraps ``docker
-  exec -it`` with :class:`pexpect.spawn` for interactive sync wizard
-  variants (P/Q/R/S/S1). Yields the spawned session; finalizer kills it.
+  exec -it`` with :class:`pexpect.spawn` for stdout-anchored interactive
+  variants (sync wizard P/Q/R/S/S1). Yields the spawned session;
+  finalizer kills it.
+- :func:`pyte_pty_session` (setforge-ffs0) — function-scoped factory
+  that layers a :class:`pyte.HistoryScreen` over the pexpect PTY so
+  prompt_toolkit's full-screen ``radiolist_dialog`` / ``input_dialog``
+  panels can be anchored on the EMULATED screen (``.display`` lines)
+  rather than the raw byte stream. Returns
+  :class:`tests.docker.pyte_session.PyteSession` instances; finalizer
+  closes every session created during the test.
 
 Only :mod:`tests.test_e2e_docker` consumes these fixtures. They live
 under ``tests/docker/`` (not ``tests/``) to keep the Docker-specific
@@ -25,6 +33,18 @@ daemon are tagged ``@pytest.mark.xdist_group("docker_daemon")``. pytest-xdist
 routes same-group tests to one worker, serializing daemon contention while
 unrelated tests still parallelize. Only tag tests that share daemon state
 (container lifecycle, exec queuing); do NOT tag a test just for being slow.
+
+pyte_pty_session vs docker_pty_session
+--------------------------------------
+Use ``docker_pty_session`` when the test only needs to read line-buffered
+stdout/stderr (existing ``Choice:`` / ``[p]`` prompts that ship as plain
+text). Use ``pyte_pty_session`` when the SUT renders a full-screen
+``prompt_toolkit.Application`` (``radiolist_dialog`` / ``input_dialog`` /
+``yes_no_dialog``) — those emit cursor-positioning ANSI that pexpect's
+line matcher cannot reliably anchor on. The pyte harness lives in
+:mod:`tests.docker.pyte_session`; see its module docstring for the
+``\\x1b[A`` arrow-key + ``\\r`` Enter conventions and the
+``docker exec -it`` ``-it`` requirement.
 """
 
 from __future__ import annotations
@@ -44,6 +64,8 @@ from pathlib import Path
 # pexpect ships no stubs; types-pexpect not added as a dev dep (per qzq scope).
 import pexpect  # type: ignore[import-untyped]
 import pytest
+
+from tests.docker.pyte_session import PyteSession
 
 CONFIG_FIXTURE: str = "tests/fixtures/e2e/setforge.test.yaml"
 """Shared fixture path for the setforge test config used by every Docker e2e test."""
@@ -485,3 +507,64 @@ def docker_pty_session(
     for s in sessions:
         with contextlib.suppress(pexpect.ExceptionPexpect, OSError):
             s.close(force=True)
+
+
+# ---------------------------------------------------------------------------
+# pyte-backed PTY session: full-screen TUI assertions via emulated terminal
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pyte_pty_session() -> Iterator[Callable[..., PyteSession]]:
+    """Function-scoped factory for :class:`PyteSession` instances.
+
+    Spawns ``docker exec -it <container> <cmd>`` through pexpect and
+    feeds the byte stream into a :class:`pyte.HistoryScreen`. Use this
+    fixture when the SUT renders a full-screen prompt_toolkit
+    ``Application`` (``radiolist_dialog`` / ``input_dialog`` /
+    ``yes_no_dialog``); use :func:`docker_pty_session` for plain stdout
+    interactives.
+
+    Each call to the factory creates a fresh session; the finalizer
+    closes every session at test teardown. See
+    :mod:`tests.docker.pyte_session` for the per-keystroke / per-escape
+    anti-smell items (``\\x1b[A`` arrows, ``\\r`` Enter, ``-it`` PTY
+    requirement, pyte ``>=0.8.2`` minimum).
+
+    Usage::
+
+        def test_radiolist_confirm(pyte_pty_session, docker_container):
+            c = docker_container()
+            session = pyte_pty_session(
+                container=c.cid,
+                cmd=["uv", "run", "setforge", "install",
+                     "--profile=foo", "--auto=use-tracked"],
+            )
+            session.expect_in_display("Proceed with the mutation")
+            session.send_keys("\\x1b[B\\r")  # arrow down → yes, Enter
+            session.wait_for_exit(timeout=30, expected_code=0)
+    """
+    sessions: list[PyteSession] = []
+
+    def _factory(
+        *,
+        container: str,
+        cmd: list[str],
+        cols: int = 120,
+        lines: int = 40,
+        timeout: float = 30.0,
+    ) -> PyteSession:
+        session = PyteSession.spawn(
+            container=container,
+            cmd=cmd,
+            cols=cols,
+            lines=lines,
+            timeout=timeout,
+        )
+        sessions.append(session)
+        return session
+
+    yield _factory
+
+    for s in sessions:
+        s.close()
