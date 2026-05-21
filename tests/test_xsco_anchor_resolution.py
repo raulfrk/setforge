@@ -108,6 +108,44 @@ class TestAfterSectionAnchor:
         with pytest.raises(AnchorNotFoundError):
             resolve_anchor(text, AnchorAfterSection(name="missing"))
 
+    def test_strip_host_local_sections_drops_named_pairs(self) -> None:
+        """``strip_host_local_sections`` removes named host-local pairs only.
+
+        Capture-back path (setforge-xsco): host-local sections injected
+        by `install` via local.yaml must be stripped from live before
+        write-back to tracked. Pairs the user authored directly in
+        tracked (not in the names set) must survive.
+        """
+        from setforge.sections import strip_host_local_sections
+
+        text = (
+            "<!-- setforge:user-section start host-local injected hash=a -->\n"
+            "injected body\n"
+            "<!-- setforge:user-section end host-local injected hash=a -->\n"
+            "<!-- setforge:user-section start host-local user-authored hash=b -->\n"
+            "user-authored body\n"
+            "<!-- setforge:user-section end host-local user-authored hash=b -->\n"
+            "<!-- setforge:user-section start shared notes hash=c -->\n"
+            "shared body\n"
+            "<!-- setforge:user-section end shared notes hash=c -->\n"
+        )
+        result = strip_host_local_sections(text, names=frozenset({"injected"}))
+        assert "injected body" not in result
+        assert "injected" not in result.split("\n")[0]  # start marker gone
+        assert "user-authored body" in result  # not in names set — kept
+        assert "shared body" in result
+
+    def test_strip_host_local_sections_noop_on_empty_names(self) -> None:
+        """No-op when no host-local names declared in local.yaml."""
+        from setforge.sections import strip_host_local_sections
+
+        text = (
+            "<!-- setforge:user-section start host-local x hash=a -->\n"
+            "body\n"
+            "<!-- setforge:user-section end host-local x hash=a -->\n"
+        )
+        assert strip_host_local_sections(text, names=frozenset()) == text
+
     def test_after_section_offset_is_line_below_end_marker(self) -> None:
         """Explicit 0-based offset semantics for after-section.
 

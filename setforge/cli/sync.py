@@ -308,7 +308,15 @@ def _run_capture(
     ``KeyboardInterrupt`` → exit-130 mapping shared between
     :func:`capture` and :func:`sync`. ``command`` names the caller so
     the Ctrl-C message reads "<command> cancelled".
+
+    Loads the local.yaml host_local_sections overlay (setforge-xsco) so
+    capture-back filters out the names install would have injected from
+    local.yaml. Without this, host-local marker pairs in the live file
+    round-trip into tracked sources on the next sync.
     """
+    from setforge.source import load_local_host_local_sections
+
+    host_local_sections_map = load_local_host_local_sections()
     try:
         return capture_mod.capture_profile(
             cfg,
@@ -316,6 +324,7 @@ def _run_capture(
             repo_root,
             setforge_yaml_path=config.resolve(),
             auto=auto_enum,
+            host_local_sections_map=host_local_sections_map,
         )
     except CaptureRequiresInteractive as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)

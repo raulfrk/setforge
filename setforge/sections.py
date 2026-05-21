@@ -629,6 +629,54 @@ def section_semantics(
     }
 
 
+def strip_host_local_sections(
+    text: str, *, names: frozenset[str], allow_legacy: bool = True
+) -> str:
+    """Return ``text`` with named host-local marker pairs (markers + body) removed.
+
+    Used by the capture path (:func:`setforge.capture.capture_tracked_file`)
+    to prevent host-local sections injected by ``setforge install`` (from
+    local.yaml ``host_local_sections``) from leaking back into tracked
+    sources on the next ``setforge sync``. ``names`` is the set of
+    host-local section names declared in local.yaml — only those pairs
+    are removed; any host-local marker pair the user authored directly
+    in tracked (carried through to live) passes through unchanged.
+    Shared marker pairs always pass through. ``allow_legacy`` mirrors
+    the strip/extract default — capture reads live-side text that may
+    contain pre-9by markers.
+
+    No-op when ``names`` is empty.
+    """
+    if not names:
+        return text
+    out_lines: list[str] = []
+    drop = False
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
+        match event:
+            case _StartMarker(semantics=SectionSemantics.HOST_LOCAL, name=name) if (
+                name in names
+            ):
+                drop = True
+                continue
+            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, key=key) if (
+                key in names
+            ):
+                drop = False
+                continue
+            case _BodyLine(line=line):
+                if not drop:
+                    out_lines.append(line)
+            case (
+                _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
+    return "".join(out_lines)
+
+
 def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
     """Return ``text`` with content between every user-section marker pair
     removed. Markers themselves are kept so the file remains a valid

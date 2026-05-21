@@ -77,6 +77,7 @@ def capture_tracked_file(
     preserve_user_keys: list[str],
     preserve_user_keys_deep: list[str] | None = None,
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS,
+    host_local_section_names: frozenset[str] = frozenset(),
 ) -> CaptureResult:
     """Write a stripped version of ``dst`` (live) back to ``src`` (tracked).
 
@@ -110,6 +111,19 @@ def capture_tracked_file(
         # does not fire for these tracked_files). Read live, optionally
         # strip shallow keys, merge tracked sections.
         content = _read_with_shallow_strip(dst, preserve_user_keys)
+        # setforge-xsco: drop host-local marker pairs + bodies that were
+        # injected by `setforge install` (via local.yaml
+        # host_local_sections) from the captured live text BEFORE
+        # merging tracked sections. Without this strip the host-local
+        # markers round-trip into the tracked source on the next
+        # `setforge sync` — a leak of host state into shared tracked
+        # content. The strip is name-scoped to ``host_local_section_names``
+        # (loaded by ``setforge.cli.sync`` at the boundary): any
+        # host-local marker pair the user authored directly in tracked
+        # is NOT in that set and passes through unchanged.
+        content = sections.strip_host_local_sections(
+            content, names=host_local_section_names, allow_legacy=True
+        )
         if preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS and src.exists():
             tracked_text = src.read_text(encoding="utf-8")
             tracked_sections = sections.extract_sections(tracked_text)
@@ -205,6 +219,7 @@ def capture_profile(
     auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
     console: Console | None = None,
+    host_local_sections_map: dict[str, dict[str, object]] | None = None,
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
 
@@ -276,12 +291,19 @@ def capture_profile(
 
     # Post-wizard writeback: per-tracked_file, against the tracked content
     # the wizard left behind (or unchanged tracked if no drift).
+    overlay = host_local_sections_map or {}
     results: list[CaptureResult] = []
     resolved = resolve_profile(config, profile_name)
     for name in resolved.tracked_files:
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
+        # setforge-xsco capture-back filter: names of host-local sections
+        # injected by `install` (from local.yaml). The capture path
+        # removes only these names from live-side text before merging
+        # tracked sections; any host-local marker pair the user authored
+        # directly in tracked carries through unchanged.
+        host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             result = capture_tracked_file(
                 sub_src,
@@ -290,6 +312,7 @@ def capture_profile(
                 preserve_user_keys=tracked_file.preserve_user_keys,
                 preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
                 preserve_user_sections_mode=tracked_file.preserve_user_sections_mode,
+                host_local_section_names=host_local_names,
             )
             results.append(
                 CaptureResult(name=sub_name, action=result.action, reason=result.reason)
