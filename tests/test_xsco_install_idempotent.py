@@ -20,6 +20,7 @@ from setforge.source import (
     AnchorAfterHeading,
     AnchorAtEndOfFile,
     HostLocalSection,
+    HostLocalSectionName,
 )
 
 
@@ -33,7 +34,7 @@ def test_install_after_heading_invariant_holds(tmp_path: Path) -> None:
     src = _write_tracked(tmp_path, "# Title\n\n## Workflow\n\nbody\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "work-overrides": HostLocalSection(
+        HostLocalSectionName("work-overrides"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"),
             body="WORK OVERRIDES CONTENT",
         )
@@ -51,7 +52,7 @@ def test_install_idempotent_re_run_no_duplication(tmp_path: Path) -> None:
     src = _write_tracked(tmp_path, "# Title\n\n## Workflow\n\nbody\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "section-a": HostLocalSection(
+        HostLocalSectionName("section-a"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="initial body"
         )
     }
@@ -66,13 +67,13 @@ def test_install_idempotent_body_update_replaces_in_place(tmp_path: Path) -> Non
     src = _write_tracked(tmp_path, "# T\n\n## Workflow\n\n")
     dst = tmp_path / "dst.md"
     initial = {
-        "s": HostLocalSection(
+        HostLocalSectionName("s"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="version-1"
         )
     }
     copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=initial)
     updated = {
-        "s": HostLocalSection(
+        HostLocalSectionName("s"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="version-2"
         )
     }
@@ -87,7 +88,7 @@ def test_install_anchor_not_found_raises_no_file_modified(tmp_path: Path) -> Non
     src = _write_tracked(tmp_path, "# Title\n\nNo workflow heading.\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "ghost": HostLocalSection(
+        HostLocalSectionName("ghost"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="will not land"
         )
     }
@@ -103,7 +104,9 @@ def test_install_at_end_of_file_appends_marker_pair(tmp_path: Path) -> None:
     src = _write_tracked(tmp_path, "# T\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "tail": HostLocalSection(anchor=AnchorAtEndOfFile(), body="tail body")
+        HostLocalSectionName("tail"): HostLocalSection(
+            anchor=AnchorAtEndOfFile(), body="tail body"
+        )
     }
     copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
     text = dst.read_text(encoding="utf-8")
@@ -115,7 +118,7 @@ def test_install_section_keyed_in_extract_sections(tmp_path: Path) -> None:
     src = _write_tracked(tmp_path, "# T\n\n## Workflow\n\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "named-section": HostLocalSection(
+        HostLocalSectionName("named-section"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="body content\n"
         )
     }

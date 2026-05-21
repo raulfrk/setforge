@@ -25,7 +25,7 @@ from setforge import compare as compare_mod
 from setforge.cli import app
 from setforge.config import load_config, resolve_profile
 from setforge.deploy import copy_atomic
-from setforge.source import AnchorAfterHeading, HostLocalSection
+from setforge.source import AnchorAfterHeading, HostLocalSection, HostLocalSectionName
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def overlay_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
 
     # Deploy the host-local section so dst is in the post-install state.
     host_local = {
-        "work-overrides": HostLocalSection(
+        HostLocalSectionName("work-overrides"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"),
             body="WORK OVERRIDES",
         )

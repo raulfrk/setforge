@@ -175,14 +175,20 @@ class TestInjectHostLocalSection:
     def test_inject_preserves_hash_invariant(self) -> None:
         text = "# Title\n\n## Workflow\n\nbody\n"
         out = inject_host_local_section(
-            text, "work-overrides", AnchorAfterHeading(value="Workflow"), "INJECTED"
+            text,
+            HostLocalSectionName("work-overrides"),
+            AnchorAfterHeading(value="Workflow"),
+            "INJECTED",
         )
         assert extract_marker_hashes(out) == hash_sections(out)
 
     def test_inject_uses_host_local_semantics_keyword(self) -> None:
         text = "# Title\n\n## Workflow\n\n"
         out = inject_host_local_section(
-            text, "w", AnchorAfterHeading(value="Workflow"), "x"
+            text,
+            HostLocalSectionName("w"),
+            AnchorAfterHeading(value="Workflow"),
+            "x",
         )
         assert "start host-local w" in out
         assert "end host-local w" in out
@@ -208,11 +214,15 @@ class TestInjectAllIdempotency:
 
     def test_re_inject_updates_body_does_not_duplicate(self) -> None:
         sections = {
-            "s": HostLocalSection(anchor=AnchorAtEndOfFile(), body="first body")
+            HostLocalSectionName("s"): HostLocalSection(
+                anchor=AnchorAtEndOfFile(), body="first body"
+            )
         }
         once = inject_all("# T\n", sections)
         sections2 = {
-            "s": HostLocalSection(anchor=AnchorAtEndOfFile(), body="updated body")
+            HostLocalSectionName("s"): HostLocalSection(
+                anchor=AnchorAtEndOfFile(), body="updated body"
+            )
         }
         twice = inject_all(once, sections2)
         assert twice.count("start host-local s") == 1
@@ -220,6 +230,10 @@ class TestInjectAllIdempotency:
         assert "first body" not in twice
 
     def test_hash_invariant_holds_after_re_inject(self) -> None:
-        sections = {"s": HostLocalSection(anchor=AnchorAtEndOfFile(), body="initial")}
+        sections = {
+            HostLocalSectionName("s"): HostLocalSection(
+                anchor=AnchorAtEndOfFile(), body="initial"
+            )
+        }
         out = inject_all(inject_all("# T\n", sections), sections)
         assert extract_marker_hashes(out) == hash_sections(out)

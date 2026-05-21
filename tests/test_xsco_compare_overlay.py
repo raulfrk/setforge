@@ -11,7 +11,7 @@ from pathlib import Path
 
 from setforge.compare import diff_file
 from setforge.deploy import copy_atomic
-from setforge.source import AnchorAfterHeading, HostLocalSection
+from setforge.source import AnchorAfterHeading, HostLocalSection, HostLocalSectionName
 
 
 def _write_src(tmp_path: Path, content: str) -> Path:
@@ -24,7 +24,7 @@ def test_compare_no_drift_after_host_local_install(tmp_path: Path) -> None:
     src = _write_src(tmp_path, "# Title\n\n## Workflow\n\nbody\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "work-overrides": HostLocalSection(
+        HostLocalSectionName("work-overrides"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK OVERRIDES"
         )
     }
@@ -50,7 +50,7 @@ def test_compare_without_host_local_arg_shows_drift_for_injected_marker(
     src = _write_src(tmp_path, "# Title\n\n## Workflow\n\nbody\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "work-overrides": HostLocalSection(
+        HostLocalSectionName("work-overrides"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK OVERRIDES"
         )
     }
@@ -68,7 +68,7 @@ def test_compare_with_extra_tracked_drift_still_reports(tmp_path: Path) -> None:
     src = _write_src(tmp_path, "# Title\n\n## Workflow\n\nbody\n")
     dst = tmp_path / "dst.md"
     host_local = {
-        "work-overrides": HostLocalSection(
+        HostLocalSectionName("work-overrides"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK"
         )
     }
