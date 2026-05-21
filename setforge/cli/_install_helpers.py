@@ -75,7 +75,7 @@ from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeErr
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
-from setforge.source import HostLocalSection
+from setforge.source import HostLocalSection, load_local_host_local_sections
 
 
 def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
@@ -643,6 +643,7 @@ def _dry_run_pipeline(
     live_sections_map = _extract_live_sections_map(ctx)
     _dry_run_emit_drift_gate(drift_report, live_sections_map=live_sections_map)
     _dry_run_emit_deploys(ctx, drift_report)
+    _dry_run_emit_host_local_inject(ctx)
     _dry_run_emit_section_reconcile(ctx, section_auto=section_auto)
     _dry_run_emit_plugin_reconcile(ctx)
     _dry_run_emit_extension_reconcile(ctx)
@@ -746,6 +747,37 @@ def _dry_run_emit_deploys(
         path = Path(str(raw)).expanduser()
         if not path.exists():
             typer.echo(f"  WOULD bootstrap {path}")
+
+
+def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
+    """Emit the ``=== would-be host-local section inject ===`` block.
+
+    Per setforge-xsco SPEC 1's mockup, each ``WOULD inject`` line carries
+    a ``[host-local via local.yaml]`` provenance tag so users can
+    distinguish host-local injections from shared section reconcile
+    operations (which produce their own WOULD lines via
+    :func:`_dry_run_emit_section_reconcile`). No-op when local.yaml is
+    absent or declares no host-local sections for tracked_files in
+    this profile.
+    """
+    typer.echo("=== would-be host-local section inject ===")
+    overlay = load_local_host_local_sections()
+    profile_ids = set(ctx.resolved.tracked_files)
+    matched: list[tuple[str, str, Path]] = []
+    for tf_id, sections_map in overlay.items():
+        if tf_id not in profile_ids:
+            continue
+        dst = resolve_dst(ctx.cfg.tracked_files[tf_id])
+        for section_name in sections_map:
+            matched.append((tf_id, section_name, dst))
+    if not matched:
+        typer.echo("  no host-local sections to inject")
+        return
+    for tf_id, section_name, dst in matched:
+        typer.echo(
+            f"  WOULD inject  '{section_name}' into {dst} "
+            f"[host-local via local.yaml] (tracked_file {tf_id!r})"
+        )
 
 
 def _dry_run_emit_section_reconcile(
