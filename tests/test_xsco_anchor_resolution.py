@@ -23,6 +23,7 @@ from setforge.source import (
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
     HostLocalSection,
+    HostLocalSectionName,
 )
 
 
@@ -194,9 +195,12 @@ class TestInjectHostLocalSection:
         malformed file with two pairs sharing one name. The guard catches
         this at the splice boundary.
         """
-        once = inject_host_local_section("# T\n", "dup", AnchorAtEndOfFile(), "first")
+        dup_name = HostLocalSectionName("dup")
+        once = inject_host_local_section(
+            "# T\n", dup_name, AnchorAtEndOfFile(), "first"
+        )
         with pytest.raises(AnchorAmbiguousError):
-            inject_host_local_section(once, "dup", AnchorAtEndOfFile(), "second")
+            inject_host_local_section(once, dup_name, AnchorAtEndOfFile(), "second")
 
 
 class TestInjectAllIdempotency:

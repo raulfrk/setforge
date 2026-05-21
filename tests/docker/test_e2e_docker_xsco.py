@@ -394,9 +394,18 @@ def test_compare_shows_host_local_via_local_yaml_tag(
         ],
     )
     assert rc == 0, stderr
-    assert "[host-local via local.yaml]" in stdout, stdout
-    assert "to-inject" in stdout, stdout
+    # Tightened: assert the full preview-line shape (sigil + canonical
+    # provenance tag + section name) on the SAME line as the
+    # "would be injected" cue, not three separate substring checks.
+    assert "+ [host-local via local.yaml] to-inject" in stdout, stdout
     assert "would be injected" in stdout, stdout
+    preview_lines = [
+        line
+        for line in stdout.splitlines()
+        if "[host-local via local.yaml] to-inject" in line
+    ]
+    assert preview_lines, stdout
+    assert any("would be injected" in line for line in preview_lines), stdout
 
 
 def test_compare_does_not_flag_injected_as_drift(
