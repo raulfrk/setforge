@@ -476,6 +476,18 @@ def compare_profile(
     before passing it in; callers that don't carry an overlay (e.g.
     the orphan-detection and status commands) pass ``None`` and get the
     pre-xsco behavior.
+
+    Overlay contract (SPEC 2 / setforge-5z11): this function re-resolves
+    the profile via :func:`resolve_profile` and intentionally discards
+    any :func:`apply_local_overlay` mutations to
+    ``resolved.claude_plugins`` or ``resolved.extensions.include`` that
+    callers may have applied upstream. That's safe today because compare
+    only iterates ``resolved.tracked_files`` — a field the overlay never
+    touches. If compare ever starts reading plugin / extension lists
+    (e.g. to surface overlay-tagged drift in the report), this
+    re-resolution MUST be replaced by accepting a pre-resolved
+    :class:`ResolvedProfile` parameter so the overlay's mutations
+    survive.
     """
     resolved = resolve_profile(config, profile_name)
     entries: list[FileCompare] = []
