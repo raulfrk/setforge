@@ -16,7 +16,7 @@ from typing import Final
 
 import typer
 from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 # ruamel.yaml ships py.typed without resolvable annotations; mirrors the
 # pragma used in setforge.config and setforge.binaries.
@@ -43,9 +43,9 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.errors import SetforgeError, ValidationErrorWithContext
+from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
-from setforge.source import Source
 
 _LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = ("source", "binaries", "claude")
 """Known top-level keys in ``local.yaml``.
@@ -54,28 +54,6 @@ Mirrors the keys consumed by :mod:`setforge.source` (``source:``) and
 :mod:`setforge.binaries` (``binaries:``, ``claude:``). Used as the
 close-match candidate list for typo'd top-level keys (mockup D).
 """
-
-
-class _LocalConfig(BaseModel):
-    """Top-level shape of ``~/.config/setforge/local.yaml`` for validate.
-
-    Mirrors the runtime loaders in :mod:`setforge.source` and
-    :mod:`setforge.binaries` but unifies them into a single Pydantic
-    model with ``extra="forbid"`` so unknown top-level keys surface as
-    schema errors (per mockup D's anti-smell discipline). The runtime
-    loaders intentionally keep their per-block split; this model is
-    validate-only and not consumed by other subcommands.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    source: Source | None = None
-    binaries: dict[str, str] = Field(default_factory=dict)
-    # ``claude:`` is currently a free-form mapping (install_mode field
-    # only, hand-validated by setforge.binaries._parse_claude_block).
-    # Validate as a mapping; the hand-validator's deeper schema is
-    # exercised by its own load path.
-    claude: dict[str, object] = Field(default_factory=dict)
 
 
 def _check_profile(

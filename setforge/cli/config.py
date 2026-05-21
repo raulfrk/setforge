@@ -42,9 +42,9 @@ from ruamel.yaml.comments import (  # type: ignore[import-not-found]
 from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
 from setforge.cli import _TYPER_KWARGS, app
 from setforge.cli._git_check import run_git_check_or_raise
-from setforge.cli.validate import _LocalConfig
 from setforge.config import Config, MarketplaceSource, MarketplaceSourceKind
 from setforge.errors import ConfirmRequiresInteractive, SetforgeError
+from setforge.local_config import LocalConfig
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.source import get_resolved_source, validate_source_dir
 
@@ -301,8 +301,8 @@ def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pyd
 @functools.cache
 def _schema_local() -> dict[str, _FieldNode]:
     """Cached walk of the local-scope model schema."""
-    # Use _LocalConfig (the validate-only union of source/binaries/claude).
-    return _walk_model(_LocalConfig)
+    # Use LocalConfig (the validate-only union of source/binaries/claude).
+    return _walk_model(LocalConfig)
 
 
 @functools.cache
@@ -508,7 +508,7 @@ def _validate_candidate(scope: ConfigScope, doc: CommentedMap) -> None:
     plain = _to_plain(doc)
     if scope is ConfigScope.LOCAL:
         try:
-            _LocalConfig.model_validate(plain)
+            LocalConfig.model_validate(plain)
         except ValidationError as exc:
             raise SetforgeError(
                 f"local.yaml candidate failed validation:\n{exc}"
