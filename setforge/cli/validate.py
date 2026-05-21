@@ -52,7 +52,7 @@ from setforge.errors import (
 )
 from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
-from setforge.local_overlay import LocalOverlayError
+from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import (
@@ -115,29 +115,7 @@ def _check_profile(
     # marketplace cross-ref errors surface at validate time too.
     # Mirrors Check 1b — the install path runs the same applier; the
     # validate path is a defensive offline backstop per SPEC 2 Q8.
-    #
-    # ``apply_local_overlay`` runs ``_validate_overlay_marketplace_cross_ref``
-    # over the mutated ``resolved.claude_plugins`` set as its final step.
-    # That is the SAME cross-ref invariant Check 6 (``_check_marketplaces``)
-    # asserts, so re-running Check 6 below would emit a duplicate failure
-    # row per offender. Track whether the overlay path completed the
-    # cross-ref so we run Check 6 only as a fallback when the overlay
-    # raised early (LocalOverlayError, or a ConfigError BEFORE the
-    # cross-ref check ran).
-    overlay_cross_ref_ran = False
-    try:
-        apply_local_overlay(cfg, resolved, prof_name)
-        overlay_cross_ref_ran = True
-    except LocalOverlayError as exc:
-        failures.append(f"{ctx}: {exc}")
-    except ConfigError as exc:
-        # The marketplace cross-ref check raises a bare ConfigError;
-        # surface it under the same {ctx} prefix as the overlay errors
-        # so the validate report-all-then-refuse contract holds. The
-        # cross-ref itself ran (and reported) — flip the gate so we
-        # don't double-report via Check 6 below.
-        failures.append(f"{ctx}: {exc}")
-        overlay_cross_ref_ran = True
+    cross_ref_ran = _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
@@ -148,8 +126,62 @@ def _check_profile(
 
     _check_extension_includes(cfg, prof_name, ctx, failures)
     _check_claude_plugins(cfg, prof_name, ctx, failures)
-    if not overlay_cross_ref_ran:
+    if not cross_ref_ran:
         _check_marketplaces(cfg, resolved, ctx, failures)
+
+
+def _apply_local_overlay_check(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    prof_name: str,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> bool:
+    """Apply the local.yaml overlay and report cross-ref status to the caller.
+
+    ``apply_local_overlay`` runs ``_validate_overlay_marketplace_cross_ref``
+    over the mutated ``resolved.claude_plugins`` set as its final step.
+    That is the SAME cross-ref invariant Check 6
+    (``_check_marketplaces``) asserts, so re-running Check 6 after a
+    completed overlay would emit a duplicate failure row per offender.
+
+    Returns ``True`` when the cross-ref check ran (whether or not it
+    found errors) — the caller skips Check 6 to avoid duplicates.
+    Returns ``False`` when the load phase raised BEFORE the cross-ref
+    check could run — the caller MUST still run Check 6 as a fallback
+    to surface any pre-existing marketplace inconsistencies that the
+    malformed overlay would have otherwise masked.
+
+    Error routing:
+    - :class:`LocalOverlayLoadError` (sentinel subclass): load-phase
+      failure (YAML parse, non-mapping, Pydantic shape) → record under
+      ``{ctx}`` and signal cross-ref did NOT run.
+    - :class:`LocalOverlayError`: resolver-phase collision or unknown-
+      remove → cross-ref did NOT run; record and fall back to Check 6.
+    - bare :class:`ConfigError`: emitted by the cross-ref check itself
+      (e.g. plugin references a missing marketplace) → cross-ref ran;
+      record and signal so the caller skips Check 6.
+    """
+    try:
+        apply_local_overlay(cfg, resolved, prof_name)
+    except LocalOverlayLoadError as exc:
+        # Load failed BEFORE cross-ref ran; surface the error and let
+        # the caller run Check 6 as a fallback so pre-existing
+        # marketplace inconsistencies are not masked.
+        failures.append(f"{ctx}: {exc}")
+        return False
+    except LocalOverlayError as exc:
+        # Resolver-phase failure (add ∩ remove or unknown-remove).
+        # Mutations did not complete, so the cross-ref check did not
+        # run; fall back to Check 6.
+        failures.append(f"{ctx}: {exc}")
+        return False
+    except ConfigError as exc:
+        # The marketplace cross-ref check itself raised; the cross-ref
+        # ran (and reported), so skip Check 6 to avoid a duplicate row.
+        failures.append(f"{ctx}: {exc}")
+        return True
+    return True
 
 
 def _check_profile_resolution(
