@@ -263,8 +263,21 @@ def inject_host_local_section(
         _format_marker_pair_unstamped,
         _stamp_section_hashes,
     )
+    from setforge.sections import extract_sections
 
     normalised = _normalise_eol(text)
+    # Defensive duplicate-pair check (anti-smell item 15). The caller
+    # of record is :func:`inject_all`, which routes existing names
+    # through the body-replace path and never re-enters this function
+    # for them; this guard catches direct callers (e.g. ad-hoc scripts)
+    # that bypass ``inject_all`` and would otherwise produce a malformed
+    # file with two pairs sharing one name.
+    if name in extract_sections(normalised, allow_legacy=True):
+        raise AnchorAmbiguousError(
+            f"section {name!r} already exists in target text; the caller "
+            "must route through inject_all (body-replace path) instead "
+            "of re-injecting a duplicate pair"
+        )
     line_offset = resolve_anchor(normalised, anchor)
     pair = _format_marker_pair_unstamped(
         semantics=SectionSemantics.HOST_LOCAL.value, name=name, body=body

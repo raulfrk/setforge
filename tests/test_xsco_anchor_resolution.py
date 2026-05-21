@@ -127,6 +127,18 @@ class TestInjectHostLocalSection:
         assert "start host-local w" in out
         assert "end host-local w" in out
 
+    def test_inject_rejects_duplicate_section_name(self) -> None:
+        """Defensive guard: re-injection of an existing name raises.
+
+        Direct callers of ``inject_host_local_section`` that bypass the
+        body-replace path in ``inject_all`` would otherwise produce a
+        malformed file with two pairs sharing one name. The guard catches
+        this at the splice boundary.
+        """
+        once = inject_host_local_section("# T\n", "dup", AnchorAtEndOfFile(), "first")
+        with pytest.raises(AnchorAmbiguousError):
+            inject_host_local_section(once, "dup", AnchorAtEndOfFile(), "second")
+
 
 class TestInjectAllIdempotency:
     """``inject_all`` updates existing sections in place — no duplicate pair."""
