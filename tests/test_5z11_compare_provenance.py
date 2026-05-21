@@ -41,9 +41,7 @@ def _cfg_with_marketplaces(
 
 
 def test_render_empty_resolution_returns_empty_list() -> None:
-    resolution = LocalOverlayResolution(
-        plugins=[], extensions=[], marketplaces=[], empty=True
-    )
+    resolution = LocalOverlayResolution(plugins=[], extensions=[], marketplaces=[])
     cfg = _cfg_with_marketplaces()
     assert render_local_overlay_block(cfg, resolution) == []
 
@@ -54,7 +52,6 @@ def test_render_pure_profile_resolution_returns_empty_list() -> None:
         plugins=[ResolvedPlugin("sp", OverlayOrigin.PROFILE)],
         extensions=[ResolvedExtension("ms-python.python", OverlayOrigin.PROFILE)],
         marketplaces=[ResolvedMarketplace("official", OverlayOrigin.PROFILE)],
-        empty=False,
     )
     cfg = _cfg_with_marketplaces(
         {"official": MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="a/b")}
@@ -69,7 +66,6 @@ def test_render_local_add_plugin_carries_from_local_yaml_tag() -> None:
         ],
         extensions=[],
         marketplaces=[],
-        empty=False,
     )
     lines = render_local_overlay_block(_cfg_with_marketplaces(), resolution)
     rendered = "\n".join(lines)
@@ -84,7 +80,6 @@ def test_render_local_remove_plugin_carries_remove_tag_with_unicode_minus() -> N
         ],
         extensions=[],
         marketplaces=[],
-        empty=False,
     )
     lines = render_local_overlay_block(_cfg_with_marketplaces(), resolution)
     rendered = "\n".join(lines)
@@ -102,7 +97,6 @@ def test_render_extension_local_add_carries_tag() -> None:
             ResolvedExtension("ms-python.python", OverlayOrigin.LOCAL_ADD),
         ],
         marketplaces=[],
-        empty=False,
     )
     lines = render_local_overlay_block(_cfg_with_marketplaces(), resolution)
     rendered = "\n".join(lines)
@@ -117,7 +111,6 @@ def test_render_marketplace_local_add_carries_source_details() -> None:
         marketplaces=[
             ResolvedMarketplace("work-internal", OverlayOrigin.LOCAL_ADD),
         ],
-        empty=False,
     )
     cfg = _cfg_with_marketplaces(
         {
@@ -149,7 +142,6 @@ def test_render_footer_summary_carries_per_axis_counts() -> None:
         marketplaces=[
             ResolvedMarketplace("m1", OverlayOrigin.LOCAL_ADD),
         ],
-        empty=False,
     )
     cfg = _cfg_with_marketplaces(
         {"m1": MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="a/b")}
@@ -181,7 +173,6 @@ def test_render_full_mockup_shape() -> None:
             ResolvedMarketplace("official", OverlayOrigin.PROFILE),
             ResolvedMarketplace("work-internal", OverlayOrigin.LOCAL_ADD),
         ],
-        empty=False,
     )
     cfg = _cfg_with_marketplaces(
         {
@@ -236,7 +227,6 @@ def test_render_uses_display_tag_for_wording() -> None:
         ],
         extensions=[],
         marketplaces=[],
-        empty=False,
     )
     rendered = "\n".join(
         render_local_overlay_block(_cfg_with_marketplaces(), resolution)

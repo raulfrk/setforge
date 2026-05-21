@@ -724,15 +724,16 @@ class LocalOverlayResolution:
     Carries the three :class:`setforge.local_overlay` resolved lists so
     callers (compare's overlay-block renderer, install's per-line
     provenance) can display ``[from local.yaml]`` / SPEC-2 remove tags
-    without re-running the resolvers. ``empty`` is ``True`` when no
-    overlay was present (the loader took the early-return path);
-    callers use that to suppress the footer summary on compare.
+    without re-running the resolvers. Callers that need to suppress the
+    footer summary on a no-op overlay walk should use
+    :func:`setforge.local_overlay.has_local_overlay` on the relevant
+    field — gating is data-driven (LOCAL_ADD / LOCAL_REMOVE membership),
+    not configuration-shape-driven.
     """
 
-    plugins: "list[ResolvedPlugin]"
-    extensions: "list[ResolvedExtension]"
-    marketplaces: "list[ResolvedMarketplace]"
-    empty: bool
+    plugins: list["ResolvedPlugin"]
+    extensions: list["ResolvedExtension"]
+    marketplaces: list["ResolvedMarketplace"]
 
 
 def _load_overlay_blocks(
@@ -856,12 +857,10 @@ def apply_local_overlay(
     _apply_plugin_mutations(config, resolved, plugin_overlay)
     _apply_extension_mutations(resolved, extension_overlay)
     _validate_overlay_marketplace_cross_ref(config, resolved)
-    empty = not (resolved_plugins or resolved_extensions or resolved_marketplaces)
     return LocalOverlayResolution(
         plugins=resolved_plugins,
         extensions=resolved_extensions,
         marketplaces=resolved_marketplaces,
-        empty=empty,
     )
 
 
