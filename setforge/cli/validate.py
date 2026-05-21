@@ -91,46 +91,7 @@ def _check_profile(
     if resolved is None:
         return
 
-    # Check 1b (setforge-lgvp + setforge-b1lg): apply the local.yaml
-    # preserve_user_keys overlay so collision (add ∩ remove) and
-    # unknown-remove errors surface during ``setforge validate``.
-    # Without this, the errors only fire on ``install`` / ``compare``
-    # (cf. setforge/cli/install.py and setforge/cli/compare.py).
-    #
-    # The overlay load path (``_load_local_source_config``) parses
-    # local.yaml against the strict :class:`_LocalSourceConfig` schema,
-    # which surfaces nested ``extra_forbidden`` / shape errors for the
-    # source / tracked_files / plugins / extensions / marketplaces
-    # blocks BEFORE :func:`_check_local_yaml` runs at the end of
-    # validate. Without broadening the catch (b1lg), these raw
-    # exceptions bubble past the narrow ``PreserveUserKeysOverlayError``
-    # clause and abort the whole validate run — defeating the
-    # report-all-then-refuse contract.
-    #
-    # Broadened catches:
-    # - :class:`PreserveUserKeysOverlayError` — resolver-phase
-    #   collision / unknown-remove → string failure (existing UX).
-    # - :class:`pydantic.ValidationError` — strict schema mismatch in
-    #   the overlay load (e.g. nested ``extra_forbidden`` on a
-    #   ``source.<unknown>`` sub-key, list-shaped ``source:``) → route
-    #   through :func:`_validation_error_to_context` so every err
-    #   gets the mockup-D formatter UX.
-    # - :class:`ConfigError` — load-phase parse / shape failure
-    #   (malformed YAML, non-mapping top-level) → string failure.
-    # - :class:`OSError` / :class:`UnicodeDecodeError` — unreadable
-    #   local.yaml (permission, non-UTF-8 bytes) → route through
-    #   :func:`format_yaml_parse_error` so the suite's
-    #   "✗ YAML PARSE ERROR" expectation holds.
-    try:
-        apply_preserve_user_keys_overlay(cfg, prof_name)
-    except PreserveUserKeysOverlayError as exc:
-        failures.append(f"{ctx}: {exc}")
-    except ValidationError as exc:
-        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
-    except ConfigError as exc:
-        failures.append(f"{ctx}: {exc}")
-    except (OSError, UnicodeDecodeError) as exc:
-        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
+    _apply_preserve_user_keys_check(cfg, prof_name, ctx, failures)
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
@@ -152,6 +113,62 @@ def _check_profile(
     _check_claude_plugins(cfg, prof_name, ctx, failures)
     if not cross_ref_ran:
         _check_marketplaces(cfg, resolved, ctx, failures)
+
+
+def _apply_preserve_user_keys_check(
+    cfg: Config,
+    prof_name: str,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Apply the preserve_user_keys overlay and route errors to ``failures``.
+
+    Check 1b (setforge-lgvp + setforge-b1lg): apply the local.yaml
+    preserve_user_keys overlay so collision (add ∩ remove) and
+    unknown-remove errors surface during ``setforge validate``.
+    Without this, the errors only fire on ``install`` / ``compare``
+    (cf. setforge/cli/install.py and setforge/cli/compare.py).
+
+    The overlay load path (``_load_local_source_config``) parses
+    local.yaml against the strict :class:`_LocalSourceConfig` schema,
+    which surfaces nested ``extra_forbidden`` / shape errors for the
+    source / tracked_files / plugins / extensions / marketplaces
+    blocks BEFORE :func:`_check_local_yaml` runs at the end of
+    validate. Without broadening the catch (b1lg), these raw
+    exceptions bubble past the narrow ``PreserveUserKeysOverlayError``
+    clause and abort the whole validate run — defeating the
+    report-all-then-refuse contract.
+
+    Broadened catches:
+
+    - :class:`PreserveUserKeysOverlayError` — resolver-phase
+      collision / unknown-remove → string failure (existing UX).
+    - :class:`pydantic.ValidationError` — strict schema mismatch in
+      the overlay load (e.g. nested ``extra_forbidden`` on a
+      ``source.<unknown>`` sub-key, list-shaped ``source:``) → route
+      through :func:`_validation_error_to_context` so every err
+      gets the mockup-D formatter UX. Load-bearing because
+      :func:`setforge.source._load_local_source_config` does NOT
+      wrap ``ValidationError`` (unlike
+      :func:`setforge.config._load_overlay_blocks` used by
+      :func:`_apply_local_overlay_check`).
+    - :class:`ConfigError` — load-phase parse / shape failure
+      (malformed YAML, non-mapping top-level) → string failure.
+    - :class:`OSError` / :class:`UnicodeDecodeError` — unreadable
+      local.yaml (permission, non-UTF-8 bytes) → route through
+      :func:`format_yaml_parse_error` so the suite's
+      "✗ YAML PARSE ERROR" expectation holds.
+    """
+    try:
+        apply_preserve_user_keys_overlay(cfg, prof_name)
+    except PreserveUserKeysOverlayError as exc:
+        failures.append(f"{ctx}: {exc}")
+    except ValidationError as exc:
+        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
+    except ConfigError as exc:
+        failures.append(f"{ctx}: {exc}")
+    except (OSError, UnicodeDecodeError) as exc:
+        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
 
 
 def _apply_local_overlay_check(
