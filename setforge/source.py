@@ -37,6 +37,7 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
 
 from setforge import git_ops
+from setforge.config import MarketplaceSourceKind
 from setforge.errors import (
     ConfigError,
     DirtySourceCheckout,
@@ -288,22 +289,98 @@ class _LocalTrackedFileOverlay(BaseModel):
     host_local_sections: dict[str, HostLocalSection] = {}
 
 
+class PluginOverlay(BaseModel):
+    """Per-host plugin add/remove overlay block (setforge-5z11 / SPEC 2).
+
+    Lives under ``local.yaml``'s top-level ``plugins:`` key. Both lists
+    default to empty so a partial overlay (only ``add`` or only ``remove``)
+    is a valid shape; the resolver merges them with the profile chain at
+    load time via :func:`setforge.local_overlay.resolve_plugin_overlay`.
+
+    ``add`` entries use the same ``name@marketplace`` shape as
+    ``Profile.claude_plugins`` so the bare-name @ marketplace dispatch in
+    :mod:`setforge.claude_plugins` is unchanged.
+    """
+
+    model_config = _STRICT
+
+    add: list[str] = []
+    remove: list[str] = []
+
+
+class ExtensionOverlay(BaseModel):
+    """Per-host VSCode-extension add/remove overlay block (setforge-5z11).
+
+    Mirrors :class:`PluginOverlay` (both lists default empty, ``_STRICT``).
+    Adds land in :attr:`setforge.config.Extensions.include`; removes drop
+    matching entries from the resolved include list. Excludes are
+    profile-only — out of scope per SPEC 2.
+    """
+
+    model_config = _STRICT
+
+    add: list[str] = []
+    remove: list[str] = []
+
+
+class _MarketplaceLocalDecl(BaseModel):
+    """One local-overlay marketplace declaration (setforge-5z11).
+
+    Mirrors :class:`setforge.config.MarketplaceSource`'s shape and the
+    ``_exactly_one`` validator at ``config.py:393`` — kept as a separate
+    model so :mod:`setforge.source` does not import the heavy
+    :mod:`setforge.config` module at definition time (would create a
+    config <-> source cycle for the resolver's lazy-import pattern).
+    """
+
+    model_config = _STRICT
+
+    source: MarketplaceSourceKind
+    repo: str | None = None
+    path: Path | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "_MarketplaceLocalDecl":
+        if (self.repo is None) == (self.path is None):
+            raise ValueError("_MarketplaceLocalDecl: exactly one of repo/path required")
+        return self
+
+
+class MarketplaceOverlay(BaseModel):
+    """Per-host marketplace add/remove overlay block (setforge-5z11).
+
+    ``add`` is keyed by marketplace name — same shape as the top-level
+    :attr:`setforge.config.Config.marketplaces` mapping. ``remove`` is a
+    list of marketplace names; the resolver errors on remove-of-unknown
+    (mirrors :mod:`setforge.preserved_keys` precedent).
+    """
+
+    model_config = _STRICT
+
+    add: dict[str, _MarketplaceLocalDecl] = {}
+    remove: list[str] = []
+
+
 class _LocalSourceConfig(BaseModel):
-    """Just the ``source:`` + ``tracked_files:`` blocks of ``local.yaml``.
+    """Source + tracked_files + per-host overlay blocks of ``local.yaml``.
 
     Loaded separately from :class:`setforge.binaries.HostLocalConfig` so
     the source-discovery layer and the binary-override layer can each
     parse the file independently without coupling. Carries the
-    ``tracked_files:`` overlay block (per-tracked_file host-local knobs;
-    today only the ``preserve_user_keys`` add/remove overlay from
-    SPEC 8) so the loader can apply the overlay at profile-resolution
-    time via :mod:`setforge.preserved_keys.resolve_overlay`.
+    ``tracked_files:`` overlay block (per-tracked_file host-local knobs
+    from SPEC 8) plus the per-host plugin/extension/marketplace overlay
+    blocks (SPEC 2 / setforge-5z11) so the loader can apply the overlays
+    at profile-resolution time via :mod:`setforge.preserved_keys` and
+    :mod:`setforge.local_overlay`.
     """
 
     model_config = _STRICT
 
     source: Source | None = None
     tracked_files: dict[str, _LocalTrackedFileOverlay] = {}
+    plugins: PluginOverlay = PluginOverlay()
+    extensions: ExtensionOverlay = ExtensionOverlay()
+    marketplaces: MarketplaceOverlay = MarketplaceOverlay()
 
     @model_validator(mode="before")
     @classmethod
@@ -346,10 +423,9 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     # Extract only the keys this loader owns; ignore other blocks
     # (binaries:, claude:, orphan_ignore:) which belong to other loaders.
     payload: dict[str, object] = {}
-    if "source" in data:
-        payload["source"] = data["source"]
-    if "tracked_files" in data:
-        payload["tracked_files"] = data["tracked_files"]
+    for key in ("source", "tracked_files", "plugins", "extensions", "marketplaces"):
+        if key in data:
+            payload[key] = data[key]
     if not payload:
         return _LocalSourceConfig()
     return _LocalSourceConfig.model_validate(payload)
@@ -641,10 +717,13 @@ __all__ = [
     "AnchorAtStartOfFile",
     "AnchorBeforeHeading",
     "AnchorKind",
+    "ExtensionOverlay",
     "GitSource",
     "HostLocalSection",
     "HostLocalSectionName",
+    "MarketplaceOverlay",
     "PathSource",
+    "PluginOverlay",
     "PreserveUserKeysOverlay",
     "Source",
     "SourceKind",
