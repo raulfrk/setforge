@@ -26,6 +26,7 @@ hint.
 
 import io
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +41,7 @@ from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
+from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 class CaptureAction(StrEnum):
@@ -219,7 +221,9 @@ def capture_profile(
     auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
     console: Console | None = None,
-    host_local_sections_map: dict[str, dict[str, object]] | None = None,
+    host_local_sections_map: (
+        Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]] | None
+    ) = None,
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
 
