@@ -357,8 +357,17 @@ def test_install_symlink_deployed_tracked_file(
 def test_compare_shows_host_local_via_local_yaml_tag(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``setforge compare`` mentions the host-local provenance for
-    declared-but-not-yet-deployed sections."""
+    """``setforge compare`` surfaces the ``+ [host-local via local.yaml] X``
+    preview line for sections declared in local.yaml but not yet deployed
+    (setforge-xsco SPEC 1 mockup — overlay-aware compare).
+
+    Exercises the compare CLI directly (not install --dry-run): the
+    overlay is loaded + validated, ``compare_profile`` threads it into
+    ``diff_file`` so already-injected sections do NOT show as drift,
+    and the preview block lists every section the next install WOULD
+    inject, tagged with the canonical ``[host-local via local.yaml]``
+    provenance marker + a ``← would be injected`` cue.
+    """
     c = docker_container()
     _install_xsco(c, check=True)  # baseline install (no overlay yet)
     _write_local_yaml(
@@ -371,19 +380,18 @@ def test_compare_shows_host_local_via_local_yaml_tag(
         "        body: |\n"
         "          would-inject body\n",
     )
-    # Run with --dry-run install to surface the would-inject preview line.
     rc, stdout, stderr = _setforge(
         c,
         [
-            "install",
+            "compare",
             "--profile=test-xsco",
             f"--config={CONFIG_FIXTURE}",
-            "--dry-run",
         ],
     )
     assert rc == 0, stderr
-    assert "[host-local via local.yaml]" in stdout
-    assert "to-inject" in stdout
+    assert "[host-local via local.yaml]" in stdout, stdout
+    assert "to-inject" in stdout, stdout
+    assert "would be injected" in stdout, stdout
 
 
 def test_compare_does_not_flag_injected_as_drift(
