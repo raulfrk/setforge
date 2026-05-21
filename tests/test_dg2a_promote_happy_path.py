@@ -162,9 +162,17 @@ def test_rewrite_live_markers_preserves_body_bytes() -> None:
         "<!-- setforge:user-section end host-local x hash=abc -->\n"
     )
     out = rewrite_live_markers_to_shared(src, HostLocalSectionName("x"))
-    assert "byte-exact body line 1\nbyte-exact body line 2\n" in out
-    assert "start shared x" in out
-    assert "end shared x" in out
+    # Exact-equality assertion: the only bytes that change are the
+    # `host-local` → `shared` keyword swap on the two marker lines.
+    # No extra prefix / suffix / body mutation is allowed (the function
+    # is contractually byte-preserving for body content — anti-smell 4).
+    expected = (
+        "<!-- setforge:user-section start shared x -->\n"
+        "byte-exact body line 1\n"
+        "byte-exact body line 2\n"
+        "<!-- setforge:user-section end shared x hash=abc -->\n"
+    )
+    assert out == expected
 
 
 def test_offer_promote_gates_on_local_yaml_presence() -> None:
