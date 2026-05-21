@@ -393,6 +393,7 @@ def test_apply_local_overlay_returns_empty_resolution_for_absent_local_yaml(
 
 def test_apply_local_overlay_check_returns_false_on_load_phase_failure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Round-2 regression guard: ``_apply_local_overlay_check`` MUST return
     ``False`` when the load phase fails so the caller falls back to Check 6.
@@ -428,7 +429,7 @@ def test_apply_local_overlay_check_returns_false_on_load_phase_failure(
 
     failures: list[ValidationErrorWithContext | str] = []
     cross_ref_ran = _apply_local_overlay_check_with_path(
-        cfg, rp, "p", "profile 'p'", failures, local
+        cfg, rp, "p", "profile 'p'", failures, local, monkeypatch
     )
 
     # Boundary contract: load-phase failure must return ``False``.
@@ -464,6 +465,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
     tmp_path: Path,
     local_body: str,
     expected_phrase: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sibling boundary contract: a resolver-phase
     :class:`LocalOverlayError` ALSO returns ``False`` because the
@@ -489,7 +491,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
 
     failures: list[ValidationErrorWithContext | str] = []
     cross_ref_ran = _apply_local_overlay_check_with_path(
-        cfg, rp, "p", "profile 'p'", failures, local
+        cfg, rp, "p", "profile 'p'", failures, local, monkeypatch
     )
 
     assert cross_ref_ran is False
@@ -498,6 +500,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
 
 def test_apply_local_overlay_check_returns_true_on_cross_ref_error(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When the cross-ref check itself raises (bare ``ConfigError``),
     the helper returns ``True`` so the caller skips Check 6 to avoid
@@ -527,7 +530,7 @@ def test_apply_local_overlay_check_returns_true_on_cross_ref_error(
 
     failures: list[ValidationErrorWithContext | str] = []
     cross_ref_ran = _apply_local_overlay_check_with_path(
-        cfg, rp, "p", "profile 'p'", failures, local
+        cfg, rp, "p", "profile 'p'", failures, local, monkeypatch
     )
 
     assert cross_ref_ran is True
@@ -541,24 +544,20 @@ def _apply_local_overlay_check_with_path(
     ctx: str,
     failures: list[ValidationErrorWithContext | str],
     local_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> bool:
     """Run ``_apply_local_overlay_check`` against an explicit ``local.yaml`` path.
 
     ``_apply_local_overlay_check`` itself delegates to ``apply_local_overlay``,
     which reads :data:`setforge.source.LOCAL_CONFIG_PATH` by default. Patch
-    the module-level constant via ``monkeypatch``-equivalent attribute set
-    + restore so the test is hermetic.
+    the module-level constant via :class:`pytest.MonkeyPatch` so cleanup
+    is automatic and the helper matches the companion CLI-integration
+    test's monkeypatch convention.
     """
-    import setforge.source as source_mod
+    from setforge.cli.validate import _apply_local_overlay_check
 
-    saved = source_mod.LOCAL_CONFIG_PATH
-    source_mod.LOCAL_CONFIG_PATH = local_path
-    try:
-        from setforge.cli.validate import _apply_local_overlay_check
-
-        return _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
-    finally:
-        source_mod.LOCAL_CONFIG_PATH = saved
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local_path)
+    return _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
 
 
 # ---------------------------------------------------------------------------
