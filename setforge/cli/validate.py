@@ -115,15 +115,29 @@ def _check_profile(
     # marketplace cross-ref errors surface at validate time too.
     # Mirrors Check 1b — the install path runs the same applier; the
     # validate path is a defensive offline backstop per SPEC 2 Q8.
+    #
+    # ``apply_local_overlay`` runs ``_validate_overlay_marketplace_cross_ref``
+    # over the mutated ``resolved.claude_plugins`` set as its final step.
+    # That is the SAME cross-ref invariant Check 6 (``_check_marketplaces``)
+    # asserts, so re-running Check 6 below would emit a duplicate failure
+    # row per offender. Track whether the overlay path completed the
+    # cross-ref so we run Check 6 only as a fallback when the overlay
+    # raised early (LocalOverlayError, or a ConfigError BEFORE the
+    # cross-ref check ran).
+    overlay_cross_ref_ran = False
     try:
         apply_local_overlay(cfg, resolved, prof_name)
+        overlay_cross_ref_ran = True
     except LocalOverlayError as exc:
         failures.append(f"{ctx}: {exc}")
     except ConfigError as exc:
         # The marketplace cross-ref check raises a bare ConfigError;
         # surface it under the same {ctx} prefix as the overlay errors
-        # so the validate report-all-then-refuse contract holds.
+        # so the validate report-all-then-refuse contract holds. The
+        # cross-ref itself ran (and reported) — flip the gate so we
+        # don't double-report via Check 6 below.
         failures.append(f"{ctx}: {exc}")
+        overlay_cross_ref_ran = True
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
@@ -134,7 +148,8 @@ def _check_profile(
 
     _check_extension_includes(cfg, prof_name, ctx, failures)
     _check_claude_plugins(cfg, prof_name, ctx, failures)
-    _check_marketplaces(cfg, resolved, ctx, failures)
+    if not overlay_cross_ref_ran:
+        _check_marketplaces(cfg, resolved, ctx, failures)
 
 
 def _check_profile_resolution(
