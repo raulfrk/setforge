@@ -34,10 +34,10 @@ import hashlib
 import subprocess
 from collections.abc import Callable
 
-import pexpect  # type: ignore[import-untyped]  # pexpect ships no py.typed
 import pytest
 
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
+from tests.docker.pyte_session import PyteSession
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -131,31 +131,30 @@ def test_install_auto_use_tracked_with_yes(
     assert "revert with: setforge revert" in result.stdout
 
 
-# Skipped pending pyte-backed PTY harness; see bd setforge-ffs0.
-@pytest.mark.skip(
-    reason=(
-        "prompt_toolkit radiolist_dialog runs in full-screen TUI mode, "
-        "which sends cursor-positioning escape sequences pexpect's "
-        "linear text matcher cannot reliably anchor on. The --yes "
-        "bypass + non-TTY guard tests cover the gate's contract end "
-        "to end; interactive PTY confirmation is verified by manual "
-        "QA. Re-enable when a pyte-backed terminal harness is wired."
-    ),
-)
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_use_tracked_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY confirm-yes: arrow-down + Enter applies the mutation."""
+    """PTY confirm-yes: select Yes, Tab to OK, Enter applies the mutation.
+
+    Drives prompt_toolkit's full-screen radiolist via the pyte harness
+    (setforge-ffs0): anchors on the dialog title + prompt text + the
+    default-no marker rendered in the emulated screen, sends arrow-down
+    to select ``Yes``, then Tab to move focus to the ``Ok`` button, then
+    Enter to submit (radiolist's own Enter handler only updates the
+    radio selection — submitting the dialog requires focus on the OK
+    button per ``prompt_toolkit.shortcuts.dialogs.radiolist_dialog``).
+    Asserts the post-confirm ``proceeding`` line lands in the display
+    before the child exits 0.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
-    child = pexpect.spawn(
-        "docker",
-        [
-            "exec",
-            "-it",
-            c.cid,
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
             "uv",
             "run",
             "setforge",
@@ -164,44 +163,51 @@ def test_install_auto_use_tracked_pty_confirm_yes(
             f"--config={CONFIG_FIXTURE}",
             "--auto=use-tracked",
         ],
-        encoding="utf-8",
-        timeout=60,
+        timeout=60.0,
     )
-    try:
-        child.expect("Proceed with the mutation")
-        child.send("\x1b[B")
-        child.sendline("")
-        child.expect(pexpect.EOF)
-    finally:
-        child.close(force=True)
-    assert child.exitstatus == 0, child.before
+    # Radiolist dialog header + prompt text.
+    session.expect_in_display("setforge install", timeout=30.0)
+    session.expect_in_display("Proceed with the mutation above?", timeout=10.0)
+    # Default-no marker: "(*) No" appears as the selected radio item.
+    session.expect_in_display("(*) No", timeout=5.0)
+    # Arrow-down moves the cursor; Enter on the radio commits the new
+    # selection (prompt_toolkit's RadioList._handle_enter writes
+    # current_value); Tab moves focus to the OK button; Enter submits.
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    # The Yes radio is now committed.
+    session.expect_in_display("(*) Yes", timeout=5.0)
+    session.send_keys("\t")
+    session.send_keys("\r")
+    # Post-confirm "proceeding" line surfaces after the dialog exits.
+    session.expect_in_display("proceeding", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    # Post-condition: mutation applied → tracked-side rule B landed.
     assert "rule B (new in tracked)" in c.read_text(_LIVE_SHARED)
 
 
-# Skipped pending pyte-backed PTY harness; see bd setforge-ffs0.
-@pytest.mark.skip(
-    reason=(
-        "Same PTY-vs-full-screen-TUI limitation as the confirm-yes "
-        "variant above. The --yes bypass + non-TTY guard cover the "
-        "contract; this PTY-driven test will return once a pyte-backed "
-        "terminal harness lands."
-    ),
-)
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_auto_use_tracked_pty_confirm_no(
     docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY confirm-no: pressing Enter on default (No) aborts cleanly."""
+    """PTY confirm-no: Tab to OK + Enter accepts the default-No, aborts cleanly.
+
+    Drives the same radiolist via the pyte harness (setforge-ffs0):
+    leaves the radio on its default ``No`` selection (default=False per
+    ``confirm_auto_operation``), Tabs from the radiolist to the ``Ok``
+    button, then Enter submits — the dialog returns False, which
+    ``confirm_auto_operation`` maps to the ``aborted`` post-confirm
+    line and a clean exit 0 with the live file untouched.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
     pre = c.read_text(_LIVE_SHARED)
-    child = pexpect.spawn(
-        "docker",
-        [
-            "exec",
-            "-it",
-            c.cid,
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
             "uv",
             "run",
             "setforge",
@@ -210,16 +216,17 @@ def test_install_auto_use_tracked_pty_confirm_no(
             f"--config={CONFIG_FIXTURE}",
             "--auto=use-tracked",
         ],
-        encoding="utf-8",
-        timeout=60,
+        timeout=60.0,
     )
-    try:
-        child.expect("Proceed with the mutation")
-        child.sendline("")
-        child.expect(pexpect.EOF)
-    finally:
-        child.close(force=True)
-    assert child.exitstatus == 0, child.before
+    session.expect_in_display("setforge install", timeout=30.0)
+    session.expect_in_display("Proceed with the mutation above?", timeout=10.0)
+    session.expect_in_display("(*) No", timeout=5.0)
+    # Default radio is No — Tab to focus OK, Enter to submit.
+    session.send_keys("\t")
+    session.send_keys("\r")
+    session.expect_in_display("aborted", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    # Post-condition: live untouched.
     assert c.read_text(_LIVE_SHARED) == pre
 
 
