@@ -94,6 +94,27 @@ class MarkerError(SetforgeError):
     (mismatched start/end, nesting, or unknown directives)."""
 
 
+class AnchorNotFoundError(ConfigError):
+    """Raised when a :data:`setforge.source.Anchor` does not match any
+    line in the tracked file at install time (setforge-xsco).
+
+    Subclass of :class:`ConfigError` so the existing ``ConfigError``
+    catch in the validate/install paths surfaces the message verbatim
+    without a separate handler.
+    """
+
+
+class AnchorAmbiguousError(ConfigError):
+    """Raised when an anchor matches more than one candidate line in the
+    tracked file (setforge-xsco).
+
+    Duplicate ``## Profiles`` headings, two end markers carrying the
+    same after-section name, etc. The message names every match's line
+    number so the user can disambiguate by renaming or removing the
+    duplicate.
+    """
+
+
 class ExtensionToolMissing(SetforgeError):
     """Raised when the ``code`` CLI is required for an action but is not
     on PATH."""
