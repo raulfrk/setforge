@@ -816,6 +816,19 @@ def _mutate_and_write(
     else:
         _apply_remove(doc, dotted, op_value, is_list=is_list)
     _validate_candidate(scope, doc)
+    _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
+
+
+def _preview_and_write(
+    *, yaml_path: Path, doc: CommentedMap, before_text: str, yes: bool
+) -> None:
+    """Render diff → prompt confirm → atomic-write the candidate doc.
+
+    Shared tail for both the generic ``_mutate_and_write`` path and the
+    marketplaces.add-specific ``_add_marketplace`` flow. Returns
+    silently when the user declines (``_prompt_confirm`` returns
+    ``False``); the file is untouched.
+    """
     after_text = _dump_to_str(doc)
     diff_text = _render_diff(before_text, after_text, yaml_path)
     console = Console()
@@ -874,14 +887,7 @@ def _add_marketplace(
     if candidate.path is not None:
         entry["path"] = str(candidate.path)
     doc["marketplaces"][name] = entry
-    after_text = _dump_to_str(doc)
-    diff_text = _render_diff(before_text, after_text, yaml_path)
-    console = Console()
-    if not _prompt_confirm(
-        yaml_path=yaml_path, diff_text=diff_text, console=console, yes=yes
-    ):
-        return
-    atomic_write_yaml(yaml_path, doc)
+    _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
 
 
 def _resolve_marketplace_inputs(
