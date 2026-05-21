@@ -30,6 +30,7 @@ from collections.abc import Callable
 import pytest
 
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
+from tests.docker.pyte_session import PyteSession
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -45,7 +46,7 @@ _TRACKED_YAML: str = f"/workspace/{CONFIG_FIXTURE}"
 
 def test_config_completion_path_works(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: shell tab-completion on ``setforge config add --local <TAB>``.
 
@@ -282,7 +283,7 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
 # ---------------------------------------------------------------------------
 
 
-def _confirm_radiolist_write(session: object) -> None:
+def _confirm_radiolist_write(session: PyteSession) -> None:
     """Arrow-down to select ``write``, commit, Tab to OK, submit.
 
     The radiolist default is ``abort``. Sending arrow-down moves the
@@ -290,27 +291,27 @@ def _confirm_radiolist_write(session: object) -> None:
     Tab moves focus to the ``Ok`` button; the final Enter submits the
     dialog. Mirrors the bviv confirm-yes ``send_keys`` sequence.
     """
-    session.send_keys("\x1b[B")  # type: ignore[attr-defined]
-    session.send_keys("\r")  # type: ignore[attr-defined]
-    session.expect_in_display("(*) write", timeout=5.0)  # type: ignore[attr-defined]
-    session.send_keys("\t")  # type: ignore[attr-defined]
-    session.send_keys("\r")  # type: ignore[attr-defined]
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    session.expect_in_display("(*) write", timeout=5.0)
+    session.send_keys("\t")
+    session.send_keys("\r")
 
 
-def _confirm_radiolist_abort(session: object) -> None:
+def _confirm_radiolist_abort(session: PyteSession) -> None:
     """Default-abort: leave the radio on ``abort``, Tab to OK, submit.
 
     The radiolist default is ``abort``. Tab moves focus to the ``Ok``
     button without changing the radio selection; the final Enter
     submits with the default value. Mirrors the bviv confirm-no shape.
     """
-    session.send_keys("\t")  # type: ignore[attr-defined]
-    session.send_keys("\r")  # type: ignore[attr-defined]
+    session.send_keys("\t")
+    session.send_keys("\r")
 
 
 def test_config_add_local_scalar_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: ``add --local binaries.code <path>`` + arrow→write writes the scalar."""
     c = docker_container()
@@ -339,7 +340,7 @@ def test_config_add_local_scalar_pty_confirm_yes(
 
 def test_config_add_local_scalar_pty_confirm_no(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: default-abort (Tab → OK → Enter) leaves the file untouched."""
     c = docker_container()
@@ -407,7 +408,7 @@ def _seed_tracked_git_repo(c: ContainerHandle) -> str:
 
 def test_config_add_local_list_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: list-add appends to the list (arrow→write).
 
@@ -452,7 +453,7 @@ def test_config_add_local_list_pty_confirm_yes(
 
 def test_config_remove_local_list_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: list-remove pops from the list (arrow→write).
 
@@ -486,7 +487,7 @@ def test_config_remove_local_list_pty_confirm_yes(
 
 def test_config_add_marketplaces_pty_interactive(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: interactive marketplaces.add prompts for source + repo + confirm."""
     c = docker_container()
@@ -526,7 +527,7 @@ def test_config_add_marketplaces_pty_interactive(
 
 def test_config_completion_value_works(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY: shell tab-completion on ``setforge config remove --local plugins.add``.
 
@@ -610,7 +611,7 @@ def test_config_completion_value_callback_contract(
 
 def test_config_add_tracked_pty_git_check_aborts(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY counterpart of the non-PTY git-check abort test."""
     c = docker_container()
@@ -646,7 +647,7 @@ def test_config_add_tracked_pty_git_check_aborts(
 
 def test_config_add_invalid_pty_validates_before_write(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY counterpart of the validate-before-write abort test."""
     c = docker_container()
@@ -676,7 +677,7 @@ def test_config_add_invalid_pty_validates_before_write(
 
 def test_config_add_non_tty_without_yes_raises(
     docker_container: Callable[..., ContainerHandle],
-    pyte_pty_session: Callable[..., object],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """PTY counterpart of the non-TTY mutate-gate test.
 
