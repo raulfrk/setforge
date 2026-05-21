@@ -1,0 +1,502 @@
+"""Docker e2e tests for host-local user-sections via local.yaml (setforge-xsco).
+
+Exercises the full xsco surface end-to-end against a fresh Debian
+container with the actual installed ``setforge`` CLI:
+
+- install with each of the 5 anchor kinds.
+- error cases: anchor-not-found aborts install, empty body rejected at
+  validate, non-markdown tracked_files rejected at validate.
+- idempotency: re-running install does not duplicate marker pairs.
+- compare overlay-aware behaviour: injected sections do NOT show as drift.
+- sync capture-back filter: live host-local sections are NOT written back
+  to tracked.
+- revert: undoes the injection.
+- symlink-deployed tracked_files: injection lands on the target file.
+- validate offline gate: anchor-not-found surfaces without touching the
+  filesystem.
+
+Profiles under exercise: ``test-xsco`` / ``test-xsco-symlink`` /
+``test-xsco-reject-json`` (declared in
+``tests/fixtures/e2e/setforge.test.yaml``).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import pytest
+
+from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
+
+pytestmark = pytest.mark.e2e_docker
+
+_HOME_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
+_HOST_LIVE = "/home/tester/.setforge_e2e/xsco/host.md"
+_HOST_LINK_LIVE = "/home/tester/.setforge_e2e/xsco/host_link.md"
+_HOST_LINK_TARGET = "/home/tester/.setforge_e2e/xsco/host_link_target.md"
+_SETTINGS_JSON_LIVE = "/home/tester/.setforge_e2e/xsco/settings.json"
+
+
+def _write_local_yaml(c: ContainerHandle, body: str) -> None:
+    c.write_text(_HOME_LOCAL_YAML, body)
+
+
+def _setforge(
+    c: ContainerHandle, args: list[str], *, check: bool = False
+) -> tuple[int, str, str]:
+    result = c.exec(["uv", "run", "setforge", *args], check=check)
+    return result.returncode, result.stdout, result.stderr
+
+
+def _install_xsco(
+    c: ContainerHandle, *, profile: str = "test-xsco", check: bool = False
+) -> tuple[int, str, str]:
+    return _setforge(
+        c,
+        ["install", f"--profile={profile}", f"--config={CONFIG_FIXTURE}"],
+        check=check,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Happy path — one test per anchor kind (5 tests).
+# ---------------------------------------------------------------------------
+
+
+def test_install_host_local_after_heading_anchor(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """after-heading anchor splices below the matched heading."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      work-overrides:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          WORK OVERRIDES CONTENT\n",
+    )
+    rc, stdout, stderr = _install_xsco(c)
+    assert rc == 0, stderr
+    assert "[host-local via local.yaml]" in stdout, stdout
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "WORK OVERRIDES CONTENT" in live
+    assert "start host-local work-overrides" in live
+
+
+def test_install_host_local_before_heading_anchor(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """before-heading anchor splices above the matched heading."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      pre-comm:\n"
+        "        anchor: {kind: before-heading, value: Communication}\n"
+        "        body: |\n"
+        "          BEFORE COMM BODY\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c)
+    assert rc == 0, stderr
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "BEFORE COMM BODY" in live
+    assert live.index("BEFORE COMM BODY") < live.index("## Communication")
+
+
+def test_install_host_local_at_start_of_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """at-start-of-file anchor splices at line 0."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      head:\n"
+        "        anchor: {kind: at-start-of-file}\n"
+        "        body: |\n"
+        "          HEAD BODY\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c)
+    assert rc == 0, stderr
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    # HEAD BODY must appear before the # xsco fixture title.
+    assert live.index("HEAD BODY") < live.index("# xsco fixture")
+
+
+def test_install_host_local_at_end_of_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """at-end-of-file anchor splices at the file tail."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      tail:\n"
+        "        anchor: {kind: at-end-of-file}\n"
+        "        body: |\n"
+        "          TAIL BODY\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c)
+    assert rc == 0, stderr
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "TAIL BODY" in live
+    # TAIL BODY must appear AFTER the Trailing heading.
+    assert live.index("## Trailing") < live.index("TAIL BODY")
+
+
+def test_install_host_local_after_section_anchor(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """after-section anchor splices after a named existing user-section."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      after-notes:\n"
+        "        anchor: {kind: after-section, name: notes}\n"
+        "        body: |\n"
+        "          AFTER-NOTES BODY\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c)
+    assert rc == 0, stderr
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "AFTER-NOTES BODY" in live
+    end_marker_idx = live.index("end shared notes")
+    start_marker_idx = live.index("start host-local after-notes")
+    assert end_marker_idx < start_marker_idx
+
+
+# ---------------------------------------------------------------------------
+# Error paths (3 tests).
+# ---------------------------------------------------------------------------
+
+
+def test_install_anchor_not_found_aborts(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A missing-anchor install MUST exit nonzero AND not modify the live file."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      ghost:\n"
+        "        anchor: {kind: after-heading, value: NoSuchHeading}\n"
+        "        body: |\n"
+        "          will not land\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c)
+    assert rc != 0
+    assert "NoSuchHeading" in stderr or "anchor" in stderr.lower()
+    # Live file either absent or contains no host-local marker.
+    cat = c.exec(["cat", _HOST_LIVE], check=False)
+    assert "will not land" not in cat.stdout
+
+
+def test_install_empty_body_rejected_at_validate(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Empty body is rejected at validate time (Pydantic ValidationError)."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      empty:\n"
+        "        anchor: {kind: at-end-of-file}\n"
+        '        body: ""\n',
+    )
+    rc, _stdout, stderr = _setforge(
+        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+    )
+    assert rc != 0
+    assert "non-empty" in stderr.lower() or "body" in stderr.lower()
+
+
+def test_validate_rejects_host_local_sections_on_json_tracked_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Non-markdown tracked_file declaring host_local_sections fails validate."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_json_reject:\n"
+        "    host_local_sections:\n"
+        "      noop:\n"
+        "        anchor: {kind: at-end-of-file}\n"
+        "        body: |\n"
+        "          body\n",
+    )
+    rc, _stdout, stderr = _setforge(
+        c,
+        ["validate", "--profile=test-xsco-reject-json", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert rc != 0
+    assert ".json" in stderr or ".md" in stderr
+
+
+def test_validate_rejects_host_local_sections_on_yaml_tracked_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Non-markdown YAML tracked_file declaring host_local_sections fails validate.
+
+    Uses ``yaml_shallow`` (already in the fixture) — declaring a
+    host-local section against it must fail with the same file-type
+    error as the JSON case.
+    """
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  yaml_shallow:\n"
+        "    host_local_sections:\n"
+        "      noop:\n"
+        "        anchor: {kind: at-end-of-file}\n"
+        "        body: |\n"
+        "          body\n",
+    )
+    rc, _stdout, stderr = _setforge(
+        c,
+        ["validate", "--profile=test-yaml-shallow", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert rc != 0
+    assert ".yaml" in stderr or ".md" in stderr
+
+
+# ---------------------------------------------------------------------------
+# Acceptance — accept-on-markdown sanity (1 test).
+# ---------------------------------------------------------------------------
+
+
+def test_validate_accepts_host_local_sections_on_md_tracked_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Markdown tracked_file with host_local_sections passes validate."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      ok:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          ok\n",
+    )
+    rc, _stdout, stderr = _setforge(
+        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+    )
+    assert rc == 0, stderr
+
+
+# ---------------------------------------------------------------------------
+# Idempotency / symlink / compare / sync / revert (7 tests).
+# ---------------------------------------------------------------------------
+
+
+def test_install_idempotent_re_run_no_duplication(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Re-running install with the same overlay does not duplicate markers."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      s1:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          idempotent body\n",
+    )
+    _install_xsco(c, check=True)
+    _install_xsco(c, check=True)
+    live = c.exec(["cat", _HOST_LIVE]).stdout
+    assert live.count("start host-local s1") == 1
+
+
+def test_install_symlink_deployed_tracked_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """When tracked_file declares ``symlink:``, host-local injection lands on
+    the TARGET file (where bytes actually reside)."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md_symlink:\n"
+        "    host_local_sections:\n"
+        "      link-body:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          SYMLINK BODY\n",
+    )
+    rc, _stdout, stderr = _install_xsco(c, profile="test-xsco-symlink")
+    assert rc == 0, stderr
+    target = c.exec(["cat", _HOST_LINK_TARGET]).stdout
+    assert "SYMLINK BODY" in target
+    # The link path resolves to the target.
+    link = c.exec(["readlink", _HOST_LINK_LIVE]).stdout.strip()
+    assert link == "~/.setforge_e2e/xsco/host_link_target.md"
+
+
+def test_compare_shows_host_local_via_local_yaml_tag(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge compare`` mentions the host-local provenance for
+    declared-but-not-yet-deployed sections."""
+    c = docker_container()
+    _install_xsco(c, check=True)  # baseline install (no overlay yet)
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      to-inject:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          would-inject body\n",
+    )
+    # Run with --dry-run install to surface the would-inject preview line.
+    rc, stdout, stderr = _setforge(
+        c,
+        [
+            "install",
+            "--profile=test-xsco",
+            f"--config={CONFIG_FIXTURE}",
+            "--dry-run",
+        ],
+    )
+    assert rc == 0, stderr
+    assert "[host-local via local.yaml]" in stdout
+    assert "to-inject" in stdout
+
+
+def test_compare_does_not_flag_injected_as_drift(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """After install, compare should NOT report the injected section as drift."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      mask-me:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          injected\n",
+    )
+    _install_xsco(c, check=True)
+    rc, stdout, stderr = _setforge(
+        c,
+        [
+            "compare",
+            "--profile=test-xsco",
+            f"--config={CONFIG_FIXTURE}",
+            "--check",
+        ],
+    )
+    assert rc == 0, f"compare --check reported drift unexpectedly:\n{stdout}\n{stderr}"
+
+
+def test_sync_capture_back_excludes_host_local(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge sync`` MUST NOT write injected host-local section markers
+    back into the tracked source.
+
+    Without the capture-back filter, the host-local marker pair would
+    re-appear in the tracked file on the next sync — that's a leak of
+    host state into shared tracked content. The current implementation
+    leaves the tracked source unchanged when only host-local injection
+    is present.
+    """
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      do-not-leak:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          do-not-leak body\n",
+    )
+    _install_xsco(c, check=True)
+    rc, _stdout, stderr = _setforge(
+        c, ["sync", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}", "-y"]
+    )
+    assert rc == 0, stderr
+    # The tracked source MUST NOT carry the host-local marker.
+    tracked = c.exec(
+        ["cat", "/workspace/tests/fixtures/e2e/tracked/xsco/host.md"]
+    ).stdout
+    assert "do-not-leak" not in tracked
+
+
+def test_revert_undoes_injection(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge revert`` restores the live file to its pre-install state,
+    removing the host-local marker pair."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      revertable:\n"
+        "        anchor: {kind: after-heading, value: Workflow}\n"
+        "        body: |\n"
+        "          REVERTABLE BODY\n",
+    )
+    _install_xsco(c, check=True)
+    live_after_install = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "REVERTABLE BODY" in live_after_install
+    rc, _stdout, stderr = _setforge(
+        c, ["revert", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}", "-y"]
+    )
+    assert rc == 0, stderr
+    live_after_revert = c.exec(["cat", _HOST_LIVE]).stdout
+    assert "REVERTABLE BODY" not in live_after_revert
+
+
+def test_validate_catches_anchor_not_found_offline(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge validate`` surfaces an anchor-not-found error WITHOUT touching
+    the live filesystem (offline gate before install)."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n"
+        "  xsco_md:\n"
+        "    host_local_sections:\n"
+        "      ghost:\n"
+        "        anchor: {kind: after-heading, value: PhantomHeading}\n"
+        "        body: |\n"
+        "          will not land\n",
+    )
+    rc, _stdout, stderr = _setforge(
+        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+    )
+    assert rc != 0
+    assert "PhantomHeading" in stderr or "anchor" in stderr.lower()
+    # Confirm offline: live file did NOT get created.
+    cat = c.exec(["cat", _HOST_LIVE], check=False)
+    assert cat.returncode != 0  # absent file

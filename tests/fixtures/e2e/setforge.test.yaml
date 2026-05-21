@@ -131,6 +131,23 @@ tracked_files:
     src: claude/skills/reviewing-markdown/SKILL.md
     dst: ~/.claude/skills/reviewing-markdown/SKILL.md
 
+  # Host-local sections fixture (setforge-xsco). Plain markdown tracked
+  # file with declared user-section markers AND with headings that anchor
+  # injections from local.yaml's host_local_sections block.
+  xsco_md:
+    src: xsco/host.md
+    dst: ~/.setforge_e2e/xsco/host.md
+    preserve_user_sections: true
+  xsco_md_symlink:
+    src: xsco/host.md
+    dst: ~/.setforge_e2e/xsco/host_link.md
+    symlink: ~/.setforge_e2e/xsco/host_link_target.md
+    preserve_user_sections: true
+  # Non-markdown tracked_file used to test xsco's file-type rejection.
+  xsco_json_reject:
+    src: xsco/settings.json
+    dst: ~/.setforge_e2e/xsco/settings.json
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -243,3 +260,14 @@ profiles:
       - prose_claude_md_agent
       - prose_markdown_agent
       - prose_reviewing_markdown_skill
+
+  # ---- Host-local sections (setforge-xsco) -----------------------------
+  test-xsco:
+    tracked_files:
+      - xsco_md
+  test-xsco-symlink:
+    tracked_files:
+      - xsco_md_symlink
+  test-xsco-reject-json:
+    tracked_files:
+      - xsco_json_reject
