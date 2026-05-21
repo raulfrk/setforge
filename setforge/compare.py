@@ -39,7 +39,23 @@ from setforge.source import HostLocalSection, HostLocalSectionName
 
 if TYPE_CHECKING:
     from setforge.config import LocalOverlayResolution
-    from setforge.local_overlay import OverlayOrigin
+    from setforge.local_overlay import (
+        OverlayOrigin,
+        ResolvedExtension,
+        ResolvedMarketplace,
+        ResolvedPlugin,
+    )
+
+    # PEP 695 type alias for the three overlay resolution lists shape.
+    # Defined under TYPE_CHECKING so the ``Resolved*`` forward refs
+    # don't pay an import-time cost on every command boot (the names
+    # are only consumed by checkers + IDEs, never instantiated at
+    # runtime); the ``_counts`` helper in
+    # :func:`_format_overlay_footer_summary` annotates with this alias
+    # via a string forward ref.
+    type _OverlayResolvedEntries = (
+        list[ResolvedPlugin] | list[ResolvedExtension] | list[ResolvedMarketplace]
+    )
 
 
 class CompareStatus(StrEnum):
@@ -858,7 +874,7 @@ def _format_overlay_footer_summary(
     """
     from setforge.local_overlay import OverlayOrigin
 
-    def _counts(entries: list) -> tuple[int, int]:  # type: ignore[type-arg]
+    def _counts(entries: "_OverlayResolvedEntries") -> tuple[int, int]:
         adds = sum(1 for e in entries if e.origin is OverlayOrigin.LOCAL_ADD)
         rems = sum(1 for e in entries if e.origin is OverlayOrigin.LOCAL_REMOVE)
         return adds, rems
