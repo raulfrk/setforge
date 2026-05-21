@@ -620,9 +620,11 @@ def _resolve_nested_setforge_error(
     acceptance) only.
     """
     # Walk down to the parent of the leaf so we can call
-    # ``.lc.key(leaf)`` on it. Path can contain dict keys (str) or list
-    # indices (int) — both walkable via subscript on CommentedMap /
-    # CommentedSeq.
+    # ``.lc.key(leaf)`` on it. Only mapping shapes are exercised today;
+    # integer-keyed list traversal (e.g. ``loc=('profiles', 'p',
+    # 'extensions', 'include', 0)``) is not yet wired up and returns
+    # the ``(1, 1, '', None)`` fallback. setforge-b1lg's unified
+    # ``.lc`` walker will extend this to CommentedSeq subscripts.
     parent: object = raw
     for step in loc[:-1]:
         if isinstance(parent, Mapping) and step in parent:
