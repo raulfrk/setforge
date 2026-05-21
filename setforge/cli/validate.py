@@ -35,6 +35,7 @@ from setforge.cli._validate_errors import (
 from setforge.compare import resolve_src
 from setforge.config import (
     Config,
+    Profile,
     ResolvedProfile,
     TrackedFile,
     apply_preserve_user_keys_overlay,
@@ -658,9 +659,6 @@ def _candidates_for_nested_loc(loc: tuple[object, ...]) -> list[str]:
         return []
     head = str(loc[0])
     if head == "profiles":
-        # Lazy import — avoid circular-import risk on cli/__init__ load.
-        from setforge.config import Profile
-
         return list(Profile.model_fields.keys())
     if head == "tracked_files":
         return list(TrackedFile.model_fields.keys())
