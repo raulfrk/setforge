@@ -266,8 +266,10 @@ def test_install_auto_accept_tracked_with_yes(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"unexpected_new_key\": 1}}' > {live_path}"])
     result = _install(
         c,
@@ -291,8 +293,10 @@ def test_install_auto_accept_tracked_non_tty_no_yes_exit_1(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"unexpected_new_key\": 1}}' > {live_path}"])
     result = _install(
         c,
@@ -319,8 +323,10 @@ def test_install_auto_accept_live_with_yes(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"unexpected_new_key\": 1}}' > {live_path}"])
     result = _install(
         c,
@@ -341,8 +347,10 @@ def test_install_auto_accept_live_non_tty_no_yes_exit_1(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"unexpected_new_key\": 1}}' > {live_path}"])
     result = _install(
         c,
@@ -369,8 +377,10 @@ def test_sync_auto_use_live_with_yes(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"new_live_key\": 42}}' > {live_path}"])
     result = _sync(
         c,
@@ -393,8 +403,10 @@ def test_sync_auto_use_live_non_tty_no_yes_exit_1(
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
-    if not live_path:
-        pytest.skip("jsonc fixture not deployed; profile shape may have changed")
+    assert live_path, (
+        "jsonc fixture missing — investigate (was test-jsonc-shallow "
+        "profile in fixtures/e2e/setforge.test.yaml removed or renamed?)"
+    )
     c.exec(["bash", "-c", f"echo '{{\"new_live_key\": 42}}' > {live_path}"])
     result = _sync(
         c,
