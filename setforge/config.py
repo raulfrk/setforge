@@ -6,9 +6,10 @@ round-trip mode so comments and key order survive subsequent capture
 writes that re-serialize the document.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from pydantic import (
     BaseModel,
@@ -26,6 +27,18 @@ from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not
 from setforge.errors import ConfigError, ProfileNotFound
 from setforge.migrations import current_expected_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
+
+if TYPE_CHECKING:
+    from setforge.local_overlay import (
+        ResolvedExtension,
+        ResolvedMarketplace,
+        ResolvedPlugin,
+    )
+    from setforge.source import (
+        ExtensionOverlay,
+        MarketplaceOverlay,
+        PluginOverlay,
+    )
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -677,3 +690,272 @@ def _validate_plugin_references(config: Config) -> None:
             f"profile claude_plugins reference undeclared plugin(s): "
             f"{details} (add to top-level claude_plugins:)"
         )
+
+
+def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:
+    """Split a local.yaml overlay plugin ref into ``(bare_name, marketplace)``.
+
+    ``add`` entries use the ``name@marketplace`` shape per SPEC 2
+    mockup; ``remove`` entries are bare names. Returns ``(name, None)``
+    when no ``@`` separator is present so the same parser drives both
+    list shapes. Empty / whitespace-only refs raise :class:`ConfigError`
+    so a typo'd YAML list entry surfaces immediately.
+    """
+    cleaned = pid.strip()
+    if not cleaned:
+        raise ConfigError(
+            "local.yaml plugins overlay: empty / whitespace plugin reference"
+        )
+    if "@" not in cleaned:
+        return cleaned, None
+    name, mp = cleaned.split("@", 1)
+    if not name or not mp:
+        raise ConfigError(
+            f"local.yaml plugins overlay: malformed plugin ref {pid!r} "
+            "(expected 'name@marketplace')"
+        )
+    return name, mp
+
+
+@dataclass(frozen=True, slots=True)
+class LocalOverlayResolution:
+    """Resolved provenance lists for one apply_local_overlay() run.
+
+    Carries the three :class:`setforge.local_overlay` resolved lists so
+    callers (compare's overlay-block renderer, install's per-line
+    provenance) can display ``[from local.yaml]`` / SPEC-2 remove tags
+    without re-running the resolvers. ``empty`` is ``True`` when no
+    overlay was present (the loader took the early-return path);
+    callers use that to suppress the footer summary on compare.
+    """
+
+    plugins: "list[ResolvedPlugin]"
+    extensions: "list[ResolvedExtension]"
+    marketplaces: "list[ResolvedMarketplace]"
+    empty: bool
+
+
+def apply_local_overlay(
+    config: Config,
+    resolved: ResolvedProfile,
+    profile_name: str,
+    *,
+    local_config_path: Path | None = None,
+) -> LocalOverlayResolution:
+    """Apply the local.yaml plugin/extension/marketplace overlay (SPEC 2).
+
+    Three-step pipeline, mirroring
+    :func:`apply_preserve_user_keys_overlay`'s lazy-import + mutate-in-place
+    discipline:
+
+    1. Load the overlay blocks from ``local.yaml`` (lazy-imports
+       :mod:`setforge.source` to dodge the config <-> source cycle).
+    2. Run :func:`setforge.local_overlay.resolve_plugin_overlay` /
+       :func:`resolve_extension_overlay` /
+       :func:`resolve_marketplace_overlay`; each raises
+       :class:`setforge.local_overlay.LocalOverlayError` (a
+       :class:`ConfigError`) on collision or unknown-remove.
+    3. Mutate ``resolved.claude_plugins``,
+       ``resolved.extensions.include`` and ``config.marketplaces`` /
+       ``config.claude_plugins`` in place so downstream reconcile sees
+       the merged sets transparently.
+
+    Finally runs a cross-ref check: every plugin's resolved marketplace
+    name must exist in the merged ``cfg.marketplaces``. Raises
+    :class:`ConfigError` with the SPEC 2 mockup wording on failure.
+
+    Returns a :class:`LocalOverlayResolution` carrying the three
+    resolved lists so compare/install output formatters can read
+    provenance without re-running the resolvers.
+    """
+    # Lazy-import to avoid a config <-> source cycle and to keep this
+    # path off the import-time graph for every command (compare /
+    # install / sync etc. each import setforge.config at boot).
+    from setforge.local_overlay import (
+        resolve_extension_overlay,
+        resolve_marketplace_overlay,
+        resolve_plugin_overlay,
+    )
+    from setforge.source import (
+        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
+    )
+    from setforge.source import (
+        _load_local_source_config,
+    )
+
+    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
+    local = _load_local_source_config(path)
+    plugin_overlay = local.plugins
+    extension_overlay = local.extensions
+    marketplace_overlay = local.marketplaces
+
+    # ------------------------------------------------------------------
+    # Resolve provenance lists (raises LocalOverlayError on failure).
+    # ------------------------------------------------------------------
+    resolved_plugins = resolve_plugin_overlay(
+        profile_plugins=list(resolved.claude_plugins),
+        profile_name=profile_name,
+        overlay=plugin_overlay,
+    )
+    resolved_extensions = resolve_extension_overlay(
+        profile_extensions=list(resolved.extensions.include),
+        profile_name=profile_name,
+        overlay=extension_overlay,
+    )
+    profile_marketplaces = _profile_referenced_marketplaces(config, resolved)
+    resolved_marketplaces = resolve_marketplace_overlay(
+        profile_marketplaces=profile_marketplaces,
+        profile_name=profile_name,
+        overlay=marketplace_overlay,
+    )
+
+    # ------------------------------------------------------------------
+    # Mutate config + resolved in place so downstream reconcile sees
+    # the merged sets. Plugin add entries (name@marketplace) synthesize
+    # ClaudePluginRef entries into cfg.claude_plugins so the existing
+    # bare-name @ marketplace dispatch in claude_plugins.reconcile is
+    # unchanged.
+    # ------------------------------------------------------------------
+    _apply_marketplace_mutations(config, marketplace_overlay)
+    _apply_plugin_mutations(config, resolved, plugin_overlay)
+    _apply_extension_mutations(resolved, extension_overlay)
+
+    # Cross-ref: every plugin's marketplace must exist in the merged set.
+    _validate_overlay_marketplace_cross_ref(config, resolved)
+
+    empty = not (resolved_plugins or resolved_extensions or resolved_marketplaces)
+    return LocalOverlayResolution(
+        plugins=resolved_plugins,
+        extensions=resolved_extensions,
+        marketplaces=resolved_marketplaces,
+        empty=empty,
+    )
+
+
+def _profile_referenced_marketplaces(
+    config: Config, resolved: ResolvedProfile
+) -> list[str]:
+    """Return marketplaces referenced by the resolved profile, in stable order.
+
+    Walks ``resolved.claude_plugins`` and looks up each bare name in
+    ``config.claude_plugins`` to find its marketplace; the set is
+    deduplicated while preserving first-occurrence order. Bare names
+    absent from ``cfg.claude_plugins`` are silently skipped — the
+    caller's plugin reconcile path raises a clearer error for unknown
+    plugin refs.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for bare_name in resolved.claude_plugins:
+        ref = config.claude_plugins.get(bare_name)
+        if ref is None:
+            continue
+        mp = ref.marketplace
+        if mp in seen:
+            continue
+        seen.add(mp)
+        out.append(mp)
+    return out
+
+
+def _apply_marketplace_mutations(config: Config, overlay: "MarketplaceOverlay") -> None:
+    """Apply ``marketplaces.add`` / ``marketplaces.remove`` to ``config.marketplaces``.
+
+    Coerces every ``_MarketplaceLocalDecl`` to a
+    :class:`MarketplaceSource` via the same field shape — the model's
+    ``_exactly_one`` validator gives identical guarantees. Removes drop
+    the matching name from the dict. Mutates in place so downstream
+    consumers (reconcile, validate) see the merged set.
+    """
+    for name, decl in overlay.add.items():
+        config.marketplaces[name] = MarketplaceSource(
+            source=decl.source, repo=decl.repo, path=decl.path
+        )
+    for name in overlay.remove:
+        config.marketplaces.pop(name, None)
+
+
+def _apply_plugin_mutations(
+    config: Config, resolved: ResolvedProfile, overlay: "PluginOverlay"
+) -> None:
+    """Apply ``plugins.add`` / ``plugins.remove`` to the resolved profile.
+
+    ``add`` entries use ``name@marketplace`` shape: synthesize a
+    :class:`ClaudePluginRef` in ``cfg.claude_plugins`` (or replace an
+    existing one when the user explicitly re-routed to a new
+    marketplace via local.yaml) and append the bare name to
+    ``resolved.claude_plugins``. ``remove`` entries are bare names;
+    drop matching entries from ``resolved.claude_plugins`` in place.
+
+    A bare-name ``add`` without ``@`` synthesizes nothing (the user
+    must pair the bare name with a marketplace by other means); we
+    still add it to ``resolved.claude_plugins`` so the cross-ref check
+    surfaces the missing registry entry as a single error message
+    rather than silently dropping the add.
+    """
+    existing = list(resolved.claude_plugins)
+    removed = set(overlay.remove)
+    pruned = [name for name in existing if name not in removed]
+    for raw in overlay.add:
+        bare_name, marketplace = _parse_overlay_plugin_pid(raw)
+        if marketplace is not None:
+            config.claude_plugins[bare_name] = ClaudePluginRef(marketplace=marketplace)
+        if bare_name not in pruned:
+            pruned.append(bare_name)
+    resolved.claude_plugins = pruned
+
+
+def _apply_extension_mutations(
+    resolved: ResolvedProfile, overlay: "ExtensionOverlay"
+) -> None:
+    """Apply ``extensions.add`` / ``extensions.remove`` to resolved.extensions.include.
+
+    Mutates the include list in place so downstream
+    :func:`setforge.vscode_extensions.reconcile` sees the merged set.
+    Excludes are profile-only — local.yaml has no extensions.exclude
+    overlay per SPEC 2.
+    """
+    existing = list(resolved.extensions.include)
+    removed = set(overlay.remove)
+    pruned = [ext_id for ext_id in existing if ext_id not in removed]
+    for ext_id in overlay.add:
+        if ext_id not in pruned:
+            pruned.append(ext_id)
+    resolved.extensions = resolved.extensions.model_copy(update={"include": pruned})
+
+
+def _validate_overlay_marketplace_cross_ref(
+    config: Config, resolved: ResolvedProfile
+) -> None:
+    """Verify every resolved plugin's marketplace exists in cfg.marketplaces.
+
+    Fires at BOTH ``setforge validate`` (offline) AND
+    ``setforge install`` (defensive backstop) per SPEC 2's Q8 decision.
+    The error message lists the offending plugin + missing marketplace
+    name + the available-marketplaces set so the user can fix the
+    right side (cf. SPEC 2 mockup validate-failure shape).
+    """
+    available = sorted(config.marketplaces)
+    available_set = set(available)
+    offenders: list[tuple[str, str]] = []
+    for bare_name in resolved.claude_plugins:
+        ref = config.claude_plugins.get(bare_name)
+        if ref is None:
+            offenders.append((bare_name, "<unknown plugin>"))
+            continue
+        if ref.marketplace not in available_set:
+            offenders.append((bare_name, ref.marketplace))
+    if not offenders:
+        return
+    lines = [
+        f"local.yaml plugins overlay: plugin {plugin!r} references "
+        f"marketplace {marketplace!r}, which is not declared"
+        for plugin, marketplace in offenders
+    ]
+    suffix = (
+        f". Available marketplaces (profile + local.marketplaces.add): "
+        f"{', '.join(available) if available else '(none)'}. "
+        f"Fix: either correct the @-suffix or add the marketplace "
+        f"under marketplaces.add in local.yaml."
+    )
+    raise ConfigError("; ".join(lines) + suffix)
