@@ -241,12 +241,15 @@ def test_validate_rejects_host_local_sections_on_json_tracked_file(
         "        body: |\n"
         "          body\n",
     )
-    rc, _stdout, stderr = _setforge(
+    rc, stdout, _stderr = _setforge(
         c,
         ["validate", "--profile=test-xsco-reject-json", f"--config={CONFIG_FIXTURE}"],
     )
+    # ``setforge validate`` renders failure context via ``typer.echo``
+    # (stdout); ``--check`` / strict-mode stream choice is a separate
+    # axis from where the validate report itself lands.
     assert rc != 0
-    assert ".json" in stderr or ".md" in stderr
+    assert ".json" in stdout or ".md" in stdout
 
 
 def test_validate_rejects_host_local_sections_on_yaml_tracked_file(
@@ -269,12 +272,14 @@ def test_validate_rejects_host_local_sections_on_yaml_tracked_file(
         "        body: |\n"
         "          body\n",
     )
-    rc, _stdout, stderr = _setforge(
+    rc, stdout, _stderr = _setforge(
         c,
         ["validate", "--profile=test-yaml-shallow", f"--config={CONFIG_FIXTURE}"],
     )
+    # ``setforge validate`` renders failure context via ``typer.echo``
+    # (stdout); see _on_json_tracked_file for the same stream choice.
     assert rc != 0
-    assert ".yaml" in stderr or ".md" in stderr
+    assert ".yaml" in stdout or ".md" in stdout
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +485,13 @@ def test_revert_undoes_injection(
         c, ["revert", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}", "-y"]
     )
     assert rc == 0, stderr
-    live_after_revert = c.exec(["cat", _HOST_LIVE]).stdout
-    assert "REVERTABLE BODY" not in live_after_revert
+    # ``setforge revert`` restores live to PRE-INSTALL state — for a
+    # fresh container the live file did not exist before install, so
+    # revert removes it (and ``cat`` returns nonzero). check=False so
+    # the test asserts on stdout content directly rather than crashing
+    # on the missing file.
+    cat = c.exec(["cat", _HOST_LIVE], check=False)
+    assert "REVERTABLE BODY" not in cat.stdout
 
 
 def test_validate_catches_anchor_not_found_offline(
@@ -500,11 +510,13 @@ def test_validate_catches_anchor_not_found_offline(
         "        body: |\n"
         "          will not land\n",
     )
-    rc, _stdout, stderr = _setforge(
+    rc, stdout, _stderr = _setforge(
         c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
     )
+    # ``setforge validate`` renders failure context via ``typer.echo``
+    # (stdout); see _on_json_tracked_file for the same stream choice.
     assert rc != 0
-    assert "PhantomHeading" in stderr or "anchor" in stderr.lower()
+    assert "PhantomHeading" in stdout or "anchor" in stdout.lower()
     # Confirm offline: live file did NOT get created.
     cat = c.exec(["cat", _HOST_LIVE], check=False)
     assert cat.returncode != 0  # absent file
