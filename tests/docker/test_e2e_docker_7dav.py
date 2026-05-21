@@ -424,12 +424,16 @@ def _seed_tracked_git_repo(c: ContainerHandle) -> str:
         "  ex:\n"
         "    src: ex.txt\n"
         "    dst: ~/.ex.txt\n"
+        "  newfile:\n"
+        "    src: newfile.txt\n"
+        "    dst: ~/.newfile.txt\n"
         "profiles:\n"
         "  base:\n"
         "    tracked_files:\n"
         "      - ex\n",
     )
     c.write_text(f"{repo_dir}/tracked/ex.txt", "hello\n")
+    c.write_text(f"{repo_dir}/tracked/newfile.txt", "fresh\n")
     git_cfg = "-c user.email=t@t -c user.name=t"
     init_cmd = (
         f"cd {repo_dir} && git init -q && "
@@ -444,25 +448,61 @@ def _seed_tracked_git_repo(c: ContainerHandle) -> str:
     return repo_dir
 
 
-def test_config_add_local_list_path_exercised_regardless_of_dup_order(
+def test_config_add_local_list_duplicate_raises_non_pty(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Non-PTY: tracked list-add of an already-present value refuses cleanly.
+
+    :func:`setforge.cli._config_helpers.apply_add` raises
+    :class:`SetforgeError` ``"<path> already contains <value>"`` BEFORE
+    :func:`_preview_and_write` renders any confirm dialog, so the dup
+    path is deterministic — no bifurcation, no PTY needed. ``ex`` is
+    already in ``profiles.base.tracked_files`` in the seeded throwaway
+    config repo, so adding it again hits the dup-raise branch.
+
+    The companion PTY test
+    :func:`test_config_add_local_list_new_value_pty_confirm_yes`
+    drives a FRESH value through the actual dialog write path.
+    """
+    c = docker_container()
+    _seed_tracked_git_repo(c)
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--tracked",
+            "profiles.base.tracked_files",
+            "ex",  # already present; must trip apply_add's dup-raise
+            "--profile=base",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "already" in combined, combined
+
+
+def test_config_add_local_list_new_value_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY: list-add code path runs whether dup-detect fires before or after dialog.
+    """PTY: tracked list-add of a fresh value exercises the radiolist write path.
 
     The ``--local`` schema has no list-shaped paths today (binaries +
     source + claude are scalars / dicts), so the list-add behavior is
     exercised on the tracked side via ``profiles.<name>.tracked_files``
     against a clean throw-away git repo seeded inside the container.
 
-    ``ex`` is already in ``profiles.base.tracked_files``; the SUT may
-    detect the duplicate either BEFORE rendering the confirm dialog (in
-    which case the process exits non-zero with no PTY interaction) or
-    AFTER rendering it (in which case the radiolist appears and a
-    default-abort exits 0). Both shapes drive the list-add code path
-    through schema lookup + ``apply_add`` under a real PTY, which is
-    the integration the test pins. The test name advertises the
-    intentional bifurcation so future readers don't read it as flake.
+    Uses a NEW tracked-files key (``"newfile"``) that is also seeded in
+    ``tracked_files:`` so the schema-validate step finds it; ``"ex"`` is
+    deliberately avoided here because it would short-circuit at
+    ``apply_add``'s dup-check before the dialog. The companion non-PTY
+    test :func:`test_config_add_local_list_duplicate_raises_non_pty`
+    covers the dup-raise branch.
     """
     c = docker_container()
     _seed_tracked_git_repo(c)
@@ -476,19 +516,17 @@ def test_config_add_local_list_path_exercised_regardless_of_dup_order(
             "add",
             "--tracked",
             "profiles.base.tracked_files",
-            "ex",  # already present; duplicate exercises the add path
+            "newfile",  # fresh; not in the seeded base.tracked_files list
             "--profile=base",
         ],
     )
-    try:
-        session.expect_in_display("Apply the mutation above?", timeout=30.0)
-        session.expect_in_display("(*) abort", timeout=10.0)
-        _confirm_radiolist_abort(session)
-        # Default-abort exits 0 after the dialog.
-        session.wait_for_exit(timeout=60.0, expected_code=0)
-    except (TimeoutError, AssertionError):
-        # Duplicate detection fired BEFORE the dialog rendered.
-        session.wait_for_exit(timeout=10.0, expected_code=1)
+    session.expect_in_display("Apply the mutation above?", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    _confirm_radiolist_write(session)
+    session.expect_in_display("writing", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    after = c.read_text("/tmp/track/setforge.yaml")
+    assert "- newfile" in after
 
 
 def test_config_remove_local_list_pty_confirm_yes(
@@ -497,7 +535,7 @@ def test_config_remove_local_list_pty_confirm_yes(
 ) -> None:
     """PTY: list-remove pops from the list (arrow→write).
 
-    See :func:`test_config_add_local_list_path_exercised_regardless_of_dup_order`
+    See :func:`test_config_add_local_list_new_value_pty_confirm_yes`
     for the tracked-side fallback rationale (``--local`` has no list paths).
     """
     c = docker_container()
@@ -584,7 +622,10 @@ def test_config_completion_value_works(
     of ``_complete_value`` here gives end-to-end coverage of the value
     callback machinery; the list branch is covered by the unit-level
     ``test_config_completion_value_callback_contract`` plus the PTY
-    list-add test ``test_config_add_local_list_path_*``.
+    list-add test
+    ``test_config_add_local_list_new_value_pty_confirm_yes`` and its
+    non-PTY companion
+    ``test_config_add_local_list_duplicate_raises_non_pty``.
 
     This exercises the END-TO-END shell-completion path (typer's
     completion machinery → setforge's _complete_value callback →
