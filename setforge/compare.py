@@ -19,10 +19,11 @@ import io
 import json
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jinja2 import Template
 from rich.table import Table
@@ -35,6 +36,10 @@ from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_profile
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
+
+if TYPE_CHECKING:
+    from setforge.config import LocalOverlayResolution
+    from setforge.local_overlay import OverlayOrigin
 
 
 class CompareStatus(StrEnum):
@@ -733,6 +738,143 @@ def render_preserve_user_keys_overlay_block(
                     marker = "="
             lines.append(f"      {marker} {key.key}  {display_tag(key)}")
     return lines
+
+
+def render_local_overlay_block(
+    config: Config, resolution: "LocalOverlayResolution"
+) -> list[str]:
+    """Build SPEC 2 compare-output lines for the plugin/ext/mp overlay.
+
+    Returns an empty list when no axis has any entries OR no axis has a
+    local-overlay-affected entry — the host-overlay summary footer is
+    only emitted when local.yaml introduced at least one change.
+
+    Renders one section per axis (Claude plugins / VSCode extensions /
+    Marketplaces) with the per-entry provenance tags inline, then a
+    final ``[Host overlay summary: ...]`` line carrying the
+    +adds/-removes counts per axis (Q9 Shape A from SPEC 2).
+
+    Pure function — the caller (``setforge compare`` CLI) prints each
+    line so test fixtures can assert on string content directly. The
+    SPEC 2 mockup uses the U+2212 minus sign for the remove tag; this
+    function routes the literal through
+    :func:`setforge.local_overlay.display_tag` (SoT for the wording).
+    """
+    from setforge.local_overlay import (
+        has_local_overlay,
+    )
+
+    any_overlay = (
+        has_local_overlay(resolution.plugins)
+        or has_local_overlay(resolution.extensions)
+        or has_local_overlay(resolution.marketplaces)
+    )
+    if not any_overlay:
+        return []
+
+    lines: list[str] = []
+    _emit_overlay_section(
+        lines,
+        header="Claude plugins:",
+        entries=[(e.value, e.origin) for e in resolution.plugins],
+        format_value=lambda v: v,
+    )
+    _emit_overlay_section(
+        lines,
+        header="VSCode extensions:",
+        entries=[(e.value, e.origin) for e in resolution.extensions],
+        format_value=lambda v: v,
+    )
+    _emit_overlay_section(
+        lines,
+        header="Marketplaces:",
+        entries=[(e.value, e.origin) for e in resolution.marketplaces],
+        format_value=lambda v: _format_marketplace_value(config, v),
+    )
+
+    summary = _format_overlay_footer_summary(resolution)
+    if lines and summary:
+        lines.append(summary)
+    return lines
+
+
+def _emit_overlay_section(
+    lines: list[str],
+    *,
+    header: str,
+    entries: "list[tuple[str, OverlayOrigin]]",
+    format_value: "Callable[[str], str]",
+) -> None:
+    """Append SPEC 2's per-axis block to ``lines`` when ``entries`` has any rows.
+
+    Suppresses the section entirely when ``entries`` is empty so an
+    axis untouched by both profile and local.yaml does not surface a
+    bare header. Mockup line shapes:
+
+    - ``+ value [from local.yaml]`` for LOCAL_ADD.
+    - ``+ value`` (no tag) for PROFILE.
+    - U+2212 prefix + value + remove tag for LOCAL_REMOVE.
+    """
+    from setforge.local_overlay import OverlayOrigin, display_tag
+
+    if not entries:
+        return
+    lines.append("")
+    lines.append(header)
+    for value, origin in entries:
+        formatted = format_value(value)
+        tag = display_tag(origin)
+        marker = chr(0x2212) if origin is OverlayOrigin.LOCAL_REMOVE else "+"
+        suffix = f" {tag}" if tag else ""
+        lines.append(f"  {marker} {formatted}{suffix}")
+
+
+def _format_marketplace_value(config: Config, name: str) -> str:
+    """Render a marketplace entry as ``name {source: ..., repo|path: ...}``.
+
+    Pulls source details from ``cfg.marketplaces`` (mutated in place by
+    the loader to include local-added marketplaces). Drops to bare
+    ``name`` when the marketplace key is absent (defensive — should
+    not happen post-mutation, but keeps the renderer total).
+    """
+    mp = config.marketplaces.get(name)
+    if mp is None:
+        return name
+    if mp.repo is not None:
+        return f"{name} {{source: {mp.source.value}, repo: {mp.repo}}}"
+    return f"{name} {{source: {mp.source.value}, path: {mp.path}}}"
+
+
+def _format_overlay_footer_summary(
+    resolution: "LocalOverlayResolution",
+) -> str | None:
+    """Return the SPEC 2 ``[Host overlay summary: ...]`` line, or ``None``.
+
+    Returns ``None`` when no axis carries any LOCAL_ADD / LOCAL_REMOVE
+    entry (the caller suppresses the line). Per-axis counts render as
+    ``plugins N+/M-`` / ``extensions N+/M-`` / ``marketplaces N+/M-``
+    with the minus character at U+2212 (decimal 8722) for column-width
+    parity with the per-row remove markers.
+    """
+    from setforge.local_overlay import OverlayOrigin
+
+    def _counts(entries: list) -> tuple[int, int]:  # type: ignore[type-arg]
+        adds = sum(1 for e in entries if e.origin is OverlayOrigin.LOCAL_ADD)
+        rems = sum(1 for e in entries if e.origin is OverlayOrigin.LOCAL_REMOVE)
+        return adds, rems
+
+    p_add, p_rem = _counts(resolution.plugins)
+    e_add, e_rem = _counts(resolution.extensions)
+    m_add, m_rem = _counts(resolution.marketplaces)
+    if not (p_add or p_rem or e_add or e_rem or m_add or m_rem):
+        return None
+    minus = chr(0x2212)
+    return (
+        f"[Host overlay summary: "
+        f"plugins {p_add}+/{p_rem}{minus}; "
+        f"extensions {e_add}+/{e_rem}{minus}; "
+        f"marketplaces {m_add}+/{m_rem}{minus} via local.yaml]"
+    )
 
 
 def compare_summary_table(report: CompareReport) -> Table:
