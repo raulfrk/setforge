@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final
 
 import typer
 from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
@@ -56,28 +55,27 @@ from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import (
+    ExtensionOverlay,
+    HostLocalSection,
+    MarketplaceOverlay,
+    PluginOverlay,
+    PreserveUserKeysOverlay,
+    _LocalTrackedFileOverlay,
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
 
-_LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = (
-    "source",
-    "binaries",
-    "claude",
-    "tracked_files",
-    "plugins",
-    "extensions",
-    "marketplaces",
-    "orphan_ignore",
-)
-"""Known top-level keys in ``local.yaml``.
 
-Mirrors the keys consumed by :mod:`setforge.source` (``source:``,
-``tracked_files:``, ``plugins:``, ``extensions:``, ``marketplaces:``)
-and :mod:`setforge.binaries` (``binaries:``, ``claude:``,
-``orphan_ignore:``). Used as the close-match candidate list for
-typo'd top-level keys (mockup D).
-"""
+def _local_yaml_top_keys() -> list[str]:
+    """Return the known top-level keys in ``local.yaml`` for close-match.
+
+    Introspects :class:`setforge.local_config.LocalConfig.model_fields`
+    rather than hand-maintaining a parallel tuple — the source of truth
+    is the model itself, so adding a new top-level overlay block (e.g.
+    ``marketplaces:`` post-5z11) automatically extends the candidate
+    list with no edit needed here.
+    """
+    return list(_LocalConfig.model_fields.keys())
 
 
 def _check_profile(
@@ -93,18 +91,46 @@ def _check_profile(
     if resolved is None:
         return
 
-    # Check 1b (setforge-lgvp): apply the local.yaml preserve_user_keys
-    # overlay so collision (add ∩ remove) and unknown-remove errors
-    # surface during ``setforge validate``. Without this, the errors
-    # only fire on ``install`` / ``compare`` (cf. setforge/cli/install.py
-    # and setforge/cli/compare.py). Catch the overlay-specific
-    # ConfigError subclass and append to ``failures`` so the existing
-    # echo path renders the canonical "in both add and remove" /
-    # "not in profile chain" phrases that the e2e suite keys on.
+    # Check 1b (setforge-lgvp + setforge-b1lg): apply the local.yaml
+    # preserve_user_keys overlay so collision (add ∩ remove) and
+    # unknown-remove errors surface during ``setforge validate``.
+    # Without this, the errors only fire on ``install`` / ``compare``
+    # (cf. setforge/cli/install.py and setforge/cli/compare.py).
+    #
+    # The overlay load path (``_load_local_source_config``) parses
+    # local.yaml against the strict :class:`_LocalSourceConfig` schema,
+    # which surfaces nested ``extra_forbidden`` / shape errors for the
+    # source / tracked_files / plugins / extensions / marketplaces
+    # blocks BEFORE :func:`_check_local_yaml` runs at the end of
+    # validate. Without broadening the catch (b1lg), these raw
+    # exceptions bubble past the narrow ``PreserveUserKeysOverlayError``
+    # clause and abort the whole validate run — defeating the
+    # report-all-then-refuse contract.
+    #
+    # Broadened catches:
+    # - :class:`PreserveUserKeysOverlayError` — resolver-phase
+    #   collision / unknown-remove → string failure (existing UX).
+    # - :class:`pydantic.ValidationError` — strict schema mismatch in
+    #   the overlay load (e.g. nested ``extra_forbidden`` on a
+    #   ``source.<unknown>`` sub-key, list-shaped ``source:``) → route
+    #   through :func:`_validation_error_to_context` so every err
+    #   gets the mockup-D formatter UX.
+    # - :class:`ConfigError` — load-phase parse / shape failure
+    #   (malformed YAML, non-mapping top-level) → string failure.
+    # - :class:`OSError` / :class:`UnicodeDecodeError` — unreadable
+    #   local.yaml (permission, non-UTF-8 bytes) → route through
+    #   :func:`format_yaml_parse_error` so the suite's
+    #   "✗ YAML PARSE ERROR" expectation holds.
     try:
         apply_preserve_user_keys_overlay(cfg, prof_name)
     except PreserveUserKeysOverlayError as exc:
         failures.append(f"{ctx}: {exc}")
+    except ValidationError as exc:
+        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
+    except ConfigError as exc:
+        failures.append(f"{ctx}: {exc}")
+    except (OSError, UnicodeDecodeError) as exc:
+        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
@@ -159,6 +185,14 @@ def _apply_local_overlay_check(
     - bare :class:`ConfigError`: emitted by the cross-ref check itself
       (e.g. plugin references a missing marketplace) → cross-ref ran;
       record and signal so the caller skips Check 6.
+    - :class:`pydantic.ValidationError`: strict-schema mismatch in the
+      overlay load (setforge-b1lg) → route through
+      :func:`_route_local_yaml_validation_error` for the mockup-D UX;
+      cross-ref did NOT run, fall back to Check 6.
+    - :class:`OSError` / :class:`UnicodeDecodeError`: unreadable
+      local.yaml (setforge-b1lg) → route through
+      :func:`format_yaml_parse_error`; cross-ref did NOT run, fall
+      back to Check 6.
     """
     try:
         apply_local_overlay(cfg, resolved, prof_name)
@@ -174,11 +208,22 @@ def _apply_local_overlay_check(
         # run; fall back to Check 6.
         failures.append(f"{ctx}: {exc}")
         return False
+    except ValidationError as exc:
+        # Strict-schema mismatch in the overlay load (setforge-b1lg):
+        # route every err through the mockup-D formatter.
+        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
+        return False
     except ConfigError as exc:
         # The marketplace cross-ref check itself raised; the cross-ref
         # ran (and reported), so skip Check 6 to avoid a duplicate row.
         failures.append(f"{ctx}: {exc}")
         return True
+    except (OSError, UnicodeDecodeError) as exc:
+        # Unreadable local.yaml (setforge-b1lg): route through the
+        # YAML PARSE category formatter so the report-all-then-refuse
+        # contract holds.
+        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
+        return False
     return True
 
 
@@ -251,11 +296,25 @@ def _check_host_local_sections(
 
     No-op when local.yaml is absent or declares no host-local sections
     for tracked_files in this profile.
+
+    Catches mirror ``_check_profile``'s broadened set (setforge-b1lg):
+    ValidationError gets routed through the mockup-D formatter so the
+    suggestion / snippet / fix-hint UX surfaces; ConfigError stays a
+    string failure (existing UX); OSError / UnicodeDecodeError ride
+    through the YAML PARSE category. Without these, a malformed
+    local.yaml that already had its overlay-apply error reported
+    above would still abort the validate run here.
     """
     try:
         overlay = load_local_host_local_sections()
     except ConfigError as exc:
         failures.append(f"{ctx}: {exc}")
+        return
+    except ValidationError as exc:
+        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
+        return
+    except (OSError, UnicodeDecodeError) as exc:
+        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
         return
     profile_ids = set(resolved.tracked_files)
     for tf_id, sections_map in overlay.items():
@@ -376,6 +435,73 @@ def _check_marketplaces(
                 )
 
 
+def _route_local_yaml_validation_error(
+    local_yaml_path: Path,
+    exc: ValidationError,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Route a ``ValidationError`` raised by the local.yaml overlay loader.
+
+    Sibling of :func:`_route_setforge_yaml_validation_error` for the
+    local.yaml side (setforge-b1lg). Re-loads local.yaml with
+    ``YAML(typ="rt")`` so the resulting ``CommentedMap`` carries
+    ``.lc`` line/column info for each error's ``loc`` path. Each
+    Pydantic error becomes one :class:`ValidationErrorWithContext`
+    carrier appended to ``failures`` via
+    :func:`_validation_error_to_context`.
+
+    Race-window resilience mirrors the setforge.yaml-side routing:
+    when the rt re-read fails (file became unreadable / unparseable
+    between the overlay load and this routing) or returns a non-Mapping
+    root, fall back to top-level ``(1, 1)`` placeholders so the
+    original :class:`ValidationError` still surfaces.
+    """
+    try:
+        raw_text = local_yaml_path.read_text(encoding="utf-8")
+        yaml_rt = YAML(typ="rt")
+        data = yaml_rt.load(raw_text)
+    except (OSError, UnicodeDecodeError, YAMLError):
+        # Either the re-read failed (race window) or the file became
+        # syntactically invalid between the overlay-loader parse and
+        # this routing. Fall back to a top-level placeholder so the
+        # original ValidationError still surfaces.
+        for err in exc.errors():
+            failures.append(_build_local_yaml_top_level_fallback(local_yaml_path, err))
+        return
+    if data is None or not isinstance(data, Mapping):
+        # Empty document or malformed top-level shape — placeholder
+        # carriers preserve the report-all-then-refuse contract.
+        for err in exc.errors():
+            failures.append(_build_local_yaml_top_level_fallback(local_yaml_path, err))
+        return
+    for err in exc.errors():
+        failures.append(
+            _validation_error_to_context(local_yaml_path, raw_text, data, err)
+        )
+
+
+def _build_local_yaml_top_level_fallback(
+    local_yaml_path: Path, err: Mapping[str, object]
+) -> ValidationErrorWithContext:
+    """Fallback carrier when the rt re-load fails for local.yaml.
+
+    Surfaces the Pydantic message at ``(1, 1)`` without snippet/pointer
+    detail. Mirrors :func:`_build_top_level_fallback` on the
+    setforge.yaml side but renders the home-relative path.
+    """
+    msg = str(err.get("msg", ""))
+    home_path = _home_relative(local_yaml_path)
+    return ValidationErrorWithContext(
+        file_path=local_yaml_path,
+        line=1,
+        column=1,
+        snippet_lines=[""],
+        field_value=msg or "value",
+        fix_hint=f"edit {home_path} — {msg}",
+        suggestion=None,
+    )
+
+
 def _check_local_yaml(
     local_yaml_path: Path, failures: list[ValidationErrorWithContext | str]
 ) -> None:
@@ -457,11 +583,13 @@ def _validation_error_to_context(
     """Convert one ``Pydantic ValidationError`` entry to a context carrier.
 
     Walks the error's ``loc`` tuple against ``data``'s ``.lc`` table to
-    map the field path to a source line/column. Builds a 1-3-line
-    snippet from ``raw_text`` around the offending line. When the
-    error is the top-level ``extra_forbidden`` shape, the offending
-    key itself is the ``field_value`` and we consult the close-match
-    suggester against :data:`_LOCAL_YAML_TOP_KEYS`.
+    map the field path to a source line/column — including nested
+    overlay-class errors (``len(loc) > 1``) via the b1lg walker. Builds
+    a 1-3-line snippet from ``raw_text`` around the offending line.
+    When the error is an ``extra_forbidden`` shape, the offending key
+    itself is the ``field_value`` and we consult the close-match
+    suggester against the overlay-class-specific candidate list
+    dispatched by :func:`_candidate_list_for`.
     """
     loc = err.get("loc", ())
     err_type = err.get("type", "")
@@ -496,37 +624,125 @@ def _resolve_error_position(
 ) -> tuple[int, int, str, str | None]:
     """Map a Pydantic error ``loc`` to (line, col, field_value, suggestion).
 
-    Falls back to (1, 1, "", None) when the loc can't be resolved on
-    the ``.lc`` table — including nested ``extra_forbidden`` errors
-    (``len(loc) > 1``) whose offending site sits inside a nested
-    CommentedMap. Walking arbitrary nested ``.lc`` tables to surface
-    accurate nested line/columns is out of scope for setforge-tmln (the
-    A6 overlay-classes spec deferred to a follow-up bd covers the full
-    nested-shape UX); bailing early keeps the close-match suggestion
-    against ``_LOCAL_YAML_TOP_KEYS`` from mis-firing for non-top-level
-    keys.
+    Three shapes:
+
+    - Empty / non-tuple loc → ``(1, 1, "", None)`` (top-level placeholder).
+    - Single-element loc (``('plgins',)``) → close-match against
+      :func:`_local_yaml_top_keys`; line/col anchored to the
+      offending top-level key.
+    - Nested loc (``('tracked_files', <id>, 'bogus')``,
+      ``('plugins', 'add')``) → walk the ``.lc`` tables to surface the
+      real nested line/column; candidate list dispatched via
+      :func:`_candidate_list_for` per overlay-class shape.
+
+    Falls back to ``(1, 1, "", None)`` when the parent chain can't be
+    walked on the ``.lc`` table (intermediate non-Mapping, missing key,
+    or :exc:`AttributeError` from a plain ``dict``).
     """
     if not isinstance(loc, tuple) or not loc:
         return 1, 1, "", None
-    # Nested errors (e.g. ``loc=('source','unknown_subkey')`` for an
-    # extra_forbidden inside the ``source:`` block) can't be located on
-    # the top-level CommentedMap and the top-level close-match candidate
-    # list does not apply. Bail to the (1, 1) fallback per the docstring
-    # contract; full nested-shape UX is the A6 follow-up bd.
-    if len(loc) > 1:
-        return 1, 1, "", None
+    if len(loc) == 1:
+        return _resolve_top_level_local_error(data, loc, err_type, msg)
+    return _resolve_nested_local_error(data, loc, err_type, msg)
+
+
+def _resolve_top_level_local_error(
+    data: Mapping[str, object],
+    loc: tuple[object, ...],
+    err_type: object,
+    msg: object,
+) -> tuple[int, int, str, str | None]:
+    """Resolve a single-element ``loc`` against the top-level CommentedMap."""
     head = str(loc[0])
-    # For ``extra_forbidden`` at the top level, Pydantic puts the
-    # offending key in ``loc`` (e.g. ``('unknown_key',)``); mockup D's
-    # close-match path kicks in here.
+    candidates = _candidate_list_for(loc)
     if err_type == "extra_forbidden":
         line_1, col_1 = _lookup_key_position(data, head)
-        suggestion = suggest_close_match(head, list(_LOCAL_YAML_TOP_KEYS))
+        suggestion = suggest_close_match(head, candidates)
         return line_1, col_1, head, suggestion
-    # Other error types: position points at the value, not the key.
     line_1, col_1 = _lookup_value_position(data, head)
     field_value = _stringify_field_value(data, head, msg)
     return line_1, col_1, field_value, None
+
+
+def _resolve_nested_local_error(
+    data: Mapping[str, object],
+    loc: tuple[object, ...],
+    err_type: object,
+    msg: object,
+) -> tuple[int, int, str, str | None]:
+    """Resolve a nested ``loc`` against nested ``.lc`` tables (setforge-b1lg).
+
+    Walks down ``data`` following each step of ``loc[:-1]`` until the
+    parent of the leaf is reached, then anchors line/col on the leaf
+    via the parent's ``.lc.key(...)`` / ``.lc.value(...)``. Falls back
+    to ``(1, 1, "", None)`` when an intermediate step is non-Mapping or
+    missing — keeps the formatter from mis-pointing into an unrelated
+    region of the file.
+
+    Sibling of :func:`_resolve_nested_setforge_error` (setforge-5twm)
+    on the ``setforge.yaml`` side; the two stay separate because the
+    candidate-list dispatch differs (per-overlay-class for local.yaml,
+    per-Profile/TrackedFile shape for setforge.yaml).
+    """
+    parent: object = data
+    for step in loc[:-1]:
+        if isinstance(parent, Mapping) and step in parent:
+            parent = parent[step]
+        else:
+            return 1, 1, "", None
+    leaf = str(loc[-1])
+    if not isinstance(parent, Mapping):
+        return 1, 1, "", None
+    candidates = _candidate_list_for(loc)
+    if err_type == "extra_forbidden":
+        line_1, col_1 = _lookup_key_position(parent, leaf)
+        suggestion = suggest_close_match(leaf, candidates) if candidates else None
+        return line_1, col_1, leaf, suggestion
+    line_1, col_1 = _lookup_value_position(parent, leaf)
+    field_value = _stringify_field_value(parent, leaf, msg)
+    return line_1, col_1, field_value, None
+
+
+def _candidate_list_for(loc: tuple[object, ...]) -> list[str]:
+    """Return the close-match candidate list for the local.yaml error site.
+
+    Dispatches on ``loc[0]`` to the right overlay-class model's
+    ``model_fields.keys()`` (setforge-b1lg). Introspection avoids the
+    hand-maintained-tuple anti-smell — adding a field to e.g.
+    :class:`PluginOverlay` extends the suggestion surface automatically.
+
+    Shapes:
+
+    - Empty / non-tuple ``loc`` → top-level :class:`LocalConfig` keys.
+    - ``('plugins', ...)`` → :class:`PluginOverlay.model_fields`.
+    - ``('extensions', ...)`` → :class:`ExtensionOverlay.model_fields`.
+    - ``('marketplaces', ...)`` → :class:`MarketplaceOverlay.model_fields`.
+    - ``('tracked_files', <id>, 'host_local_sections', ...)``
+      → :class:`HostLocalSection.model_fields` (sub-block keys).
+    - ``('tracked_files', <id>, 'preserve_user_keys', ...)``
+      → :class:`PreserveUserKeysOverlay.model_fields` (add / remove).
+    - ``('tracked_files', <id>, ...)`` (other) →
+      :class:`_LocalTrackedFileOverlay.model_fields`.
+    - anything else → top-level keys (fallback).
+    """
+    if not loc:
+        return _local_yaml_top_keys()
+    head = loc[0]
+    match head:
+        case "plugins":
+            return list(PluginOverlay.model_fields.keys())
+        case "extensions":
+            return list(ExtensionOverlay.model_fields.keys())
+        case "marketplaces":
+            return list(MarketplaceOverlay.model_fields.keys())
+        case "tracked_files":
+            if len(loc) >= 3 and loc[2] == "host_local_sections":
+                return list(HostLocalSection.model_fields.keys())
+            if len(loc) >= 3 and loc[2] == "preserve_user_keys":
+                return list(PreserveUserKeysOverlay.model_fields.keys())
+            return list(_LocalTrackedFileOverlay.model_fields.keys())
+        case _:
+            return _local_yaml_top_keys()
 
 
 def _lookup_key_position(data: Mapping[str, object], key: str) -> tuple[int, int]:
@@ -610,12 +826,16 @@ def _build_fix_hint(
 
     Different error types get tailored language — ``extra_forbidden``
     gets "unknown key", value-shape errors get the Pydantic message.
+    The "remove or rename" phrasing is intentionally site-neutral so
+    the same hint works for top-level keys AND nested overlay-class
+    keys (setforge-b1lg) without flagging a nested key as
+    "top-level".
     """
     home_path = _home_relative(local_yaml_path)
     if err_type == "extra_forbidden":
         return (
             f"edit {home_path}:{line_1} — unknown key {field_value!r} "
-            "(remove or rename to a known top-level key)"
+            "(remove or rename to a known key)"
         )
     return f"edit {home_path}:{line_1} — {msg}"
 
