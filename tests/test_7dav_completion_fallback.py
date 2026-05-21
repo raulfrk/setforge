@@ -16,6 +16,7 @@ from setforge.cli.config import (
     _complete_path_dispatch,
     _static_template_paths,
 )
+from setforge.errors import SetforgeError
 
 
 class _FakeCtx:
@@ -41,10 +42,16 @@ def test_static_tracked_template_lists_top_level_keys() -> None:
 def test_dispatch_falls_back_on_schema_walk_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When ``_complete_path_local`` raises, the dispatch falls back."""
+    """When ``_complete_path_local`` raises a plausible failure, dispatch falls back.
+
+    The dispatch's narrowed catch covers the realistic schema-walk
+    failure families (SetforgeError, KeyError, AttributeError,
+    ValueError, OSError) — exercise SetforgeError here since that's the
+    family the runtime path raises on malformed config.
+    """
 
     def _explode(ctx: Any, incomplete: str) -> list[str]:
-        raise RuntimeError("schema walk exploded")
+        raise SetforgeError("schema walk exploded")
 
     monkeypatch.setattr("setforge.cli.config._complete_path_local", _explode)
     result = _complete_path_dispatch(_FakeCtx(local=True), "")
