@@ -35,6 +35,7 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
+from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics, extract_sections
 from setforge.source import HostLocalSection, HostLocalSectionName
@@ -114,9 +115,9 @@ def compare(
         _render_compare_report(report, console, full_diff=full_diff)
         # setforge-xsco SPEC 1 mockup: surface every host-local section
         # the install would inject, tagged with the canonical provenance
-        # marker. Lives BELOW the drift summary so the diff body and
-        # per-status counts stay grouped, mirroring the mockup's
-        # ordering ("✓ no drift ... + [host-local via local.yaml] X").
+        # marker (HOST_LOCAL_PROVENANCE_TAG). Lives BELOW the drift
+        # summary so the diff body and per-status counts stay grouped,
+        # mirroring the mockup's ordering ("✓ no drift ... + <tag> X").
         _render_host_local_preview(host_local_sections_map, cfg, console)
         if reconcile_user_sections:
             _print_section_reconcile_dry_run(profile_ctx, console)
@@ -214,7 +215,7 @@ def _render_host_local_preview(
 ) -> None:
     """Emit the setforge-xsco SPEC 1 host-local would-be-injected preview block.
 
-    Per the mockup: ``+ [host-local via local.yaml] X ← would be injected``.
+    Per the mockup: ``+ <HOST_LOCAL_PROVENANCE_TAG> X ← would be injected``.
     One indented block per tracked_file with at least one host-local
     section declared in local.yaml. For each section, classifies
     "would be injected" (section name not present in live file) vs
@@ -251,7 +252,7 @@ def _render_host_local_preview(
         for section_name in sections_map:
             sigil, suffix = _classify_section_state(section_name, live_names)
             console.print(
-                f"  {sigil} [host-local via local.yaml] {section_name}     ← {suffix}",
+                f"  {sigil} {HOST_LOCAL_PROVENANCE_TAG} {section_name}     ← {suffix}",
                 markup=False,
             )
 

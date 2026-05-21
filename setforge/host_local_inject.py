@@ -36,7 +36,7 @@ item 11).
 from __future__ import annotations
 
 import re
-from typing import assert_never
+from typing import Final, assert_never
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.sections import (
@@ -54,6 +54,13 @@ from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
 )
+
+# Provenance tag emitted by every install / install --dry-run / compare
+# code path that surfaces a host-local section. Centralised here so all
+# user-visible sites stay in lock-step; tests can keep their literal
+# assertions to guarantee the wire format does not silently drift.
+HOST_LOCAL_PROVENANCE_TAG: Final[str] = "[host-local via local.yaml]"
+
 
 # Matches an ATX-style markdown heading: 1-6 leading ``#`` followed by a
 # space and the heading text. Setext (underline-style) headings are

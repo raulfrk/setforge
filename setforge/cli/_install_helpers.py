@@ -72,6 +72,7 @@ from setforge.compare import (
 )
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
+from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
@@ -257,12 +258,13 @@ def _deploy_all_tracked_files(
 def _echo_host_local_sections_provenance(
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
 ) -> None:
-    """Print a per-section ``injected ... [host-local via local.yaml]`` line.
+    """Print a per-section ``injected ... <HOST_LOCAL_PROVENANCE_TAG>`` line.
 
     No-op when ``host_local_sections`` is ``None`` or empty. The
-    provenance tag matches the mockup in setforge-xsco SPEC 1 so users
-    grepping install output can locate every host-local injection at a
-    glance.
+    provenance tag (see ``HOST_LOCAL_PROVENANCE_TAG`` in
+    :mod:`setforge.host_local_inject`) matches the mockup in
+    setforge-xsco SPEC 1 so users grepping install output can locate
+    every host-local injection at a glance.
     """
     if not host_local_sections:
         return
@@ -270,7 +272,7 @@ def _echo_host_local_sections_provenance(
     plural = "s" if len(host_local_sections) != 1 else ""
     typer.echo(
         f"    injected {len(host_local_sections)} host-local section{plural} "
-        f"[host-local via local.yaml]: {names}"
+        f"{HOST_LOCAL_PROVENANCE_TAG}: {names}"
     )
 
 
@@ -790,7 +792,7 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     """Emit the ``=== would-be host-local section inject ===`` block.
 
     Per setforge-xsco SPEC 1's mockup, each ``WOULD inject`` line carries
-    a ``[host-local via local.yaml]`` provenance tag so users can
+    a ``HOST_LOCAL_PROVENANCE_TAG`` so users can
     distinguish host-local injections from shared section reconcile
     operations (which produce their own WOULD lines via
     :func:`_dry_run_emit_section_reconcile`). No-op when local.yaml is
@@ -813,7 +815,7 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     for tf_id, section_name, dst in matched:
         typer.echo(
             f"  WOULD inject  '{section_name}' into {dst} "
-            f"[host-local via local.yaml] (tracked_file {tf_id!r})"
+            f"{HOST_LOCAL_PROVENANCE_TAG} (tracked_file {tf_id!r})"
         )
 
 
