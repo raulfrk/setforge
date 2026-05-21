@@ -735,47 +735,18 @@ class LocalOverlayResolution:
     empty: bool
 
 
-def apply_local_overlay(
-    config: Config,
-    resolved: ResolvedProfile,
-    profile_name: str,
-    *,
-    local_config_path: Path | None = None,
-) -> LocalOverlayResolution:
-    """Apply the local.yaml plugin/extension/marketplace overlay (SPEC 2).
+def _load_overlay_blocks(
+    local_config_path: Path | None,
+) -> tuple["PluginOverlay", "ExtensionOverlay", "MarketplaceOverlay"]:
+    """Load the three SPEC 2 overlay blocks from ``local.yaml``.
 
-    Three-step pipeline, mirroring
-    :func:`apply_preserve_user_keys_overlay`'s lazy-import + mutate-in-place
-    discipline:
-
-    1. Load the overlay blocks from ``local.yaml`` (lazy-imports
-       :mod:`setforge.source` to dodge the config <-> source cycle).
-    2. Run :func:`setforge.local_overlay.resolve_plugin_overlay` /
-       :func:`resolve_extension_overlay` /
-       :func:`resolve_marketplace_overlay`; each raises
-       :class:`setforge.local_overlay.LocalOverlayError` (a
-       :class:`ConfigError`) on collision or unknown-remove.
-    3. Mutate ``resolved.claude_plugins``,
-       ``resolved.extensions.include`` and ``config.marketplaces`` /
-       ``config.claude_plugins`` in place so downstream reconcile sees
-       the merged sets transparently.
-
-    Finally runs a cross-ref check: every plugin's resolved marketplace
-    name must exist in the merged ``cfg.marketplaces``. Raises
-    :class:`ConfigError` with the SPEC 2 mockup wording on failure.
-
-    Returns a :class:`LocalOverlayResolution` carrying the three
-    resolved lists so compare/install output formatters can read
-    provenance without re-running the resolvers.
+    Lazy-imports :mod:`setforge.source` to dodge the config <-> source
+    cycle and keep this path off the import-time graph for every
+    command (compare / install / sync etc. each import
+    :mod:`setforge.config` at boot). Returns the three overlay structs
+    (plugins, extensions, marketplaces) — each is a typed Pydantic
+    model with ``.add`` / ``.remove`` lists or mappings.
     """
-    # Lazy-import to avoid a config <-> source cycle and to keep this
-    # path off the import-time graph for every command (compare /
-    # install / sync etc. each import setforge.config at boot).
-    from setforge.local_overlay import (
-        resolve_extension_overlay,
-        resolve_marketplace_overlay,
-        resolve_plugin_overlay,
-    )
     from setforge.source import (
         LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
     )
@@ -785,13 +756,33 @@ def apply_local_overlay(
 
     path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
     local = _load_local_source_config(path)
-    plugin_overlay = local.plugins
-    extension_overlay = local.extensions
-    marketplace_overlay = local.marketplaces
+    return local.plugins, local.extensions, local.marketplaces
 
-    # ------------------------------------------------------------------
-    # Resolve provenance lists (raises LocalOverlayError on failure).
-    # ------------------------------------------------------------------
+
+def _resolve_provenance_lists(
+    config: Config,
+    resolved: ResolvedProfile,
+    profile_name: str,
+    plugin_overlay: "PluginOverlay",
+    extension_overlay: "ExtensionOverlay",
+    marketplace_overlay: "MarketplaceOverlay",
+) -> tuple[
+    "list[ResolvedPlugin]", "list[ResolvedExtension]", "list[ResolvedMarketplace]"
+]:
+    """Resolve the three provenance lists for the SPEC 2 overlay.
+
+    Lazy-imports :mod:`setforge.local_overlay` resolvers. Each raises
+    :class:`setforge.local_overlay.LocalOverlayError` (a
+    :class:`ConfigError`) on collision or unknown-remove — the caller
+    surfaces those errors under the validate report-all-then-refuse
+    contract.
+    """
+    from setforge.local_overlay import (
+        resolve_extension_overlay,
+        resolve_marketplace_overlay,
+        resolve_plugin_overlay,
+    )
+
     resolved_plugins = resolve_plugin_overlay(
         profile_plugins=list(resolved.claude_plugins),
         profile_name=profile_name,
@@ -808,21 +799,63 @@ def apply_local_overlay(
         profile_name=profile_name,
         overlay=marketplace_overlay,
     )
+    return resolved_plugins, resolved_extensions, resolved_marketplaces
 
-    # ------------------------------------------------------------------
-    # Mutate config + resolved in place so downstream reconcile sees
-    # the merged sets. Plugin add entries (name@marketplace) synthesize
-    # ClaudePluginRef entries into cfg.claude_plugins so the existing
-    # bare-name @ marketplace dispatch in claude_plugins.reconcile is
-    # unchanged.
-    # ------------------------------------------------------------------
+
+def apply_local_overlay(
+    config: Config,
+    resolved: ResolvedProfile,
+    profile_name: str,
+    *,
+    local_config_path: Path | None = None,
+) -> LocalOverlayResolution:
+    """Apply the local.yaml plugin/extension/marketplace overlay (SPEC 2).
+
+    Three-step pipeline, mirroring
+    :func:`apply_preserve_user_keys_overlay`'s lazy-import + mutate-in-place
+    discipline:
+
+    1. Load the overlay blocks from ``local.yaml`` via
+       :func:`_load_overlay_blocks` (lazy-imports :mod:`setforge.source`
+       to dodge the config <-> source cycle).
+    2. Run :func:`_resolve_provenance_lists` — wraps the three
+       :mod:`setforge.local_overlay` resolvers; each raises
+       :class:`setforge.local_overlay.LocalOverlayError` (a
+       :class:`ConfigError`) on collision or unknown-remove.
+    3. Mutate ``resolved.claude_plugins``,
+       ``resolved.extensions.include`` and ``config.marketplaces`` /
+       ``config.claude_plugins`` in place so downstream reconcile sees
+       the merged sets transparently. Plugin add entries
+       (``name@marketplace``) synthesize :class:`ClaudePluginRef`
+       entries into ``cfg.claude_plugins`` so the existing
+       bare-name @ marketplace dispatch in
+       :mod:`setforge.claude_plugins.reconcile` is unchanged.
+
+    Finally runs a cross-ref check: every plugin's resolved marketplace
+    name must exist in the merged ``cfg.marketplaces``. Raises
+    :class:`ConfigError` with the SPEC 2 mockup wording on failure.
+
+    Returns a :class:`LocalOverlayResolution` carrying the three
+    resolved lists so compare/install output formatters can read
+    provenance without re-running the resolvers.
+    """
+    plugin_overlay, extension_overlay, marketplace_overlay = _load_overlay_blocks(
+        local_config_path
+    )
+    resolved_plugins, resolved_extensions, resolved_marketplaces = (
+        _resolve_provenance_lists(
+            config,
+            resolved,
+            profile_name,
+            plugin_overlay,
+            extension_overlay,
+            marketplace_overlay,
+        )
+    )
     _apply_marketplace_mutations(config, marketplace_overlay)
     _apply_plugin_mutations(config, resolved, plugin_overlay)
     _apply_extension_mutations(resolved, extension_overlay)
-
-    # Cross-ref: every plugin's marketplace must exist in the merged set.
     _validate_overlay_marketplace_cross_ref(config, resolved)
-
     empty = not (resolved_plugins or resolved_extensions or resolved_marketplaces)
     return LocalOverlayResolution(
         plugins=resolved_plugins,
