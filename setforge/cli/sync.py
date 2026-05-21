@@ -55,9 +55,13 @@ from setforge.cli._helpers import (
     _refuse_legacy_live_markers,
     _resolve_drift_paths,
 )
-from setforge.cli._install_helpers import _compute_preserve_user_keys_applied
+from setforge.cli._install_helpers import (
+    _compute_preserve_user_keys_applied,
+    _load_validated_host_local_sections,
+)
 from setforge.config import Config, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
+from setforge.source import load_local_host_local_sections
 
 
 def _build_capture_plan(
@@ -158,7 +162,16 @@ def merge(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(ctx, command="merge")
-    report = compare_mod.compare_profile(cfg, profile, repo_root)
+    # setforge-xsco round-2: thread the local.yaml host_local_sections
+    # overlay so the merge wizard's drift display does NOT surface
+    # already-injected host-local sections as DRIFTED (false-positive
+    # against the live file that just received them via install).
+    host_local_sections_map = _load_validated_host_local_sections(
+        cfg, resolved, repo_root
+    )
+    report = compare_mod.compare_profile(
+        cfg, profile, repo_root, host_local_sections=host_local_sections_map
+    )
 
     if not report.has_unexpected_drift:
         typer.echo("no unexpected drift; nothing to do.")
@@ -232,7 +245,19 @@ def sync(
 
     # bviv: confirmation gate for sync --auto=use-live (live → tracked).
     if auto_enum is capture_mod.CaptureAuto.USE_LIVE:
-        drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+        # setforge-xsco round-2: thread the local.yaml host_local_sections
+        # overlay so the --auto=use-live confirm panel does NOT count
+        # already-injected host-local sections as drift (false-positive
+        # count + risk-row inflation).
+        host_local_sections_map = _load_validated_host_local_sections(
+            cfg, resolved, repo_root
+        )
+        drift_report = compare_mod.compare_profile(
+            cfg,
+            profile,
+            repo_root,
+            host_local_sections=host_local_sections_map,
+        )
         plan = _build_capture_plan(
             drift_report=drift_report,
             ctx=ctx,
@@ -314,8 +339,6 @@ def _run_capture(
     local.yaml. Without this, host-local marker pairs in the live file
     round-trip into tracked sources on the next sync.
     """
-    from setforge.source import load_local_host_local_sections
-
     host_local_sections_map = load_local_host_local_sections()
     try:
         return capture_mod.capture_profile(
