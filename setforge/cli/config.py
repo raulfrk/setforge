@@ -212,6 +212,19 @@ def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pyd
     origin = getattr(ann, "__origin__", None)
     args = getattr(ann, "__args__", ())
 
+    # Literal[...] — Pydantic discriminator fields render as
+    # ``Literal[Enum.MEMBER]``. Surface the literal values as
+    # enum_values so value-completion on a discriminator path
+    # (e.g. ``source.kind``) yields the literal options. Run BEFORE
+    # the union check because Literal carries __args__ too.
+    if origin is typing.Literal:
+        literal_values = tuple(
+            (a.value if isinstance(a, StrEnum) else str(a)) for a in args
+        )
+        return _FieldNode(
+            annotation=ann, is_list=False, enum_values=literal_values, children={}
+        )
+
     # 3) Union shapes — PEP 604 (X | Y) and typing.Union[X, Y]. Check
     # BEFORE the bare-type branch because ``types.UnionType`` carries
     # ``__origin__ = None`` but still has ``__args__`` populated.
@@ -220,12 +233,27 @@ def _node_from_annotation(ann: Any) -> _FieldNode:  # noqa: ANN401, C901 — Pyd
         if len(non_none) == 1:
             return _node_from_annotation(non_none[0])
         # Multi-arm union — merge children across arms so dotted paths
-        # into either union member resolve via the same dispatch.
+        # into either union member resolve via the same dispatch. For
+        # discriminator fields (one ``Literal[...]`` per arm) accumulate
+        # enum_values across arms so completion on the union surfaces
+        # every arm's discriminator value.
         merged_children: dict[str, _FieldNode] = {}
         for arm in non_none:
             arm_node = _node_from_annotation(arm)
             for k, v in arm_node.children.items():
-                merged_children.setdefault(k, v)
+                if k in merged_children and v.enum_values:
+                    existing = merged_children[k]
+                    combined = tuple(
+                        dict.fromkeys((*existing.enum_values, *v.enum_values))
+                    )
+                    merged_children[k] = _FieldNode(
+                        annotation=existing.annotation,
+                        is_list=existing.is_list,
+                        enum_values=combined,
+                        children=existing.children,
+                    )
+                else:
+                    merged_children.setdefault(k, v)
         if merged_children:
             return _FieldNode(
                 annotation=ann, is_list=False, enum_values=(), children=merged_children

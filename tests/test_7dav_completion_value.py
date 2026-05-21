@@ -55,13 +55,18 @@ def test_value_completion_unknown_path_yields_empty() -> None:
 
 
 def test_value_completion_enum_yields_members() -> None:
-    """A ``StrEnum`` scalar surfaces the enum members."""
-    # source.kind is constrained to `path` | `git` via SourceKind.
+    """A ``StrEnum`` scalar surfaces the enum members.
+
+    ``source.kind`` is constrained to ``path`` | ``git`` via
+    :class:`setforge.source.SourceKind`. The contract is that both
+    members surface as completion candidates — an empty list satisfies
+    ``isinstance(list)`` but is useless for the user, so the assertion
+    pins both expected values explicitly.
+    """
     ctx = _FakeCtx(path="source.kind")
     suggestions = _complete_value(ctx, "")
-    # Either dispatch surfaces the enum members, or the discriminator
-    # union flattens; both shapes are acceptable so long as no crash.
-    assert isinstance(suggestions, list)
+    assert "path" in suggestions, suggestions
+    assert "git" in suggestions, suggestions
 
 
 def test_value_completion_with_empty_path_yields_empty() -> None:
