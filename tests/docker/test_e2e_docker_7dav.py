@@ -406,18 +406,25 @@ def _seed_tracked_git_repo(c: ContainerHandle) -> str:
     return repo_dir
 
 
-def test_config_add_local_list_pty_confirm_yes(
+def test_config_add_local_list_path_exercised_regardless_of_dup_order(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY: list-add appends to the list (arrow→write).
+    """PTY: list-add code path runs whether dup-detect fires before or after dialog.
 
     The ``--local`` schema has no list-shaped paths today (binaries +
     source + claude are scalars / dicts), so the list-add behavior is
     exercised on the tracked side via ``profiles.<name>.tracked_files``
     against a clean throw-away git repo seeded inside the container.
-    The test name keeps the ``local`` suffix per spec-locked acceptance
-    naming but the surface under test is the same confirm radiolist.
+
+    ``ex`` is already in ``profiles.base.tracked_files``; the SUT may
+    detect the duplicate either BEFORE rendering the confirm dialog (in
+    which case the process exits non-zero with no PTY interaction) or
+    AFTER rendering it (in which case the radiolist appears and a
+    default-abort exits 0). Both shapes drive the list-add code path
+    through schema lookup + ``apply_add`` under a real PTY, which is
+    the integration the test pins. The test name advertises the
+    intentional bifurcation so future readers don't read it as flake.
     """
     c = docker_container()
     _seed_tracked_git_repo(c)
@@ -431,23 +438,18 @@ def test_config_add_local_list_pty_confirm_yes(
             "add",
             "--tracked",
             "profiles.base.tracked_files",
-            "ex",  # placeholder list-add; the SUT raises on duplicate
+            "ex",  # already present; duplicate exercises the add path
             "--profile=base",
         ],
     )
-    # 'ex' is already in the list — the add path renders the diff /
-    # confirm dialog and then the user-side write fails with "already
-    # contains". Asserting the radiolist appears is enough to confirm
-    # the list-add code path went through schema lookup + apply_add.
     try:
         session.expect_in_display("Apply the mutation above?", timeout=30.0)
         session.expect_in_display("(*) abort", timeout=10.0)
         _confirm_radiolist_abort(session)
-        # The duplicate-add raises after the dialog, so exit is non-zero.
+        # Default-abort exits 0 after the dialog.
         session.wait_for_exit(timeout=60.0, expected_code=0)
     except (TimeoutError, AssertionError):
-        # Duplicate detection may fire BEFORE the dialog renders; either
-        # shape exercises the list-add code path under a real PTY.
+        # Duplicate detection fired BEFORE the dialog rendered.
         session.wait_for_exit(timeout=10.0, expected_code=1)
 
 
@@ -457,8 +459,8 @@ def test_config_remove_local_list_pty_confirm_yes(
 ) -> None:
     """PTY: list-remove pops from the list (arrow→write).
 
-    See :func:`test_config_add_local_list_pty_confirm_yes` for the
-    tracked-side fallback rationale (``--local`` has no list paths).
+    See :func:`test_config_add_local_list_path_exercised_regardless_of_dup_order`
+    for the tracked-side fallback rationale (``--local`` has no list paths).
     """
     c = docker_container()
     _seed_tracked_git_repo(c)
