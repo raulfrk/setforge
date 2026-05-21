@@ -480,6 +480,224 @@ def _build_fix_hint(
     return f"edit {home_path}:{line_1} — {msg}"
 
 
+def _route_setforge_yaml_validation_error(
+    config_path: Path,
+    exc: ValidationError,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Route ``ValidationError`` from ``load_config`` through tmln formatters.
+
+    Re-loads ``setforge.yaml`` with ``YAML(typ="rt")`` (lazy — only when
+    a ValidationError fired) so the resulting ``CommentedMap`` carries
+    ``.lc`` line/column info for each error's ``loc`` path. Each
+    Pydantic error becomes one ``ValidationErrorWithContext`` carrier
+    appended to ``failures``; the caller renders them through the
+    existing :func:`_render_failures` mechanism (setforge-5twm).
+
+    The candidate list for close-match suggestions is introspected from
+    :attr:`setforge.config.Config.model_fields` (top-level keys) or the
+    nested model's ``model_fields`` for nested ``extra_forbidden`` errors.
+    """
+    raw_text = config_path.read_text(encoding="utf-8")
+    raw_lines = raw_text.splitlines()
+    yaml_rt = YAML(typ="rt")
+    raw = yaml_rt.load(raw_text)
+    if raw is None or not isinstance(raw, Mapping):
+        # Malformed top-level shape — fall back to top-level (1, 1)
+        # placeholder; the error message carries the diagnostic.
+        for err in exc.errors():
+            failures.append(_build_top_level_fallback(config_path, err))
+        return
+    for err in exc.errors():
+        failures.append(
+            _setforge_yaml_error_to_context(config_path, raw_lines, raw, err)
+        )
+
+
+def _setforge_yaml_error_to_context(
+    config_path: Path,
+    raw_lines: list[str],
+    raw: Mapping[str, object],
+    err: Mapping[str, object],
+) -> ValidationErrorWithContext:
+    """Convert one Pydantic error from ``load_config`` to a tmln carrier.
+
+    Sibling of :func:`_validation_error_to_context` for the engine
+    config side. Walks the error's ``loc`` against ``raw``'s nested
+    ``.lc`` tables; picks the candidate list for close-match from the
+    appropriate Pydantic model at that nesting depth.
+    """
+    loc = err.get("loc", ())
+    err_type = err.get("type", "")
+    msg = err.get("msg", "")
+    line_1, col_1, field_value, suggestion = _resolve_setforge_yaml_error_position(
+        raw, loc, err_type, msg
+    )
+    snippet_lines = _build_snippet(raw_lines, line_1)
+    fix_hint = _build_setforge_fix_hint(config_path, line_1, err_type, field_value, msg)
+    return ValidationErrorWithContext(
+        file_path=config_path,
+        line=line_1,
+        column=col_1,
+        snippet_lines=snippet_lines,
+        field_value=field_value,
+        fix_hint=fix_hint,
+        suggestion=suggestion,
+    )
+
+
+def _resolve_setforge_yaml_error_position(
+    raw: Mapping[str, object],
+    loc: tuple[object, ...] | object,
+    err_type: object,
+    msg: object,
+) -> tuple[int, int, str, str | None]:
+    """Map a setforge.yaml Pydantic ``loc`` to (line, col, field_value, suggestion).
+
+    Handles three shapes:
+
+    - Empty loc → (1, 1, "", None) (top-level shape error).
+    - Single-element loc (``('proffiles',)``) → close-match against
+      :attr:`Config.model_fields.keys()`.
+    - Nested loc (``('profiles', 'p', 'tipo')`` /
+      ``('tracked_files', 'd', 'srcc')``) → walk the ``.lc`` tables to
+      locate the offending nested key, candidate list from the matching
+      nested Pydantic model's ``model_fields``.
+
+    .. note::
+
+        TODO: superseded by setforge-b1lg's nested ``.lc`` walker
+        extension — b1lg will unify this with
+        :func:`_resolve_error_position` (local.yaml side). The local
+        port here keeps 5twm shippable in Wave 1.
+    """
+    if not isinstance(loc, tuple) or not loc:
+        return 1, 1, "", None
+    if len(loc) == 1:
+        return _resolve_top_level_setforge_error(raw, loc, err_type, msg)
+    return _resolve_nested_setforge_error(raw, loc, err_type, msg)
+
+
+def _resolve_top_level_setforge_error(
+    raw: Mapping[str, object],
+    loc: tuple[object, ...],
+    err_type: object,
+    msg: object,
+) -> tuple[int, int, str, str | None]:
+    """Resolve a single-element ``loc`` against the top-level CommentedMap."""
+    head = str(loc[0])
+    candidates = list(Config.model_fields.keys())
+    if err_type == "extra_forbidden":
+        line_1, col_1 = _lookup_key_position(raw, head)
+        suggestion = suggest_close_match(head, candidates)
+        return line_1, col_1, head, suggestion
+    line_1, col_1 = _lookup_value_position(raw, head)
+    field_value = _stringify_field_value(raw, head, msg)
+    return line_1, col_1, field_value, None
+
+
+def _resolve_nested_setforge_error(
+    raw: Mapping[str, object],
+    loc: tuple[object, ...],
+    err_type: object,
+    msg: object,
+) -> tuple[int, int, str, str | None]:
+    """Resolve a nested ``loc`` against the nested ``.lc`` tables.
+
+    TODO: superseded by setforge-b1lg's nested ``.lc`` walker — this
+    local port handles ``profiles.<name>.<key>`` and
+    ``tracked_files.<id>.<key>`` shapes (the common cases for 5twm
+    acceptance) only.
+    """
+    # Walk down to the parent of the leaf so we can call
+    # ``.lc.key(leaf)`` on it. Path can contain dict keys (str) or list
+    # indices (int) — both walkable via subscript on CommentedMap /
+    # CommentedSeq.
+    parent: object = raw
+    for step in loc[:-1]:
+        if isinstance(parent, Mapping) and step in parent:
+            parent = parent[step]
+        else:
+            return 1, 1, "", None
+    leaf = str(loc[-1])
+    if not isinstance(parent, Mapping):
+        return 1, 1, "", None
+    candidates = _candidates_for_nested_loc(loc)
+    if err_type == "extra_forbidden":
+        line_1, col_1 = _lookup_key_position(parent, leaf)
+        suggestion = suggest_close_match(leaf, candidates) if candidates else None
+        return line_1, col_1, leaf, suggestion
+    line_1, col_1 = _lookup_value_position(parent, leaf)
+    field_value = _stringify_field_value(parent, leaf, msg)
+    return line_1, col_1, field_value, None
+
+
+def _candidates_for_nested_loc(loc: tuple[object, ...]) -> list[str]:
+    """Return the close-match candidate list for the nested error site.
+
+    Maps the loc shape to the Pydantic model whose ``model_fields`` are
+    the valid keys at that depth:
+
+    - ``('profiles', <name>, <key>)`` → :attr:`Profile.model_fields`.
+    - ``('tracked_files', <id>, <key>)`` → :attr:`TrackedFile.model_fields`.
+    - Anything else → empty list (no suggestion fires).
+    """
+    if len(loc) < 3:
+        return []
+    head = str(loc[0])
+    if head == "profiles":
+        # Lazy import — avoid circular-import risk on cli/__init__ load.
+        from setforge.config import Profile
+
+        return list(Profile.model_fields.keys())
+    if head == "tracked_files":
+        return list(TrackedFile.model_fields.keys())
+    return []
+
+
+def _build_setforge_fix_hint(
+    config_path: Path,
+    line_1: int,
+    err_type: object,
+    field_value: str,
+    msg: object,
+) -> str:
+    """Render the ``Fix:`` action line for a setforge.yaml error.
+
+    Sibling of :func:`_build_fix_hint`; uses repo-relative path
+    (display root is the directory of ``setforge.yaml`` itself) and
+    "unknown key" wording for ``extra_forbidden``.
+    """
+    home_path = str(config_path).replace(str(Path.home()), "~", 1)
+    if err_type == "extra_forbidden":
+        return (
+            f"edit {home_path}:{line_1} — unknown key {field_value!r} "
+            "(remove or rename to a known key)"
+        )
+    return f"edit {home_path}:{line_1} — {msg}"
+
+
+def _build_top_level_fallback(
+    config_path: Path, err: Mapping[str, object]
+) -> ValidationErrorWithContext:
+    """Fallback carrier when the rt re-load returns a non-Mapping root.
+
+    Surfaces the Pydantic message at (1, 1) without snippet/pointer
+    detail — the top-level shape is broken at a level the snippet UX
+    cannot meaningfully render against.
+    """
+    msg = str(err.get("msg", ""))
+    return ValidationErrorWithContext(
+        file_path=config_path,
+        line=1,
+        column=1,
+        snippet_lines=[""],
+        field_value=msg or "value",
+        fix_hint=f"edit {config_path} — {msg}",
+        suggestion=None,
+    )
+
+
 def _render_failures(failures: list[ValidationErrorWithContext | str]) -> str:
     """Render every failure carrier to its final string form.
 
@@ -537,9 +755,19 @@ def validate(
     failures: list[ValidationErrorWithContext | str] = []
 
     # Check 1: Pydantic schema validation + cross-field checks in load_config.
+    # ValidationError → tmln close-match UX (setforge-5twm); SetforgeError
+    # (cycle / missing-profile / file-not-found / etc.) keeps its existing
+    # bail-on-first routing — these are cross-field violations that don't
+    # have a useful "Did you mean" suggestion path.
     try:
         cfg = load_config(config)
-    except (ValidationError, SetforgeError) as exc:
+    except ValidationError as exc:
+        _route_setforge_yaml_validation_error(config, exc, failures)
+        typer.echo(_render_failures(failures))
+        typer.echo(f"=== validation FAILED: {len(failures)} errors ===")
+        typer.echo("no changes will be made until the errors are resolved")
+        raise typer.Exit(1) from exc
+    except SetforgeError as exc:
         typer.echo(f"schema: {exc}")
         raise typer.Exit(1) from exc
 
