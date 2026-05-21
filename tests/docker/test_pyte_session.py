@@ -58,8 +58,10 @@ def test_pyte_session_dataclass_holds_screen_stream_process() -> None:
     session = PyteSession(screen=screen, stream=stream, process=process)  # type: ignore[arg-type]
     assert session.screen is screen
     assert session.stream is stream
-    assert isinstance(session.display, list)
     assert len(session.display) == 40
+    # No bytes fed yet → every line is the initial blank (cols-wide
+    # whitespace string); pyte renders an unwritten screen as blanks.
+    assert all(line.strip() == "" for line in session.display)
 
 
 def test_pyte_session_close_is_idempotent() -> None:
