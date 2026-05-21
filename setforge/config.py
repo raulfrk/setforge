@@ -26,15 +26,20 @@ from ruamel.yaml import YAML  # type: ignore[import-not-found]
 from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not-found]
 
 from setforge.errors import ConfigError, ProfileNotFound
+from setforge.local_overlay import (
+    LocalOverlayError,
+    LocalOverlayLoadError,
+    ResolvedExtension,
+    ResolvedMarketplace,
+    ResolvedPlugin,
+    resolve_extension_overlay,
+    resolve_marketplace_overlay,
+    resolve_plugin_overlay,
+)
 from setforge.migrations import current_expected_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
 
 if TYPE_CHECKING:
-    from setforge.local_overlay import (
-        ResolvedExtension,
-        ResolvedMarketplace,
-        ResolvedPlugin,
-    )
     from setforge.source import (
         ExtensionOverlay,
         MarketplaceOverlay,
@@ -706,8 +711,6 @@ def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:
     are :class:`LocalOverlayLoadError`; this is a resolver-phase failure
     so Check 6 still runs as a fallback in the validate CLI.
     """
-    from setforge.local_overlay import LocalOverlayError
-
     cleaned = pid.strip()
     if not cleaned:
         raise LocalOverlayError(
@@ -764,7 +767,6 @@ def _load_overlay_blocks(
     load-phase failure means the cross-ref check did NOT run, and the
     standalone Check 6 must still execute as a fallback.
     """
-    from setforge.local_overlay import LocalOverlayLoadError
     from setforge.source import (
         LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
     )
@@ -794,18 +796,12 @@ def _resolve_provenance_lists(
 ]:
     """Resolve the three provenance lists for the SPEC 2 overlay.
 
-    Lazy-imports :mod:`setforge.local_overlay` resolvers. Each raises
+    Each :mod:`setforge.local_overlay` resolver raises
     :class:`setforge.local_overlay.LocalOverlayError` (a
     :class:`ConfigError`) on collision or unknown-remove — the caller
     surfaces those errors under the validate report-all-then-refuse
     contract.
     """
-    from setforge.local_overlay import (
-        resolve_extension_overlay,
-        resolve_marketplace_overlay,
-        resolve_plugin_overlay,
-    )
-
     resolved_plugins = resolve_plugin_overlay(
         profile_plugins=list(resolved.claude_plugins),
         profile_name=profile_name,
