@@ -60,6 +60,7 @@ from setforge.cli._welcome import (
     reject_auto_on_fresh_host,
 )
 from setforge.config import (
+    apply_local_overlay,
     apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
@@ -183,6 +184,14 @@ def install(
     host_local_sections_map = _load_validated_host_local_sections(
         cfg, resolved, repo_root
     )
+    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2 /
+    # setforge-5z11) — also AFTER profile resolution. Mutates resolved
+    # and cfg in place so the existing reconcile path consumes the
+    # merged sets transparently. Raises LocalOverlayError (a
+    # ConfigError) on collision / unknown-remove, surfaced via the
+    # standard SetforgeError handler. The cross-ref check fires
+    # defensively here even when validate ran first (Q8).
+    apply_local_overlay(cfg, resolved, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

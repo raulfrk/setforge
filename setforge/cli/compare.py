@@ -31,6 +31,7 @@ from setforge.cli._output import render
 from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
 from setforge.config import (
     Config,
+    apply_local_overlay,
     apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
@@ -79,6 +80,11 @@ def compare(
     # apply the overlay so the renderer can read preserve_user_keys_resolved
     # for the mockup-B provenance display.
     apply_preserve_user_keys_overlay(cfg, profile)
+    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2 /
+    # setforge-5z11). Mutates resolved and cfg in place; the resolved
+    # provenance lists drive the host-overlay block printed below the
+    # drift report (cf. render_local_overlay_block in setforge.compare).
+    overlay_resolution = apply_local_overlay(cfg, resolved, profile)
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
@@ -111,6 +117,11 @@ def compare(
             # markup=False — mockup-B provenance tags use square brackets
             # (e.g. ``[from local.yaml]``) which Rich would otherwise
             # interpret as markup spans and silently strip.
+            console.print(line, markup=False)
+        # SPEC 2 — emit the per-axis effective-set block (plugins /
+        # extensions / marketplaces) with [from local.yaml] / SPEC-2
+        # remove tags inline, plus the footer summary line.
+        for line in compare_mod.render_local_overlay_block(cfg, overlay_resolution):
             console.print(line, markup=False)
         _render_compare_report(report, console, full_diff=full_diff)
         # setforge-xsco SPEC 1 mockup: surface every host-local section

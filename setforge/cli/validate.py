@@ -38,6 +38,7 @@ from setforge.config import (
     Profile,
     ResolvedProfile,
     TrackedFile,
+    apply_local_overlay,
     apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
@@ -51,6 +52,7 @@ from setforge.errors import (
 )
 from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
+from setforge.local_overlay import LocalOverlayError
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import (
@@ -64,16 +66,20 @@ _LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = (
     "binaries",
     "claude",
     "tracked_files",
+    "plugins",
+    "extensions",
+    "marketplaces",
     "orphan_ignore",
 )
 """Known top-level keys in ``local.yaml``.
 
 Mirrors the keys consumed by :mod:`setforge.source` (``source:``,
-``tracked_files:``), :mod:`setforge.binaries` (``binaries:``,
-``claude:``), and :mod:`setforge.compare` (``orphan_ignore:``).
-Used as the close-match candidate list for typo'd top-level keys
-(mockup D).
+``tracked_files:``, ``plugins:``, ``extensions:``, ``marketplaces:``)
+and :mod:`setforge.binaries` (``binaries:``, ``claude:``,
+``orphan_ignore:``). Used as the close-match candidate list for
+typo'd top-level keys (mockup D).
 """
+
 
 
 def _check_profile(
@@ -103,6 +109,21 @@ def _check_profile(
         failures.append(f"{ctx}: {exc}")
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
+
+    # Check 1c (setforge-5z11): apply the local.yaml plugin / extension
+    # / marketplace overlay so its collision / unknown-remove and
+    # marketplace cross-ref errors surface at validate time too.
+    # Mirrors Check 1b — the install path runs the same applier; the
+    # validate path is a defensive offline backstop per SPEC 2 Q8.
+    try:
+        apply_local_overlay(cfg, resolved, prof_name)
+    except LocalOverlayError as exc:
+        failures.append(f"{ctx}: {exc}")
+    except ConfigError as exc:
+        # The marketplace cross-ref check raises a bare ConfigError;
+        # surface it under the same {ctx} prefix as the overlay errors
+        # so the validate report-all-then-refuse contract holds.
+        failures.append(f"{ctx}: {exc}")
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
