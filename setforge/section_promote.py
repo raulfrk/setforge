@@ -206,7 +206,7 @@ def confirm_promote_to_shared(
     # paying the prompt_toolkit import cost on cold-start paths.
     from setforge import section_promote as _self  # local alias for monkeypatch
 
-    choice = _self.radiolist_dialog(
+    app = _self.radiolist_dialog(
         title=f"setforge sync — promote {plan.section_name}",
         text="Promote this host-local section to shared?",
         values=[
@@ -214,12 +214,52 @@ def confirm_promote_to_shared(
             (True, "Yes - apply the 4-mutation atomic promote"),
         ],
         default=False,
-    ).run()
+    )
+    _bind_escape_to_abort(app)
+    choice = app.run()
     if choice is None or choice is False:
         console.print("[red]aborted[/red] - no mutations applied")
         return False
     console.print("[green]proceeding[/green] - applying promote")
     return True
+
+
+def _bind_escape_to_abort(app: object) -> None:
+    """Add an explicit Escape binding that exits the dialog with ``None``.
+
+    prompt_toolkit's :func:`radiolist_dialog` ships no ESC keybinding by
+    default — exit is only via the OK / Cancel buttons. The spec
+    (setforge-dg2a) requires Escape to abort the confirm dialog cleanly,
+    so we layer a per-Application ``escape`` binding on top of the
+    factory-returned :class:`prompt_toolkit.application.Application` that
+    calls :meth:`Application.exit` with no result (which surfaces as
+    ``None`` to the ``.run()`` caller, matching the Cancel-button path).
+
+    The ``app`` parameter is typed as :class:`object` so this helper
+    stays usable from cold-start paths that have not paid the
+    prompt_toolkit import cost yet — the actual runtime shape is
+    :class:`prompt_toolkit.application.Application`, but typing it that
+    way would force an eager prompt_toolkit import at module load.
+    Imports are deferred to the function body for the same reason.
+    """
+    from prompt_toolkit.key_binding import (
+        KeyBindings,
+        KeyPressEvent,
+        merge_key_bindings,
+    )
+
+    bindings = KeyBindings()
+
+    @bindings.add("escape", eager=True)
+    def _(event: KeyPressEvent) -> None:
+        event.app.exit()
+
+    # Merge the new bindings on top of whatever the factory installed.
+    # Application.key_bindings is the active set; replacing via
+    # merge_key_bindings preserves the factory's tab / s-tab focus moves.
+    app.key_bindings = merge_key_bindings(  # type: ignore[attr-defined]
+        [app.key_bindings, bindings]  # type: ignore[attr-defined]
+    )
 
 
 # ---------------------------------------------------------------------------
