@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import typer
 from pydantic import BaseModel, ValidationError
@@ -93,18 +93,30 @@ app.add_typer(config_app, name="config")
 # ---------------------------------------------------------------------------
 
 
+_MISSING_SCOPE_TWO_WAY: Final[str] = "exactly one of --local / --tracked is required"
+"""Error message when neither ``--local`` nor ``--tracked`` is set on add / remove."""
+
+_MISSING_SCOPE_THREE_WAY: Final[str] = (
+    "exactly one of --local / --tracked / --effective is required"
+)
+"""Error when no scope flag is set on ``show`` (the three-way form)."""
+
+
 def _resolve_scope(
     *,
     local: bool,
     tracked: bool,
     effective: bool = False,
+    allow_effective: bool = False,
 ) -> ConfigScope:
     """Enforce the ``--local`` / ``--tracked`` / ``--effective`` mutex.
 
     Exactly-one-required (no implicit default) raises
     :class:`typer.BadParameter` so the user sees a typer-formatted
     error rather than a stack trace. ``--effective`` is only valid on
-    ``show``; callers pass ``effective=False`` for add/remove.
+    ``show``; callers pass ``allow_effective=True`` there and leave
+    ``allow_effective=False`` for ``add`` / ``remove`` so the error
+    message omits the inapplicable third flag.
     """
     picked = [
         flag
@@ -117,9 +129,7 @@ def _resolve_scope(
     ]
     if not picked:
         raise typer.BadParameter(
-            "exactly one of --local / --tracked"
-            + ("/ --effective" if effective is False else "")
-            + " is required"
+            _MISSING_SCOPE_THREE_WAY if allow_effective else _MISSING_SCOPE_TWO_WAY
         )
     if len(picked) > 1:
         joined = " + ".join(picked)
@@ -607,7 +617,9 @@ def config_show(
     slice). With ``--effective``: prints the merged profile chain
     snapshot via the existing profile-show pathway.
     """
-    scope = _resolve_scope(local=local, tracked=tracked, effective=effective)
+    scope = _resolve_scope(
+        local=local, tracked=tracked, effective=effective, allow_effective=True
+    )
     if scope is ConfigScope.EFFECTIVE:
         if profile is None:
             raise typer.BadParameter("--effective requires --profile=NAME")
