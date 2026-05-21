@@ -501,11 +501,7 @@ def _run_add(
     node = _resolve_path(scope, path)
     if node is None:
         raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
-    yaml_path = _scope_yaml_path(scope)
-    if scope is ConfigScope.LOCAL:
-        _ensure_local_yaml(yaml_path)
-    elif scope is ConfigScope.TRACKED:
-        _run_tracked_git_check(yaml_path)
+    yaml_path = _prepare_scope_yaml(scope)
     _mutate_and_write(
         scope=scope,
         yaml_path=yaml_path,
@@ -515,6 +511,21 @@ def _run_add(
         is_list=node.is_list,
         yes=yes,
     )
+
+
+def _prepare_scope_yaml(scope: ConfigScope) -> Path:
+    """Return the yaml path for ``scope``, ensuring the per-scope precondition.
+
+    LOCAL: stub the file if missing so the mutate-then-write pipeline
+    has a doc to load. TRACKED: refuse on a dirty config repo via the
+    install / sync git-clean gate. Returns the resolved path either way.
+    """
+    yaml_path = _scope_yaml_path(scope)
+    if scope is ConfigScope.LOCAL:
+        _ensure_local_yaml(yaml_path)
+    elif scope is ConfigScope.TRACKED:
+        _run_tracked_git_check(yaml_path)
+    return yaml_path
 
 
 @config_app.command("remove")
@@ -637,14 +648,24 @@ def _add_marketplace(
         doc["marketplaces"] = CommentedMap()
     if name in doc["marketplaces"]:
         raise SetforgeError(f"marketplaces.{name} already exists")
+    doc["marketplaces"][name] = _build_marketplace_entry(candidate)
+    _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
+
+
+def _build_marketplace_entry(candidate: MarketplaceSource) -> CommentedMap:
+    """Render a validated :class:`MarketplaceSource` as a YAML mapping entry.
+
+    Emits the ``source`` / ``repo`` / ``path`` keys in stable order with
+    ``None`` slots omitted, so the round-trip serializer doesn't leak
+    spurious null lines into the diff preview.
+    """
     entry = CommentedMap()
     entry["source"] = candidate.source.value
     if candidate.repo is not None:
         entry["repo"] = candidate.repo
     if candidate.path is not None:
         entry["path"] = str(candidate.path)
-    doc["marketplaces"][name] = entry
-    _preview_and_write(yaml_path=yaml_path, doc=doc, before_text=before_text, yes=yes)
+    return entry
 
 
 def _resolve_marketplace_inputs(
