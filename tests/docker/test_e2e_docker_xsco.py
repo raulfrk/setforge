@@ -219,11 +219,13 @@ def test_install_empty_body_rejected_at_validate(
         "        anchor: {kind: at-end-of-file}\n"
         '        body: ""\n',
     )
-    rc, _stdout, stderr = _setforge(
+    rc, stdout, _stderr = _setforge(
         c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
     )
     assert rc != 0
-    assert "non-empty" in stderr.lower() or "body" in stderr.lower()
+    # ``setforge validate`` renders failure context via ``typer.echo``
+    # (stdout) — same stream the sibling rejection tests below assert on.
+    assert "non-empty" in stdout.lower() or "body" in stdout.lower()
 
 
 def test_validate_rejects_host_local_sections_on_json_tracked_file(
