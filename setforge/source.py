@@ -140,17 +140,128 @@ class PreserveUserKeysOverlay(BaseModel):
     remove: list[str] = []
 
 
+class AnchorKind(StrEnum):
+    """Closed set of anchor-kind discriminator values (setforge-xsco).
+
+    Five anchor shapes for splicing a :class:`HostLocalSection` into a
+    markdown tracked file at install time. ``after-heading`` /
+    ``before-heading`` match exact heading text (byte-equal — no
+    case-fold, no slug-normalise). ``at-start-of-file`` / ``at-end-of-file``
+    splice at the document boundaries. ``after-section`` references an
+    existing user-section in the SAME tracked file by name.
+    """
+
+    AFTER_HEADING = "after-heading"
+    BEFORE_HEADING = "before-heading"
+    AT_START_OF_FILE = "at-start-of-file"
+    AT_END_OF_FILE = "at-end-of-file"
+    AFTER_SECTION = "after-section"
+
+
+class AnchorAfterHeading(BaseModel):
+    """Anchor matching the line immediately following the heading ``value``."""
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.AFTER_HEADING] = AnchorKind.AFTER_HEADING
+    value: str
+
+
+class AnchorBeforeHeading(BaseModel):
+    """Anchor matching the line immediately preceding the heading ``value``."""
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.BEFORE_HEADING] = AnchorKind.BEFORE_HEADING
+    value: str
+
+
+class AnchorAtStartOfFile(BaseModel):
+    """Anchor matching the first line of the file (line offset 0)."""
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.AT_START_OF_FILE] = AnchorKind.AT_START_OF_FILE
+
+
+class AnchorAtEndOfFile(BaseModel):
+    """Anchor matching the line after the last line of the file."""
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.AT_END_OF_FILE] = AnchorKind.AT_END_OF_FILE
+
+
+class AnchorAfterSection(BaseModel):
+    """Anchor matching the line after the end marker of section ``name``."""
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.AFTER_SECTION] = AnchorKind.AFTER_SECTION
+    name: str
+
+
+Anchor = Annotated[
+    AnchorAfterHeading
+    | AnchorBeforeHeading
+    | AnchorAtStartOfFile
+    | AnchorAtEndOfFile
+    | AnchorAfterSection,
+    Field(discriminator="kind"),
+]
+
+
+class HostLocalSection(BaseModel):
+    """One host-local user-section overlay (setforge-xsco).
+
+    Carries an :data:`Anchor` (where to splice the section) and exactly
+    one of ``body`` (inline string) or ``body_file`` (path to a file
+    read at install time). Both empty / both set is a configuration
+    error surfaced at :class:`pydantic.ValidationError` time. ``body_file``
+    is read lazily by the injection module — the model validator only
+    sniffs it for emptiness when the file exists.
+    """
+
+    model_config = _STRICT
+
+    anchor: Anchor
+    body: str | None = None
+    body_file: Path | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_body_source(self) -> "HostLocalSection":
+        """Enforce exactly-one-of ``body`` / ``body_file`` + non-empty body."""
+        if (self.body is None) == (self.body_file is None):
+            shape = "both" if self.body is not None else "neither"
+            raise ValueError(
+                "HostLocalSection requires exactly one of `body` (inline) "
+                f"or `body_file` (path); got {shape}"
+            )
+        if self.body is not None and not self.body.strip():
+            raise ValueError("HostLocalSection `body` must be non-empty")
+        if (
+            self.body_file is not None
+            and self.body_file.exists()
+            and not self.body_file.read_text(encoding="utf-8").strip()
+        ):
+            raise ValueError(f"HostLocalSection `body_file` {self.body_file} is empty")
+        return self
+
+
 class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
-    Carries a single nested ``preserve_user_keys`` overlay today.
-    Extension to host-local ``mode`` / ``dst`` / ``symlink`` overrides
-    tracked in setforge-m3qx (file separately when a concrete need lands).
+    Carries a nested ``preserve_user_keys`` overlay (SPEC 8) plus a
+    ``host_local_sections`` mapping (setforge-xsco) keyed by section
+    name. Extension to host-local ``mode`` / ``dst`` / ``symlink``
+    overrides tracked in setforge-m3qx (file separately when a concrete
+    need lands).
     """
 
     model_config = _STRICT
 
     preserve_user_keys: PreserveUserKeysOverlay | None = None
+    host_local_sections: dict[str, HostLocalSection] = {}
 
 
 class _LocalSourceConfig(BaseModel):
@@ -231,6 +342,26 @@ def load_local_tracked_file_overlays(
     import time, per the SPEC 8 anti-smell discipline.
     """
     return _load_local_source_config(path).tracked_files
+
+
+def load_local_host_local_sections(
+    path: Path = LOCAL_CONFIG_PATH,
+) -> dict[str, dict[str, HostLocalSection]]:
+    """Return ``{tracked_file_id: {section_name: HostLocalSection}}`` (setforge-xsco).
+
+    Mirrors :func:`load_local_tracked_file_overlays` shape but projects
+    each :class:`_LocalTrackedFileOverlay` to its ``host_local_sections``
+    sub-mapping only. Empty dict when the file is absent or no
+    tracked_file declares any host-local section. Entries with an empty
+    ``host_local_sections`` mapping are dropped from the result so
+    callers can treat presence as "has at least one section".
+    """
+    overlays = _load_local_source_config(path).tracked_files
+    return {
+        tf_id: dict(overlay.host_local_sections)
+        for tf_id, overlay in overlays.items()
+        if overlay.host_local_sections
+    }
 
 
 _cli_source: Path | None = None
@@ -437,7 +568,15 @@ __all__ = [
     "DEFAULT_CLONE_ROOT",
     "ENV_VAR",
     "LOCAL_CONFIG_PATH",
+    "Anchor",
+    "AnchorAfterHeading",
+    "AnchorAfterSection",
+    "AnchorAtEndOfFile",
+    "AnchorAtStartOfFile",
+    "AnchorBeforeHeading",
+    "AnchorKind",
     "GitSource",
+    "HostLocalSection",
     "PathSource",
     "PreserveUserKeysOverlay",
     "Source",
@@ -446,6 +585,7 @@ __all__ = [
     "fetch_source",
     "format_post_write_hint",
     "get_resolved_source",
+    "load_local_host_local_sections",
     "resolve_source",
     "resolve_source_dir",
     "set_cli_source",
