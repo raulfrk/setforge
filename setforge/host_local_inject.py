@@ -52,6 +52,7 @@ from setforge.source import (
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
     HostLocalSection,
+    HostLocalSectionName,
 )
 
 # Matches an ATX-style markdown heading: 1-6 leading ``#`` followed by a
@@ -247,11 +248,18 @@ def _read_body(section: HostLocalSection) -> str:
 
 def inject_host_local_section(
     text: str,
-    name: str,
+    name: HostLocalSectionName,
     anchor: Anchor,
     body: str,
 ) -> str:
     """Splice a marker pair + body into ``text`` at the resolved anchor.
+
+    ``name`` is :data:`HostLocalSectionName` — a provenance-marked
+    NewType that MUST come from the local.yaml parse path
+    (:func:`setforge.source.load_local_host_local_sections`). A static
+    type-checker rejects bare ``str`` here so a caller cannot
+    accidentally pass a tracked-side shared-section name (different
+    drift semantics).
 
     EOL-normalises ``text`` first (anti-smell item 11 — CRLF live, LF
     tracked). Builds the marker pair via
@@ -312,9 +320,15 @@ def inject_host_local_section(
 
 def inject_all(
     text: str,
-    sections: dict[str, HostLocalSection],
+    sections: dict[HostLocalSectionName, HostLocalSection],
 ) -> str:
     """Inject every section in ``sections`` into ``text`` in declaration order.
+
+    ``sections`` is keyed by :data:`HostLocalSectionName` — the
+    provenance-marked NewType the load path
+    (:func:`setforge.source.load_local_host_local_sections`) constructs.
+    A static type-checker rejects a plain ``dict[str, HostLocalSection]``
+    so callers cannot pass a tracked-side section map by accident.
 
     Idempotency: when ``text`` already contains a user-section whose
     name matches a key in ``sections``, the existing section's BODY

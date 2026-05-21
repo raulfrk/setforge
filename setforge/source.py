@@ -28,7 +28,7 @@ import shlex
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -156,6 +156,22 @@ class AnchorKind(StrEnum):
     AT_START_OF_FILE = "at-start-of-file"
     AT_END_OF_FILE = "at-end-of-file"
     AFTER_SECTION = "after-section"
+
+
+HostLocalSectionName = NewType("HostLocalSectionName", str)
+"""Provenance-marked name of a host-local user-section (setforge-xsco).
+
+A ``HostLocalSectionName`` MUST originate from a key in the local.yaml
+``host_local_sections:`` block. Constructed at parse time by
+:func:`load_local_host_local_sections` and threaded through the
+injection module so callers cannot accidentally substitute a tracked-side
+shared-section name (which has different drift semantics — shared
+sections participate in section-reconcile; host-local sections do
+not). Mirrors the :data:`setforge.sections.LiveSections` /
+:data:`setforge.transitions.TransitionDir` pattern: a name-only
+NewType wrapping ``str`` so call sites stay backwards-compatible at
+runtime while the static type carries the provenance constraint.
+"""
 
 
 class AnchorAfterHeading(BaseModel):
@@ -388,7 +404,7 @@ def validate_host_local_sections_file_type(
 
 def load_local_host_local_sections(
     path: Path = LOCAL_CONFIG_PATH,
-) -> dict[str, dict[str, HostLocalSection]]:
+) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Return ``{tracked_file_id: {section_name: HostLocalSection}}`` (setforge-xsco).
 
     Mirrors :func:`load_local_tracked_file_overlays` shape but projects
@@ -397,10 +413,18 @@ def load_local_host_local_sections(
     tracked_file declares any host-local section. Entries with an empty
     ``host_local_sections`` mapping are dropped from the result so
     callers can treat presence as "has at least one section".
+
+    Section-name keys are constructed as :data:`HostLocalSectionName`
+    here at the parse boundary (the local.yaml load point); downstream
+    callers receive the provenance-marked NewType so a type-checker
+    flags any attempt to pass a tracked-side shared-section name in.
     """
     overlays = _load_local_source_config(path).tracked_files
     return {
-        tf_id: dict(overlay.host_local_sections)
+        tf_id: {
+            HostLocalSectionName(name): section
+            for name, section in overlay.host_local_sections.items()
+        }
         for tf_id, overlay in overlays.items()
         if overlay.host_local_sections
     }
@@ -619,6 +643,7 @@ __all__ = [
     "AnchorKind",
     "GitSource",
     "HostLocalSection",
+    "HostLocalSectionName",
     "PathSource",
     "PreserveUserKeysOverlay",
     "Source",
