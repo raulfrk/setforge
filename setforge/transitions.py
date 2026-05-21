@@ -49,6 +49,7 @@ class TransitionCommand(StrEnum):
     REVERT = "revert"
     MERGE = "merge"
     CLEANUP_ORPHANS = "cleanup-orphans"
+    PROMOTE = "promote"
 
 
 _STATE_ENV = "SETFORGE_STATE_DIR"
