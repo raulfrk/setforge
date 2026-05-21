@@ -34,7 +34,7 @@ from setforge import host_local_inject, jsonc, section_reconcile, sections, yaml
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_profile
 from setforge.paths import template_context
-from setforge.source import HostLocalSection
+from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 class CompareStatus(StrEnum):
@@ -203,7 +203,7 @@ def diff_file(
     preserve_user_sections: bool = False,
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> str:
     """Return the unified diff between ``src`` and ``dst``.
 
@@ -271,7 +271,7 @@ def _render_with_merges(
     preserve_user_keys_deep: list[str] | None = None,
     *,
     dst_text: str,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> str:
     """Render the post-merge tracked content that ``diff_file`` compares
     against the live ``dst_text``.
@@ -429,7 +429,9 @@ def compare_profile(
     *,
     transitions_dir: Path | None = None,
     ignored: frozenset[str] = frozenset(),
-    host_local_sections: Mapping[str, dict[str, HostLocalSection]] | None = None,
+    host_local_sections: (
+        Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
+    ) = None,
 ) -> CompareReport:
     """Build a :class:`CompareReport` for every tracked_file in the resolved profile.
 
@@ -492,7 +494,7 @@ def _compare_one(
     dst: Path,
     tracked_file: TrackedFile,
     *,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
     # False on a dangling symlink, which would otherwise misclassify the
@@ -575,7 +577,7 @@ def _compare_symlinked(
     dst: Path,
     tracked_file: TrackedFile,
     *,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
 

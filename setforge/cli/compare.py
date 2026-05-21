@@ -37,7 +37,7 @@ from setforge.config import (
 )
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics, extract_sections
-from setforge.source import HostLocalSection
+from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 @app.command(epilog=COMPARE_EXAMPLES)
@@ -196,7 +196,7 @@ def _render_compare_report(
 
 
 def _render_host_local_preview(
-    host_local_sections_map: dict[str, dict[str, HostLocalSection]],
+    host_local_sections_map: dict[str, dict[HostLocalSectionName, HostLocalSection]],
     cfg: Config,
     profile_tracked_file_ids: list[str],
     console: Console,

@@ -33,7 +33,7 @@ from setforge import host_local_inject, jsonc, sections, yaml_merge
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.section_reconcile import maintain_marker_hashes
-from setforge.source import HostLocalSection
+from setforge.source import HostLocalSection, HostLocalSectionName
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def copy_atomic(
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
     precomputed_live_sections: sections.LiveSections | None = None,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
@@ -206,7 +206,7 @@ def _compute_content(
     section_bodies_override: dict[str, str] | None = None,
     *,
     precomputed_live_sections: sections.LiveSections | None = None,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> str:
     """Render the bytes ``copy_atomic`` will write to ``dst``.
 
@@ -330,7 +330,7 @@ def deploy_symlinked_file(
     tracked_file: TrackedFile,
     *,
     backup: bool = True,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> DeployResult:
     """Deploy a tracked_file that declares ``symlink:``.
 
@@ -404,7 +404,7 @@ def _deploy_target_content(
     tracked_file: TrackedFile,
     *,
     backup: bool,
-    host_local_sections: dict[str, HostLocalSection] | None = None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> None:
     """Write ``src`` content to ``target`` via :func:`_atomic_write`.
 

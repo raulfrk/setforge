@@ -77,6 +77,7 @@ from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
 from setforge.source import (
     HostLocalSection,
+    HostLocalSectionName,
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
@@ -108,7 +109,7 @@ def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
 
 def _load_validated_host_local_sections(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> dict[str, dict[str, HostLocalSection]]:
+) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Load local.yaml host_local_sections + reject non-markdown tracked_files.
 
     Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
@@ -126,7 +127,7 @@ def _load_validated_host_local_sections(
     ``compare_profile`` respectively.
     """
     overlay = load_local_host_local_sections()
-    result: dict[str, dict[str, HostLocalSection]] = {}
+    result: dict[str, dict[HostLocalSectionName, HostLocalSection]] = {}
     profile_ids = set(resolved.tracked_files)
     for tf_id, sections_map in overlay.items():
         if tf_id not in profile_ids:
@@ -200,7 +201,7 @@ def _deploy_all_tracked_files(
     *,
     section_decisions: Mapping[Path, dict[str, str]],
     live_sections_map: Mapping[Path, LiveSections],
-    host_local_sections_map: Mapping[str, dict[str, HostLocalSection]],
+    host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
 ) -> None:
     """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
 
@@ -254,7 +255,7 @@ def _deploy_all_tracked_files(
 
 
 def _echo_host_local_sections_provenance(
-    host_local_sections: dict[str, HostLocalSection] | None,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
 ) -> None:
     """Print a per-section ``injected ... [host-local via local.yaml]`` line.
 
@@ -799,7 +800,7 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     typer.echo("=== would-be host-local section inject ===")
     overlay = load_local_host_local_sections()
     profile_ids = set(ctx.resolved.tracked_files)
-    matched: list[tuple[str, str, Path]] = []
+    matched: list[tuple[str, HostLocalSectionName, Path]] = []
     for tf_id, sections_map in overlay.items():
         if tf_id not in profile_ids:
             continue

@@ -222,7 +222,7 @@ def capture_profile(
     snapshot_base: Path | None = None,
     console: Console | None = None,
     host_local_sections_map: (
-        Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]] | None
+        Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
