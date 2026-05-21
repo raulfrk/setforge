@@ -30,6 +30,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import ModuleType
 from typing import assert_never
 
 from rich.console import Console
@@ -589,7 +590,7 @@ def _dispatch_promote(
     profile: str,
     snapshot_base: Path,
     source: Source | None,
-    section_promote_mod: object,
+    section_promote_mod: ModuleType,
     console: Console,
 ) -> PromoteOutcome:
     """Run check_source_clean → build plan → confirm → execute, capture snapshots.
@@ -614,7 +615,7 @@ def _dispatch_promote(
             f"{promotable.live_path} between wizard scan and promote dispatch"
         )
     body = live_sections[promotable.section_name]
-    plan = section_promote_mod.build_promote_plan(  # type: ignore[attr-defined]
+    plan = section_promote_mod.build_promote_plan(
         section_name=promotable.section_name,
         local_yaml_path=local_yaml_path,
         tracked_path=promotable.tracked_path,
@@ -623,9 +624,7 @@ def _dispatch_promote(
         anchor=promotable.anchor,
         profile=profile,
     )
-    if not section_promote_mod.confirm_promote_to_shared(  # type: ignore[attr-defined]
-        plan, console=console
-    ):
+    if not section_promote_mod.confirm_promote_to_shared(plan, console=console):
         return PromoteOutcome(section=promotable, action=SectionAction.KEEP_LIVE)
 
     # Local import: keep transitions out of section_wizard's module-level
@@ -635,7 +634,7 @@ def _dispatch_promote(
 
     snapshot_targets = [plan.tracked_path, plan.live_path, plan.local_yaml_path]
     file_pre = transitions.snapshot_paths(snapshot_targets)
-    section_promote_mod.execute_promote_to_shared(  # type: ignore[attr-defined]
+    section_promote_mod.execute_promote_to_shared(
         plan,
         tracked_file_id=promotable.tracked_file_id,
         snapshot_base=snapshot_base,
