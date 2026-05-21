@@ -67,6 +67,7 @@ class SectionAction(StrEnum):
     EDIT = "edit"
     SKIP = "skip"
     QUIT_KEEP_REST = "quit_keep_rest"
+    PROMOTE = "promote"
 
 
 # Resolved decision per section: the final body to write + the action
