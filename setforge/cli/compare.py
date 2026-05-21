@@ -195,6 +195,20 @@ def _render_compare_report(
                 console.print(Syntax(entry.diff, "diff"))
 
 
+def _classify_section_state(section_name: str, live_names: set[str]) -> tuple[str, str]:
+    """Return ``(sigil, suffix)`` describing whether ``section_name`` is injected.
+
+    ``"="`` + ``"already injected"`` when the section already appears in
+    the live file's marker set (the previous install landed); ``"+"`` +
+    ``"would be injected"`` otherwise. The arms collapse the two
+    ``console.print`` branches in :func:`_render_host_local_preview` to
+    a single formatted line.
+    """
+    if section_name in live_names:
+        return "=", "already injected"
+    return "+", "would be injected"
+
+
 def _render_host_local_preview(
     host_local_sections_map: dict[str, dict[HostLocalSectionName, HostLocalSection]],
     cfg: Config,
@@ -237,18 +251,11 @@ def _render_host_local_preview(
             rendered_any = True
         console.print(f"{dst}  ({tf_id})", markup=False)
         for section_name in sections_map:
-            if section_name in live_names:
-                console.print(
-                    f"  = [host-local via local.yaml] {section_name}"
-                    "     ← already injected",
-                    markup=False,
-                )
-            else:
-                console.print(
-                    f"  + [host-local via local.yaml] {section_name}"
-                    "     ← would be injected",
-                    markup=False,
-                )
+            sigil, suffix = _classify_section_state(section_name, live_names)
+            console.print(
+                f"  {sigil} [host-local via local.yaml] {section_name}     ← {suffix}",
+                markup=False,
+            )
 
 
 def _print_section_reconcile_dry_run(ctx: ProfileContext, console: Console) -> None:
