@@ -828,33 +828,14 @@ def apply_local_overlay(
 ) -> LocalOverlayResolution:
     """Apply the local.yaml plugin/extension/marketplace overlay (SPEC 2).
 
-    Three-step pipeline, mirroring
-    :func:`apply_preserve_user_keys_overlay`'s lazy-import + mutate-in-place
-    discipline:
-
-    1. Load the overlay blocks from ``local.yaml`` via
-       :func:`_load_overlay_blocks` (lazy-imports :mod:`setforge.source`
-       to dodge the config <-> source cycle).
-    2. Run :func:`_resolve_provenance_lists` — wraps the three
-       :mod:`setforge.local_overlay` resolvers; each raises
-       :class:`setforge.local_overlay.LocalOverlayError` (a
-       :class:`ConfigError`) on collision or unknown-remove.
-    3. Mutate ``resolved.claude_plugins``,
-       ``resolved.extensions.include`` and ``config.marketplaces`` /
-       ``config.claude_plugins`` in place so downstream reconcile sees
-       the merged sets transparently. Plugin add entries
-       (``name@marketplace``) synthesize :class:`ClaudePluginRef`
-       entries into ``cfg.claude_plugins`` so the existing
-       bare-name @ marketplace dispatch in
-       :mod:`setforge.claude_plugins.reconcile` is unchanged.
-
-    Finally runs a cross-ref check: every plugin's resolved marketplace
-    name must exist in the merged ``cfg.marketplaces``. Raises
-    :class:`ConfigError` with the SPEC 2 mockup wording on failure.
-
-    Returns a :class:`LocalOverlayResolution` carrying the three
-    resolved lists so compare/install output formatters can read
-    provenance without re-running the resolvers.
+    Loads overlay blocks (:func:`_load_overlay_blocks`), resolves
+    provenance lists (:func:`_resolve_provenance_lists`), mutates
+    ``config`` and ``resolved`` in place, then runs
+    :func:`_validate_overlay_marketplace_cross_ref`. See each helper's
+    docstring for phase-specific behavior. Returns a
+    :class:`LocalOverlayResolution` carrying the three resolved lists
+    so compare/install formatters can read provenance without
+    re-running the resolvers.
     """
     plugin_overlay, extension_overlay, marketplace_overlay = _load_overlay_blocks(
         local_config_path
