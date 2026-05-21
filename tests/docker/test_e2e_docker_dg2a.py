@@ -187,8 +187,20 @@ def test_promote_pty_confirm_esc(
     session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
     session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
-    # Send raw ESC (radiolist_dialog binds Esc to None-return).
-    session.send_keys("\x1b")
+    # Wait until the radiolist has rendered the default-No row: this is
+    # the fence that proves prompt_toolkit's Application has focus and
+    # is ready to consume keystrokes. The "Promote section" title paints
+    # earlier in the redraw sequence and the dialog drops keys sent
+    # before focus is wired (round-4 ESC bug).
+    session.expect_in_display("(*) No", timeout=10.0)
+    # Double-tap Esc to abort the radiolist_dialog. prompt_toolkit's
+    # KeyProcessor reads a lone \x1b as the prefix of an escape sequence
+    # (e.g. arrow keys) and waits for follow-up bytes; the second \x1b
+    # resolves the ambiguity to Keys.Escape, which binds to "exit with
+    # None" on radiolist_dialog. A single \x1b would only resolve after
+    # the renderer's input timeout, which exceeds this test's 15s
+    # expect window in practice.
+    session.send_keys("\x1b\x1b")
     session.expect_in_display("aborted", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     assert c.read_text(_HOST_LIVE) == live_pre
@@ -258,8 +270,13 @@ def test_promote_pty_then_revert(
     session.expect_in_display("Choice (k/p/s/q)", timeout=10.0)
     session.send_keys("p")
     session.expect_in_display("Promote section", timeout=30.0)
+    # Same focus-fence as test_promote_pty_confirm_yes: wait for the
+    # default-No row to render before sending arrow keys; otherwise the
+    # arrow-down is dropped and the radio cursor stays on No.
+    session.expect_in_display("(*) No", timeout=10.0)
     session.send_keys("\x1b[B")
     session.send_keys("\r")
+    session.expect_in_display("(*) Yes", timeout=5.0)
     session.send_keys("\t")
     session.send_keys("\r")
     session.expect_in_display("proceeding", timeout=15.0)
