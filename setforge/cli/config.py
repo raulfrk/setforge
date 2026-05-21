@@ -887,25 +887,55 @@ def _add_marketplace(
 def _resolve_marketplace_inputs(
     *, source: str | None, repo: str | None, yes: bool
 ) -> tuple[str, str | None, str | None]:
-    """Resolve marketplaces.add inputs via flags or interactive dialogs."""
+    """Resolve marketplaces.add inputs via flags or interactive dialogs.
+
+    Two-phase dispatch: ``--source`` flag set → :func:`_resolve_from_flags`
+    (no interactive prompt). Otherwise gate on a real TTY and dispatch
+    to :func:`_prompt_marketplace_kind` for the interactive flow.
+    Returns the ``(kind, repo, path)`` triple consumed by
+    :func:`_add_marketplace`.
+    """
     if source is not None:
-        if source not in (
-            MarketplaceSourceKind.GITHUB.value,
-            MarketplaceSourceKind.PATH.value,
-        ):
-            raise SetforgeError(
-                f"--source must be one of github | path; got {source!r}"
-            )
-        if source == MarketplaceSourceKind.GITHUB.value and repo is None:
-            raise SetforgeError("--source=github requires --repo=owner/name")
-        if source == MarketplaceSourceKind.PATH.value:
-            return source, None, repo  # `repo` reused as path string
-        return source, repo, None
+        return _resolve_from_flags(source=source, repo=repo)
     if not sys.stdin.isatty() or yes:
         raise ConfirmRequiresInteractive(
             "marketplaces.add requires --source + (--repo or path) when stdin "
             "is not a TTY"
         )
+    return _prompt_marketplace_kind()
+
+
+def _resolve_from_flags(
+    *, source: str, repo: str | None
+) -> tuple[str, str | None, str | None]:
+    """Resolve marketplaces.add inputs from flag values (non-interactive path).
+
+    ``--repo`` aliases two distinct slots: for ``--source=github`` it
+    carries the ``owner/name`` slug; for ``--source=path`` it carries
+    the absolute filesystem path. Returns ``(kind, repo, None)`` for
+    github or ``(kind, None, path)`` for path, matching the
+    discriminated MarketplaceSource union.
+    """
+    if source not in (
+        MarketplaceSourceKind.GITHUB.value,
+        MarketplaceSourceKind.PATH.value,
+    ):
+        raise SetforgeError(f"--source must be one of github | path; got {source!r}")
+    if source == MarketplaceSourceKind.GITHUB.value:
+        if repo is None:
+            raise SetforgeError("--source=github requires --repo=owner/name")
+        return source, repo, None
+    # --source=path — ``repo`` carries the absolute path string.
+    return source, None, repo
+
+
+def _prompt_marketplace_kind() -> tuple[str, str | None, str | None]:
+    """Drive the interactive marketplaces.add flow via prompt_toolkit dialogs.
+
+    Lazy-imports the module-level radiolist/input dialog symbols so
+    monkeypatch indirection from the unit tests still resolves through
+    the live module object.
+    """
     from setforge.cli import config as _self
 
     chosen = _self.radiolist_dialog(
