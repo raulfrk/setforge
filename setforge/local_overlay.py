@@ -329,6 +329,7 @@ def has_local_overlay(
 
 __all__ = [
     "LocalOverlayError",
+    "LocalOverlayLoadError",
     "OverlayOrigin",
     "ResolvedExtension",
     "ResolvedMarketplace",
