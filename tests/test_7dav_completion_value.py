@@ -75,10 +75,17 @@ def test_value_completion_with_empty_path_yields_empty() -> None:
     assert _complete_value(ctx, "") == []
 
 
-def test_value_completion_never_raises_on_corrupt_input() -> None:
-    """Top-level try/except in ``_complete_value`` swallows everything."""
-    # Pass a path that intentionally points into a non-existent file
-    # → the implementation must NOT raise (shell completion contract).
+def test_value_completion_empty_for_scalar_with_no_enum() -> None:
+    """Scalar fields without an enum surface an empty completion list.
+
+    ``binaries.code`` is a free-form ``Path``-typed scalar (no
+    ``StrEnum`` / ``Literal`` constraint), so the
+    ``_complete_value_impl`` walk falls through the ``node.is_list``
+    branch and the ``node.enum_values`` branch and returns ``[]``.
+    Pinning this contract guards against accidentally surfacing
+    irrelevant universe values (e.g., from a misrouted enum lookup)
+    for free-form scalars.
+    """
     ctx = _FakeCtx(path="binaries.code")
     out = _complete_value(ctx, "")
-    assert isinstance(out, list)
+    assert out == []
