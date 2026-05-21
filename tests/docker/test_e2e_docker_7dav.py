@@ -36,7 +36,8 @@ _TRACKED_YAML: str = f"/workspace/{CONFIG_FIXTURE}"
 
 
 # ---------------------------------------------------------------------------
-# Non-PTY tests (4) — work in any worktree, ffs0 not required
+# Mixed top-section: shell-completion path test (uses pyte) + 4 non-PTY
+# tests covering the deterministic surfaces.
 # ---------------------------------------------------------------------------
 
 
