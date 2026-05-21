@@ -260,14 +260,62 @@ def test_config_add_marketplaces_pty_interactive(pyte_pty_session) -> None:
 
 def test_config_completion_value_works(
     docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
 ) -> None:
-    """Value completion callback returns valid suggestions inside the container.
+    """PTY: shell tab-completion on ``setforge config remove --local plugins.add``.
 
-    Sidesteps the PTY fixture (gated on ffs0) by invoking the value-
-    completion callback directly through ``python -c`` against the
-    installed setforge package. Verifies the callback returns a list
-    without raising on a known path, which is the contract callers
-    (shell completion) actually need.
+    Spawns an interactive zsh inside the container, sources the
+    ``setforge --show-completion=zsh`` script, types
+    ``setforge config remove --local plugins.add `` and presses TAB,
+    then asserts the configured plugin names appear in the screen
+    buffer as completion candidates.
+
+    This exercises the END-TO-END shell-completion path (typer's
+    completion machinery → setforge's _complete_value callback →
+    shell-rendered candidates) rather than the unit-level callback
+    contract that ``test_config_completion_value_callback_contract``
+    covers. The PTY route catches integration breakage that
+    monkeypatched callbacks can't (shell-renderer escapes,
+    completion-script wiring, lazy-import timing).
+    """
+    c = docker_container()
+    # Seed a local.yaml with one plugin so TAB has something to complete.
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "binaries:\n"
+        "  code: /usr/bin/code\n"
+        "plugins:\n"
+        "  add:\n"
+        "    - secure-code-review@official\n",
+    )
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=["zsh", "-i"],
+    )
+    # Source the completion script + tab on the relevant path.
+    session.send_keys('eval "$(uv run setforge --show-completion=zsh)" 2>/dev/null\r')
+    session.expect_in_display("$", timeout=10)
+    session.send_keys("uv run setforge config remove --local plugins.add \t")
+    # The plugin name should appear in the rendered completion menu.
+    session.expect_in_display("secure-code-review@official", timeout=10)
+
+
+def test_config_completion_value_callback_contract(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Direct-callback contract for ``_complete_value`` inside the container.
+
+    Sits alongside the PTY test above. The PTY test exercises the
+    end-to-end shell-completion pipeline; this one pins the inner
+    callback contract (returns a list, never raises) by invoking
+    ``setforge.cli.config._complete_value`` directly through
+    ``python -c`` against the installed setforge package.
+
+    A real shell-completion PTY flow is brittle (shell-startup timing,
+    completion-script source order, host shell version skew, TAB-byte
+    handling). The PTY test above documents the failure-mode set; this
+    callback test gives a fast deterministic signal when the inner
+    contract regresses without bisecting through the shell layer.
     """
     c = docker_container()
     py = (
@@ -277,6 +325,7 @@ def test_config_completion_value_works(
         "    info_name = 'add'\n"
         "out = _complete_value(C(), '')\n"
         "assert isinstance(out, list), out\n"
+        "assert 'path' in out and 'git' in out, out\n"
         "print('OK:', out)\n"
     )
     result = c.exec(["uv", "run", "python", "-c", py], check=False)
