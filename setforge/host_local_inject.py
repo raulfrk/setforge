@@ -36,6 +36,7 @@ item 11).
 from __future__ import annotations
 
 import re
+from typing import assert_never
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.sections import (
@@ -208,6 +209,12 @@ def resolve_anchor(text: str, anchor: Anchor) -> int:
             return _resolve_at_end_of_file(normalised, anchor)
         case AnchorAfterSection():
             return _resolve_after_section(normalised, anchor)
+        case _ as never:
+            # Exhaustiveness guard: adding a 6th anchor variant to the
+            # discriminated union without extending this match fails at
+            # type-check time (mypy / pyright surface ``never``'s
+            # narrowed type as the unhandled variant).
+            assert_never(never)
 
 
 def _read_body(section: HostLocalSection) -> str:
