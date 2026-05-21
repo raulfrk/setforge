@@ -16,7 +16,9 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from typer.testing import CliRunner
 
+from setforge.cli import app
 from setforge.config import (
     ClaudePluginRef,
     Config,
@@ -27,7 +29,7 @@ from setforge.config import (
     ResolvedProfile,
     apply_local_overlay,
 )
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, ValidationErrorWithContext
 from setforge.local_overlay import LocalOverlayError
 
 
@@ -343,3 +345,215 @@ def test_apply_local_overlay_returns_empty_resolution_for_absent_local_yaml(
 
     assert all(p.origin is OverlayOrigin.PROFILE for p in resolution.plugins)
     assert all(m.origin is OverlayOrigin.PROFILE for m in resolution.marketplaces)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 boundary fix: malformed local.yaml must NOT mask Check 6
+# ---------------------------------------------------------------------------
+
+
+def test_apply_local_overlay_check_returns_false_on_load_phase_failure(
+    tmp_path: Path,
+) -> None:
+    """Round-2 regression guard: ``_apply_local_overlay_check`` MUST return
+    ``False`` when the load phase fails so the caller falls back to Check 6.
+
+    Round-1 fix-up flipped the ``overlay_cross_ref_ran`` gate on ALL
+    ``ConfigError`` paths from :func:`apply_local_overlay`, including
+    YAML-parse / Pydantic-shape failures that raise BEFORE
+    :func:`_validate_overlay_marketplace_cross_ref` runs. That masked
+    pre-existing marketplace inconsistencies on a malformed overlay.
+
+    The sentinel :class:`LocalOverlayLoadError` plus the
+    :func:`_apply_local_overlay_check` helper restores the boundary:
+    a load-phase failure returns ``False`` (cross-ref did NOT run),
+    so the caller MUST execute :func:`_check_marketplaces` as a
+    fallback. This test asserts the boundary directly at the helper
+    level — the CLI-end integration path through
+    :func:`apply_preserve_user_keys_overlay` has a pre-existing
+    documented gap (setforge-b1lg) that is out of scope here.
+    """
+
+    # cfg has a pre-existing marketplace inconsistency: ``sp`` references
+    # ``ghost-mp``, but ``marketplaces:`` is empty. The standalone Check 6
+    # would catch this — but only if the gate falls back correctly.
+    cfg = _make_cfg(
+        plugins={"sp": "ghost-mp"},
+        marketplaces={},
+    )
+    rp = _make_resolved(["sp"])
+
+    # Malformed YAML in the resolved local.yaml path forces
+    # ``_load_overlay_blocks`` to raise ``LocalOverlayLoadError``.
+    local = _write_local(tmp_path, "plugins: : :\n")
+
+    failures: list[ValidationErrorWithContext | str] = []
+    cross_ref_ran = _apply_local_overlay_check_with_path(
+        cfg, rp, "p", "profile 'p'", failures, local
+    )
+
+    # Boundary contract: load-phase failure must return ``False``.
+    assert cross_ref_ran is False
+    # The load-phase error itself was recorded under {ctx}.
+    assert any("profile 'p'" in str(f) and "malformed YAML" in str(f) for f in failures)
+
+
+def test_apply_local_overlay_check_returns_false_on_resolver_error(
+    tmp_path: Path,
+) -> None:
+    """Sibling boundary contract: a resolver-phase
+    :class:`LocalOverlayError` (add ∩ remove or unknown-remove) ALSO
+    returns ``False`` because the cross-ref check did NOT execute.
+    """
+
+    cfg = _make_cfg(
+        plugins={"sp": "ghost-mp"},
+        marketplaces={},
+    )
+    rp = _make_resolved(["sp"], extensions=["ms-python.python"])
+
+    # Well-formed YAML but resolver-phase invariant: remove an extension
+    # that's not in the profile's resolved set.
+    local = _write_local(
+        tmp_path,
+        """\
+        extensions:
+          remove:
+            - never-installed.foo
+        """,
+    )
+
+    failures: list[ValidationErrorWithContext | str] = []
+    cross_ref_ran = _apply_local_overlay_check_with_path(
+        cfg, rp, "p", "profile 'p'", failures, local
+    )
+
+    assert cross_ref_ran is False
+    assert any("not in profile-resolved set" in str(f) for f in failures)
+
+
+def test_apply_local_overlay_check_returns_true_on_cross_ref_error(
+    tmp_path: Path,
+) -> None:
+    """When the cross-ref check itself raises (bare ``ConfigError``),
+    the helper returns ``True`` so the caller skips Check 6 to avoid
+    a duplicate failure row.
+    """
+
+    cfg = _make_cfg(
+        plugins={"sp": "official"},
+        marketplaces={
+            "official": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="a/b"
+            )
+        },
+    )
+    rp = _make_resolved(["sp"])
+
+    # Plugin add referencing an undefined marketplace — load succeeds,
+    # resolvers succeed, mutation runs, cross-ref fires.
+    local = _write_local(
+        tmp_path,
+        """\
+        plugins:
+          add:
+            - new-plugin@nonexistent-mp
+        """,
+    )
+
+    failures: list[ValidationErrorWithContext | str] = []
+    cross_ref_ran = _apply_local_overlay_check_with_path(
+        cfg, rp, "p", "profile 'p'", failures, local
+    )
+
+    assert cross_ref_ran is True
+    assert any("'nonexistent-mp'" in str(f) for f in failures)
+
+
+def _apply_local_overlay_check_with_path(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    prof_name: str,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+    local_path: Path,
+) -> bool:
+    """Run ``_apply_local_overlay_check`` against an explicit ``local.yaml`` path.
+
+    ``_apply_local_overlay_check`` itself delegates to ``apply_local_overlay``,
+    which reads :data:`setforge.source.LOCAL_CONFIG_PATH` by default. Patch
+    the module-level constant via ``monkeypatch``-equivalent attribute set
+    + restore so the test is hermetic.
+    """
+    import setforge.source as source_mod
+
+    saved = source_mod.LOCAL_CONFIG_PATH
+    source_mod.LOCAL_CONFIG_PATH = local_path
+    try:
+        from setforge.cli.validate import _apply_local_overlay_check
+
+        return _apply_local_overlay_check(cfg, resolved, prof_name, ctx, failures)
+    finally:
+        source_mod.LOCAL_CONFIG_PATH = saved
+
+
+# ---------------------------------------------------------------------------
+# Integration: resolver-phase failure surfaces both errors via the CLI
+# ---------------------------------------------------------------------------
+
+
+def test_resolver_error_via_cli_surfaces_check_6_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end CLI integration of the boundary fix.
+
+    YAML parses cleanly (no b1lg integration gap) but the extensions
+    resolver fires. The helper returns ``False`` → Check 6 runs →
+    BOTH the resolver error AND the pre-existing marketplace
+    inconsistency surface in the validate output.
+    """
+    cfg_yaml = dedent(
+        """\
+        version: 1
+        tracked_files:
+          d:
+            src: tracked_file.txt
+            dst: ~/.some-tracked_file
+        marketplaces: {}
+        claude_plugins:
+          sp:
+            marketplace: ghost-mp
+        profiles:
+          p:
+            tracked_files: [d]
+            claude_plugins: [sp]
+        """
+    )
+    cfg_path = tmp_path / "setforge.yaml"
+    cfg_path.write_text(cfg_yaml, encoding="utf-8")
+    (tmp_path / "tracked").mkdir(exist_ok=True)
+    (tmp_path / "tracked" / "tracked_file.txt").write_text("x\n", encoding="utf-8")
+
+    local = tmp_path / "local.yaml"
+    local.write_text(
+        dedent(
+            """\
+            extensions:
+              remove:
+                - never-installed.foo
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("setforge.cli.validate._LOCAL_CONFIG_PATH", local)
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
+
+    result = CliRunner().invoke(
+        app, ["validate", "--profile=p", f"--config={cfg_path}"]
+    )
+    assert result.exit_code == 1, result.output
+
+    # Both errors surface: resolver failure + pre-existing marketplace
+    # inconsistency from Check 6's fallback path.
+    assert "not in profile-resolved set" in result.output
+    assert "ghost-mp" in result.output
