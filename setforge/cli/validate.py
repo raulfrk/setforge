@@ -56,7 +56,6 @@ from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import (
-    Source,
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
@@ -79,7 +78,6 @@ and :mod:`setforge.binaries` (``binaries:``, ``claude:``,
 ``orphan_ignore:``). Used as the close-match candidate list for
 typo'd top-level keys (mockup D).
 """
-
 
 
 def _check_profile(
