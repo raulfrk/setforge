@@ -100,9 +100,7 @@ def _module_self() -> Any:  # noqa: ANN401
     reference. Defining the indirection once at module scope keeps
     the per-call sites tight.
     """
-    import sys as _sys
-
-    return _sys.modules[__name__]
+    return sys.modules[__name__]
 
 
 __all__ = [
