@@ -492,6 +492,27 @@ def _iter_promotable_sections(
             )
 
 
+def _classify_action(
+    promotable: PromotableSection,
+    *,
+    interactive: bool,
+    quit_remaining: bool,
+    console: Console,
+) -> tuple[SectionAction, bool]:
+    """Pick the wizard action for one promotable section.
+
+    Returns ``(action, terminal_quit)``: ``terminal_quit`` is ``True``
+    when this iteration should set the loop's ``quit_remaining`` flag
+    (the ``[q]`` quit case). Non-interactive runs and post-quit
+    iterations short-circuit to :attr:`SectionAction.KEEP_LIVE`; an
+    interactive run prompts via :func:`_prompt_one_host_local`.
+    """
+    if not interactive or quit_remaining:
+        return SectionAction.KEEP_LIVE, False
+    action = _prompt_one_host_local(promotable, console)
+    return action, action is SectionAction.QUIT_KEEP_REST
+
+
 def run_host_local_promote_wizard(
     *,
     tracked_files: Iterable[tuple[str, Path, Path]],
@@ -536,29 +557,28 @@ def run_host_local_promote_wizard(
     outcomes: list[PromoteOutcome] = []
     quit_remaining = False
     for promotable in _iter_promotable_sections(tracked_files, overlays):
-        if not interactive or quit_remaining:
-            outcomes.append(
-                PromoteOutcome(section=promotable, action=SectionAction.KEEP_LIVE)
-            )
-            continue
-        action = _prompt_one_host_local(promotable, console)
-        if action is SectionAction.QUIT_KEEP_REST:
+        action, terminal_quit = _classify_action(
+            promotable,
+            interactive=interactive,
+            quit_remaining=quit_remaining,
+            console=console,
+        )
+        if terminal_quit:
             quit_remaining = True
-            outcomes.append(PromoteOutcome(section=promotable, action=action))
-            continue
         if action is not SectionAction.PROMOTE:
             outcomes.append(PromoteOutcome(section=promotable, action=action))
             continue
-        outcome = _dispatch_promote(
-            promotable,
-            local_yaml_path=local_yaml_path,
-            profile=profile,
-            snapshot_base=snapshot_base,
-            source=source,
-            section_promote_mod=section_promote,
-            console=console,
+        outcomes.append(
+            _dispatch_promote(
+                promotable,
+                local_yaml_path=local_yaml_path,
+                profile=profile,
+                snapshot_base=snapshot_base,
+                source=source,
+                section_promote_mod=section_promote,
+                console=console,
+            )
         )
-        outcomes.append(outcome)
     return outcomes
 
 
