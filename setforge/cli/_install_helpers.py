@@ -28,7 +28,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC
 from pathlib import Path
-from typing import assert_never
+from typing import Final, assert_never
 
 import typer
 
@@ -639,11 +639,11 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 #   invokes — even under ``--auto=*`` + ``--dry-run``.
 # ---------------------------------------------------------------------------
 
-_DRY_RUN_HEADER: str = "=== DRY-RUN MODE — NOTHING WILL BE MUTATED ==="
+_DRY_RUN_HEADER: Final[str] = "=== DRY-RUN MODE — NOTHING WILL BE MUTATED ==="
 """First line of every dry-run invocation. Unambiguous opener for users + log
 scanners."""
 
-_DRY_RUN_FINAL_LINE: str = "=== rerun without --dry-run to apply for real ==="
+_DRY_RUN_FINAL_LINE: Final[str] = "=== rerun without --dry-run to apply for real ==="
 """Last line of every dry-run invocation. Exact-match string the acceptance
 gate `tail -1 | rg -q '...'` checks against; do NOT reformat without
 updating the spec + every consumer."""
