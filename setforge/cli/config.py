@@ -182,10 +182,18 @@ def _resolve_scope(
 
 
 def _tracked_yaml_path() -> Path:
-    """Return the tracked ``setforge.yaml`` resolved via the source layer."""
+    """Return the tracked ``setforge.yaml`` resolved via the source layer.
+
+    :func:`validate_source_dir` already returns the full path to the
+    ``setforge.yaml`` file inside the resolved source directory, not the
+    directory itself. The earlier ``source_dir / "setforge.yaml"`` form
+    double-suffixed the filename (yielding e.g.
+    ``/path/setforge.yaml/setforge.yaml``), which then tripped
+    :func:`_run_tracked_git_check`'s ``yaml_path.parent`` to point at a
+    file rather than a directory.
+    """
     resolved_source = get_resolved_source()
-    source_dir = validate_source_dir(resolved_source)
-    return source_dir / "setforge.yaml"
+    return validate_source_dir(resolved_source)
 
 
 def _scope_yaml_path(scope: ConfigScope) -> Path:
