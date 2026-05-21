@@ -281,16 +281,6 @@ def test_validate_local_yaml_empty_exits_zero(
     assert result.exit_code == 0, result.output
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Post-merge integration gap: source.py's _LocalSourceConfig parse "
-        "raises raw ruamel.yaml ScannerError on malformed YAML BEFORE "
-        "tmln's _check_local_yaml runs (lgvp's apply_preserve_user_keys_overlay "
-        "call site). The raw exception bubbles past lgvp's narrow "
-        "`except PreserveUserKeysOverlayError` clause. Tracked in setforge-b1lg."
-    ),
-    strict=False,
-)
 def test_validate_local_yaml_parse_error_uses_parse_category(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
@@ -378,17 +368,6 @@ def test_validate_local_yaml_no_ansi_when_not_tty(
     assert re.search(r"\x1b\[", result.output) is None
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Post-merge integration gap with lgvp's apply_preserve_user_keys_overlay: "
-        "source.py's _LocalSourceConfig parse runs BEFORE tmln's "
-        "_check_local_yaml; raw pydantic.ValidationError from "
-        "PermissionError-on-read-text bubbles past lgvp's `except "
-        "PreserveUserKeysOverlayError` and is never seen by tmln's "
-        "format_yaml_parse_error. Tracked in setforge-b1lg follow-up."
-    ),
-    strict=False,
-)
 def test_validate_local_yaml_unreadable_surfaces_as_parse_error(
     tmp_path: Path, local_yaml_at: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,12 +377,18 @@ def test_validate_local_yaml_unreadable_surfaces_as_parse_error(
     """
     cfg = _write_minimal_config(tmp_path)
     # Create the file so .exists() is True, then monkeypatch read_text
-    # to raise — a portable way to simulate PermissionError /
-    # UnicodeDecodeError without relying on root-vs-user chmod behavior.
+    # to raise ONLY for local_yaml_at — a portable way to simulate
+    # PermissionError / UnicodeDecodeError without relying on root-
+    # vs-user chmod behavior, while leaving other Path.read_text calls
+    # (tracked srcs, setforge.yaml re-reads) intact.
     local_yaml_at.write_text("source:\n  path: /tmp\n", encoding="utf-8")
+    target = str(local_yaml_at)
+    original_read_text = Path.read_text
 
-    def _boom(*_a: object, **_kw: object) -> str:
-        raise PermissionError("simulated EACCES")
+    def _boom(self: Path, *a: object, **kw: object) -> str:
+        if str(self) == target:
+            raise PermissionError("simulated EACCES")
+        return original_read_text(self, *a, **kw)
 
     monkeypatch.setattr(Path, "read_text", _boom)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
@@ -413,51 +398,46 @@ def test_validate_local_yaml_unreadable_surfaces_as_parse_error(
     assert "validation FAILED" in result.output
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Post-merge integration gap with lgvp's apply_preserve_user_keys_overlay: "
-        "source.py's _LocalSourceConfig parse fires Pydantic's "
-        "extra_forbidden ValidationError for source.path.<unknown> BEFORE "
-        "tmln's _check_local_yaml has a chance to format it. Raw "
-        "ValidationError bubbles past lgvp's narrow `except "
-        "PreserveUserKeysOverlayError` clause. Tracked in setforge-b1lg "
-        "follow-up (extend tmln overlay coverage to swallow raw Pydantic "
-        "errors and route them through format_schema_validation_error)."
-    ),
-    strict=False,
-)
-def test_validate_local_yaml_nested_extra_forbidden_bails_to_1_1(
+def test_validate_local_yaml_nested_extra_forbidden_resolves_real_line(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
-    """Nested ``extra_forbidden`` (``len(loc) > 1``) bails to the (1, 1)
-    fallback per the ``_resolve_error_position`` docstring contract,
-    rather than mis-locating the offending key on the top-level
-    CommentedMap.
+    """Nested ``extra_forbidden`` (``len(loc) > 1``) resolves to the
+    real offending line via the b1lg ``.lc`` walker, NOT the (1, 1)
+    fallback.
 
-    A ``source:`` block with an unknown sub-key produces a Pydantic
-    error with ``loc=('source','<unknown>')``. The top-level
-    close-match list (``_LOCAL_YAML_TOP_KEYS``) does not apply for
-    nested keys; the report must NOT fire a misleading "Did you mean"
-    suggestion, must NOT crash, and must still surface a schema error.
+    A ``tracked_files.<id>.<unknown>`` shape produces a Pydantic error
+    with ``loc=('tracked_files', <id>, '<unknown>')``. The walker
+    descends two levels into the ``tracked_files:`` CommentedMap,
+    anchors on the leaf key, and produces a real line/column. The
+    candidate list dispatched by
+    :func:`setforge.cli.validate._candidate_list_for` for
+    ``loc[0]='tracked_files'`` is the
+    :class:`_LocalTrackedFileOverlay` field set (preserve_user_keys /
+    host_local_sections); ``not_a_real_field`` is far enough from both
+    that no misleading "Did you mean" fires.
     """
     cfg = _write_minimal_config(tmp_path)
-    # ``source:`` is a known top-level key; ``not_a_real_field`` is an
-    # unknown sub-key of ``PathSource`` (Pydantic ``extra="forbid"``
-    # bubbles up at depth 2). The discriminator (``kind: path``) is
-    # provided so Pydantic resolves the union before hitting the extra
-    # sub-key — otherwise we'd get a discriminator error, not the
-    # nested ``extra_forbidden`` we're exercising.
+    # ``tracked_files:`` is a known top-level key; ``not_a_real_field``
+    # is an unknown sub-key of ``_LocalTrackedFileOverlay`` (Pydantic
+    # ``extra="forbid"`` bubbles up at depth 2). No discriminated
+    # union in this branch, so the walker's parent chain is a clean
+    # Mapping all the way down.
     local_yaml_at.write_text(
-        "source:\n  kind: path\n  path: /tmp\n  not_a_real_field: oops\n",
+        "binaries:\n"
+        "  uv: /usr/bin/uv\n"
+        "tracked_files:\n"
+        "  d:\n"
+        "    not_a_real_field: oops\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
     # Schema error fires (not a crash, not a YAML PARSE).
     assert "✗ SCHEMA VALIDATION ERROR" in result.output
-    # Bails to line 1 per the docstring contract — nested .lc walking
-    # is the A6 follow-up bd's scope.
-    assert "local.yaml:1" in result.output
+    # Walker resolves to the real offending line (5 — the
+    # ``not_a_real_field`` row), NOT the legacy (1, 1) fallback.
+    assert "local.yaml:5" in result.output
     # No misleading top-level-key close-match suggestion fires for a
-    # nested key.
+    # nested key whose siblings aren't close enough by Levenshtein
+    # distance.
     assert "Did you mean" not in result.output
