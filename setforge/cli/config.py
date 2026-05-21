@@ -512,8 +512,13 @@ def _to_plain(obj: Any) -> Any:  # noqa: ANN401 — recursive YAML coercion
 # ---------------------------------------------------------------------------
 
 
-def _dump_to_str(doc: CommentedMap) -> str:
-    """Serialize ``doc`` back to a string using the rt YAML factory."""
+def _dump_to_str(doc: Any) -> str:  # noqa: ANN401 — accepts any YAML-dumpable tree
+    """Serialize ``doc`` back to a string using the rt YAML factory.
+
+    Accepts any YAML-dumpable tree (``CommentedMap`` for whole-file
+    dumps, plus ``CommentedSeq`` / scalar / dict / list for the sliced
+    sub-trees produced by :func:`_slice_doc` in ``show``).
+    """
     import io
 
     yaml = yaml_rt()
@@ -628,13 +633,7 @@ def config_show(
     yaml_path = _scope_yaml_path(scope)
     doc = _load_doc(yaml_path)
     sliced = _slice_doc(doc, path)
-    import io
-
-    yaml = yaml_rt()
-    buf = io.StringIO()
-    yaml.dump(sliced, buf)
-    text = buf.getvalue()
-    typer.echo(text.rstrip())
+    typer.echo(_dump_to_str(sliced).rstrip())
 
 
 def _show_effective(profile: str) -> None:
