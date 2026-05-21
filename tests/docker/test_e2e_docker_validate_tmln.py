@@ -61,18 +61,6 @@ def test_validate_local_yaml_typo_top_level_key_emits_mockup_d(
     assert "validation FAILED" in out
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Post-merge integration gap with lgvp's apply_preserve_user_keys_overlay: "
-        "source.py's _LocalSourceConfig loader raises raw ruamel YAML "
-        "ScannerError on malformed local.yaml BEFORE tmln's _check_local_yaml "
-        "runs. The raw 'error: malformed YAML in ...' message reaches the user "
-        "instead of tmln's formatted '✗ YAML PARSE ERROR (...)' line. "
-        "Functional behavior (exit 1 on malformed local.yaml) is preserved; "
-        "only the formatting deviates. Tracked in setforge-b1lg follow-up."
-    ),
-    strict=False,
-)
 def test_validate_local_yaml_parse_error_emits_yaml_parse_category(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -102,3 +90,134 @@ def test_validate_local_yaml_multi_error_reports_all_then_refuses(
     assert out.count("✗ SCHEMA VALIDATION ERROR") >= 2
     assert "validation FAILED:" in out
     assert "no changes will be made" in out
+
+
+# ---------------------------------------------------------------------------
+# setforge-b1lg: overlay-class typo paths. Each test seeds a local.yaml that
+# typos a sub-key inside one overlay-class block, runs ``validate``, and
+# asserts (a) the schema-validation category fires, (b) the ``Did you mean``
+# suggestion surfaces the dispatched candidate, and (c) the ``Fix:`` action
+# names the offending file. The mockup-D ``←─── line N`` marker confirms the
+# walker resolved a real nested line (NOT the legacy (1, 1) fallback).
+# ---------------------------------------------------------------------------
+
+
+def test_validate_local_yaml_plugins_typo_suggests_plugins(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside the ``plugins:`` overlay block triggers
+    a "Did you mean" against :class:`PluginOverlay.model_fields`."""
+    c = docker_container()
+    # ``ad`` is Levenshtein distance 1 from ``add`` — the PluginOverlay
+    # candidate list dispatched by ``_candidate_list_for(('plugins',))``.
+    c.write_text(_HOME_LOCAL_YAML, "plugins:\n  ad:\n    - foo@bar\n")
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'add'" in out
+    assert "Fix:" in out
+    assert "local.yaml:" in out
+    # Walker resolves the nested loc to a real line > 1 (the ``ad:`` row).
+    assert "←─── line 2" in out
+
+
+def test_validate_local_yaml_extensions_typo_suggests_extensions(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside the ``extensions:`` overlay block triggers
+    a "Did you mean" against :class:`ExtensionOverlay.model_fields`."""
+    c = docker_container()
+    # ``adde`` is distance 1 from ``add`` (extra 'e').
+    c.write_text(_HOME_LOCAL_YAML, "extensions:\n  adde:\n    - some.ext\n")
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'add'" in out
+    assert "Fix:" in out
+    assert "←─── line 2" in out
+
+
+def test_validate_local_yaml_marketplaces_typo_suggests_marketplaces(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside the ``marketplaces:`` overlay block
+    triggers a "Did you mean" against :class:`MarketplaceOverlay.model_fields`.
+    """
+    c = docker_container()
+    # ``rem`` is distance 3 from ``remove`` — TOO FAR for the
+    # Levenshtein-2 gate. Use ``remov`` (distance 1) instead.
+    c.write_text(_HOME_LOCAL_YAML, "marketplaces:\n  remov:\n    - foo\n")
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'remove'" in out
+    assert "Fix:" in out
+    assert "←─── line 2" in out
+
+
+def test_validate_local_yaml_host_local_sections_typo_suggests(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside a ``host_local_sections.<name>`` block
+    triggers a "Did you mean" against :class:`HostLocalSection.model_fields`
+    (``anchor`` / ``body`` / ``body_file``)."""
+    c = docker_container()
+    # ``bdy`` is distance 1 from ``body``. The full host_local_sections
+    # shape requires nested ``anchor:`` + body discriminator, but
+    # extra_forbidden fires on ``bdy`` before the exactly-one-of validator
+    # runs (Pydantic processes extra-key checks first).
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "tracked_files:\n"
+        "  d:\n"
+        "    host_local_sections:\n"
+        "      foo:\n"
+        "        bdy: hello\n",
+    )
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'body'" in out
+    assert "Fix:" in out
+
+
+def test_validate_local_yaml_tracked_files_nested_typo_suggests(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside ``tracked_files.<id>`` (not
+    preserve_user_keys / host_local_sections) triggers a "Did you mean"
+    against :class:`_LocalTrackedFileOverlay.model_fields`."""
+    c = docker_container()
+    # ``preserve_user_key`` (missing trailing 's') is distance 1 from
+    # ``preserve_user_keys`` — the _LocalTrackedFileOverlay field name.
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "tracked_files:\n  d:\n    preserve_user_key:\n      add: [foo]\n",
+    )
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'preserve_user_keys'" in out
+    assert "Fix:" in out
+
+
+def test_validate_local_yaml_preserve_user_keys_nested_typo_suggests(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A typo'd sub-key inside ``tracked_files.<id>.preserve_user_keys``
+    triggers a "Did you mean" against
+    :class:`PreserveUserKeysOverlay.model_fields` (``add`` / ``remove``).
+    """
+    c = docker_container()
+    # ``adde`` is distance 1 from ``add`` — the PreserveUserKeysOverlay
+    # candidate list dispatched by ``_candidate_list_for`` when
+    # ``loc[2] == 'preserve_user_keys'``.
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "tracked_files:\n  d:\n    preserve_user_keys:\n      adde: [foo]\n",
+    )
+    rc, out = _run_validate(c)
+    assert rc == 1, out
+    assert "✗ SCHEMA VALIDATION ERROR" in out
+    assert "Did you mean 'add'" in out
+    assert "Fix:" in out
