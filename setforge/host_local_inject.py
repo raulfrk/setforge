@@ -231,12 +231,18 @@ def _read_body(section: HostLocalSection) -> str:
 
     Pydantic's :meth:`HostLocalSection._exactly_one_body_source`
     guarantees exactly one is set, so this is a discriminator-style
-    pick with no fallthrough.
+    pick with no fallthrough. The empty-``body_file`` check lives here
+    (next to the read) rather than in the model validator so schema
+    parsing stays decoupled from filesystem state (see
+    :class:`setforge.source.HostLocalSection` docstring).
     """
     if section.body is not None:
         return section.body
     assert section.body_file is not None  # exactly-one-of guarantee
-    return section.body_file.read_text(encoding="utf-8")
+    body = section.body_file.read_text(encoding="utf-8")
+    if not body.strip():
+        raise ValueError(f"HostLocalSection `body_file` {section.body_file} is empty")
+    return body
 
 
 def inject_host_local_section(

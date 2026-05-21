@@ -216,10 +216,18 @@ class HostLocalSection(BaseModel):
 
     Carries an :data:`Anchor` (where to splice the section) and exactly
     one of ``body`` (inline string) or ``body_file`` (path to a file
-    read at install time). Both empty / both set is a configuration
-    error surfaced at :class:`pydantic.ValidationError` time. ``body_file``
-    is read lazily by the injection module — the model validator only
-    sniffs it for emptiness when the file exists.
+    read at install time). Both / neither is a configuration error
+    surfaced at :class:`pydantic.ValidationError` time.
+
+    Empty-``body_file`` validation is deferred to
+    :func:`setforge.host_local_inject._read_body` (the injection / install
+    path). Sniffing the filesystem inside a Pydantic model_validator
+    couples schema parsing to the live FS state — a missing
+    ``body_file`` slips through schema validation but fails at deploy,
+    and revalidating a parsed model in a different cwd reads a
+    different file. The schema check stays a pure-data invariant
+    (exactly-one-of, non-empty inline body); the FS-touching empty
+    check lives next to the read.
     """
 
     model_config = _STRICT
@@ -230,7 +238,13 @@ class HostLocalSection(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_body_source(self) -> "HostLocalSection":
-        """Enforce exactly-one-of ``body`` / ``body_file`` + non-empty body."""
+        """Enforce exactly-one-of ``body`` / ``body_file`` + non-empty inline body.
+
+        FS-touching checks (empty ``body_file``, missing ``body_file``)
+        are intentionally NOT in scope here — the model validator stays
+        pure so it can be reused at parse time without coupling to a
+        specific cwd. See class docstring for the full rationale.
+        """
         if (self.body is None) == (self.body_file is None):
             shape = "both" if self.body is not None else "neither"
             raise ValueError(
@@ -239,12 +253,6 @@ class HostLocalSection(BaseModel):
             )
         if self.body is not None and not self.body.strip():
             raise ValueError("HostLocalSection `body` must be non-empty")
-        if (
-            self.body_file is not None
-            and self.body_file.exists()
-            and not self.body_file.read_text(encoding="utf-8").strip()
-        ):
-            raise ValueError(f"HostLocalSection `body_file` {self.body_file} is empty")
         return self
 
 
