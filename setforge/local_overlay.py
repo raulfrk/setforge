@@ -109,6 +109,26 @@ class LocalOverlayError(ConfigError):
     """
 
 
+class LocalOverlayLoadError(ConfigError):
+    """Raised when ``local.yaml`` cannot be loaded or parsed for overlays.
+
+    Sentinel subclass of :class:`ConfigError` used by
+    :func:`setforge.config._load_overlay_blocks` to distinguish
+    load-phase failures (YAML parse error, non-mapping top level,
+    Pydantic shape error in an overlay block) from cross-ref-phase
+    failures (which still raise bare :class:`ConfigError`). The
+    validate CLI's overlay-check wrapper uses this distinction to
+    decide whether the marketplace cross-ref ran:
+
+    - :class:`LocalOverlayLoadError` → load failed BEFORE the
+      cross-ref check; the standalone Check 6 must still run as a
+      fallback to surface pre-existing marketplace inconsistencies.
+    - bare :class:`ConfigError` from
+      :func:`setforge.config.apply_local_overlay` → cross-ref ran
+      and reported; skip Check 6 to avoid duplicate failure rows.
+    """
+
+
 def _check_overlay_lists(
     *,
     overlay_kind: str,

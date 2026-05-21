@@ -15,6 +15,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationError,
     computed_field,
     field_validator,
     model_validator,
@@ -747,7 +748,17 @@ def _load_overlay_blocks(
     :mod:`setforge.config` at boot). Returns the three overlay structs
     (plugins, extensions, marketplaces) — each is a typed Pydantic
     model with ``.add`` / ``.remove`` lists or mappings.
+
+    Load-phase failures (YAML parse error, non-mapping top level,
+    Pydantic shape error in an overlay block) are re-raised as
+    :class:`setforge.local_overlay.LocalOverlayLoadError` — a sentinel
+    subclass of :class:`ConfigError` — so the validate CLI can
+    distinguish them from cross-ref-phase failures (which keep raising
+    bare :class:`ConfigError`). The distinction matters because a
+    load-phase failure means the cross-ref check did NOT run, and the
+    standalone Check 6 must still execute as a fallback.
     """
+    from setforge.local_overlay import LocalOverlayLoadError
     from setforge.source import (
         LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
     )
@@ -756,7 +767,12 @@ def _load_overlay_blocks(
     )
 
     path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
-    local = _load_local_source_config(path)
+    try:
+        local = _load_local_source_config(path)
+    except ConfigError as exc:
+        raise LocalOverlayLoadError(str(exc)) from exc
+    except ValidationError as exc:
+        raise LocalOverlayLoadError(str(exc)) from exc
     return local.plugins, local.extensions, local.marketplaces
 
 
