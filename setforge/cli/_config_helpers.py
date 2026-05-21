@@ -159,9 +159,10 @@ def _node_from_union(ann: Any, args: tuple[Any, ...]) -> FieldNode:  # noqa: ANN
         return FieldNode(
             annotation=ann, is_list=False, enum_values=(), children=merged_children
         )
-    return (
-        node_from_annotation(non_none[0]) if non_none else FieldNode(ann, False, (), {})
-    )
+    # ``non_none`` is non-empty here: an all-``None`` union (``None | None``)
+    # is not a valid annotation, and the single-arm case returned above.
+    assert non_none, "union must contain at least one non-None arm"
+    return node_from_annotation(non_none[0])
 
 
 def _node_from_list(ann: Any) -> FieldNode:  # noqa: ANN401
