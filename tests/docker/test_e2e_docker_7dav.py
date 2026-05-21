@@ -1,23 +1,24 @@
 """Docker e2e tests for ``setforge config`` (setforge-7dav).
 
-Gated on setforge-ffs0 merge — see batch ε spec. The PTY half of this
-file consumes the ``pyte_pty_session`` fixture from ffs0; until ffs0
-lands on main, those tests fail to resolve the fixture and are run
-only post-merge in Phase 7.
+The PTY half of this file consumes the ``pyte_pty_session`` factory
+fixture from setforge-ffs0 (now merged on main). The factory takes
+``container=`` + ``cmd=`` and returns a :class:`PyteSession` whose
+key verbs are :meth:`send_keys`, :meth:`expect_in_display`, and
+:meth:`wait_for_exit`.
 
 Two test classes:
 
-- 4 non-PTY tests (suffix ``_non_pty``) cover the deterministic paths:
-  path-completion enumeration via the static fixture, git-clean-check
-  on the tracked side, validate-before-write contract, and round-trip
-  preservation. These work in any worktree.
+- 5 non-PTY / non-interactive tests cover the deterministic paths:
+  git-clean-check on the tracked side, validate-before-write contract,
+  round-trip preservation, the non-TTY mutate-gate, and the inner
+  ``_complete_value`` callback contract invoked through ``python -c``.
 
-- 10 PTY tests (no ``_non_pty`` suffix) cover the interactive surfaces
-  (arrow-key confirm, default-abort behavior, interactive
-  marketplaces.add prompt flow, shell-completion). These require the
-  ``pyte_pty_session`` fixture from setforge-ffs0 and will fail to run
-  inside this worktree until ffs0 merges. The Phase 7 post-merge gate
-  validates them.
+- 10 PTY tests cover the interactive surfaces: scalar / list arrow-key
+  confirm (yes + default-abort), list remove, the interactive
+  marketplaces.add prompt flow, shell-completion for paths + values,
+  tracked-side git-check refusal under a TTY, the validate-before-write
+  surface under a TTY, and the non-TTY-stdin mutate-gate exercised from
+  inside an interactive PTY.
 """
 
 from __future__ import annotations
@@ -212,73 +213,182 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
 
 
 # ---------------------------------------------------------------------------
-# PTY tests (10) — gated on setforge-ffs0's ``pyte_pty_session`` fixture
+# PTY tests (10) — drive the real ``pyte_pty_session`` factory from ffs0
 # ---------------------------------------------------------------------------
 #
-# These names MUST exist per SPEC 4 acceptance; the bodies use the
-# ``pyte_pty_session`` fixture lands in ffs0. Inside this worktree the
-# fixture will fail to resolve, but the acceptance ``rg -nq`` checks
-# only verify the names appear in the file. The Phase 7 post-merge
-# gate validates the actual PTY behavior on merged main.
+# Pattern: ``session = pyte_pty_session(container=..., cmd=[...])`` then
+# anchor on ``session.expect_in_display(needle, timeout=...)`` /
+# ``session.send_keys(seq)`` / ``session.wait_for_exit(timeout=...,
+# expected_code=...)``. Radiolist labels are matched by their visible
+# substrings — ``"(*) abort"`` / ``"(*) write"`` (asterisk indicates the
+# currently-selected radio option in the rendered display). Arrow down
+# is ``"\x1b[B"``; Enter is ``"\r"``; Tab is ``"\t"``.
 # ---------------------------------------------------------------------------
 
 
-def test_config_add_local_scalar_pty_confirm_yes(pyte_pty_session) -> None:
-    """PTY: ``add --local binaries.code <path>`` + arrow→Yes writes the scalar."""
-    pyte_pty_session.send("uv run setforge config add --local binaries.code /opt/code")
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("About to update")
-    pyte_pty_session.send_arrow_down()
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("writing")
-
-
-def test_config_add_local_scalar_pty_confirm_no(pyte_pty_session) -> None:
-    """PTY: default-abort leaves the file untouched."""
-    pyte_pty_session.send("uv run setforge config add --local binaries.code /opt/code")
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("About to update")
-    pyte_pty_session.send_enter()  # default-abort
-    pyte_pty_session.expect("aborted")
-
-
-def test_config_add_local_list_pty_confirm_yes(pyte_pty_session) -> None:
-    """PTY: list-add appends to the list (arrow→Yes)."""
-    pyte_pty_session.send(
-        "uv run setforge config add --local plugins.add work-tools@work-internal"
+def test_config_add_local_scalar_pty_confirm_yes(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
+    """PTY: ``add --local binaries.code <path>`` + arrow→write writes the scalar."""
+    c = docker_container()
+    c.write_text(_HOME_LOCAL_YAML, "binaries:\n  code: /usr/bin/code\n")
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--local",
+            "binaries.code",
+            "/opt/code",
+        ],
     )
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("About to update")
-    pyte_pty_session.send_arrow_down()
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("writing")
+    session.expect_in_display("About to update", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    session.expect_in_display("writing", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    after = c.read_text(_HOME_LOCAL_YAML)
+    assert "/opt/code" in after
 
 
-def test_config_remove_local_list_pty_confirm_yes(pyte_pty_session) -> None:
-    """PTY: list-remove pops from the list (arrow→Yes)."""
-    pyte_pty_session.send(
-        "uv run setforge config remove --local plugins.add stale-plugin"
+def test_config_add_local_scalar_pty_confirm_no(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
+    """PTY: default-abort (Enter on first selection) leaves the file untouched."""
+    c = docker_container()
+    initial = "binaries:\n  code: /usr/bin/code\n"
+    c.write_text(_HOME_LOCAL_YAML, initial)
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--local",
+            "binaries.code",
+            "/opt/code",
+        ],
     )
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("About to update")
-    pyte_pty_session.send_arrow_down()
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("writing")
+    session.expect_in_display("About to update", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    # Default-selected is "abort"; Enter accepts that choice.
+    session.send_keys("\r")
+    session.expect_in_display("aborted", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    assert c.read_text(_HOME_LOCAL_YAML) == initial
 
 
-def test_config_add_marketplaces_pty_interactive(pyte_pty_session) -> None:
+def test_config_add_local_list_pty_confirm_yes(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
+    """PTY: list-add appends to the list (arrow→write)."""
+    c = docker_container()
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "plugins:\n  add:\n    - existing-plugin@official\n",
+    )
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--local",
+            "plugins.add",
+            "work-tools@work-internal",
+        ],
+    )
+    session.expect_in_display("About to update", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    session.expect_in_display("writing", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    assert "work-tools@work-internal" in c.read_text(_HOME_LOCAL_YAML)
+
+
+def test_config_remove_local_list_pty_confirm_yes(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
+    """PTY: list-remove pops from the list (arrow→write)."""
+    c = docker_container()
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "plugins:\n  add:\n    - stale-plugin@official\n    - keep@official\n",
+    )
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "remove",
+            "--local",
+            "plugins.add",
+            "stale-plugin@official",
+        ],
+    )
+    session.expect_in_display("About to update", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    session.expect_in_display("writing", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    after = c.read_text(_HOME_LOCAL_YAML)
+    assert "stale-plugin@official" not in after
+    assert "keep@official" in after
+
+
+def test_config_add_marketplaces_pty_interactive(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
     """PTY: interactive marketplaces.add prompts for source + repo + confirm."""
-    pyte_pty_session.send("uv run setforge config add --local marketplaces.add my-mp")
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("source kind")
-    pyte_pty_session.send_enter()  # github default
-    pyte_pty_session.expect("owner/name")
-    pyte_pty_session.send("owner/repo")
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("About to update")
-    pyte_pty_session.send_arrow_down()
-    pyte_pty_session.send_enter()
-    pyte_pty_session.expect("writing")
+    c = docker_container()
+    c.write_text(_HOME_LOCAL_YAML, "binaries:\n  code: /usr/bin/code\n")
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--local",
+            "marketplaces.add",
+            "my-mp",
+        ],
+    )
+    # Source-kind radiolist (github is the default per _prompt_marketplace_kind).
+    session.expect_in_display("source kind", timeout=30.0)
+    session.send_keys("\r")
+    # owner/name input dialog for github.
+    session.expect_in_display("owner/name", timeout=15.0)
+    session.send_keys("owner/repo")
+    session.send_keys("\t")
+    session.send_keys("\r")
+    # Diff-preview confirm panel.
+    session.expect_in_display("About to update", timeout=15.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    session.send_keys("\x1b[B")
+    session.send_keys("\r")
+    session.expect_in_display("writing", timeout=15.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+    after = c.read_text(_HOME_LOCAL_YAML)
+    assert "owner/repo" in after
 
 
 def test_config_completion_value_works(
@@ -358,44 +468,98 @@ def test_config_completion_value_callback_contract(
 
 # The remaining PTY tests reuse the same fixture verbs against the
 # git-check / validate / non-TTY surfaces but inside an actual PTY so
-# the prompt_toolkit dialog code path is exercised end-to-end. They
-# share the gating note above.
+# the prompt_toolkit dialog code path is exercised end-to-end.
 
 
-def _pty_smoke(session, command: str) -> None:
-    """Internal helper: send a command, wait for prompt or abort."""
-    session.send(command)
-    session.send_enter()
-
-
-# Aliased existing names so the acceptance ``rg -nq`` checks pass for
-# the remaining PTY case names from the spec.
-
-
-def test_config_add_tracked_pty_git_check_aborts(pyte_pty_session) -> None:
+def test_config_add_tracked_pty_git_check_aborts(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
     """PTY counterpart of the non-PTY git-check abort test."""
-    _pty_smoke(
-        pyte_pty_session,
-        "uv run setforge config add --tracked schema_version 1.1",
+    c = docker_container()
+    # Dirty the e2e config-repo working tree so the tracked-side gate trips.
+    c.write_text("/workspace/tests/fixtures/e2e/dirt.txt", "uncommitted\n")
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n",
     )
-    pyte_pty_session.expect_any(["dirty", "aborted", "error"])
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--tracked",
+            "schema_version",
+            "1.1",
+        ],
+    )
+    # The git-check path surfaces a non-zero exit before the diff-preview
+    # panel; the dirty-tree refusal message contains "dirty" or the
+    # source-validate text. Either signal counts as "gate tripped".
+    try:
+        session.expect_in_display("dirty", timeout=30.0)
+    except TimeoutError:
+        session.expect_in_display("Error", timeout=5.0)
+    session.wait_for_exit(timeout=60.0, expected_code=1)
 
 
 def test_config_add_invalid_pty_validates_before_write(
-    pyte_pty_session,
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
 ) -> None:
     """PTY counterpart of the validate-before-write abort test."""
-    _pty_smoke(
-        pyte_pty_session,
-        "uv run setforge config add --local source.kind bogus",
+    c = docker_container()
+    c.write_text(_HOME_LOCAL_YAML, "binaries:\n  code: /usr/bin/code\n")
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "uv",
+            "run",
+            "setforge",
+            "config",
+            "add",
+            "--local",
+            "source.kind",
+            "bogus",
+        ],
     )
-    pyte_pty_session.expect_any(["INVALID", "validation", "error"])
+    # The schema-validate hook fires before the diff-preview panel and
+    # raises a SetforgeError surfaced as a non-zero exit with the field
+    # name in the message.
+    try:
+        session.expect_in_display("validation", timeout=30.0)
+    except TimeoutError:
+        session.expect_in_display("source", timeout=5.0)
+    session.wait_for_exit(timeout=60.0, expected_code=1)
 
 
-def test_config_add_non_tty_without_yes_raises(pyte_pty_session) -> None:
-    """PTY counterpart of the non-TTY mutate-gate test."""
-    _pty_smoke(
-        pyte_pty_session,
-        "uv run setforge config add --local binaries.code /x </dev/null",
+def test_config_add_non_tty_without_yes_raises(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., object],
+) -> None:
+    """PTY counterpart of the non-TTY mutate-gate test.
+
+    Drives ``setforge config add`` from inside an interactive PTY but
+    redirects the child's stdin from ``/dev/null`` via the shell so the
+    SUT sees a non-TTY stdin even though the PTY itself is interactive.
+    This exercises the ``ConfirmRequiresInteractive`` mutate-gate code
+    path inside a real TTY-aware host shell.
+    """
+    c = docker_container()
+    c.write_text(_HOME_LOCAL_YAML, "binaries:\n  code: /usr/bin/code\n")
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
+            "sh",
+            "-c",
+            "uv run setforge config add --local binaries.code /x </dev/null",
+        ],
     )
-    pyte_pty_session.expect_any(["--yes", "TTY", "ConfirmRequiresInteractive"])
+    try:
+        session.expect_in_display("--yes", timeout=30.0)
+    except TimeoutError:
+        session.expect_in_display("TTY", timeout=5.0)
+    session.wait_for_exit(timeout=60.0, expected_code=1)
