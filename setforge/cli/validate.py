@@ -179,16 +179,20 @@ def _apply_local_overlay_check(
     Error routing:
     - :class:`LocalOverlayLoadError` (sentinel subclass): load-phase
       failure (YAML parse, non-mapping, Pydantic shape) → record under
-      ``{ctx}`` and signal cross-ref did NOT run.
+      ``{ctx}`` and signal cross-ref did NOT run. Note:
+      :func:`setforge.config._load_overlay_blocks` wraps raw
+      :class:`pydantic.ValidationError` from the strict overlay-load
+      schema into :class:`LocalOverlayLoadError` (config.py:782-783),
+      so no separate ``except ValidationError`` clause is needed here
+      — unlike :func:`_check_profile` (whose
+      ``apply_preserve_user_keys_overlay`` path does NOT wrap) and
+      :func:`_check_host_local_sections` (whose
+      ``load_local_host_local_sections`` does NOT wrap either).
     - :class:`LocalOverlayError`: resolver-phase collision or unknown-
       remove → cross-ref did NOT run; record and fall back to Check 6.
     - bare :class:`ConfigError`: emitted by the cross-ref check itself
       (e.g. plugin references a missing marketplace) → cross-ref ran;
       record and signal so the caller skips Check 6.
-    - :class:`pydantic.ValidationError`: strict-schema mismatch in the
-      overlay load (setforge-b1lg) → route through
-      :func:`_route_local_yaml_validation_error` for the mockup-D UX;
-      cross-ref did NOT run, fall back to Check 6.
     - :class:`OSError` / :class:`UnicodeDecodeError`: unreadable
       local.yaml (setforge-b1lg) → route through
       :func:`format_yaml_parse_error`; cross-ref did NOT run, fall
@@ -199,7 +203,9 @@ def _apply_local_overlay_check(
     except LocalOverlayLoadError as exc:
         # Load failed BEFORE cross-ref ran; surface the error and let
         # the caller run Check 6 as a fallback so pre-existing
-        # marketplace inconsistencies are not masked.
+        # marketplace inconsistencies are not masked. Per the wrapping
+        # invariant in config.py:782-783, this clause covers
+        # ValidationError raised by the strict overlay-load schema too.
         failures.append(f"{ctx}: {exc}")
         return False
     except LocalOverlayError as exc:
@@ -207,11 +213,6 @@ def _apply_local_overlay_check(
         # Mutations did not complete, so the cross-ref check did not
         # run; fall back to Check 6.
         failures.append(f"{ctx}: {exc}")
-        return False
-    except ValidationError as exc:
-        # Strict-schema mismatch in the overlay load (setforge-b1lg):
-        # route every err through the mockup-D formatter.
-        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
         return False
     except ConfigError as exc:
         # The marketplace cross-ref check itself raised; the cross-ref
