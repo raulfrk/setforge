@@ -29,10 +29,11 @@ from pathlib import Path
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from setforge import jsonc, sections, yaml_merge
+from setforge import host_local_inject, jsonc, sections, yaml_merge
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.section_reconcile import maintain_marker_hashes
+from setforge.source import HostLocalSection
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ def copy_atomic(
     preserve_user_keys_deep: list[str] | None = None,
     section_bodies_override: dict[str, str] | None = None,
     precomputed_live_sections: sections.LiveSections | None = None,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
     mode: int | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
@@ -115,6 +117,7 @@ def copy_atomic(
         preserve_user_keys_deep,
         section_bodies_override,
         precomputed_live_sections=precomputed_live_sections,
+        host_local_sections=host_local_sections,
     )
 
     if dst_existed:
@@ -203,6 +206,7 @@ def _compute_content(
     section_bodies_override: dict[str, str] | None = None,
     *,
     precomputed_live_sections: sections.LiveSections | None = None,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> str:
     """Render the bytes ``copy_atomic`` will write to ``dst``.
 
@@ -257,6 +261,13 @@ def _compute_content(
             # override map fall through to live-as-is.
             live_sections = {**live_sections, **section_bodies_override}
         content = sections.merge_sections(content, live_sections)
+        # Inject host-local user-sections from local.yaml AFTER merge_sections
+        # (so anchors resolve against post-merge content with live bodies)
+        # but BEFORE maintain_marker_hashes (so the new pairs' end markers
+        # are stamped with the canonical hash). Outside this window breaks
+        # the post-install hash invariant per setforge-xsco anti-smell #7.
+        if host_local_sections:
+            content = host_local_inject.inject_all(content, host_local_sections)
         # Post-merge: rewrite every end-marker hash to match the body
         # actually written. Idempotent + cheap; satisfies the post-install
         # invariant extract_marker_hashes(content) == hash_sections(content).
@@ -319,6 +330,7 @@ def deploy_symlinked_file(
     tracked_file: TrackedFile,
     *,
     backup: bool = True,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> DeployResult:
     """Deploy a tracked_file that declares ``symlink:``.
 
@@ -375,13 +387,24 @@ def deploy_symlinked_file(
             f"deploying tracked_file with symlink: {tracked_file.symlink!r}."
         )
 
-    _deploy_target_content(src, target, tracked_file, backup=backup)
+    _deploy_target_content(
+        src,
+        target,
+        tracked_file,
+        backup=backup,
+        host_local_sections=host_local_sections,
+    )
     action = _replace_symlink_atomic(dst, tracked_file.symlink)
     return DeployResult(dst=dst, action=action, backup_path=None)
 
 
 def _deploy_target_content(
-    src: Path, target: Path, tracked_file: TrackedFile, *, backup: bool
+    src: Path,
+    target: Path,
+    tracked_file: TrackedFile,
+    *,
+    backup: bool,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> None:
     """Write ``src`` content to ``target`` via :func:`_atomic_write`.
 
@@ -398,6 +421,7 @@ def _deploy_target_content(
         tracked_file.preserve_user_keys or None,
         tracked_file.preserve_user_keys_deep or None,
         None,
+        host_local_sections=host_local_sections,
     )
     _atomic_write(content, src, target, target_existed, backup, tracked_file.mode)
 

@@ -30,10 +30,11 @@ from rich.table import Table
 # ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
 from ruamel.yaml import YAML  # type: ignore[import-not-found]
 
-from setforge import jsonc, sections, yaml_merge
+from setforge import host_local_inject, jsonc, section_reconcile, sections, yaml_merge
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_profile
 from setforge.paths import template_context
+from setforge.source import HostLocalSection
 
 
 class CompareStatus(StrEnum):
@@ -202,6 +203,7 @@ def diff_file(
     preserve_user_sections: bool = False,
     preserve_user_keys: list[str] | None = None,
     preserve_user_keys_deep: list[str] | None = None,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> str:
     """Return the unified diff between ``src`` and ``dst``.
 
@@ -209,16 +211,24 @@ def diff_file(
     content (same merge sequence as :func:`setforge.deploy.copy_atomic`)
     so preserved drift never shows in the diff body.
 
-    Fast path: with ``preserve_user_sections=True``, if every section's
-    sha256 matches between src and dst AND the non-section content is
-    byte-identical, the rendered merge would equal live — skip the
-    splice + diff and return ``""`` early.
+    When ``host_local_sections`` is non-empty, the rendered ``src`` is
+    augmented with the same host-local injection deploy would perform,
+    so a live file that already received its host-local sections does
+    NOT show up as drift (setforge-xsco — compare overlay-aware path).
+
+    Fast path: with ``preserve_user_sections=True`` AND no host-local
+    sections to inject, if every section's sha256 matches between src
+    and dst AND the non-section content is byte-identical, the rendered
+    merge would equal live — skip the splice + diff and return ``""``
+    early. When host_local_sections is non-empty the fast path is
+    skipped because the rendered src would carry MORE markers than the
+    raw src.
     """
     if not dst.exists():
         return ""
 
     dst_text = dst.read_text(encoding="utf-8")
-    if preserve_user_sections:
+    if preserve_user_sections and not host_local_sections:
         src_text = src.read_text(encoding="utf-8")
         # Live side is parsed with allow_legacy=True so install's
         # pre-deploy compare step survives a pre-9by user file. The
@@ -242,6 +252,7 @@ def diff_file(
         preserve_user_keys,
         preserve_user_keys_deep,
         dst_text=dst_text,
+        host_local_sections=host_local_sections,
     )
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
@@ -260,6 +271,7 @@ def _render_with_merges(
     preserve_user_keys_deep: list[str] | None = None,
     *,
     dst_text: str,
+    host_local_sections: dict[str, HostLocalSection] | None = None,
 ) -> str:
     """Render the post-merge tracked content that ``diff_file`` compares
     against the live ``dst_text``.
@@ -299,6 +311,9 @@ def _render_with_merges(
         # See ``diff_file`` above for the ``allow_legacy=True`` rationale.
         live_sections = sections.extract_sections(dst_text, allow_legacy=True)
         content = sections.merge_sections(content, live_sections)
+        if host_local_sections:
+            content = host_local_inject.inject_all(content, host_local_sections)
+            content = section_reconcile.maintain_marker_hashes(content)
     return content
 
 

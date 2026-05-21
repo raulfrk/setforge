@@ -37,10 +37,6 @@ from __future__ import annotations
 
 import re
 
-from setforge.cli.section import (
-    _format_marker_pair_unstamped,
-    _stamp_section_hashes,
-)
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.sections import (
     SectionSemantics,
@@ -250,6 +246,17 @@ def inject_host_local_section(
     of ``setforge install`` updates the body in place rather than
     appending a duplicate pair (handled in :func:`inject_all`).
     """
+    # Lazy import: setforge.cli.section -> setforge.compare ->
+    # setforge.host_local_inject would form a module-import cycle if
+    # this hoist were at the top. The cli.section module is imported on
+    # first call (after compare's import-time graph has settled). Mirrors
+    # the cycle-breaking pattern at setforge/config.py:587
+    # (apply_preserve_user_keys_overlay).
+    from setforge.cli.section import (
+        _format_marker_pair_unstamped,
+        _stamp_section_hashes,
+    )
+
     normalised = _normalise_eol(text)
     line_offset = resolve_anchor(normalised, anchor)
     pair = _format_marker_pair_unstamped(
@@ -291,9 +298,10 @@ def inject_all(
     :func:`inject_host_local_section` raises (anchor not found, anchor
     ambiguous).
     """
-    # Local import keeps the module-import-graph free of a sections ->
-    # host_local_inject cycle when sections later grows utilities that
-    # would otherwise want host_local_inject types.
+    # Lazy import: same cycle-break rationale as inject_host_local_section
+    # (cli.section -> compare -> host_local_inject); _stamp_section_hashes
+    # is the proximate dependency.
+    from setforge.cli.section import _stamp_section_hashes
     from setforge.sections import extract_sections, merge_sections
 
     result = _normalise_eol(text)

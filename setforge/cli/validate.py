@@ -42,10 +42,22 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
-from setforge.errors import SetforgeError, ValidationErrorWithContext
+from setforge.errors import (
+    AnchorAmbiguousError,
+    AnchorNotFoundError,
+    ConfigError,
+    SetforgeError,
+    ValidationErrorWithContext,
+)
+from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
+from setforge.source import (
+    Source,
+    load_local_host_local_sections,
+    validate_host_local_sections_file_type,
+)
 
 _LOCAL_YAML_TOP_KEYS: Final[tuple[str, ...]] = ("source", "binaries", "claude")
 """Known top-level keys in ``local.yaml``.
@@ -81,6 +93,8 @@ def _check_profile(
         apply_preserve_user_keys_overlay(cfg, prof_name)
     except PreserveUserKeysOverlayError as exc:
         failures.append(f"{ctx}: {exc}")
+
+    _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
     for tracked_file_name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tracked_file_name]
@@ -141,6 +155,58 @@ def _check_tracked_srcs(
     src = resolve_src(tracked_file, repo_root)
     if not src.exists():
         failures.append(f"{dot_ctx}: src {tracked_file.src} does not exist")
+
+
+def _check_host_local_sections(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Check: local.yaml host_local_sections validates against tracked srcs.
+
+    Two layers:
+
+    1. **File-type gate**: REJECT host_local_sections for non-markdown
+       tracked_files (anchor grammar requires .md / .markdown).
+    2. **Anchor resolution gate**: resolve every anchor against the
+       current tracked source on disk. Surfaces anchor-not-found /
+       anchor-ambiguous BEFORE install would attempt the splice
+       (offline gate per SPEC 1 acceptance commands).
+
+    No-op when local.yaml is absent or declares no host-local sections
+    for tracked_files in this profile.
+    """
+    try:
+        overlay = load_local_host_local_sections()
+    except ConfigError as exc:
+        failures.append(f"{ctx}: {exc}")
+        return
+    profile_ids = set(resolved.tracked_files)
+    for tf_id, sections_map in overlay.items():
+        if tf_id not in profile_ids:
+            continue
+        tracked_file = cfg.tracked_files[tf_id]
+        src = resolve_src(tracked_file, repo_root)
+        try:
+            validate_host_local_sections_file_type(tf_id, len(sections_map), src)
+        except ConfigError as exc:
+            failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
+            continue
+        if not src.exists():
+            # _check_tracked_srcs surfaces the missing-src error
+            # elsewhere; do not double-report here.
+            continue
+        text = src.read_text(encoding="utf-8")
+        for section_name, section in sections_map.items():
+            try:
+                resolve_anchor(text, section.anchor)
+            except (AnchorNotFoundError, AnchorAmbiguousError) as exc:
+                failures.append(
+                    f"{ctx}: tracked_file {tf_id!r}: "
+                    f"host_local_sections.{section_name}: {exc}"
+                )
 
 
 def _check_extension_includes(

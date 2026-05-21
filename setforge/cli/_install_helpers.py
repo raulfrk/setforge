@@ -64,12 +64,18 @@ from setforge.cli._helpers import (
     _resolve_drift_paths,
     _resolve_section_decisions,
 )
-from setforge.compare import CompareStatus
+from setforge.compare import (
+    CompareStatus,
+    expand_tracked_file,
+    resolve_dst,
+    resolve_src,
+)
 from setforge.config import TrackedFile
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics
+from setforge.source import HostLocalSection
 
 
 def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
@@ -158,6 +164,7 @@ def _deploy_all_tracked_files(
     *,
     section_decisions: Mapping[Path, dict[str, str]],
     live_sections_map: Mapping[Path, LiveSections],
+    host_local_sections_map: Mapping[str, dict[str, HostLocalSection]],
 ) -> None:
     """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
 
@@ -166,34 +173,68 @@ def _deploy_all_tracked_files(
     after each ``preserve_user_sections`` deploy so the three-way
     classifier has a baseline on the next install.
     """
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if tracked_file.symlink is not None:
-            # Symlink-deployed: the link lands at ``sub_dst`` and the
-            # tracked content lands at ``Path(tracked_file.symlink).expanduser()``.
-            # preserve_user_{sections,keys} still composes; deploy.deploy_symlinked_file
-            # routes through the same _compute_content path as copy_atomic.
-            result = deploy.deploy_symlinked_file(sub_src, sub_dst, tracked_file)
-            typer.echo(f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}")
+    for name in ctx.resolved.tracked_files:
+        tracked_file = ctx.cfg.tracked_files[name]
+        host_local = host_local_sections_map.get(name) or None
+        src = resolve_src(tracked_file, ctx.repo_root)
+        dst = resolve_dst(tracked_file)
+        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            if tracked_file.symlink is not None:
+                # Symlink-deployed: the link lands at ``sub_dst`` and
+                # the tracked content lands at
+                # ``Path(tracked_file.symlink).expanduser()``.
+                # preserve_user_{sections,keys} still composes;
+                # deploy.deploy_symlinked_file routes through the same
+                # _compute_content path as copy_atomic.
+                result = deploy.deploy_symlinked_file(
+                    sub_src, sub_dst, tracked_file, host_local_sections=host_local
+                )
+                typer.echo(
+                    f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}"
+                )
+                _echo_preserve_user_keys_provenance(tracked_file)
+                _echo_host_local_sections_provenance(host_local)
+                if tracked_file.preserve_user_sections:
+                    section_reconcile.stamp_tracked_baseline(sub_src)
+                continue
+            override = section_decisions.get(sub_dst)
+            precomputed = live_sections_map.get(sub_dst)
+            result = deploy.copy_atomic(
+                sub_src,
+                sub_dst,
+                preserve_user_sections=tracked_file.preserve_user_sections,
+                preserve_user_keys=tracked_file.preserve_user_keys or None,
+                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
+                section_bodies_override=override,
+                precomputed_live_sections=precomputed,
+                host_local_sections=host_local,
+                mode=tracked_file.mode,
+            )
+            typer.echo(f"{result.action.value:>8}  {sub_dst}")
             _echo_preserve_user_keys_provenance(tracked_file)
+            _echo_host_local_sections_provenance(host_local)
             if tracked_file.preserve_user_sections:
                 section_reconcile.stamp_tracked_baseline(sub_src)
-            continue
-        override = section_decisions.get(sub_dst)
-        precomputed = live_sections_map.get(sub_dst)
-        result = deploy.copy_atomic(
-            sub_src,
-            sub_dst,
-            preserve_user_sections=tracked_file.preserve_user_sections,
-            preserve_user_keys=tracked_file.preserve_user_keys or None,
-            preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
-            section_bodies_override=override,
-            precomputed_live_sections=precomputed,
-            mode=tracked_file.mode,
-        )
-        typer.echo(f"{result.action.value:>8}  {sub_dst}")
-        _echo_preserve_user_keys_provenance(tracked_file)
-        if tracked_file.preserve_user_sections:
-            section_reconcile.stamp_tracked_baseline(sub_src)
+
+
+def _echo_host_local_sections_provenance(
+    host_local_sections: dict[str, HostLocalSection] | None,
+) -> None:
+    """Print a per-section ``injected ... [host-local via local.yaml]`` line.
+
+    No-op when ``host_local_sections`` is ``None`` or empty. The
+    provenance tag matches the mockup in setforge-xsco SPEC 1 so users
+    grepping install output can locate every host-local injection at a
+    glance.
+    """
+    if not host_local_sections:
+        return
+    names = ", ".join(sorted(host_local_sections))
+    plural = "s" if len(host_local_sections) != 1 else ""
+    typer.echo(
+        f"    injected {len(host_local_sections)} host-local section{plural} "
+        f"[host-local via local.yaml]: {names}"
+    )
 
 
 def _echo_preserve_user_keys_provenance(tracked_file: TrackedFile) -> None:
