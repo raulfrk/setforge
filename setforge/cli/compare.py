@@ -117,9 +117,7 @@ def compare(
         # marker. Lives BELOW the drift summary so the diff body and
         # per-status counts stay grouped, mirroring the mockup's
         # ordering ("✓ no drift ... + [host-local via local.yaml] X").
-        _render_host_local_preview(
-            host_local_sections_map, cfg, resolved.tracked_files, console
-        )
+        _render_host_local_preview(host_local_sections_map, cfg, console)
         if reconcile_user_sections:
             _print_section_reconcile_dry_run(profile_ctx, console)
 
@@ -212,7 +210,6 @@ def _classify_section_state(section_name: str, live_names: set[str]) -> tuple[st
 def _render_host_local_preview(
     host_local_sections_map: dict[str, dict[HostLocalSectionName, HostLocalSection]],
     cfg: Config,
-    profile_tracked_file_ids: list[str],
     console: Console,
 ) -> None:
     """Emit the setforge-xsco SPEC 1 host-local would-be-injected preview block.
@@ -227,14 +224,15 @@ def _render_host_local_preview(
     without running it, mirroring the dry-run install output.
 
     No-op when ``host_local_sections_map`` is empty.
+    ``host_local_sections_map`` is the output of
+    :func:`_load_validated_host_local_sections`, which already filters
+    by the resolved profile's tracked_files — no further profile-membership
+    check is needed here.
     """
     if not host_local_sections_map:
         return
-    profile_ids = set(profile_tracked_file_ids)
     rendered_any = False
     for tf_id, sections_map in host_local_sections_map.items():
-        if tf_id not in profile_ids:
-            continue
         tracked_file = cfg.tracked_files[tf_id]
         dst = resolve_dst(tracked_file)
         # Existing live-section names — used to classify already-injected
