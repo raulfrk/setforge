@@ -255,32 +255,7 @@ def sync(
     if not no_transition:
         transitions.ensure_state_dir_writable()
 
-    # bviv: confirmation gate for sync --auto=use-live (live → tracked).
-    if auto_enum is capture_mod.CaptureAuto.USE_LIVE:
-        # setforge-xsco round-2: thread the local.yaml host_local_sections
-        # overlay so the --auto=use-live confirm panel does NOT count
-        # already-injected host-local sections as drift (false-positive
-        # count + risk-row inflation).
-        host_local_sections_map = _load_validated_host_local_sections(
-            cfg, resolved, repo_root
-        )
-        drift_report = compare_mod.compare_profile(
-            cfg,
-            profile,
-            repo_root,
-            host_local_sections=host_local_sections_map,
-        )
-        plan = _build_capture_plan(
-            drift_report=drift_report,
-            ctx=ctx,
-        )
-        if not confirm_auto_operation(
-            command="sync --auto=use-live",
-            profile=profile,
-            plan=plan,
-            yes=yes,
-        ):
-            raise typer.Exit(0)
+    _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
 
     promote_outcomes = _run_promote_wizard(
         ctx,
@@ -303,20 +278,76 @@ def sync(
 
     file_post = transitions.snapshot_paths(src_paths)
     if not no_transition:
-        target = transitions.write_transition(
-            transitions.make_meta(
-                transitions.TransitionCommand.SYNC,
-                profile,
-                end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
-                command_line=redact_argv(sys.argv[1:]),
-                preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
-            ),
-            file_pre,
-            file_post,
-            None,  # sync's extension change is reflected in the YAML diff
+        _write_sync_transition(
+            ctx,
+            file_pre=file_pre,
+            file_post=file_post,
         )
-        typer.echo(f"transition: {target}")
-        typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+
+
+def _run_capture_confirm_gate(
+    ctx: ProfileContext,
+    *,
+    auto_enum: capture_mod.CaptureAuto | None,
+    yes: bool,
+) -> None:
+    """Run the bviv ``sync --auto=use-live`` drift-confirm gate.
+
+    No-op unless ``auto_enum`` is :attr:`CaptureAuto.USE_LIVE`. Compares
+    live vs tracked with the host_local_sections overlay threaded
+    (setforge-xsco round-2 so injected host-local sections do not
+    inflate the drift count), renders the auto-operation confirm panel,
+    and exits 0 cleanly when the user declines.
+    """
+    if auto_enum is not capture_mod.CaptureAuto.USE_LIVE:
+        return
+    host_local_sections_map = _load_validated_host_local_sections(
+        ctx.cfg, ctx.resolved, ctx.repo_root
+    )
+    drift_report = compare_mod.compare_profile(
+        ctx.cfg,
+        ctx.profile,
+        ctx.repo_root,
+        host_local_sections=host_local_sections_map,
+    )
+    plan = _build_capture_plan(drift_report=drift_report, ctx=ctx)
+    if not confirm_auto_operation(
+        command="sync --auto=use-live",
+        profile=ctx.profile,
+        plan=plan,
+        yes=yes,
+    ):
+        raise typer.Exit(0)
+
+
+def _write_sync_transition(
+    ctx: ProfileContext,
+    *,
+    file_pre: dict[Path, str | None],
+    file_post: dict[Path, str | None],
+) -> None:
+    """Write the SYNC transition record + echo the user-visible breadcrumb.
+
+    Encapsulates the :func:`transitions.write_transition` call (with
+    the redacted argv, end timestamp, and preserve_user_keys_applied
+    metadata) and the trailing ``transition: ...`` /
+    ``↩  revert with: ...`` echoes so the caller body stays a flat
+    capture-and-write skeleton.
+    """
+    target = transitions.write_transition(
+        transitions.make_meta(
+            transitions.TransitionCommand.SYNC,
+            ctx.profile,
+            end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+            command_line=redact_argv(sys.argv[1:]),
+            preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
+        ),
+        file_pre,
+        file_post,
+        None,  # sync's extension change is reflected in the YAML diff
+    )
+    typer.echo(f"transition: {target}")
+    typer.echo(f"↩  revert with: setforge revert --profile={ctx.profile}")
 
 
 def _sync_snapshot_paths(
