@@ -27,6 +27,7 @@ from setforge import (
     merge as merge_mod,
 )
 from setforge import (
+    section_wizard,
     transitions,
     vscode_extensions,
 )
@@ -59,9 +60,14 @@ from setforge.cli._install_helpers import (
     _compute_preserve_user_keys_applied,
     _load_validated_host_local_sections,
 )
+from setforge.compare import resolve_dst, resolve_src
 from setforge.config import Config, load_config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
-from setforge.source import load_local_host_local_sections
+from setforge.source import (
+    LOCAL_CONFIG_PATH,
+    get_resolved_source,
+    load_local_host_local_sections,
+)
 
 
 def _build_capture_plan(
@@ -270,7 +276,17 @@ def sync(
         ):
             raise typer.Exit(0)
 
-    src_paths = _sync_snapshot_paths(ctx, config)
+    promote_outcomes = _run_promote_wizard(
+        ctx,
+        auto_enum=auto_enum,
+        no_transition=no_transition,
+    )
+    any_promoted = any(
+        outcome.action is section_wizard.SectionAction.PROMOTE
+        for outcome in promote_outcomes
+    )
+
+    src_paths = _sync_snapshot_paths(ctx, config, include_local_yaml=any_promoted)
     file_pre = transitions.snapshot_paths(src_paths)
 
     results = _run_capture(cfg, profile, repo_root, config, auto_enum, command="sync")
@@ -297,11 +313,116 @@ def sync(
         typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
 
-def _sync_snapshot_paths(ctx: ProfileContext, config: Path) -> list[Path]:
-    """Every tracked src path under the profile plus ``setforge.yaml`` itself."""
+def _sync_snapshot_paths(
+    ctx: ProfileContext,
+    config: Path,
+    *,
+    include_local_yaml: bool = False,
+) -> list[Path]:
+    """Every tracked src path under the profile plus ``setforge.yaml`` itself.
+
+    When ``include_local_yaml`` is ``True``, also include
+    :data:`LOCAL_CONFIG_PATH` so the sync transition snapshot captures
+    the host_local_sections drop the dg2a promote wizard just applied
+    (setforge-dg2a anti-smell 6). ``setforge revert`` reads the snapshot
+    list off the transition; missing local.yaml here would silently
+    skip restoring the dropped entry on revert.
+    """
     paths = [sub_src for _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
+    if include_local_yaml:
+        paths.append(LOCAL_CONFIG_PATH)
     return paths
+
+
+def _run_promote_wizard(
+    ctx: ProfileContext,
+    *,
+    auto_enum: capture_mod.CaptureAuto | None,
+    no_transition: bool,
+) -> list[section_wizard.PromoteOutcome]:
+    """Walk host-local promotables; prompt + dispatch promote per spec dg2a.
+
+    Skipped when ``--auto`` is set (sync's non-interactive paths cannot
+    drive the radiolist confirm dialog) or when no overlays are
+    declared. Each successful promote is recorded as a standalone
+    ``TransitionCommand.PROMOTE`` transition so ``setforge revert``
+    rolls the multi-file mutation back independently of the surrounding
+    SYNC transition.
+    """
+    overlays = load_local_host_local_sections()
+    if not overlays:
+        return []
+    if auto_enum is not None:
+        # Non-interactive sync: keep all promotables host-local
+        # silently. The wizard's prompt requires a TTY.
+        return []
+
+    if not no_transition:
+        transitions.ensure_state_dir_writable()
+    snapshot_base = transitions.state_root() / "snapshots"
+    snapshot_base.mkdir(parents=True, exist_ok=True)
+
+    try:
+        source = get_resolved_source()
+    except Exception:
+        source = None
+
+    tracked_files = _iter_promotable_tracked_files(ctx)
+    if not tracked_files:
+        return []
+
+    outcomes = section_wizard.run_host_local_promote_wizard(
+        tracked_files=tracked_files,
+        overlays=overlays,
+        local_yaml_path=LOCAL_CONFIG_PATH,
+        profile=ctx.profile,
+        snapshot_base=snapshot_base,
+        source=source,
+        interactive=sys.stdin.isatty(),
+    )
+
+    if no_transition:
+        return outcomes
+    for outcome in outcomes:
+        if outcome.action is not section_wizard.SectionAction.PROMOTE:
+            continue
+        assert outcome.file_pre is not None
+        assert outcome.file_post is not None
+        target = transitions.write_transition(
+            transitions.make_meta(
+                transitions.TransitionCommand.PROMOTE,
+                ctx.profile,
+                end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+                command_line=redact_argv(sys.argv[1:]),
+            ),
+            outcome.file_pre,
+            outcome.file_post,
+            None,
+        )
+        typer.echo(f"promote transition: {target}")
+    return outcomes
+
+
+def _iter_promotable_tracked_files(
+    ctx: ProfileContext,
+) -> list[tuple[str, Path, Path]]:
+    """Yield ``(tracked_file_id, tracked_path, live_path)`` per profile entry.
+
+    Built from ``ctx.resolved.tracked_files`` so the iteration order
+    matches the user-visible profile order. Symlink-deployed
+    tracked_files use the symlink path as ``live_path`` — the wizard's
+    promote dispatch reads/writes through it identically.
+    """
+    out: list[tuple[str, Path, Path]] = []
+    for name in ctx.resolved.tracked_files:
+        tracked_file = ctx.cfg.tracked_files[name]
+        if not tracked_file.preserve_user_sections:
+            continue
+        src = resolve_src(tracked_file, ctx.repo_root)
+        dst = resolve_dst(tracked_file)
+        out.append((name, src, dst))
+    return out
 
 
 def _capture_extensions(config: Path, profile: str) -> None:

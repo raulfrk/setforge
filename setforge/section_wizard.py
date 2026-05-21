@@ -26,7 +26,7 @@ from __future__ import annotations
 import difflib
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -36,18 +36,29 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from setforge._editor import run_editor
+from setforge.errors import SetforgeError
 from setforge.section_reconcile import (
     SectionDrift,
     SectionDriftState,
 )
-from setforge.sections import SectionSemantics
+from setforge.sections import SectionSemantics, extract_sections
+from setforge.source import (
+    Anchor,
+    HostLocalSection,
+    HostLocalSectionName,
+    Source,
+    check_source_clean,
+)
 from setforge.wizard import read_one_choice
 
 __all__ = [
+    "PromotableSection",
+    "PromoteOutcome",
     "ReconcileAuto",
     "SectionAction",
     "SectionDecision",
     "reconcile_sections",
+    "run_host_local_promote_wizard",
     "state_label",
 ]
 
@@ -351,3 +362,269 @@ def _format_drift_group(state: SectionDriftState, count: int) -> str:
             return f"{count} inconsistent"
         case _:
             assert_never(state)
+
+
+# ---------------------------------------------------------------------------
+# sync wizard `[p]` auto-promote (setforge-dg2a)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class PromotableSection:
+    """Input record for one promotable host-local-via-local.yaml section.
+
+    Captured by the sync wizard before prompting. Carries everything the
+    promote dispatch path needs (paths, anchor, body capture happens
+    LIVE-side inside the wizard so the secrets scan sees the user's
+    actual edits — not the local.yaml-declared seed body).
+    """
+
+    tracked_file_id: str
+    section_name: HostLocalSectionName
+    tracked_path: Path
+    live_path: Path
+    anchor: Anchor
+
+
+@dataclass(slots=True, frozen=True)
+class PromoteOutcome:
+    """Result record for one promotable section's wizard pass.
+
+    ``action`` is one of ``KEEP_LIVE`` / ``PROMOTE`` / ``SKIP`` /
+    ``QUIT_KEEP_REST``. Only ``PROMOTE`` carries side-effects (the
+    three-file mutation). Callers use ``promoted_paths`` to extend the
+    snapshot path list for the surrounding transition (setforge-dg2a
+    anti-smell 6: ``LOCAL_CONFIG_PATH`` must be in the snapshot when
+    promote ran). ``file_pre`` / ``file_post`` are the
+    :func:`transitions.snapshot_paths` records captured by the wizard
+    around the executor call so the caller can write a
+    :attr:`TransitionCommand.PROMOTE` transition record without
+    re-reading the mutated files.
+    """
+
+    section: PromotableSection
+    action: SectionAction
+    promoted_paths: tuple[Path, ...] = ()
+    file_pre: Mapping[Path, str | None] | None = None
+    file_post: Mapping[Path, str | None] | None = None
+
+
+def _render_host_local_choices(console: Console) -> None:
+    """Render the [k]/[p]/[s]/[q] menu for a promotable host-local section."""
+    console.print("")
+    console.print(
+        "   [bold][[k]][/bold] keep live           "
+        "[dim](host-local stays host-local — default)[/dim]"
+    )
+    console.print(
+        "   [bold][[p]][/bold] promote to shared   "
+        "[dim](atomic procedure — see confirm panel)[/dim]"
+    )
+    console.print(
+        "   [bold][[s]][/bold] skip                "
+        "[dim](keep host-local, ask again next sync)[/dim]"
+    )
+    console.print(
+        "   [bold][[q]][/bold] quit wizard         "
+        "[dim](keep host-local for this and all remaining)[/dim]"
+    )
+    console.print("")
+
+
+def _render_host_local_header(section: PromotableSection, console: Console) -> None:
+    sep = "─" * 57
+    console.print(f"\n[dim]{sep}[/dim]")
+    console.print(
+        f" [bold]section[/bold] [cyan]{section.section_name}[/cyan]  "
+        f"[dim](host-local via local.yaml)[/dim]  "
+        f"[yellow]promotable[/yellow]"
+    )
+    console.print(f"[dim]{sep}[/dim]")
+
+
+def _prompt_one_host_local(
+    section: PromotableSection, console: Console
+) -> SectionAction:
+    """Render the per-section prompt for ``section`` and return the action."""
+    _render_host_local_header(section, console)
+    _render_host_local_choices(console)
+    choice = read_one_choice("   Choice (k/p/s/q): ", {"k", "p", "s", "q"})
+    if choice == "p":
+        return SectionAction.PROMOTE
+    if choice == "s":
+        return SectionAction.SKIP
+    if choice == "q":
+        return SectionAction.QUIT_KEEP_REST
+    return SectionAction.KEEP_LIVE
+
+
+def _iter_promotable_sections(
+    tracked_files: Iterable[tuple[str, Path, Path]],
+    overlays: Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]],
+) -> Iterator[PromotableSection]:
+    """Yield one :class:`PromotableSection` per (tracked_file, host_local section).
+
+    Iterates the caller's ``tracked_files`` argument
+    (``(tracked_file_id, tracked_path, live_path)`` tuples) joined
+    against the local.yaml ``host_local_sections`` overlay. Only emits a
+    record when the live file actually contains the section's marker
+    pair — promote requires the section to exist live-side (otherwise
+    install has not yet injected it and there is nothing to promote).
+    """
+    for tracked_file_id, tracked_path, live_path in tracked_files:
+        overlay = overlays.get(tracked_file_id)
+        if not overlay:
+            continue
+        try:
+            live_text = live_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        live_section_names = set(extract_sections(live_text, allow_legacy=True))
+        for section_name, host_local in overlay.items():
+            if section_name not in live_section_names:
+                continue
+            yield PromotableSection(
+                tracked_file_id=tracked_file_id,
+                section_name=section_name,
+                tracked_path=tracked_path,
+                live_path=live_path,
+                anchor=host_local.anchor,
+            )
+
+
+def run_host_local_promote_wizard(
+    *,
+    tracked_files: Iterable[tuple[str, Path, Path]],
+    overlays: Mapping[str, Mapping[HostLocalSectionName, HostLocalSection]],
+    local_yaml_path: Path,
+    profile: str,
+    snapshot_base: Path,
+    source: Source | None,
+    interactive: bool,
+    console: Console | None = None,
+) -> list[PromoteOutcome]:
+    """Walk promotable host-local sections; prompt + dispatch promote per the spec.
+
+    Sync's pre-capture entry point for the dg2a ``[p]`` flow. For each
+    promotable section (declared in ``local.yaml`` ``host_local_sections``
+    AND present in the live file):
+
+    1. Render header + ``[k]/[p]/[s]/[q]`` menu.
+    2. ``[k]`` / ``[s]`` keep live; ``[q]`` keeps all remaining.
+    3. ``[p]`` runs :func:`check_source_clean` (anti-smell 13), builds
+       a :class:`PromotePlan` from the LIVE body (anti-smell 4), renders
+       the all-in-one confirm panel + arrow-key dialog, and on yes
+       executes the three-file mutation atomically.
+
+    ``interactive=False`` short-circuits to all-keep-live (sync without
+    a TTY never auto-promotes). Returns one :class:`PromoteOutcome` per
+    promotable section the wizard saw; callers consume
+    ``promoted_paths`` to extend the surrounding transition snapshot.
+
+    Imports for :mod:`setforge.section_promote` are deferred to call
+    time so the module's lazy ``radiolist_dialog`` indirection stays
+    paid only on the promote path (validate / compare cold-start budget
+    is the canonical reason).
+    """
+    if console is None:
+        console = Console()
+
+    # Local import: pulls in section_promote (and transitively ruamel.yaml +
+    # prompt_toolkit's import shim) only when the wizard is actually invoked.
+    from setforge import section_promote
+
+    outcomes: list[PromoteOutcome] = []
+    quit_remaining = False
+    for promotable in _iter_promotable_sections(tracked_files, overlays):
+        if not interactive or quit_remaining:
+            outcomes.append(
+                PromoteOutcome(section=promotable, action=SectionAction.KEEP_LIVE)
+            )
+            continue
+        action = _prompt_one_host_local(promotable, console)
+        if action is SectionAction.QUIT_KEEP_REST:
+            quit_remaining = True
+            outcomes.append(PromoteOutcome(section=promotable, action=action))
+            continue
+        if action is not SectionAction.PROMOTE:
+            outcomes.append(PromoteOutcome(section=promotable, action=action))
+            continue
+        outcome = _dispatch_promote(
+            promotable,
+            local_yaml_path=local_yaml_path,
+            profile=profile,
+            snapshot_base=snapshot_base,
+            source=source,
+            section_promote_mod=section_promote,
+            console=console,
+        )
+        outcomes.append(outcome)
+    return outcomes
+
+
+def _dispatch_promote(
+    promotable: PromotableSection,
+    *,
+    local_yaml_path: Path,
+    profile: str,
+    snapshot_base: Path,
+    source: Source | None,
+    section_promote_mod: object,
+    console: Console,
+) -> PromoteOutcome:
+    """Run check_source_clean → build plan → confirm → execute, capture snapshots.
+
+    Returns a :class:`PromoteOutcome`: ``action=PROMOTE`` with
+    ``file_pre`` / ``file_post`` populated when the user confirmed and
+    the mutation ran (caller writes a ``PROMOTE`` transition record
+    with these), or ``action=KEEP_LIVE`` with empty snapshots when the
+    user aborted at the confirm panel.
+    """
+    if source is not None:
+        check_source_clean(source)
+    # Body capture: live file as-of right now. Promote acts on the
+    # user's actual edits, NOT the local.yaml-declared seed body.
+    live_text = promotable.live_path.read_text(encoding="utf-8")
+    live_sections = extract_sections(live_text, allow_legacy=True)
+    if promotable.section_name not in live_sections:
+        # Defensive: caller filtered for presence already, but the live
+        # file could have changed between iteration and dispatch.
+        raise SetforgeError(
+            f"section {promotable.section_name!r} disappeared from "
+            f"{promotable.live_path} between wizard scan and promote dispatch"
+        )
+    body = live_sections[promotable.section_name]
+    plan = section_promote_mod.build_promote_plan(  # type: ignore[attr-defined]
+        section_name=promotable.section_name,
+        local_yaml_path=local_yaml_path,
+        tracked_path=promotable.tracked_path,
+        live_path=promotable.live_path,
+        body=body,
+        anchor=promotable.anchor,
+        profile=profile,
+    )
+    if not section_promote_mod.confirm_promote_to_shared(  # type: ignore[attr-defined]
+        plan, console=console
+    ):
+        return PromoteOutcome(section=promotable, action=SectionAction.KEEP_LIVE)
+
+    # Local import: keep transitions out of section_wizard's module-level
+    # import set (it pulls patch / git_ops machinery the install-only
+    # callers do not need).
+    from setforge import transitions
+
+    snapshot_targets = [plan.tracked_path, plan.live_path, plan.local_yaml_path]
+    file_pre = transitions.snapshot_paths(snapshot_targets)
+    section_promote_mod.execute_promote_to_shared(  # type: ignore[attr-defined]
+        plan,
+        tracked_file_id=promotable.tracked_file_id,
+        snapshot_base=snapshot_base,
+    )
+    file_post = transitions.snapshot_paths(snapshot_targets)
+    return PromoteOutcome(
+        section=promotable,
+        action=SectionAction.PROMOTE,
+        promoted_paths=tuple(snapshot_targets),
+        file_pre=file_pre,
+        file_post=file_post,
+    )
