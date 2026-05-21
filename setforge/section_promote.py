@@ -385,24 +385,6 @@ def _rewrite_live_to_shared(plan: PromotePlan) -> None:
     _atomic_write_text(plan.live_path, new_live)
 
 
-def _drop_local_yaml_entry_call(plan: PromotePlan, *, tracked_file_id: str) -> None:
-    """Step 3: drop the ``host_local_sections.<name>`` entry from ``local.yaml``.
-
-    Thin wrapper around :func:`_drop_host_local_section_entry` that
-    binds the call site to ``plan.local_yaml_path`` and
-    ``plan.section_name``. Kept as a separate function so the executor
-    body reads as a three-step skeleton and the rollback tests'
-    monkeypatch on :func:`_drop_host_local_section_entry` still hits the
-    real call site through this wrapper (module-attribute lookup at
-    call time).
-    """
-    _drop_host_local_section_entry(
-        plan.local_yaml_path,
-        tracked_file_id=tracked_file_id,
-        section_name=plan.section_name,
-    )
-
-
 def execute_promote_to_shared(
     plan: PromotePlan,
     *,
@@ -430,6 +412,10 @@ def execute_promote_to_shared(
     the writes, every file is restored from snapshot before the
     exception re-raises (anti-smell 1). Caller is responsible for the
     transition record + ``check_source_clean`` pre-gate.
+
+    Step 3 calls :func:`_drop_host_local_section_entry` via bare-name
+    module-level lookup so rollback tests monkeypatching that name on
+    the module attribute hit the call site as written.
     """
     files = [plan.tracked_path, plan.live_path, plan.local_yaml_path]
     snap = Snapshot(files=files, snapshot_base=snapshot_base)
@@ -437,7 +423,11 @@ def execute_promote_to_shared(
         try:
             _write_tracked_with_shared_section(plan)
             _rewrite_live_to_shared(plan)
-            _drop_local_yaml_entry_call(plan, tracked_file_id=tracked_file_id)
+            _drop_host_local_section_entry(
+                plan.local_yaml_path,
+                tracked_file_id=tracked_file_id,
+                section_name=plan.section_name,
+            )
             snap.discard()
         except BaseException:
             snap.restore()
