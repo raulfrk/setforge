@@ -28,7 +28,7 @@ from rich.table import Table
 from setforge.cli import _CONFIG_OPTION, _TYPER_KWARGS, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
-from setforge.cli._output import render
+from setforge.cli._output import OutputContext, render
 from setforge.config import (
     Config,
     Profile,
@@ -100,6 +100,19 @@ def profile_show(
     and printed as a red error before ``exit 1``) when ``name`` is not
     defined in ``setforge.yaml``.
     """
+    _run_profile_show(name=name, config=config, ctx_obj=ctx.obj)
+
+
+def _run_profile_show(
+    *, name: str, config: Path, ctx_obj: OutputContext | None
+) -> None:
+    """Inner body of ``profile show``, callable without a :class:`typer.Context`.
+
+    Other subcommands (e.g. ``setforge config show --effective``) need
+    the profile-show render path without owning a typer context. They
+    pass ``ctx_obj=None`` (or their own resolved :class:`OutputContext`)
+    instead of synthesizing a stand-in context.
+    """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     if name not in cfg.profiles:
@@ -126,7 +139,7 @@ def profile_show(
         _render_preserve_user_keys(profile_ctx, console)
 
     render(
-        ctx.obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
+        ctx_obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
     )
 
 

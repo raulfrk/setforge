@@ -385,11 +385,17 @@ def config_show(
 
 
 def _show_effective(profile: str) -> None:
-    """Print the merged profile chain via the existing ``profile show`` body."""
-    from setforge.cli.profile import profile_show
+    """Print the merged profile chain via the existing ``profile show`` body.
+
+    Delegates to :func:`_run_profile_show` — the typer-context-free
+    inner helper extracted from the ``profile show`` subcommand —
+    rather than calling the typer-decorated ``profile_show`` directly,
+    which requires a :class:`typer.Context` first positional argument.
+    """
+    from setforge.cli.profile import _run_profile_show
 
     cfg_path = _tracked_yaml_path()
-    profile_show(name=profile, config=cfg_path)
+    _run_profile_show(name=profile, config=cfg_path, ctx_obj=None)
 
 
 # ---------------------------------------------------------------------------
