@@ -108,6 +108,27 @@ class TestAfterSectionAnchor:
         with pytest.raises(AnchorNotFoundError):
             resolve_anchor(text, AnchorAfterSection(name="missing"))
 
+    def test_after_section_offset_is_line_below_end_marker(self) -> None:
+        """Explicit 0-based offset semantics for after-section.
+
+        Constructs a 3-line file with a section spanning lines 0-2:
+          line 0: start marker
+          line 1: body
+          line 2: end marker
+        ``after-section`` MUST resolve to offset 3 (one past the end
+        marker) so the splice lands on a fresh line — same convention
+        as the other resolvers (``_resolve_after_heading`` returns
+        ``matches[0] + 1`` for "line below"). Guards against off-by-one
+        regressions when the walker / enumerate base changes.
+        """
+        text = (
+            "<!-- setforge:user-section start shared notes -->\n"
+            "body\n"
+            "<!-- setforge:user-section end shared notes -->\n"
+        )
+        offset = resolve_anchor(text, AnchorAfterSection(name="notes"))
+        assert offset == 3
+
 
 class TestInjectHostLocalSection:
     """End-to-end splice preserves the post-install hash invariant."""

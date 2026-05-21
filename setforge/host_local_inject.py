@@ -164,11 +164,16 @@ def _find_after_section_offsets(text: str, name: str) -> list[int]:
     inherits the strict parser's validation (nested sections,
     end-without-start, etc.). End-marker key matching uses the
     canonical ``key`` (named sections by name; unnamed by string index).
+    The walker yields exactly one event per line; the 0-based event
+    index IS the line index, so the offset immediately after the end
+    marker is ``idx + 1``. This convention matches the other resolvers
+    (``_resolve_after_heading`` returns ``matches[0] + 1`` for the same
+    "line below" semantics).
     """
     matches: list[int] = []
-    for line_count, event in enumerate(_walk_markers(text, allow_legacy=True), start=1):
+    for idx, event in enumerate(_walk_markers(text, allow_legacy=True)):
         if isinstance(event, _EndMarker) and event.key == name:
-            matches.append(line_count)
+            matches.append(idx + 1)
     return matches
 
 
@@ -180,6 +185,10 @@ def _resolve_after_section(text: str, anchor: AnchorAfterSection) -> int:
             f"no user-section matched anchor after-section {anchor.name!r}"
         )
     if len(matches) > 1:
+        # The ambiguity message names the END-MARKER line numbers
+        # (1-indexed for human display); the offset list is 0-indexed
+        # "line below the end marker", so subtract 1 to recover the
+        # end-marker line itself for the error message.
         lines_1 = ", ".join(str(m) for m in matches)
         raise AnchorAmbiguousError(
             f"anchor after-section {anchor.name!r} matches multiple "
