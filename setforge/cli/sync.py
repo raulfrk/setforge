@@ -62,7 +62,13 @@ from setforge.cli._install_helpers import (
 )
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import Config, load_config, resolve_profile
-from setforge.errors import CaptureRequiresInteractive, ExtensionToolMissing
+from setforge.errors import (
+    CaptureRequiresInteractive,
+    ConfigError,
+    ExtensionToolMissing,
+    NoSourceConfigured,
+    SourceNotCloned,
+)
 from setforge.source import (
     LOCAL_CONFIG_PATH,
     get_resolved_source,
@@ -363,9 +369,22 @@ def _run_promote_wizard(
     snapshot_base = transitions.state_root() / "snapshots"
     snapshot_base.mkdir(parents=True, exist_ok=True)
 
+    # Narrow the source-resolution failure modes that legitimately
+    # short-circuit promote (no source configured, source clone missing,
+    # malformed local.yaml). Anything else propagates — silently skipping
+    # `check_source_clean` for an unknown error would nullify the
+    # anti-smell 13 safety gate. When we DO catch one of the expected
+    # cases, warn the user so the dirty-checkout skip is visible.
     try:
         source = get_resolved_source()
-    except Exception:
+    except (NoSourceConfigured, SourceNotCloned, ConfigError) as exc:
+        typer.secho(
+            f"warning: source unresolved ({exc.__class__.__name__}); "
+            "skipping check_source_clean. Promote will not detect a "
+            "dirty source-repo checkout.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
         source = None
 
     tracked_files = _iter_promotable_tracked_files(ctx)
