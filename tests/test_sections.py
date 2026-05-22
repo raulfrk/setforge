@@ -392,19 +392,16 @@ def test_set_marker_hashes_replaces_existing_hash() -> None:
     assert extract_marker_hashes(result) == {"a": new}
 
 
-def test_set_marker_hashes_strips_when_absent_from_dict() -> None:
-    """Sections present in text but absent from hashes dict have their
-    hash= segment removed."""
+def test_set_marker_hashes_raises_when_key_absent_from_dict() -> None:
+    """Sections present in text but absent from hashes dict raise
+    ValueError — strict-by-default, no silent strip (setforge-pto)."""
     text = (
         "<!-- setforge:user-section start shared a -->\n"
         "body\n"
         f"<!-- setforge:user-section end shared a hash={_HASH_HEX_64} -->\n"
     )
-    result = set_marker_hashes(text, {})
-    assert "hash=" not in result
-    # Stripped output has no hash segment — re-parse needs allow_legacy=True
-    # under the post-9ln strict parser.
-    assert extract_marker_hashes(result, allow_legacy=True) == {"a": None}
+    with pytest.raises(ValueError, match="'a'"):
+        set_marker_hashes(text, {})
 
 
 def test_set_marker_hashes_byte_preserving_outside_markers() -> None:
@@ -463,6 +460,37 @@ def test_set_marker_hashes_bad_key_raises_value_error() -> None:
     )
     with pytest.raises(ValueError, match="nonexistent"):
         set_marker_hashes(text, {"nonexistent": _HASH_HEX_64}, allow_legacy=True)
+
+
+def test_set_marker_hashes_missing_key_message_format() -> None:
+    """The missing-keys ValueError message matches the unknown-keys shape:
+    sorted, repr-quoted names joined by ', ' (setforge-pto)."""
+    text = (
+        "<!-- setforge:user-section start shared b -->\n"
+        "body b\n"
+        "<!-- setforge:user-section end shared b -->\n"
+        "<!-- setforge:user-section start shared a -->\n"
+        "body a\n"
+        "<!-- setforge:user-section end shared a -->\n"
+    )
+    with pytest.raises(ValueError, match="missing key") as excinfo:
+        set_marker_hashes(text, {}, allow_legacy=True)
+    msg = str(excinfo.value)
+    assert "set_marker_hashes: hashes is missing key(s) present in text:" in msg
+    # Sorted + repr-quoted: 'a' precedes 'b'.
+    assert "'a', 'b'" in msg
+
+
+def test_set_marker_hashes_allow_legacy_does_not_bypass_strict_check() -> None:
+    """``allow_legacy=True`` tolerates pre-9by input markers but does NOT
+    weaken the strict missing-keys check (setforge-pto)."""
+    text = (
+        "<!-- setforge:user-section start shared a -->\n"
+        "body\n"
+        "<!-- setforge:user-section end shared a -->\n"
+    )
+    with pytest.raises(ValueError, match="'a'"):
+        set_marker_hashes(text, {}, allow_legacy=True)
 
 
 def test_set_marker_hashes_unnamed_section_by_index() -> None:

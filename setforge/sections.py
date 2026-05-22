@@ -549,17 +549,17 @@ def set_marker_hashes(
     """Rewrite end markers in ``text`` to embed the given hashes.
 
     For each section whose name is a key in ``hashes``, the end marker is
-    rewritten to embed (or replace) its ``hash=<...>`` segment. Sections
-    present in ``text`` but absent from ``hashes`` have any existing
-    ``hash=<...>`` segment STRIPPED — explicit absence means "no hash for
-    this section." Section bodies, start markers, and all non-marker
-    content are preserved byte-for-byte. Pass ``allow_legacy=True`` to
-    tolerate pre-9by input markers (see :func:`_walk_markers`); the
-    output markers are always fully formed.
+    rewritten to embed (or replace) its ``hash=<...>`` segment. ``hashes``
+    must cover EVERY section present in ``text`` — missing keys are a
+    contract violation and raise :class:`ValueError` (setforge-pto). Section
+    bodies, start markers, and all non-marker content are preserved
+    byte-for-byte. Pass ``allow_legacy=True`` to tolerate pre-9by input
+    markers (see :func:`_walk_markers`); the output markers are always
+    fully formed.
 
     Raises :class:`MarkerError` on malformed markers and :class:`ValueError`
-    when ``hashes`` contains a key that does not correspond to a section
-    present in ``text``.
+    when ``hashes`` contains a key not present in ``text``, or is missing
+    a key for any section present in ``text``.
     """
     # Validate keys up front so a typo fails loudly before any rewrite.
     present = set(extract_sections(text, allow_legacy=allow_legacy).keys())
@@ -570,14 +570,19 @@ def set_marker_hashes(
             f"set_marker_hashes: hashes contains key(s) not present in text: "
             f"{unknown_str}"
         )
+    missing = present - set(hashes)
+    if missing:
+        missing_str = ", ".join(sorted(repr(k) for k in missing))
+        raise ValueError(
+            f"set_marker_hashes: hashes is missing key(s) present in text: "
+            f"{missing_str}"
+        )
 
     out_lines: list[str] = []
     for event in _walk_markers(text, allow_legacy=allow_legacy):
         match event:
             case _EndMarker(name=name, semantics=semantics, key=key, line=line):
-                out_lines.append(
-                    _format_end_marker(name, semantics, hashes.get(key), line)
-                )
+                out_lines.append(_format_end_marker(name, semantics, hashes[key], line))
             case (
                 _BodyLine(line=line) | _OutsideLine(line=line) | _StartMarker(line=line)
             ):
@@ -590,19 +595,21 @@ def set_marker_hashes(
 def _format_end_marker(
     name: str | None,
     semantics: SectionSemantics,
-    embedded_hash: str | None,
+    embedded_hash: str,
     original_line: str,
 ) -> str:
     """Build the canonical end-marker line for ``name`` and ``embedded_hash``.
 
     Preserves the original line's trailing newline (or its absence) so
-    ``set_marker_hashes`` is byte-preserving on file endings.
+    ``set_marker_hashes`` is byte-preserving on file endings. Post-pto,
+    ``embedded_hash`` is always a concrete string — the strict
+    missing-keys check in :func:`set_marker_hashes` rules out ``None``
+    at the sole caller.
     """
     parts = ["<!-- setforge:user-section end", semantics.value]
     if name is not None:
         parts.append(name)
-    if embedded_hash is not None:
-        parts.append(f"hash={embedded_hash}")
+    parts.append(f"hash={embedded_hash}")
     parts.append("-->")
     body = " ".join(parts)
     newline = "\n" if original_line.endswith("\n") else ""
