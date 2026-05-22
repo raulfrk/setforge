@@ -705,9 +705,18 @@ def apply_host_local_tracked_file_overrides(
     tracked_file declares any of the three overrides — preserves
     today's behavior for hosts that have not adopted the overlay.
     Lazy-imports :mod:`setforge.source` to dodge the config <->
-    source cycle. Raises nothing on its own — :class:`ValidationError`
-    from the overlay's own validator surfaces at parse time, not
-    here.
+    source cycle.
+
+    Raises :class:`pydantic.ValidationError` from
+    :func:`TrackedFile.model_validate` when the merged shape
+    violates a TrackedFile invariant — e.g. an overlay whose
+    ``symlink_target`` equals the tracked-side ``dst`` after
+    :func:`Path.expanduser` (the ``_symlink_no_self_loop``
+    model_validator fires on the merged model). Parse-time
+    invariants on the overlay itself (mutual-exclusion, mode
+    bounds, ``$VAR`` in dst) surface earlier in
+    :func:`setforge.source.load_local_tracked_file_overlays`,
+    not here.
     """
     from setforge.source import (
         LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
