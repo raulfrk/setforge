@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
+from ruamel.yaml.scalarint import ScalarInt  # type: ignore[import-not-found]
+
 from setforge.errors import ConfigError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
     CONFIG_FILENAME,
@@ -477,8 +480,6 @@ class TestLocalTrackedFileOverlayHostLocalOverrides:
         the overlay with a ``ScalarInt`` argument still gets the strict
         rejection — mirrors :func:`TrackedFile._validate_mode`.
         """
-        from ruamel.yaml.scalarint import ScalarInt
-
         # ScalarInt(755) is the shape ruamel.yaml's round-trip loader
         # emits for the YAML-1.1 ``mode: 0755`` form.
         with pytest.raises(ValueError, match=r"YAML-1\.1-style"):

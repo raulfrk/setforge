@@ -670,11 +670,31 @@ def apply_preserve_user_keys_overlay(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class HostLocalTrackedFileOverride:
+    """One tracked_file's resolved m3qx overlay state.
+
+    Carried by the mapping returned from
+    :func:`apply_host_local_tracked_file_overrides` so compare's
+    provenance-tag renderer can read which of the three fields were
+    actually overridden host-locally without re-loading local.yaml.
+
+    ``None`` on a field means "no override; the profile-side value
+    wins". The mapping never contains an entry where all three are
+    ``None`` (the resolver short-circuits the empty-overlay case so
+    callers can treat presence as "at least one override applied").
+    """
+
+    mode: int | None
+    dst: Path | None
+    symlink_target: Path | None
+
+
 def apply_host_local_tracked_file_overrides(
     config: Config,
     *,
     local_config_path: Path | None = None,
-) -> dict[str, "HostLocalTrackedFileOverride"]:
+) -> dict[str, HostLocalTrackedFileOverride]:
     """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target``
     overlay (setforge-m3qx).
 
@@ -718,14 +738,9 @@ def apply_host_local_tracked_file_overrides(
     :func:`setforge.source.load_local_tracked_file_overlays`,
     not here.
     """
-    from setforge.source import (
-        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
-    )
-    from setforge.source import (
-        load_local_tracked_file_overlays,
-    )
+    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
 
-    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
+    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
     overlays = load_local_tracked_file_overlays(path)
     applied: dict[str, HostLocalTrackedFileOverride] = {}
     for tf_id, overlay in overlays.items():
@@ -766,26 +781,6 @@ def apply_host_local_tracked_file_overrides(
             symlink_target=overlay.symlink_target,
         )
     return applied
-
-
-@dataclass(frozen=True, slots=True)
-class HostLocalTrackedFileOverride:
-    """One tracked_file's resolved m3qx overlay state.
-
-    Carried by the mapping returned from
-    :func:`apply_host_local_tracked_file_overrides` so compare's
-    provenance-tag renderer can read which of the three fields were
-    actually overridden host-locally without re-loading local.yaml.
-
-    ``None`` on a field means "no override; the profile-side value
-    wins". The mapping never contains an entry where all three are
-    ``None`` (the resolver short-circuits the empty-overlay case so
-    callers can treat presence as "at least one override applied").
-    """
-
-    mode: int | None
-    dst: Path | None
-    symlink_target: Path | None
 
 
 def _validate_plugin_references(config: Config) -> None:

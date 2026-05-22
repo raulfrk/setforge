@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from setforge.config import (
     Config,
@@ -158,5 +159,5 @@ def test_revalidate_catches_post_merge_self_loop(tmp_path: Path) -> None:
         "tracked_files:\n  hook:\n    symlink_target: /home/x/hook.sh\n",
         encoding="utf-8",
     )
-    with pytest.raises(Exception, match=r"self-loop"):
+    with pytest.raises(ValidationError, match=r"self-loop"):
         apply_host_local_tracked_file_overrides(cfg)
