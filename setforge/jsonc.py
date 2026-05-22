@@ -43,10 +43,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-# json5 (json-five on PyPI) ships py.typed without resolvable annotations; no stub pkg.
-from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
-from json5.loader import ModelLoader, loads  # type: ignore[import-not-found]
-from json5.model import (  # type: ignore[import-not-found]
+from json5.dumper import ModelDumper, dumps
+from json5.loader import ModelLoader, loads
+from json5.model import (
     BooleanLiteral,
     DoubleQuotedString,
     Float,

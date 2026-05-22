@@ -12,9 +12,10 @@ Per SPEC 4 mockup — value completion dispatches on the dotted path:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import typer
 
 from setforge.cli.config import _complete_value
 
@@ -51,7 +52,7 @@ def _isolate_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_value_completion_unknown_path_yields_empty() -> None:
     """An unknown dotted-path yields no value suggestions."""
     ctx = _FakeCtx(path="bogus.field")
-    assert _complete_value(ctx, "") == []
+    assert _complete_value(cast(typer.Context, ctx), "") == []
 
 
 def test_value_completion_enum_yields_members() -> None:
@@ -64,7 +65,7 @@ def test_value_completion_enum_yields_members() -> None:
     pins both expected values explicitly.
     """
     ctx = _FakeCtx(path="source.kind")
-    suggestions = _complete_value(ctx, "")
+    suggestions = _complete_value(cast(typer.Context, ctx), "")
     assert "path" in suggestions, suggestions
     assert "git" in suggestions, suggestions
 
@@ -72,7 +73,7 @@ def test_value_completion_enum_yields_members() -> None:
 def test_value_completion_with_empty_path_yields_empty() -> None:
     """No path argument means no value suggestion possible."""
     ctx = _FakeCtx(path=None)
-    assert _complete_value(ctx, "") == []
+    assert _complete_value(cast(typer.Context, ctx), "") == []
 
 
 def test_value_completion_empty_for_scalar_with_no_enum() -> None:
@@ -87,5 +88,5 @@ def test_value_completion_empty_for_scalar_with_no_enum() -> None:
     for free-form scalars.
     """
     ctx = _FakeCtx(path="binaries.code")
-    out = _complete_value(ctx, "")
+    out = _complete_value(cast(typer.Context, ctx), "")
     assert out == []

@@ -26,8 +26,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import host_local_inject, jsonc, sections, yaml_merge
 from setforge.config import Config, ResolvedProfile, TrackedFile

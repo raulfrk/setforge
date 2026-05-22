@@ -46,9 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import jsonc, wizard
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src

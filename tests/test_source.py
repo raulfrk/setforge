@@ -15,6 +15,7 @@ from setforge.source import (
     ENV_VAR,
     GitSource,
     PathSource,
+    SourceKind,
     _load_local_source_config,
     resolve_source,
     resolve_source_dir,
@@ -45,27 +46,27 @@ class TestSchema:
     """Pydantic Source schema validates the kind-discriminator union."""
 
     def test_path_source_accepts_path_kind(self, tmp_path: Path) -> None:
-        src = PathSource(kind="path", path=tmp_path)
+        src = PathSource(kind=SourceKind.PATH, path=tmp_path)
         assert src.kind == "path"
         assert src.path == tmp_path
 
     def test_git_source_defaults_ref_to_main(self) -> None:
-        src = GitSource(kind="git", url="git@github.com:r/x.git")
+        src = GitSource(kind=SourceKind.GIT, url="git@github.com:r/x.git")
         assert src.ref == "main"
 
     def test_git_source_display_name_strips_dot_git(self) -> None:
-        src = GitSource(kind="git", url="git@github.com:raulfrk/dotfiles.git")
+        src = GitSource(kind=SourceKind.GIT, url="git@github.com:raulfrk/dotfiles.git")
         assert src.display_name == "dotfiles"
 
     def test_git_source_resolved_clone_dest_defaults_to_xdg(self) -> None:
-        src = GitSource(kind="git", url="git@github.com:r/foo.git")
+        src = GitSource(kind=SourceKind.GIT, url="git@github.com:r/foo.git")
         assert src.resolved_clone_dest == DEFAULT_CLONE_ROOT / "foo"
 
     def test_git_source_resolved_clone_dest_honors_override(
         self, tmp_path: Path
     ) -> None:
         src = GitSource(
-            kind="git",
+            kind=SourceKind.GIT,
             url="git@github.com:r/foo.git",
             clone_dest=tmp_path / "custom",
         )
@@ -269,11 +270,11 @@ class TestResolveSourceDir:
     """``resolve_source_dir`` returns the on-disk directory."""
 
     def test_path_source_returns_path(self, tmp_path: Path) -> None:
-        src = PathSource(kind="path", path=tmp_path)
+        src = PathSource(kind=SourceKind.PATH, path=tmp_path)
         assert resolve_source_dir(src) == tmp_path
 
     def test_path_source_expands_tilde(self) -> None:
-        src = PathSource(kind="path", path=Path("~/dotfiles"))
+        src = PathSource(kind=SourceKind.PATH, path=Path("~/dotfiles"))
         assert resolve_source_dir(src) == Path.home() / "dotfiles"
 
     def test_git_source_returns_resolved_clone_dest_when_exists(
@@ -281,12 +282,16 @@ class TestResolveSourceDir:
     ) -> None:
         clone = tmp_path / "clone"
         clone.mkdir()
-        src = GitSource(kind="git", url="git@github.com:r/x.git", clone_dest=clone)
+        src = GitSource(
+            kind=SourceKind.GIT, url="git@github.com:r/x.git", clone_dest=clone
+        )
         assert resolve_source_dir(src) == clone
 
     def test_git_source_raises_when_clone_missing(self, tmp_path: Path) -> None:
         clone = tmp_path / "absent"
-        src = GitSource(kind="git", url="git@github.com:r/x.git", clone_dest=clone)
+        src = GitSource(
+            kind=SourceKind.GIT, url="git@github.com:r/x.git", clone_dest=clone
+        )
         with pytest.raises(SourceNotCloned, match="not cloned"):
             resolve_source_dir(src)
 
@@ -296,7 +301,7 @@ class TestValidateSourceDir:
 
     def test_returns_setforge_yaml_path(self, tmp_path: Path) -> None:
         src_dir = _write_source_dir(tmp_path)
-        src = PathSource(kind="path", path=src_dir)
+        src = PathSource(kind=SourceKind.PATH, path=src_dir)
         result = validate_source_dir(src)
         assert result == src_dir / CONFIG_FILENAME
 
@@ -305,13 +310,13 @@ class TestValidateSourceDir:
     ) -> None:
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        src = PathSource(kind="path", path=empty_dir)
+        src = PathSource(kind=SourceKind.PATH, path=empty_dir)
         with pytest.raises(ConfigError, match=r"does not contain setforge\.yaml"):
             validate_source_dir(src)
 
     def test_propagates_source_not_cloned_for_git_source(self, tmp_path: Path) -> None:
         src = GitSource(
-            kind="git",
+            kind=SourceKind.GIT,
             url="git@github.com:r/x.git",
             clone_dest=tmp_path / "missing",
         )
@@ -332,7 +337,7 @@ class TestValidateSourceDir:
         src_dir = tmp_path / "src"
         src_dir.mkdir()
         (src_dir / "my_setup.yaml").write_text("profiles: {}\n")
-        src = PathSource(kind="path", path=src_dir)
+        src = PathSource(kind=SourceKind.PATH, path=src_dir)
         with pytest.raises(
             ConfigError,
             match=(

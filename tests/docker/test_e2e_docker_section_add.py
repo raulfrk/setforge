@@ -16,6 +16,7 @@ CLI. Coverage matrix:
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 
 import pytest
 
@@ -44,7 +45,7 @@ def _setforge(
 
 
 def test_section_emit_shared_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(c, ["section", "emit", "shared", "foo"])
@@ -54,7 +55,7 @@ def test_section_emit_shared_in_container(
 
 
 def test_section_emit_host_local_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(c, ["section", "emit", "host-local", "bar"])
@@ -63,7 +64,7 @@ def test_section_emit_host_local_in_container(
 
 
 def test_section_emit_invalid_name_exits_2_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(c, ["section", "emit", "shared", "Foo"])
@@ -71,7 +72,7 @@ def test_section_emit_invalid_name_exits_2_in_container(
 
 
 def test_section_emit_round_trips_through_extract_sections(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """Emit output, paste it into a fresh markdown file, parse it back."""
     c = docker_container()
@@ -109,7 +110,7 @@ def _seed_minimal_md(c: ContainerHandle, *, path: str) -> None:
 
 
 def test_section_add_scripted_shared_writes_marker_pair_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     target = "/workspace/tests/fixtures/e2e/tracked/sections/marked.md"
@@ -137,7 +138,7 @@ def test_section_add_scripted_shared_writes_marker_pair_in_container(
 
 
 def test_section_add_scripted_host_local_writes_marker_pair_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(
@@ -161,7 +162,7 @@ def test_section_add_scripted_host_local_writes_marker_pair_in_container(
 
 
 def test_section_add_scripted_with_file_body_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     c.write_text("/tmp/body.md", "custom body content\n")
@@ -187,7 +188,7 @@ def test_section_add_scripted_with_file_body_in_container(
 
 
 def test_section_add_then_install_deploys_marker_pair_to_live(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """Cross-bead: add a shared marker, install, the live file gets it."""
     c = docker_container()
@@ -228,7 +229,7 @@ def test_section_add_then_install_deploys_marker_pair_to_live(
 
 
 def test_section_add_refuses_non_markdown_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     # json_settings -> json/settings.json (not markdown).
@@ -255,7 +256,7 @@ def test_section_add_refuses_non_markdown_in_container(
 
 
 def test_section_add_refuses_duplicate_name_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     # marked.md fixture already has a section named 'notes'.
@@ -279,7 +280,7 @@ def test_section_add_refuses_duplicate_name_in_container(
 
 
 def test_section_add_refuses_anchor_past_eof_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(
@@ -302,7 +303,7 @@ def test_section_add_refuses_anchor_past_eof_in_container(
 
 
 def test_section_add_non_tty_no_flags_exits_2_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """No --tracked-file/--semantics/--name flags + piped stdin → exit 2."""
     c = docker_container()
@@ -325,7 +326,7 @@ def test_section_add_non_tty_no_flags_exits_2_in_container(
 
 
 def test_section_visible_in_root_help_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(c, ["--help"])
@@ -334,7 +335,7 @@ def test_section_visible_in_root_help_in_container(
 
 
 def test_section_subcommands_visible_in_section_help_in_container(
-    docker_container: pytest.FixtureRequest,
+    docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
     result = _setforge(c, ["section", "--help"])

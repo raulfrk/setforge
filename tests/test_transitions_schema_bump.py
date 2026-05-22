@@ -28,11 +28,12 @@ from pathlib import Path
 from setforge._redact import REDACTED, redact_argv
 from setforge.transitions import (
     TransitionCommand,
+    TransitionDir,
     TransitionMeta,
     load_meta,
 )
 
-_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "pre_bump_meta_v1"
+_FIXTURE_DIR = TransitionDir(Path(__file__).parent / "fixtures" / "pre_bump_meta_v1")
 
 
 def test_load_meta_backward_compat_old_record() -> None:

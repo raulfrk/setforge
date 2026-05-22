@@ -1,7 +1,5 @@
 """Tests for setforge.jsonc — JSONC overlay / strip / drift classify."""
 
-from pathlib import Path
-
 import pytest
 
 from setforge.errors import MergeTypeMismatch
@@ -181,8 +179,8 @@ def test_overlay_user_keys_deep_unions_top_level_object() -> None:
 
 def test_python_to_node_supports_nested_object() -> None:
     # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
-    from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
-    from json5.model import JSONObject  # type: ignore[import-not-found]
+    from json5.dumper import ModelDumper, dumps
+    from json5.model import JSONObject
 
     from setforge.jsonc import _python_to_node, parse_jsonc
 
@@ -195,8 +193,8 @@ def test_python_to_node_supports_nested_object() -> None:
 
 def test_python_to_node_supports_nested_array() -> None:
     # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
-    from json5.dumper import ModelDumper, dumps  # type: ignore[import-not-found]
-    from json5.model import JSONArray  # type: ignore[import-not-found]
+    from json5.dumper import ModelDumper, dumps
+    from json5.model import JSONArray
 
     from setforge.jsonc import _python_to_node, parse_jsonc
 
@@ -416,8 +414,8 @@ def test_pydantic_rejects_empty_path_segment() -> None:
     from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        TrackedFile(
-            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[" > foo"]
+        TrackedFile.model_validate(
+            {"src": "a.json", "dst": "/tmp/a.json", "preserve_user_keys": [" > foo"]}
         )
 
 
@@ -428,8 +426,8 @@ def test_pydantic_rejects_trailing_separator() -> None:
     from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        TrackedFile(
-            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo > "]
+        TrackedFile.model_validate(
+            {"src": "a.json", "dst": "/tmp/a.json", "preserve_user_keys": ["foo > "]}
         )
 
 
@@ -440,8 +438,12 @@ def test_pydantic_rejects_whitespace_only_segment() -> None:
     from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        TrackedFile(
-            src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=["foo >    > bar"]
+        TrackedFile.model_validate(
+            {
+                "src": "a.json",
+                "dst": "/tmp/a.json",
+                "preserve_user_keys": ["foo >    > bar"],
+            }
         )
 
 
@@ -452,7 +454,9 @@ def test_pydantic_rejects_empty_string_path() -> None:
     from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        TrackedFile(src=Path("a.json"), dst="/tmp/a.json", preserve_user_keys=[""])
+        TrackedFile.model_validate(
+            {"src": "a.json", "dst": "/tmp/a.json", "preserve_user_keys": [""]}
+        )
 
 
 def test_pydantic_rejects_head_collision_with_deep_list() -> None:
@@ -464,11 +468,13 @@ def test_pydantic_rejects_head_collision_with_deep_list() -> None:
     from setforge.config import TrackedFile
 
     with pytest.raises(ValidationError):
-        TrackedFile(
-            src=Path("a.json"),
-            dst="/tmp/a.json",
-            preserve_user_keys=["[python] > editor.fontSize"],
-            preserve_user_keys_deep=["[python]"],
+        TrackedFile.model_validate(
+            {
+                "src": "a.json",
+                "dst": "/tmp/a.json",
+                "preserve_user_keys": ["[python] > editor.fontSize"],
+                "preserve_user_keys_deep": ["[python]"],
+            }
         )
 
 
@@ -476,10 +482,12 @@ def test_pydantic_accepts_well_formed_nested_path() -> None:
     """Sanity check: a clean two-segment path is accepted."""
     from setforge.config import TrackedFile
 
-    tracked_file = TrackedFile(
-        src=Path("a.json"),
-        dst="/tmp/a.json",
-        preserve_user_keys=["[python] > editor.fontSize"],
+    tracked_file = TrackedFile.model_validate(
+        {
+            "src": "a.json",
+            "dst": "/tmp/a.json",
+            "preserve_user_keys": ["[python] > editor.fontSize"],
+        }
     )
     assert tracked_file.preserve_user_keys == ["[python] > editor.fontSize"]
 
@@ -488,9 +496,11 @@ def test_pydantic_accepts_flat_v1_paths() -> None:
     """Sanity check: single-segment names (no separator) still accepted."""
     from setforge.config import TrackedFile
 
-    tracked_file = TrackedFile(
-        src=Path("a.json"),
-        dst="/tmp/a.json",
-        preserve_user_keys=["claudeCode.foo"],
+    tracked_file = TrackedFile.model_validate(
+        {
+            "src": "a.json",
+            "dst": "/tmp/a.json",
+            "preserve_user_keys": ["claudeCode.foo"],
+        }
     )
     assert tracked_file.preserve_user_keys == ["claudeCode.foo"]

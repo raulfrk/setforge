@@ -29,9 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
-
-# ruamel.yaml ships py.typed without resolvable annotations.
-from ruamel.yaml.comments import (  # type: ignore[import-not-found]
+from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )

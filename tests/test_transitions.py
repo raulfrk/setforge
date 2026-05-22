@@ -256,7 +256,7 @@ def test_load_meta_old_record_without_source_sha_round_trips_to_none(
     tmp_path: Path,
 ) -> None:
     """meta.json written before setforge-xra8 must deserialize cleanly."""
-    target = tmp_path / "20260507T120000000000Z-install-vmh"
+    target = TransitionDir(tmp_path / "20260507T120000000000Z-install-vmh")
     target.mkdir()
     # Hand-craft a pre-xra8 payload — no ``source_sha`` key.
     payload = {
@@ -276,7 +276,7 @@ def test_load_meta_old_record_without_source_sha_round_trips_to_none(
 
 def test_load_meta_new_record_with_source_sha(tmp_path: Path) -> None:
     """meta.json carrying ``source_sha`` must round-trip the value."""
-    target = tmp_path / "20260518T120000000000Z-install-vmh"
+    target = TransitionDir(tmp_path / "20260518T120000000000Z-install-vmh")
     write_meta(
         target,
         TransitionMeta(
@@ -295,11 +295,11 @@ def test_load_meta_new_record_with_source_sha(tmp_path: Path) -> None:
 def test_load_meta_raises_on_missing_file(tmp_path: Path) -> None:
     """Missing meta.json must surface a clear InvalidTransitionRecord."""
     with pytest.raises(InvalidTransitionRecord, match=r"cannot read meta\.json"):
-        load_meta(tmp_path / "nonexistent")
+        load_meta(TransitionDir(tmp_path / "nonexistent"))
 
 
 def test_write_meta_creates_dir_and_file(tmp_path: Path) -> None:
-    target = tmp_path / "20260507T120000000000Z-install-vmh"
+    target = TransitionDir(tmp_path / "20260507T120000000000Z-install-vmh")
     meta = TransitionMeta(
         command=TransitionCommand.INSTALL,
         profile="vmh",
@@ -960,7 +960,7 @@ def test_resolve_transition_prefix_root_missing(
 def test_summarize_transition_no_patch_returns_empty(tmp_path: Path) -> None:
     """Extension-only transitions have no changes.patch — summarize is a
     no-op for them, not an error."""
-    transition = tmp_path / "extensions-only"
+    transition = TransitionDir(tmp_path / "extensions-only")
     transition.mkdir()
     assert summarize_transition(transition) == {}
 
@@ -974,7 +974,7 @@ def test_summarize_transition_classifies_each_action(tmp_path: Path) -> None:
     deleted = Path("/tmp/test-summarize-deleted.txt")
     pre = {created: None, modified: "before\n", deleted: "old\n"}
     post = {created: "fresh\n", modified: "after\n", deleted: None}
-    transition = tmp_path / "transition"
+    transition = TransitionDir(tmp_path / "transition")
     transition.mkdir()
     (transition / "changes.patch").write_text(
         compute_patch(pre, post), encoding="utf-8"
@@ -1350,7 +1350,7 @@ def test_load_reconcile_outcomes_missing_file_returns_empty_tuple(
 
     # No reconcile_outcomes.json on disk — simulates a pre-setforge-k0uj
     # transition record.
-    assert load_reconcile_outcomes(tmp_path) == ()
+    assert load_reconcile_outcomes(TransitionDir(tmp_path)) == ()
 
 
 def test_write_transition_backward_compat_without_reconcile_outcomes(

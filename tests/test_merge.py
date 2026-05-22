@@ -22,7 +22,7 @@ from typing import Any, override
 import pytest
 
 # ruamel.yaml ships py.typed without resolvable annotations; see setforge/compare.py.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge.compare import CompareReport, CompareStatus, FileCompare
 from setforge.config import Config, Profile, TrackedFile
@@ -103,10 +103,12 @@ def _make_config(
     _write(dst, dst_text)
     config = Config(
         tracked_files={
-            tracked_file_name: TrackedFile(
-                src=Path(f"{tracked_file_name}{ext}"),
-                dst=str(dst),
-                preserve_user_keys=preserve or [],
+            tracked_file_name: TrackedFile.model_validate(
+                {
+                    "src": f"{tracked_file_name}{ext}",
+                    "dst": str(dst),
+                    "preserve_user_keys": preserve or [],
+                }
             )
         },
         profiles={"p": Profile(tracked_files=[tracked_file_name])},
@@ -347,7 +349,7 @@ def test_apply_action_u_jsonc(tmp_path: Path) -> None:
 
     # json5 can parse the result.
     # json5 ships py.typed without resolvable annotations; see setforge/jsonc.py.
-    from json5.loader import loads  # type: ignore[import-not-found]
+    from json5.loader import loads
 
     parsed = loads(updated_text)
     assert parsed["b"] == 88
@@ -641,10 +643,12 @@ def test_manual_pending_records_transition_for_applied(
     # Two drift keys: first -> [k], second -> [m]+n
     config = Config(
         tracked_files={
-            "x": TrackedFile(
-                src=Path("x.yaml"),
-                dst=str(tmp_path / "live" / "x.yaml"),
-                preserve_user_keys=["a"],
+            "x": TrackedFile.model_validate(
+                {
+                    "src": "x.yaml",
+                    "dst": str(tmp_path / "live" / "x.yaml"),
+                    "preserve_user_keys": ["a"],
+                }
             )
         },
         profiles={"p": Profile(tracked_files=["x"])},

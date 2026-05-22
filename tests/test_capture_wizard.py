@@ -70,11 +70,13 @@ def _make_config(
     _write(dst, dst_text)
     config = Config(
         tracked_files={
-            tracked_file_name: TrackedFile(
-                src=Path(f"{tracked_file_name}{ext}"),
-                dst=str(dst),
-                preserve_user_keys=preserve_user_keys or [],
-                preserve_user_keys_deep=preserve_user_keys_deep or [],
+            tracked_file_name: TrackedFile.model_validate(
+                {
+                    "src": f"{tracked_file_name}{ext}",
+                    "dst": str(dst),
+                    "preserve_user_keys": preserve_user_keys or [],
+                    "preserve_user_keys_deep": preserve_user_keys_deep or [],
+                }
             )
         },
         profiles={"p": Profile(tracked_files=[tracked_file_name])},

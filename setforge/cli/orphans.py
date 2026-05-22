@@ -28,9 +28,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import compare as compare_mod
 from setforge import transitions

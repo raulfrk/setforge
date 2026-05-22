@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -385,7 +386,7 @@ def test_validate_local_yaml_unreadable_surfaces_as_parse_error(
     target = str(local_yaml_at)
     original_read_text = Path.read_text
 
-    def _boom(self: Path, *a: object, **kw: object) -> str:
+    def _boom(self: Path, *a: Any, **kw: Any) -> str:
         if str(self) == target:
             raise PermissionError("simulated EACCES")
         return original_read_text(self, *a, **kw)

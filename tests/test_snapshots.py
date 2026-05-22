@@ -82,7 +82,7 @@ def _build_ctx(
     src_path.parent.mkdir(parents=True, exist_ok=True)
     if dst_template is None:
         dst_template = str(home / "live" / "text.txt")
-    tracked = TrackedFile(src=src_relative, dst=dst_template, template=False)
+    tracked = TrackedFile(src=Path(src_relative), dst=dst_template, template=False)
     cfg = Config(
         version=1,
         schema_version="1.0",

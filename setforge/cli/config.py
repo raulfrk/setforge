@@ -32,9 +32,7 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
-
-# ruamel.yaml ships py.typed without resolvable annotations.
-from ruamel.yaml.comments import (  # type: ignore[import-not-found]
+from ruamel.yaml.comments import (
     CommentedMap,
     CommentedSeq,
 )

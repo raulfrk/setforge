@@ -133,7 +133,7 @@ def test_render_json_emits_envelope_and_skips_closure(
         ctx,
         "compare",
         {"a": 1},
-        human_fn=lambda: called.append(True),  # type: ignore[func-returns-value]
+        human_fn=lambda: called.append(True),
     )
     captured = capsys.readouterr()
     assert called == []
@@ -218,7 +218,7 @@ def test_redacting_filter_passes_non_string_msg() -> None:
     """Non-string record.msg (lazy %-format args) is not rewritten."""
     filt = RedactingFilter()
     record = _make_record("%s")
-    record.msg = ("not", "a", "string")  # type: ignore[assignment]
+    record.msg = ("not", "a", "string")
     assert filt.filter(record) is True
     assert record.msg == ("not", "a", "string")
 

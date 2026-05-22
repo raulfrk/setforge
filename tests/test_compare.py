@@ -252,7 +252,9 @@ def test_compare_profile_yaml_all_expected(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(tracked_files=["x"]),
-        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
+        TrackedFile.model_validate(
+            {"src": "x.yaml", "dst": str(dst), "preserve_user_keys": ["a"]}
+        ),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -272,7 +274,9 @@ def test_compare_profile_yaml_mixed_drift(tmp_path: Path) -> None:
 
     config = _make_config(
         Profile(tracked_files=["x"]),
-        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=["a"]),
+        TrackedFile.model_validate(
+            {"src": "x.yaml", "dst": str(dst), "preserve_user_keys": ["a"]}
+        ),
         "x",
     )
     report = compare_profile(config, "p", repo)
@@ -315,7 +319,9 @@ def _make_config_with_yaml(
     _write(dst, dst_text)
     config = _make_config(
         Profile(tracked_files=["x"]),
-        TrackedFile(src=Path("x.yaml"), dst=str(dst), preserve_user_keys=preserve),
+        TrackedFile.model_validate(
+            {"src": "x.yaml", "dst": str(dst), "preserve_user_keys": preserve}
+        ),
         "x",
     )
     return config, repo

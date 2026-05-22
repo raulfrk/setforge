@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+from click.testing import Result
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
@@ -57,7 +58,7 @@ def config_repo(tmp_path: Path) -> Path:
     return config_path
 
 
-def _invoke(args: Iterable[str]) -> object:
+def _invoke(args: Iterable[str]) -> Result:
     """Run the setforge CLI with ``CliRunner``; return the typer Result.
 
     ``CliRunner.invoke`` does NOT run ``setforge.cli.main()`` — it runs
@@ -71,24 +72,24 @@ def _invoke(args: Iterable[str]) -> object:
     return runner.invoke(app, list(args))
 
 
-def _outerr(result: object) -> str:
+def _outerr(result: Result) -> str:
     """Combine stdout + any SetforgeError message into one string for asserts."""
-    parts: list[str] = [getattr(result, "stdout", "") or ""]
-    exc = getattr(result, "exception", None)
+    parts: list[str] = [result.stdout or ""]
+    exc = result.exception
     if exc is not None:
         parts.append(str(exc))
     return "\n".join(parts)
 
 
-def _effective_exit_code(result: object) -> int:
+def _effective_exit_code(result: Result) -> int:
     """Return ``exit_code`` collapsing the SetforgeError-as-exit-1 contract."""
-    exc = getattr(result, "exception", None)
+    exc = result.exception
     if exc is not None:
         from setforge.errors import SetforgeError
 
         if isinstance(exc, SetforgeError):
             return 1
-    return int(getattr(result, "exit_code", 1))
+    return result.exit_code
 
 
 def _seed_live_file(home: Path) -> Path:

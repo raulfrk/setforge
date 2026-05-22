@@ -20,10 +20,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.scalarint import OctalInt, ScalarInt  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge.errors import ConfigError, ProfileNotFound
 from setforge.local_overlay import (

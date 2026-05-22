@@ -165,4 +165,4 @@ def test_radiolist_dialog_attribute_resolves_lazily() -> None:
 def test_radiolist_dialog_unknown_attribute_raises() -> None:
     """``__getattr__`` raises ``AttributeError`` for unknown names."""
     with pytest.raises(AttributeError):
-        _ = _secrets_confirm.nonexistent_attribute  # type: ignore[attr-defined]
+        _ = _secrets_confirm.nonexistent_attribute

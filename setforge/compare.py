@@ -27,9 +27,7 @@ from typing import TYPE_CHECKING
 
 from jinja2 import Template
 from rich.table import Table
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import host_local_inject, jsonc, section_reconcile, sections, yaml_merge
 from setforge.binaries import LOCAL_CONFIG_PATH
@@ -682,8 +680,11 @@ def _compare_symlinked(
     # Link metadata is correct; probe the target's CONTENT for drift.
     # ``diff_file`` returns ``""`` when its second argument does not
     # exist, so a broken link (target absent) naturally lands UNCHANGED
-    # here — the link itself is still what setforge installed.
-    target_path = Path(tracked_file.symlink).expanduser()
+    # here — the link itself is still what setforge installed. Reuse
+    # the type-narrowed ``expected`` (str, non-None at this point) so
+    # mypy sees a clean ``str`` argument to ``Path(...)`` rather than
+    # the still-Optional ``tracked_file.symlink``.
+    target_path = Path(expected).expanduser()
     target_diff = diff_file(
         src,
         target_path,

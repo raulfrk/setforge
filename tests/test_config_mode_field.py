@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge.config import TrackedFile
 

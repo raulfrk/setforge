@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from rich.console import Console
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from setforge import compare as compare_mod

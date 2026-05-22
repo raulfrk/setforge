@@ -40,9 +40,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge.errors import SetforgeError
 from setforge.host_local_inject import inject_host_local_section

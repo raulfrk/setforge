@@ -30,10 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import typer
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from setforge import compare as compare_mod
 from setforge import transitions

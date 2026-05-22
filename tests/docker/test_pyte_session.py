@@ -55,7 +55,7 @@ def test_pyte_session_dataclass_holds_screen_stream_process() -> None:
     screen = pyte.HistoryScreen(120, 40)
     stream = pyte.ByteStream(screen)
     process = _StubProcess()
-    session = PyteSession(screen=screen, stream=stream, process=process)  # type: ignore[arg-type]
+    session = PyteSession(screen=screen, stream=stream, process=process)
     assert session.screen is screen
     assert session.stream is stream
     assert len(session.display) == 40
@@ -69,7 +69,7 @@ def test_pyte_session_close_is_idempotent() -> None:
     screen = pyte.HistoryScreen(120, 40)
     stream = pyte.ByteStream(screen)
     process = _StubProcess()
-    session = PyteSession(screen=screen, stream=stream, process=process)  # type: ignore[arg-type]
+    session = PyteSession(screen=screen, stream=stream, process=process)
     session.close()
     session.close()
     assert process.close_calls == 1
@@ -79,6 +79,6 @@ def test_pyte_session_display_reflects_fed_bytes() -> None:
     """:attr:`PyteSession.display` mirrors :attr:`screen.display`."""
     screen = pyte.HistoryScreen(120, 40)
     stream = pyte.ByteStream(screen)
-    session = PyteSession(screen=screen, stream=stream, process=_StubProcess())  # type: ignore[arg-type]
+    session = PyteSession(screen=screen, stream=stream, process=_StubProcess())
     stream.feed(b"hello pyte world")
     assert "hello pyte world" in "\n".join(session.display)

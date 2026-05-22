@@ -46,9 +46,7 @@ from typing import Self
 import typer
 from rich.console import Console
 from rich.table import Table
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import jsonc, transitions, yaml_merge
 from setforge._editor import run_editor

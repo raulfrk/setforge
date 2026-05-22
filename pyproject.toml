@@ -39,6 +39,7 @@ Changelog = "https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.11",
     "pexpect>=4.9",
     "pyte>=0.8.2",
     "pytest>=8.0",
@@ -141,3 +142,25 @@ sigterm = true
 show_missing = true
 fail_under = 83
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:", "@(typing\\.)?overload"]
+
+[tool.mypy]
+# Aligned with [project].requires-python and [tool.ruff].target-version
+# so PEP 695 type-parameter syntax (e.g. ``class Foo[T]:``) parses.
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+check_untyped_defs = true
+
+# json5 (json-five on PyPI) ships ``py.typed`` but its public ``dumper``
+# module exposes ``ModelDumper`` as a sibling of ``BaseDumper`` rather
+# than a subclass, so the documented ``dumps(model, dumper=ModelDumper())``
+# usage type-checks as an [arg-type] violation against the library's own
+# annotations. Treat the json5 surface as the untyped seam that
+# ``setforge.jsonc`` already documents (mirrors the per-file ``ANN401``
+# allow under ``[tool.ruff.lint.per-file-ignores]``) so the wrapper's
+# bug is not propagated into our error log.
+[[tool.mypy.overrides]]
+module = ["json5", "json5.*"]
+follow_imports = "skip"

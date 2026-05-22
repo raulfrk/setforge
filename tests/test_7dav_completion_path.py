@@ -6,7 +6,9 @@ dotted paths matching the user's incomplete prefix.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
+import typer
 
 from setforge.cli.config import (
     ConfigScope,
@@ -34,14 +36,14 @@ def test_local_path_completion_includes_source_kind() -> None:
 
 def test_local_path_completion_filters_by_prefix() -> None:
     """``_complete_path_local`` filters by ``incomplete`` prefix."""
-    suggestions = _complete_path_local(_FakeCtx(), "sourc")
+    suggestions = _complete_path_local(cast(typer.Context, _FakeCtx()), "sourc")
     assert all(s.startswith("sourc") for s in suggestions)
     assert "source" in suggestions
 
 
 def test_tracked_path_completion_yields_top_level_keys() -> None:
     """``Config`` walk surfaces ``profiles`` and ``tracked_files``."""
-    suggestions = _complete_path_tracked(_FakeCtx(), "")
+    suggestions = _complete_path_tracked(cast(typer.Context, _FakeCtx()), "")
     assert "profiles" in suggestions
     assert "tracked_files" in suggestions
     assert "marketplaces" in suggestions

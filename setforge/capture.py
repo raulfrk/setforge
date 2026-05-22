@@ -32,9 +32,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from rich.console import Console
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 from setforge import jsonc, sections, yaml_merge
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift

@@ -7,9 +7,10 @@ shell. ``_complete_path_dispatch`` wraps the schema walk in a broad
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import typer
 
 from setforge.cli.config import (
     ConfigScope,
@@ -54,7 +55,7 @@ def test_dispatch_falls_back_on_schema_walk_error(
         raise SetforgeError("schema walk exploded")
 
     monkeypatch.setattr("setforge.cli.config._complete_path_local", _explode)
-    result = _complete_path_dispatch(_FakeCtx(local=True), "")
+    result = _complete_path_dispatch(cast(typer.Context, _FakeCtx(local=True)), "")
     # Fallback list arrives instead of an exception.
     assert "source" in result
     assert "binaries" in result

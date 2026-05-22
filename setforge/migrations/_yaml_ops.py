@@ -22,9 +22,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.comments import CommentedMap  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
 __all__ = ["atomic_write_yaml", "rename_key", "yaml_rt"]
 

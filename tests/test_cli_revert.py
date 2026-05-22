@@ -471,7 +471,7 @@ def test_revert_to_before_two_step_unwinds_chain_in_order(
     call_log: list[list[str]] = []
     real_run = _transitions_module.subprocess.run
 
-    def _logging_run(args: list[str], **kwargs: object) -> object:
+    def _logging_run(args: list[str], **kwargs: Any) -> Any:
         call_log.append(list(args))
         return real_run(args, **kwargs)
 

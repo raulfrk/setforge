@@ -29,8 +29,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 __all__ = [
     "MIGRATIONS",

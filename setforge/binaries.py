@@ -28,9 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError

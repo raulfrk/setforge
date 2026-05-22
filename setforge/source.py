@@ -31,10 +31,8 @@ from pathlib import Path
 from typing import Annotated, Final, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from setforge import git_ops
 from setforge.config import MarketplaceSourceKind

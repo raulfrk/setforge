@@ -16,11 +16,8 @@ from pathlib import Path
 import typer
 from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
 from pydantic import ValidationError
-
-# ruamel.yaml ships py.typed without resolvable annotations; mirrors the
-# pragma used in setforge.config and setforge.binaries.
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
-from ruamel.yaml.error import YAMLError  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from setforge import source as source_mod
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
