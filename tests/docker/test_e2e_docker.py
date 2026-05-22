@@ -548,17 +548,20 @@ def test_install_comprehensive_plugins_extensions(
 def test_install_verbose_emits_setforge_debug(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``-v`` flag surfaces ``setforge.claude_plugins`` DEBUG from a real subprocess.
+    """``-v`` flag surfaces ``claude_marketplace_cache`` DEBUG via real subprocess.
 
     Closes the e2e scope gap left by the in-process CliRunner unit tests
     in :mod:`tests.test_cli_e2e` (which prove flag mechanics inside the
     test interpreter but not real-subprocess logging propagation). Runs
     the comprehensive profile under ``-v`` in a fresh Debian container
-    and asserts a ``setforge.claude_plugins DEBUG:`` line lands on
-    stderr — proving the setforge-58x verbosity surface threads
-    end-to-end through CLI startup, ``logging.basicConfig(stream=sys.stderr)``,
-    and the production ``setforge.claude_plugins`` LOGGER call sites
-    (``_run_git`` / ``_clone_marketplace`` / ``_cache_origin_url``).
+    and asserts a ``setforge.claude_marketplace_cache DEBUG:`` line
+    lands on stderr — proving the setforge-58x verbosity surface threads
+    end-to-end through CLI startup,
+    ``logging.basicConfig(stream=sys.stderr)``, and the production
+    ``setforge.claude_marketplace_cache`` LOGGER call sites (``_run_git``
+    / ``_clone_marketplace`` / ``_cache_origin_url``). The git helpers
+    moved out of ``claude_plugins`` into ``claude_marketplace_cache``
+    in setforge-qo23.
 
     The ``claude.install_mode: local-clone`` opt-in via host-local
     ``local.yaml`` is required: under default ``regular`` mode the git
@@ -573,9 +576,9 @@ def test_install_verbose_emits_setforge_debug(
     """
     c = docker_container()
     # Flip to local-clone install mode so the git helpers in
-    # claude_plugins (_run_git / _clone_marketplace / _cache_origin_url)
-    # are exercised on the install path; their success-path stderr-DEBUG
-    # blocks are what this test verifies.
+    # claude_marketplace_cache (_run_git / _clone_marketplace /
+    # _cache_origin_url) are exercised on the install path; their
+    # success-path stderr-DEBUG blocks are what this test verifies.
     c.write_text(
         "/home/tester/.config/setforge/local.yaml",
         textwrap.dedent(
@@ -586,8 +589,8 @@ def test_install_verbose_emits_setforge_debug(
         ),
     )
     result = _install(c, "test-comprehensive", root_args=["-vv"])
-    assert "setforge.claude_plugins DEBUG:" in result.stderr, (
-        f"expected 'setforge.claude_plugins DEBUG:' in stderr; "
+    assert "setforge.claude_marketplace_cache DEBUG:" in result.stderr, (
+        f"expected 'setforge.claude_marketplace_cache DEBUG:' in stderr; "
         f"first 800 chars: {result.stderr[:800]}"
     )
 
