@@ -296,9 +296,14 @@ class _LocalTrackedFileOverlay(BaseModel):
     setforge.yaml can serve both.
 
     Always write the YAML-1.2 octal literal: ``mode: 0o755``. The
-    in-range bound is ``0..0o7777`` (4095 decimal) — covers the
-    full 12-bit POSIX mode-bit surface (sticky / setgid / setuid +
-    rwxrwxrwx). The model_validator rejects out-of-range values.
+    in-range bound is ``0..0o1777`` (1023 decimal + the 0o1000
+    sticky bit) — covers rwxrwxrwx (0o0777) plus the sticky bit
+    (0o1000). The setuid (0o4000) and setgid (0o2000) bits are
+    refused for security, mirroring
+    :func:`setforge.config.TrackedFile._validate_mode`. The
+    out-of-range check fires first (mode <= 0o7777 is the parse
+    surface); the setuid/setgid check fires second so the user
+    gets a targeted message rather than a generic out-of-range.
 
     YAML-1.1 footgun caveat: under ``local.yaml``'s safe-yaml
     loader, BOTH ``mode: 0755`` (YAML-1.1 octal) and ``mode: 755``
@@ -405,16 +410,21 @@ class _LocalTrackedFileOverlay(BaseModel):
     def _validate_host_local_overrides(self) -> "_LocalTrackedFileOverlay":
         """Enforce mutual-exclusion + bounds + ``$VAR`` ban for the m3qx fields.
 
-        Three invariants in one validator so each call to
+        Four invariants in one validator so each call to
         ``_LocalTrackedFileOverlay.model_validate(...)`` sees the
         full contract:
 
         1. ``mode`` + ``symlink_target`` together — refused
            (chmod-on-symlink follows the link, footgun semantics).
         2. ``mode`` out of ``0..0o7777`` (4095 decimal) — refused
-           (POSIX file-mode bits including setuid / setgid /
-           sticky cap at 12 bits).
-        3. ``dst`` containing ``$`` — refused (env-var expansion
+           (12-bit POSIX mode-bit ceiling at the parse layer).
+        3. ``mode`` with setuid (0o4000) or setgid (0o2000) bits
+           set — refused for security, mirroring
+           :func:`setforge.config.TrackedFile._validate_mode`.
+           Catching it here surfaces a clear message before the
+           downstream ``TrackedFile.model_validate(merged)`` in
+           :func:`setforge.config.apply_host_local_tracked_file_overrides`.
+        4. ``dst`` containing ``$`` — refused (env-var expansion
            is intentionally out of contract; only ``~``-prefix is
            supported, expanded via :func:`Path.expanduser`).
         """
@@ -428,6 +438,18 @@ class _LocalTrackedFileOverlay(BaseModel):
             raise ValueError(
                 "_LocalTrackedFileOverlay: `mode` must be in 0..0o7777 "
                 f"(4095 decimal); got {self.mode:#o}"
+            )
+        if self.mode is not None and self.mode & 0o6000:
+            # Mirror TrackedFile._validate_mode: setuid (0o4000) and
+            # setgid (0o2000) bits are refused for security; sticky
+            # (0o1000) is still permitted. Catching it at the overlay
+            # layer surfaces a clear message instead of the less-clear
+            # ValidationError from TrackedFile.model_validate(merged)
+            # downstream in apply_host_local_tracked_file_overrides.
+            raise ValueError(
+                f"_LocalTrackedFileOverlay: `mode` {self.mode:#o} sets "
+                "setuid/setgid bits which TrackedFile refuses for "
+                "security; use 0..0o1777 (sticky bit still permitted)."
             )
         if self.dst is not None and "$" in str(self.dst):
             raise ValueError(

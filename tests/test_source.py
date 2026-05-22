@@ -381,9 +381,12 @@ class TestLocalTrackedFileOverlayHostLocalOverrides:
     install path) + ``symlink_target`` (install as symlink) extend
     :class:`_LocalTrackedFileOverlay`. ``mode`` and ``symlink_target``
     are mutually exclusive (chmod-on-symlink follows the link). ``mode``
-    is bounded ``0 <= mode <= 0o7777``. ``dst`` forbids ``$VAR``
-    env-var references — expansion happens at deploy time via
-    ``Path.expanduser`` only.
+    is bounded ``0 <= mode <= 0o7777`` at the parse layer; the setuid
+    (0o4000) and setgid (0o2000) bits are refused for security so the
+    effective upper bound is ``0o1777`` (sticky bit still permitted)
+    — mirrors :func:`TrackedFile._validate_mode`. ``dst`` forbids
+    ``$VAR`` env-var references — expansion happens at deploy time
+    via ``Path.expanduser`` only.
     """
 
     def test_rejects_mode_with_symlink_target(self) -> None:
@@ -432,14 +435,31 @@ class TestLocalTrackedFileOverlayHostLocalOverrides:
         assert ovl.mode == 0
 
     def test_accepts_mode_max(self) -> None:
-        """Boundary: mode == 0o7777 (4095 decimal) is in-range.
+        """Boundary: mode == 0o1777 (the highest accepted value).
 
-        The 12-bit cap covers POSIX file-mode bits including sticky
-        (0o1000), setgid (0o2000), setuid (0o4000), and the three
-        rwx triples (0o0777).
+        The parse-layer cap is 0o7777 (12-bit POSIX surface) but the
+        setuid (0o4000) + setgid (0o2000) bits are refused for
+        security (mirrors :func:`TrackedFile._validate_mode`). The
+        sticky bit (0o1000) is still permitted, so 0o1777 is the
+        maximum accepted value.
         """
-        ovl = _LocalTrackedFileOverlay(mode=0o7777)
-        assert ovl.mode == 0o7777
+        ovl = _LocalTrackedFileOverlay(mode=0o1777)
+        assert ovl.mode == 0o1777
+
+    def test_rejects_setuid_bit(self) -> None:
+        """mode with setuid (0o4000) is refused at the overlay layer
+        with a clear message — mirrors :func:`TrackedFile._validate_mode`
+        so the merged-revalidate path in
+        :func:`apply_host_local_tracked_file_overrides` cannot surface
+        a less-clear ValidationError for the same input."""
+        with pytest.raises(ValueError, match=r"setuid/setgid bits"):
+            _LocalTrackedFileOverlay(mode=0o4755)
+
+    def test_rejects_setgid_bit(self) -> None:
+        """mode with setgid (0o2000) is refused with the same message
+        as setuid — both are filtered by the ``mode & 0o6000`` check."""
+        with pytest.raises(ValueError, match=r"setuid/setgid bits"):
+            _LocalTrackedFileOverlay(mode=0o2755)
 
     def test_rejects_negative_mode(self) -> None:
         """Boundary: mode < 0 is out-of-range."""
