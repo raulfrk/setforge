@@ -190,6 +190,7 @@ def _drift_body(user_sub: str) -> str:
 # --- Variant B ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_minimal_floor(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -204,6 +205,7 @@ def test_install_minimal_floor(
 # --- Variant C ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_text_sections_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -228,6 +230,7 @@ def test_install_text_sections_no_live(
 # --- Variant D ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_text_sections_preserve_user_content(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -260,6 +263,7 @@ def test_install_text_sections_preserve_user_content(
 # --- Variant E ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_json_byte_copy(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -277,6 +281,7 @@ def test_install_json_byte_copy(
 # --- Variant F ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_jsonc_shallow_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -292,6 +297,7 @@ def test_install_jsonc_shallow_no_live(
 # --- Variant G ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_jsonc_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -333,6 +339,7 @@ def test_install_jsonc_shallow_preserve_overlay(
 # --- Variant H ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_jsonc_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -373,6 +380,7 @@ def test_install_jsonc_deep_preserve_overlay(
 # --- Variant H1 -----------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_yaml_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -404,6 +412,7 @@ def test_install_yaml_shallow_preserve_overlay(
 # --- Variant H2 -----------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_yaml_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -436,6 +445,7 @@ def test_install_yaml_deep_preserve_overlay(
 # --- Variant I ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_directory_copy(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -453,6 +463,7 @@ def test_install_directory_copy(
 # --- Variant J ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_template_dst_jinja2(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -479,6 +490,7 @@ def test_install_template_dst_jinja2(
 # --- Variant K ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_chain_resolution_and_bootstrap(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -498,6 +510,7 @@ def test_install_chain_resolution_and_bootstrap(
 # --- Variant L ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_comprehensive_plugins_extensions(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -531,6 +544,7 @@ def test_install_comprehensive_plugins_extensions(
 # --- Variant L1 (setforge-58x verbosity surface) --------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_verbose_emits_setforge_debug(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -586,6 +600,7 @@ def test_install_verbose_emits_setforge_debug(
 # --- Variant M ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_no_drift_noop(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -601,6 +616,7 @@ def test_sync_no_drift_noop(
 # --- Variant N ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_auto_use_live_silent_absorb(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -616,6 +632,7 @@ def test_sync_auto_use_live_silent_absorb(
 # --- Variant O ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_auto_keep_tracked_refuse_absorb(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -659,6 +676,7 @@ def test_sync_auto_keep_tracked_refuse_absorb(
 # This is the empirical resolution of open question 8.
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_interactive_keep_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
@@ -678,6 +696,7 @@ def test_sync_interactive_keep_via_pty(
 # --- Variant Q (interactive: pty + 'u') -----------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_interactive_use_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
@@ -696,6 +715,7 @@ def test_sync_interactive_use_via_pty(
 # --- Variant R (interactive: pty + 's') -----------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_interactive_skip_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
@@ -734,6 +754,7 @@ def test_sync_interactive_skip_via_pty(
 # --- Variant S (interactive: pty + 'm') -----------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_interactive_merge_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
@@ -761,6 +782,7 @@ def test_sync_interactive_merge_via_pty(
 # --- Variant S1 (YAML deep wizard parity) ---------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_yaml_deep_interactive_use_via_pty(
     docker_container: Callable[..., ContainerHandle],
     docker_pty_session: Callable[..., pexpect.spawn],
@@ -784,6 +806,7 @@ def test_sync_yaml_deep_interactive_use_via_pty(
 # --- Variant T ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_compare_reports_drift_exit_nonzero(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -810,6 +833,7 @@ def test_compare_reports_drift_exit_nonzero(
 # --- Variant U ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_then_revert_restores_state(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -847,6 +871,7 @@ def test_install_then_revert_restores_state(
 # --- p1vl: revert confirm-explain-redo wizard (mockup A) ------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_revert_confirm_aborted(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -883,6 +908,7 @@ def test_e2e_docker_revert_confirm_aborted(
     assert c.read_text(target) == pre
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_revert_confirm_applied(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -919,6 +945,7 @@ def test_e2e_docker_revert_confirm_applied(
 # --- Variant V ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_idempotent_second_run_noop(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -935,6 +962,7 @@ def test_install_idempotent_second_run_noop(
 # --- Variant W ------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_validate_clean_yaml_exit_zero(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -972,6 +1000,7 @@ _LEGACY_LIVE_TEXT = (
 )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_compare_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1012,6 +1041,7 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_legacy_live_markers_preserves_body_and_retags(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1043,6 +1073,7 @@ def test_install_legacy_live_markers_preserves_body_and_retags(
     assert "<!-- setforge:user-section end notes -->" not in live_post
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_compare_after_legacy_install_is_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1104,6 +1135,7 @@ _PROSE_SKILL_TRACKED = (
 )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_deploys_three_new_prose_reviewer_agents(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1116,6 +1148,7 @@ def test_install_deploys_three_new_prose_reviewer_agents(
         assert live == tracked, f"deployed {basename} drifts from tracked"
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_install_deploys_new_reviewing_markdown_skill(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1127,6 +1160,7 @@ def test_install_deploys_new_reviewing_markdown_skill(
     assert live == tracked
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1148,6 +1182,7 @@ def test_compare_after_install_clean_no_drift_for_new_agents_and_skill(
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_revert_after_install_removes_new_agents_and_skill(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1213,6 +1248,7 @@ def test_revert_after_install_removes_new_agents_and_skill(
     ), "post-revert: reviewing-markdown SKILL.md should be absent"
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_merge_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1260,6 +1296,7 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_sync_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1307,6 +1344,7 @@ def test_sync_legacy_live_refuses_with_pointer_to_install(
 # --- Variant L2 (legacy my_setup.yaml migration error) ----------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1362,6 +1400,7 @@ def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
 # --- Variant: scan clean (gitleaks present, no findings) -------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_secrets_scan_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1390,6 +1429,7 @@ def test_e2e_docker_install_secrets_scan_clean(
 # --- Variant: gitleaks finds + aborts (default non-TTY ABORT) -------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_secrets_scan_finds_and_aborts(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1450,6 +1490,7 @@ def test_e2e_docker_install_secrets_scan_finds_and_aborts(
 # --- Variant: gitleaks missing → warn-and-continue (soft-requirement) ----
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_no_gitleaks_warns_and_continues(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1596,6 +1637,7 @@ def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> 
     return out_path
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_plugin_failure_skip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1648,6 +1690,7 @@ def test_e2e_docker_install_plugin_failure_skip(
     assert '"status": "skipped"' in outcomes, outcomes
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_plugin_failure_retry_success(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1716,6 +1759,7 @@ def test_e2e_docker_install_plugin_failure_retry_success(
     assert second.returncode == 0, second.stderr
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1757,6 +1801,7 @@ def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_retry_failed_flag(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1821,6 +1866,7 @@ def _init(
     return result
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_fresh(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1849,6 +1895,7 @@ def test_e2e_docker_init_fresh(
     assert host_local_check.returncode == 0, "host-local dir missing post-init"
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_reinit_idempotent(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1875,6 +1922,7 @@ def test_e2e_docker_init_reinit_idempotent(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_force_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1919,6 +1967,7 @@ def test_e2e_docker_init_force_with_backup(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_check_readonly(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -1947,6 +1996,7 @@ def test_e2e_docker_init_check_readonly(
 # --- Variant U (setforge upgrade --check via fake PyPI) ---------------------
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_upgrade_check_mode(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2032,6 +2082,7 @@ def test_e2e_docker_upgrade_check_mode(
 #      end-to-end at multi-file granularity.
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_migrate_check_no_migrations_available(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2134,6 +2185,7 @@ _FAKE_MIGRATION_HARNESS = textwrap.dedent(
 )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_migrate_multi_file_fake(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2254,6 +2306,7 @@ def _git_init_workspace(container: ContainerHandle) -> None:
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_path_source_clean_no_warn(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2274,6 +2327,7 @@ def test_e2e_docker_install_path_source_clean_no_warn(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_path_source_dirty_warns_abort(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2320,6 +2374,7 @@ def test_e2e_docker_install_path_source_dirty_warns_abort(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_path_source_dirty_no_git_check_bypasses(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -2344,6 +2399,7 @@ def test_e2e_docker_install_path_source_dirty_no_git_check_bypasses(
     )
 
 
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
