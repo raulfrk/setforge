@@ -774,6 +774,7 @@ source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
     { name = "json-five" },
+    { name = "packaging" },
     { name = "platformdirs" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
@@ -798,6 +799,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "json-five", specifier = ">=1.1,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
+    { name = "packaging", specifier = ">=21" },
     { name = "pexpect", marker = "extra == 'dev'", specifier = ">=4.9" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.50" },
