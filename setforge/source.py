@@ -338,18 +338,27 @@ class _LocalTrackedFileOverlay(BaseModel):
     ``/usr/local/share/foo/config.txt``); install creates a
     symlink at the tracked dst pointing to this target. Same
     path-expansion semantics as ``dst``. Mutually exclusive with
-    ``mode``. Deploy-time semantics:
+    ``mode``. Deploy-time semantics (mirrors
+    :func:`setforge.deploy.deploy_symlinked_file`, the shared code
+    path the m3qx override rides through):
 
-    - Dangling target (file does not exist at install time) is
-      accepted with a WARNING — the symlink lands on disk so the
-      target can appear later.
-    - Existing dst that is a regular file (or pre-existing symlink)
-      is overwritten with the new symlink (mirrors the existing
-      :func:`copy_atomic` overwrite semantics).
-    - Existing dst that is a directory raises :class:`DeployError`
-      — a tracked_file pointing into a real directory layout is
-      almost certainly a config mistake; refuse rather than
-      silently clobber.
+    - Missing target file → :func:`_deploy_target_content` writes
+      the tracked content to the target BEFORE
+      :func:`_replace_symlink_atomic` places the link at dst.
+      Post-install the link is NEVER dangling; the parent
+      directory of ``target`` is created if absent. No warning
+      is emitted — the "dangling" framing is informational only.
+    - Existing dst that is a regular file (or pre-existing
+      symlink that is not the desired one) → REFUSED with
+      :class:`setforge.errors.SetforgeError`. The user must move
+      the file aside or remove it before re-running install; the
+      pre-existing content is preserved on refusal. This mirrors
+      the tracked-side ``symlink:`` field's move-aside-first
+      discipline (no silent clobber).
+    - Existing dst that is a directory → REFUSED with
+      :class:`setforge.errors.SetforgeError`. A tracked_file
+      pointing at a real directory layout is almost certainly a
+      config mistake.
     """
 
     @field_validator("mode", mode="before")

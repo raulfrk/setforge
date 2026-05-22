@@ -190,11 +190,11 @@ def test_install_fails_when_symlink_target_dst_is_directory(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 5: install overwrites pre-existing regular file with symlink
+# Scenario 5: install refuses regular file collision when deploying symlink
 # ---------------------------------------------------------------------------
 
 
-def test_install_overwrites_existing_file_with_symlink(
+def test_install_refuses_regular_file_collision_with_symlink(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """Pre-existing regular file at the tracked dst is refused —
