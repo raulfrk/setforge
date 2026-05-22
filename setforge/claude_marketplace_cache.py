@@ -43,6 +43,7 @@ MARKETPLACE_CACHE_ROOT: Final[Path] = (
 
 __all__ = [
     "MARKETPLACE_CACHE_ROOT",
+    "resolve_marketplace_source",
     "sync_marketplace_cache",
 ]
 
@@ -167,7 +168,7 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         # subprocess hygiene already mandates list-form argv and no
         # shell=True; this is the defense-in-depth completion of that.
         # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-        # by _resolve_marketplace_source for GITHUB sources
+        # by resolve_marketplace_source for GITHUB sources
         result = subprocess.run(
             [str(git), "clone", "--", source.repo or "", str(dest_path)],
             check=True,
@@ -212,7 +213,7 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 def _cache_origin_url(cache_dir: Path) -> str | None:
     """Return the cache's ``origin`` remote URL, or ``None`` on git failure.
 
-    Used by :func:`_resolve_marketplace_source` to detect a config-side
+    Used by :func:`resolve_marketplace_source` to detect a config-side
     repo URL change after the cache was first created. A best-effort
     probe — any git failure (no remote, dirty checkout, missing git
     binary) yields ``None`` so the caller can fall through to a
@@ -246,7 +247,7 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
     return result.stdout.strip()
 
 
-def _resolve_marketplace_source(
+def resolve_marketplace_source(
     source: MarketplaceSource,
     mode: ClaudeInstallMode,
     *,
@@ -322,7 +323,7 @@ def _resolve_cache_collision(
 ) -> MarketplaceSource:
     """Dispatch a URL-drift collision to the wizard and apply the choice.
 
-    Pulled out of :func:`_resolve_marketplace_source` so the swap-site
+    Pulled out of :func:`resolve_marketplace_source` so the swap-site
     keeps its single-screen shape. The wizard returns a closed-set
     :class:`CollisionAction`; this function maps each action to its
     side effects:
@@ -347,7 +348,7 @@ def _resolve_cache_collision(
         cache_root=cache_root,
         existing_origin=existing_origin,
         # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-        # by _resolve_marketplace_source for GITHUB sources
+        # by resolve_marketplace_source for GITHUB sources
         new_repo=source.repo or "",
         auto=auto,
     )

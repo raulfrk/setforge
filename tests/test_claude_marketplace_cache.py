@@ -1,6 +1,6 @@
 """Tests for marketplace + git + cache plumbing (``setforge.claude_marketplace_cache``).
 
-Exercises ``_resolve_marketplace_source`` (install-mode dispatch),
+Exercises ``resolve_marketplace_source`` (install-mode dispatch),
 ``_clone_marketplace`` argv hygiene, ``_safe_cache_dir`` path-traversal
 guards, and ``sync_marketplace_cache`` semantics. The ``fake_git``
 fixture (defined in :mod:`tests.conftest`) wires :class:`FakeGit` into
@@ -21,44 +21,44 @@ from setforge.config import (
 from tests.conftest import _make_config, _make_resolved
 
 # ---------------------------------------------------------------------------
-# _resolve_marketplace_source (pure transform)
+# resolve_marketplace_source (pure transform)
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_marketplace_source_regular_returns_input(tmp_path: Path) -> None:
+def testresolve_marketplace_source_regular_returns_input(tmp_path: Path) -> None:
     """REGULAR mode never touches the source — pure passthrough."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
 
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.REGULAR, cache_root=tmp_path
     )
     assert out is src
     assert not any(tmp_path.iterdir())  # no cache I/O
 
 
-def test_resolve_marketplace_source_path_kind_passthrough(tmp_path: Path) -> None:
+def testresolve_marketplace_source_path_kind_passthrough(tmp_path: Path) -> None:
     """PATH sources passthrough regardless of mode (already local)."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
 
     local = tmp_path / "preinstalled"
     local.mkdir()
     src = MarketplaceSource(source=MarketplaceSourceKind.PATH, path=local)
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
     )
     assert out is src
 
 
-def test_resolve_marketplace_source_local_clone_clones_on_cache_miss(
+def testresolve_marketplace_source_local_clone_clones_on_cache_miss(
     fake_git, tmp_path: Path
 ) -> None:
     """Cache miss in LOCAL_CLONE mode triggers a single git clone."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
     )
     assert out.source is MarketplaceSourceKind.PATH
@@ -66,26 +66,26 @@ def test_resolve_marketplace_source_local_clone_clones_on_cache_miss(
     assert fake.clone_count() == 1
 
 
-def test_resolve_marketplace_source_local_clone_offline_raises(
+def testresolve_marketplace_source_local_clone_offline_raises(
     fake_git, tmp_path: Path
 ) -> None:
     """git clone failure surfaces as MarketplaceCacheMiss with remediation."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.errors import MarketplaceCacheMiss
 
     fake_git(known_repos=set())  # any clone fails
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
     with pytest.raises(MarketplaceCacheMiss, match="sync-cache"):
-        _resolve_marketplace_source(
+        resolve_marketplace_source(
             src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
         )
 
 
-def test_resolve_marketplace_source_git_binary_missing_raises(
+def testresolve_marketplace_source_git_binary_missing_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Missing git binary yields a specific remediation message."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.errors import MarketplaceCacheMiss
 
     monkeypatch.setattr(
@@ -94,16 +94,16 @@ def test_resolve_marketplace_source_git_binary_missing_raises(
     )
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
     with pytest.raises(MarketplaceCacheMiss, match=r"git.*not on PATH"):
-        _resolve_marketplace_source(
+        resolve_marketplace_source(
             src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
         )
 
 
-def test_resolve_marketplace_source_existing_cache_no_clone(
+def testresolve_marketplace_source_existing_cache_no_clone(
     fake_git, tmp_path: Path
 ) -> None:
     """When the cache already exists with a matching origin, no git clone runs."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     cache_root = tmp_path / "cache"
@@ -113,18 +113,18 @@ def test_resolve_marketplace_source_existing_cache_no_clone(
     # Pre-register the origin URL so _cache_origin_url returns a match.
     fake.cloned[cache_dir] = "anthropic/plug"
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
     )
     assert out.path == cache_dir
     assert fake.clone_count() == 0
 
 
-def test_resolve_marketplace_source_url_drift_invokes_wizard(
+def testresolve_marketplace_source_url_drift_invokes_wizard(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cache-origin URL drift dispatches the wizard; [u]pdate re-clones."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.marketplace_cache_wizard import (
         CollisionAction,
         CollisionResolution,
@@ -144,17 +144,17 @@ def test_resolve_marketplace_source_url_drift_invokes_wizard(
         "setforge.marketplace_cache_wizard.resolve_collision",
         lambda **_: CollisionResolution(action=CollisionAction.UPDATE),
     )
-    _resolve_marketplace_source(
+    resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
     )
     assert fake.clone_count() == 1
 
 
-def test_resolve_marketplace_source_url_drift_non_tty_no_auto_raises(
+def testresolve_marketplace_source_url_drift_non_tty_no_auto_raises(
     fake_git, tmp_path: Path
 ) -> None:
     """Cache collision under non-TTY + no --auto raises MarketplaceCacheMiss."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.errors import MarketplaceCacheMiss
 
     fake = fake_git(known_repos={"anthropic/plug", "newowner/plug"})
@@ -166,7 +166,7 @@ def test_resolve_marketplace_source_url_drift_non_tty_no_auto_raises(
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="newowner/plug")
     # pytest has no TTY → wizard refuses to silently auto-pick.
     with pytest.raises(MarketplaceCacheMiss, match="cache collision"):
-        _resolve_marketplace_source(
+        resolve_marketplace_source(
             src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
         )
     # No destructive action — existing cache untouched, no clone.
@@ -190,11 +190,11 @@ def test_clone_marketplace_argv_uses_dash_dash_separator(
     prevents shell-level injection; this completes the defense at the
     git-CLI argument-parsing layer.
     """
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
 
     fake = fake_git(known_repos={"anthropic/plug"})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
-    _resolve_marketplace_source(
+    resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
     )
     clone_calls = [c for c in fake.calls if c[1:2] == ["clone"]]
@@ -239,17 +239,17 @@ def test_safe_cache_dir_accepts_plain_basename(tmp_path: Path) -> None:
     assert out == tmp_path / "plug"
 
 
-def test_resolve_marketplace_source_rejects_path_traversal_repo(
+def testresolve_marketplace_source_rejects_path_traversal_repo(
     fake_git, tmp_path: Path
 ) -> None:
     """A repo of shape 'foo/..' (basename '..') is rejected pre-clone."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.errors import MarketplaceCacheMiss
 
     fake = fake_git(known_repos={"foo/.."})
     src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="foo/..")
     with pytest.raises(MarketplaceCacheMiss, match="invalid marketplace cache subdir"):
-        _resolve_marketplace_source(
+        resolve_marketplace_source(
             src, ClaudeInstallMode.LOCAL_CLONE, cache_root=tmp_path / "cache"
         )
     # And: no rmtree, no clone, no I/O — assert nothing was executed.

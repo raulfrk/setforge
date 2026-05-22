@@ -233,11 +233,11 @@ def test_resolve_collision_keep_accepts_full_word(tmp_path: Path) -> None:
 # --- integration: claude_plugins drives the wizard ---
 
 
-def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
+def testresolve_marketplace_source_url_drift_keep_uses_existing_cache(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[k]eep returns the existing cache_dir and runs zero clones."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
@@ -261,7 +261,7 @@ def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
         "setforge.marketplace_cache_wizard.resolve_collision",
         lambda **_: CollisionResolution(action=CollisionAction.KEEP),
     )
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root, mp_name="anthropic"
     )
     assert out.source is MarketplaceSourceKind.PATH
@@ -271,11 +271,11 @@ def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
     assert cache_dir.exists()
 
 
-def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
+def testresolve_marketplace_source_url_drift_both_clones_into_new_subdir(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[b]oth clones into a fresh subdir; existing cache stays put."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
@@ -301,7 +301,7 @@ def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
             action=CollisionAction.BOTH, new_cache_dir=new_dir
         ),
     )
-    out = _resolve_marketplace_source(
+    out = resolve_marketplace_source(
         src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root, mp_name="anthropic"
     )
     assert out.path == new_dir
@@ -311,11 +311,11 @@ def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
     assert new_dir.exists()
 
 
-def test_resolve_marketplace_source_url_drift_abort_propagates(
+def testresolve_marketplace_source_url_drift_abort_propagates(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """typer.Abort from the wizard propagates out of _resolve_marketplace_source."""
-    from setforge.claude_marketplace_cache import _resolve_marketplace_source
+    """typer.Abort from the wizard propagates out of resolve_marketplace_source."""
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
@@ -337,7 +337,7 @@ def test_resolve_marketplace_source_url_drift_abort_propagates(
         _raise_abort,
     )
     with pytest.raises(typer.Abort):
-        _resolve_marketplace_source(
+        resolve_marketplace_source(
             src,
             ClaudeInstallMode.LOCAL_CLONE,
             cache_root=cache_root,

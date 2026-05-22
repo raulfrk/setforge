@@ -104,7 +104,7 @@ def _isolate_home(
     directory, NOT under the test's ``tmp_path``. This matters because
     some tests pass their ``tmp_path`` to production code and then
     assert it is empty (e.g.
-    ``test_claude_plugins.test_resolve_marketplace_source_regular_returns_input``
+    ``test_claude_marketplace_cache.test_resolve_marketplace_source_regular_returns_input``
     on its ``cache_root=tmp_path`` argument). If the autouse fixture
     seeded a subdir into ``tmp_path``, those assertions would
     false-fail. ``tmp_path_factory`` gives a separate per-test dir

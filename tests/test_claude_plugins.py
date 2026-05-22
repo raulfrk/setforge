@@ -1495,7 +1495,7 @@ def test_roundtrip_file_and_plugin_state(
 # :mod:`tests.test_claude_marketplace_cache` (setforge-qo23). The
 # integration cases below stay here because they exercise
 # ``reconcile()`` end-to-end (claude_plugins orchestration crossing into
-# the marketplace-cache module via :func:`_resolve_marketplace_source`).
+# the marketplace-cache module via :func:`resolve_marketplace_source`).
 
 
 def test_reconcile_local_clone_swaps_source_before_marketplace_add(

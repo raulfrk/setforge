@@ -30,7 +30,7 @@ from pathlib import Path
 
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge.binaries import load_host_local_config, resolve_binary, stderr_of
-from setforge.claude_marketplace_cache import _resolve_marketplace_source
+from setforge.claude_marketplace_cache import resolve_marketplace_source
 from setforge.config import (
     ClaudeInstallMode,
     Config,
@@ -175,7 +175,7 @@ def marketplace_add(name: str, source: MarketplaceSource) -> None:
     claude = str(_get_claude_bin())
     if source.source is MarketplaceSourceKind.GITHUB:
         # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-        # by _resolve_marketplace_source for GITHUB sources
+        # by resolve_marketplace_source for GITHUB sources
         source_arg = source.repo or ""
     else:
         source_arg = str(source.path or "")
@@ -304,7 +304,7 @@ def _add_declared_marketplaces(
     w.r.t. anything outside ``failed`` — the caller still owns the
     surrounding state machine.
 
-    ``auto`` propagates to :func:`_resolve_marketplace_source` and
+    ``auto`` propagates to :func:`resolve_marketplace_source` and
     governs the cache-collision wizard. Default is interactive (the
     wizard fires on URL drift); pass ``auto=True`` from a non-
     interactive CLI path to refuse silent auto-resolution.
@@ -312,7 +312,7 @@ def _add_declared_marketplaces(
     for mp_name in mps_to_add:
         LOGGER.info("adding marketplace: %s", mp_name)
         try:
-            effective_source = _resolve_marketplace_source(
+            effective_source = resolve_marketplace_source(
                 cfg.marketplaces[mp_name],
                 install_mode,
                 cache_root=cache_root,
