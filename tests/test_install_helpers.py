@@ -10,8 +10,10 @@ explicitly.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from setforge.cli import _install_helpers
+from setforge.cli._helpers import ProfileContext
 from setforge.compare import CompareReport
 
 
@@ -31,10 +33,6 @@ def test_check_unexpected_drift_no_entries_is_noop() -> None:
     the cast keeps mypy honest about the deliberate violation that the
     short-circuit contract permits.
     """
-    from typing import cast
-
-    from setforge.cli._helpers import ProfileContext
-
     empty = CompareReport(entries=[], has_unexpected_drift=False)
     _install_helpers._check_unexpected_drift(
         empty,

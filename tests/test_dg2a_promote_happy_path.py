@@ -13,8 +13,6 @@ import io
 from pathlib import Path
 
 import pytest
-
-# ruamel.yaml ships py.typed without resolvable annotations.
 from ruamel.yaml import YAML
 
 from setforge.secrets import SecretsScanResult
