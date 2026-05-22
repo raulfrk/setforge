@@ -68,10 +68,26 @@ Superpowers skills are designed to defer to.
 3. **Phase 3 — Plan** — produce the implementation plan as a normal response
    (no `EnterPlanMode`). The bd issue's structured fields carry the
    contract from step 2; the plan is internal scaffolding, not a
-   review surface. **NOT optional.** Walks the implementation against
-   actual code; verifies symbol names exist; catches pre-implementation
-   typos. *(empirical observation A — omitting this caused the cxj
-   typo bug.)*
+   review surface. **MANDATORY.** Before invoking ANY Phase 4
+   implementation Agent (whether single-stream or parallel
+   cross-worktree), verify that a Phase 3 implementation plan exists
+   at `~/.claude/projects/{cwd-slug}/plans/<YYYY-MM-DD>-<feature>.md`.
+   If not, invoke `superpowers:writing-plans` BEFORE proceeding. The
+   spec batch (Phase 2) is the contract; the implementation plan
+   (Phase 3) is the symbol-verification walk-through — they are NOT
+   interchangeable. Walks the implementation against actual code;
+   verifies symbol names exist; catches pre-implementation typos.
+   *(empirical observations A and M — observation A: omitting this
+   caused the cxj typo bug at single-bead scale; observation M: same
+   anti-pattern at orchestration scale in the setforge-4tm 12-bead
+   batch, where the orchestrator was about to dispatch 12 Phase 4
+   Agents without a Phase 3 plan because the Phase 2 spec batch was
+   deemed sufficient — user intervention required.)*
+
+   The plan-existence requirement applies once per BEAD, not per subagent.
+   For in-session subagent dispatch via
+   `superpowers:subagent-driven-development`, the parent bead's
+   Phase 3 plan covers the burst — no separate plan per subagent.
 
 4. **Phase 4 — Implement** — single-stream by default
    (`superpowers:executing-plans`). Parallel ONLY when work is
@@ -175,7 +191,7 @@ N+1.
 - Specs → `~/.claude/projects/{cwd-slug}/specs/<YYYY-MM-DD>-<topic>.md`
 - Plans → `~/.claude/projects/{cwd-slug}/plans/<YYYY-MM-DD>-<feature>.md`
 - `{cwd-slug}` matches the auto-memory convention — cwd with `/` → `-`
-  (e.g. `-home-raul-my-setup`).
+  (e.g. `-home-raul-setforge`).
 
 ## Hard-gate posture
 
