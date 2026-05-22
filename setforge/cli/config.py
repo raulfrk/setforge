@@ -40,7 +40,7 @@ from ruamel.yaml.comments import (  # type: ignore[import-not-found]
 )
 
 from setforge.binaries import LOCAL_CONFIG_PATH, ensure_local_config_stub
-from setforge.cli import _TYPER_KWARGS, app
+from setforge.cli import app
 from setforge.cli._config_helpers import (
     FieldNode as _FieldNode,
 )
@@ -121,7 +121,7 @@ class ConfigScope(StrEnum):
 config_app: typer.Typer = typer.Typer(
     help="Granular CRUD over setforge.yaml / local.yaml.",
     no_args_is_help=True,
-    **_TYPER_KWARGS,
+    rich_markup_mode=None,
 )
 app.add_typer(config_app, name="config")
 

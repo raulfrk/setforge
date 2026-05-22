@@ -22,7 +22,6 @@ from setforge import snapshots as snap_mod
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
-    _TYPER_KWARGS,
     _resolve_config_arg,
     app,
 )
@@ -66,7 +65,7 @@ snapshot_app: typer.Typer = typer.Typer(
         "profile-resolved tracked_files.dst set plus local.yaml."
     ),
     no_args_is_help=True,
-    **_TYPER_KWARGS,
+    rich_markup_mode=None,
 )
 app.add_typer(snapshot_app, name="snapshot")
 

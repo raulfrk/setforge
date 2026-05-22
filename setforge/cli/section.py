@@ -27,7 +27,6 @@ from setforge._editor import run_editor
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
-    _TYPER_KWARGS,
     _resolve_config_arg,
     app,
 )
@@ -75,7 +74,7 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 section_app: typer.Typer = typer.Typer(
     help="Manage user-section markers in tracked markdown files.",
     no_args_is_help=True,
-    **_TYPER_KWARGS,
+    rich_markup_mode=None,
 )
 app.add_typer(section_app, name="section")
 
