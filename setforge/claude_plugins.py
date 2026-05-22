@@ -30,7 +30,7 @@ from pathlib import Path
 
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge.binaries import load_host_local_config, resolve_binary, stderr_of
-from setforge.claude_marketplace_cache import resolve_marketplace_source
+from setforge.claude_marketplace_cache import _TIMEOUT_S, resolve_marketplace_source
 from setforge.config import (
     ClaudeInstallMode,
     Config,
@@ -58,7 +58,6 @@ __all__ = [
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _CLAUDE_BIN_NAME = "claude"
-_TIMEOUT_S = 30
 
 
 @functools.lru_cache(maxsize=1)
