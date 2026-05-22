@@ -237,7 +237,7 @@ def test_resolve_marketplace_source_url_drift_keep_uses_existing_cache(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[k]eep returns the existing cache_dir and runs zero clones."""
-    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import _resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
@@ -275,7 +275,7 @@ def test_resolve_marketplace_source_url_drift_both_clones_into_new_subdir(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """[b]oth clones into a fresh subdir; existing cache stays put."""
-    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import _resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,
@@ -315,7 +315,7 @@ def test_resolve_marketplace_source_url_drift_abort_propagates(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """typer.Abort from the wizard propagates out of _resolve_marketplace_source."""
-    from setforge.claude_plugins import _resolve_marketplace_source
+    from setforge.claude_marketplace_cache import _resolve_marketplace_source
     from setforge.config import (
         ClaudeInstallMode,
         MarketplaceSource,

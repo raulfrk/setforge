@@ -11,7 +11,9 @@ from pathlib import Path
 import typer
 
 from setforge import binaries
+from setforge import claude_marketplace_cache as claude_mp_cache_mod
 from setforge import claude_plugins as claude_plugins_mod
+from setforge import claude_yaml_editor as claude_yaml_editor_mod
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
 from setforge.cli._help_examples import (
     MARKETPLACE_ADD_EXAMPLES,
@@ -145,7 +147,7 @@ def _register_plugin_in_yaml(
     source: MarketplaceSource,
 ) -> None:
     """Register the marketplace, plugin, and profile binding in setforge.yaml."""
-    mp_added = claude_plugins_mod.yaml_add_marketplace(config, mp_name, source)
+    mp_added = claude_yaml_editor_mod.yaml_add_marketplace(config, mp_name, source)
     if mp_added:
         typer.echo(f"registered marketplace: {mp_name}")
         try:
@@ -154,11 +156,13 @@ def _register_plugin_in_yaml(
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
 
-    plugin_declared = claude_plugins_mod.yaml_add_plugin(config, plugin_name, mp_name)
+    plugin_declared = claude_yaml_editor_mod.yaml_add_plugin(
+        config, plugin_name, mp_name
+    )
     if plugin_declared:
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
-    profile_added = claude_plugins_mod.yaml_add_plugin_to_profile(
+    profile_added = claude_yaml_editor_mod.yaml_add_plugin_to_profile(
         config, profile, f"{plugin_name}@{mp_name}"
     )
     if profile_added:
@@ -217,7 +221,7 @@ def plugin_remove(
 ) -> None:
     """Remove a plugin from the profile's claude_plugins list."""
     plugin_ref = name  # already in <name>@<marketplace> form or just name
-    changed = claude_plugins_mod.yaml_remove_plugin_from_profile(
+    changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
         config, profile, plugin_ref
     )
     if changed:
@@ -318,7 +322,7 @@ def sync_cache(
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:
-        refreshed = claude_plugins_mod.sync_marketplace_cache(cfg, resolved)
+        refreshed = claude_mp_cache_mod.sync_marketplace_cache(cfg, resolved)
     except MarketplaceCacheMiss as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -355,7 +359,7 @@ def marketplace_add_cmd(
     """Register a marketplace in YAML and run claude plugin marketplace add."""
     source = _parse_marketplace_from(from_)
 
-    yaml_changed = claude_plugins_mod.yaml_add_marketplace(config, name, source)
+    yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
     if yaml_changed:
         typer.echo(f"added {name} to marketplaces in YAML")
     else:
@@ -374,7 +378,7 @@ def marketplace_remove_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Remove a marketplace from YAML and run claude plugin marketplace remove."""
-    yaml_changed = claude_plugins_mod.yaml_remove_marketplace(config, name)
+    yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
     if yaml_changed:
         typer.echo(f"removed {name} from marketplaces in YAML")
     else:

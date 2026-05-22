@@ -12,23 +12,32 @@ when CliRunner tests share ``$HOME`` (setforge-hpd4):
   resolves ``Path.home()`` lazily (completion, snapshots, transitions,
   migrations) — without this, parallel workers would still race on the
   dev-host home for those code paths.
+
+The :class:`FakeClaude` / :class:`FakeGit` fakes and their
+``fake_claude`` / ``fake_git`` fixtures live here (rather than in a
+single test file) so ``test_claude_plugins.py``,
+``test_claude_marketplace_cache.py``, and ``test_cli_e2e.py`` can all
+discover them via pytest's standard conftest mechanism (setforge-qo23).
 """
 
+import json
 import os
-from collections.abc import Sequence
+import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-# Re-export the ``fake_claude`` fixture defined in tests/test_claude_plugins.py
-# so test_cli_e2e.py (setforge-181) can request it via parameter without
-# tripping ruff F811 (which fires on direct imports of a fixture name that
-# matches a test-parameter name). Placing the import here makes the fixture
-# discoverable via pytest's normal conftest mechanism instead of a same-file
-# rebinding. ``__all__`` silences ruff F401 without per-site noqa.
-from tests.test_claude_plugins import fake_claude, fake_git
-
-__all__ = ["fake_claude", "fake_git"]
+from setforge import claude_marketplace_cache as _mp_cache
+from setforge import claude_plugins as _cp
+from setforge.config import (
+    Config,
+    Profile,
+    ReconcilePolicy,
+    ResolvedProfile,
+    TrackedFile,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +129,27 @@ def _isolate_home(
 
 
 @pytest.fixture(autouse=True)
+def _reset_claude_bin_cache() -> None:
+    """Clear the ``_get_claude_bin`` lru_cache before every test.
+
+    ``setforge.claude_plugins._get_claude_bin`` is wrapped in
+    :func:`functools.lru_cache` for process-lifetime memoization in
+    production. The ``fake_claude`` / ``fake_git`` fixtures call
+    ``cache_clear()`` at fixture-entry to avoid serving a stale fake
+    path; but a test that does NOT request those fixtures still
+    inherits whatever path was last cached by a prior test (typically
+    ``/usr/local/bin/claude`` — the fake_claude factory's hardcoded
+    value). On a host where that path is not a real binary the next
+    install / reconcile flow surfaces ``FileNotFoundError`` from the
+    eventual ``subprocess.run`` call. Surfaced by the setforge-qo23
+    split (re-ordered test discovery exposed the latent leak); fixing
+    here keeps every later test on a clean slate regardless of which
+    fixtures the preceding test happened to use.
+    """
+    _cp._get_claude_bin.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _suppress_fresh_host_welcome(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
@@ -182,3 +212,367 @@ def pytest_collection_modifyitems(
         "markers",
         "no_home_isolation: opt this test out of the _isolate_home autouse fixture.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared Config / ResolvedProfile builders (setforge-qo23)
+# ---------------------------------------------------------------------------
+
+
+def _make_config(
+    *,
+    marketplaces: dict | None = None,
+    claude_plugins: dict | None = None,
+) -> Config:
+    """Build a minimal Config for reconcile / sync-cache tests."""
+    return Config(
+        tracked_files={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
+        marketplaces=marketplaces or {},
+        claude_plugins=claude_plugins or {},
+        profiles={"default": Profile(tracked_files=["d"])},
+    )
+
+
+def _make_resolved(
+    *,
+    claude_plugins: list[str] | None = None,
+    plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE,
+) -> ResolvedProfile:
+    return ResolvedProfile(
+        claude_plugins=claude_plugins or [],
+        plugins_reconcile=plugins_reconcile,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fake ``claude`` driver + ``fake_claude`` fixture (setforge-qo23)
+# ---------------------------------------------------------------------------
+
+
+class FakeClaude:
+    """In-memory simulation of ``claude plugin`` commands.
+
+    Non-claude argv (e.g. ``patch``, ``git``) is forwarded to a captured
+    ``_real_run`` so the transitions layer's reverse-patch step works
+    even when ``fake_claude`` is the only fixture wired in. The
+    ``fake_claude`` fixture captures ``subprocess.run`` BEFORE
+    monkeypatching it, mirroring the delegation pattern used by
+    :class:`tests.test_cli_e2e.FakeCode` for the co-resident fixture
+    case.
+    """
+
+    def __init__(
+        self,
+        *,
+        marketplaces: list[dict] | None = None,
+        plugins: list[dict] | None = None,
+    ) -> None:
+        # Each marketplace entry: {"name": str, "source": str, ...}
+        self._marketplaces: list[dict] = list(marketplaces or [])
+        # Each plugin entry: {"id": "<name>@<mp>", "enabled": bool, ...}
+        self._plugins: list[dict] = list(plugins or [])
+        self.calls: list[list[str]] = []
+        # Captured pre-monkeypatch ``subprocess.run`` for non-claude argv.
+        # ``None`` until the ``fake_claude`` fixture wires it; with the
+        # delegate unset, non-claude argv raises (today's behavior).
+        self._real_run: Any = None
+
+    def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
+        # Forward non-claude invocations (patch / git etc.) to the
+        # captured real subprocess.run. Argv[0] is the binary path
+        # (str already at this point).
+        if args and Path(args[0]).name != "claude":
+            if self._real_run is not None:
+                return self._real_run(args, **kwargs)
+            raise AssertionError(f"unexpected non-claude invocation: {args!r}")
+
+        self.calls.append(list(args))
+        cmd = args[1:]  # ["plugin", "marketplace", "list", "--json"]
+
+        if cmd == ["plugin", "marketplace", "list", "--json"]:
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps(self._marketplaces), ""
+            )
+        if cmd == ["plugin", "list", "--json"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps(self._plugins), "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "marketplace"] and cmd[2] == "add":
+            # claude plugin marketplace add <source-url>
+            # Production claude derives the marketplace name from the
+            # repo's marketplace.json. For test fidelity we derive name
+            # from the last path component of the source URL — matches
+            # the convention real marketplaces follow (the marketplace
+            # name == the repo basename). Necessary so a later
+            # ``marketplace remove <name>`` matches the entry recorded
+            # here (revert flow uses the declared YAML name).
+            source_url = cmd[3]
+            name = source_url.rsplit("/", 1)[-1]
+            self._marketplaces.append({"name": name, "source": source_url})
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if (
+            len(cmd) >= 3
+            and cmd[:2] == ["plugin", "marketplace"]
+            and cmd[2] == "remove"
+        ):
+            name = cmd[3]
+            self._marketplaces = [
+                m for m in self._marketplaces if m.get("name") != name
+            ]
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if (
+            len(cmd) >= 3
+            and cmd[:2] == ["plugin", "marketplace"]
+            and cmd[2] == "update"
+        ):
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "install"]:
+            plugin_arg = cmd[2]  # "name@marketplace" or similar
+            # "--scope=user" may follow
+            if not any(p["id"] == plugin_arg for p in self._plugins):
+                # Match production: install adds to installed_plugins.json
+                # without touching enabledPlugins. Plugin lands disabled
+                # until 'enable' runs.
+                self._plugins.append(
+                    {"id": plugin_arg, "enabled": False, "scope": "user"}
+                )
+            # Re-install of an already-installed plugin: no-op on enabled
+            # state (production claude doesn't touch enabledPlugins on
+            # re-install).
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "enable"]:
+            name = cmd[2]
+            for p in self._plugins:
+                if p["id"] == name:
+                    p["enabled"] = True
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "disable"]:
+            name = cmd[2]
+            for p in self._plugins:
+                if p["id"] == name:
+                    p["enabled"] = False
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(cmd) >= 3 and cmd[:2] == ["plugin", "uninstall"]:
+            # Mirror production: `claude plugin uninstall <id>` removes
+            # the plugin entry from installed_plugins.json entirely.
+            name = cmd[2]
+            self._plugins = [p for p in self._plugins if p["id"] != name]
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(f"unexpected claude invocation: {args!r}")
+
+    # Convenience query helpers
+    def install_args(self) -> list[str]:
+        return [c[3] for c in self.calls if c[1:3] == ["plugin", "install"]]
+
+    def enable_args(self) -> list[str]:
+        return [c[3] for c in self.calls if c[1:3] == ["plugin", "enable"]]
+
+    def disable_args(self) -> list[str]:
+        return [c[3] for c in self.calls if c[1:3] == ["plugin", "disable"]]
+
+    def uninstall_args(self) -> list[str]:
+        return [c[3] for c in self.calls if c[1:3] == ["plugin", "uninstall"]]
+
+    def mp_add_args(self) -> list[str]:
+        return [
+            c[4]
+            for c in self.calls
+            if len(c) > 4 and c[1:4] == ["plugin", "marketplace", "add"]
+        ]
+
+    def installed_state(self) -> dict[str, dict]:
+        """Snapshot of installed plugins keyed by plugin id.
+
+        In-memory analog of ``~/.claude/installed_plugins.json``. Tests
+        assert against this rather than reaching into the private
+        ``_plugins`` list.
+        """
+        return {p["id"]: dict(p) for p in self._plugins}
+
+    def marketplaces_state(self) -> list[dict]:
+        """Snapshot of registered marketplaces, in registration order.
+
+        In-memory analog of ``claude plugin marketplace list --json``
+        output. Returns shallow-copied entries so test mutations cannot
+        leak into the fake's internal ``_marketplaces`` list. Tests
+        assert against this rather than reaching into the private
+        attribute.
+        """
+        return [dict(m) for m in self._marketplaces]
+
+
+@pytest.fixture
+def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
+    """Return a factory that wires :class:`FakeClaude` into ``claude_plugins``.
+
+    The factory builds a fresh fake from optional ``marketplaces`` /
+    ``plugins`` snapshots and patches ``resolve_binary`` +
+    ``subprocess.run`` on ``setforge.claude_plugins`` so every claude-CLI
+    invocation hits the fake. The pre-monkeypatch ``subprocess.run`` is
+    captured into ``fake._real_run`` so non-claude argv (e.g. ``patch``,
+    ``git``) keeps reaching the real subprocess layer.
+    """
+
+    def factory(
+        *,
+        marketplaces: list[dict] | None = None,
+        plugins: list[dict] | None = None,
+    ) -> FakeClaude:
+        fake = FakeClaude(marketplaces=marketplaces, plugins=plugins)
+        # Snapshot the pre-monkeypatch ``subprocess.run`` so FakeClaude
+        # can forward non-claude argv (patch / git etc. used by the
+        # transitions revert path) to the real function. Capturing
+        # ``subprocess.run`` here — before the ``monkeypatch.setattr``
+        # below — preserves the delegate even when the e2e test path
+        # exercises ``apply_patch_reverse``.
+        fake._real_run = subprocess.run
+        monkeypatch.setattr(
+            "setforge.claude_plugins.resolve_binary",
+            lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
+        )
+        monkeypatch.setattr("setforge.claude_plugins.subprocess.run", fake.run)
+        _cp._get_claude_bin.cache_clear()
+        return fake
+
+    return factory
+
+
+# ---------------------------------------------------------------------------
+# Fake ``git`` driver + ``fake_git`` fixture (setforge-qo23)
+# ---------------------------------------------------------------------------
+
+
+class FakeGit:
+    """In-memory simulation of ``git clone`` / ``git fetch`` / ``git reset``.
+
+    Records every invocation in ``calls`` and tracks per-cache origin URLs
+    in ``cloned`` so tests can assert on the exact sequence. Mirrors
+    :class:`FakeClaude`'s design: forwarded non-git argv (e.g. ``claude``)
+    delegates to ``_real_run`` so the same monkeypatch can host both
+    fakes when needed.
+
+    A repo is "successfully cloned" if it appears in ``known_repos``;
+    cloning an unknown repo raises ``CalledProcessError`` so tests can
+    exercise the cache-miss + offline path.
+    """
+
+    def __init__(
+        self,
+        *,
+        known_repos: set[str] | None = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self.cloned: dict[Path, str] = {}
+        # ``None`` means "no restriction" — every clone succeeds. A set
+        # (even an empty one) means strict membership: only listed repos
+        # clone successfully; anything else raises CalledProcessError so
+        # tests can exercise the cache-miss + offline path. An empty set
+        # therefore means "every clone fails."
+        self.known_repos: set[str] | None = known_repos
+        self._real_run: Callable[..., Any] | None = None
+
+    def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
+        if not args or Path(args[0]).name != "git":
+            if self._real_run is not None:
+                return self._real_run(args, **kwargs)
+            raise AssertionError(f"unexpected non-git invocation: {args!r}")
+        self.calls.append(list(args))
+        cmd = args[1:]
+
+        # git clone -- <repo> <dest>
+        # Defense-in-depth: `_clone_marketplace` always passes the `--`
+        # separator before source.repo to prevent argv flag injection.
+        if len(cmd) >= 4 and cmd[0] == "clone" and cmd[1] == "--":
+            repo = cmd[2]
+            dest = Path(cmd[3])
+            if self.known_repos is not None and repo not in self.known_repos:
+                raise subprocess.CalledProcessError(
+                    128, args, stderr=f"fatal: repository '{repo}' not found"
+                )
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / ".git").mkdir(exist_ok=True)
+            self.cloned[dest] = repo
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        # git -C <dir> remote get-url origin
+        if (
+            len(cmd) >= 5
+            and cmd[0] == "-C"
+            and cmd[2:5] == ["remote", "get-url", "origin"]
+        ):
+            cache_dir = Path(cmd[1])
+            url = self.cloned.get(cache_dir, "")
+            return subprocess.CompletedProcess(args, 0, url + "\n", "")
+
+        # git -C <dir> fetch origin
+        if len(cmd) >= 4 and cmd[0] == "-C" and cmd[2:4] == ["fetch", "origin"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        # git -C <dir> reset --hard origin/HEAD
+        if (
+            len(cmd) >= 5
+            and cmd[0] == "-C"
+            and cmd[2:5] == ["reset", "--hard", "origin/HEAD"]
+        ):
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        raise AssertionError(f"unexpected git invocation: {args!r}")
+
+    def clone_count(self) -> int:
+        return sum(1 for c in self.calls if c[1:2] == ["clone"])
+
+
+@pytest.fixture
+def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., FakeGit]:
+    """Wire :class:`FakeGit` into ``claude_marketplace_cache``.
+
+    Returns a factory: ``fake = fake_git(known_repos={"a/b"})``. Sets
+    ``shutil.which`` to report ``git`` resolvable, redirects the cache
+    root into ``tmp_path``, and clears the ``_get_claude_bin`` lru-cache
+    so tests that combine the two fakes don't see stale binary state.
+    Patches target the ``claude_marketplace_cache`` module (setforge-qo23
+    split) — the cache helpers now own the ``shutil`` / ``subprocess``
+    namespace attributes that previously sat on ``claude_plugins``.
+    """
+
+    def factory(*, known_repos: set[str] | None = None) -> FakeGit:
+        fake = FakeGit(known_repos=known_repos)
+        fake._real_run = subprocess.run
+        cache_root = tmp_path / "marketplaces"
+        monkeypatch.setattr(_mp_cache, "MARKETPLACE_CACHE_ROOT", cache_root)
+        monkeypatch.setattr(
+            "setforge.claude_marketplace_cache.shutil.which",
+            lambda name: "/usr/bin/git" if name == "git" else None,
+        )
+        # If a prior test wired subprocess.run via fake_claude, this
+        # overwrite is fine — FakeGit's run delegates non-git argv to
+        # _real_run (which here is the un-monkeypatched subprocess.run
+        # captured BEFORE this setattr).
+        monkeypatch.setattr(
+            "setforge.claude_marketplace_cache.subprocess.run", fake.run
+        )
+        _cp._get_claude_bin.cache_clear()
+        return fake
+
+    return factory
+
+
+# ---------------------------------------------------------------------------
+# Host-local install-mode helpers (setforge-qo23)
+# ---------------------------------------------------------------------------
+
+
+def _local_clone_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting LOCAL_CLONE."""
+    from setforge import binaries as bin_mod
+
+    local_path = tmp_path / "local.yaml"
+    local_path.write_text("claude:\n  install_mode: local-clone\n")
+    monkeypatch.setattr(bin_mod, "LOCAL_CONFIG_PATH", local_path)
+
+
+def _regular_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point binaries.LOCAL_CONFIG_PATH at a local.yaml selecting REGULAR."""
+    from setforge import binaries as bin_mod
+
+    local_path = tmp_path / "local.yaml"
+    local_path.write_text("claude:\n  install_mode: regular\n")
+    monkeypatch.setattr(bin_mod, "LOCAL_CONFIG_PATH", local_path)
