@@ -1,10 +1,12 @@
-"""Ruamel.yaml editing helpers for ``~/.claude/config.yaml``.
+"""Ruamel.yaml editing helpers for ``setforge.yaml`` plugin blocks.
 
-Provides verb-shaped functions (``yaml_add_marketplace``,
-``yaml_remove_marketplace``, ``yaml_add_plugin``,
-``yaml_add_plugin_to_profile``, ``yaml_remove_plugin_from_profile``)
-that read, mutate, and write back the Claude config YAML. Round-trip
-preserves comments and key ordering via ruamel.yaml's ``rt`` mode.
+Targets the ``claude_plugins:`` and ``marketplaces:`` blocks in
+``setforge.yaml``. Provides verb-shaped functions
+(``yaml_add_marketplace``, ``yaml_remove_marketplace``,
+``yaml_add_plugin``, ``yaml_add_plugin_to_profile``,
+``yaml_remove_plugin_from_profile``) that read, mutate, and write
+back the setforge config YAML. Round-trip preserves comments and
+key ordering via ruamel.yaml's ``rt`` mode.
 """
 
 from __future__ import annotations

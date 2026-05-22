@@ -1,12 +1,12 @@
-"""Marketplace + git + cache plumbing for Claude plugin sources.
+"""Marketplace clone/cache/discovery helpers for Claude plugin sources.
 
-Provides cloning, cache-resolving, and discovery helpers used by
-:func:`setforge.claude_plugins.reconcile` at install time. All git
-invocations honor the locked subprocess hygiene (list argv,
-``check=True``, ``text=True``, ``capture_output=True``, explicit
-``timeout=``). Cache directory layout is rooted at
-:data:`MARKETPLACE_CACHE_ROOT`; each marketplace mirrors into
-``MARKETPLACE_CACHE_ROOT / <repo-basename>``.
+Owns the on-disk path resolution from a :class:`MarketplaceSource`
+to a usable ``cache_dir`` — clone-on-demand, refresh-by-source-shape,
+collision-handling. All git invocations honor the locked subprocess
+hygiene (list argv, ``check=True``, ``text=True``,
+``capture_output=True``, explicit ``timeout=``). Cache directory
+layout is rooted at :data:`MARKETPLACE_CACHE_ROOT`; each marketplace
+mirrors into ``MARKETPLACE_CACHE_ROOT / <repo-basename>``.
 """
 
 from __future__ import annotations
