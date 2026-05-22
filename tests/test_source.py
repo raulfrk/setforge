@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-
-# ruamel.yaml ships py.typed without resolvable annotations; no stub pkg on PyPI.
-from ruamel.yaml.scalarint import ScalarInt  # type: ignore[import-not-found]
+from ruamel.yaml.scalarint import ScalarInt
 
 from setforge.errors import ConfigError, NoSourceConfigured, SourceNotCloned
 from setforge.source import (
@@ -489,4 +487,4 @@ class TestLocalTrackedFileOverlayHostLocalOverrides:
         """Bool is rejected; isinstance(True, int) is True so the
         bool gate must run before the int gate."""
         with pytest.raises(ValueError, match=r"not bool"):
-            _LocalTrackedFileOverlay(mode=True)  # type: ignore[arg-type]
+            _LocalTrackedFileOverlay(mode=True)
