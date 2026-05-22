@@ -36,7 +36,7 @@ from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 if TYPE_CHECKING:
-    from setforge.config import LocalOverlayResolution
+    from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
     from setforge.local_overlay import (
         OverlayOrigin,
         ResolvedExtension,
@@ -766,6 +766,52 @@ def render_preserve_user_keys_overlay_block(
                 case KeyOrigin.FROM_PROFILE:
                     marker = "="
             lines.append(f"      {marker} {key.key}  {display_tag(key)}")
+    return lines
+
+
+def render_host_local_tracked_file_overrides_block(
+    overrides: "Mapping[str, HostLocalTrackedFileOverride]",
+) -> list[str]:
+    """Build setforge-m3qx compare-output lines for host-local
+    ``mode`` / ``dst`` / ``symlink_target`` overrides.
+
+    Returns an empty list when ``overrides`` is empty — the block
+    is suppressed when local.yaml introduces no m3qx override.
+    Otherwise returns one line per tracked_file with one
+    bracketed provenance tag per overridden field, mirroring the
+    SPEC 2 ``[from local.yaml]`` style:
+
+    - ``[host-local mode=0o755]`` for a chmod override
+    - ``[host-local dst=/etc/foo]`` for a destination retarget
+    - ``[host-local symlink → /usr/local/foo]`` for a symlink install
+
+    Pure function — the caller prints each line so test fixtures can
+    assert on string content directly. Sort by tracked_file id so
+    the output is stable across local.yaml mapping insertion order.
+    """
+    if not overrides:
+        return []
+
+    lines: list[str] = []
+    lines.append("=== applying host overlay (~/.config/setforge/local.yaml) ===")
+    plural = "s" if len(overrides) != 1 else ""
+    lines.append(
+        f"tracked_files host-local overrides: {len(overrides)} file{plural} affected"
+    )
+    for tf_id in sorted(overrides):
+        override = overrides[tf_id]
+        tags: list[str] = []
+        if override.mode is not None:
+            tags.append(f"[host-local mode={override.mode:#o}]")
+        if override.dst is not None:
+            tags.append(f"[host-local dst={override.dst}]")
+        if override.symlink_target is not None:
+            # U+2192 RIGHTWARDS ARROW per the field's "→" convention,
+            # mirroring the SPEC 2 U+2212 minus-sign discipline: one
+            # Unicode glyph carries the renderer's semantics across
+            # every output sink.
+            tags.append(f"[host-local symlink → {override.symlink_target}]")
+        lines.append(f"  {tf_id}: {' '.join(tags)}")
     return lines
 
 

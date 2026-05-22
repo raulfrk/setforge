@@ -30,9 +30,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal, NewType
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
+from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge import git_ops
 from setforge.config import MarketplaceSourceKind
@@ -274,17 +275,158 @@ class HostLocalSection(BaseModel):
 class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
-    Carries a nested ``preserve_user_keys`` overlay (SPEC 8) plus a
+    Carries a nested ``preserve_user_keys`` overlay (SPEC 8), a
     ``host_local_sections`` mapping (setforge-xsco) keyed by section
-    name. Extension to host-local ``mode`` / ``dst`` / ``symlink``
-    overrides tracked in setforge-m3qx (file separately when a concrete
-    need lands).
+    name, and three host-local install-time overrides
+    (setforge-m3qx): ``mode`` (chmod), ``dst`` (retarget install
+    path), and ``symlink_target`` (deploy as a symlink). See each
+    field's docstring for the use case and validation semantics.
     """
 
     model_config = _STRICT
 
     preserve_user_keys: PreserveUserKeysOverlay | None = None
     host_local_sections: dict[str, HostLocalSection] = {}
+    mode: int | None = None
+    """POSIX file-mode bits (chmod) for the live dst on this host.
+
+    Use case: a tracked script that needs the executable bit on a
+    development host but not on a CI-only host — the override lives
+    in ``local.yaml`` rather than the tracked profile so a single
+    setforge.yaml can serve both.
+
+    Always write the YAML-1.2 octal literal: ``mode: 0o755``. The
+    in-range bound is ``0..0o7777`` (4095 decimal) — covers the
+    full 12-bit POSIX mode-bit surface (sticky / setgid / setuid +
+    rwxrwxrwx). The model_validator rejects out-of-range values.
+
+    YAML-1.1 footgun caveat: under ``local.yaml``'s safe-yaml
+    loader, BOTH ``mode: 0755`` (YAML-1.1 octal) and ``mode: 755``
+    (plain decimal) parse to ``int(755)``, which IS in range
+    (755 < 4095). The validator cannot distinguish "user meant
+    0o755" from "user meant decimal 755" post-parse. Always
+    prefer the explicit ``0o`` prefix to avoid the ambiguity; on
+    the tracked-side ``setforge.yaml`` the round-trip YAML parser
+    distinguishes the two and the strict octal-only field validator
+    rejects the leading-zero form there. Mutually exclusive with
+    ``symlink_target`` — chmod follows the link, not the symlink
+    metadata itself, so the combination would silently chmod the
+    target file (footgun); the validator refuses it.
+    """
+
+    dst: Path | None = None
+    """Host-local override for the tracked_file's install destination.
+
+    Use case: tracked file normally deploys to ``~/.foo``, but on
+    host X it needs to deploy to ``/etc/foo`` (e.g., system-wide
+    vs user-local install variant) — the override lives in
+    ``local.yaml`` so the profile stays portable. Accepts
+    ``~``-prefix (expanded at deploy time via
+    :func:`Path.expanduser`). Forbids ``$VAR``-style env-var
+    references (the validator raises on any ``$`` in the path) —
+    expansion semantics are intentionally narrowed to
+    ``expanduser`` only so a missing env var cannot silently
+    redirect the install. Stored as raw :class:`Path`; resolved
+    only at apply time.
+    """
+
+    symlink_target: Path | None = None
+    """Host-local override to install the tracked_file as a symlink.
+
+    Use case: tracked file content is a placeholder, but on host
+    X the actual content lives at a system path (e.g.,
+    ``/usr/local/share/foo/config.txt``); install creates a
+    symlink at the tracked dst pointing to this target. Same
+    path-expansion semantics as ``dst``. Mutually exclusive with
+    ``mode``. Deploy-time semantics:
+
+    - Dangling target (file does not exist at install time) is
+      accepted with a WARNING — the symlink lands on disk so the
+      target can appear later.
+    - Existing dst that is a regular file (or pre-existing symlink)
+      is overwritten with the new symlink (mirrors the existing
+      :func:`copy_atomic` overwrite semantics).
+    - Existing dst that is a directory raises :class:`DeployError`
+      — a tracked_file pointing into a real directory layout is
+      almost certainly a config mistake; refuse rather than
+      silently clobber.
+    """
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode_octal_only(cls, v: object) -> int | None:
+        """Reject every shape EXCEPT YAML-1.2 octal (``0o755``) or a plain int.
+
+        Mirrors :func:`setforge.config.TrackedFile._validate_mode` so a
+        host that writes ``mode: 0755`` in ``local.yaml`` gets the same
+        clear "use 0o755" error as a tracked-side ``mode: 0755``
+        misconfig — anti-smell #6 (YAML 1.1 leading-zero footgun).
+
+        Accepts :class:`OctalInt` (the canonical YAML-1.2 form) and the
+        exact ``int`` type. Rejects :class:`ScalarInt` subclasses that
+        are NOT :class:`OctalInt` (the YAML-1.1 ``0755`` shape parses
+        as ``ScalarInt(755)`` under ruamel.yaml + YAML 1.2), bools
+        (``isinstance(True, int)`` is True; ``mode: true`` would
+        silently mean ``0o1``), and any other type.
+        """
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(
+                f"_LocalTrackedFileOverlay: `mode` must be YAML-1.2 octal "
+                f"int literal (e.g. 0o755), not bool. Got: {v!r}"
+            )
+        if isinstance(v, ScalarInt) and not isinstance(v, OctalInt):
+            raise ValueError(
+                f"_LocalTrackedFileOverlay: `mode` {int(v)} appears to use "
+                f"YAML-1.1-style leading-zero octal (e.g. 0755) which YAML 1.2 "
+                f"silently parses as decimal. If you meant the permission bits "
+                f"commonly written as 'octal 755', use the YAML-1.2 literal 0o755. "
+                f"If you literally meant the integer {int(v)}, use 0o{int(v):o}."
+            )
+        if type(v) is not int and not isinstance(v, OctalInt):
+            raise ValueError(
+                f"_LocalTrackedFileOverlay: `mode` must be a YAML-1.2 octal "
+                f"int literal (e.g. 0o755); strings, floats, and other types "
+                f"are rejected. Got: {v!r}"
+            )
+        return int(v)
+
+    @model_validator(mode="after")
+    def _validate_host_local_overrides(self) -> "_LocalTrackedFileOverlay":
+        """Enforce mutual-exclusion + bounds + ``$VAR`` ban for the m3qx fields.
+
+        Three invariants in one validator so each call to
+        ``_LocalTrackedFileOverlay.model_validate(...)`` sees the
+        full contract:
+
+        1. ``mode`` + ``symlink_target`` together — refused
+           (chmod-on-symlink follows the link, footgun semantics).
+        2. ``mode`` out of ``0..0o7777`` (4095 decimal) — refused
+           (POSIX file-mode bits including setuid / setgid /
+           sticky cap at 12 bits).
+        3. ``dst`` containing ``$`` — refused (env-var expansion
+           is intentionally out of contract; only ``~``-prefix is
+           supported, expanded via :func:`Path.expanduser`).
+        """
+        if self.mode is not None and self.symlink_target is not None:
+            raise ValueError(
+                "_LocalTrackedFileOverlay: `mode` and `symlink_target` are "
+                "mutually exclusive — chmod-on-symlink modifies the symlink "
+                "target, not the link."
+            )
+        if self.mode is not None and (self.mode < 0 or self.mode > 0o7777):
+            raise ValueError(
+                "_LocalTrackedFileOverlay: `mode` must be in 0..0o7777 "
+                f"(4095 decimal); got {self.mode:#o}"
+            )
+        if self.dst is not None and "$" in str(self.dst):
+            raise ValueError(
+                "_LocalTrackedFileOverlay: `dst` must not contain env-var "
+                f"references ($VAR); got {self.dst}. Use a ``~``-prefixed "
+                "or absolute path; expansion is via Path.expanduser only."
+            )
+        return self
 
 
 class PluginOverlay(BaseModel):

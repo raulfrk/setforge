@@ -31,6 +31,7 @@ from setforge.cli._output import render
 from setforge.compare import CompareStatus, load_ignored_orphans, resolve_dst
 from setforge.config import (
     Config,
+    apply_host_local_tracked_file_overrides,
     apply_local_overlay,
     apply_preserve_user_keys_overlay,
     load_config,
@@ -80,6 +81,12 @@ def compare(
     # apply the overlay so the renderer can read preserve_user_keys_resolved
     # for the mockup-B provenance display.
     apply_preserve_user_keys_overlay(cfg, profile)
+    # Apply local.yaml host-local mode/dst/symlink_target overlay
+    # (setforge-m3qx). Captures the per-tracked_file override mapping
+    # so the renderer can emit ``[host-local mode=...]`` /
+    # ``[host-local dst=...]`` / ``[host-local symlink → ...]``
+    # provenance tags next to each affected entry.
+    host_local_overrides = apply_host_local_tracked_file_overrides(cfg)
     # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2 /
     # setforge-5z11). Mutates resolved and cfg in place; the resolved
     # provenance lists drive the host-overlay block printed below the
@@ -117,6 +124,13 @@ def compare(
             # markup=False — mockup-B provenance tags use square brackets
             # (e.g. ``[from local.yaml]``) which Rich would otherwise
             # interpret as markup spans and silently strip.
+            console.print(line, markup=False)
+        # setforge-m3qx: render host-local mode/dst/symlink_target
+        # override provenance tags. Same markup=False discipline as
+        # the preserve_user_keys block — the tags carry square brackets.
+        for line in compare_mod.render_host_local_tracked_file_overrides_block(
+            host_local_overrides
+        ):
             console.print(line, markup=False)
         # SPEC 2 — emit the per-axis effective-set block (plugins /
         # extensions / marketplaces) with [from local.yaml] / SPEC-2

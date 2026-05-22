@@ -60,6 +60,7 @@ from setforge.cli._welcome import (
     reject_auto_on_fresh_host,
 )
 from setforge.config import (
+    apply_host_local_tracked_file_overrides,
     apply_local_overlay,
     apply_preserve_user_keys_overlay,
     load_config,
@@ -177,6 +178,11 @@ def install(
     # preserve_user_keys derived view stays back-compat for callers
     # that don't read provenance.
     apply_preserve_user_keys_overlay(cfg, profile)
+    # Apply local.yaml host-local mode/dst/symlink_target overlay (setforge-m3qx)
+    # — also AFTER profile resolution. Rebuilds each TrackedFile with the
+    # m3qx overrides applied so downstream resolve_dst / deploy /
+    # deploy_symlinked_file consume the override transparently.
+    apply_host_local_tracked_file_overrides(cfg)
     # Load + validate the local.yaml host_local_sections overlay (xsco).
     # Validation is file-type only at this layer: anchors / bodies are
     # resolved during deploy._compute_content. Empty mapping when local.yaml

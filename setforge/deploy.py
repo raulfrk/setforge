@@ -380,6 +380,17 @@ def deploy_symlinked_file(
     dst.parent.mkdir(parents=True, exist_ok=True)
 
     if dst.exists() and not dst.is_symlink():
+        # Distinguish directory-at-dst from regular-file-at-dst so the
+        # m3qx symlink_target overlay (setforge-m3qx) surfaces the
+        # "directory in the way" case with a targeted message — silently
+        # clobbering or recursing into a real directory layout is
+        # almost certainly a config mistake.
+        if dst.is_dir():
+            raise SetforgeError(
+                f"refusing to deploy symlink at {dst}: a directory is "
+                f"already present. Move or remove it before deploying "
+                f"tracked_file with symlink: {tracked_file.symlink!r}."
+            )
         raise SetforgeError(
             f"refusing to deploy symlink at {dst}: a regular file is "
             f"already present. Move it aside or remove it before "

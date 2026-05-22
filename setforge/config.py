@@ -670,6 +670,115 @@ def apply_preserve_user_keys_overlay(
         )
 
 
+def apply_host_local_tracked_file_overrides(
+    config: Config,
+    *,
+    local_config_path: Path | None = None,
+) -> dict[str, "HostLocalTrackedFileOverride"]:
+    """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target``
+    overlay (setforge-m3qx).
+
+    For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
+    block that declares one of the three m3qx fields, rebuild the
+    matching :class:`TrackedFile` with the override applied:
+
+    - ``mode`` (int) overrides :attr:`TrackedFile.mode` verbatim.
+    - ``dst`` (Path) overrides :attr:`TrackedFile.dst` (the string
+      template) with ``str(overlay.dst)``; the existing
+      :func:`resolve_dst` Jinja2 + ``expanduser`` pipeline runs
+      against the override exactly as it would against a tracked-side
+      ``dst:`` value.
+    - ``symlink_target`` (Path) overrides :attr:`TrackedFile.symlink`
+      with ``str(overlay.symlink_target)``; downstream
+      :func:`setforge.deploy.deploy_symlinked_file` consumes the
+      override transparently and writes a symlink at the resolved
+      dst pointing at the raw user string (cross-host portability
+      invariant preserved).
+
+    Returns a mapping ``{tracked_file_id: HostLocalTrackedFileOverride}``
+    of which overrides actually applied — used by compare to render
+    ``[host-local mode=...]`` / ``[host-local dst=...]`` /
+    ``[host-local symlink → ...]`` provenance tags without
+    re-loading local.yaml.
+
+    No-op (empty mapping) when ``local.yaml`` is absent or no
+    tracked_file declares any of the three overrides — preserves
+    today's behavior for hosts that have not adopted the overlay.
+    Lazy-imports :mod:`setforge.source` to dodge the config <->
+    source cycle. Raises nothing on its own — :class:`ValidationError`
+    from the overlay's own validator surfaces at parse time, not
+    here.
+    """
+    from setforge.source import (
+        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
+    )
+    from setforge.source import (
+        load_local_tracked_file_overlays,
+    )
+
+    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
+    overlays = load_local_tracked_file_overlays(path)
+    applied: dict[str, HostLocalTrackedFileOverride] = {}
+    for tf_id, overlay in overlays.items():
+        if (
+            overlay.mode is None
+            and overlay.dst is None
+            and overlay.symlink_target is None
+        ):
+            continue
+        if tf_id not in config.tracked_files:
+            # The overlay references a tracked_file the resolved
+            # profile does not include. Stay silent here — the
+            # SPEC 8 preserve_user_keys path also tolerates orphan
+            # overlay entries (the validate CLI is the unambiguous
+            # surface for unknown-tracked_file diagnostics).
+            continue
+        tracked_file = config.tracked_files[tf_id]
+        updates: dict[str, object] = {}
+        if overlay.mode is not None:
+            updates["mode"] = overlay.mode
+        if overlay.dst is not None:
+            updates["dst"] = str(overlay.dst)
+        if overlay.symlink_target is not None:
+            updates["symlink"] = str(overlay.symlink_target)
+        # Build a fresh model via model_validate(dump | updates) rather
+        # than model_copy(update=...) — model_copy bypasses field +
+        # model validators, which would let a hostile overlay set
+        # symlink == dst (the _symlink_no_self_loop check would never
+        # re-fire) or push a mode value past TrackedFile's stricter
+        # field-level rules. The dump-and-revalidate path re-runs every
+        # TrackedFile invariant against the merged shape so the m3qx
+        # override layer cannot weaken the contract.
+        merged = {**tracked_file.model_dump(), **updates}
+        config.tracked_files[tf_id] = TrackedFile.model_validate(merged)
+        applied[tf_id] = HostLocalTrackedFileOverride(
+            mode=overlay.mode,
+            dst=overlay.dst,
+            symlink_target=overlay.symlink_target,
+        )
+    return applied
+
+
+@dataclass(frozen=True, slots=True)
+class HostLocalTrackedFileOverride:
+    """One tracked_file's resolved m3qx overlay state.
+
+    Carried by the mapping returned from
+    :func:`apply_host_local_tracked_file_overrides` so compare's
+    provenance-tag renderer can read which of the three fields were
+    actually overridden host-locally without re-loading local.yaml.
+
+    ``None`` on a field means "no override; the profile-side value
+    wins". The mapping never contains an entry where all three are
+    ``None`` (the resolver short-circuits the empty-overlay case so
+    callers can treat presence as "at least one override applied").
+    """
+
+    mode: int | None
+    dst: Path | None
+    symlink_target: Path | None
+
+
 def _validate_plugin_references(config: Config) -> None:
     """Verify every ``profile.claude_plugins`` entry exists in the
     top-level ``Config.claude_plugins`` registry.

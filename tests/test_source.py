@@ -17,6 +17,7 @@ from setforge.source import (
     PathSource,
     SourceKind,
     _load_local_source_config,
+    _LocalTrackedFileOverlay,
     resolve_source,
     resolve_source_dir,
     validate_source_dir,
@@ -366,3 +367,105 @@ class TestResolveSourceWithEnv:
         )
         assert isinstance(result, PathSource)
         assert result.path == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# _LocalTrackedFileOverlay: host-local mode / dst / symlink_target (setforge-m3qx)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalTrackedFileOverlayHostLocalOverrides:
+    """Validator surface for the three host-local override fields.
+
+    Per SPEC 7 / setforge-m3qx: ``mode`` (chmod) + ``dst`` (retarget
+    install path) + ``symlink_target`` (install as symlink) extend
+    :class:`_LocalTrackedFileOverlay`. ``mode`` and ``symlink_target``
+    are mutually exclusive (chmod-on-symlink follows the link). ``mode``
+    is bounded ``0 <= mode <= 0o7777``. ``dst`` forbids ``$VAR``
+    env-var references — expansion happens at deploy time via
+    ``Path.expanduser`` only.
+    """
+
+    def test_rejects_mode_with_symlink_target(self) -> None:
+        """mode + symlink_target are mutually exclusive (footgun semantics)."""
+        with pytest.raises(ValueError, match=r"mutually exclusive"):
+            _LocalTrackedFileOverlay(mode=0o755, symlink_target=Path("/tmp/x"))
+
+    def test_rejects_mode_out_of_range(self) -> None:
+        """mode must be in 0..0o7777 (4095 decimal)."""
+        with pytest.raises(ValueError, match=r"must be in 0\.\.0o7777"):
+            _LocalTrackedFileOverlay(mode=0o10000)
+
+    def test_rejects_typo_field_via_extra_forbid(self) -> None:
+        """_STRICT extra='forbid' catches typo'd field names (e.g. modee)."""
+        with pytest.raises(ValidationError):
+            _LocalTrackedFileOverlay(modee=0o755)  # type: ignore[call-arg]
+
+    def test_accepts_octal_mode(self) -> None:
+        """mode: 0o755 (493 decimal) is in-range; no exception."""
+        ovl = _LocalTrackedFileOverlay(mode=0o755)
+        assert ovl.mode == 0o755
+
+    def test_accepts_each_field_independently(self) -> None:
+        """mode alone, dst alone, symlink_target alone — each accepted."""
+        assert _LocalTrackedFileOverlay(mode=0o644).mode == 0o644
+        assert _LocalTrackedFileOverlay(dst=Path("~/foo")).dst == Path("~/foo")
+        sym_ovl = _LocalTrackedFileOverlay(symlink_target=Path("/usr/local/foo"))
+        assert sym_ovl.symlink_target == Path("/usr/local/foo")
+
+    def test_old_shape_still_parses(self) -> None:
+        """Overlay with no new fields parses (backward compat for hosts
+        that haven't adopted setforge-m3qx overrides)."""
+        ovl = _LocalTrackedFileOverlay()
+        assert ovl.mode is None
+        assert ovl.dst is None
+        assert ovl.symlink_target is None
+
+    def test_rejects_env_var_in_dst(self) -> None:
+        """dst must not reference $VAR-style env vars (out of contract)."""
+        with pytest.raises(ValueError, match=r"\$"):
+            _LocalTrackedFileOverlay(dst=Path("$HOME/foo"))
+
+    def test_accepts_mode_zero(self) -> None:
+        """Boundary: mode == 0 is in-range (degenerate but valid POSIX bits)."""
+        ovl = _LocalTrackedFileOverlay(mode=0)
+        assert ovl.mode == 0
+
+    def test_accepts_mode_max(self) -> None:
+        """Boundary: mode == 0o7777 (4095 decimal) is in-range.
+
+        The 12-bit cap covers POSIX file-mode bits including sticky
+        (0o1000), setgid (0o2000), setuid (0o4000), and the three
+        rwx triples (0o0777).
+        """
+        ovl = _LocalTrackedFileOverlay(mode=0o7777)
+        assert ovl.mode == 0o7777
+
+    def test_rejects_negative_mode(self) -> None:
+        """Boundary: mode < 0 is out-of-range."""
+        with pytest.raises(ValueError, match=r"must be in 0\.\.0o7777"):
+            _LocalTrackedFileOverlay(mode=-1)
+
+    def test_rejects_scalarint_yaml11_octal_shape(self) -> None:
+        """ScalarInt (non-OctalInt) is rejected with the canonical
+        "use 0o755" hint.
+
+        Defense-in-depth at the direct-construction layer:
+        :class:`_LocalTrackedFileOverlay`'s safe-yaml loader strips
+        the OctalInt/ScalarInt distinction (both ``0755`` and ``755``
+        parse to plain ``int(755)``); but a Python caller constructing
+        the overlay with a ``ScalarInt`` argument still gets the strict
+        rejection — mirrors :func:`TrackedFile._validate_mode`.
+        """
+        from ruamel.yaml.scalarint import ScalarInt
+
+        # ScalarInt(755) is the shape ruamel.yaml's round-trip loader
+        # emits for the YAML-1.1 ``mode: 0755`` form.
+        with pytest.raises(ValueError, match=r"YAML-1\.1-style"):
+            _LocalTrackedFileOverlay(mode=ScalarInt(755))
+
+    def test_rejects_bool_mode(self) -> None:
+        """Bool is rejected; isinstance(True, int) is True so the
+        bool gate must run before the int gate."""
+        with pytest.raises(ValueError, match=r"not bool"):
+            _LocalTrackedFileOverlay(mode=True)  # type: ignore[arg-type]
