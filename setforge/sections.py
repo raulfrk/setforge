@@ -551,11 +551,10 @@ def set_marker_hashes(
     For each section whose name is a key in ``hashes``, the end marker is
     rewritten to embed (or replace) its ``hash=<...>`` segment. ``hashes``
     must cover EVERY section present in ``text`` — missing keys are a
-    contract violation and raise :class:`ValueError` (setforge-pto). Section
-    bodies, start markers, and all non-marker content are preserved
-    byte-for-byte. Pass ``allow_legacy=True`` to tolerate pre-9by input
-    markers (see :func:`_walk_markers`); the output markers are always
-    fully formed.
+    contract violation and raise :class:`ValueError`. Section bodies,
+    start markers, and all non-marker content are preserved byte-for-byte.
+    Pass ``allow_legacy=True`` to tolerate pre-9by input markers (see
+    :func:`_walk_markers`); the output markers are always fully formed.
 
     Raises :class:`MarkerError` on malformed markers and :class:`ValueError`
     when ``hashes`` contains a key not present in ``text``, or is missing
@@ -601,10 +600,7 @@ def _format_end_marker(
     """Build the canonical end-marker line for ``name`` and ``embedded_hash``.
 
     Preserves the original line's trailing newline (or its absence) so
-    ``set_marker_hashes`` is byte-preserving on file endings. Post-pto,
-    ``embedded_hash`` is always a concrete string — the strict
-    missing-keys check in :func:`set_marker_hashes` rules out ``None``
-    at the sole caller.
+    ``set_marker_hashes`` is byte-preserving on file endings.
     """
     parts = ["<!-- setforge:user-section end", semantics.value]
     if name is not None:
