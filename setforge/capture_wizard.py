@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 
 from setforge import jsonc, wizard
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
@@ -158,8 +158,11 @@ def _walk_one_file(
     else:
         fmt = FileFormat.YAML
         y = YAML(typ="rt")
-        tracked = y.load(src.read_text(encoding="utf-8"))
-        live = y.load(dst.read_text(encoding="utf-8"))
+        try:
+            tracked = y.load(src.read_text(encoding="utf-8"))
+            live = y.load(dst.read_text(encoding="utf-8"))
+        except YAMLError:
+            return
 
     if not isinstance(tracked, dict) or not isinstance(live, dict):
         return

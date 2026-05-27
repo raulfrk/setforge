@@ -668,6 +668,26 @@ def test_sync_auto_keep_tracked_refuse_absorb(
     assert pre == post
 
 
+# --- Variant O2 (markdown frontmatter: no crash) ----------------------------
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_sync_markdown_frontmatter_no_crash(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """O2: sync must not crash on markdown tracked files with YAML frontmatter."""
+    c = docker_container()
+    _install(c, "test-prose-reviewers")
+    skill_path = (
+        "/workspace/tests/fixtures/e2e/tracked/"
+        "claude/skills/reviewing-markdown/SKILL.md"
+    )
+    pre = c.read_text(skill_path)
+    _sync(c, "test-prose-reviewers", extra=["--auto=keep-tracked", "--yes"])
+    post = c.read_text(skill_path)
+    assert pre == post
+
+
 # --- Variant P (interactive: pty + 'k') -----------------------------------
 #
 # Wizard surface note (verified against setforge/capture_wizard.py:175):
