@@ -231,6 +231,24 @@ def test_failed_replace_leaves_original_intact(
     assert list(tmp_path.glob(".setforge.yaml.*.tmp")) == []
 
 
+def test_atomic_write_through_symlink_preserves_link(tmp_path: Path) -> None:
+    """When the config path is a symlink, the atomic write must replace the
+    LINK TARGET (write through), not swap the link for a regular file — the
+    pre-atomic open("w") behaviour the change must preserve."""
+    import setforge.claude_yaml_editor as mod
+
+    real = tmp_path / "real-setforge.yaml"
+    real.write_text(_YAML_FIXTURE, encoding="utf-8")
+    link = tmp_path / "setforge.yaml"
+    link.symlink_to(real)
+
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
+    mod.yaml_add_marketplace(link, "new-mp", src)
+
+    assert link.is_symlink()  # link survived
+    assert "new-mp" in real.read_text()  # content landed in the target
+
+
 def test_atomic_write_preserves_file_permissions(tmp_path: Path) -> None:
     """The atomic temp+rename must carry the config's existing perm bits
     over — os.replace swaps the inode, so without this the file would

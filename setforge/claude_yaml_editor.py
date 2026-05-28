@@ -59,6 +59,11 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
     atomic: a SIGTERM leaves the original intact. Mirrors
     :func:`setforge.section_reconcile._atomic_write_text`.
     """
+    # Resolve symlinks first: os.replace swaps the link itself for a
+    # regular file, whereas the prior open("w") wrote THROUGH the link.
+    # Resolving to the real target preserves that "replace target, never
+    # the link" semantics, matching deploy._atomic_write's real_dst.
+    config_path = config_path.resolve()
     # os.replace swaps the inode, so the new file would otherwise inherit
     # mkstemp's 0o600 and silently drop the config's group/other access.
     # Carry the existing perm bits over (config_path is guaranteed to
