@@ -18,7 +18,7 @@ from setforge.cli._help_examples import (
     EXT_REMOVE_EXAMPLES,
 )
 from setforge.config import ReconcilePolicy, load_config, resolve_profile
-from setforge.errors import ExtensionToolMissing
+from setforge.errors import ExtensionInstallFailed, ExtensionToolMissing
 
 ext_app: typer.Typer = typer.Typer(
     help="Manage VSCode extensions in setforge.yaml.",
@@ -92,6 +92,9 @@ def ext_add(
                 err=True,
                 fg=typer.colors.YELLOW,
             )
+        except ExtensionInstallFailed as exc:
+            typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
 
 
 @ext_app.command("remove", epilog=EXT_REMOVE_EXAMPLES)

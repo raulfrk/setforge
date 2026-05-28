@@ -30,3 +30,25 @@ def test_ext_list_resolves_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ext_mod, "_resolve_config_arg", fake_resolve)
     CliRunner().invoke(app, ["ext", "list", "--profile=x"])
     assert seen == [Path("setforge.yaml")]
+
+
+def test_ext_add_handles_install_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-zero `code --install-extension` raises ExtensionInstallFailed,
+    which must surface as a clean error + exit 1, not a traceback
+    (setforge-ec2o.52)."""
+    import setforge.cli.ext as ext_mod
+    from setforge.errors import ExtensionInstallFailed
+
+    monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(
+        ext_mod.vscode_extensions, "add_to_include", lambda *a, **k: True
+    )
+
+    def boom(_ext_id: str) -> None:
+        raise ExtensionInstallFailed("code --install-extension exited 1")
+
+    monkeypatch.setattr(ext_mod.vscode_extensions, "install_one", boom)
+    result = CliRunner().invoke(app, ["ext", "add", "pub.ext", "--profile=x"])
+    assert result.exit_code == 1
+    assert "code --install-extension exited 1" in result.output
+    assert "Traceback" not in result.output
