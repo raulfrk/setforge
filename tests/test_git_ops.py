@@ -275,6 +275,26 @@ class TestSanitizeArgs:
         assert "alice" not in out
         assert "https://***@github.com/o/r" in out
 
+    def test_embedded_at_in_userinfo_masked(self) -> None:
+        # An unencoded `@` inside the userinfo (git/curl split at the LAST
+        # `@` of the authority) must not leak the secret tail: the match has
+        # to extend past the first `@` to the last one before the path.
+        from setforge.git_ops import _sanitize_args
+
+        out = _sanitize_args(["clone", "https://u:sec@ret_TOKEN@github.com/o/r.git"])
+        assert "sec@ret_TOKEN" not in out
+        assert "ret_TOKEN" not in out
+        assert "https://***@github.com/o/r.git" in out
+
+    def test_path_level_at_not_masked(self) -> None:
+        # An `@` after the first `/` is part of the path, not credentials —
+        # masking it would corrupt the message. The userinfo run stops at
+        # the first `/`, so a path `@` is left untouched.
+        from setforge.git_ops import _sanitize_args
+
+        out = _sanitize_args(["clone", "https://github.com/o/r@v1.git"])
+        assert out == "clone https://github.com/o/r@v1.git"
+
     def test_ssh_remote_passes_through(self) -> None:
         from setforge.git_ops import _sanitize_args
 

@@ -27,7 +27,7 @@ from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
 
-_URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(r"(?P<scheme>\w+://)[^/@\s]+@")
+_URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(r"(?P<scheme>\w+://)[^/\s]+@")
 
 
 def _mask_url_credentials(text: str) -> str:
@@ -35,12 +35,16 @@ def _mask_url_credentials(text: str) -> str:
 
     Any ``scheme://user:token@host`` occurrence has its userinfo replaced
     with ``***`` so an embedded credential never reaches an error message,
-    log line, or error-tracking surface. Applied to BOTH the command we
-    construct AND git's own stderr: git echoes the full remote URL
-    verbatim in ``unable to access '<url>'`` messages, so masking only our
-    argv would still leak the token through the surfaced stderr. SSH-style
-    remotes (``git@host:path`` — no ``://``) carry a username, not a
-    secret, and pass through untouched.
+    log line, or error-tracking surface. The userinfo run excludes ``/``
+    and whitespace but NOT ``@``, so the match extends to the last ``@``
+    of the authority — an unencoded ``@`` inside the userinfo is masked
+    whole instead of leaking its tail, and the run still cannot cross the
+    first ``/`` so a path-level ``@`` is never touched. Applied to BOTH
+    the command we construct AND git's own stderr: git echoes the full
+    remote URL verbatim in ``unable to access '<url>'`` messages, so
+    masking only our argv would still leak the token through the surfaced
+    stderr. SSH-style remotes (``git@host:path`` — no ``://``) carry a
+    username, not a secret, and pass through untouched.
     """
     return _URL_USERINFO_RE.sub(r"\g<scheme>***@", text)
 
