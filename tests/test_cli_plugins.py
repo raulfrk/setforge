@@ -104,3 +104,30 @@ def test_plugin_remove_disable_subprocess_error_is_clean(
     assert result.exit_code == 1
     assert not isinstance(result.exception, subprocess.CalledProcessError)
     assert "error" in result.output.lower()
+
+
+def test_plugin_add_marketplace_register_subprocess_error_is_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing `claude plugin marketplace add` during the plugin-add
+    registration flow must surface as a clean error + exit 1, not a
+    traceback (the catch arm inside _register_plugin_in_yaml)."""
+    import setforge.cli.plugins as plugins_mod
+
+    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    monkeypatch.setattr(plugins_mod, "load_config", lambda c: object())
+    # New marketplace → the register path invokes `claude marketplace add`.
+    monkeypatch.setattr(
+        plugins_mod.claude_yaml_editor_mod, "yaml_add_marketplace", lambda *a, **k: True
+    )
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise subprocess.CalledProcessError(1, ["claude"], stderr="nope")
+
+    monkeypatch.setattr(plugins_mod.claude_plugins_mod, "marketplace_add", boom)
+    result = CliRunner().invoke(
+        app, ["plugin", "add", "p@mp", "--from=github:o/r", "--profile=x"]
+    )
+    assert result.exit_code == 1
+    assert not isinstance(result.exception, subprocess.CalledProcessError)
+    assert "error" in result.output.lower()
