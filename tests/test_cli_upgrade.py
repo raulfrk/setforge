@@ -544,3 +544,49 @@ def test_upgrade_module_uses_only_radiolist_no_typer_prompt() -> None:
         "input(",
     ):
         assert forbidden not in source, f"forbidden prompt {forbidden!r} in upgrade.py"
+
+
+# ---------------------------------------------------------------------------
+# _run_uv_tool_upgrade — --to version pinning (setforge-ec2o.41)
+# ---------------------------------------------------------------------------
+
+
+def test_pinned_upgrade_uses_install_reinstall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pinned target installs the exact version via reinstall-package —
+    `uv tool upgrade` cannot target a version (setforge-ec2o.41)."""
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    calls = _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Installed setforge==9.9.9\n", stderr=""
+            )
+        ],
+    )
+    upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=True)
+    assert calls[0][1:] == [
+        "tool",
+        "install",
+        "--reinstall-package",
+        "setforge",
+        "setforge==9.9.9",
+    ]
+
+
+def test_unpinned_upgrade_keeps_tool_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without --to, the unpinned path stays `uv tool upgrade setforge`."""
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    calls = _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Installed setforge==9.9.9\n", stderr=""
+            )
+        ],
+    )
+    upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=False)
+    assert calls[0][1:] == ["tool", "upgrade", "setforge"]

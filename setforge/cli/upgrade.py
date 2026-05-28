@@ -433,8 +433,13 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
 # ---------------------------------------------------------------------------
 
 
-def _run_uv_tool_upgrade(*, target: str) -> None:
-    """Shell out to ``uv tool upgrade setforge``; parse STDOUT, not exit code.
+def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
+    """Shell out to upgrade setforge; parse STDOUT, not exit code.
+
+    When ``pinned`` (the user passed ``--to=<version>``) the install is
+    pinned to the exact target via ``uv tool install --reinstall-package``
+    — ``uv tool upgrade`` cannot target a version and would silently pull
+    PyPI-latest. Otherwise ``uv tool upgrade setforge`` moves to latest.
 
     Per research brief §2: ``uv tool upgrade`` returns exit 0 even on
     the no-op case where setforge is already at the latest pinned
@@ -446,8 +451,19 @@ def _run_uv_tool_upgrade(*, target: str) -> None:
         raise UpgradeError(
             "uv not found on PATH; install from https://docs.astral.sh/uv/"
         )
+    if pinned:
+        cmd = [
+            uv,
+            "tool",
+            "install",
+            "--reinstall-package",
+            _PACKAGE_NAME,
+            f"{_PACKAGE_NAME}=={target}",
+        ]
+    else:
+        cmd = [uv, "tool", "upgrade", _PACKAGE_NAME]
     result = subprocess.run(
-        [uv, "tool", "upgrade", _PACKAGE_NAME],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
@@ -616,7 +632,7 @@ def upgrade(
     if choice is UpgradeChoice.ABORT:
         return
 
-    _run_uv_tool_upgrade(target=plan.target_version)
+    _run_uv_tool_upgrade(target=plan.target_version, pinned=to is not None)
     _verify_post_upgrade(expected=plan.target_version)
 
     if choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK:
