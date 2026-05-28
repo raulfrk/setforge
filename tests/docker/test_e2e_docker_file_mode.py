@@ -12,6 +12,10 @@ Three named scenarios per the user's per-CLI-flag-row coverage preference:
    ``setforge validate`` refuses a config that declares
    ``mode: 0755`` (the YAML-1.1-style footgun); error message points
    at the canonical ``0o755`` literal.
+4. ``test_mode_e2e_install_reapplies_mode_after_manual_chmod`` —
+   install at ``0o755``; ``chmod 0644`` (content unchanged); re-install
+   (``--auto-accept-tracked`` to clear the drift gate) restores ``0o755``
+   instead of short-circuiting to a content-NOOP.
 
 Setup pattern: each test writes its own minimal setforge.yaml +
 tracked source under /tmp inside the container, then runs setforge
@@ -176,3 +180,58 @@ def test_mode_e2e_validate_rejects_yaml_1_1_octal(
     assert result.returncode != 0, result.stdout
     combined = result.stdout + result.stderr
     assert "0o755" in combined, combined
+
+
+# ---------------------------------------------------------------------------
+# Scenario 4: install re-applies mode bits after a mode-only manual chmod
+# ---------------------------------------------------------------------------
+
+
+def test_mode_e2e_install_reapplies_mode_after_manual_chmod(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    c = docker_container()
+    cfg_text = (
+        "version: 1\n"
+        "tracked_files:\n"
+        "  hook_script:\n"
+        "    src: hook.sh\n"
+        f"    dst: {_DST}\n"
+        "    mode: 0o755\n"
+        "profiles:\n"
+        "  test-mode:\n"
+        "    tracked_files:\n"
+        "      - hook_script\n"
+    )
+    src_text = "#!/bin/sh\necho hook fired\n"
+    _bootstrap(c, cfg_text=cfg_text, src_text=src_text)
+
+    install = _setforge(
+        c, ["install", "--profile=test-mode", f"--config={_CFG}"], check=False
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    assert _stat_mode_octal(c, _DST) == "755"
+
+    # Mode-only drift: content stays byte-identical, only perms change.
+    c.exec(["chmod", "0644", _DST], check=True)
+    assert _stat_mode_octal(c, _DST) == "644"
+
+    # Mode drift is gated as unexpected drift, so a bare re-install
+    # refuses; --auto-accept-tracked clears the gate and lets the deploy
+    # run. The deploy must then APPLY the mode bits on a content-NOOP
+    # rather than skipping them (the pre-fix behavior left perms at 0644).
+    reinstall = _setforge(
+        c,
+        [
+            "install",
+            "--profile=test-mode",
+            f"--config={_CFG}",
+            "--auto-accept-tracked",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert reinstall.returncode == 0, reinstall.stdout + reinstall.stderr
+    assert _stat_mode_octal(c, _DST) == "755", reinstall.stdout + reinstall.stderr
+    # Content untouched.
+    assert c.exec(["cat", _DST], check=True).stdout.strip().startswith("#!/bin/sh")
