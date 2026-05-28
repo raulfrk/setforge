@@ -442,9 +442,11 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
     PyPI-latest. Otherwise ``uv tool upgrade setforge`` moves to latest.
 
     Per research brief §2: ``uv tool upgrade`` returns exit 0 even on
-    the no-op case where setforge is already at the latest pinned
-    version. The reliable signal is STDOUT — match
-    ``"Nothing to upgrade"`` or ``"already up to date"``.
+    the no-op case where setforge is already at the latest version. The
+    reliable signal is STDOUT — match ``"Nothing to upgrade"`` or
+    ``"already up to date"``. This no-op detection applies only to the
+    unpinned path; ``install --reinstall-package`` always reinstalls and
+    never reports a no-op (``_verify_post_upgrade`` confirms the result).
     """
     uv = shutil.which("uv")
     if uv is None:
@@ -475,10 +477,7 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
         )
     stdout_lower = result.stdout.lower()
     if "nothing to upgrade" in stdout_lower or "already up to date" in stdout_lower:
-        typer.echo(
-            f"setforge is already on the requested version "
-            f"({target}); no-op (pin in effect)."
-        )
+        typer.echo(f"setforge is already up to date ({target}); no-op.")
 
 
 def _verify_post_upgrade(*, expected: str) -> None:
