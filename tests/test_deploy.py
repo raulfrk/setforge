@@ -83,6 +83,34 @@ def test_identical_content_is_noop(tmp_path: Path) -> None:
     assert not Path(str(dst) + ".bak").exists()
 
 
+def test_backup_update_never_loses_dst(tmp_path: Path) -> None:
+    """An UPDATE that takes a backup leaves dst present with new content
+    and the backup carrying old content — no window where dst is absent
+    (setforge-ec2o.49)."""
+    src = tmp_path / "src"
+    src.write_text("new\n")
+    dst = tmp_path / "dst"
+    dst.write_text("old\n")
+
+    result = copy_atomic(src, dst)
+
+    assert dst.exists()
+    assert dst.read_text() == "new\n"
+    assert result.backup_path == Path(str(dst) + ".bak")
+    assert result.backup_path.read_text() == "old\n"
+
+
+def test_atomic_write_has_no_exdev_branch() -> None:
+    """The cross-filesystem rescue branch (and its unlink-before-replace
+    window) is gone: backup is now an unconditional copy + os.replace
+    (setforge-ec2o.49)."""
+    import setforge.deploy as deploy_mod
+
+    src = Path(deploy_mod.__file__).read_text(encoding="utf-8")
+    assert "errno.EXDEV" not in src
+    assert "import errno" not in src
+
+
 def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
     # Tracked side ships with a hash-stamped end marker (post-9by canonical).

@@ -15,7 +15,6 @@ either YAML or markdown.
 """
 
 import contextlib
-import errno
 import io
 import logging
 import os
@@ -307,14 +306,11 @@ def _atomic_write(
         backup_path: Path | None = None
         if backup and dst_existed:
             backup_path = Path(str(dst) + ".bak")
-            try:
-                os.replace(dst, backup_path)
-            except OSError as exc:
-                if exc.errno == errno.EXDEV:
-                    shutil.copy2(dst, backup_path)
-                    dst.unlink()
-                else:
-                    raise
+            # Copy (not rename) so dst stays in place until os.replace
+            # atomically swaps the new content in — no window where dst is
+            # absent. copy2 works across filesystems; tmp_path is always
+            # in dst.parent, so os.replace below never hits EXDEV.
+            shutil.copy2(dst, backup_path)
 
         os.replace(tmp_path, dst)
         return backup_path
