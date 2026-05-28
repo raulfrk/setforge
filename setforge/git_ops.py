@@ -17,6 +17,7 @@ All operations:
   stderr surfaced in the message.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -25,6 +26,20 @@ from typing import Final
 from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
+
+_URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(r"(?P<scheme>\w+://)[^/@\s]+@")
+
+
+def _sanitize_args(args: list[str]) -> str:
+    """Join ``args`` for display, masking credentials in URL-shaped tokens.
+
+    Any arg matching ``scheme://userinfo@host`` has its userinfo replaced
+    with ``***`` so an embedded ``user:token@`` never reaches an error
+    message, log line, or error-tracking surface. SSH-style remotes
+    (``git@host:path`` — no ``://``) carry a username, not a secret, and
+    pass through untouched.
+    """
+    return " ".join(_URL_USERINFO_RE.sub(r"\g<scheme>***@", arg) for arg in args)
 
 
 def _git_bin() -> str:
@@ -62,11 +77,11 @@ def _run_git(
         # check=True path; surface git's stderr in the error message.
         stderr = (exc.stderr or "").strip()
         raise GitOpError(
-            f"git {' '.join(args)} failed (exit {exc.returncode}): {stderr}"
+            f"git {_sanitize_args(args)} failed (exit {exc.returncode}): {stderr}"
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise GitOpError(
-            f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
+            f"git {_sanitize_args(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
         ) from exc
 
 

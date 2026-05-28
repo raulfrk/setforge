@@ -258,3 +258,37 @@ class TestGitCheckout:
         repo = _git_init(tmp_path / "repo")
         with pytest.raises(GitOpError, match="git checkout"):
             git_checkout(repo, "does-not-exist-branch")
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_args — credential masking in error messages (setforge-ec2o.50)
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeArgs:
+    def test_https_userinfo_masked(self) -> None:
+        from setforge.git_ops import _sanitize_args
+
+        out = _sanitize_args(["clone", "https://alice:ghp_secret@github.com/o/r"])
+        assert "ghp_secret" not in out
+        assert "alice" not in out
+        assert "https://***@github.com/o/r" in out
+
+    def test_ssh_remote_passes_through(self) -> None:
+        from setforge.git_ops import _sanitize_args
+
+        out = _sanitize_args(["clone", "git@github.com:owner/repo.git"])
+        assert out == "clone git@github.com:owner/repo.git"
+
+    def test_plain_args_unchanged(self) -> None:
+        from setforge.git_ops import _sanitize_args
+
+        assert _sanitize_args(["fetch", "origin"]) == "fetch origin"
+
+    def test_clone_failure_with_token_url_masks_token(self, tmp_path: Path) -> None:
+        # Clone a bogus authed URL into a dest under a nonexistent parent so
+        # git fails fast; the token must not appear in the raised message.
+        dest = tmp_path / "dest"
+        with pytest.raises(GitOpError) as excinfo:
+            git_clone("https://u:ghp_tok_abc@localhost:1/nope.git", dest)
+        assert "ghp_tok_abc" not in str(excinfo.value)
