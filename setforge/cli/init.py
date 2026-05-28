@@ -50,6 +50,10 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
         from prompt_toolkit.shortcuts import radiolist_dialog
 
         return radiolist_dialog
+    if name == "input_dialog":
+        from prompt_toolkit.shortcuts import input_dialog
+
+        return input_dialog
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -197,11 +201,10 @@ def _prompt_source_config(
 
     Returns a :class:`SourceSpec` carrying both the choice and the
     per-kind fields (path / url+ref) needed to write a ``source:``
-    block into ``local.yaml``. Interactive PATH/GIT branches are not
-    yet implemented (the prompt currently only yields the choice; an
-    inline URL/path entry would need a separate input dialog) — they
-    fall through to :attr:`SourceChoice.SKIP` with a warning unless
-    the user passed ``--path-source`` / ``--git-source`` explicitly.
+    block into ``local.yaml``. Interactive GIT/PATH selections collect
+    the URL / directory via a follow-up :func:`input_dialog`; an empty
+    or cancelled entry falls back to :attr:`SourceChoice.SKIP` so the
+    stub stays editable rather than half-written.
     """
     if path_source is not None:
         return SourceSpec(
@@ -232,12 +235,23 @@ def _prompt_source_config(
         ],
         default=SourceChoice.SKIP,
     ).run()
-    # Interactive PATH/GIT yields the choice only; the user did not
-    # supply path / URL inline. Fall back to SKIP so the stub stays
-    # editable rather than half-written. (Full interactive entry is a
-    # follow-up bead.) ``None`` (cancel/escape) also collapses to SKIP.
-    if result is None or result is not SourceChoice.SKIP:
-        return SourceSpec(choice=SourceChoice.SKIP)
+    if result is SourceChoice.GIT:
+        url = _self.input_dialog(
+            title="git config-repo source",
+            text="Enter the git URL to clone (blank to skip):",
+        ).run()
+        if not url:
+            return SourceSpec(choice=SourceChoice.SKIP)
+        return SourceSpec(choice=SourceChoice.GIT, url=url, ref=git_ref)
+    if result is SourceChoice.PATH:
+        path_str = _self.input_dialog(
+            title="local config-repo source",
+            text="Enter the local config-repo directory (blank to skip):",
+        ).run()
+        if not path_str:
+            return SourceSpec(choice=SourceChoice.SKIP)
+        return SourceSpec(choice=SourceChoice.PATH, path=Path(path_str))
+    # SKIP selection or None (cancel/escape).
     return SourceSpec(choice=SourceChoice.SKIP)
 
 

@@ -100,6 +100,86 @@ def _patch_init_dialog(
 
 
 # ---------------------------------------------------------------------------
+# Interactive GIT/PATH source entry (setforge-ec2o.46)
+# ---------------------------------------------------------------------------
+
+
+def test_source_prompt_git_collects_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Selecting GIT collects a URL via input_dialog and builds a GIT spec."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(
+        "setforge.cli.init.radiolist_dialog",
+        _DialogRecorder([init_mod.SourceChoice.GIT]),
+    )
+    monkeypatch.setattr(
+        "setforge.cli.init.input_dialog",
+        _DialogRecorder(["https://github.com/o/r"]),
+    )
+    spec = init_mod._prompt_source_config(
+        no_prompt=False, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.GIT
+    assert spec.url == "https://github.com/o/r"
+    assert spec.ref == "main"
+
+
+def test_source_prompt_path_collects_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Selecting PATH collects a directory via input_dialog and builds a PATH spec."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(
+        "setforge.cli.init.radiolist_dialog",
+        _DialogRecorder([init_mod.SourceChoice.PATH]),
+    )
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _DialogRecorder(["/tmp/cfg"]))
+    spec = init_mod._prompt_source_config(
+        no_prompt=False, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.PATH
+    assert spec.path == Path("/tmp/cfg")
+
+
+def test_source_prompt_empty_input_falls_back_to_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled/empty input_dialog collapses to SKIP rather than a
+    half-built GIT/PATH spec (setforge-ec2o.46)."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(
+        "setforge.cli.init.radiolist_dialog",
+        _DialogRecorder([init_mod.SourceChoice.GIT]),
+    )
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _DialogRecorder([None]))
+    spec = init_mod._prompt_source_config(
+        no_prompt=False, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.SKIP
+
+
+def test_source_prompt_skip_selection_returns_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SKIP selection returns SKIP without touching input_dialog."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(
+        "setforge.cli.init.radiolist_dialog",
+        _DialogRecorder([init_mod.SourceChoice.SKIP]),
+    )
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("input_dialog must not be called for SKIP")
+
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _boom)
+    spec = init_mod._prompt_source_config(
+        no_prompt=False, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.SKIP
+
+
+# ---------------------------------------------------------------------------
 # Dataclass / enum shape tests
 # ---------------------------------------------------------------------------
 
