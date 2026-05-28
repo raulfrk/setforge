@@ -590,3 +590,21 @@ def test_unpinned_upgrade_keeps_tool_upgrade(
     )
     upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=False)
     assert calls[0][1:] == ["tool", "upgrade", "setforge"]
+
+
+def test_pinned_failure_message_names_install_not_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure on the pinned path reports the command actually run
+    (`uv tool install`), not a hard-coded `uv tool upgrade`."""
+    from setforge.errors import UpgradeError
+
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    _patch_subprocess_run(
+        monkeypatch,
+        responses=[
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
+        ],
+    )
+    with pytest.raises(UpgradeError, match=r"uv tool install failed: boom"):
+        upgrade_mod._run_uv_tool_upgrade(target="9.9.9", pinned=True)

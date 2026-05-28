@@ -471,7 +471,7 @@ def _run_uv_tool_upgrade(*, target: str, pinned: bool) -> None:
     )
     if result.returncode != 0:
         raise UpgradeError(
-            f"uv tool upgrade failed: {result.stderr.strip() or result.stdout.strip()}"
+            f"uv tool {cmd[2]} failed: {result.stderr.strip() or result.stdout.strip()}"
         )
     stdout_lower = result.stdout.lower()
     if "nothing to upgrade" in stdout_lower or "already up to date" in stdout_lower:
