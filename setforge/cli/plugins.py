@@ -420,7 +420,9 @@ def marketplace_update_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Run claude plugin marketplace update for a named marketplace."""
-    config = _resolve_config_arg(config)
+    # No _resolve_config_arg here: this command never loads the config
+    # (it only shells to `claude`), and resolving would add a spurious
+    # NoSourceConfigured failure mode for a command that needs no source.
     try:
         claude_plugins_mod.marketplace_update(name)
         typer.echo(f"updated marketplace: {name}")
