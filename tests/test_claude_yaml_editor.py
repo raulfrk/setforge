@@ -229,3 +229,18 @@ def test_failed_replace_leaves_original_intact(
 
     assert p.read_text() == original
     assert list(tmp_path.glob(".setforge.yaml.*.tmp")) == []
+
+
+def test_atomic_write_preserves_file_permissions(tmp_path: Path) -> None:
+    """The atomic temp+rename must carry the config's existing perm bits
+    over — os.replace swaps the inode, so without this the file would
+    silently drop to mkstemp's 0o600 and lose group/other access."""
+    import stat
+
+    from setforge.claude_yaml_editor import yaml_add_marketplace
+
+    p = _write_yaml_fixture(tmp_path)
+    p.chmod(0o644)
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
+    yaml_add_marketplace(p, "new-mp", src)
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644

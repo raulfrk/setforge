@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -58,6 +59,12 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
     atomic: a SIGTERM leaves the original intact. Mirrors
     :func:`setforge.section_reconcile._atomic_write_text`.
     """
+    # os.replace swaps the inode, so the new file would otherwise inherit
+    # mkstemp's 0o600 and silently drop the config's group/other access.
+    # Carry the existing perm bits over (config_path is guaranteed to
+    # exist — every caller loads it first). fchmod on the temp fd before
+    # replace closes the TOCTOU window, matching deploy._atomic_write.
+    original_mode = stat.S_IMODE(config_path.stat().st_mode)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(config_path.parent), prefix=f".{config_path.name}.", suffix=".tmp"
     )
@@ -65,6 +72,8 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             yaml.dump(doc, fh)
+            fh.flush()
+            os.fchmod(fh.fileno(), original_mode)
         os.replace(tmp_path, config_path)
     finally:
         with contextlib.suppress(OSError):
