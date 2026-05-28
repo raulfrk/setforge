@@ -135,6 +135,37 @@ def test_fchmod_failure_propagates(
     assert leftover == []
 
 
+def test_mode_only_drift_applied_when_content_identical(tmp_path: Path) -> None:
+    """Identical content + drifted mode → UPDATED with perms fixed, no backup
+    (setforge-ec2o.32)."""
+    src = tmp_path / "src"
+    src.write_text("same\n")
+    src.chmod(0o644)
+    dst = tmp_path / "dst"
+    dst.write_text("same\n")
+    dst.chmod(0o600)
+
+    result = copy_atomic(src, dst, mode=0o644)
+
+    assert result.action is deploy_mod.DeployAction.UPDATED
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o644
+    assert result.backup_path is None
+    assert not Path(str(dst) + ".bak").exists()
+
+
+def test_identical_content_and_mode_stays_noop(tmp_path: Path) -> None:
+    """Identical content AND matching mode → still NOOP (setforge-ec2o.32)."""
+    src = tmp_path / "src"
+    src.write_text("same\n")
+    dst = tmp_path / "dst"
+    dst.write_text("same\n")
+    dst.chmod(0o644)
+
+    result = copy_atomic(src, dst, mode=0o644)
+
+    assert result.action is deploy_mod.DeployAction.NOOP
+
+
 def test_atomic_write_source_orders_fchmod_before_replace() -> None:
     """The source of :func:`_atomic_write` has ``os.fchmod`` strictly before
     ``os.replace`` — the AST-level proxy for the runtime guarantee that

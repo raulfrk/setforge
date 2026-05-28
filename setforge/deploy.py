@@ -125,6 +125,15 @@ def copy_atomic(
         action = DeployAction.CREATED
 
     if action is DeployAction.NOOP:
+        # Content matches, but mode bits may have drifted. compare flags
+        # mode-only drift; apply it here (path-based chmod is safe — no
+        # content swap to race, real_dst already symlink-resolved) so
+        # install fixes perms instead of reporting "unchanged".
+        if mode is not None and stat.S_IMODE(real_dst.stat().st_mode) != mode:
+            os.chmod(real_dst, mode)
+            return DeployResult(
+                dst=real_dst, action=DeployAction.UPDATED, backup_path=None
+            )
         return DeployResult(dst=real_dst, action=action, backup_path=None)
 
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
