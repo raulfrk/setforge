@@ -157,6 +157,11 @@ def _register_plugin_in_yaml(
             typer.echo(f"marketplace added: {mp_name}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            typer.secho(
+                f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1) from exc
 
     plugin_declared = claude_yaml_editor_mod.yaml_add_plugin(
         config, plugin_name, mp_name
@@ -237,6 +242,11 @@ def plugin_remove(
             typer.echo(f"disabled plugin: {plugin_ref}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            typer.secho(
+                f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1) from exc
 
 
 @plugin_app.command("reconcile", epilog=PLUGIN_RECONCILE_EXAMPLES)
@@ -376,6 +386,9 @@ def marketplace_add_cmd(
         typer.echo(f"registered marketplace: {name}")
     except PluginToolMissing as exc:
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
 
 
 @marketplace_app.command("remove", epilog=MARKETPLACE_REMOVE_EXAMPLES)
@@ -396,6 +409,9 @@ def marketplace_remove_cmd(
         typer.echo(f"removed marketplace: {name}")
     except PluginToolMissing as exc:
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
 
 
 @marketplace_app.command("update", epilog=MARKETPLACE_UPDATE_EXAMPLES)
@@ -410,3 +426,6 @@ def marketplace_update_cmd(
         typer.echo(f"updated marketplace: {name}")
     except PluginToolMissing as exc:
         typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
