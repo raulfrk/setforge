@@ -167,6 +167,7 @@ def merge(
     ``compare`` reports no unexpected drift — the wizard runs only when
     there's work to do.
     """
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)

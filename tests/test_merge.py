@@ -768,3 +768,28 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
     )
     apply_action(uk, "s", setforge_yaml_path=setforge_yaml)
     assert "# my config" in setforge_yaml.read_text()
+
+
+# ---------------------------------------------------------------------------
+# merge CLI command — source-layer resolution (setforge-ec2o.42)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_command_resolves_config_arg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The merge command must consult the source layer before load_config —
+    otherwise users with a configured source get FileNotFoundError running
+    merge outside the config-repo root (setforge-ec2o.42)."""
+    from typer.testing import CliRunner
+
+    import setforge.cli.sync as sync_mod
+    from setforge.cli import app
+
+    seen: list[Path] = []
+
+    def fake_resolve(config: Path) -> Path:
+        seen.append(config)
+        raise SystemExit(99)  # short-circuit before load_config
+
+    monkeypatch.setattr(sync_mod, "_resolve_config_arg", fake_resolve)
+    CliRunner().invoke(app, ["merge", "--profile=x"])
+    assert seen == [Path("setforge.yaml")]
