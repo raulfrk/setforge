@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 
 from setforge import vscode_extensions
-from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     EXT_ADD_EXAMPLES,
     EXT_LIST_EXAMPLES,
@@ -34,6 +34,7 @@ def ext_list(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Show declared (YAML) vs installed (code --list-extensions)."""
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     declared_include = set(resolved.extensions.include)
@@ -75,6 +76,7 @@ def ext_add(
     ),
 ) -> None:
     """Append an extension ID to the profile's extensions.include list."""
+    config = _resolve_config_arg(config)
     added = vscode_extensions.add_to_include(config, profile, extension_id)
     if added:
         typer.echo(f"added to {profile}.extensions.include: {extension_id}")
@@ -104,6 +106,7 @@ def ext_remove(
     ),
 ) -> None:
     """Remove an extension ID from the profile's extensions.include list."""
+    config = _resolve_config_arg(config)
     changed = vscode_extensions.remove_from_include(
         config, profile, extension_id, add_to_exclude_list=exclude
     )
@@ -127,6 +130,7 @@ def ext_reconcile(
     Exits non-zero on non-empty drift when policy is REPORT or
     ``--dry-run`` is set — both are read-only modes intended for CI.
     """
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:

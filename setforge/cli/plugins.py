@@ -14,7 +14,7 @@ from setforge import binaries
 from setforge import claude_marketplace_cache as claude_mp_cache_mod
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import claude_yaml_editor as claude_yaml_editor_mod
-from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, app
+from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     MARKETPLACE_ADD_EXAMPLES,
     MARKETPLACE_REMOVE_EXAMPLES,
@@ -53,6 +53,7 @@ def plugin_list(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Show declared (YAML) vs installed (claude plugin list) status."""
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     declared_ids = set(resolved.claude_plugins)
@@ -112,6 +113,7 @@ def plugin_add(
     ),
 ) -> None:
     """Register a marketplace (if new), declare plugin in YAML, and install."""
+    config = _resolve_config_arg(config)
     plugin_name, mp_name = _validate_plugin_add_args(name, marketplace)
     load_config(config)
     source = _parse_marketplace_from(from_)
@@ -220,6 +222,7 @@ def plugin_remove(
     ),
 ) -> None:
     """Remove a plugin from the profile's claude_plugins list."""
+    config = _resolve_config_arg(config)
     plugin_ref = name  # already in <name>@<marketplace> form or just name
     changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
         config, profile, plugin_ref
@@ -248,6 +251,7 @@ def plugin_reconcile(
 
     Exits non-zero when policy is REPORT or --dry-run and there is drift.
     """
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:
@@ -319,6 +323,7 @@ def sync_cache(
         )
         return
 
+    config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
     try:
@@ -357,6 +362,7 @@ def marketplace_add_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Register a marketplace in YAML and run claude plugin marketplace add."""
+    config = _resolve_config_arg(config)
     source = _parse_marketplace_from(from_)
 
     yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
@@ -378,6 +384,7 @@ def marketplace_remove_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Remove a marketplace from YAML and run claude plugin marketplace remove."""
+    config = _resolve_config_arg(config)
     yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
     if yaml_changed:
         typer.echo(f"removed {name} from marketplaces in YAML")
@@ -397,6 +404,7 @@ def marketplace_update_cmd(
     config: Path = _CONFIG_OPTION,
 ) -> None:
     """Run claude plugin marketplace update for a named marketplace."""
+    config = _resolve_config_arg(config)
     try:
         claude_plugins_mod.marketplace_update(name)
         typer.echo(f"updated marketplace: {name}")
