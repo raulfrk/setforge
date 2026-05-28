@@ -11,6 +11,9 @@ key ordering via ruamel.yaml's ``rt`` mode.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -45,6 +48,27 @@ def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:
     yaml.preserve_quotes = True
     with config_path.open("r", encoding="utf-8") as fh:
         return yaml, yaml.load(fh)
+
+
+def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
+    """Dump ``doc`` to ``config_path`` atomically (temp file + ``os.replace``).
+
+    ``open("w")`` truncates in place — a crash mid-dump corrupts the
+    config. Writing to a sibling temp file and renaming makes the swap
+    atomic: a SIGTERM leaves the original intact. Mirrors
+    :func:`setforge.section_reconcile._atomic_write_text`.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(config_path.parent), prefix=f".{config_path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            yaml.dump(doc, fh)
+        os.replace(tmp_path, config_path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink(missing_ok=True)
 
 
 def _ensure_top_level_block(doc: CommentedMap, key: str) -> CommentedMap:
@@ -85,8 +109,7 @@ def yaml_add_marketplace(
     else:
         entry["path"] = str(source.path or "")
     mps[name] = entry
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
 
@@ -103,8 +126,7 @@ def yaml_remove_marketplace(config_path: Path, name: str) -> bool:
     mps = doc.get("marketplaces")
     if mps and name in mps:
         del mps[name]
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
 
@@ -128,8 +150,7 @@ def yaml_add_plugin(
     entry = CommentedMap()
     entry["marketplace"] = marketplace
     plugins_block[plugin_name] = entry
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
 
@@ -156,8 +177,7 @@ def yaml_add_plugin_to_profile(
     profile_block = profiles[profile_name]
     cp_list = _ensure_list(profile_block, "claude_plugins")
     cp_list.append(plugin_ref)
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
 
@@ -185,6 +205,5 @@ def yaml_remove_plugin_from_profile(
     cp_list = profile_block.get("claude_plugins", [])
     if plugin_ref in cp_list:
         cp_list.remove(plugin_ref)
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _atomic_yaml_dump(yaml, doc, config_path)
     return True

@@ -7,6 +7,8 @@ preservation across edits.
 
 from pathlib import Path
 
+import pytest
+
 from setforge.config import MarketplaceSource, MarketplaceSourceKind
 
 # ---------------------------------------------------------------------------
@@ -190,3 +192,40 @@ def test_yaml_comments_preserved_after_edits(tmp_path: Path) -> None:
     assert "Marketplaces comment." in text
     assert "Plugins comment." in text
     assert "Profile comment." in text
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes — crash mid-write must not truncate the config (ec2o.26)
+# ---------------------------------------------------------------------------
+
+
+def test_no_direct_truncating_open() -> None:
+    """All five mutators route through the atomic helper, never a bare
+    truncating ``config_path.open("w")`` (setforge-ec2o.26)."""
+    import setforge.claude_yaml_editor as mod
+
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    assert 'config_path.open("w"' not in src
+    assert "_atomic_yaml_dump" in src
+
+
+def test_failed_replace_leaves_original_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash during the rename leaves the original config untouched and
+    no temp file behind (setforge-ec2o.26)."""
+    import setforge.claude_yaml_editor as mod
+
+    p = _write_yaml_fixture(tmp_path)
+    original = p.read_text()
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError("simulated crash")
+
+    monkeypatch.setattr(mod.os, "replace", boom)
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="acme/new-mp")
+    with pytest.raises(OSError, match="simulated crash"):
+        mod.yaml_add_marketplace(p, "new-mp", src)
+
+    assert p.read_text() == original
+    assert list(tmp_path.glob(".setforge.yaml.*.tmp")) == []
