@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -285,9 +286,36 @@ class TestSanitizeArgs:
 
         assert _sanitize_args(["fetch", "origin"]) == "fetch origin"
 
+    def test_stderr_url_credentials_masked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # git echoes the full remote URL (with user:token@) verbatim in its
+        # stderr — masking only our argv would still leak the token through
+        # the surfaced stderr. Drive a deterministic CalledProcessError whose
+        # stderr carries a token and assert the raised message masks it.
+        import setforge.git_ops as git_ops_mod
+
+        def fake_run(*_args: object, **_kwargs: object) -> NoReturn:
+            raise subprocess.CalledProcessError(
+                128,
+                ["git", "fetch", "origin"],
+                stderr=(
+                    "fatal: unable to access "
+                    "'https://u:ghp_SECRET@github.com/o/r.git/': boom"
+                ),
+            )
+
+        monkeypatch.setattr(git_ops_mod.subprocess, "run", fake_run)
+        with pytest.raises(GitOpError) as excinfo:
+            git_ops_mod.git_fetch(Path("/tmp/whatever"))
+        msg = str(excinfo.value)
+        assert "ghp_SECRET" not in msg
+        assert "https://***@github.com/o/r.git" in msg
+
     def test_clone_failure_with_token_url_masks_token(self, tmp_path: Path) -> None:
-        # Clone a bogus authed URL into a dest under a nonexistent parent so
-        # git fails fast; the token must not appear in the raised message.
+        # End-to-end: a real failing clone with an authed URL. The masking
+        # now covers git's stderr too, so the token is absent regardless of
+        # how git phrases the failure.
         dest = tmp_path / "dest"
         with pytest.raises(GitOpError) as excinfo:
             git_clone("https://u:ghp_tok_abc@localhost:1/nope.git", dest)

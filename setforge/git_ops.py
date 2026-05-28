@@ -30,16 +30,24 @@ _GIT_TIMEOUT_SECONDS: Final[int] = 300
 _URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(r"(?P<scheme>\w+://)[^/@\s]+@")
 
 
-def _sanitize_args(args: list[str]) -> str:
-    """Join ``args`` for display, masking credentials in URL-shaped tokens.
+def _mask_url_credentials(text: str) -> str:
+    """Replace ``scheme://userinfo@`` credentials anywhere in ``text``.
 
-    Any arg matching ``scheme://userinfo@host`` has its userinfo replaced
-    with ``***`` so an embedded ``user:token@`` never reaches an error
-    message, log line, or error-tracking surface. SSH-style remotes
-    (``git@host:path`` — no ``://``) carry a username, not a secret, and
-    pass through untouched.
+    Any ``scheme://user:token@host`` occurrence has its userinfo replaced
+    with ``***`` so an embedded credential never reaches an error message,
+    log line, or error-tracking surface. Applied to BOTH the command we
+    construct AND git's own stderr: git echoes the full remote URL
+    verbatim in ``unable to access '<url>'`` messages, so masking only our
+    argv would still leak the token through the surfaced stderr. SSH-style
+    remotes (``git@host:path`` — no ``://``) carry a username, not a
+    secret, and pass through untouched.
     """
-    return " ".join(_URL_USERINFO_RE.sub(r"\g<scheme>***@", arg) for arg in args)
+    return _URL_USERINFO_RE.sub(r"\g<scheme>***@", text)
+
+
+def _sanitize_args(args: list[str]) -> str:
+    """Join ``args`` for display with URL credentials masked per arg."""
+    return " ".join(_mask_url_credentials(arg) for arg in args)
 
 
 def _git_bin() -> str:
@@ -75,7 +83,7 @@ def _run_git(
         )
     except subprocess.CalledProcessError as exc:
         # check=True path; surface git's stderr in the error message.
-        stderr = (exc.stderr or "").strip()
+        stderr = _mask_url_credentials((exc.stderr or "").strip())
         raise GitOpError(
             f"git {_sanitize_args(args)} failed (exit {exc.returncode}): {stderr}"
         ) from exc
