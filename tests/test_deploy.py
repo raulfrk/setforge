@@ -99,6 +99,28 @@ def test_backup_update_never_loses_dst(tmp_path: Path) -> None:
     assert result.backup_path.read_text() == "old\n"
 
 
+def test_backup_does_not_follow_preexisting_bak_symlink(tmp_path: Path) -> None:
+    """A pre-existing ``.bak`` symlink must be replaced, not written
+    through — copy2 follows symlinks, so without an unlink the backup
+    would clobber the link's target instead of snapshotting dst."""
+    src = tmp_path / "src"
+    src.write_text("new\n")
+    dst = tmp_path / "dst"
+    dst.write_text("old\n")
+    victim = tmp_path / "victim"
+    victim.write_text("KEEP\n")
+    bak = Path(str(dst) + ".bak")
+    bak.symlink_to(victim)
+
+    result = copy_atomic(src, dst)
+
+    assert victim.read_text() == "KEEP\n"  # target untouched
+    assert not bak.is_symlink()  # link replaced by a regular file
+    assert bak.read_text() == "old\n"  # backup snapshots the old content
+    assert result.backup_path == bak
+    assert dst.read_text() == "new\n"
+
+
 def test_atomic_write_has_no_exdev_branch() -> None:
     """The cross-filesystem rescue branch (and its unlink-before-replace
     window) is gone: backup is now an unconditional copy + os.replace."""

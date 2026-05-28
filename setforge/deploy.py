@@ -315,6 +315,13 @@ def _atomic_write(
         backup_path: Path | None = None
         if backup and dst_existed:
             backup_path = Path(str(dst) + ".bak")
+            # Unlink any pre-existing .bak first: shutil.copy2 FOLLOWS a
+            # symlink at the destination and would write dst's content
+            # THROUGH it (clobbering the link target). The prior
+            # rename-based backup replaced the link instead, so unlink to
+            # preserve that "replace, never follow" semantics.
+            with contextlib.suppress(FileNotFoundError):
+                backup_path.unlink()
             # Copy (not rename) so dst stays in place until os.replace
             # atomically swaps the new content in — no window where dst is
             # absent. copy2 works across filesystems; tmp_path is always
