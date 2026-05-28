@@ -158,6 +158,24 @@ def test_source_prompt_empty_input_falls_back_to_skip(
     assert spec.choice is init_mod.SourceChoice.SKIP
 
 
+def test_source_prompt_whitespace_input_falls_back_to_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A whitespace-only entry is truthy but would write a YAML scalar that
+    re-reads as null — a half-written stub. It must collapse to SKIP."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(
+        "setforge.cli.init.radiolist_dialog",
+        _DialogRecorder([init_mod.SourceChoice.PATH]),
+    )
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _DialogRecorder(["   "]))
+    spec = init_mod._prompt_source_config(
+        no_prompt=False, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.SKIP
+
+
 def test_source_prompt_skip_selection_returns_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

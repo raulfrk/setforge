@@ -240,6 +240,10 @@ def _prompt_source_config(
             title="git config-repo source",
             text="Enter the git URL to clone (blank to skip):",
         ).run()
+        # Strip first: a whitespace-only entry is truthy but would write a
+        # `path:`/`url:` plain scalar that YAML re-reads as null — a
+        # half-written stub. Collapse it (and None/empty) to SKIP.
+        url = (url or "").strip()
         if not url:
             return SourceSpec(choice=SourceChoice.SKIP)
         return SourceSpec(choice=SourceChoice.GIT, url=url, ref=git_ref)
@@ -248,6 +252,7 @@ def _prompt_source_config(
             title="local config-repo source",
             text="Enter the local config-repo directory (blank to skip):",
         ).run()
+        path_str = (path_str or "").strip()
         if not path_str:
             return SourceSpec(choice=SourceChoice.SKIP)
         return SourceSpec(choice=SourceChoice.PATH, path=Path(path_str))
