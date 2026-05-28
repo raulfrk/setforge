@@ -104,3 +104,24 @@ def test_plugin_list_resolves_source_layer_from_wrong_cwd(
         check=False,
     )
     _assert_resolved(res.stdout, res.stderr, res.returncode)
+
+
+def test_marketplace_update_needs_no_source(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """The counterpoint: ``marketplace update`` only shells to ``claude`` and
+    loads no config, so it must run with NO source configured. It must NOT
+    gain the spurious ``NoSourceConfigured`` failure the resolve batch added
+    to the config-consuming commands — run with no ``source:`` block and no
+    ``setforge.yaml`` in CWD and assert no source error / traceback."""
+    c = docker_container()
+    # Deliberately NO _bootstrap_source_repo: no source block, and the
+    # default CWD (/workspace) has no setforge.yaml. A command that wrongly
+    # resolved config would raise NoSourceConfigured here.
+    res = c.exec(
+        ["uv", "run", "setforge", "marketplace", "update", "mp"],
+        check=False,
+    )
+    combined = res.stdout + res.stderr
+    assert "NoSourceConfigured" not in combined, combined
+    assert "Traceback (most recent call last)" not in combined, combined

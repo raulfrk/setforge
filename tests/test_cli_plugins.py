@@ -41,6 +41,34 @@ def test_plugin_marketplace_resolves_config(
     assert seen == [Path("setforge.yaml")]
 
 
+def test_marketplace_update_does_not_resolve_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`marketplace update` only shells to `claude` and never loads the
+    config, so it must NOT call _resolve_config_arg — resolving would add a
+    spurious NoSourceConfigured failure mode for a command needing no
+    source. Regression guard for the resolve being re-added."""
+    import setforge.cli.plugins as plugins_mod
+
+    resolved: list[Path] = []
+
+    def fake_resolve(config: Path) -> Path:
+        resolved.append(config)
+        raise SystemExit(99)  # would short-circuit before the claude call
+
+    called: list[str] = []
+    monkeypatch.setattr(plugins_mod, "_resolve_config_arg", fake_resolve)
+    monkeypatch.setattr(
+        plugins_mod.claude_plugins_mod,
+        "marketplace_update",
+        lambda name: called.append(name),
+    )
+    result = CliRunner().invoke(app, ["marketplace", "update", "mp"])
+    assert result.exit_code == 0, result.output
+    assert resolved == []  # the source layer was never consulted
+    assert called == ["mp"]  # the command reached the claude call
+
+
 @pytest.mark.parametrize(
     ("argv", "target_fn"),
     [
