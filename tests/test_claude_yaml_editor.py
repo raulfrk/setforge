@@ -195,13 +195,13 @@ def test_yaml_comments_preserved_after_edits(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic writes — crash mid-write must not truncate the config (ec2o.26)
+# Atomic writes — crash mid-write must not truncate the config
 # ---------------------------------------------------------------------------
 
 
 def test_no_direct_truncating_open() -> None:
     """All five mutators route through the atomic helper, never a bare
-    truncating ``config_path.open("w")`` (setforge-ec2o.26)."""
+    truncating ``config_path.open("w")``."""
     import setforge.claude_yaml_editor as mod
 
     src = Path(mod.__file__).read_text(encoding="utf-8")
@@ -213,7 +213,7 @@ def test_failed_replace_leaves_original_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A crash during the rename leaves the original config untouched and
-    no temp file behind (setforge-ec2o.26)."""
+    no temp file behind."""
     import setforge.claude_yaml_editor as mod
 
     p = _write_yaml_fixture(tmp_path)

@@ -85,8 +85,7 @@ def test_identical_content_is_noop(tmp_path: Path) -> None:
 
 def test_backup_update_never_loses_dst(tmp_path: Path) -> None:
     """An UPDATE that takes a backup leaves dst present with new content
-    and the backup carrying old content — no window where dst is absent
-    (setforge-ec2o.49)."""
+    and the backup carrying old content — no window where dst is absent."""
     src = tmp_path / "src"
     src.write_text("new\n")
     dst = tmp_path / "dst"
@@ -102,8 +101,7 @@ def test_backup_update_never_loses_dst(tmp_path: Path) -> None:
 
 def test_atomic_write_has_no_exdev_branch() -> None:
     """The cross-filesystem rescue branch (and its unlink-before-replace
-    window) is gone: backup is now an unconditional copy + os.replace
-    (setforge-ec2o.49)."""
+    window) is gone: backup is now an unconditional copy + os.replace."""
     import setforge.deploy as deploy_mod
 
     src = Path(deploy_mod.__file__).read_text(encoding="utf-8")

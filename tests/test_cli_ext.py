@@ -1,4 +1,4 @@
-"""CLI-level tests for the ``ext`` command group (setforge-ec2o.35 / .52).
+"""CLI-level tests for the ``ext`` command group.
 
 Drives the real CLI via Typer's :class:`CliRunner`. Covers source-layer
 resolution (every command must consult the source layer before
@@ -17,8 +17,7 @@ from setforge.cli import app
 
 def test_ext_list_resolves_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """ext list must call _resolve_config_arg before load_config so a
-    configured source layer works outside the config-repo root
-    (setforge-ec2o.35)."""
+    configured source layer works outside the config-repo root."""
     import setforge.cli.ext as ext_mod
 
     seen: list[Path] = []
@@ -34,8 +33,7 @@ def test_ext_list_resolves_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_ext_add_handles_install_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-zero `code --install-extension` raises ExtensionInstallFailed,
-    which must surface as a clean error + exit 1, not a traceback
-    (setforge-ec2o.52)."""
+    which must surface as a clean error + exit 1, not a traceback."""
     import setforge.cli.ext as ext_mod
     from setforge.errors import ExtensionInstallFailed
 

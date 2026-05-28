@@ -547,7 +547,7 @@ def test_upgrade_module_uses_only_radiolist_no_typer_prompt() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _run_uv_tool_upgrade — --to version pinning (setforge-ec2o.41)
+# _run_uv_tool_upgrade — --to version pinning
 # ---------------------------------------------------------------------------
 
 
@@ -555,7 +555,7 @@ def test_pinned_upgrade_uses_install_reinstall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pinned target installs the exact version via reinstall-package —
-    `uv tool upgrade` cannot target a version (setforge-ec2o.41)."""
+    `uv tool upgrade` cannot target a version."""
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     calls = _patch_subprocess_run(
         monkeypatch,

@@ -1,5 +1,4 @@
-"""CLI-level tests for the ``plugin`` / ``marketplace`` command groups
-(setforge-ec2o.35 / .51).
+"""CLI-level tests for the ``plugin`` / ``marketplace`` command groups.
 
 Drives the real CLI via Typer's :class:`CliRunner`. Covers source-layer
 resolution and clean error handling for failing ``claude`` subprocesses.
@@ -28,7 +27,7 @@ def test_plugin_marketplace_resolves_config(
 ) -> None:
     """plugin/marketplace commands must call _resolve_config_arg before
     load_config so a configured source layer works outside the config-repo
-    root (setforge-ec2o.35)."""
+    root."""
     import setforge.cli.plugins as plugins_mod
 
     seen: list[Path] = []
@@ -54,7 +53,7 @@ def test_marketplace_subprocess_error_is_clean(
     monkeypatch: pytest.MonkeyPatch, argv: list[str], target_fn: str
 ) -> None:
     """A failing `claude` subprocess must surface as a clean error + exit 1,
-    not a raw traceback (setforge-ec2o.51)."""
+    not a raw traceback."""
     import setforge.cli.plugins as plugins_mod
 
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
@@ -85,7 +84,7 @@ def test_plugin_remove_disable_subprocess_error_is_clean(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failing `claude plugin disable` during plugin remove --disable must
-    surface as a clean error + exit 1, not a traceback (setforge-ec2o.51)."""
+    surface as a clean error + exit 1, not a traceback."""
     import setforge.cli.plugins as plugins_mod
 
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)

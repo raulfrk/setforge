@@ -136,8 +136,7 @@ def test_fchmod_failure_propagates(
 
 
 def test_mode_only_drift_applied_when_content_identical(tmp_path: Path) -> None:
-    """Identical content + drifted mode → UPDATED with perms fixed, no backup
-    (setforge-ec2o.32)."""
+    """Identical content + drifted mode → UPDATED with perms fixed, no backup."""
     src = tmp_path / "src"
     src.write_text("same\n")
     src.chmod(0o644)
@@ -154,7 +153,7 @@ def test_mode_only_drift_applied_when_content_identical(tmp_path: Path) -> None:
 
 
 def test_identical_content_and_mode_stays_noop(tmp_path: Path) -> None:
-    """Identical content AND matching mode → still NOOP (setforge-ec2o.32)."""
+    """Identical content AND matching mode → still NOOP."""
     src = tmp_path / "src"
     src.write_text("same\n")
     dst = tmp_path / "dst"

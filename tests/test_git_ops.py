@@ -261,7 +261,7 @@ class TestGitCheckout:
 
 
 # ---------------------------------------------------------------------------
-# _sanitize_args — credential masking in error messages (setforge-ec2o.50)
+# _sanitize_args — credential masking in error messages
 # ---------------------------------------------------------------------------
 
 

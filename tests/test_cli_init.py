@@ -100,7 +100,7 @@ def _patch_init_dialog(
 
 
 # ---------------------------------------------------------------------------
-# Interactive GIT/PATH source entry (setforge-ec2o.46)
+# Interactive GIT/PATH source entry
 # ---------------------------------------------------------------------------
 
 
@@ -144,7 +144,7 @@ def test_source_prompt_empty_input_falls_back_to_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A cancelled/empty input_dialog collapses to SKIP rather than a
-    half-built GIT/PATH spec (setforge-ec2o.46)."""
+    half-built GIT/PATH spec."""
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(

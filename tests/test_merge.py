@@ -771,14 +771,14 @@ def test_save_as_preserved_yaml_comments_survive(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# merge CLI command — source-layer resolution (setforge-ec2o.42)
+# merge CLI command — source-layer resolution
 # ---------------------------------------------------------------------------
 
 
 def test_merge_command_resolves_config_arg(monkeypatch: pytest.MonkeyPatch) -> None:
     """The merge command must consult the source layer before load_config —
     otherwise users with a configured source get FileNotFoundError running
-    merge outside the config-repo root (setforge-ec2o.42)."""
+    merge outside the config-repo root."""
     from typer.testing import CliRunner
 
     import setforge.cli.sync as sync_mod
