@@ -646,3 +646,34 @@ def test_cli_compare_full_diff_includes_markers(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "+++" in result.stdout or "---" in result.stdout
+
+
+def test_render_with_merges_jsonc_uses_passed_dst_text_not_disk(
+    tmp_path: Path,
+) -> None:
+    """The JSONC preserve-keys path overlays from the passed ``dst_text``.
+
+    Pass a ``dst_text`` whose user-key value differs from what is on
+    disk at ``dst``; the rendered merge must reflect the PARAMETER, proving
+    the function does not re-read ``dst`` from disk on this branch (no
+    TOCTOU re-read, no wasted I/O).
+    """
+    from setforge.compare import _render_with_merges
+
+    src = tmp_path / "settings.json"
+    _write(src, '{\n  "tabSize": 2,\n  "userKey": "tracked"\n}\n')
+    dst = tmp_path / "live.json"
+    # On-disk dst carries a value the test must NOT see surface.
+    _write(dst, '{\n  "userKey": "ON_DISK_SHOULD_NOT_APPEAR"\n}\n')
+
+    passed_dst_text = '{\n  "userKey": "FROM_PARAMETER"\n}\n'
+    rendered = _render_with_merges(
+        src,
+        dst,
+        False,
+        ["userKey"],
+        dst_text=passed_dst_text,
+    )
+
+    assert "FROM_PARAMETER" in rendered
+    assert "ON_DISK_SHOULD_NOT_APPEAR" not in rendered

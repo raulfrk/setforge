@@ -309,7 +309,7 @@ def _render_with_merges(
     deep = preserve_user_keys_deep or []
     if (shallow or deep) and jsonc.is_jsonc_file(src):
         tracked_text = src.read_text(encoding="utf-8")
-        live_text = dst.read_text(encoding="utf-8")
+        live_text = dst_text
         content = jsonc.overlay_user_keys(
             tracked_text, live_text, shallow, deep_key_names=deep
         )
