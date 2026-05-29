@@ -99,7 +99,7 @@ def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
     - ``False`` — tracked_files exist but none declare an overlay.
     """
     saw_tracked_file = False
-    for tracked_file, _src, _dst in _iter_all_tracked_files(ctx):
+    for tracked_file, _sub_name, _src, _dst in _iter_all_tracked_files(ctx):
         saw_tracked_file = True
         if tracked_file.preserve_user_keys or tracked_file.preserve_user_keys_deep:
             return True
@@ -770,7 +770,7 @@ def _dry_run_emit_deploys(
             f"compare report length ({len(drift_report.entries)}); refusing "
             f"to render a deploy preview against an inconsistent join"
         )
-    for (_tracked, _sub_src, sub_dst), entry in zip(
+    for (_tracked, _sub_name, _sub_src, sub_dst), entry in zip(
         walk, drift_report.entries, strict=True
     ):
         match entry.status:

@@ -303,7 +303,7 @@ def install(
     # file, so a transition recording the link path would brick revert.
     dst_paths: list[Path] = [
         Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
-        for tf, _, sub_dst in _iter_all_tracked_files(ctx)
+        for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
     ]
     dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
 

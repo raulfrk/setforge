@@ -182,7 +182,7 @@ def build_welcome_inventory(ctx: ProfileContext) -> WelcomeInventory:
     """
     tracked_file_count = 0
     dst_dirs: set[Path] = set()
-    for _tracked, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
+    for _tracked, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
         tracked_file_count += 1
         parent = sub_dst.parent
         if not parent.exists():

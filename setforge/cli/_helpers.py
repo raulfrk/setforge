@@ -140,24 +140,26 @@ def _iter_section_tracked_files(
 
 def _iter_all_tracked_files(
     ctx: ProfileContext,
-) -> Iterator[tuple[TrackedFile, Path, Path]]:
-    """Yield ``(tracked_file, sub_src, sub_dst)`` for every resolved entry.
+) -> Iterator[tuple[TrackedFile, str, Path, Path]]:
+    """Yield ``(tracked_file, sub_name, sub_src, sub_dst)`` per resolved entry.
 
     Sibling of :func:`_iter_section_tracked_files` without the
     ``preserve_user_sections`` filter; consolidates the unfiltered
     resolve_src / resolve_dst / expand_tracked_file walks that ``install``
     (transition snapshot + copy_atomic loop) and ``sync`` (transition
     snapshot) all duplicate today. Yields ``tracked_file`` alongside the
-    pair because the install copy_atomic caller needs per-tracked_file
+    ``expand_tracked_file`` synthetic ``sub_name`` (``name`` for plain
+    files, ``name/relpath`` for directory entries) and the path pair
+    because the install copy_atomic caller needs per-tracked_file
     ``preserve_user_*`` attributes; callers that only need a path
-    destructure as ``_, _, sub_dst`` or ``_, sub_src, _``.
+    destructure as ``_, _, _, sub_dst`` or ``_, _, sub_src, _``.
     """
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
-        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            yield tracked_file, sub_src, sub_dst
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            yield tracked_file, sub_name, sub_src, sub_dst
 
 
 def _resolve_drift_paths(
@@ -168,21 +170,23 @@ def _resolve_drift_paths(
 
     Both ``install._build_unexpected_drift_plan`` and
     ``sync._build_capture_plan`` need the same ``name → (sub_src, sub_dst)``
-    map keyed by both the expanded name and the bare ``tracked_file.src``
-    string. Returns one ``(entry, sub_src, sub_dst)`` tuple per DRIFTED
+    map keyed by the ``expand_tracked_file`` synthetic ``sub_name`` — the
+    exact string that becomes ``FileCompare.name`` — so directory sub-files
+    (``name/relpath``) do not collide on a bare basename. Returns one
+    ``(entry, sub_src, sub_dst)`` tuple per DRIFTED
     entry with drift content (``unexpected_drift_keys``, ``diff``, or
     ``mode_drift`` non-empty). Entries with no path match fall back to
     the entry name in both positions, preserving the pre-extraction
     behavior.
     """
     paths_by_name: dict[str, tuple[Path, Path]] = {}
-    for tracked_file, sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        # expand_tracked_file's naming convention: plain files use the
-        # tracked_file name directly; directory entries use "name/relpath".
-        # Register both the bare name and the prefixed form so lookup
-        # works regardless of expansion shape.
-        paths_by_name[sub_src.name] = (sub_src, sub_dst)
-        paths_by_name[str(tracked_file.src)] = (sub_src, sub_dst)
+    for _tracked_file, sub_name, sub_src, sub_dst in _iter_all_tracked_files(ctx):
+        # ``sub_name`` is expand_tracked_file's synthetic name — ``name``
+        # for plain files, ``name/relpath`` for directory entries — and is
+        # exactly what compare_profile stores in ``FileCompare.name``. Keying
+        # by it gives one unique entry per sub-file, so directory sub-files no
+        # longer overwrite each other on a shared basename.
+        paths_by_name[sub_name] = (sub_src, sub_dst)
     resolved_entries: list[tuple[FileCompare, Path, Path]] = []
     for entry in drift_report.entries:
         if entry.status is not CompareStatus.DRIFTED:

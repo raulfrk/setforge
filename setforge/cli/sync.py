@@ -370,7 +370,7 @@ def _sync_snapshot_paths(
     pre-mutation, so ``revert`` rolls the drop back independently of
     the surrounding SYNC transition.
     """
-    paths = [sub_src for _, sub_src, _ in _iter_all_tracked_files(ctx)]
+    paths = [sub_src for _, _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
     return paths
 

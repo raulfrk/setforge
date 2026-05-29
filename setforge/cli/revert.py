@@ -358,7 +358,7 @@ def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    for tracked_file, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
+    for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is None:
             continue
         revert_symlink_deployment(sub_dst, tracked_file.symlink)
