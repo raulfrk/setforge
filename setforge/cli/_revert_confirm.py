@@ -313,7 +313,7 @@ def confirm_revert_operation(
             "setforge revert requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     _render_panel(plan, console)
     choice = _prompt_choice(plan)
     if choice is RevertChoice.ABORT:
@@ -419,7 +419,7 @@ def confirm_multi_step_revert_operation(
             "setforge revert --to-before requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     _render_multi_step_panel(plan, console)
     choice = _prompt_multi_step_choice(plan)
     if choice is RevertChoice.ABORT:

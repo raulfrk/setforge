@@ -390,7 +390,7 @@ def prompt_git_check_choice(
             "check (e.g. for CI / cron use)."
         )
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     _render_panel(
         source=source,
         dirty_lines=dirty_lines,
@@ -518,7 +518,7 @@ def run_git_check_or_raise(
     if no_git_check:
         return
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     source_dir = resolve_source_dir(source)
     detached = False
     dirty_lines: list[str] = []

@@ -74,7 +74,7 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
             fg=typer.colors.YELLOW,
         )
         return SecretAction.ABORT
-    console = Console()
+    console = Console(stderr=True)
     _render_panel(finding, console)
     from setforge.cli import _secrets_confirm as _self  # monkeypatch seam
 

@@ -454,7 +454,7 @@ def prompt_welcome(
             "is not a TTY (no consent surface available)"
         )
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     _render_panel(inventory, console=console)
     initial = _run_dialog(values=_PROMPT_VALUES_FULL, default=WelcomeChoice.ABORT)
     resolved = _handle_initial_choice(initial, run_dry_run=run_dry_run, console=console)

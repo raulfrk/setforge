@@ -108,7 +108,7 @@ def prompt_failure_action(
         )
         return default
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     console.print(f"[bold red]=== reconcile failure ===[/bold red]\n{message}")
     while True:
         # ``radiolist_dialog`` resolves through the module-level
@@ -242,7 +242,7 @@ def confirm_auto_operation(
             f"setforge {command} with --auto* requires --yes when stdin is not a TTY"
         )
     if console is None:
-        console = Console()
+        console = Console(stderr=True)
     _render_panel(command=command, profile=profile, plan=plan, console=console)
     # ``radiolist_dialog`` resolves through the module-level
     # ``__getattr__`` (lazy prompt_toolkit import); tests monkeypatch
