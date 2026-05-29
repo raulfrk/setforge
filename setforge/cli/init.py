@@ -36,6 +36,7 @@ from setforge.cli._init_helpers import (
     is_initialized,
     probe_environment,
 )
+from setforge.errors import ConfirmRequiresInteractive
 
 # prompt_toolkit's ``radiolist_dialog`` resolves through this module's
 # lazy ``__getattr__`` below so cold-start commands (``setforge --help``,
@@ -219,6 +220,10 @@ def _prompt_source_config(
         )
     if no_prompt:
         return SourceSpec(choice=SourceChoice.SKIP)
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge init requires --no-prompt when stdin is not a TTY"
+        )
     from setforge.cli import init as _self
 
     result = _self.radiolist_dialog(
@@ -264,6 +269,10 @@ def _prompt_apply_confirm(*, no_prompt: bool) -> ApplyChoice:
     """Resolve the ``=== ready to apply ===`` prompt → ApplyChoice."""
     if no_prompt:
         return ApplyChoice.PROCEED
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge init requires --no-prompt when stdin is not a TTY"
+        )
     from setforge.cli import init as _self
 
     result = _self.radiolist_dialog(
@@ -291,6 +300,10 @@ def _prompt_force_confirm(*, no_prompt: bool) -> ForceChoice:
     """
     if no_prompt:
         return ForceChoice.OVERWRITE_WITH_BACKUP
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge init requires --no-prompt when stdin is not a TTY"
+        )
     from setforge.cli import init as _self
 
     result = _self.radiolist_dialog(

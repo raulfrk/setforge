@@ -108,6 +108,7 @@ def test_source_prompt_git_collects_url(monkeypatch: pytest.MonkeyPatch) -> None
     """Selecting GIT collects a URL via input_dialog and builds a GIT spec."""
     import setforge.cli.init as init_mod
 
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         "setforge.cli.init.radiolist_dialog",
         _DialogRecorder([init_mod.SourceChoice.GIT]),
@@ -128,6 +129,7 @@ def test_source_prompt_path_collects_path(monkeypatch: pytest.MonkeyPatch) -> No
     """Selecting PATH collects a directory via input_dialog and builds a PATH spec."""
     import setforge.cli.init as init_mod
 
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         "setforge.cli.init.radiolist_dialog",
         _DialogRecorder([init_mod.SourceChoice.PATH]),
@@ -147,6 +149,7 @@ def test_source_prompt_empty_input_falls_back_to_skip(
     half-built GIT/PATH spec."""
     import setforge.cli.init as init_mod
 
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         "setforge.cli.init.radiolist_dialog",
         _DialogRecorder([init_mod.SourceChoice.GIT]),
@@ -165,6 +168,7 @@ def test_source_prompt_whitespace_input_falls_back_to_skip(
     re-reads as null — a half-written stub. It must collapse to SKIP."""
     import setforge.cli.init as init_mod
 
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         "setforge.cli.init.radiolist_dialog",
         _DialogRecorder([init_mod.SourceChoice.PATH]),
@@ -182,6 +186,7 @@ def test_source_prompt_skip_selection_returns_skip(
     """SKIP selection returns SKIP without touching input_dialog."""
     import setforge.cli.init as init_mod
 
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         "setforge.cli.init.radiolist_dialog",
         _DialogRecorder([init_mod.SourceChoice.SKIP]),
@@ -195,6 +200,143 @@ def test_source_prompt_skip_selection_returns_skip(
         no_prompt=False, path_source=None, git_source=None, git_ref="main"
     )
     assert spec.choice is init_mod.SourceChoice.SKIP
+
+
+# ---------------------------------------------------------------------------
+# Non-TTY guard: raise ConfirmRequiresInteractive (no radiolist opened)
+# ---------------------------------------------------------------------------
+
+
+def _explode_radiolist(*_a: object, **_k: object) -> object:
+    """radiolist_dialog stand-in that fails if the seam is ever reached."""
+    raise AssertionError("radiolist_dialog must not run on a non-TTY")
+
+
+def test_source_prompt_non_tty_raises_without_opening_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-TTY + no --no-prompt: raise before any radiolist/input dialog runs."""
+    import setforge.cli.init as init_mod
+    from setforge.errors import ConfirmRequiresInteractive
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _explode_radiolist)
+    with pytest.raises(ConfirmRequiresInteractive):
+        init_mod._prompt_source_config(
+            no_prompt=False, path_source=None, git_source=None, git_ref="main"
+        )
+
+
+def test_apply_confirm_non_tty_raises_without_opening_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-TTY + no --no-prompt: _prompt_apply_confirm raises, no dialog."""
+    import setforge.cli.init as init_mod
+    from setforge.errors import ConfirmRequiresInteractive
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    with pytest.raises(ConfirmRequiresInteractive):
+        init_mod._prompt_apply_confirm(no_prompt=False)
+
+
+def test_force_confirm_non_tty_raises_without_opening_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-TTY + no --no-prompt: _prompt_force_confirm raises, no dialog."""
+    import setforge.cli.init as init_mod
+    from setforge.errors import ConfirmRequiresInteractive
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    with pytest.raises(ConfirmRequiresInteractive):
+        init_mod._prompt_force_confirm(no_prompt=False)
+
+
+# ---------------------------------------------------------------------------
+# Automation: --no-prompt (no_prompt=True) on non-TTY returns documented
+# defaults without raising; --path-source/--git-source flags bypass the guard.
+# ---------------------------------------------------------------------------
+
+
+def test_source_prompt_no_prompt_non_tty_returns_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--no-prompt on a non-TTY resolves to SKIP without raising or prompting."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    monkeypatch.setattr("setforge.cli.init.input_dialog", _explode_radiolist)
+    spec = init_mod._prompt_source_config(
+        no_prompt=True, path_source=None, git_source=None, git_ref="main"
+    )
+    assert spec.choice is init_mod.SourceChoice.SKIP
+
+
+def test_apply_confirm_no_prompt_non_tty_returns_proceed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--no-prompt on a non-TTY resolves to PROCEED without raising."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    assert (
+        init_mod._prompt_apply_confirm(no_prompt=True) is init_mod.ApplyChoice.PROCEED
+    )
+
+
+def test_force_confirm_no_prompt_non_tty_returns_overwrite_with_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--no-prompt on a non-TTY resolves to OVERWRITE_WITH_BACKUP without raising."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    assert (
+        init_mod._prompt_force_confirm(no_prompt=True)
+        is init_mod.ForceChoice.OVERWRITE_WITH_BACKUP
+    )
+
+
+def test_source_prompt_path_source_flag_bypasses_non_tty_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--path-source supplies a source non-interactively: PATH, not blocked."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    spec = init_mod._prompt_source_config(
+        no_prompt=False,
+        path_source=Path("/tmp/cfg"),
+        git_source=None,
+        git_ref="main",
+    )
+    assert spec.choice is init_mod.SourceChoice.PATH
+    assert spec.path == Path("/tmp/cfg")
+
+
+def test_source_prompt_git_source_flag_bypasses_non_tty_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--git-source supplies a source non-interactively: GIT, not blocked."""
+    import setforge.cli.init as init_mod
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("setforge.cli.init.radiolist_dialog", _explode_radiolist)
+    spec = init_mod._prompt_source_config(
+        no_prompt=False,
+        path_source=None,
+        git_source="https://github.com/o/r",
+        git_ref="main",
+    )
+    assert spec.choice is init_mod.SourceChoice.GIT
+    assert spec.url == "https://github.com/o/r"
+    assert spec.ref == "main"
 
 
 # ---------------------------------------------------------------------------

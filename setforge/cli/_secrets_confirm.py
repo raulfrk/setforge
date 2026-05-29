@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 from typing import Any, cast
 
+import typer
 from rich.console import Console
 from rich.panel import Panel
 
@@ -57,14 +58,21 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
     Short-circuits to :data:`SecretAction.ABORT` when ``yes=True`` —
     non-interactive callers MUST NOT silently bypass a secret finding
     (auto-bypass would defeat the defense-in-depth goal of the scan).
-    Esc / ``None`` from the dialog also returns ABORT (the mockup-T
-    default). Tests monkeypatch
+    Non-TTY stdin also returns ABORT, emitting a yellow stderr warning
+    first so the abort is not silent. Esc / ``None`` from the dialog
+    also returns ABORT (the mockup-T default). Tests monkeypatch
     ``setforge.cli._secrets_confirm.radiolist_dialog`` to control the
     return value.
     """
     if yes:
         return SecretAction.ABORT
     if not sys.stdin.isatty():
+        typer.secho(
+            "warning: potential secret detected but no TTY is available to "
+            "confirm — aborting install",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
         return SecretAction.ABORT
     console = Console()
     _render_panel(finding, console)

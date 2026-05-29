@@ -48,7 +48,7 @@ from setforge._changelog_parser import parse_changelog
 from setforge._pypi_client import PyPIVersionInfo, fetch_latest_version
 from setforge.cli import app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
-from setforge.errors import PyPIFetchError, UpgradeError
+from setforge.errors import ConfirmRequiresInteractive, PyPIFetchError, UpgradeError
 
 # Lazy radiolist import — mirrors ``setforge/cli/_confirm.py:34-39``.
 # Lets ``setforge --help`` / ``setforge upgrade --help`` skip the
@@ -625,6 +625,10 @@ def upgrade(
         # Automation path: skip the panel render, take the recommended
         # choice, run the wrap. Tests cover both branches.
         choice = _confirm_upgrade(plan, yes=True)
+    elif not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge upgrade requires --no-prompt when stdin is not a TTY"
+        )
     else:
         choice = _confirm_upgrade(plan, yes=no_prompt)
 

@@ -151,6 +151,55 @@ def test_non_tty_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     assert recorder.call_count == 0
 
 
+def test_non_tty_emits_stderr_warning_and_aborts(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-TTY (without ``yes``) aborts AND surfaces a stderr warning.
+
+    A silent ABORT in a non-interactive pipeline hides WHY the install
+    stopped; the wizard must explain that a secret was found and there
+    is no TTY to confirm. The warning must NOT reproduce the candidate
+    secret value — echoing the snippet would leak it into stderr / CI
+    logs / scrollback, defeating the very abort that protects it.
+    """
+    monkeypatch.setattr(
+        _secrets_confirm.sys.stdin, "isatty", lambda: False, raising=False
+    )
+    recorder = _patch_dialog(monkeypatch, return_value=SecretAction.ALLOWLIST)
+    secret = "ghp_DEADBEEFsentinel0123456789"
+
+    action = _secrets_confirm.prompt_secret_action(_make_finding(snippet=secret))
+
+    assert action is SecretAction.ABORT
+    assert recorder.call_count == 0
+    err = capsys.readouterr().err
+    assert err.strip() != ""  # a non-empty diagnostic, not a silent abort
+    assert secret not in err  # the secret value must never leak to stderr
+
+
+def test_yes_short_circuit_emits_no_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The ``yes=True`` ABORT is the documented defense-in-depth path —
+    it is intentional, not a missing-TTY condition, so it must stay
+    silent. A 'no TTY' diagnostic here would be spurious noise on the
+    automation path (the install caller already prints its own abort
+    message).
+    """
+    monkeypatch.setattr(
+        _secrets_confirm.sys.stdin, "isatty", lambda: False, raising=False
+    )
+    recorder = _patch_dialog(monkeypatch, return_value=SecretAction.ALLOWLIST)
+
+    action = _secrets_confirm.prompt_secret_action(_make_finding(), yes=True)
+
+    assert action is SecretAction.ABORT
+    assert recorder.call_count == 0
+    assert capsys.readouterr().err == ""
+
+
 # ---------------------------------------------------------------------------
 # Lazy import seam
 # ---------------------------------------------------------------------------

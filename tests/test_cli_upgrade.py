@@ -525,6 +525,76 @@ def test_cli_upgrade_pypi_fetch_error_exits_one(
 
 
 # ---------------------------------------------------------------------------
+# Non-TTY confirm guard
+# ---------------------------------------------------------------------------
+
+
+def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_radiolist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-TTY + no ``--no-prompt`` must raise before any radiolist opens."""
+    from setforge.errors import ConfirmRequiresInteractive
+
+    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_notes(monkeypatch, notes="- body")
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    # Seam guard: the radiolist must never be constructed on a non-TTY.
+    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+
+    def fail_run(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("non-TTY confirm guard must not shell out")
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", fail_run)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["upgrade"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ConfirmRequiresInteractive)
+    assert recorder.call_count == 0
+
+
+def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--no-prompt`` on a non-TTY auto-applies (``yes=True``) and proceeds."""
+    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_notes(monkeypatch, notes="- body")
+    monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    # The radiolist must never run on the automation path either.
+    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.ABORT)
+
+    responses = [
+        subprocess.CompletedProcess(
+            args=["uv", "tool", "upgrade", "setforge"],
+            returncode=0,
+            stdout="Installed setforge==0.3.0\n",
+            stderr="",
+        ),
+        subprocess.CompletedProcess(
+            args=["uv", "tool", "list"],
+            returncode=0,
+            stdout="setforge 0.3.0\n",
+            stderr="",
+        ),
+    ]
+    calls = _patch_subprocess_run(monkeypatch, responses=responses)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["upgrade", "--no-prompt"])
+
+    assert result.exit_code == 0, result.output
+    assert recorder.call_count == 0
+    assert len(calls) == 2
+    assert calls[0][1:] == ["tool", "upgrade", "setforge"]
+    assert "upgraded to 0.3.0" in result.output
+
+
+# ---------------------------------------------------------------------------
 # Wizard discipline guard
 # ---------------------------------------------------------------------------
 
