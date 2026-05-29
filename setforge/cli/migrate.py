@@ -21,6 +21,7 @@ unconditionally. The first real migration ships in v0.3.0.
 from __future__ import annotations
 
 import difflib
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,7 @@ import tempfile
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import typer
 
@@ -36,6 +37,7 @@ from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import MIGRATE_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.migrations import (
+    MIGRATIONS,
     Migration,
     MigrationRoots,
     _fs_ops,
@@ -44,6 +46,11 @@ from setforge.migrations import (
     detect_current_schema,
     find_migration_path,
 )
+
+# Strict anchored version-token: digits and dots only (e.g. ``1.0``,
+# ``2.10.3``). Rejects whitespace, newlines, YAML metacharacters, and
+# any other payload before a ``--pin`` value can reach ``setforge.yaml``.
+_PIN_VERSION_RE: Final = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 
 # ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via
 # the module-level ``__getattr__`` below — non-interactive callers and
@@ -183,7 +190,7 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         return
     _execute_chain(chain=chain, roots=roots, choice=choice)
     _run_post_apply_validate(cfg_path=cfg_path)
-    _print_completion_report(cfg_path=cfg_path, chain=chain, roots=roots)
+    _print_completion_report(cfg_path=cfg_path, chain=chain, roots=roots, choice=choice)
 
 
 # ---------------------------------------------------------------------------
@@ -514,17 +521,27 @@ def _print_completion_report(
     cfg_path: Path,
     chain: Sequence[Migration],
     roots: MigrationRoots,
+    choice: MigrateChoice,
 ) -> None:
-    """Print the closing ``=== migration complete ===`` block + rollback hint."""
+    """Print the closing ``=== migration complete ===`` block + rollback hint.
+
+    The rollback hint is suppressed when ``choice`` is
+    :attr:`MigrateChoice.APPLY_NO_BACKUP`, since no ``.pre-X.Y.bak``
+    siblings were written in that case. The ``choice`` flag is the sole
+    source of truth — backup existence is never probed on disk.
+    """
     typer.echo("=== migration complete ===")
     typer.echo(f"  next: cd {roots.repo_root} && git diff {cfg_path.name}")
-    to_version = chain[-1].to_version
-    affected = _all_affected_paths(chain=chain, roots=roots)
-    if affected:
-        typer.echo(f"  to undo: restore each <file>.pre-{to_version}.bak sibling, e.g.")
-        first = affected[0]
-        backup = _fs_ops.backup_path(first, to_version)
-        typer.echo(f"           mv {backup} {first}")
+    if choice is not MigrateChoice.APPLY_NO_BACKUP:
+        to_version = chain[-1].to_version
+        affected = _all_affected_paths(chain=chain, roots=roots)
+        if affected:
+            typer.echo(
+                f"  to undo: restore each <file>.pre-{to_version}.bak sibling, e.g."
+            )
+            first = affected[0]
+            backup = _fs_ops.backup_path(first, to_version)
+            typer.echo(f"           mv {backup} {first}")
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +556,25 @@ def _write_pin(*, cfg_path: Path, pin: str) -> None:
     leaves the original file intact. The key is inserted at the top of
     the document when absent (immediately after ``version:`` when that
     exists), or its value is overwritten in place when already present.
+
+    Validates ``pin`` against the migrations registry BEFORE any
+    filesystem read or mutation: the value must be a strict version
+    token (digits + dots) AND a known schema version (the build's
+    :data:`current_expected_schema_version` plus every ``from_version``
+    / ``to_version`` declared in :data:`MIGRATIONS`). An invalid pin
+    raises :class:`typer.BadParameter` without touching ``setforge.yaml``.
     """
+    allowed_versions = (
+        {current_expected_schema_version}
+        | {m.from_version for m in MIGRATIONS}
+        | {m.to_version for m in MIGRATIONS}
+    )
+    if _PIN_VERSION_RE.fullmatch(pin) is None or pin not in allowed_versions:
+        known = ", ".join(sorted(allowed_versions))
+        raise typer.BadParameter(
+            f"unknown schema version {pin!r}; known versions: {known}",
+            param_hint="--pin",
+        )
     if not cfg_path.exists():
         typer.echo(f"error: setforge.yaml not found at {cfg_path}", err=True)
         raise typer.Exit(1)

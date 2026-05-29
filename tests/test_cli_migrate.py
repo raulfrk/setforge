@@ -171,6 +171,9 @@ def test_apply_with_yes_applies_with_backup(
     assert (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
     assert "new_key:" in cfg.read_text(encoding="utf-8")
     assert "old_key:" not in cfg.read_text(encoding="utf-8")
+    # With backups, the completion report DOES surface the rollback hint.
+    assert "to undo" in result.output
+    assert ".pre-1.1.bak" in result.output
 
 
 def test_apply_radiolist_abort_writes_nothing(
@@ -249,6 +252,10 @@ def test_apply_radiolist_no_backup_skips_backup_files(
     assert result.exit_code == 0, result.output
     assert "new_key:" in cfg.read_text(encoding="utf-8")
     assert not (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
+    # No backups were written, so the completion report omits the
+    # ``.pre-X.Y.bak`` rollback hint entirely.
+    assert "to undo" not in result.output
+    assert ".pre-1.1.bak" not in result.output
 
 
 def test_apply_backup_failure_aborts_before_apply(
@@ -373,6 +380,46 @@ def test_pin_overwrites_existing_schema_version(tmp_path: Path) -> None:
     content = cfg.read_text(encoding="utf-8")
     assert "1.0" in content
     assert "1.1" not in content
+
+
+@pytest.mark.parametrize(
+    "bad_pin",
+    [
+        "hello",  # non-version garbage
+        "9.9",  # well-formed but unregistered version
+        " 1.0 ",  # surrounding whitespace
+        "1.0\nmalicious: x",  # YAML-injection payload
+        "!!python/object",  # YAML tag metacharacters
+    ],
+)
+def test_pin_rejects_invalid_value_before_writing(tmp_path: Path, bad_pin: str) -> None:
+    """An invalid --pin raises a usage error and never mutates setforge.yaml."""
+    cfg = tmp_path / "setforge.yaml"
+    original = "# header\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n"
+    cfg.write_text(original, encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", f"--pin={bad_pin}", f"--config={cfg}"])
+    assert result.exit_code != 0
+    # File is byte-for-byte unchanged — validation fires before any write.
+    assert cfg.read_text(encoding="utf-8") == original
+    assert "schema_version" not in cfg.read_text(encoding="utf-8")
+
+
+def test_pin_accepts_current_known_version(tmp_path: Path) -> None:
+    """The build's current schema version is accepted and written."""
+    from setforge.migrations import current_expected_schema_version
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "# header\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", f"--pin={current_expected_schema_version}", f"--config={cfg}"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "schema_version" in cfg.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
