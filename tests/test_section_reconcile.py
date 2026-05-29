@@ -157,6 +157,32 @@ def test_classify_section_drift_strict_tracked_rejects_hashless_tracked() -> Non
         classify_section_drift(tracked_text, live_text)
 
 
+def test_classify_section_drift_raises_on_parser_key_set_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A section present in both bodies but absent from a section primitive
+    surfaces as a clear MarkerError, not a raw KeyError or a silent default.
+
+    Simulate a parser key-set disagreement by stubbing one primitive
+    (``section_semantics``) so it omits a key that ``extract_sections``
+    reports on both sides. The classifier must raise a domain error that
+    names the offending primitive, never mask the drift.
+    """
+    import setforge.section_reconcile as sr
+
+    body = "shared body\n"
+    digest = _sha256(body)
+    tracked = _make_text("workflow", "shared", body, digest)
+    live = _make_text("workflow", "shared", body, digest)
+    monkeypatch.setattr(sr, "section_semantics", lambda _text: {})
+    with pytest.raises(MarkerError, match="semantics_map"):
+        classify_section_drift(tracked, live)
+    # The error must NOT be a bare KeyError leaking through.
+    monkeypatch.setattr(sr, "hash_sections", lambda _t, **_k: {})
+    with pytest.raises(MarkerError):
+        classify_section_drift(tracked, live)
+
+
 def test_classify_section_drift_legacy_when_live_hashless() -> None:
     body = "rule A\n"
     tracked_text = _make_text(

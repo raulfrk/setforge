@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from setforge.errors import MarkerError
 from setforge.sections import (
     SectionSemantics,
     extract_marker_hashes,
@@ -138,17 +139,38 @@ def classify_section_drift(
     return {
         name: _classify_one_marker(
             name=name,
-            semantics=semantics_map[name],
+            semantics=_require_section_key(semantics_map, name, "semantics_map"),
             tracked_body=tracked_bodies[name],
             live_body=live_bodies[name],
-            a_t=tracked_hashes[name],
-            a_l=live_hashes[name],
+            a_t=_require_section_key(tracked_hashes, name, "tracked_hashes"),
+            a_l=_require_section_key(live_hashes, name, "live_hashes"),
             e_t=tracked_embedded.get(name),
             e_l=live_embedded.get(name),
         )
         for name in tracked_bodies
         if name in live_bodies
     }
+
+
+def _require_section_key[T](mapping: Mapping[str, T], name: str, source: str) -> T:
+    """Return ``mapping[name]`` or raise on a parser key-set disagreement.
+
+    Called only for section keys already known to be present in both
+    ``tracked_bodies`` and ``live_bodies`` (the iterated intersection).
+    A miss here means one of the section primitives disagreed with
+    :func:`extract_sections` about which sections exist — the live side
+    is parsed ``allow_legacy=True`` but the tracked side is strict, so a
+    miss is a real parser bug, not a legacy artifact. Surface it loudly
+    rather than masking the drift with a silent default.
+    """
+    value = mapping.get(name)
+    if value is None:
+        raise MarkerError(
+            f"section primitive {source} is missing section key {name!r} "
+            "present in both tracked and live bodies — parser key-set "
+            "disagreement"
+        )
+    return value
 
 
 def _classify_one_marker(
