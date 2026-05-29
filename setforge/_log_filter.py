@@ -23,26 +23,33 @@ ones realistic to leak through a debug log of CLI args or env vars:
 Patterns rewrite the VALUE to ``<REDACTED>`` (or, for the AWS / GitHub
 shapes, preserve a short prefix so a user can still tell *which*
 provider's token leaked) while leaving the surrounding context intact.
-The filter is conservative: it never mutates non-string ``record.msg``
-payloads (e.g. lazy %-format LogRecord tuples), so callers that rely
-on string interpolation deferred to the handler still work — they
-just don't get redaction. Callers that want guaranteed redaction
-should pass the already-interpolated string.
+Redaction covers both the interpolated ``record.msg`` string and the
+``record.args`` payload of lazy %-format records: a non-string ``msg``
+(the deferred-interpolation case) still has its str-valued args masked,
+so secrets passed positionally (``log.debug("token=%s", secret)``) or
+by mapping (``log.debug("token=%(t)s", {"t": secret})``) are caught.
+Non-str args (ints, paths, objects) pass through unchanged and the
+container shape (tuple vs. mapping, arity, keys) is preserved, so the
+handler's deferred ``%``-interpolation still succeeds.
 """
 
 from __future__ import annotations
 
+import collections.abc
 import logging
 import re
 from typing import override
 
 
 class RedactingFilter(logging.Filter):
-    """Mask token / credential shapes in ``record.msg`` before emission.
+    """Mask token / credential shapes in ``record.msg`` / args before emission.
 
-    Stateless; safe to attach to multiple loggers. Returns ``True``
-    unconditionally — the filter never drops a record, only rewrites
-    its message.
+    Stateless; safe to attach to multiple loggers — redaction uses only
+    locals and the class-level compiled patterns, and ``record.args`` is
+    rebuilt into a fresh container rather than mutated in place, so a
+    ``LogRecord`` shared across handlers/threads is never corrupted.
+    Returns ``True`` unconditionally — the filter never drops a record,
+    only rewrites its message and args.
     """
 
     # KEY=VALUE form: env-var assignments and `--token=abc` flags. The
@@ -87,22 +94,50 @@ class RedactingFilter(logging.Filter):
         r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
     )
 
+    def _redact(self, value: str) -> str:
+        """Apply the secret-masking substitution chain to ``value``.
+
+        Pure ``str -> str`` transform using only locals and the
+        class-level compiled patterns; holds no instance state.
+
+        Order matters: JWT and GitHub-PAT patterns are more specific
+        than the generic KEY=VALUE shape, so run them first to avoid
+        the generic pattern's ``\\S+`` eating a token that would have
+        gotten a more informative prefix-preserving mask.
+        """
+        value = self._JWT_RE.sub("<REDACTED-JWT>", value)
+        value = self._GITHUB_PAT_RE.sub("gh<REDACTED>", value)
+        value = self._AWS_KEY_RE.sub("AKIA<REDACTED>", value)
+        value = self._BEARER_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", value)
+        value = self._SECRET_KEY_RE.sub(lambda m: f"{m.group(1)}=<REDACTED>", value)
+        value = self._SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", value)
+        value = self._CRED_URL_RE.sub(lambda m: f"{m.group(1)}<REDACTED>@", value)
+        return value
+
     @override
     def filter(self, record: logging.LogRecord) -> bool:
-        """Rewrite secret-shaped substrings in ``record.msg`` in-place."""
+        """Rewrite secret-shaped substrings in ``record.msg`` and ``record.args``.
+
+        Args redaction runs independent of the non-str ``record.msg``
+        early return: a lazy %-format record (non-str/lazy ``msg`` with
+        secret str values in ``record.args``) still gets its args
+        masked. Branches on ``Mapping`` before tuple because a dict is
+        also iterable; both forms rebuild a fresh container (never
+        mutated in place) so the shared ``LogRecord`` is not corrupted
+        across handlers/threads.
+        """
+        if record.args is not None:
+            if isinstance(record.args, collections.abc.Mapping):
+                record.args = {
+                    key: self._redact(value) if isinstance(value, str) else value
+                    for key, value in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(
+                    self._redact(arg) if isinstance(arg, str) else arg
+                    for arg in record.args
+                )
         if not isinstance(record.msg, str):
             return True
-        msg = record.msg
-        # Order matters: JWT and GitHub-PAT patterns are more specific
-        # than the generic KEY=VALUE shape, so run them first to avoid
-        # the generic pattern's `\S+` eating a token that would have
-        # gotten a more informative prefix-preserving mask.
-        msg = self._JWT_RE.sub("<REDACTED-JWT>", msg)
-        msg = self._GITHUB_PAT_RE.sub("gh<REDACTED>", msg)
-        msg = self._AWS_KEY_RE.sub("AKIA<REDACTED>", msg)
-        msg = self._BEARER_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", msg)
-        msg = self._SECRET_KEY_RE.sub(lambda m: f"{m.group(1)}=<REDACTED>", msg)
-        msg = self._SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)} <REDACTED>", msg)
-        msg = self._CRED_URL_RE.sub(lambda m: f"{m.group(1)}<REDACTED>@", msg)
-        record.msg = msg
+        record.msg = self._redact(record.msg)
         return True
