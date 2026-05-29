@@ -143,6 +143,9 @@ def list_marketplaces() -> dict[str, dict]:
     Calls ``claude plugin marketplace list --json`` and parses the JSON
     array.  Each element must have a ``name`` key; the whole element is
     kept as the value so callers can inspect ``source``, ``repo``, etc.
+
+    Raises :class:`PluginToolMissing` when the binary is missing, the CLI
+    call fails, or its output is not a JSON array.
     """
     claude = str(_get_claude_bin())
     try:
@@ -157,7 +160,18 @@ def list_marketplaces() -> dict[str, dict]:
         raise PluginToolMissing(
             f"`claude plugin marketplace list` failed: {stderr_of(exc)}"
         ) from exc
-    entries: list[dict] = json.loads(result.stdout)
+    try:
+        entries = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PluginToolMissing(
+            "`claude plugin marketplace list` returned non-JSON output: "
+            f"{result.stdout[:200]!r}"
+        ) from exc
+    if not isinstance(entries, list):
+        raise PluginToolMissing(
+            "`claude plugin marketplace list` returned non-list JSON: "
+            f"{result.stdout[:200]!r}"
+        )
     return {e["name"]: e for e in entries if "name" in e}
 
 
@@ -167,6 +181,9 @@ def list_installed() -> dict[str, dict]:
 
     Calls ``claude plugin list --json`` and parses the JSON array.
     The ``enabled`` field (``bool``) is preserved on each entry.
+
+    Raises :class:`PluginToolMissing` when the binary is missing, the CLI
+    call fails, or its output is not a JSON array.
     """
     claude = str(_get_claude_bin())
     try:
@@ -181,7 +198,16 @@ def list_installed() -> dict[str, dict]:
         raise PluginToolMissing(
             f"`claude plugin list` failed: {stderr_of(exc)}"
         ) from exc
-    entries: list[dict] = json.loads(result.stdout)
+    try:
+        entries = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PluginToolMissing(
+            f"`claude plugin list` returned non-JSON output: {result.stdout[:200]!r}"
+        ) from exc
+    if not isinstance(entries, list):
+        raise PluginToolMissing(
+            f"`claude plugin list` returned non-list JSON: {result.stdout[:200]!r}"
+        )
     return {e["id"]: e for e in entries if "id" in e}
 
 

@@ -506,8 +506,11 @@ def _reconcile_plugins(
     re-prompts inside :func:`prompt_failure_action`.
 
     Returns the :class:`PluginDelta` describing what landed on disk (or
-    ``None`` when the ``claude`` binary is missing — warn-and-skip)
-    plus the per-item outcomes tuple.
+    ``None`` when the ``claude`` binary is missing at the pre-probe or
+    reconcile phase — warn-and-skip, nothing landed) plus the per-item
+    outcomes tuple. If the binary vanishes only at the post-probe (after
+    reconcile already mutated disk), the delta is reconstructed from the
+    reconcile report rather than returned as ``None``.
 
     ``retry_failed_ids`` filters the work list to only those ids: today
     we cannot pre-filter ``claude_plugins.reconcile`` (it's batch-only),
@@ -529,8 +532,23 @@ def _reconcile_plugins(
         _warn_skip_reconcile(exc)
         return None, ()
     _emit_plugin_report(plugin_report)
-    post_plugins = claude_plugins_mod.list_installed()
-    post_marketplaces = claude_plugins_mod.list_marketplaces()
+    try:
+        post_plugins = claude_plugins_mod.list_installed()
+        post_marketplaces = claude_plugins_mod.list_marketplaces()
+    except PluginToolMissing as exc:
+        # TOCTOU: the binary was present at the pre-probe but vanished
+        # before the post-probe. ``reconcile`` + ``_emit_plugin_report``
+        # have already mutated disk, so mirroring the pre-probe's
+        # ``return None, ()`` abort would discard the just-landed install
+        # and report a false empty delta. We cannot re-measure post-state,
+        # so derive the delta from the authoritative record of what
+        # reconcile executed (the report) and short-circuit the retry loop
+        # (which would re-invoke the now-missing binary).
+        _warn_skip_reconcile(exc)
+        delta = _delta_from_report(plugin_report)
+        report_outcomes: list[transitions.ReconcileOutcome] = []
+        _append_plugin_success_outcomes(report_outcomes, delta)
+        return delta, tuple(report_outcomes)
     delta_first = _compute_plugin_delta(
         pre_plugins, pre_marketplaces, post_plugins, post_marketplaces
     )
@@ -742,6 +760,43 @@ def _abort_reverse_reconcile_plugins(delta: transitions.PluginDelta) -> None:
     SetforgeError handler surfaces it.
     """
     _reverse_plugins(delta)
+
+
+def _delta_from_report(
+    report: claude_plugins_mod.ReconcileReport,
+) -> transitions.PluginDelta:
+    """Derive a :class:`PluginDelta` from a successful reconcile report.
+
+    Fallback for when the post-reconcile disk re-probe is impossible (the
+    ``claude`` binary vanished mid-run after :func:`reconcile` already
+    mutated disk). Disk state cannot be re-measured, so the report — the
+    authoritative record of the actions reconcile executed — stands in for
+    it: ``to_install`` ``(name, marketplace)`` pairs become
+    ``"<name>@<marketplace>"`` ids, ``to_enable`` / ``to_disable`` /
+    ``marketplaces_added`` are already in final form. Ids present in
+    ``report.failed`` are excluded so the delta reflects only what landed,
+    not what was attempted-and-errored.
+    """
+    failed_ids = {item_id for item_id, _err in report.failed}
+    installed = tuple(
+        sorted(
+            f"{name}@{marketplace}"
+            for name, marketplace in report.to_install
+            if f"{name}@{marketplace}" not in failed_ids
+        )
+    )
+    enabled = tuple(sorted(pid for pid in report.to_enable if pid not in failed_ids))
+    disabled = tuple(sorted(pid for pid in report.to_disable if pid not in failed_ids))
+    added_mps = tuple(
+        sorted(mp for mp in report.marketplaces_added if mp not in failed_ids)
+    )
+    return transitions.PluginDelta(
+        installed=installed,
+        enabled=enabled,
+        disabled=disabled,
+        marketplaces_added=added_mps,
+        marketplaces_removed=(),
+    )
 
 
 def _compute_plugin_delta(

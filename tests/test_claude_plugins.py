@@ -152,6 +152,103 @@ def test_missing_claude_binary_raises_plugin_tool_missing(
         plugin_install("cline", "anthropic")
 
 
+def _wire_stdout(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
+    """Point claude-CLI subprocess.run at a stub returning ``stdout``.
+
+    resolve_binary is forced to a valid path so the wrapper proceeds to
+    parse ``result.stdout`` rather than short-circuiting on a missing
+    binary; the cache is cleared so the stubbed resolver actually runs.
+    """
+    cp._get_claude_bin.cache_clear()
+    monkeypatch.setattr(
+        "setforge.claude_plugins.resolve_binary",
+        lambda name: Path("/usr/local/bin/claude") if name == "claude" else None,
+    )
+
+    def stub_run(args: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+    monkeypatch.setattr("setforge.claude_plugins.subprocess.run", stub_run)
+
+
+@pytest.mark.parametrize(
+    "bad_stdout",
+    [
+        "this is not json at all",
+        "",
+        "{ broken json",
+    ],
+)
+def test_list_marketplaces_non_json_raises_plugin_tool_missing(
+    monkeypatch: pytest.MonkeyPatch, bad_stdout: str
+) -> None:
+    """Non-JSON stdout surfaces PluginToolMissing, not a raw JSONDecodeError."""
+    _wire_stdout(monkeypatch, bad_stdout)
+    with pytest.raises(PluginToolMissing) as excinfo:
+        cp.list_marketplaces()
+    assert not isinstance(excinfo.value, json.JSONDecodeError)
+    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.parametrize(
+    "bad_stdout",
+    [
+        "this is not json at all",
+        "",
+        "{ broken json",
+    ],
+)
+def test_list_installed_non_json_raises_plugin_tool_missing(
+    monkeypatch: pytest.MonkeyPatch, bad_stdout: str
+) -> None:
+    """Non-JSON stdout surfaces PluginToolMissing, not a raw JSONDecodeError."""
+    _wire_stdout(monkeypatch, bad_stdout)
+    with pytest.raises(PluginToolMissing) as excinfo:
+        cp.list_installed()
+    assert not isinstance(excinfo.value, json.JSONDecodeError)
+    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.parametrize(
+    "wrong_shape",
+    [
+        '{"name": "anthropic"}',  # JSON object, not a list
+        '"anthropic"',  # JSON string
+        "42",  # JSON number
+    ],
+)
+def test_list_marketplaces_wrong_shape_raises_plugin_tool_missing(
+    monkeypatch: pytest.MonkeyPatch, wrong_shape: str
+) -> None:
+    """Valid-JSON-but-wrong-shape stdout raises PluginToolMissing, not TypeError.
+
+    A bare JSONDecodeError guard would let a non-list payload through to
+    the ``{e["name"]: ...}`` comprehension, raising TypeError/KeyError; the
+    list-shape assertion (or the element guard) must surface the clear
+    error instead.
+    """
+    _wire_stdout(monkeypatch, wrong_shape)
+    with pytest.raises(PluginToolMissing):
+        cp.list_marketplaces()
+
+
+@pytest.mark.parametrize(
+    "wrong_shape",
+    [
+        '{"id": "cline@anthropic"}',  # JSON object, not a list
+        '"cline"',  # JSON string
+        "42",  # JSON number
+    ],
+)
+def test_list_installed_wrong_shape_raises_plugin_tool_missing(
+    monkeypatch: pytest.MonkeyPatch, wrong_shape: str
+) -> None:
+    """Valid-JSON-but-wrong-shape stdout raises PluginToolMissing, not TypeError."""
+    _wire_stdout(monkeypatch, wrong_shape)
+    with pytest.raises(PluginToolMissing):
+        cp.list_installed()
+
+
 def test_get_claude_bin_consults_resolve_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1596,3 +1693,69 @@ def test_local_clone_repeat_install_is_offline(
         f"expected zero git clones on repeat install, got "
         f"{[c for c in fake.calls if c[1:2] == ['clone']]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Post-probe TOCTOU: claude binary vanishes between pre- and post-probe
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_plugins_post_probe_tool_missing_keeps_landed_delta(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binary disappearing after reconcile must not propagate, nor drop the delta.
+
+    reconcile() + _emit_plugin_report() already mutated disk before the
+    post-probe runs. If the post-probe raises PluginToolMissing (TOCTOU:
+    binary removed / PATH changed mid-run), _reconcile_plugins must NOT
+    re-raise and must NOT return the pre-probe abort shape (None, ()) —
+    that would silently discard the just-landed install. The returned
+    delta must reflect what reconcile executed.
+    """
+    import setforge.cli._plugin_helpers as ph
+
+    fake_claude()
+    real_installed = cp.list_installed
+    real_marketplaces = cp.list_marketplaces
+    real_emit = ph._emit_plugin_report
+    # ``reconcile`` calls list_installed / list_marketplaces internally
+    # (before _emit_plugin_report) and the pre-probe runs before that, so a
+    # naive call counter can't isolate the post-probe. Gate the failure on a
+    # flag flipped once the report has been emitted — i.e. once reconcile has
+    # already mutated disk — so ONLY the two post-probe calls raise.
+    state = {"after_reconcile": False}
+
+    def gated_emit(report: Any) -> None:
+        real_emit(report)
+        state["after_reconcile"] = True
+
+    def probing_list_installed() -> dict[str, dict]:
+        if state["after_reconcile"]:
+            raise PluginToolMissing("claude vanished mid-run")
+        return real_installed()
+
+    def probing_list_marketplaces() -> dict[str, dict]:
+        if state["after_reconcile"]:
+            raise PluginToolMissing("claude vanished mid-run")
+        return real_marketplaces()
+
+    monkeypatch.setattr(ph, "_emit_plugin_report", gated_emit)
+    monkeypatch.setattr(cp, "list_installed", probing_list_installed)
+    monkeypatch.setattr(cp, "list_marketplaces", probing_list_marketplaces)
+
+    cfg = _make_config(claude_plugins={"a": ClaudePluginRef(marketplace="m1")})
+    profile = _make_resolved(
+        claude_plugins=["a"], plugins_reconcile=ReconcilePolicy.ADDITIVE
+    )
+
+    delta, outcomes = ph._reconcile_plugins(cfg, profile)
+
+    # No unhandled exception reached the caller; the post-probe raise on
+    # BOTH list_installed and list_marketplaces was absorbed.
+    # The landed install is preserved (not the pre-probe (None, ()) abort).
+    assert delta is not None, "post-probe failure must not discard the landed delta"
+    assert "a@m1" in delta.installed
+    # Return tuple shape matches the contract: (PluginDelta | None, tuple[...]).
+    assert isinstance(outcomes, tuple)
+    landed_ids = {o.item_id for o in outcomes}
+    assert "a@m1" in landed_ids
