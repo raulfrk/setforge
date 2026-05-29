@@ -201,7 +201,7 @@ def _handle_end_marker(
             f"line {lineno}: user-section end name {name!r} does not "
             f"match start name {state.section_name!r}"
         )
-    if semantics is not state.section_semantics:
+    if semantics != state.section_semantics:
         raise MarkerError(
             f"line {lineno}: user-section end semantics {semantics.value!r} "
             f"does not match start semantics "
