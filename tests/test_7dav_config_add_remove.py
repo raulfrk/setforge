@@ -171,3 +171,29 @@ def test_add_tracked_profile_rejected_for_top_level_paths(
         ],
     )
     assert result.exit_code != 0
+
+
+def test_remove_local_missing_yaml_exits_clean_without_creating(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``remove --local`` on a missing local.yaml exits 0 with a clean message.
+
+    The guard must report nothing-to-remove and NOT materialize the file —
+    a no-op remove must leave no stray artifact behind.
+    """
+    # The conftest autouse fixtures redirect the binaries/source/compare
+    # LOCAL_CONFIG_PATH to ``tmp_path/local.yaml`` and the Typer root
+    # callback materializes a stub there. Point the config-scope path at a
+    # distinct, un-stubbed location so it is genuinely absent at remove time.
+    missing = tmp_path / "absent" / "local.yaml"
+    assert not missing.exists()
+    monkeypatch.setattr("setforge.cli.config.LOCAL_CONFIG_PATH", missing)
+
+    result = runner.invoke(
+        app, ["config", "remove", "--local", "binaries.code", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "nothing to remove" in result.stdout
+    # The remove path must not create the file.
+    assert not missing.exists()

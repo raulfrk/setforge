@@ -563,6 +563,9 @@ def config_remove(
     if node is None:
         raise SetforgeError(f"unknown path for --{scope.value}: {path!r}")
     yaml_path = _scope_yaml_path(scope)
+    if scope is ConfigScope.LOCAL and not yaml_path.exists():
+        typer.echo("nothing to remove")
+        raise typer.Exit(0)
     if scope is ConfigScope.TRACKED:
         _run_tracked_git_check(yaml_path)
     _mutate_and_write(
