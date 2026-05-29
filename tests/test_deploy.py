@@ -37,6 +37,18 @@ def test_fresh_deploy_creates_dst(tmp_path: Path) -> None:
     assert dst.read_text() == "hello\n"
 
 
+def test_deploy_to_nested_workflows_dir_creates_parents(tmp_path: Path) -> None:
+    """Deploying a workflows-category file creates the ~/.claude/workflows parent."""
+    src = tmp_path / "session-workflow-impl.js"
+    src.write_text("export const meta = {}\n")
+    dst = tmp_path / ".claude" / "workflows" / "session-workflow-impl.js"
+    result = copy_atomic(src, dst)
+    assert result.action is DeployAction.CREATED
+    assert result.backup_path is None
+    assert dst.parent.is_dir()
+    assert dst.read_text() == "export const meta = {}\n"
+
+
 def test_redeploy_with_backup(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.write_text("new\n")

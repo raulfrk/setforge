@@ -1271,6 +1271,74 @@ def test_revert_after_install_removes_new_agents_and_skill(
     ), "post-revert: reviewing-markdown SKILL.md should be absent"
 
 
+_WORKFLOW_LIVE = "/home/tester/.claude/workflows/example-impl.js"
+_WORKFLOW_TRACKED = (
+    "/workspace/tests/fixtures/e2e/tracked/claude/workflows/example-impl.js"
+)
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_install_deploys_workflows_category_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Install deploys a workflows/*.js file byte-identical to tracked."""
+    c = docker_container()
+    _install(c, "test-workflows")
+    live = c.read_text(_WORKFLOW_LIVE)
+    tracked = c.read_text(_WORKFLOW_TRACKED)
+    assert live == tracked, "deployed example-impl.js drifts from tracked"
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_compare_after_install_clean_no_drift_for_workflows(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """After clean install of the workflows profile, compare --check exits 0."""
+    c = docker_container()
+    _install(c, "test-workflows")
+    proc = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "compare",
+            "--profile=test-workflows",
+            f"--config={CONFIG_FIXTURE}",
+            "--check",
+        ],
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_revert_after_install_removes_workflows_file(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """Revert removes the deployed workflows file (absent on fresh container)."""
+    c = docker_container()
+    _install(c, "test-workflows")
+    assert c.exec(["test", "-f", _WORKFLOW_LIVE], check=False).returncode == 0, (
+        "pre-revert sanity: example-impl.js should exist"
+    )
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-workflows",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ]
+    )
+    assert revert.returncode == 0, revert.stderr
+    assert c.exec(["test", "-f", _WORKFLOW_LIVE], check=False).returncode != 0, (
+        "post-revert: example-impl.js should be absent"
+    )
+
+
 @pytest.mark.xdist_group("docker_daemon")
 def test_merge_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
