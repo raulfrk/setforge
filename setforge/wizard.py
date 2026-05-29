@@ -461,7 +461,7 @@ def _restore_signal_handlers(prev: dict[int, _SignalHandler]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_wizard_loop(
+def run_wizard_loop(  # noqa: C901 — empty-drift short-circuit adds one branch over the threshold; splitting the loop would scatter the snapshot/transition lifecycle
     items: Iterator[DriftItem],
     *,
     setforge_yaml_path: Path,
@@ -524,6 +524,10 @@ def run_wizard_loop(
         lifetime — can do the restore.
     """
     items_list = list(items)
+    decisions: list[tuple[DriftItem, ActionResult]] = []
+
+    if not items_list:
+        return decisions
 
     # Collect all affected paths for the snapshot
     affected_paths: list[Path] = [setforge_yaml_path]
@@ -534,7 +538,6 @@ def run_wizard_loop(
             affected_paths.append(item.dst_path)
 
     snap = Snapshot(files=affected_paths, snapshot_base=snapshot_base)
-    decisions: list[tuple[DriftItem, ActionResult]] = []
 
     with snap:
         prev_handlers = _install_signal_handlers(snap) if auto_accept is None else {}

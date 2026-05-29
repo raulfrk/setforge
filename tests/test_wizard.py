@@ -105,6 +105,48 @@ def test_run_wizard_loop_dispatches_per_item(
     assert len(transition_calls) == 1
 
 
+def test_run_wizard_loop_empty_writes_no_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No drift items → no transition record, no snapshot base, empty result.
+
+    A no-op transition (identical file_pre/file_post) would pollute the
+    history; the empty-items short-circuit must skip the record entirely
+    and must not leave a snapshot directory behind.
+    """
+    setforge_yaml = _make_setforge_yaml(tmp_path)
+
+    transition_calls: list[Any] = []
+
+    def _fake_write_transition(*a: Any, **kw: Any) -> Path:
+        transition_calls.append(1)
+        return Path("/tmp/fake")
+
+    monkeypatch.setattr(
+        "setforge.wizard.transitions.write_transition",
+        _fake_write_transition,
+    )
+
+    snapshot_base = tmp_path / "snaps"
+    console = Console(file=StringIO(), force_terminal=False, no_color=True)
+    decisions = run_wizard_loop(
+        iter([]),
+        setforge_yaml_path=setforge_yaml,
+        snapshot_base=snapshot_base,
+        console=console,
+        auto_accept="k",
+        transition_command=TransitionCommand.MERGE,
+        profile="p",
+        pending_message="unused",
+    )
+
+    assert decisions == []
+    assert transition_calls == []
+    # The short-circuit precedes Snapshot construction, so no snapshot
+    # base directory is allocated for the no-drift path.
+    assert not snapshot_base.exists()
+
+
 def test_run_wizard_loop_breaks_on_manual_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
