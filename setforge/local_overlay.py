@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from setforge.errors import ConfigError
 
@@ -307,6 +307,8 @@ def display_tag(origin: OverlayOrigin) -> str:
             return "[− removed via local.yaml]"  # noqa: RUF001
         case OverlayOrigin.PROFILE:
             return ""
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def has_local_overlay(

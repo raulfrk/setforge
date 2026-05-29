@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import assert_never
 
 from setforge.errors import ConfigError
 
@@ -152,6 +153,8 @@ def display_tag(resolved: ResolvedPreservedKey) -> str:
             return "[from local.yaml]"
         case KeyOrigin.REMOVED_VIA_LOCAL:
             return "[removed via local.yaml]"
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def has_local_yaml_overlay(resolved_list: list[ResolvedPreservedKey]) -> bool:
