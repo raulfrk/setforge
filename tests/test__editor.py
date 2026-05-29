@@ -61,6 +61,45 @@ def test_run_editor_wraps_shlex_split_value_error(
     )
 
 
+def test_editor_run_passes_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The editor subprocess.run call must carry ``timeout=_EDITOR_TIMEOUT_S``."""
+    monkeypatch.setenv("EDITOR", "echo")
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(_editor.subprocess, "run", fake_run)
+    target = tmp_path / "file.md"
+    run_editor(target)
+    assert captured["timeout"] == _editor._EDITOR_TIMEOUT_S
+
+
+def test_editor_timeout_surfaces_setforge_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A hung editor (TimeoutExpired) surfaces SetforgeError chained from exc."""
+    monkeypatch.setenv("EDITOR", "echo")
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=3600)
+
+    monkeypatch.setattr(_editor.subprocess, "run", fake_run)
+    target = tmp_path / "file.md"
+    with pytest.raises(SetforgeError) as excinfo:
+        run_editor(target)
+    assert isinstance(excinfo.value.__cause__, subprocess.TimeoutExpired), (
+        "expected SetforgeError chained via `from exc` from TimeoutExpired"
+    )
+
+
 def test_default_to_vi_when_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
