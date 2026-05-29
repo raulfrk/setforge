@@ -75,10 +75,11 @@ class SecretFinding:
 class SecretsScanResult:
     """Outcome of a single gitleaks invocation.
 
-    ``findings`` is post-allowlist filtering; ``files_scanned`` reflects
-    the count gitleaks reported (best-effort — gitleaks' JSON report
-    does not always carry a top-level file count, in which case this
-    falls back to ``0``).
+    ``findings`` is post-allowlist filtering; ``files_scanned`` is the
+    real count of files under ``tracked_root`` walked for the scan,
+    computed directly (gitleaks' JSON report carries no scanned-file
+    count). It is ``0`` on paths where nothing was scanned (explicit
+    skip, missing binary, timeout, or scan-runtime failure).
     """
 
     findings: tuple[SecretFinding, ...]
@@ -208,6 +209,7 @@ def run_pre_deploy_scan(
     if gitleaks_path is None:
         _warn(_MISSING_BINARY_MESSAGE)
         return SecretsScanResult(findings=(), files_scanned=0)
+    file_count = sum(1 for p in tracked_root.rglob("*") if p.is_file())
     try:
         result = subprocess.run(
             [
@@ -231,11 +233,11 @@ def run_pre_deploy_scan(
         )
         return SecretsScanResult(findings=(), files_scanned=0)
     if result.returncode == 0:
-        return SecretsScanResult(findings=(), files_scanned=0)
+        return SecretsScanResult(findings=(), files_scanned=file_count)
     if result.returncode == 1:
         findings = _parse_gitleaks_json(result.stdout)
         filtered = _filter_allowlist(findings, allowlist_path)
-        return SecretsScanResult(findings=filtered, files_scanned=len(findings))
+        return SecretsScanResult(findings=filtered, files_scanned=file_count)
     _warn(
         f"warning: gitleaks scan failed (exit {result.returncode}): "
         f"{result.stderr.strip()}; continuing without secrets check"

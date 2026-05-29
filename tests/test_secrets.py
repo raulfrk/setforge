@@ -194,8 +194,53 @@ def test_exit_one_filters_via_allowlist(
     )
 
     assert result.findings == ()
-    # files_scanned reflects unfiltered count (gitleaks reported 1).
+    # files_scanned reflects the count of files walked under tracked_root
+    # (here: just the allowlist file written into tmp_path), NOT the
+    # number of findings gitleaks reported.
     assert result.files_scanned == 1
+
+
+def test_files_scanned_counts_walked_files_not_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``files_scanned`` is the count of files under tracked_root, not findings.
+
+    Seed a tree with several files (including a nested one) and a single
+    gitleaks finding; ``files_scanned`` must equal the walked file count,
+    never ``len(findings)``.
+    """
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    (tmp_path / "b.md").write_text("y", encoding="utf-8")
+    nested = tmp_path / "sub" / "c.md"
+    nested.parent.mkdir()
+    nested.write_text("z", encoding="utf-8")
+    payload = _gitleaks_json(
+        [
+            {
+                "RuleID": "github-pat",
+                "Description": "GitHub Personal Access Token",
+                "File": "a.md",
+                "StartLine": 1,
+                "Secret": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "Match": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        secrets.binaries, "resolve_binary", lambda _name: Path("/fake/gitleaks")
+    )
+    monkeypatch.setattr(
+        secrets.subprocess, "run", _fake_run(returncode=1, stdout=payload)
+    )
+
+    result = secrets.run_pre_deploy_scan(
+        tracked_root=tmp_path, allowlist_path=tmp_path / "nonexistent-allow"
+    )
+
+    assert len(result.findings) == 1
+    # Three files were walked; the single finding must not drive the count.
+    assert result.files_scanned == 3
 
 
 def test_exit_other_warns_and_continues(
