@@ -313,6 +313,7 @@ def create_snapshot(
         shutil.rmtree(partial_dir)
     partial_dir.mkdir(parents=True)
 
+    finalized = False
     try:
         captured = _capture_files(
             partial_dir, _resolve_dst_paths(cfg, resolved, repo_root)
@@ -325,11 +326,14 @@ def create_snapshot(
             files=tuple(captured),
         )
         _finalize(partial_dir, final_dir, meta, keep)
-    except BaseException:
-        # On any failure during write: remove the .partial dir so a
-        # subsequent attempt sees a clean slate. Re-raise unchanged.
-        shutil.rmtree(partial_dir, ignore_errors=True)
-        raise
+        finalized = True
+    finally:
+        # On any non-finalized exit (including KeyboardInterrupt /
+        # SystemExit / GeneratorExit): remove the .partial dir so a
+        # subsequent attempt sees a clean slate. Runs only on failure;
+        # on success partial_dir was already renamed to final_dir.
+        if not finalized:
+            shutil.rmtree(partial_dir, ignore_errors=True)
     return meta
 
 
