@@ -82,7 +82,14 @@ def _get_claude_bin() -> Path:
 
 
 def ensure_claude_available() -> None:
-    """Raise :class:`PluginToolMissing` if the claude CLI cannot be resolved."""
+    """Resolve the claude CLI or raise.
+
+    Raises :class:`PluginToolMissing` if the binary cannot be found at any
+    layer, or :class:`BinaryOverrideInvalid` (propagated from
+    :func:`resolve_binary`) if a configured override points at a
+    non-executable path. Both are :class:`SetforgeError` subclasses, so an
+    uncaught one still exits non-zero via the top-level CLI handler.
+    """
     _get_claude_bin()
 
 

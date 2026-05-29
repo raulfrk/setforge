@@ -394,8 +394,6 @@ def marketplace_add_cmd(
     try:
         claude_plugins_mod.marketplace_add(name, source)
         typer.echo(f"registered marketplace: {name}")
-    except PluginToolMissing as exc:
-        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -422,8 +420,6 @@ def marketplace_remove_cmd(
     try:
         claude_plugins_mod.marketplace_remove(name)
         typer.echo(f"removed marketplace: {name}")
-    except PluginToolMissing as exc:
-        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
