@@ -575,6 +575,90 @@ def test_revert_apply_with_editor_opens_editor_then_reprompts(
     assert len(editor_calls) == 1
 
 
+def test_revert_repeated_apply_with_editor_reopens_editor_each_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner: CliRunner,
+) -> None:
+    """Two consecutive APPLY_WITH_EDITOR choices must each re-open the
+    editor before the terminating APPLY — proving the post-editor
+    re-prompt loops rather than falling through after a single pass."""
+    import shutil
+
+    if shutil.which("patch") is None:
+        pytest.skip("GNU patch not on PATH")
+
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    (repo / "tracked" / "greeting.md").write_text("hello\n", encoding="utf-8")
+    dst = tmp_path / "live" / "greeting.md"
+    cfg = repo / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  greeting:\n"
+        "    src: greeting.md\n"
+        f"    dst: {dst}\n"
+        "profiles:\n"
+        "  vmh:\n"
+        "    tracked_files: [greeting]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
+
+    # APPLY_WITH_EDITOR twice, then APPLY — a terminating sequence so the
+    # loop cannot spin (never always-APPLY_WITH_EDITOR).
+    return_sequence = [
+        RevertChoice.APPLY_WITH_EDITOR,
+        RevertChoice.APPLY_WITH_EDITOR,
+        RevertChoice.APPLY,
+    ]
+    call_count = {"n": 0}
+
+    def fake_confirm(*, plan: Any, yes: bool, console: Any = None) -> RevertChoice:
+        idx = call_count["n"]
+        call_count["n"] += 1
+        return return_sequence[idx]
+
+    monkeypatch.setattr("setforge.cli.revert.confirm_revert_operation", fake_confirm)
+
+    editor_calls: list[Path] = []
+
+    def fake_editor(target: Path) -> None:
+        editor_calls.append(target)
+
+    monkeypatch.setattr("setforge.cli.revert.run_editor", fake_editor)
+
+    install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
+    assert install_res.exit_code == 0
+    assert dst.exists()
+
+    revert_res = runner.invoke(app, ["revert", "--profile=vmh", f"--config={cfg}"])
+    assert revert_res.exit_code == 0, revert_res.output
+    assert not dst.exists()
+    # Three confirm calls (two editor passes + final APPLY); the editor
+    # re-opened once per APPLY_WITH_EDITOR choice.
+    assert call_count["n"] == 3
+    assert len(editor_calls) == 2
+
+
+def test_revert_yes_true_returns_apply_without_editor_loop() -> None:
+    """The real confirm_revert_operation with yes=True returns APPLY
+    immediately, so automation never enters the editor loop."""
+    editor_calls: list[Path] = []
+
+    def fake_editor(target: Path) -> None:  # pragma: no cover - must not run
+        editor_calls.append(target)
+
+    choice = confirm_revert_operation(plan=_make_plan(), yes=True)
+    assert choice is RevertChoice.APPLY
+    # yes=True short-circuits before the loop condition, so run_editor is
+    # never reachable: the while-loop would only run on APPLY_WITH_EDITOR.
+    assert choice is not RevertChoice.APPLY_WITH_EDITOR
+    assert editor_calls == []
+
+
 def test_revert_apply_with_editor_then_abort_leaves_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

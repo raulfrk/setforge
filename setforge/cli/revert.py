@@ -415,16 +415,16 @@ def revert(
     choice = confirm_revert_operation(plan=plan, yes=yes)
     if choice is RevertChoice.ABORT:
         return
-    if choice is RevertChoice.APPLY_WITH_EDITOR:
+    while choice is RevertChoice.APPLY_WITH_EDITOR:
         target = _render_plan_to_editor(plan)
         try:
             run_editor(target)
         finally:
             target.unlink(missing_ok=True)
-        # Re-prompt after editor closes so the user can still abort.
+        # Re-prompt after editor closes so the user can still abort or re-edit.
         choice = confirm_revert_operation(plan=plan, yes=yes)
-        if choice is RevertChoice.ABORT:
-            return
+    if choice is RevertChoice.ABORT:
+        return
 
     _apply_revert(transition, profile, config)
 
