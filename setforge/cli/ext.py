@@ -132,6 +132,8 @@ def ext_reconcile(
 
     Exits non-zero on non-empty drift when policy is REPORT or
     ``--dry-run`` is set — both are read-only modes intended for CI.
+    A live run (the policy actually applies changes) also exits non-zero
+    when it has failed actions (``report.failed``).
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
@@ -157,5 +159,7 @@ def ext_reconcile(
         typer.secho(f"FAILED   {ext_id} — {err}", err=True, fg=typer.colors.YELLOW)
     if not report:
         typer.echo("nothing to reconcile")
-    elif is_read_only:
+    elif is_read_only:  # noqa: SIM114 — read-only drift and live-run failure are distinct exit conditions; keep branches separate
+        raise typer.Exit(code=1)
+    elif report.failed:
         raise typer.Exit(code=1)

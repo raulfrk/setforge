@@ -44,7 +44,7 @@ from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 @app.command(epilog=COMPARE_EXAMPLES)
-def compare(
+def compare(  # noqa: C901 — option-combo guard adds one branch over the threshold; splitting the CLI entrypoint would obscure the option model
     ctx: typer.Context,
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -72,6 +72,8 @@ def compare(
     ),
 ) -> None:
     """Report drift between tracked and live for every tracked_file in the profile."""
+    if strict and not check:
+        raise typer.BadParameter("--strict requires --check")
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent

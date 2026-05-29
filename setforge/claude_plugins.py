@@ -43,6 +43,7 @@ from setforge.errors import ConfigError, MarketplaceCacheMiss, PluginToolMissing
 
 __all__ = [
     "ReconcileReport",
+    "ensure_claude_available",
     "list_installed",
     "list_marketplaces",
     "marketplace_add",
@@ -80,6 +81,11 @@ def _get_claude_bin() -> Path:
     return path
 
 
+def ensure_claude_available() -> None:
+    """Raise :class:`PluginToolMissing` if the claude CLI cannot be resolved."""
+    _get_claude_bin()
+
+
 # ---------------------------------------------------------------------------
 # Report dataclass
 # ---------------------------------------------------------------------------
@@ -94,6 +100,8 @@ class ReconcileReport:
     are lists of plugin IDs in ``name@marketplace`` form.
     ``marketplaces_added`` lists marketplace names that were (or would be)
     added.  ``dry_run`` is ``True`` whenever no write commands were run.
+    ``failed`` lists ``(id, err)`` tuples for actions that errored; it is
+    the authoritative failure signal the CLI gates the exit code on.
     """
 
     to_install: list[tuple[str, str]]
@@ -104,6 +112,11 @@ class ReconcileReport:
     failed: list[tuple[str, str]] = field(default_factory=list)
 
     def __bool__(self) -> bool:
+        # Truthiness reports planned/executed work only; ``failed`` is
+        # deliberately excluded. The CLI gates the failure exit code on
+        # ``report.failed`` directly (see plugin_reconcile / ext reconcile),
+        # so a failures-only report must still be falsy here for the
+        # "nothing to reconcile" branch to mean "no work planned".
         return bool(
             self.to_install
             or self.to_enable

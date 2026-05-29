@@ -281,7 +281,7 @@ def install(
     )
     if scan_result.findings and not _handle_secret_findings(scan_result, yes=yes):
         typer.secho("install aborted by secrets scan", err=True, fg=typer.colors.RED)
-        return
+        raise typer.Exit(code=1)
 
     # Resolve user-section drift (shared sections) into per-tracked_file
     # decisions BEFORE the deploy loop so wizard prompts and the

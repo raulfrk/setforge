@@ -260,6 +260,8 @@ def plugin_reconcile(
     """Explicit reconcile (in addition to the automatic run inside install).
 
     Exits non-zero when policy is REPORT or --dry-run and there is drift.
+    Also exits non-zero when a live run (ADDITIVE/PRUNE) has failed actions
+    (``report.failed``).
     """
     config = _resolve_config_arg(config)
     cfg = load_config(config)
@@ -274,7 +276,9 @@ def plugin_reconcile(
     _render_reconcile_report(report, is_read_only=is_read_only)
     if not report:
         typer.echo("plugins: nothing to reconcile")
-    elif is_read_only:
+    elif is_read_only:  # noqa: SIM114 — read-only drift and live-run failure are distinct exit conditions; keep branches separate
+        raise typer.Exit(code=1)
+    elif report.failed:
         raise typer.Exit(code=1)
 
 
@@ -375,6 +379,12 @@ def marketplace_add_cmd(
     config = _resolve_config_arg(config)
     source = _parse_marketplace_from(from_)
 
+    try:
+        claude_plugins_mod.ensure_claude_available()
+    except PluginToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
     yaml_changed = claude_yaml_editor_mod.yaml_add_marketplace(config, name, source)
     if yaml_changed:
         typer.echo(f"added {name} to marketplaces in YAML")
@@ -398,6 +408,11 @@ def marketplace_remove_cmd(
 ) -> None:
     """Remove a marketplace from YAML and run claude plugin marketplace remove."""
     config = _resolve_config_arg(config)
+    try:
+        claude_plugins_mod.ensure_claude_available()
+    except PluginToolMissing as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
     yaml_changed = claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
     if yaml_changed:
         typer.echo(f"removed {name} from marketplaces in YAML")
@@ -427,7 +442,8 @@ def marketplace_update_cmd(
         claude_plugins_mod.marketplace_update(name)
         typer.echo(f"updated marketplace: {name}")
     except PluginToolMissing as exc:
-        typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc

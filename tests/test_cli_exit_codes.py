@@ -7,6 +7,7 @@ exits non-zero in read-only modes when drift exists, and that
 ``install`` gates on unexpected drift (P4.3).
 """
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from typer.testing import CliRunner
 
 from setforge import claude_plugins as cp
 from setforge.cli import app
+from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 
 _FIXTURE_YAML = """\
 version: 1
@@ -432,3 +434,54 @@ def test_install_reconcile_alone_accepted_on_clean_profile(
         ["install", "--profile=p", f"--config={cfg}", "--reconcile-user-sections"],
     )
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# install secrets-scan abort — exit code must agree with the abort message
+# ---------------------------------------------------------------------------
+
+
+def _planted_finding() -> SecretFinding:
+    """Build one representative SecretFinding for the scan-abort path."""
+    snippet = "ghp_xxxxxxxxxxxxxxxxxxxx"
+    return SecretFinding(
+        rule_id="github-pat",
+        file_path=Path("tracked/secret.txt"),
+        line_number=1,
+        snippet=snippet,
+        snippet_hash=hashlib.sha256(snippet.encode("utf-8")).hexdigest(),
+        secret_kind="GitHub Personal Access Token",
+    )
+
+
+def test_install_secrets_abort_exits_1_with_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A planted secret finding with declined remediation aborts non-zero.
+
+    The pre-deploy scan is forced to return one finding and the
+    per-finding resolver is forced to ABORT (declined remediation, the
+    non-interactive default). The command must exit 1 and print
+    'install aborted by secrets scan' to stderr — the message and the
+    exit code must agree.
+    """
+    cfg = _setup_install_fixture(tmp_path, monkeypatch)
+
+    scan_result = SecretsScanResult(findings=(_planted_finding(),), files_scanned=1)
+    monkeypatch.setattr(
+        "setforge.cli.install.secrets_mod.run_pre_deploy_scan",
+        lambda **_kwargs: scan_result,
+    )
+    # Declined remediation: every finding resolves to ABORT.
+    monkeypatch.setattr(
+        "setforge.cli.install.prompt_secret_action",
+        lambda _finding, **_kwargs: SecretAction.ABORT,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["install", "--profile=p", f"--config={cfg}", "--no-transition"],
+    )
+    assert result.exit_code == 1, f"output: {result.output}"
+    assert "install aborted by secrets scan" in result.stderr

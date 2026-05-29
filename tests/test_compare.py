@@ -550,6 +550,65 @@ def test_cli_compare_check_strict_exits_0_clean(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+def test_cli_compare_strict_without_check_is_usage_error(tmp_path: Path) -> None:
+    """compare --strict without --check is a usage error (non-zero, no compare).
+
+    --strict alone used to parse fine and change nothing → exit 0, so a
+    user believing they had CI gating did not. The guard now raises a
+    usage error before any comparison runs.
+    """
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--strict"]
+    )
+    assert result.exit_code != 0
+    assert "--strict requires --check" in result.stderr
+
+
+def test_cli_compare_strict_with_check_unchanged(tmp_path: Path) -> None:
+    """compare --strict --check keeps existing behavior: clean profile exits 0.
+
+    The new guard only rejects --strict alone; --strict --check must still
+    run the comparison and not raise a usage error.
+    """
+    from typer.testing import CliRunner
+
+    from setforge.cli import app
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "x"
+    _write(src, "same\n")
+    dst = tmp_path / "live" / "x"
+    _write(dst, "same\n")
+    cfg_path = repo / "setforge.yaml"
+    cfg_path.write_text(
+        f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
+        "profiles:\n  p:\n    tracked_files: [x]\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--strict", "--check"]
+    )
+    assert result.exit_code == 0
+    assert "--strict requires --check" not in result.output
+
+
 def test_yaml_compare_drift_treats_deep_paths_as_expected(tmp_path: Path) -> None:
     """Deep-list paths whose drift would otherwise look 'unexpected'
     must classify as expected so the wizard does not surface them."""

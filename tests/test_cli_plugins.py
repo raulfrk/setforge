@@ -7,11 +7,13 @@ resolution and clean error handling for failing ``claude`` subprocesses.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from setforge import claude_plugins as claude_plugins_mod
 from setforge.cli import app
 
 
@@ -159,3 +161,156 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
     assert result.exit_code == 1
     assert not isinstance(result.exception, subprocess.CalledProcessError)
     assert "error" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# marketplace add/update/remove on a missing claude CLI: non-zero exit +
+# atomic refusal (YAML byte-identical before/after on add/remove).
+# ---------------------------------------------------------------------------
+
+_MARKETPLACE_FIXTURE_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: x
+    dst: y
+marketplaces:
+  existing:
+    source: github
+    repo: owner/repo
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+@pytest.fixture(autouse=True)
+def _clear_claude_bin_cache() -> Iterator[None]:
+    """Reset the module-global ``_get_claude_bin`` cache around every test.
+
+    ``_get_claude_bin`` is ``functools.lru_cache(maxsize=1)`` and shared
+    across the process, so a resolved-or-missing verdict from one case
+    leaks into later cases unless cleared. Clearing both before and after
+    keeps marketplace-availability cases order-independent.
+    """
+    claude_plugins_mod._get_claude_bin.cache_clear()
+    yield
+    claude_plugins_mod._get_claude_bin.cache_clear()
+
+
+def _write_marketplace_config(tmp_path: Path) -> Path:
+    """Write a setforge.yaml with one declared marketplace under tmp_path."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(_MARKETPLACE_FIXTURE_YAML, encoding="utf-8")
+    return cfg
+
+
+def test_marketplace_add_missing_claude_exits_nonzero_and_leaves_yaml_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`marketplace add` with claude absent exits non-zero and writes no YAML."""
+    cfg = _write_marketplace_config(tmp_path)
+    before = cfg.read_bytes()
+
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "add", "fresh", "--from=github:o/r", f"--config={cfg}"]
+    )
+    assert result.exit_code != 0, result.output
+    assert "error" in result.output.lower()
+    assert cfg.read_bytes() == before
+
+
+def test_marketplace_remove_missing_claude_exits_nonzero_and_leaves_yaml_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`marketplace remove` with claude absent exits non-zero and writes no YAML.
+
+    The fixture declares a marketplace that ``remove`` would otherwise
+    delete, so a byte-identical file proves the YAML editor never ran.
+    """
+    cfg = _write_marketplace_config(tmp_path)
+    before = cfg.read_bytes()
+
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "remove", "existing", f"--config={cfg}"]
+    )
+    assert result.exit_code != 0, result.output
+    assert "error" in result.output.lower()
+    assert cfg.read_bytes() == before
+
+
+def test_marketplace_update_missing_claude_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`marketplace update` with claude absent exits non-zero (no warning swallow)."""
+    monkeypatch.setattr("setforge.claude_plugins.resolve_binary", lambda _: None)
+
+    result = CliRunner().invoke(app, ["marketplace", "update", "existing"])
+    assert result.exit_code != 0, result.output
+    assert "error" in result.output.lower()
+
+
+def test_marketplace_add_with_claude_present_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`marketplace add` with claude present registers the marketplace (exit 0)."""
+    cfg = _write_marketplace_config(tmp_path)
+
+    monkeypatch.setattr(
+        "setforge.claude_plugins.resolve_binary", lambda _: Path("/usr/bin/claude")
+    )
+    added: list[str] = []
+    monkeypatch.setattr(
+        claude_plugins_mod, "marketplace_add", lambda name, source: added.append(name)
+    )
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "add", "fresh", "--from=github:o/r", f"--config={cfg}"]
+    )
+    assert result.exit_code == 0, result.output
+    assert added == ["fresh"]
+    assert "registered marketplace: fresh" in result.output
+
+
+def test_marketplace_remove_with_claude_present_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`marketplace remove` with claude present removes the marketplace (exit 0)."""
+    cfg = _write_marketplace_config(tmp_path)
+
+    monkeypatch.setattr(
+        "setforge.claude_plugins.resolve_binary", lambda _: Path("/usr/bin/claude")
+    )
+    removed: list[str] = []
+    monkeypatch.setattr(
+        claude_plugins_mod, "marketplace_remove", lambda name: removed.append(name)
+    )
+
+    result = CliRunner().invoke(
+        app, ["marketplace", "remove", "existing", f"--config={cfg}"]
+    )
+    assert result.exit_code == 0, result.output
+    assert removed == ["existing"]
+    assert "removed marketplace: existing" in result.output
+
+
+def test_marketplace_update_with_claude_present_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`marketplace update` with claude present updates the marketplace (exit 0)."""
+    monkeypatch.setattr(
+        "setforge.claude_plugins.resolve_binary", lambda _: Path("/usr/bin/claude")
+    )
+    updated: list[str] = []
+    monkeypatch.setattr(
+        claude_plugins_mod, "marketplace_update", lambda name: updated.append(name)
+    )
+
+    result = CliRunner().invoke(app, ["marketplace", "update", "existing"])
+    assert result.exit_code == 0, result.output
+    assert updated == ["existing"]
+    assert "updated marketplace: existing" in result.output
