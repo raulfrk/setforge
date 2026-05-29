@@ -355,3 +355,47 @@ def test_fetch_latest_version_propagates_yanked_reason_when_target_yanked(
         fetch_latest_version(
             package="setforge", current_version="0.1.0", cache_dir=tmp_path
         )
+
+
+# ---------------------------------------------------------------------------
+# _select_latest: empty-files release must be excluded (not "non-yanked")
+# ---------------------------------------------------------------------------
+
+
+def test_select_latest_excludes_empty_files_release() -> None:
+    """A release with an empty ``files`` list is not an installable candidate.
+
+    The prior ``files and all(...)`` short-circuit treated empty files as
+    "not yanked", so a fileless newer release won the max(). The explicit
+    ``if not files: continue`` must exclude it, leaving the older release
+    with real files as latest.
+    """
+    latest = _pypi_client._select_latest(
+        releases={
+            "1.0.0": [{"yanked": False}],
+            "2.0.0": [],  # fileless release — must be excluded
+        },
+        include_prereleases=False,
+    )
+    assert latest == "1.0.0"
+
+
+def test_select_latest_all_empty_returns_none() -> None:
+    """Every release fileless → no candidate survives → None."""
+    latest = _pypi_client._select_latest(
+        releases={"1.0.0": [], "2.0.0": []},
+        include_prereleases=False,
+    )
+    assert latest is None
+
+
+def test_select_latest_still_skips_all_yanked_nonempty() -> None:
+    """The all-yanked skip must survive the empty-files rewrite (regression)."""
+    latest = _pypi_client._select_latest(
+        releases={
+            "1.0.0": [{"yanked": False}],
+            "2.0.0": [{"yanked": True}],  # all files yanked — still skipped
+        },
+        include_prereleases=False,
+    )
+    assert latest == "1.0.0"

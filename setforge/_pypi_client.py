@@ -123,9 +123,11 @@ def _select_latest(
     """Pick the highest non-yanked (and optionally non-prerelease) release.
 
     PyPI's ``releases`` map keys versions to per-file lists; we filter
-    by ``yanked`` at the file level (any file yanked → release yanked,
-    matching PyPI's own UI behavior) and by ``packaging.version``
-    parseability. Returns the normalized string of the highest version,
+    by ``yanked`` at the file level (all files yanked → release yanked,
+    matching PyPI's own behavior of marking a release yanked only when
+    every file is yanked) and by ``packaging.version`` parseability. A
+    release with an empty ``files`` list is treated as not-installable
+    and excluded. Returns the normalized string of the highest version,
     or ``None`` when no candidate survives the filter.
     """
     candidates: list[Version] = []
@@ -136,7 +138,9 @@ def _select_latest(
             continue
         if not include_prereleases and ver.is_prerelease:
             continue
-        if files and all(f.get("yanked") for f in files):
+        if not files:
+            continue
+        if all(f.get("yanked") for f in files):
             continue
         candidates.append(ver)
     if not candidates:
