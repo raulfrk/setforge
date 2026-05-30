@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Dockerfile for the E2E test ring (setforge-nen.9).
+# Dockerfile for the E2E test ring.
 #
 # Build with the repo root as the context (so COPY can pull in
 # pyproject.toml / uv.lock / setforge/ / tracked/):
@@ -10,7 +10,7 @@
 # A repo-root .dockerignore keeps the context lean. The conftest
 # `docker_image` fixture invokes the same form; the `-<inputs-hash>`
 # suffix is derived from the content of all hashed inputs (see
-# `_image_tag` in conftest.py — setforge-0ci) and changes whenever
+# `_image_tag` in conftest.py) and changes whenever
 # anything baked into the image changes.
 #
 # Layer order is stable→volatile so GHA cache misses on source edits
@@ -41,7 +41,7 @@ ARG VSCODE_VERSION=1.95.3
 ARG CLAUDE_CODE_VERSION=2.1.126
 ARG NODE_MAJOR=20
 ARG PYTHON_VERSION=3.13
-# Gitleaks v8.x — used by setforge-nz5x's pre-deploy secrets scan
+# Gitleaks v8.x — used by the pre-deploy secrets scan
 # Docker e2e cases. Pinned to a recent stable release.
 ARG GITLEAKS_VERSION=8.21.2
 

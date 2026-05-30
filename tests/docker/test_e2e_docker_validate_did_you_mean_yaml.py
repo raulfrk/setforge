@@ -1,6 +1,6 @@
-"""Docker e2e: ``setforge validate`` tmln UX on setforge.yaml.
+"""Docker e2e: ``setforge validate`` did-you-mean UX on setforge.yaml.
 
-Mirrors :mod:`tests.docker.test_e2e_docker_validate_tmln` (local.yaml
+Mirrors :mod:`tests.docker.test_e2e_docker_validate_did_you_mean` (local.yaml
 side) but exercises the engine-config side: typo'd top-level / nested
 keys in ``setforge.yaml`` route through the
 ``format_schema_validation_error`` + ``suggest_close_match`` path
@@ -47,7 +47,7 @@ def test_validate_setforge_yaml_top_level_typo_suggests(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """A typo'd top-level key (``proffiles:``) in setforge.yaml routes
-    through the tmln formatter and surfaces a "Did you mean 'profiles'"
+    through the did-you-mean formatter and surfaces a "Did you mean 'profiles'"
     suggestion against the introspected ``Config.model_fields`` list."""
     c = docker_container()
     _seed_workspace(c)
@@ -74,7 +74,7 @@ def test_validate_setforge_yaml_top_level_typo_suggests(
 def test_validate_setforge_yaml_profile_nested_typo_suggests(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A typo'd profile-nested key (``extendz``) routes through tmln with
+    """A typo'd profile-nested key (``extendz``) routes through did-you-mean with
     a close-match against :attr:`Profile.model_fields.keys()`."""
     c = docker_container()
     _seed_workspace(c)
@@ -100,7 +100,7 @@ def test_validate_setforge_yaml_profile_nested_typo_suggests(
 def test_validate_setforge_yaml_tracked_files_nested_typo_suggests(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A typo'd tracked_files-entry key (``srcc``) routes through tmln
+    """A typo'd tracked_files-entry key (``srcc``) routes through did-you-mean
     with a close-match against :attr:`TrackedFile.model_fields.keys()`."""
     c = docker_container()
     _seed_workspace(c)
@@ -122,11 +122,11 @@ def test_validate_setforge_yaml_tracked_files_nested_typo_suggests(
     assert "validation FAILED" in out
 
 
-def test_validate_setforge_yaml_cycle_error_not_routed_to_tmln(
+def test_validate_setforge_yaml_cycle_error_not_routed_to_did_you_mean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """A profile-extends cycle (SetforgeError tier) MUST NOT route
-    through tmln — the existing ``schema: profile cycle: ...`` phrasing
+    through did-you-mean — the existing ``schema: profile cycle: ...`` phrasing
     is the contract callers key on."""
     c = docker_container()
     _seed_workspace(c)
@@ -163,11 +163,11 @@ def test_validate_setforge_yaml_cycle_error_not_routed_to_tmln(
     assert "✗ SCHEMA VALIDATION ERROR" not in out
 
 
-def test_validate_setforge_yaml_missing_profile_not_routed_to_tmln(
+def test_validate_setforge_yaml_missing_profile_not_routed_to_did_you_mean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """A ``--profile=<name>`` that doesn't exist surfaces via the
-    existing string-failures path (not tmln). The tmln SCHEMA header
+    existing string-failures path (not did-you-mean). The did-you-mean SCHEMA header
     must be absent from the output."""
     c = docker_container()
     _seed_workspace(c)

@@ -15,7 +15,7 @@ does NOT touch the shared ``tests/fixtures/e2e/setforge.test.yaml``
 All tests are tagged ``@pytest.mark.xdist_group("docker_daemon")`` so
 the parallel xdist runner serializes them onto the single docker
 daemon shared across workers (matches the convention adopted by
-``test_e2e_docker_5z11.py`` / ``test_e2e_docker_dg2a.py``).
+``test_e2e_docker_local_overlay.py`` / ``test_e2e_docker_auto_promote.py``).
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ pytestmark = [
 ]
 
 
-_WORKDIR = "/home/tester/m3qx-e2e"
+_WORKDIR = "/home/tester/overlay-fields-e2e"
 _CFG = f"{_WORKDIR}/setforge.yaml"
 _SRC = f"{_WORKDIR}/tracked/hook.sh"
-_DEFAULT_DST = "/home/tester/.m3qx-e2e/hook.sh"
+_DEFAULT_DST = "/home/tester/.overlay-fields-e2e/hook.sh"
 _LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
 
 
@@ -47,7 +47,7 @@ _BASE_CFG = (
     "    src: hook.sh\n"
     f"    dst: {_DEFAULT_DST}\n"
     "profiles:\n"
-    "  test-m3qx:\n"
+    "  test-overlay-fields:\n"
     "    tracked_files:\n"
     "      - hook_script\n"
 )
@@ -62,7 +62,7 @@ def _bootstrap(
     c.exec(["mkdir", "-p", f"{_WORKDIR}/.cache"], check=True)
     c.write_text(_CFG, cfg_text)
     c.write_text(_SRC, src_text)
-    # Source perms intentionally restrictive to prove the m3qx mode
+    # Source perms intentionally restrictive to prove the overlay-fields mode
     # override actually drives the chmod (not source perms).
     c.exec(["chmod", "0600", _SRC], check=True)
 
@@ -98,7 +98,9 @@ def test_install_applies_host_local_mode_chmod(
         c,
         "tracked_files:\n  hook_script:\n    mode: 0o755\n",
     )
-    result = _setforge(c, ["install", "--profile=test-m3qx", f"--config={_CFG}"])
+    result = _setforge(
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"]
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert _stat_mode_octal(c, _DEFAULT_DST) == "755"
 
@@ -111,16 +113,18 @@ def test_install_applies_host_local_mode_chmod(
 def test_install_applies_host_local_dst_retarget(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``local.yaml`` declares ``dst: /home/tester/.m3qx-alt/hook.sh``;
+    """``local.yaml`` declares ``dst: /home/tester/.overlay-fields-alt/hook.sh``;
     install lands content there instead of the profile-side dst."""
     c = docker_container()
     _bootstrap(c)
-    retarget_dst = "/home/tester/.m3qx-alt/hook.sh"
+    retarget_dst = "/home/tester/.overlay-fields-alt/hook.sh"
     _write_local_yaml(
         c,
         f"tracked_files:\n  hook_script:\n    dst: {retarget_dst}\n",
     )
-    result = _setforge(c, ["install", "--profile=test-m3qx", f"--config={_CFG}"])
+    result = _setforge(
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"]
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
     # Override lands at the retargeted path; the profile-side dst stays absent.
@@ -142,12 +146,14 @@ def test_install_creates_symlink_when_symlink_target_set(
     creates a symlink at the tracked dst pointing at that target."""
     c = docker_container()
     _bootstrap(c)
-    target = "/home/tester/.m3qx-target/hook.sh"
+    target = "/home/tester/.overlay-fields-target/hook.sh"
     _write_local_yaml(
         c,
         f"tracked_files:\n  hook_script:\n    symlink_target: {target}\n",
     )
-    result = _setforge(c, ["install", "--profile=test-m3qx", f"--config={_CFG}"])
+    result = _setforge(
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"]
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
     # dst is a symlink; readlink yields the raw target string.
@@ -175,13 +181,13 @@ def test_install_fails_when_symlink_target_dst_is_directory(
     c.exec(["rm", "-f", _DEFAULT_DST], check=False)
     c.exec(["mkdir", "-p", _DEFAULT_DST], check=True)
 
-    target = "/home/tester/.m3qx-target/hook.sh"
+    target = "/home/tester/.overlay-fields-target/hook.sh"
     _write_local_yaml(
         c,
         f"tracked_files:\n  hook_script:\n    symlink_target: {target}\n",
     )
     result = _setforge(
-        c, ["install", "--profile=test-m3qx", f"--config={_CFG}"], check=False
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"], check=False
     )
     assert result.returncode != 0, result.stdout
     combined = result.stdout + result.stderr
@@ -203,18 +209,18 @@ def test_install_refuses_regular_file_collision_with_symlink(
     _bootstrap(c)
     # Pre-stage a regular file at the dst path. Per deploy_symlinked_file's
     # contract, this refuses with a regular-file-collision error (NOT a
-    # silent clobber). The m3qx symlink_target overlay rides through the
+    # silent clobber). The overlay-fields symlink_target overlay rides through the
     # same code path, so it inherits this safety.
-    c.exec(["mkdir", "-p", "/home/tester/.m3qx-e2e"], check=True)
+    c.exec(["mkdir", "-p", "/home/tester/.overlay-fields-e2e"], check=True)
     c.write_text(_DEFAULT_DST, "PREEXISTING USER CONTENT\n")
 
-    target = "/home/tester/.m3qx-target/hook.sh"
+    target = "/home/tester/.overlay-fields-target/hook.sh"
     _write_local_yaml(
         c,
         f"tracked_files:\n  hook_script:\n    symlink_target: {target}\n",
     )
     result = _setforge(
-        c, ["install", "--profile=test-m3qx", f"--config={_CFG}"], check=False
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"], check=False
     )
     assert result.returncode != 0, result.stdout
     combined = result.stdout + result.stderr
@@ -238,18 +244,20 @@ def test_install_accepts_dangling_symlink_target(
     writes the tracked content there, then drops the symlink at dst.
 
     This is the existing ``symlink:`` contract carried through the
-    new m3qx host-local channel: deploy WRITES the target so the link
+    new overlay-fields host-local channel: deploy WRITES the target so the link
     is never dangling immediately after install (the "dangling at
     install time" worry in the spec is informational — by the end
     of install the target carries the tracked bytes)."""
     c = docker_container()
     _bootstrap(c)
-    target = "/home/tester/.m3qx-fresh/nested/hook.sh"
+    target = "/home/tester/.overlay-fields-fresh/nested/hook.sh"
     _write_local_yaml(
         c,
         f"tracked_files:\n  hook_script:\n    symlink_target: {target}\n",
     )
-    result = _setforge(c, ["install", "--profile=test-m3qx", f"--config={_CFG}"])
+    result = _setforge(
+        c, ["install", "--profile=test-overlay-fields", f"--config={_CFG}"]
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
     # The symlink lands at dst; the target now exists with tracked content.
@@ -277,7 +285,9 @@ def test_validate_rejects_typo_in_host_local_overlay(
         "tracked_files:\n  hook_script:\n    modee: 0o755\n",  # typo
     )
     result = _setforge(
-        c, ["validate", "--profile=test-m3qx", f"--config={_CFG}"], check=False
+        c,
+        ["validate", "--profile=test-overlay-fields", f"--config={_CFG}"],
+        check=False,
     )
     assert result.returncode != 0, result.stdout
     combined = result.stdout + result.stderr
@@ -303,10 +313,12 @@ def test_validate_rejects_mode_and_symlink_target_together(
         "tracked_files:\n"
         "  hook_script:\n"
         "    mode: 0o755\n"
-        "    symlink_target: /home/tester/.m3qx-other/hook.sh\n",
+        "    symlink_target: /home/tester/.overlay-fields-other/hook.sh\n",
     )
     result = _setforge(
-        c, ["validate", "--profile=test-m3qx", f"--config={_CFG}"], check=False
+        c,
+        ["validate", "--profile=test-overlay-fields", f"--config={_CFG}"],
+        check=False,
     )
     assert result.returncode != 0, result.stdout
     combined = result.stdout + result.stderr

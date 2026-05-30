@@ -207,7 +207,7 @@ def test_install_with_collision_overlay_fails_cleanly(
 
     Lgvp's resolver raises :class:`PreserveUserKeysOverlayError`
     (a :class:`ConfigError` subclass) which surfaces through setforge's
-    global error handler as ``error: ...`` + exit 1. tmln will later
+    global error handler as ``error: ...`` + exit 1. did-you-mean will later
     upgrade this to the mockup-D format; today's surface is the bare
     error phrase.
     """
@@ -233,7 +233,7 @@ def test_install_with_unknown_remove_fails_cleanly(
 
     Anti-smell guard: must NOT silently overlay an unrecognized
     ``remove`` entry — surface the typo immediately with the canonical
-    "not in profile chain" phrase so tmln's setforge-validate can
+    "not in profile chain" phrase so did-you-mean's setforge-validate can
     upgrade the formatting later.
     """
     c = docker_container()

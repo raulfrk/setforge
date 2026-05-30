@@ -300,7 +300,7 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
 
 
 # ---------------------------------------------------------------------------
-# PTY tests (10) — drive the real ``pyte_pty_session`` factory from ffs0
+# PTY tests (10) — drive the real ``pyte_pty_session`` factory
 # ---------------------------------------------------------------------------
 #
 # Pattern: ``session = pyte_pty_session(container=..., cmd=[...])`` then
@@ -317,7 +317,7 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
 # ``(*) abort``), NOT on the diff-panel preamble (``About to update``)
 # which is wiped from the display by the time the dialog appears.
 # Submitting requires arrow→to select + Enter (commit radio) + Tab
-# (focus OK button) + Enter (submit) — see ffs0 / bviv reference tests.
+# (focus OK button) + Enter (submit) — see the auto-confirm reference tests.
 # ---------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def _confirm_radiolist_write(session: PyteSession) -> None:
     The radiolist default is ``abort``. Sending arrow-down moves the
     cursor onto ``write``; the inner Enter commits the radio selection;
     Tab moves focus to the ``Ok`` button; the final Enter submits the
-    dialog. Mirrors the bviv confirm-yes ``send_keys`` sequence.
+    dialog. Mirrors the auto-confirm confirm-yes ``send_keys`` sequence.
     """
     session.send_keys("\x1b[B")
     session.send_keys("\r")
@@ -341,7 +341,7 @@ def _confirm_radiolist_abort(session: PyteSession) -> None:
 
     The radiolist default is ``abort``. Tab moves focus to the ``Ok``
     button without changing the radio selection; the final Enter
-    submits with the default value. Mirrors the bviv confirm-no shape.
+    submits with the default value. Mirrors the auto-confirm confirm-no shape.
     """
     session.send_keys("\t")
     session.send_keys("\r")

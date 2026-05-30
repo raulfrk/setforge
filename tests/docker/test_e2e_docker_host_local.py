@@ -1,6 +1,6 @@
 """Docker e2e tests for host-local user-sections via local.yaml.
 
-Exercises the full xsco surface end-to-end against a fresh Debian
+Exercises the full host-local surface end-to-end against a fresh Debian
 container with the actual installed ``setforge`` CLI:
 
 - install with each of the 5 anchor kinds.
@@ -15,8 +15,8 @@ container with the actual installed ``setforge`` CLI:
 - validate offline gate: anchor-not-found surfaces without touching the
   filesystem.
 
-Profiles under exercise: ``test-xsco`` / ``test-xsco-symlink`` /
-``test-xsco-reject-json`` (declared in
+Profiles under exercise: ``test-host-local`` / ``test-host-local-symlink`` /
+``test-host-local-reject-json`` (declared in
 ``tests/fixtures/e2e/setforge.test.yaml``).
 """
 
@@ -31,10 +31,10 @@ from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
 pytestmark = pytest.mark.e2e_docker
 
 _HOME_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
-_HOST_LIVE = "/home/tester/.setforge_e2e/xsco/host.md"
-_HOST_LINK_LIVE = "/home/tester/.setforge_e2e/xsco/host_link.md"
-_HOST_LINK_TARGET = "/home/tester/.setforge_e2e/xsco/host_link_target.md"
-_SETTINGS_JSON_LIVE = "/home/tester/.setforge_e2e/xsco/settings.json"
+_HOST_LIVE = "/home/tester/.setforge_e2e/host-local/host.md"
+_HOST_LINK_LIVE = "/home/tester/.setforge_e2e/host-local/host_link.md"
+_HOST_LINK_TARGET = "/home/tester/.setforge_e2e/host-local/host_link_target.md"
+_SETTINGS_JSON_LIVE = "/home/tester/.setforge_e2e/host-local/settings.json"
 
 
 def _write_local_yaml(c: ContainerHandle, body: str) -> None:
@@ -48,8 +48,8 @@ def _setforge(
     return result.returncode, result.stdout, result.stderr
 
 
-def _install_xsco(
-    c: ContainerHandle, *, profile: str = "test-xsco", check: bool = False
+def _install_host_local(
+    c: ContainerHandle, *, profile: str = "test-host-local", check: bool = False
 ) -> tuple[int, str, str]:
     return _setforge(
         c,
@@ -71,14 +71,14 @@ def test_install_host_local_after_heading_anchor(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      work-overrides:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          WORK OVERRIDES CONTENT\n",
     )
-    rc, stdout, stderr = _install_xsco(c)
+    rc, stdout, stderr = _install_host_local(c)
     assert rc == 0, stderr
     assert "[host-local via local.yaml]" in stdout, stdout
     live = c.exec(["cat", _HOST_LIVE]).stdout
@@ -94,14 +94,14 @@ def test_install_host_local_before_heading_anchor(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      pre-comm:\n"
         "        anchor: {kind: before-heading, value: Communication}\n"
         "        body: |\n"
         "          BEFORE COMM BODY\n",
     )
-    rc, _stdout, stderr = _install_xsco(c)
+    rc, _stdout, stderr = _install_host_local(c)
     assert rc == 0, stderr
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert "BEFORE COMM BODY" in live
@@ -116,18 +116,18 @@ def test_install_host_local_at_start_of_file(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      head:\n"
         "        anchor: {kind: at-start-of-file}\n"
         "        body: |\n"
         "          HEAD BODY\n",
     )
-    rc, _stdout, stderr = _install_xsco(c)
+    rc, _stdout, stderr = _install_host_local(c)
     assert rc == 0, stderr
     live = c.exec(["cat", _HOST_LIVE]).stdout
-    # HEAD BODY must appear before the # xsco fixture title.
-    assert live.index("HEAD BODY") < live.index("# xsco fixture")
+    # HEAD BODY must appear before the # host-local fixture title.
+    assert live.index("HEAD BODY") < live.index("# host-local fixture")
 
 
 def test_install_host_local_at_end_of_file(
@@ -138,14 +138,14 @@ def test_install_host_local_at_end_of_file(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      tail:\n"
         "        anchor: {kind: at-end-of-file}\n"
         "        body: |\n"
         "          TAIL BODY\n",
     )
-    rc, _stdout, stderr = _install_xsco(c)
+    rc, _stdout, stderr = _install_host_local(c)
     assert rc == 0, stderr
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert "TAIL BODY" in live
@@ -161,14 +161,14 @@ def test_install_host_local_after_section_anchor(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      after-notes:\n"
         "        anchor: {kind: after-section, name: notes}\n"
         "        body: |\n"
         "          AFTER-NOTES BODY\n",
     )
-    rc, _stdout, stderr = _install_xsco(c)
+    rc, _stdout, stderr = _install_host_local(c)
     assert rc == 0, stderr
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert "AFTER-NOTES BODY" in live
@@ -190,14 +190,14 @@ def test_install_anchor_not_found_aborts(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      ghost:\n"
         "        anchor: {kind: after-heading, value: NoSuchHeading}\n"
         "        body: |\n"
         "          will not land\n",
     )
-    rc, _stdout, stderr = _install_xsco(c)
+    rc, _stdout, stderr = _install_host_local(c)
     assert rc != 0
     assert "NoSuchHeading" in stderr or "anchor" in stderr.lower()
     # Live file either absent or contains no host-local marker.
@@ -213,14 +213,14 @@ def test_install_empty_body_rejected_at_validate(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      empty:\n"
         "        anchor: {kind: at-end-of-file}\n"
         '        body: ""\n',
     )
     rc, stdout, _stderr = _setforge(
-        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+        c, ["validate", "--profile=test-host-local", f"--config={CONFIG_FIXTURE}"]
     )
     assert rc != 0
     # ``setforge validate`` renders failure context via ``typer.echo``
@@ -236,7 +236,7 @@ def test_validate_rejects_host_local_sections_on_json_tracked_file(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_json_reject:\n"
+        "  host_local_json_reject:\n"
         "    host_local_sections:\n"
         "      noop:\n"
         "        anchor: {kind: at-end-of-file}\n"
@@ -245,7 +245,11 @@ def test_validate_rejects_host_local_sections_on_json_tracked_file(
     )
     rc, stdout, _stderr = _setforge(
         c,
-        ["validate", "--profile=test-xsco-reject-json", f"--config={CONFIG_FIXTURE}"],
+        [
+            "validate",
+            "--profile=test-host-local-reject-json",
+            f"--config={CONFIG_FIXTURE}",
+        ],
     )
     # ``setforge validate`` renders failure context via ``typer.echo``
     # (stdout); ``--check`` / strict-mode stream choice is a separate
@@ -297,7 +301,7 @@ def test_validate_accepts_host_local_sections_on_md_tracked_file(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      ok:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
@@ -305,7 +309,7 @@ def test_validate_accepts_host_local_sections_on_md_tracked_file(
         "          ok\n",
     )
     rc, _stdout, stderr = _setforge(
-        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+        c, ["validate", "--profile=test-host-local", f"--config={CONFIG_FIXTURE}"]
     )
     assert rc == 0, stderr
 
@@ -323,15 +327,15 @@ def test_install_idempotent_re_run_no_duplication(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      s1:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          idempotent body\n",
     )
-    _install_xsco(c, check=True)
-    _install_xsco(c, check=True)
+    _install_host_local(c, check=True)
+    _install_host_local(c, check=True)
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert live.count("start host-local s1") == 1
 
@@ -345,20 +349,20 @@ def test_install_symlink_deployed_tracked_file(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md_symlink:\n"
+        "  host_local_md_symlink:\n"
         "    host_local_sections:\n"
         "      link-body:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          SYMLINK BODY\n",
     )
-    rc, _stdout, stderr = _install_xsco(c, profile="test-xsco-symlink")
+    rc, _stdout, stderr = _install_host_local(c, profile="test-host-local-symlink")
     assert rc == 0, stderr
     target = c.exec(["cat", _HOST_LINK_TARGET]).stdout
     assert "SYMLINK BODY" in target
     # The link path resolves to the target.
     link = c.exec(["readlink", _HOST_LINK_LIVE]).stdout.strip()
-    assert link == "~/.setforge_e2e/xsco/host_link_target.md"
+    assert link == "~/.setforge_e2e/host-local/host_link_target.md"
 
 
 def test_compare_shows_host_local_via_local_yaml_tag(
@@ -376,11 +380,11 @@ def test_compare_shows_host_local_via_local_yaml_tag(
     provenance marker + a ``← would be injected`` cue.
     """
     c = docker_container()
-    _install_xsco(c, check=True)  # baseline install (no overlay yet)
+    _install_host_local(c, check=True)  # baseline install (no overlay yet)
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      to-inject:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
@@ -391,7 +395,7 @@ def test_compare_shows_host_local_via_local_yaml_tag(
         c,
         [
             "compare",
-            "--profile=test-xsco",
+            "--profile=test-host-local",
             f"--config={CONFIG_FIXTURE}",
         ],
     )
@@ -418,19 +422,19 @@ def test_compare_does_not_flag_injected_as_drift(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      mask-me:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          injected\n",
     )
-    _install_xsco(c, check=True)
+    _install_host_local(c, check=True)
     rc, stdout, stderr = _setforge(
         c,
         [
             "compare",
-            "--profile=test-xsco",
+            "--profile=test-host-local",
             f"--config={CONFIG_FIXTURE}",
             "--check",
         ],
@@ -454,21 +458,21 @@ def test_sync_capture_back_excludes_host_local(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      do-not-leak:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          do-not-leak body\n",
     )
-    _install_xsco(c, check=True)
+    _install_host_local(c, check=True)
     rc, _stdout, stderr = _setforge(
-        c, ["sync", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}", "-y"]
+        c, ["sync", "--profile=test-host-local", f"--config={CONFIG_FIXTURE}", "-y"]
     )
     assert rc == 0, stderr
     # The tracked source MUST NOT carry the host-local marker.
     tracked = c.exec(
-        ["cat", "/workspace/tests/fixtures/e2e/tracked/xsco/host.md"]
+        ["cat", "/workspace/tests/fixtures/e2e/tracked/host-local/host.md"]
     ).stdout
     assert "do-not-leak" not in tracked
 
@@ -482,18 +486,18 @@ def test_revert_undoes_injection(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      revertable:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
         "        body: |\n"
         "          REVERTABLE BODY\n",
     )
-    _install_xsco(c, check=True)
+    _install_host_local(c, check=True)
     live_after_install = c.exec(["cat", _HOST_LIVE]).stdout
     assert "REVERTABLE BODY" in live_after_install
     rc, _stdout, stderr = _setforge(
-        c, ["revert", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}", "-y"]
+        c, ["revert", "--profile=test-host-local", f"--config={CONFIG_FIXTURE}", "-y"]
     )
     assert rc == 0, stderr
     # ``setforge revert`` restores live to PRE-INSTALL state — for a
@@ -514,7 +518,7 @@ def test_validate_catches_anchor_not_found_offline(
     _write_local_yaml(
         c,
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         "      ghost:\n"
         "        anchor: {kind: after-heading, value: PhantomHeading}\n"
@@ -522,7 +526,7 @@ def test_validate_catches_anchor_not_found_offline(
         "          will not land\n",
     )
     rc, stdout, _stderr = _setforge(
-        c, ["validate", "--profile=test-xsco", f"--config={CONFIG_FIXTURE}"]
+        c, ["validate", "--profile=test-host-local", f"--config={CONFIG_FIXTURE}"]
     )
     # ``setforge validate`` renders failure context via ``typer.echo``
     # (stdout); see _on_json_tracked_file for the same stream choice.

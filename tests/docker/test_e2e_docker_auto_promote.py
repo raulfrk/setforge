@@ -1,10 +1,10 @@
-"""Docker E2E PTY tests for the dg2a sync-wizard ``[p]`` auto-promote.
+"""Docker E2E PTY tests for the auto-promote sync-wizard ``[p]`` auto-promote.
 
 Exercises the wizard end-to-end against a fresh Debian 12 container:
 
-1. ``setforge install --profile=test-xsco`` injects the host-local
+1. ``setforge install --profile=test-host-local`` injects the host-local
    section declared in ``local.yaml`` into the live tracked file.
-2. ``setforge sync --profile=test-xsco`` walks promotable host-local
+2. ``setforge sync --profile=test-host-local`` walks promotable host-local
    sections, renders the ``[k]/[p]/[s]/[q]`` menu, and on ``p``
    dispatches the all-in-one confirm panel + arrow-key
    ``radiolist_dialog`` (default=No).
@@ -14,7 +14,7 @@ captures the emulated screen so we can assert on the
 rendered prompt, the confirm panel, the secrets-scan row, the RISKS
 block, and the post-promote file mutations.
 
-Five cases per spec dg2a acceptance:
+Five cases per spec auto-promote acceptance:
 
 - ``test_promote_pty_confirm_yes`` — user picks ``[p]``, then Yes;
   promote applies, exit 0, post-state asserts the three-file mutation.
@@ -44,15 +44,15 @@ from tests.docker.pyte_session import PyteSession
 pytestmark = pytest.mark.e2e_docker
 
 _HOME_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
-_HOST_LIVE = "/home/tester/.setforge_e2e/xsco/host.md"
-_HOST_TRACKED = "/workspace/tests/fixtures/e2e/tracked/xsco/host.md"
+_HOST_LIVE = "/home/tester/.setforge_e2e/host-local/host.md"
+_HOST_TRACKED = "/workspace/tests/fixtures/e2e/tracked/host-local/host.md"
 
 
 def _local_yaml_with_section(section_name: str, body_line: str) -> str:
     """Build a local.yaml with one host_local_sections entry."""
     return (
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    host_local_sections:\n"
         f"      {section_name}:\n"
         "        anchor: {kind: after-heading, value: Workflow}\n"
@@ -61,7 +61,9 @@ def _local_yaml_with_section(section_name: str, body_line: str) -> str:
     )
 
 
-def _install_xsco(c: ContainerHandle, *, profile: str = "test-xsco") -> None:
+def _install_host_local(
+    c: ContainerHandle, *, profile: str = "test-host-local"
+) -> None:
     """Run ``setforge install`` so the host-local section lands in the live file."""
     result = c.exec(
         [
@@ -84,7 +86,7 @@ def _sync_cmd() -> list[str]:
         "run",
         "setforge",
         "sync",
-        "--profile=test-xsco",
+        "--profile=test-host-local",
         f"--config={CONFIG_FIXTURE}",
     ]
 
@@ -97,7 +99,7 @@ def test_promote_pty_confirm_yes(
     """User picks [p] + Yes: promote applies; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("promo", "PROMO BODY"))
-    _install_xsco(c)
+    _install_host_local(c)
     # Verify the host-local section landed in live before promoting.
     live_pre = c.read_text(_HOST_LIVE)
     assert "start host-local promo" in live_pre
@@ -140,7 +142,7 @@ def test_promote_pty_confirm_no(
     """User picks [p] + default-No: no mutations; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("nope", "NOPE BODY"))
-    _install_xsco(c)
+    _install_host_local(c)
     live_pre = c.read_text(_HOST_LIVE)
     local_yaml_pre = c.read_text(_HOME_LOCAL_YAML)
 
@@ -174,7 +176,7 @@ def test_promote_pty_confirm_esc(
     """User picks [p], then Esc on the dialog: treated as abort; exit 0."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("escape", "ESCAPE BODY"))
-    _install_xsco(c)
+    _install_host_local(c)
     live_pre = c.read_text(_HOST_LIVE)
     local_yaml_pre = c.read_text(_HOME_LOCAL_YAML)
 
@@ -220,7 +222,7 @@ def test_promote_pty_secrets_warned(
     # would trigger our own pre-commit gitleaks hook).
     secret_line = "AKIA" + "IOSFODNN" + "7" + "EXAMPLE"  # gitleaks:allow
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("leaky", secret_line))
-    _install_xsco(c)
+    _install_host_local(c)
 
     session = pyte_pty_session(
         container=c.cid,
@@ -256,7 +258,7 @@ def test_promote_pty_then_revert(
     """Full promote + setforge revert round-trip: post-revert == pre-promote bytes."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, _local_yaml_with_section("rt", "RT BODY"))
-    _install_xsco(c)
+    _install_host_local(c)
     live_pre = c.read_text(_HOST_LIVE)
     local_yaml_pre = c.read_text(_HOME_LOCAL_YAML)
     tracked_pre = c.read_text(_HOST_TRACKED)
@@ -292,7 +294,7 @@ def test_promote_pty_then_revert(
             "run",
             "setforge",
             "revert",
-            "--profile=test-xsco",
+            "--profile=test-host-local",
             f"--config={CONFIG_FIXTURE}",
             "--yes",
         ],

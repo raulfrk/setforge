@@ -62,7 +62,7 @@ _EXPECTED_HEADERS: tuple[str, ...] = (
     _FINAL_LINE,
 )
 
-# Confirm-wizard substrings the bviv flow emits. The dry-run path MUST
+# Confirm-wizard substrings the auto-confirm flow emits. The dry-run path MUST
 # NOT produce either of these under ``--auto=*`` + ``--dry-run`` per
 # spec anti-pattern #5.
 _CONFIRM_SUBSTRINGS: tuple[str, ...] = (
@@ -407,9 +407,9 @@ def test_dry_run_no_confirm_substring(
 ) -> None:
     """Anti-pattern #5: zero ``Apply [y/N]?`` / ``type 'apply' to proceed`` matches.
 
-    The bviv confirm wizard MUST NOT fire under ``--auto=*`` +
+    The auto-confirm confirm wizard MUST NOT fire under ``--auto=*`` +
     ``--dry-run``. Mirrors the unit-test tripwire pattern at the
-    Docker layer so a future regression in the real bviv flow
+    Docker layer so a future regression in the real auto-confirm flow
     surfaces here too.
     """
     c = docker_container()

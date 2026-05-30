@@ -212,7 +212,7 @@ def test_install_text_sections_no_live(
     """C: preserve_user_sections=true, no live content → dst equals tracked.
 
     install rewrites end markers with an embedded ``hash=<sha256>``
-    segment (post-9by: tracked is also stamped). The body is the
+    segment (post-hashed-marker: tracked is also stamped). The body is the
     load-bearing assertion; the end marker may carry the new hash
     segment or be the legacy untagged form.
     """
@@ -890,14 +890,14 @@ def test_install_then_revert_restores_state(
     )
 
 
-# --- p1vl: revert confirm-explain-redo wizard (mockup A) ------------------
+# --- revert-confirm: revert confirm-explain-redo wizard (mockup A) ------------------
 
 
 @pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_revert_confirm_aborted(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """p1vl: revert without --yes against a non-TTY stdin refuses with
+    """revert-confirm: revert without --yes against a non-TTY stdin refuses with
     ConfirmRequiresInteractive and leaves the deployed file untouched.
 
     The non-TTY refusal is the wizard's safety contract: without a TTY
@@ -934,7 +934,7 @@ def test_e2e_docker_revert_confirm_aborted(
 def test_e2e_docker_revert_confirm_applied(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """p1vl: revert --yes short-circuits the wizard and applies cleanly,
+    """revert-confirm: revert --yes short-circuits the wizard and applies cleanly,
     removing the file `install` created and writing a reverse transition.
     """
     c = docker_container()
@@ -998,11 +998,11 @@ def test_validate_clean_yaml_exit_zero(
 
 
 # ===========================================================================
-# Section: Legacy (pre-9by) marker migration
+# Section: Legacy (pre-hashed-marker) marker migration
 # ===========================================================================
 #
 # These variants exercise the install / compare flow against a live
-# file whose user-section markers are in the pre-9by shape: no
+# file whose user-section markers are in the pre-hashed-marker shape: no
 # host-local|shared semantics keyword on the start marker, and no
 # ``hash=<sha256>`` segment on the end marker. The strict parser rejects
 # these; install opts into ``allow_legacy=True`` to migrate the file in
@@ -1028,7 +1028,7 @@ def test_compare_legacy_live_refuses_with_pointer_to_install(
 ) -> None:
     """compare refuses legacy live markers with actionable SetforgeError.
 
-    Seeds a pre-9by-shaped live ``marked.md`` (untagged markers, no
+    Seeds a pre-hashed-marker-shaped live ``marked.md`` (untagged markers, no
     hash segment) and runs ``setforge compare``; asserts non-zero
     exit AND that the combined stdout+stderr names ``setforge
     install`` as the next step. Without the refusal guard, the
@@ -1141,7 +1141,7 @@ def test_compare_after_legacy_install_is_clean(
 # compare must report no drift, and revert must remove every deployed
 # artifact (each starts absent on a fresh container).
 #
-# Implicitly verifies: 9by's strict-tag
+# Implicitly verifies: hashed-marker's strict-tag
 # parser does not reject pure-tracked agent files that contain no
 # user-section markers.
 
@@ -1342,11 +1342,11 @@ def test_revert_after_install_removes_workflows_file(
 def test_merge_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """merge on a pre-9by live file refuses with the actionable error.
+    """merge on a pre-hashed-marker live file refuses with the actionable error.
 
     Pairs with the unit-level
     ``test_merge_refuses_legacy_live_with_actionable_error`` in
-    ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
+    ``tests/test_cli_section_reconcile.py``. Seeds a pre-hashed-marker-shaped live
     ``~/.claude/CLAUDE.md`` (no ``host-local``/``shared`` semantics keyword
     on the start marker, no ``hash=<sha256>`` segment on the end marker) and
     runs ``setforge merge --profile=vm-headless``; asserts non-zero exit
@@ -1390,11 +1390,11 @@ def test_merge_legacy_live_refuses_with_pointer_to_install(
 def test_sync_legacy_live_refuses_with_pointer_to_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """sync on a pre-9by live file refuses with the actionable error.
+    """sync on a pre-hashed-marker live file refuses with the actionable error.
 
     Pairs with the unit-level
     ``test_sync_refuses_legacy_live_with_actionable_error`` in
-    ``tests/test_cli_section_reconcile.py``. Seeds a pre-9by-shaped live
+    ``tests/test_cli_section_reconcile.py``. Seeds a pre-hashed-marker-shaped live
     ``~/.claude/CLAUDE.md`` and runs ``setforge sync --profile=vm-headless``;
     asserts non-zero exit AND that combined stdout+stderr names
     ``setforge install`` as the next step.
@@ -1494,7 +1494,7 @@ def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
 def test_e2e_docker_install_secrets_scan_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """nz5x: gitleaks on PATH + clean tracked → install succeeds normally.
+    """secrets-scan: gitleaks on PATH + clean tracked → install succeeds normally.
 
     The ``test-minimal`` fixture's tracked tree carries the single
     ``minimal/text.txt`` file (``hello from test-minimal``); gitleaks
@@ -1523,7 +1523,7 @@ def test_e2e_docker_install_secrets_scan_clean(
 def test_e2e_docker_install_secrets_scan_finds_and_aborts(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """nz5x: planting a secret in tracked aborts the install cleanly.
+    """secrets-scan: planting a secret in tracked aborts the install cleanly.
 
     Non-TTY install context (``docker exec`` without ``-t``) means the
     wizard short-circuits to :data:`SecretAction.ABORT` per the
@@ -1541,7 +1541,9 @@ def test_e2e_docker_install_secrets_scan_finds_and_aborts(
     """
     c = docker_container()
     fake_token = "ghp_" + "x6Hv9Kp2zQwL8mN3rF7tY1bC4dE5gJ0sA9iU"
-    planted = f"hello from test-minimal\nfake gh pat for nz5x e2e: {fake_token}\n"
+    planted = (
+        f"hello from test-minimal\nfake gh pat for secrets-scan e2e: {fake_token}\n"
+    )
     c.write_text(
         "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt",
         planted,
@@ -1584,7 +1586,7 @@ def test_e2e_docker_install_secrets_scan_finds_and_aborts(
 def test_e2e_docker_install_no_gitleaks_warns_and_continues(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """nz5x soft-requirement: missing gitleaks → yellow warning + install OK.
+    """secrets-scan soft-requirement: missing gitleaks → yellow warning + install OK.
 
     Removes the gitleaks binary from /usr/local/bin inside the
     container (the only location it lives on PATH), then runs install.
@@ -1707,12 +1709,12 @@ def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> 
     """Append ``extra_ext`` to the test-comprehensive profile in the fixture.
 
     Writes a patched copy of the canonical fixture under
-    ``tests/fixtures/e2e/setforge.k0uj.test.yaml`` so its relative
+    ``tests/fixtures/e2e/setforge.patched-ext.test.yaml`` so its relative
     ``src:`` paths still resolve correctly (the config-loader resolves
     ``src:`` against the config file's parent dir). Returns the
     repo-relative path for use with ``--config``.
     """
-    out_path = "tests/fixtures/e2e/setforge.k0uj.test.yaml"
+    out_path = "tests/fixtures/e2e/setforge.patched-ext.test.yaml"
     text = c.exec(["cat", CONFIG_FIXTURE], check=True).stdout
     needle = "        - editorconfig.editorconfig\n"
     if needle not in text:
@@ -1960,7 +1962,7 @@ def _init(
 def test_e2e_docker_init_fresh(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """n2la: fresh --no-prompt init creates all three bootstrap paths.
+    """init-bootstrap: fresh --no-prompt init creates all three bootstrap paths.
 
     Wipes the local.yaml stub that the Typer root callback writes on
     every invocation, then asserts that init creates the canonical
@@ -1989,7 +1991,7 @@ def test_e2e_docker_init_fresh(
 def test_e2e_docker_init_reinit_idempotent(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """n2la: rerunning init after a clean bootstrap is a no-op.
+    """init-bootstrap: rerunning init after a clean bootstrap is a no-op.
 
     First run creates the bootstrap state; the second run takes the
     idempotent branch (sentinel + host-local dir both present) and
@@ -2016,7 +2018,7 @@ def test_e2e_docker_init_reinit_idempotent(
 def test_e2e_docker_init_force_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """n2la: --force --no-prompt produces a timestamped backup.
+    """init-bootstrap: --force --no-prompt produces a timestamped backup.
 
     Seeds a user-marker local.yaml + the host-local dir so we hit the
     --force branch (not the fresh-init branch), then asserts the backup
@@ -2061,7 +2063,7 @@ def test_e2e_docker_init_force_with_backup(
 def test_e2e_docker_init_check_readonly(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """n2la: --check prints the env/dirs/capabilities report; no side effects.
+    """init-bootstrap: --check prints the env/dirs/capabilities report; no side effects.
 
     Wipes setforge state, runs --check, and asserts the host-local
     share directory does NOT appear (the root callback writes the
@@ -2507,27 +2509,34 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     """
     c = docker_container()
     # Set up bare remote with one commit + fixture tree.
-    c.exec(["mkdir", "-p", "/tmp/g40x-remote.git"], check=True)
+    c.exec(["mkdir", "-p", "/tmp/git-freshness-remote.git"], check=True)
     # ``-b main`` pins the bare repo's HEAD to ``refs/heads/main``; without
     # it, the bare HEAD defaults to ``master`` (or whatever ``init.defaultBranch``
     # resolves to on the host). A later ``git clone`` would then check out
     # an empty working tree because the bare's HEAD references a branch
     # that the seed's push didn't create.
     c.exec(
-        ["git", "init", "-q", "-b", "main", "--bare", "/tmp/g40x-remote.git"],
+        ["git", "init", "-q", "-b", "main", "--bare", "/tmp/git-freshness-remote.git"],
         check=True,
     )
-    c.exec(["mkdir", "-p", "/tmp/g40x-seed"], check=True)
-    c.exec(["git", "-C", "/tmp/g40x-seed", "init", "-q", "-b", "main"], check=True)
-    c.exec(["git", "-C", "/tmp/g40x-seed", "config", "user.email", "x@y"], check=True)
-    c.exec(["git", "-C", "/tmp/g40x-seed", "config", "user.name", "x"], check=True)
+    c.exec(["mkdir", "-p", "/tmp/git-freshness-seed"], check=True)
+    c.exec(
+        ["git", "-C", "/tmp/git-freshness-seed", "init", "-q", "-b", "main"], check=True
+    )
+    c.exec(
+        ["git", "-C", "/tmp/git-freshness-seed", "config", "user.email", "x@y"],
+        check=True,
+    )
+    c.exec(
+        ["git", "-C", "/tmp/git-freshness-seed", "config", "user.name", "x"], check=True
+    )
     # Copy fixture in.
     c.exec(
         [
             "cp",
             "-r",
             "/workspace/tests/fixtures/e2e/tracked",
-            "/tmp/g40x-seed/tracked",
+            "/tmp/git-freshness-seed/tracked",
         ],
         check=True,
     )
@@ -2535,20 +2544,22 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
         [
             "cp",
             "/workspace/tests/fixtures/e2e/setforge.test.yaml",
-            "/tmp/g40x-seed/setforge.yaml",
+            "/tmp/git-freshness-seed/setforge.yaml",
         ],
         check=True,
     )
-    c.exec(["git", "-C", "/tmp/g40x-seed", "add", "-A"], check=True)
-    c.exec(["git", "-C", "/tmp/g40x-seed", "commit", "-q", "-m", "v1"], check=True)
+    c.exec(["git", "-C", "/tmp/git-freshness-seed", "add", "-A"], check=True)
+    c.exec(
+        ["git", "-C", "/tmp/git-freshness-seed", "commit", "-q", "-m", "v1"], check=True
+    )
     c.exec(
         [
             "git",
             "-C",
-            "/tmp/g40x-seed",
+            "/tmp/git-freshness-seed",
             "push",
             "-q",
-            "/tmp/g40x-remote.git",
+            "/tmp/git-freshness-remote.git",
             "main",
         ],
         check=True,
@@ -2559,23 +2570,25 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
             "git",
             "clone",
             "-q",
-            "/tmp/g40x-remote.git",
+            "/tmp/git-freshness-remote.git",
             "/home/tester/cache",
         ],
         check=True,
     )
     # Advance the remote by one commit so cache is behind.
-    c.write_text("/tmp/g40x-seed/tracked/minimal/text.txt", "v2 content\n")
-    c.exec(["git", "-C", "/tmp/g40x-seed", "add", "-A"], check=True)
-    c.exec(["git", "-C", "/tmp/g40x-seed", "commit", "-q", "-m", "v2"], check=True)
+    c.write_text("/tmp/git-freshness-seed/tracked/minimal/text.txt", "v2 content\n")
+    c.exec(["git", "-C", "/tmp/git-freshness-seed", "add", "-A"], check=True)
+    c.exec(
+        ["git", "-C", "/tmp/git-freshness-seed", "commit", "-q", "-m", "v2"], check=True
+    )
     c.exec(
         [
             "git",
             "-C",
-            "/tmp/g40x-seed",
+            "/tmp/git-freshness-seed",
             "push",
             "-q",
-            "/tmp/g40x-remote.git",
+            "/tmp/git-freshness-remote.git",
             "main",
         ],
         check=True,
@@ -2585,7 +2598,7 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     local_yaml = (
         "source:\n"
         "  kind: git\n"
-        "  url: file:///tmp/g40x-remote.git\n"
+        "  url: file:///tmp/git-freshness-remote.git\n"
         "  ref: main\n"
         "  clone_dest: /home/tester/cache\n"
     )

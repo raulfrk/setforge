@@ -12,7 +12,7 @@ Five named scenarios per the user's per-CLI-flag-row coverage preference:
 
 3. ``test_symlink_e2e_compare_detects_broken_link`` — install,
    delete the target, ``compare --check`` exits non-zero (the
-   existing-bug surface m483 fixes: pre-m483 the broken link
+   existing-bug surface symlink-compare fixes: pre-symlink-compare the broken link
    misclassified as MISSING; ``--check`` flagged nothing).
 
 4. ``test_symlink_e2e_compare_detects_regular_file_at_dst`` —
@@ -87,7 +87,7 @@ def test_symlink_e2e_install_creates_link_and_target(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     c = docker_container()
-    _bootstrap(c, cfg_text=_BASE_CFG, src_text="hello m483\n")
+    _bootstrap(c, cfg_text=_BASE_CFG, src_text="hello symlink-compare\n")
 
     result = _setforge(
         c, ["install", "--profile=test-symlink", f"--config={_CFG}"], check=False
@@ -100,11 +100,11 @@ def test_symlink_e2e_install_creates_link_and_target(
 
     # Content lives at target.
     target_content = c.exec(["cat", _TARGET], check=True)
-    assert target_content.stdout == "hello m483\n"
+    assert target_content.stdout == "hello symlink-compare\n"
 
     # Reading through the symlink also returns the content.
     via_link = c.exec(["cat", _DST], check=True)
-    assert via_link.stdout == "hello m483\n"
+    assert via_link.stdout == "hello symlink-compare\n"
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +153,8 @@ def test_symlink_e2e_compare_detects_broken_link(
     assert c.exec(["test", "-L", _DST], check=False).returncode == 0  # link still there
     assert c.exec(["test", "-e", _DST], check=False).returncode != 0  # target gone
 
-    # Pre-m483 this would have been classified MISSING (Path.exists()
-    # returns False on a broken link). m483's dispatch via is_symlink()
+    # Pre-symlink-compare this would have been classified MISSING (Path.exists()
+    # returns False on a broken link). symlink-compare's dispatch via is_symlink()
     # first MUST land in a non-MISSING classification.
     #
     # Per current impl: broken link with matching target string is
@@ -168,7 +168,7 @@ def test_symlink_e2e_compare_detects_broken_link(
     # Must not classify as MISSING (the existing-bug surface). The compare
     # CLI prints ``MISSING: <N> files`` only when ``missing_count > 0``;
     # the broken-link case ought to land as UNCHANGED (matching target
-    # string) or DRIFTED (target-content drift, post-m483 IMPORTANT #4),
+    # string) or DRIFTED (target-content drift, post-symlink-compare IMPORTANT #4),
     # so the ``MISSING:`` line must NOT appear at all.
     assert "MISSING:" not in combined, combined
 
@@ -280,7 +280,7 @@ def test_symlink_e2e_revert_reverses_target_content(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: revert UNLINKS the symlink (m483 spec acceptance #4)
+# Scenario 7: revert UNLINKS the symlink (symlink-compare spec acceptance #4)
 # ---------------------------------------------------------------------------
 
 

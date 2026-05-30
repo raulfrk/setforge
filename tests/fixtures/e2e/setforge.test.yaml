@@ -1,8 +1,8 @@
-# Test-only setforge config for E2E coverage (setforge-nen.9).
+# Test-only setforge config for E2E coverage.
 #
 # This config is tool-generic — it never references production profiles
 # (vm-headless / -full / workstation), which will be extracted to a
-# separate config repo via setforge-2ba. Every profile here exercises
+# separate config repo. Every profile here exercises
 # one well-defined mechanism so the matching variant in
 # tests/test_e2e_docker.py and tests/test_cli_e2e.py can assert against
 # a stable shape.
@@ -31,7 +31,7 @@ tracked_files:
     preserve_user_sections: true
 
   # Shared-semantics user-section markers — exercises the three-way
-  # reconcile wizard introduced in setforge-9by.
+  # reconcile wizard.
   sections_shared_md:
     src: sections/shared.md
     dst: ~/.setforge_e2e/sections/shared.md
@@ -113,11 +113,11 @@ tracked_files:
     src: comprehensive/config.yaml
     dst: ~/.setforge_e2e/comprehensive/config.yaml
 
-  # Prose-reviewer agents + reviewing-markdown skill (setforge-h5k).
+  # Prose-reviewer agents + reviewing-markdown skill.
   # Test-only mirror of the production wiring in /workspace/setforge.yaml;
   # used by the prose-reviewer Docker e2e variants to exercise install /
   # compare / revert against new files that have no user-section markers
-  # (implicitly covers 9by's strict-tag parser).
+  # (implicitly covers hashed-marker's strict-tag parser).
   prose_python_agent:
     src: claude/agents/python-prose-reviewer.md
     dst: ~/.claude/agents/python-prose-reviewer.md
@@ -138,22 +138,22 @@ tracked_files:
     src: claude/workflows/example-impl.js
     dst: ~/.claude/workflows/example-impl.js
 
-  # Host-local sections fixture (setforge-xsco). Plain markdown tracked
+  # Host-local sections fixture. Plain markdown tracked
   # file with declared user-section markers AND with headings that anchor
   # injections from local.yaml's host_local_sections block.
-  xsco_md:
-    src: xsco/host.md
-    dst: ~/.setforge_e2e/xsco/host.md
+  host_local_md:
+    src: host-local/host.md
+    dst: ~/.setforge_e2e/host-local/host.md
     preserve_user_sections: true
-  xsco_md_symlink:
-    src: xsco/host.md
-    dst: ~/.setforge_e2e/xsco/host_link.md
-    symlink: ~/.setforge_e2e/xsco/host_link_target.md
+  host_local_md_symlink:
+    src: host-local/host.md
+    dst: ~/.setforge_e2e/host-local/host_link.md
+    symlink: ~/.setforge_e2e/host-local/host_link_target.md
     preserve_user_sections: true
-  # Non-markdown tracked_file used to test xsco's file-type rejection.
-  xsco_json_reject:
-    src: xsco/settings.json
-    dst: ~/.setforge_e2e/xsco/settings.json
+  # Non-markdown tracked_file used to test host-local's file-type rejection.
+  host_local_json_reject:
+    src: host-local/settings.json
+    dst: ~/.setforge_e2e/host-local/settings.json
 
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
@@ -257,7 +257,7 @@ profiles:
     bootstrap:
       - ~/.setforge_e2e/comprehensive/bootstrap-stub.txt
 
-  # ---- Prose-reviewer artifacts (setforge-h5k) ------------------------
+  # ---- Prose-reviewer artifacts --------------------------------------
   # Exercises install / compare / revert for the three new prose
   # reviewer agents + the new reviewing-markdown skill, in isolation
   # from plugin / extension reconciliation.
@@ -275,13 +275,13 @@ profiles:
     tracked_files:
       - workflows_example_impl
 
-  # ---- Host-local sections (setforge-xsco) -----------------------------
-  test-xsco:
+  # ---- Host-local sections ---------------------------------------------
+  test-host-local:
     tracked_files:
-      - xsco_md
-  test-xsco-symlink:
+      - host_local_md
+  test-host-local-symlink:
     tracked_files:
-      - xsco_md_symlink
-  test-xsco-reject-json:
+      - host_local_md_symlink
+  test-host-local-reject-json:
     tracked_files:
-      - xsco_json_reject
+      - host_local_json_reject

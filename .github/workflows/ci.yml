@@ -18,7 +18,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
       # The engine repo no longer carries setforge.yaml at root after the
-      # setforge-2ba.4 split; CI validates against the e2e test fixture only.
+      # split; CI validates against the e2e test fixture only.
       - run: uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all
       - run: uv run ruff check
       - run: uv run ruff format --check
@@ -47,8 +47,8 @@ jobs:
       - run: uv sync --extra dev
       # Compute the same content-hashed tag the fixture expects, so the
       # prebuild image matches what `docker image inspect` looks for
-      # inside `docker_image` (see `_image_tag` in tests/docker/conftest.py
-      # — dotfiles-0ci). Without this, the prebuild would tag the image
+      # inside `docker_image` (see `_image_tag` in tests/docker/conftest.py).
+      # Without this, the prebuild would tag the image
       # with a name the fixture never asks for, and the fixture would
       # rebuild from scratch, defeating the GHA layer cache.
       - name: Compute E2E image tag

@@ -45,13 +45,13 @@ def overlay_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     cfg_path.write_text(
         "version: 1\n"
         "tracked_files:\n"
-        "  xsco_md:\n"
+        "  host_local_md:\n"
         "    src: section.md\n"
         f"    dst: {dst}\n"
         "    preserve_user_sections: true\n"
         "profiles:\n"
         "  p:\n"
-        "    tracked_files: [xsco_md]\n",
+        "    tracked_files: [host_local_md]\n",
         encoding="utf-8",
     )
 
@@ -70,7 +70,7 @@ def overlay_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     # LOCAL_CONFIG_PATH module-level constant does not help because the
     # default-arg binding captures it at function-def time.
     overlay = {
-        "xsco_md": {
+        "host_local_md": {
             "work-overrides": HostLocalSection(
                 anchor=AnchorAfterHeading(value="Workflow"), body="WORK OVERRIDES"
             )
@@ -105,8 +105,8 @@ def test_sync_wizard_excludes_injected_host_local_from_drift_display(
         cfg, resolved, repo_root
     )
     # Sanity: overlay was loaded.
-    assert "xsco_md" in host_local_sections_map
-    assert "work-overrides" in host_local_sections_map["xsco_md"]
+    assert "host_local_md" in host_local_sections_map
+    assert "work-overrides" in host_local_sections_map["host_local_md"]
 
     # Overlay-aware compare: no drift.
     report_with = compare_mod.compare_profile(

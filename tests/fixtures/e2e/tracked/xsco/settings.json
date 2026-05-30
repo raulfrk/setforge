@@ -1,4 +1,0 @@
-{
-  "kind": "host-local-reject-fixture",
-  "purpose": "exercises xsco's file-type validator on non-markdown tracked_file"
-}
