@@ -1,5 +1,4 @@
-"""Tests for the ``mode_drift`` channel on :class:`setforge.compare.FileCompare`
-(setforge-8z91).
+"""Tests for the ``mode_drift`` channel on :class:`setforge.compare.FileCompare`.
 
 The contract:
 

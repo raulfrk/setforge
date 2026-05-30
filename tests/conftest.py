@@ -2,7 +2,7 @@
 
 Two autouse fixtures here form a defense-in-depth around the
 ``~/.config/setforge/local.yaml`` stub-creation race that surfaces
-when CliRunner tests share ``$HOME`` (setforge-hpd4):
+when CliRunner tests share ``$HOME``:
 
 - :func:`_isolated_local_config` redirects the ``LOCAL_CONFIG_PATH``
   module constants in ``setforge.binaries`` and ``setforge.source`` to
@@ -17,7 +17,7 @@ The :class:`FakeClaude` / :class:`FakeGit` fakes and their
 ``fake_claude`` / ``fake_git`` fixtures live here (rather than in a
 single test file) so ``test_claude_plugins.py``,
 ``test_claude_marketplace_cache.py``, and ``test_cli_e2e.py`` can all
-discover them via pytest's standard conftest mechanism (setforge-qo23).
+discover them via pytest's standard conftest mechanism.
 """
 
 import json
@@ -62,15 +62,15 @@ def _isolated_local_config(
         "setforge.source.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )
-    # setforge.compare imports LOCAL_CONFIG_PATH for orphan_ignore reads
-    # (setforge-o3h8); redirect that re-export too so tests don't read
+    # setforge.compare imports LOCAL_CONFIG_PATH for orphan_ignore reads;
+    # redirect that re-export too so tests don't read
     # the dev host's local.yaml mid-compare.
     monkeypatch.setattr(
         "setforge.compare.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
     )
     # setforge.cli.orphans imports LOCAL_CONFIG_PATH for orphan_ignore
-    # writes (setforge-o3h8); redirect that re-export too.
+    # writes; redirect that re-export too.
     monkeypatch.setattr(
         "setforge.cli.orphans.LOCAL_CONFIG_PATH",
         tmp_path / "local.yaml",
@@ -141,7 +141,7 @@ def _reset_claude_bin_cache() -> None:
     ``/usr/local/bin/claude`` — the fake_claude factory's hardcoded
     value). On a host where that path is not a real binary the next
     install / reconcile flow surfaces ``FileNotFoundError`` from the
-    eventual ``subprocess.run`` call. Surfaced by the setforge-qo23
+    eventual ``subprocess.run`` call. Surfaced by the conftest
     split (re-ordered test discovery exposed the latent leak); fixing
     here keeps every later test on a clean slate regardless of which
     fixtures the preceding test happened to use.
@@ -158,7 +158,7 @@ def _suppress_fresh_host_welcome(
 
     Every CliRunner ``install`` invocation in the inner test ring runs
     under :func:`_isolate_home` with a transitions-free sandboxed HOME.
-    Without this fixture, the fresh-host welcome gate (setforge-7jg4)
+    Without this fixture, the fresh-host welcome gate
     would either raise :class:`WelcomeRequiresInteractive` (non-TTY
     CliRunner stdin) or reject ``--auto=*`` for every install test in
     the suite.
@@ -215,7 +215,7 @@ def pytest_collection_modifyitems(
 
 
 # ---------------------------------------------------------------------------
-# Shared Config / ResolvedProfile builders (setforge-qo23)
+# Shared Config / ResolvedProfile builders
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def _make_resolved(
 
 
 # ---------------------------------------------------------------------------
-# Fake ``claude`` driver + ``fake_claude`` fixture (setforge-qo23)
+# Fake ``claude`` driver + ``fake_claude`` fixture
 # ---------------------------------------------------------------------------
 
 
@@ -436,7 +436,7 @@ def fake_claude(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeClaude]:
 
 
 # ---------------------------------------------------------------------------
-# Fake ``git`` driver + ``fake_git`` fixture (setforge-qo23)
+# Fake ``git`` driver + ``fake_git`` fixture
 # ---------------------------------------------------------------------------
 
 
@@ -528,7 +528,7 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
     ``shutil.which`` to report ``git`` resolvable, redirects the cache
     root into ``tmp_path``, and clears the ``_get_claude_bin`` lru-cache
     so tests that combine the two fakes don't see stale binary state.
-    Patches target the ``claude_marketplace_cache`` module (setforge-qo23
+    Patches target the ``claude_marketplace_cache`` module (after the
     split) — the cache helpers now own the ``shutil`` / ``subprocess``
     namespace attributes that previously sat on ``claude_plugins``.
     """
@@ -556,7 +556,7 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
 
 
 # ---------------------------------------------------------------------------
-# Host-local install-mode helpers (setforge-qo23)
+# Host-local install-mode helpers
 # ---------------------------------------------------------------------------
 
 

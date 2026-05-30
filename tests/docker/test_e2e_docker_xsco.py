@@ -1,4 +1,4 @@
-"""Docker e2e tests for host-local user-sections via local.yaml (setforge-xsco).
+"""Docker e2e tests for host-local user-sections via local.yaml.
 
 Exercises the full xsco surface end-to-end against a fresh Debian
 container with the actual installed ``setforge`` CLI:
@@ -366,7 +366,7 @@ def test_compare_shows_host_local_via_local_yaml_tag(
 ) -> None:
     """``setforge compare`` surfaces the ``+ [host-local via local.yaml] X``
     preview line for sections declared in local.yaml but not yet deployed
-    (setforge-xsco SPEC 1 mockup — overlay-aware compare).
+    (SPEC 1 mockup — overlay-aware compare).
 
     Exercises the compare CLI directly (not install --dry-run): the
     overlay is loaded + validated, ``compare_profile`` threads it into

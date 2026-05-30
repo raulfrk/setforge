@@ -1,4 +1,4 @@
-"""Unit tests for ``_home_relative`` (setforge-5twm round-2 polish).
+"""Unit tests for ``_home_relative`` (round-2 polish).
 
 Covers the three boundary cases that motivated the rewrite from
 ``str.replace`` to ``Path.relative_to``:

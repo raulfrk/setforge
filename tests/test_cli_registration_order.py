@@ -44,7 +44,7 @@ EXPECTED_SUBGROUPS: tuple[str, ...] = (
     "profile",
     "snapshot",
     "completion",
-    "config",  # setforge-7dav
+    "config",
 )
 
 

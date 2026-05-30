@@ -175,7 +175,7 @@ def merge(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(ctx, command="merge")
-    # setforge-xsco round-2: thread the local.yaml host_local_sections
+    # Round-2: thread the local.yaml host_local_sections
     # overlay so the merge wizard's drift display does NOT surface
     # already-injected host-local sections as DRIFTED (false-positive
     # against the live file that just received them via install).
@@ -292,7 +292,7 @@ def _run_capture_confirm_gate(
 
     No-op unless ``auto_enum`` is :attr:`CaptureAuto.USE_LIVE`. Compares
     live vs tracked with the host_local_sections overlay threaded
-    (setforge-xsco round-2 so injected host-local sections do not
+    (round-2 so injected host-local sections do not
     inflate the drift count), renders the auto-operation confirm panel,
     and exits 0 cleanly when the user declines.
     """
@@ -336,7 +336,7 @@ def _write_sync_transition(
     preceding ``TransitionCommand.PROMOTE`` record in
     :func:`transitions.load_latest`, so ``setforge revert`` after a
     sync-with-promote would reverse the no-op SYNC instead of the
-    promote (setforge-dg2a round-4 round-trip regression).
+    promote (round-4 round-trip regression).
     """
     if file_pre == file_post:
         return
@@ -508,7 +508,7 @@ def _run_capture(
     :func:`capture` and :func:`sync`. ``command`` names the caller so
     the Ctrl-C message reads "<command> cancelled".
 
-    Loads the local.yaml host_local_sections overlay (setforge-xsco) so
+    Loads the local.yaml host_local_sections overlay so
     capture-back filters out the names install would have injected from
     local.yaml. Without this, host-local marker pairs in the live file
     round-trip into tracked sources on the next sync.

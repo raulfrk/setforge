@@ -573,7 +573,7 @@ def test_install_with_use_tracked_records_transition(
 
 
 # ---------------------------------------------------------------------------
-# setforge-9ln — legacy live migration via install; compare/sync refuse
+# legacy live migration via install; compare/sync refuse
 # ---------------------------------------------------------------------------
 
 

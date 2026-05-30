@@ -1,6 +1,6 @@
 """Unit tests for the local.yaml plugin/extension/marketplace overlay resolvers.
 
-Spec: ``setforge-5z11`` / SPEC 2. Validates the semantics of
+Spec: SPEC 2. Validates the semantics of
 :func:`setforge.local_overlay.resolve_plugin_overlay`,
 :func:`setforge.local_overlay.resolve_extension_overlay`, and
 :func:`setforge.local_overlay.resolve_marketplace_overlay` — the
@@ -495,8 +495,7 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
     f-string or bare string-literal constructions at the call site.
     This complements the REMOVE parity test above and closes the
     loophole that let ``setforge/cli/profile.py:_tag_provenance`` build
-    the bare ADD tag inline (caught by Phase 5 review for bd
-    setforge-5z11).
+    the bare ADD tag inline (caught by Phase 5 review).
 
     Two legitimate definition sites are allow-listed:
 

@@ -1,4 +1,4 @@
-"""Host-local user-section injection for markdown tracked_files (setforge-xsco).
+"""Host-local user-section injection for markdown tracked_files.
 
 Resolves a :data:`setforge.source.Anchor` against rendered markdown text
 and splices a host-local user-section marker pair + body at the resolved
@@ -166,7 +166,7 @@ def _resolve_at_end_of_file(text: str, anchor: AnchorAtEndOfFile) -> int:
 
 def _find_after_section_offsets(text: str, name: str) -> list[int]:
     """Return every 0-indexed line offset immediately after a user-section
-    end marker whose key equals ``name`` (setforge-xsco).
+    end marker whose key equals ``name``.
 
     Routes through :func:`setforge.sections._walk_markers` so the scan
     inherits the strict parser's validation (nested sections,

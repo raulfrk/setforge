@@ -1,6 +1,6 @@
-"""Docker E2E tests for setforge-9by section reconcile wizard.
+"""Docker E2E tests for the section reconcile wizard.
 
-19 cases per the bd setforge-9by --notes:
+19 cases per the spec notes:
 
 Original behavior + flag matrix (1-10):
 - 1: --auto=use-tracked deploys shared drift + hash assertion.
@@ -399,8 +399,8 @@ def test_install_reconcile_with_no_drift_exits_silently(
     """12: --reconcile-user-sections + no drift exits 0 without hanging.
 
     Timeout=30s guard catches the failure-mode where the wizard tries to
-    prompt on a no-drift section. The 30s budget (raised from 10s per
-    bd setforge-hdlu) absorbs xdist daemon contention while still
+    prompt on a no-drift section. The 30s budget (raised from 10s)
+    absorbs xdist daemon contention while still
     catching a hung wizard, which would never complete.
     """
     c = docker_container()

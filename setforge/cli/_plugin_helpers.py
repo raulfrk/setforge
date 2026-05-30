@@ -71,7 +71,7 @@ class ReconcileAttempt:
     ``source`` is a human-tag describing where the item came from
     (``"from profile"`` or ``"from local.yaml"``); today we always set
     ``"from profile"`` since the per-source provenance split is
-    setforge-7dav scope. ``full_stderr`` carries the full captured
+    out of scope here. ``full_stderr`` carries the full captured
     subprocess trace for the DIAGNOSE branch of
     :func:`prompt_failure_action`.
     """

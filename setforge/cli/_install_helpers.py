@@ -120,7 +120,7 @@ def _load_validated_host_local_sections(
     profile on a different host). Non-markdown ``src`` with declared
     host-local sections raises :class:`ConfigError` via
     :func:`validate_host_local_sections_file_type` BEFORE any file is
-    written (setforge-xsco anti-smell item: install aborts cleanly).
+    written (anti-smell item: install aborts cleanly).
 
     Shared between :mod:`setforge.cli.install` and
     :mod:`setforge.cli.compare` so both surfaces validate identically
@@ -263,7 +263,7 @@ def _echo_host_local_sections_provenance(
     No-op when ``host_local_sections`` is ``None`` or empty. The
     provenance tag (see ``HOST_LOCAL_PROVENANCE_TAG`` in
     :mod:`setforge.host_local_inject`) matches the mockup in
-    setforge-xsco SPEC 1 so users grepping install output can locate
+    SPEC 1 so users grepping install output can locate
     every host-local injection at a glance.
     """
     if not host_local_sections:
@@ -318,16 +318,16 @@ def _write_install_transition(
     """Write the install transition record; return the target directory path.
 
     Two arguments carry schema-bump backward-compat history: ``source_dir``
-    (setforge-xra8 — when set and pointing at a git repo,
+    (when set and pointing at a git repo,
     :func:`transitions.make_meta` records HEAD's sha so ``setforge
     status`` can compute commits-since-last-install) and
-    ``reconcile_outcomes`` (setforge-k0uj — defaults to empty so
+    ``reconcile_outcomes`` (defaults to empty so
     pre-bump callers keep working; when non-empty, serialized to
     ``reconcile_outcomes.json`` alongside ``extensions.json`` /
     ``plugins.json`` so ``install --retry-failed`` can rebuild the
     skipped-ids set on the next invocation).
 
-    ``preserve_user_keys_applied`` is the setforge-8ohd schema-bump
+    ``preserve_user_keys_applied`` is the schema-bump
     kwarg; computed by :func:`_compute_preserve_user_keys_applied` at
     the install call site. ``command_line`` is captured from
     ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
@@ -609,7 +609,7 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# setforge-lnvq: dry-run pipeline.
+# Dry-run pipeline.
 #
 # ``_dry_run_pipeline`` is the orchestrator-level branch entered when
 # ``setforge install --dry-run`` is invoked. It reuses every read-only
@@ -791,7 +791,7 @@ def _dry_run_emit_deploys(
 def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     """Emit the ``=== would-be host-local section inject ===`` block.
 
-    Per setforge-xsco SPEC 1's mockup, each ``WOULD inject`` line carries
+    Per SPEC 1's mockup, each ``WOULD inject`` line carries
     a ``HOST_LOCAL_PROVENANCE_TAG`` so users can
     distinguish host-local injections from shared section reconcile
     operations (which produce their own WOULD lines via

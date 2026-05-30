@@ -81,7 +81,7 @@ class OverlayDelta:
 
     Mockup G calls out six welcome categories — the sixth is "applied
     local.yaml overlays". Today the host-overlay schema (spec B,
-    setforge-2by4 / preserve_user_keys overlay) is not yet implemented,
+    preserve_user_keys overlay) is not yet implemented,
     so every field on a fresh host is zero. The struct is kept distinct
     from :class:`WelcomeInventory` so the implementation of spec B can
     populate it without rewriting the inventory contract — only

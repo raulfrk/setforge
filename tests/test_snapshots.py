@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`setforge.snapshots` (setforge-of3a).
+"""Unit tests for :mod:`setforge.snapshots`.
 
 Covers atomic create (partial → final rename), mode preservation,
 symlink fidelity, setuid masking, additive-overlay restore,

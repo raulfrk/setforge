@@ -96,7 +96,7 @@ class MarkerError(SetforgeError):
 
 class AnchorNotFoundError(ConfigError):
     """Raised when a :data:`setforge.source.Anchor` does not match any
-    line in the tracked file at install time (setforge-xsco).
+    line in the tracked file at install time.
 
     Subclass of :class:`ConfigError` so the existing ``ConfigError``
     catch in the validate/install paths surfaces the message verbatim
@@ -106,7 +106,7 @@ class AnchorNotFoundError(ConfigError):
 
 class AnchorAmbiguousError(ConfigError):
     """Raised when an anchor matches more than one candidate line in the
-    tracked file (setforge-xsco).
+    tracked file.
 
     Duplicate ``## Profiles`` headings, two end markers carrying the
     same after-section name, etc. The message names every match's line

@@ -1,4 +1,4 @@
-"""Docker E2E tests for setforge-gtqv completion static-template fallback.
+"""Docker E2E tests for completion static-template fallback.
 
 Six named cases per SPEC 1:
 

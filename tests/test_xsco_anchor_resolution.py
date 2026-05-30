@@ -1,4 +1,4 @@
-"""Unit tests for setforge.host_local_inject.resolve_anchor (setforge-xsco).
+"""Unit tests for setforge.host_local_inject.resolve_anchor.
 
 Covers the 5 anchor kinds plus error paths (not found, ambiguous,
 fenced-code-block skipping, CRLF normalisation, after-section against
@@ -112,7 +112,7 @@ class TestAfterSectionAnchor:
     def test_strip_host_local_sections_drops_named_pairs(self) -> None:
         """``strip_host_local_sections`` removes named host-local pairs only.
 
-        Capture-back path (setforge-xsco): host-local sections injected
+        Capture-back path: host-local sections injected
         by `install` via local.yaml must be stripped from live before
         write-back to tracked. Pairs the user authored directly in
         tracked (not in the names set) must survive.

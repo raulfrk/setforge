@@ -1,6 +1,5 @@
 """Docker E2E tests for the host-local ``mode`` / ``dst`` /
-``symlink_target`` overlay on ``_LocalTrackedFileOverlay``
-(setforge-m3qx).
+``symlink_target`` overlay on ``_LocalTrackedFileOverlay``.
 
 Eight named scenarios per the user's per-CLI-flag-row coverage
 preference (``feedback_docker_e2e_coverage_preference`` memory): one

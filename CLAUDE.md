@@ -1,6 +1,6 @@
 # setforge
 
-Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `setforge.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the setforge-2ba.4 split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
+Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `setforge.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the engine/config split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
 
 ## The meta-twist: live vs tracked
 
@@ -44,7 +44,7 @@ A 100+ test end-to-end suite at `tests/docker/` exercises `install`/`sync`/`comp
 - **Runtime serial (`-n 0`):** ~15+ min.
 - **When to run:** required whenever Phase 7 fires (post-merge cross-cutting review). See `## Final checks (post-merge)` below.
 - **Prerequisite:** `docker` on PATH and `gitleaks` on PATH (or `--gitleaks-bin` override) for the secrets-scan e2e cases; the suite skips containers missing docker.
-- **Full-screen TUI tests (setforge-ffs0):** prompt_toolkit's `radiolist_dialog` / `input_dialog` panels emit cursor-positioning ANSI that pexpect's line matcher cannot anchor on. Use the `pyte_pty_session` fixture in `tests/docker/conftest.py` for those — it feeds the PTY byte stream into a `pyte.HistoryScreen` and exposes `.display: list[str]` for line-by-line asserts. See `tests/docker/pyte_session.py` for the API (anti-smell items: `docker exec -it` is required, arrow keys are `\x1b[A/B/C/D`, Enter is `\r`). The plain-stdout `docker_pty_session` (raw pexpect) still suits non-TUI interactives.
+- **Full-screen TUI tests:** prompt_toolkit's `radiolist_dialog` / `input_dialog` panels emit cursor-positioning ANSI that pexpect's line matcher cannot anchor on. Use the `pyte_pty_session` fixture in `tests/docker/conftest.py` for those — it feeds the PTY byte stream into a `pyte.HistoryScreen` and exposes `.display: list[str]` for line-by-line asserts. See `tests/docker/pyte_session.py` for the API (anti-smell items: `docker exec -it` is required, arrow keys are `\x1b[A/B/C/D`, Enter is `\r`). The plain-stdout `docker_pty_session` (raw pexpect) still suits non-TUI interactives.
 
 The suite is gated by `pytest -m e2e_docker` AND excluded from the default `pytest` run via `pyproject.toml`'s `addopts = "-m 'not e2e_docker'"`, so plain `uv run pytest` will not run it.
 
@@ -64,7 +64,7 @@ that unit tests cannot exercise.
 
 **Why `--no-cov` on the Docker e2e invocation:** pytest-cov's controller is
 selected at master `pytest_configure` time (before xdist worker setup). With
-`--cov` in default addopts (per setforge-fp0i) and the conftest auto-xdist
+`--cov` in default addopts and the conftest auto-xdist
 hook setting `numprocesses=2`, pytest-cov picks the `Central` controller and
 then crashes at `pytest_configure_node` when xdist tries to set up workers
 with `AttributeError: 'Central' object has no attribute 'configure_node'`.
@@ -119,8 +119,8 @@ After `wt merge`, the project's wt config (`.config/wt.toml`) runs
 post-merge hook runs in the TARGET branch worktree (typically main) —
 not the merging worktree, which `wt merge` removes by default. This
 keeps main's venv in sync when a merged branch adds a new dep (e.g.
-the setforge-rsw / nen.9 + pexpect class). Unrelated sibling worktrees
-still need manual `uv sync` recovery — see setforge-b6d for scope.
+the pexpect class). Unrelated sibling worktrees
+still need manual `uv sync` recovery.
 
 ## The four-tool stack
 

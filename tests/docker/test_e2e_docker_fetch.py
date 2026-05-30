@@ -1,4 +1,4 @@
-"""Docker e2e tests for ``setforge fetch`` (setforge-2ba.3 git-mgmt).
+"""Docker e2e tests for ``setforge fetch`` (git-mgmt).
 
 Uses a local bare-repo inside the container served via ``file://`` URL
 — no network access needed. Each test instantiates a fresh container

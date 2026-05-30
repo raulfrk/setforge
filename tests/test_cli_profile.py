@@ -187,19 +187,19 @@ def test_profile_show_unknown_name_exits_nonzero(tmp_path: Path) -> None:
 def test_profile_show_preserve_user_keys_lists_keys_no_overlay_diff_yet(
     tmp_path: Path,
 ) -> None:
-    """preserve_user_keys section lists per-file keys and cites bd setforge-lgvp.
+    """preserve_user_keys section lists per-file keys and a pending-overlay note.
 
     The overlay +N/-M diff is out of scope for this bead (per Q10);
-    the section is expected to print the bd-id citation line, NOT a
-    ``TODO`` comment.
+    the section is expected to print the pending-overlay note line, NOT
+    a ``TODO`` comment.
     """
     cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
     result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "has_preserve" in result.output
     assert "allowDangerouslySkipPermissions" in result.output
-    # bd id citation visible; no TODO scaffolding leak.
-    assert "bd setforge-lgvp" in result.output
+    # pending-overlay note visible; no TODO scaffolding leak.
+    assert "overlay surface not yet implemented" in result.output
     assert "TODO" not in result.output
 
 

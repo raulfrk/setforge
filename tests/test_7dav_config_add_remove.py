@@ -6,7 +6,7 @@ Covers:
 - ``--yes`` short-circuit (mutate-gate posture),
 - round-trip preservation (comments / key-order kept by ruamel.yaml rt).
 
-See setforge-7dav SPEC 4 acceptance for the enumerated cases.
+See the config SPEC 4 acceptance for the enumerated cases.
 """
 
 from __future__ import annotations

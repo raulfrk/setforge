@@ -1,4 +1,4 @@
-"""End-to-end tests for ``setforge status`` (mockup O / setforge-xra8).
+"""End-to-end tests for ``setforge status`` (mockup O).
 
 Drives the real CLI via Typer's :class:`CliRunner` against synthetic
 config repos and tmp ``SETFORGE_STATE_DIR``. Read-only command: every

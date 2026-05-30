@@ -1,8 +1,8 @@
-"""Sync-wizard ``[p]`` auto-promote: host-local section → shared (setforge-dg2a).
+"""Sync-wizard ``[p]`` auto-promote: host-local section → shared.
 
 When ``setforge sync``'s per-section drift prompt encounters a host-local
-section declared in ``~/.config/setforge/local.yaml`` ``host_local_sections``
-(setforge-xsco), the user can press ``[p]`` to promote the section to
+section declared in ``~/.config/setforge/local.yaml``
+``host_local_sections``, the user can press ``[p]`` to promote the section to
 ``shared``. The promote performs four atomic mutations:
 
 1. Drop the ``host_local_sections.<name>`` entry from ``local.yaml``.
@@ -227,7 +227,7 @@ def _bind_escape_to_abort(app: object) -> None:
 
     prompt_toolkit's :func:`radiolist_dialog` ships no ESC keybinding by
     default — exit is only via the OK / Cancel buttons. The spec
-    (setforge-dg2a) requires Escape to abort the confirm dialog cleanly,
+    requires Escape to abort the confirm dialog cleanly,
     so we layer a per-Application ``escape`` binding on top of the
     factory-returned :class:`prompt_toolkit.application.Application` that
     calls :meth:`Application.exit` with no result (which surfaces as

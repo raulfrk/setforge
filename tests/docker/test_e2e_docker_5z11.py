@@ -1,6 +1,6 @@
 """Docker E2E tests for the local.yaml plugin/extension/marketplace overlay.
 
-Spec: ``setforge-5z11`` / SPEC 2. Exercises mockup output end-to-end
+Spec: SPEC 2. Exercises mockup output end-to-end
 against a real Debian container with the actual installed ``setforge``
 CLI:
 

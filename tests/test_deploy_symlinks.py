@@ -1,4 +1,4 @@
-"""Tests for symlink-aware deploy (setforge-m483).
+"""Tests for symlink-aware deploy.
 
 Contract for :func:`setforge.deploy.deploy_symlinked_file`:
 

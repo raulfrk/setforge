@@ -1,4 +1,4 @@
-"""Docker fixtures for the E2E test ring (setforge-nen.9, setforge-ffs0).
+"""Docker fixtures for the E2E test ring.
 
 Four fixtures:
 
@@ -14,7 +14,7 @@ Four fixtures:
   exec -it`` with :class:`pexpect.spawn` for stdout-anchored interactive
   variants (sync wizard P/Q/R/S/S1). Yields the spawned session;
   finalizer kills it.
-- :func:`pyte_pty_session` (setforge-ffs0) — function-scoped factory
+- :func:`pyte_pty_session` — function-scoped factory
   that layers a :class:`pyte.HistoryScreen` over the pexpect PTY so
   prompt_toolkit's full-screen ``radiolist_dialog`` / ``input_dialog``
   panels can be anchored on the EMULATED screen (``.display`` lines)
@@ -128,7 +128,7 @@ def _parse_dockerignore(path: Path) -> tuple[set[str], set[str], set[str]]:
 # into the image (Dockerfile + sources copied in) or read by the e2e tests
 # from inside the image (the e2e config fixture) goes here. A change to
 # any of these flips the content hash, which flips the image tag, which
-# naturally invalidates the build cache — see setforge-0ci.
+# naturally invalidates the build cache.
 _HASH_INPUT_FILES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "docker" / "Dockerfile",
     REPO_ROOT / "pyproject.toml",
@@ -261,8 +261,7 @@ def docker_image() -> str:
     edit flips the hash, flips the tag, and naturally invalidates the
     local image cache. When the hashed tag already exists locally the
     rebuild is skipped (fast cache hit); when no image carries the
-    current hash we build. See setforge-0ci for the footgun this
-    replaces.
+    current hash we build.
 
     Concurrent pytest sessions on the same host can race the inspect/build
     step: both see returncode != 0 from ``docker image inspect``, both invoke
@@ -424,7 +423,7 @@ def docker_container(
             "-w",
             "/workspace",
         ]
-        # Suppress the setforge-7jg4 fresh-host welcome panel by default
+        # Suppress the fresh-host welcome panel by default
         # for the Docker e2e suite. The welcome's spec behavior raises
         # WelcomeRequiresInteractive on non-TTY + no --yes, which would
         # trip every existing install-touching test on the fresh

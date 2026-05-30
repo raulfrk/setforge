@@ -1,6 +1,6 @@
 """Unit tests for the local.yaml preserve_user_keys overlay resolver.
 
-Spec: ``setforge-lgvp`` / SPEC 8 (mockup B). Validates the semantics of
+Spec: SPEC 8 (mockup B). Validates the semantics of
 :func:`setforge.preserved_keys.resolve_overlay` — the contract that
 ``compare``/``install`` rely on to display provenance tags per
 mockup B's ``[from local.yaml]`` / ``[from profile X]`` /

@@ -7,7 +7,7 @@ fixtures (HOME isolation, LOCAL_CONFIG_PATH redirect) live in
 Worker count
 ============
 
-Capped at 2. The earlier ``-n 4`` cap (setforge-hpd4 first take, reverted
+Capped at 2. The earlier ``-n 4`` cap (first take, reverted
 in 6874cfe / 1bf1d18) saturated the Docker daemon AND the host VM under
 sustained parallel load — combined with a retry-on-Timeout helper that
 doubled exec load on transient hiccups, the host crashed mid-run.
@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import pytest
 
-# Cap rationale (per setforge-hpd4 + setforge-pfqe investigation, 2026-05-20):
+# Cap rationale (per investigation, 2026-05-20):
 # -n 2 is the empirically-validated stable equilibrium on this host (109 tests,
 # zero TimeoutExpired flakes, zero daemon crashes). The original hpd4 spec
 # target of < 6 min wall-time was aspirational, set pre-daemon-saturation;
@@ -127,7 +127,6 @@ def pytest_configure(config: pytest.Config) -> None:
     # honored: tests sharing a group label are routed to the same worker.
     # Under ``load``, ``xdist_group`` markers are silently ignored — the
     # ``docker_daemon`` sweep (six daemon-heavy tests) would not serialize.
-    # See setforge-hdlu review fix.
     if config.option.dist == "no":
         config.option.dist = "loadgroup"
     config.option.tx = ["popen"] * _XDIST_WORKER_CAP

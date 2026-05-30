@@ -366,7 +366,7 @@ def _format_drift_group(state: SectionDriftState, count: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# sync wizard `[p]` auto-promote (setforge-dg2a)
+# sync wizard `[p]` auto-promote
 # ---------------------------------------------------------------------------
 
 
@@ -394,8 +394,8 @@ class PromoteOutcome:
     ``action`` is one of ``KEEP_LIVE`` / ``PROMOTE`` / ``SKIP`` /
     ``QUIT_KEEP_REST``. Only ``PROMOTE`` carries side-effects (the
     three-file mutation). Callers use ``promoted_paths`` to extend the
-    snapshot path list for the surrounding transition (setforge-dg2a
-    anti-smell 6: ``LOCAL_CONFIG_PATH`` must be in the snapshot when
+    snapshot path list for the surrounding transition (anti-smell 6:
+    ``LOCAL_CONFIG_PATH`` must be in the snapshot when
     promote ran). ``file_pre`` / ``file_post`` are the
     :func:`transitions.snapshot_paths` records captured by the wizard
     around the executor call so the caller can write a

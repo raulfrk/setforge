@@ -510,7 +510,7 @@ def _verify_post_upgrade(*, expected: str) -> None:
 def _run_migrate_check_subprocess() -> None:
     """Best-effort ``uv run setforge migrate --check``; soft-fail when missing.
 
-    ``migrate`` is registered by a SIBLING bd issue (setforge-s5pq); when
+    ``migrate`` is registered by a sibling component; when
     it has not landed yet the subprocess exits non-zero with a "no such
     command" message. Soft-fail in that case — print a hint and return.
     """

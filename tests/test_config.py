@@ -377,7 +377,7 @@ def test_config_rejects_unknown_field_in_nested_tracked_file() -> None:
 
 
 # ---------------------------------------------------------------------------
-# preserve_user_keys_deep validators (setforge-nen.21)
+# preserve_user_keys_deep validators
 # ---------------------------------------------------------------------------
 
 
@@ -407,7 +407,7 @@ def test_tracked_file_rejects_list_suffix_in_preserve_user_keys_deep(path: str) 
 
 
 # ---------------------------------------------------------------------------
-# local.yaml tracked_files overlay schema (setforge-lgvp / SPEC 8)
+# local.yaml tracked_files overlay schema (SPEC 8)
 # ---------------------------------------------------------------------------
 
 

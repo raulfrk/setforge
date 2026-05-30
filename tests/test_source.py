@@ -371,14 +371,14 @@ class TestResolveSourceWithEnv:
 
 
 # ---------------------------------------------------------------------------
-# _LocalTrackedFileOverlay: host-local mode / dst / symlink_target (setforge-m3qx)
+# _LocalTrackedFileOverlay: host-local mode / dst / symlink_target
 # ---------------------------------------------------------------------------
 
 
 class TestLocalTrackedFileOverlayHostLocalOverrides:
     """Validator surface for the three host-local override fields.
 
-    Per SPEC 7 / setforge-m3qx: ``mode`` (chmod) + ``dst`` (retarget
+    Per SPEC 7: ``mode`` (chmod) + ``dst`` (retarget
     install path) + ``symlink_target`` (install as symlink) extend
     :class:`_LocalTrackedFileOverlay`. ``mode`` and ``symlink_target``
     are mutually exclusive (chmod-on-symlink follows the link). ``mode``
@@ -419,7 +419,7 @@ class TestLocalTrackedFileOverlayHostLocalOverrides:
 
     def test_old_shape_still_parses(self) -> None:
         """Overlay with no new fields parses (backward compat for hosts
-        that haven't adopted setforge-m3qx overrides)."""
+        that haven't adopted the host-local overrides)."""
         ovl = _LocalTrackedFileOverlay()
         assert ovl.mode is None
         assert ovl.dst is None

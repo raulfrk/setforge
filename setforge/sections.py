@@ -7,7 +7,7 @@ Marker syntax (HTML comments only)::
     <!-- setforge:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
 
 The ``host-local|shared`` keyword is REQUIRED on both start and end
-markers as of setforge-9by. ``host-local`` sections are preserved
+markers. ``host-local`` sections are preserved
 unconditionally from live on install; ``shared`` sections participate in
 a three-way merge that can surface tracked-side updates via the
 ``--reconcile-user-sections`` wizard. End markers carry a mandatory
@@ -82,7 +82,7 @@ _MARKER_PREFIX_RE = re.compile(
     r"^\s*<!--\s*setforge:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
 )
 
-# Pre-rename (setforge-2ba.1) namespace detector. Live files deployed
+# Pre-rename namespace detector. Live files deployed
 # before the my-setup → setforge rename carry markers like
 # ``<!-- my-setup:user-section start ... -->``; the post-rename parser
 # (_MARKER_PREFIX_RE above) doesn't recognize them, which would silently
@@ -370,7 +370,7 @@ def detect_legacy_namespace_markers(text: str) -> bool:
     ``my-setup:user-section`` marker.
 
     Detects markers carrying the OLD namespace from before the
-    my-setup → setforge rename (setforge-2ba.1). Such markers are
+    my-setup → setforge rename. Such markers are
     silently ignored by the post-rename parser; this detector lets
     the CLI surface a clear "run sed migration" error before any
     install/sync/compare run loses host-local section bodies.

@@ -92,7 +92,7 @@ def _check_profile(
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
-    # Check 1c (setforge-5z11): apply the local.yaml plugin / extension
+    # Check 1c: apply the local.yaml plugin / extension
     # / marketplace overlay so its collision / unknown-remove and
     # marketplace cross-ref errors surface at validate time too.
     # Mirrors Check 1b — the install path runs the same applier; the
@@ -120,7 +120,7 @@ def _apply_preserve_user_keys_check(
 ) -> None:
     """Apply the preserve_user_keys overlay and route errors to ``failures``.
 
-    Check 1b (setforge-lgvp + setforge-b1lg): apply the local.yaml
+    Check 1b: apply the local.yaml
     preserve_user_keys overlay so collision (add ∩ remove) and
     unknown-remove errors surface during ``setforge validate``.
     Without this, the errors only fire on ``install`` / ``compare``
@@ -208,7 +208,7 @@ def _apply_local_overlay_check(
       (e.g. plugin references a missing marketplace) → cross-ref ran;
       record and signal so the caller skips Check 6.
     - :class:`OSError` / :class:`UnicodeDecodeError`: unreadable
-      local.yaml (setforge-b1lg) → route through
+      local.yaml → route through
       :func:`format_yaml_parse_error`; cross-ref did NOT run, fall
       back to Check 6.
     """
@@ -234,7 +234,7 @@ def _apply_local_overlay_check(
         failures.append(f"{ctx}: {exc}")
         return True
     except (OSError, UnicodeDecodeError) as exc:
-        # Unreadable local.yaml (setforge-b1lg): route through the
+        # Unreadable local.yaml: route through the
         # YAML PARSE category formatter so the report-all-then-refuse
         # contract holds.
         failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
@@ -312,7 +312,7 @@ def _check_host_local_sections(
     No-op when local.yaml is absent or declares no host-local sections
     for tracked_files in this profile.
 
-    Catches mirror ``_check_profile``'s broadened set (setforge-b1lg):
+    Catches mirror ``_check_profile``'s broadened set:
     ValidationError gets routed through the mockup-D formatter so the
     suggestion / snippet / fix-hint UX surfaces; ConfigError stays a
     string failure (existing UX); OSError / UnicodeDecodeError ride
@@ -458,7 +458,7 @@ def _route_local_yaml_validation_error(
     """Route a ``ValidationError`` raised by the local.yaml overlay loader.
 
     Sibling of :func:`_route_setforge_yaml_validation_error` for the
-    local.yaml side (setforge-b1lg). Re-loads local.yaml with
+    local.yaml side. Re-loads local.yaml with
     ``YAML(typ="rt")`` so the resulting ``CommentedMap`` carries
     ``.lc`` line/column info for each error's ``loc`` path. Each
     Pydantic error becomes one :class:`ValidationErrorWithContext`
@@ -685,7 +685,7 @@ def _resolve_nested_local_error(
     err_type: object,
     msg: object,
 ) -> tuple[int, int, str, str | None]:
-    """Resolve a nested ``loc`` against nested ``.lc`` tables (setforge-b1lg).
+    """Resolve a nested ``loc`` against nested ``.lc`` tables.
 
     Walks down ``data`` following each step of ``loc[:-1]`` until the
     parent of the leaf is reached, then anchors line/col on the leaf
@@ -694,7 +694,7 @@ def _resolve_nested_local_error(
     missing — keeps the formatter from mis-pointing into an unrelated
     region of the file.
 
-    Sibling of :func:`_resolve_nested_setforge_error` (setforge-5twm)
+    Sibling of :func:`_resolve_nested_setforge_error`
     on the ``setforge.yaml`` side; the two stay separate because the
     candidate-list dispatch differs (per-overlay-class for local.yaml,
     per-Profile/TrackedFile shape for setforge.yaml).
@@ -722,7 +722,7 @@ def _candidate_list_for(loc: tuple[object, ...]) -> list[str]:
     """Return the close-match candidate list for the local.yaml error site.
 
     Dispatches on ``loc[0]`` to the right overlay-class model's
-    ``model_fields.keys()`` (setforge-b1lg). Introspection avoids the
+    ``model_fields.keys()``. Introspection avoids the
     hand-maintained-tuple anti-smell — adding a field to e.g.
     :class:`PluginOverlay` extends the suggestion surface automatically.
 
@@ -843,7 +843,7 @@ def _build_fix_hint(
     gets "unknown key", value-shape errors get the Pydantic message.
     The "remove or rename" phrasing is intentionally site-neutral so
     the same hint works for top-level keys AND nested overlay-class
-    keys (setforge-b1lg) without flagging a nested key as
+    keys without flagging a nested key as
     "top-level".
     """
     home_path = _home_relative(local_yaml_path)
@@ -867,7 +867,7 @@ def _route_setforge_yaml_validation_error(
     ``.lc`` line/column info for each error's ``loc`` path. Each
     Pydantic error becomes one ``ValidationErrorWithContext`` carrier
     appended to ``failures``; the caller renders them through the
-    existing :func:`_render_failures` mechanism (setforge-5twm).
+    existing :func:`_render_failures` mechanism.
 
     The candidate list for close-match suggestions is introspected from
     :attr:`setforge.config.Config.model_fields` (top-level keys) or the
@@ -1150,7 +1150,7 @@ def validate(
     failures: list[ValidationErrorWithContext | str] = []
 
     # Check 1: Pydantic schema validation + cross-field checks in load_config.
-    # ValidationError → tmln close-match UX (setforge-5twm); SetforgeError
+    # ValidationError → tmln close-match UX; SetforgeError
     # (cycle / missing-profile / file-not-found / etc.) keeps its existing
     # bail-on-first routing — these are cross-field violations that don't
     # have a useful "Did you mean" suggestion path.
@@ -1177,7 +1177,7 @@ def validate(
     for prof_name in profiles_to_check:
         _check_profile(cfg, prof_name, repo_root, failures)
 
-    # Check 7 (setforge-tmln): host-local local.yaml schema + parse errors
+    # Check 7: host-local local.yaml schema + parse errors
     # with mockup-D UX. Collect into the same failures list so the
     # report-all-then-refuse contract holds across all check categories.
     _check_local_yaml(_LOCAL_CONFIG_PATH, failures)

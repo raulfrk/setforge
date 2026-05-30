@@ -1,4 +1,4 @@
-"""Docker E2E coverage for the setforge-8ohd TransitionMeta schema bump.
+"""Docker E2E coverage for the TransitionMeta schema bump.
 
 7 named cases per SPEC 3:
 

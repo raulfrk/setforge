@@ -233,7 +233,7 @@ def diff_file(
     When ``host_local_sections`` is non-empty, the rendered ``src`` is
     augmented with the same host-local injection deploy would perform,
     so a live file that already received its host-local sections does
-    NOT show up as drift (setforge-xsco — compare overlay-aware path).
+    NOT show up as drift (compare overlay-aware path).
 
     Fast path: with ``preserve_user_sections=True`` AND no host-local
     sections to inject, if every section's sha256 matches between src
@@ -463,8 +463,8 @@ def compare_profile(
     shape for callers that don't have a transitions dir handy.
 
     ``host_local_sections`` is the validated local.yaml overlay shaped
-    ``{tracked_file_id: {section_name: HostLocalSection}}`` (setforge-xsco
-    SPEC 1). When provided, the per-tracked_file overlay is threaded
+    ``{tracked_file_id: {section_name: HostLocalSection}}`` (SPEC 1).
+    When provided, the per-tracked_file overlay is threaded
     into :func:`diff_file` so a live file that already received its
     host-local sections does NOT show up as drift, AND the post-merge
     rendered ``src`` mirrors what ``setforge install`` would actually
@@ -475,7 +475,7 @@ def compare_profile(
     the orphan-detection and status commands) pass ``None`` and get the
     pre-xsco behavior.
 
-    Overlay contract (SPEC 2 / setforge-5z11): this function re-resolves
+    Overlay contract (SPEC 2): this function re-resolves
     the profile via :func:`resolve_profile` and intentionally discards
     any :func:`apply_local_overlay` mutations to
     ``resolved.claude_plugins`` or ``resolved.extensions.include`` that
@@ -772,7 +772,7 @@ def render_preserve_user_keys_overlay_block(
 def render_host_local_tracked_file_overrides_block(
     overrides: "Mapping[str, HostLocalTrackedFileOverride]",
 ) -> list[str]:
-    """Build setforge-m3qx compare-output lines for host-local
+    """Build compare-output lines for host-local
     ``mode`` / ``dst`` / ``symlink_target`` overrides.
 
     Returns an empty list when ``overrides`` is empty — the block

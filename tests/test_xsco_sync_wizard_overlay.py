@@ -1,4 +1,4 @@
-"""Sync-wizard overlay regression tests (setforge-xsco round-2).
+"""Sync-wizard overlay regression tests (round-2).
 
 Regression coverage for the Round-2 IMPORTANT finding that
 ``setforge merge`` (the standalone wizard) and ``setforge sync

@@ -490,7 +490,7 @@ profiles:
 
 
 # ---------------------------------------------------------------------------
-# Test 13 / 14: preserve_user_keys overlay (setforge-lgvp).
+# Test 13 / 14: preserve_user_keys overlay.
 # Validate must surface the same collision / unknown-remove failures as
 # install / compare so misconfigured local.yaml is caught offline before
 # the user runs a deploy.

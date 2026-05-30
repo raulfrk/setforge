@@ -1,4 +1,4 @@
-"""Tests for nested-error tmln routing on setforge.yaml (setforge-5twm).
+"""Tests for nested-error tmln routing on setforge.yaml.
 
 Covers the nested ``loc`` paths emitted by Pydantic for
 ``extra_forbidden`` inside ``profiles.<name>`` and

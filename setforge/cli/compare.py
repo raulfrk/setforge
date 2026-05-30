@@ -83,14 +83,14 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
     # apply the overlay so the renderer can read preserve_user_keys_resolved
     # for the mockup-B provenance display.
     apply_preserve_user_keys_overlay(cfg, profile)
-    # Apply local.yaml host-local mode/dst/symlink_target overlay
-    # (setforge-m3qx). Captures the per-tracked_file override mapping
+    # Apply local.yaml host-local mode/dst/symlink_target overlay.
+    # Captures the per-tracked_file override mapping
     # so the renderer can emit ``[host-local mode=...]`` /
     # ``[host-local dst=...]`` / ``[host-local symlink → ...]``
     # provenance tags next to each affected entry.
     host_local_overrides = apply_host_local_tracked_file_overrides(cfg)
-    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2 /
-    # setforge-5z11). Mutates resolved and cfg in place; the resolved
+    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2).
+    # Mutates resolved and cfg in place; the resolved
     # provenance lists drive the host-overlay block printed below the
     # drift report (cf. render_local_overlay_block in setforge.compare).
     overlay_resolution = apply_local_overlay(cfg, resolved, profile)
@@ -98,7 +98,7 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(profile_ctx, command="compare")
-    # setforge-xsco: load + validate the local.yaml host_local_sections
+    # Load + validate the local.yaml host_local_sections
     # overlay so ``compare_profile`` threads it into ``diff_file`` —
     # a live file that already received its host-local sections must
     # not surface as drift. Same validator install uses (anchors
@@ -127,7 +127,7 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
             # (e.g. ``[from local.yaml]``) which Rich would otherwise
             # interpret as markup spans and silently strip.
             console.print(line, markup=False)
-        # setforge-m3qx: render host-local mode/dst/symlink_target
+        # Render host-local mode/dst/symlink_target
         # override provenance tags. Same markup=False discipline as
         # the preserve_user_keys block — the tags carry square brackets.
         for line in compare_mod.render_host_local_tracked_file_overrides_block(
@@ -143,7 +143,7 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
         for line in compare_mod.render_local_overlay_block(cfg, overlay_resolution):
             console.print(line, markup=False, soft_wrap=True)
         _render_compare_report(report, console, full_diff=full_diff)
-        # setforge-xsco SPEC 1 mockup: surface every host-local section
+        # SPEC 1 mockup: surface every host-local section
         # the install would inject, tagged with the canonical provenance
         # marker (HOST_LOCAL_PROVENANCE_TAG). Lives BELOW the drift
         # summary so the diff body and per-status counts stay grouped,
@@ -243,7 +243,7 @@ def _render_host_local_preview(
     cfg: Config,
     console: Console,
 ) -> None:
-    """Emit the setforge-xsco SPEC 1 host-local would-be-injected preview block.
+    """Emit the SPEC 1 host-local would-be-injected preview block.
 
     Per the mockup: ``+ <HOST_LOCAL_PROVENANCE_TAG> X ← would be injected``.
     One indented block per tracked_file with at least one host-local

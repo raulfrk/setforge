@@ -443,7 +443,7 @@ def test_completion_install_unknown_shell_exits_2(home: Path) -> None:
 
 
 # Note: subprocess returncode != 0 / empty stdout no longer raise SetforgeError —
-# they fall back to the vendored template per setforge-gtqv. Coverage for the
+# they fall back to the vendored template. Coverage for the
 # fallback path lives in tests/test_completion_fallback.py.
 
 

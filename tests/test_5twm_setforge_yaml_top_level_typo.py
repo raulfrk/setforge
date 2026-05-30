@@ -1,6 +1,6 @@
-"""Top-level typo tmln routing for ``setforge validate`` (setforge-5twm).
+"""Top-level typo tmln routing for ``setforge validate``.
 
-Mirrors the local.yaml tmln close-match UX (setforge-tmln) but exercises
+Mirrors the local.yaml tmln close-match UX but exercises
 the engine-config side: a typo'd top-level key in setforge.yaml routes
 through ``format_schema_validation_error`` + ``suggest_close_match``
 against ``Config.model_fields.keys()`` instead of bailing on first error

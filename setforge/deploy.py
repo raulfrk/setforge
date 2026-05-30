@@ -272,7 +272,7 @@ def _compute_content(
         # (so anchors resolve against post-merge content with live bodies)
         # but BEFORE maintain_marker_hashes (so the new pairs' end markers
         # are stamped with the canonical hash). Outside this window breaks
-        # the post-install hash invariant per setforge-xsco anti-smell #7.
+        # the post-install hash invariant per anti-smell #7.
         if host_local_sections:
             content = host_local_inject.inject_all(content, host_local_sections)
         # Post-merge: rewrite every end-marker hash to match the body
@@ -393,7 +393,7 @@ def deploy_symlinked_file(
 
     if dst.exists() and not dst.is_symlink():
         # Distinguish directory-at-dst from regular-file-at-dst so the
-        # m3qx symlink_target overlay (setforge-m3qx) surfaces the
+        # m3qx symlink_target overlay surfaces the
         # "directory in the way" case with a targeted message — silently
         # clobbering or recursing into a real directory layout is
         # almost certainly a config mistake.

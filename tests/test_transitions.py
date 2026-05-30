@@ -87,7 +87,7 @@ def test_transition_dirname_zero_microseconds_zero_padded() -> None:
 def test_two_writes_in_same_second_produce_distinct_dirnames() -> None:
     """Two timestamps in the same wall-clock second but different microseconds
     must produce distinct dirnames — this is the collision the format change
-    eliminates (setforge-nen.16)."""
+    eliminates."""
     a = datetime(2026, 5, 8, 12, 7, 30, 1, tzinfo=UTC)
     b = datetime(2026, 5, 8, 12, 7, 30, 2, tzinfo=UTC)
     assert transition_dirname(a, "install", "vmh") != transition_dirname(
@@ -255,7 +255,8 @@ def test_to_dict_includes_source_sha_when_set() -> None:
 def test_load_meta_old_record_without_source_sha_round_trips_to_none(
     tmp_path: Path,
 ) -> None:
-    """meta.json written before setforge-xra8 must deserialize cleanly."""
+    """meta.json written before the last-install line landed must
+    deserialize cleanly."""
     target = TransitionDir(tmp_path / "20260507T120000000000Z-install-vmh")
     target.mkdir()
     # Hand-craft a pre-xra8 payload — no ``source_sha`` key.
@@ -577,7 +578,7 @@ def test_load_latest_filters_by_command(
 ) -> None:
     """``command=`` kwarg restricts candidates to that TransitionCommand value.
 
-    Regression for the setforge-xra8 last-install line: when a SYNC or
+    Regression for the last-install line: when a SYNC or
     REVERT lands AFTER an INSTALL, ``load_latest(profile)`` returns the
     sync/revert dir (the unconditional "latest"). Status's
     "last install:" row needs the latest INSTALL specifically — passing
@@ -850,8 +851,8 @@ def test_list_transitions_skips_corrupted_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Half-written or unreadable dirs are silently skipped — graceful
-    degradation matters here because partial writes are real (issue
-    setforge-nen.16/.17 track atomic writes)."""
+    degradation matters here because partial writes are real (atomic
+    writes are tracked separately)."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     root = tmp_path / "transitions"
     root.mkdir()
@@ -1004,7 +1005,7 @@ def test_transition_listing_dataclass_is_frozen() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic write (setforge-nen.17) — staging dir + os.rename commit marker
+# Atomic write — staging dir + os.rename commit marker
 # ---------------------------------------------------------------------------
 
 
@@ -1290,7 +1291,7 @@ def test_extension_delta_from_json_accepts_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-k0uj — ReconcileOutcome serialization + backward-compat
+# ReconcileOutcome serialization + backward-compat
 # ---------------------------------------------------------------------------
 
 
@@ -1341,14 +1342,15 @@ def test_load_reconcile_outcomes_missing_file_returns_empty_tuple(
     tmp_path: Path,
 ) -> None:
     """Backward-compat: a transition dir without ``reconcile_outcomes.json``
-    (every install pre-setforge-k0uj) decodes to ``()`` — not an exception.
+    (every install before reconcile_outcomes existed) decodes to ``()`` —
+    not an exception.
 
     This is the load-side anchor for the design's backward-compat
     guarantee. ``install --retry-failed`` against an old transition
     must observe an empty set of skipped ids, not crash."""
     from setforge.transitions import load_reconcile_outcomes
 
-    # No reconcile_outcomes.json on disk — simulates a pre-setforge-k0uj
+    # No reconcile_outcomes.json on disk — simulates a legacy
     # transition record.
     assert load_reconcile_outcomes(TransitionDir(tmp_path)) == ()
 
@@ -1356,9 +1358,9 @@ def test_load_reconcile_outcomes_missing_file_returns_empty_tuple(
 def test_write_transition_backward_compat_without_reconcile_outcomes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The setforge-k0uj backward-compat invariant: calling
+    """The backward-compat invariant: calling
     :func:`write_transition` WITHOUT the ``reconcile_outcomes`` kwarg
-    (every callsite pre-setforge-k0uj) must NOT write the file, and
+    (every legacy callsite) must NOT write the file, and
     :func:`load_reconcile_outcomes` on the result returns ``()``."""
     from setforge.transitions import load_reconcile_outcomes
 

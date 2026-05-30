@@ -229,7 +229,7 @@ def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
         if detect_legacy_namespace_markers(live_text):
             raise SetforgeError(
                 f"{sub_dst}: legacy 'my-setup:user-section' marker namespace "
-                f"detected (pre-rename from setforge-2ba.1). The post-rename "
+                f"detected (pre-rename). The post-rename "
                 f"parser does not recognize these markers, so 'setforge "
                 f"{command}' would silently drop host-local section bodies. "
                 f"Migrate the file in place with:\n"

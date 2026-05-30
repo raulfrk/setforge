@@ -18,7 +18,7 @@ Discovery walks four precedence layers, first non-empty wins entirely
 4. Fallback — CWD if it contains ``setforge.yaml``.
 
 Multi-source / stacked sources are explicitly OUT OF SCOPE per the
-parent spec (setforge-2ba). The Pydantic schema's ``source:`` key is
+parent spec. The Pydantic schema's ``source:`` key is
 singular; a list-shaped value raises a :class:`pydantic.ValidationError`
 at load time.
 """
@@ -141,7 +141,7 @@ class PreserveUserKeysOverlay(BaseModel):
 
 
 class AnchorKind(StrEnum):
-    """Closed set of anchor-kind discriminator values (setforge-xsco).
+    """Closed set of anchor-kind discriminator values.
 
     Five anchor shapes for splicing a :class:`HostLocalSection` into a
     markdown tracked file at install time. ``after-heading`` /
@@ -159,7 +159,7 @@ class AnchorKind(StrEnum):
 
 
 HostLocalSectionName = NewType("HostLocalSectionName", str)
-"""Provenance-marked name of a host-local user-section (setforge-xsco).
+"""Provenance-marked name of a host-local user-section.
 
 A ``HostLocalSectionName`` MUST originate from a key in the local.yaml
 ``host_local_sections:`` block. Constructed at parse time by
@@ -228,7 +228,7 @@ Anchor = Annotated[
 
 
 class HostLocalSection(BaseModel):
-    """One host-local user-section overlay (setforge-xsco).
+    """One host-local user-section overlay.
 
     Carries an :data:`Anchor` (where to splice the section) and exactly
     one of ``body`` (inline string) or ``body_file`` (path to a file
@@ -276,9 +276,9 @@ class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
     Carries a nested ``preserve_user_keys`` overlay (SPEC 8), a
-    ``host_local_sections`` mapping (setforge-xsco) keyed by section
-    name, and three host-local install-time overrides
-    (setforge-m3qx): ``mode`` (chmod), ``dst`` (retarget install
+    ``host_local_sections`` mapping keyed by section
+    name, and three host-local install-time overrides:
+    ``mode`` (chmod), ``dst`` (retarget install
     path), and ``symlink_target`` (deploy as a symlink). See each
     field's docstring for the use case and validation semantics.
     """
@@ -461,7 +461,7 @@ class _LocalTrackedFileOverlay(BaseModel):
 
 
 class PluginOverlay(BaseModel):
-    """Per-host plugin add/remove overlay block (setforge-5z11 / SPEC 2).
+    """Per-host plugin add/remove overlay block (SPEC 2).
 
     Lives under ``local.yaml``'s top-level ``plugins:`` key. Both lists
     default to empty so a partial overlay (only ``add`` or only ``remove``)
@@ -480,7 +480,7 @@ class PluginOverlay(BaseModel):
 
 
 class ExtensionOverlay(BaseModel):
-    """Per-host VSCode-extension add/remove overlay block (setforge-5z11).
+    """Per-host VSCode-extension add/remove overlay block.
 
     Mirrors :class:`PluginOverlay` (both lists default empty, ``_STRICT``).
     Adds land in :attr:`setforge.config.Extensions.include`; removes drop
@@ -495,7 +495,7 @@ class ExtensionOverlay(BaseModel):
 
 
 class _MarketplaceLocalDecl(BaseModel):
-    """One local-overlay marketplace declaration (setforge-5z11).
+    """One local-overlay marketplace declaration.
 
     Mirrors :class:`setforge.config.MarketplaceSource`'s shape and the
     ``_exactly_one`` validator at ``config.py:393`` — kept as a separate
@@ -518,7 +518,7 @@ class _MarketplaceLocalDecl(BaseModel):
 
 
 class MarketplaceOverlay(BaseModel):
-    """Per-host marketplace add/remove overlay block (setforge-5z11).
+    """Per-host marketplace add/remove overlay block.
 
     ``add`` is keyed by marketplace name — same shape as the top-level
     :attr:`setforge.config.Config.marketplaces` mapping. ``remove`` is a
@@ -540,7 +540,7 @@ class _LocalSourceConfig(BaseModel):
     parse the file independently without coupling. Carries the
     ``tracked_files:`` overlay block (per-tracked_file host-local knobs
     from SPEC 8) plus the per-host plugin/extension/marketplace overlay
-    blocks (SPEC 2 / setforge-5z11) so the loader can apply the overlays
+    blocks (SPEC 2) so the loader can apply the overlays
     at profile-resolution time via :mod:`setforge.preserved_keys` and
     :mod:`setforge.local_overlay`.
     """
@@ -567,7 +567,7 @@ class _LocalSourceConfig(BaseModel):
             raise ValueError(
                 "`source:` must be a single mapping (path-kind or git-kind), "
                 "not a list. Multi-source / stacked sources is out of scope "
-                "for setforge; see parent bead setforge-2ba."
+                "for setforge."
             )
         return data
 
@@ -623,7 +623,7 @@ def validate_host_local_sections_file_type(
     section_count: int,
     src: Path,
 ) -> None:
-    """Raise :class:`ConfigError` if ``src`` is not markdown (setforge-xsco).
+    """Raise :class:`ConfigError` if ``src`` is not markdown.
 
     ``host_local_sections`` is REJECTED for non-markdown tracked_files
     (.md / .markdown). Anchor grammar (after-heading / before-heading /
@@ -652,7 +652,7 @@ def validate_host_local_sections_file_type(
 def load_local_host_local_sections(
     path: Path = LOCAL_CONFIG_PATH,
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
-    """Return ``{tracked_file_id: {section_name: HostLocalSection}}`` (setforge-xsco).
+    """Return ``{tracked_file_id: {section_name: HostLocalSection}}``.
 
     Mirrors :func:`load_local_tracked_file_overlays` shape but projects
     each :class:`_LocalTrackedFileOverlay` to its ``host_local_sections``
@@ -780,7 +780,7 @@ def validate_source_dir(source: Source) -> Path:
     if config_path.exists():
         return config_path
     # Friendly migration error for the my_setup.yaml -> setforge.yaml
-    # rename (setforge-2ba.1). Mirrors the legacy-namespace detector
+    # rename. Mirrors the legacy-namespace detector
     # pattern in setforge.sections.detect_legacy_namespace_markers.
     legacy_path = source_dir / _LEGACY_CONFIG_FILENAME
     if legacy_path.exists():

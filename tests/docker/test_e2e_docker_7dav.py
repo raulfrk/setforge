@@ -1,7 +1,7 @@
-"""Docker e2e tests for ``setforge config`` (setforge-7dav).
+"""Docker e2e tests for ``setforge config``.
 
 The PTY half of this file consumes the ``pyte_pty_session`` factory
-fixture from setforge-ffs0 (now merged on main). The factory takes
+fixture (now merged on main). The factory takes
 ``container=`` + ``cmd=`` and returns a :class:`PyteSession` whose
 key verbs are :meth:`send_keys`, :meth:`expect_in_display`, and
 :meth:`wait_for_exit`.

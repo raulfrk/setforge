@@ -24,7 +24,7 @@ The harness layers on top of pexpect:
    ANSI escape sequences (``\\x1b[A`` arrow up, ``\\r`` Enter, etc.)
    pass through unchanged.
 
-Anti-smell items the docstring explicitly bakes in (per spec setforge-ffs0):
+Anti-smell items the docstring explicitly bakes in:
 
 - ``docker exec -it`` (with ``-it``) is REQUIRED — without ``-t``,
   prompt_toolkit fast-paths to a non-TTY renderer that emits plain text

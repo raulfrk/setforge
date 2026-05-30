@@ -11,8 +11,8 @@ Read-only: no live mutation, no subprocess, no network.
 :class:`SetforgeError` propagates to ``main()`` for ``exit 1``.
 
 ``local.yaml`` overlay surfaces (plugin / marketplaces / extensions
-overrides, host_local_sections, preserve_user_keys overlay diff) land
-with bd setforge-lgvp; until then the affected blocks print
+overrides, host_local_sections, preserve_user_keys overlay diff) are
+not yet implemented; until then the affected blocks print
 :data:`_OVERLAY_PENDING_NOTE` instead of forging false provenance.
 """
 
@@ -39,9 +39,8 @@ from setforge.config import (
 from setforge.errors import SetforgeError
 
 # Provenance placeholder for surfaces whose overlay machinery has not
-# shipped yet. Cited bd id is the contract; do NOT replace with a TODO
-# comment.
-_OVERLAY_PENDING_NOTE: str = "(overlay surface lands when bd setforge-lgvp ships)"
+# shipped yet.
+_OVERLAY_PENDING_NOTE: str = "(overlay surface not yet implemented)"
 
 
 def _build_console() -> Console:
@@ -360,8 +359,8 @@ def _render_marketplaces(ctx: ProfileContext, console: Console) -> None:
     every profile in the file sees the same registry. Provenance per
     entry is therefore the config file itself; the rendering shows the
     count and lists the (name, source-kind) pairs without per-entry
-    profile tags. ``local.yaml`` marketplace overrides land via bd
-    setforge-lgvp.
+    profile tags. ``local.yaml`` marketplace overrides are not yet
+    implemented.
     """
     items = ctx.cfg.marketplaces
     console.print(f"marketplaces ({len(items)} effective):")
@@ -384,11 +383,11 @@ def _render_host_local_sections(ctx: ProfileContext, console: Console) -> None:
 
     The ``host_local_sections:`` block in ``~/.config/setforge/local.yaml``
     is sketched as a commented stub in :mod:`setforge.binaries` but has
-    no loader yet; the data shape lands with bd setforge-lgvp. Until
+    no loader yet; the data shape is not yet implemented. Until
     then this renderer prints the section title with the pending-overlay
     note so the user knows the surface is acknowledged but empty.
     """
-    del ctx  # No data to read until bd setforge-lgvp ships the loader.
+    del ctx  # No data to read until the loader is implemented.
     console.print("host_local_sections (0 effective):")
     console.print(f"  {_OVERLAY_PENDING_NOTE}")
 
@@ -471,8 +470,8 @@ def _render_preserve_user_keys(ctx: ProfileContext, console: Console) -> None:
     declares a non-empty ``preserve_user_keys`` (or
     ``preserve_user_keys_deep``) list, and prints one block per file
     with the key paths inline. The ``local.yaml`` overlay diff for these
-    keys is out of scope for this bead; the bd setforge-lgvp citation
-    line communicates that to the reader.
+    keys is out of scope here; the pending-overlay note
+    communicates that to the reader.
     """
     rows: list[tuple[str, list[str]]] = []
     for tf_name in ctx.resolved.tracked_files:

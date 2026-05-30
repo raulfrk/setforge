@@ -179,13 +179,12 @@ def _register_plugin_in_yaml(
 def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
     """Run ``claude plugin install`` then ``claude plugin enable``.
 
-    Per setforge-l37: ``claude plugin install`` writes
+    ``claude plugin install`` writes
     ``installed_plugins.json`` without flipping ``enabledPlugins`` — without
     the second call the plugin lands disabled. Strict failure on enable
     matches the interactive single-plugin shape of ``plugin add``: a silent
     warning would be a footgun. The install half retains today's pattern;
-    latent subprocess-error handling on install is tracked separately as
-    setforge-oyv.
+    latent subprocess-error handling on install is tracked separately.
     """
     pid = f"{plugin_name}@{mp_name}"
     try:

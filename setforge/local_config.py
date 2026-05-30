@@ -50,7 +50,7 @@ class LocalConfig(BaseModel):
     # :func:`apply_preserve_user_keys_overlay`; this layer only asserts
     # the key is allowed at the top level.
     tracked_files: dict[str, object] = Field(default_factory=dict)
-    # SPEC 2 (setforge-5z11) per-host plugin / extension / marketplace
+    # SPEC 2 per-host plugin / extension / marketplace
     # overlay blocks. Free-form mapping shapes at this layer; the
     # strict per-block schemas (PluginOverlay / ExtensionOverlay /
     # MarketplaceOverlay) live in :mod:`setforge.source` and are

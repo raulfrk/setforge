@@ -10,7 +10,7 @@ Exercises the wizard end-to-end against a fresh Debian 12 container:
    ``radiolist_dialog`` (default=No).
 
 The :func:`tests.docker.conftest.pyte_pty_session` fixture
-(setforge-ffs0) captures the emulated screen so we can assert on the
+captures the emulated screen so we can assert on the
 rendered prompt, the confirm panel, the secrets-scan row, the RISKS
 block, and the post-promote file mutations.
 

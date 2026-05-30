@@ -1,6 +1,6 @@
 """status subcommand — one-shot situational awareness for a profile.
 
-Renders five sections per the setforge-xra8 mockup (section O):
+Renders five sections per the mockup (section O):
 
 1. config-repo — HEAD short-sha, commits since last install, commits vs ``origin/main``.
 2. last install — age and transition id of the most recent install transition.

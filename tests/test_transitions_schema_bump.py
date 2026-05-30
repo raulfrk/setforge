@@ -1,4 +1,4 @@
-"""Tests for the setforge-8ohd TransitionMeta schema bump.
+"""Tests for the TransitionMeta schema bump.
 
 Covers three forward-compat invariants:
 
@@ -49,7 +49,7 @@ def test_load_meta_backward_compat_old_record() -> None:
     assert meta.host == "test-host.example"
     assert meta.version == "0.1.42"
     assert meta.source_sha == "abc123def456789abcdef0123456789abcdef012"
-    # The setforge-8ohd schema-bump fields default to None when absent:
+    # The schema-bump fields default to None when absent:
     assert meta.end_timestamp is None
     assert meta.command_line is None
     assert meta.preserve_user_keys_applied is None

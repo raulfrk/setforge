@@ -321,8 +321,8 @@ def ensure_local_config_stub() -> None:
     ``write_text(...)`` — two parallel processes that ran the
     ``exists()`` check between each other's writes would both proceed
     to the write, racing on the file content. Under
-    ``pytest -n auto`` this surfaced as the unit-suite-race symptom
-    behind setforge-hpd4. The atomic ``open("x")`` mode raises
+    ``pytest -n auto`` this surfaced as a unit-suite-race symptom.
+    The atomic ``open("x")`` mode raises
     ``FileExistsError`` for any other process that won the race; we
     swallow it (the file's existence is the invariant, not which
     process wrote it).

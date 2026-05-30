@@ -1,6 +1,6 @@
-"""Docker E2E tests for setforge-bviv --auto* confirmation wizard.
+"""Docker E2E tests for the --auto* confirmation wizard.
 
-Coverage matrix per spec setforge-bviv:
+Coverage matrix:
 
 install --auto=use-tracked (section reconcile):
   - with-yes / pty-yes / pty-no / non-tty-no-yes-exit-1
@@ -139,7 +139,7 @@ def test_install_auto_use_tracked_pty_confirm_yes(
     """PTY confirm-yes: select Yes, Tab to OK, Enter applies the mutation.
 
     Drives prompt_toolkit's full-screen radiolist via the pyte harness
-    (setforge-ffs0): anchors on the dialog title + prompt text + the
+    anchors on the dialog title + prompt text + the
     default-no marker rendered in the emulated screen, sends arrow-down
     to select ``Yes``, then Tab to move focus to the ``Ok`` button, then
     Enter to submit (radiolist's own Enter handler only updates the
@@ -193,7 +193,7 @@ def test_install_auto_use_tracked_pty_confirm_no(
 ) -> None:
     """PTY confirm-no: Tab to OK + Enter accepts the default-No, aborts cleanly.
 
-    Drives the same radiolist via the pyte harness (setforge-ffs0):
+    Drives the same radiolist via the pyte harness:
     leaves the radio on its default ``No`` selection (default=False per
     ``confirm_auto_operation``), Tabs from the radiolist to the ``Ok``
     button, then Enter submits — the dialog returns False, which

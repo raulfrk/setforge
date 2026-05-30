@@ -178,7 +178,7 @@ def install(
     # preserve_user_keys derived view stays back-compat for callers
     # that don't read provenance.
     apply_preserve_user_keys_overlay(cfg, profile)
-    # Apply local.yaml host-local mode/dst/symlink_target overlay (setforge-m3qx)
+    # Apply local.yaml host-local mode/dst/symlink_target overlay
     # — also AFTER profile resolution. Rebuilds each TrackedFile with the
     # m3qx overrides applied so downstream resolve_dst / deploy /
     # deploy_symlinked_file consume the override transparently.
@@ -190,8 +190,8 @@ def install(
     host_local_sections_map = _load_validated_host_local_sections(
         cfg, resolved, repo_root
     )
-    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2 /
-    # setforge-5z11) — also AFTER profile resolution. Mutates resolved
+    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
+    # — also AFTER profile resolution. Mutates resolved
     # and cfg in place so the existing reconcile path consumes the
     # merged sets transparently. Raises LocalOverlayError (a
     # ConfigError) on collision / unknown-remove, surfaced via the
@@ -202,7 +202,7 @@ def install(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
 
-    # setforge-7jg4: fresh-host welcome gate. Fires BEFORE every other
+    # Fresh-host welcome gate. Fires BEFORE every other
     # phase (git-check, dry-run dispatch, state-dir probe, bootstrap,
     # deploy) so a brand-new host can preview what the install will do
     # and consent before any mutation OR diagnostic that depends on a
@@ -227,7 +227,7 @@ def install(
         if welcome_choice is not WelcomeChoice.PROCEED:
             return
 
-    # Pre-deploy git-status check (setforge-g40x). Fires BEFORE the drift
+    # Pre-deploy git-status check. Fires BEFORE the drift
     # gate so a dirty / stale source is surfaced before any other slow
     # work (compare, secrets-scan, deploy). When the source-layer is
     # configured (--source / SETFORGE_SOURCE / local.yaml), use it so a
@@ -240,7 +240,7 @@ def install(
         no_git_check=no_git_check,
     )
 
-    # setforge-lnvq: boundary-not-leaf dispatch. When `--dry-run` is set,
+    # Boundary-not-leaf dispatch. When `--dry-run` is set,
     # route through `_dry_run_pipeline` which calls only the read-only
     # shared helpers (compare_profile, _extract_live_sections_map,
     # _resolve_section_decisions, vscode_extensions.reconcile(dry_run=True),
@@ -402,7 +402,7 @@ def _collect_retry_failed_ids(profile: str) -> frozenset[str]:
 
     Returns an empty :class:`frozenset` when there's no prior transition
     or the previous transition has no ``reconcile_outcomes.json`` file
-    (backward-compat path for transitions written before setforge-k0uj).
+    (backward-compat path for transitions written before the schema bump).
     Used by ``setforge install --retry-failed`` to filter the reconcile
     work list to only those previously-failed ids.
     """

@@ -1,4 +1,4 @@
-"""Docker E2E tests for ``setforge install --dry-run`` (setforge-lnvq).
+"""Docker E2E tests for ``setforge install --dry-run``.
 
 Thirteen named cases per SPEC 4. The single highest-value gate is
 :func:`test_dry_run_zero_filesystem_diff` — a fresh container's full

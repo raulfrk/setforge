@@ -1,4 +1,4 @@
-"""Tests for ``setforge validate`` local.yaml error UX (setforge-tmln).
+"""Tests for ``setforge validate`` local.yaml error UX.
 
 Covers three layers per SPEC 9 / mockup D:
 

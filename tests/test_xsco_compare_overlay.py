@@ -1,4 +1,4 @@
-"""Compare-overlay unit tests for host-local injection (setforge-xsco).
+"""Compare-overlay unit tests for host-local injection.
 
 Asserts that :func:`setforge.compare.diff_file` masks injected host-local
 sections so an already-deployed live file does NOT report drift on the

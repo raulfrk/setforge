@@ -1,7 +1,7 @@
 # setforge global preferences (pre-9by fixture)
 
 This fixture mimics a real `~/.claude/CLAUDE.md` from before the
-setforge-9by parser tightening: every user-section marker is missing
+parser tightening: every user-section marker is missing
 the `host-local`/`shared` semantics keyword, and every end marker is
 missing the `hash=<sha256>` segment. The strict parser must refuse to
 read this; the `allow_legacy=True` migration mode must accept it.

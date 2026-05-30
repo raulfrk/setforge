@@ -696,7 +696,7 @@ def apply_host_local_tracked_file_overrides(
     local_config_path: Path | None = None,
 ) -> dict[str, HostLocalTrackedFileOverride]:
     """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target``
-    overlay (setforge-m3qx).
+    overlay.
 
     For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
     block that declares one of the three m3qx fields, rebuild the

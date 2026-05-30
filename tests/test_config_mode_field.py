@@ -1,4 +1,4 @@
-"""Tests for the ``TrackedFile.mode`` Pydantic field (setforge-8z91).
+"""Tests for the ``TrackedFile.mode`` Pydantic field.
 
 The validator must:
 

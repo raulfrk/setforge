@@ -9,7 +9,7 @@ The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
 - ``preserve_user_keys`` files have those YAML keys removed (so live
   values stay host-local and never bake into the repo).
 
-Since `setforge-nen.23`, capture is no longer a silent absorb. When a
+Capture is no longer a silent absorb. When a
 tracked_file declares ``preserve_user_keys_deep`` or carries non-preserve
 top-level drift between tracked and live, the capture-time merge
 wizard fires (interactive by default; non-interactive via
@@ -90,7 +90,7 @@ def capture_tracked_file(
     (``STRIP``). KEEP_DEFAULTS falls back to STRIP semantics when src
     doesn't yet exist — no defaults to preserve.
 
-    ``preserve_user_keys_deep`` (since `setforge-nen.23`) signals that
+    ``preserve_user_keys_deep`` signals that
     tracked-only sub-keys at those paths must survive the live → tracked
     overlay. The capture-time wizard (fired by :func:`capture_profile`
     upstream) mutates tracked in place at the per-sub-key level before
@@ -111,7 +111,7 @@ def capture_tracked_file(
         # does not fire for these tracked_files). Read live, optionally
         # strip shallow keys, merge tracked sections.
         content = _read_with_shallow_strip(dst, preserve_user_keys)
-        # setforge-xsco: drop host-local marker pairs + bodies that were
+        # drop host-local marker pairs + bodies that were
         # injected by `setforge install` (via local.yaml
         # host_local_sections) from the captured live text BEFORE
         # merging tracked sections. Without this strip the host-local
@@ -300,7 +300,7 @@ def capture_profile(
         tracked_file = config.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        # setforge-xsco capture-back filter: names of host-local sections
+        # capture-back filter: names of host-local sections
         # injected by `install` (from local.yaml). The capture path
         # removes only these names from live-side text before merging
         # tracked sections; any host-local marker pair the user authored

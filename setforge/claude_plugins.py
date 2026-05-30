@@ -480,7 +480,7 @@ def _reconcile_install(
 ) -> None:
     """Run the install + enable loop, appending subprocess failures to ``failed``.
 
-    Per spec § Algorithm β2 (setforge-l37): freshly-installed plugins
+    Per spec § Algorithm β2: freshly-installed plugins
     land disabled in ``installed_plugins.json`` — ``claude plugin install``
     never touches ``enabledPlugins``. To make a single reconcile run land
     each plugin active, successful installs are routed through the enable

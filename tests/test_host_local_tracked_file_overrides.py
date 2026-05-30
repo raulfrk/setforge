@@ -1,5 +1,5 @@
 """Unit tests for the local.yaml host-local mode/dst/symlink_target
-overlay resolver (setforge-m3qx).
+overlay resolver.
 
 Validates the semantics of
 :func:`setforge.config.apply_host_local_tracked_file_overrides` — the

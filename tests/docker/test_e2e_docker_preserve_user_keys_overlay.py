@@ -1,4 +1,4 @@
-"""Docker E2E tests for the local.yaml preserve_user_keys overlay (setforge-lgvp).
+"""Docker E2E tests for the local.yaml preserve_user_keys overlay.
 
 Exercises mockup-B output (SPEC 8) end-to-end against a real Debian
 container with the actual installed ``setforge`` CLI:

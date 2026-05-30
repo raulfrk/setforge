@@ -1,4 +1,4 @@
-"""Unit tests for ``setforge config show`` (setforge-7dav).
+"""Unit tests for ``setforge config show``.
 
 Covers the read-only verbs: full-file rendering for ``--local`` and
 ``--tracked`` scope; dotted-path slicing; mutex enforcement on the

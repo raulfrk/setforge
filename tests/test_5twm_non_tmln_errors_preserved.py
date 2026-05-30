@@ -1,4 +1,4 @@
-"""Tests that non-tmln errors keep their existing routing (setforge-5twm).
+"""Tests that non-tmln errors keep their existing routing.
 
 The 5twm change ONLY routes Pydantic ``ValidationError`` (raw shape
 errors) through the tmln formatter. Cross-field violations raised as

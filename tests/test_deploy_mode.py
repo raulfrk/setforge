@@ -1,5 +1,4 @@
-"""Tests for the ``mode=`` kwarg of :func:`setforge.deploy.copy_atomic`
-(setforge-8z91).
+"""Tests for the ``mode=`` kwarg of :func:`setforge.deploy.copy_atomic`.
 
 The contract:
 

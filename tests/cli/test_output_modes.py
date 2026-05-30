@@ -1,4 +1,4 @@
-"""Unit + behavioral tests for setforge-a1tn verbose/quiet/JSON output modes.
+"""Unit + behavioral tests for verbose/quiet/JSON output modes.
 
 Coverage matrix:
 

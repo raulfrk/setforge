@@ -1,4 +1,4 @@
-"""Docker e2e: ``setforge validate`` tmln UX on setforge.yaml (setforge-5twm).
+"""Docker e2e: ``setforge validate`` tmln UX on setforge.yaml.
 
 Mirrors :mod:`tests.docker.test_e2e_docker_validate_tmln` (local.yaml
 side) but exercises the engine-config side: typo'd top-level / nested

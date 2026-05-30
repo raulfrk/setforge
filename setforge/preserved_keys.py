@@ -65,7 +65,7 @@ class PreserveUserKeysOverlayError(ConfigError):
     Subclasses :class:`ConfigError` so :func:`setforge.cli.validate`'s
     existing config-error handling path catches it uniformly. The
     instance's message carries the canonical phrase the validate-side
-    formatter (setforge-tmln) keys on:
+    formatter keys on:
 
     - ``"in both add and remove"`` for the add∩remove collision case.
     - ``"not in profile chain"`` for the unknown-remove case.

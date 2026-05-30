@@ -1,4 +1,4 @@
-"""Docker e2e tests for ``setforge validate`` mockup-D UX (setforge-tmln).
+"""Docker e2e tests for ``setforge validate`` mockup-D UX.
 
 Asserts on the literal output strings of the mockup-D validate-error
 UX against a fresh container running the actual ``setforge`` CLI —
@@ -93,7 +93,7 @@ def test_validate_local_yaml_multi_error_reports_all_then_refuses(
 
 
 # ---------------------------------------------------------------------------
-# setforge-b1lg: overlay-class typo paths. Each test seeds a local.yaml that
+# overlay-class typo paths. Each test seeds a local.yaml that
 # typos a sub-key inside one overlay-class block, runs ``validate``, and
 # asserts (a) the schema-validation category fires, (b) the ``Did you mean``
 # suggestion surfaces the dispatched candidate, and (c) the ``Fix:`` action

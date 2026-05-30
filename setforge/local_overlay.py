@@ -1,4 +1,4 @@
-"""Per-host plugin / extension / marketplace overlay resolvers (setforge-5z11).
+"""Per-host plugin / extension / marketplace overlay resolvers.
 
 Resolves a profile's effective plugin / extension / marketplace lists
 from the profile chain and the optional ``local.yaml`` overlays

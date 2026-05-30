@@ -212,7 +212,7 @@ def _walk_deep_phase(
     nested-path head from ``preserve_user_keys`` — heads are walked
     even though they're not in ``preserve_user_keys_deep`` so the
     wizard can prompt on UNCOVERED sibling drift while remaining
-    silent on path-preserved leaves (per ``setforge-nen.19`` spec).
+    silent on path-preserved leaves (per spec).
     Behavior lifted verbatim from ``_walk_one_file``.
     """
     deep_paths_to_walk = list(preserve_user_keys_deep)
@@ -382,8 +382,8 @@ def _join(prefix: str, key: str, fmt: FileFormat) -> str:
     """Format-aware key-path separator.
 
     YAML continues to emit ``"a.b"`` (legacy ``preserve_user_keys_deep``
-    convention). JSONC emits ``"a > b"`` (nested-path syntax from
-    ``setforge-nen.19``) — the ``[u]se-live`` action forwards the
+    convention). JSONC emits ``"a > b"`` (nested-path syntax)
+    — the ``[u]se-live`` action forwards the
     ``key_path`` to :func:`setforge.jsonc.overlay_user_keys`, which
     parses on ``" > "``.
     """

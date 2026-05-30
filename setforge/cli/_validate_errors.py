@@ -1,4 +1,4 @@
-"""Validate-error formatting per mockup D (setforge-tmln).
+"""Validate-error formatting per mockup D.
 
 Two error categories with distinct UX:
 

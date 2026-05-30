@@ -1,4 +1,4 @@
-"""Docker E2E tests for tracked-file orphan detection + cleanup-orphans (setforge-o3h8).
+"""Docker E2E tests for tracked-file orphan detection + cleanup-orphans.
 
 Each scenario runs in a fresh Debian container with real
 ``setforge`` install/compare/cleanup-orphans/revert side effects.

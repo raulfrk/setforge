@@ -1,4 +1,4 @@
-"""CLI integration tests for ``setforge snapshot`` (setforge-of3a).
+"""CLI integration tests for ``setforge snapshot``.
 
 Exercises the typer surface via :class:`typer.testing.CliRunner` against
 a fixture config + fixture profile, with ``Path.home`` monkeypatched

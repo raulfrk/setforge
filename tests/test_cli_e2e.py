@@ -1,4 +1,4 @@
-"""CliRunner ring for the ``setforge`` CLI (setforge-nen.9 inner ring).
+"""CliRunner ring for the ``setforge`` CLI (inner ring).
 
 Drives the real Typer surface against ``tests/fixtures/e2e/setforge.test.yaml``,
 sandboxing the live tree under ``tmp_path`` via ``$HOME`` redirection and
@@ -11,7 +11,7 @@ One test class per top-level CLI command (``install``, ``sync``,
 The Docker ring (``tests/test_e2e_docker.py``) exercises the same
 fixtures against real ``claude`` + ``code`` binaries.
 
-setforge-181 (this file) extends nen.9 with ``fake_claude`` + ``fake_code``
+This file extends the inner ring with ``fake_claude`` + ``fake_code``
 in-memory driver fixtures so the inner ring also exercises the
 extension + plugin reconcile legs (not just the warn-and-skip path).
 ``FakeClaude`` lives in ``tests.test_claude_plugins`` (its primary
@@ -794,7 +794,7 @@ class TestValidate:
 
 
 # ---------------------------------------------------------------------------
-# --verbose/-v flag + SETFORGE_LOG_LEVEL env var (setforge-58x)
+# --verbose/-v flag + SETFORGE_LOG_LEVEL env var
 # ---------------------------------------------------------------------------
 
 
@@ -808,14 +808,14 @@ class TestVerbosity:
     """
 
     def test_root_v_flag_enables_info_stderr(self, fixture_repo: Path) -> None:
-        """-v sets INFO level per setforge-a1tn (count=True)."""
+        """-v sets INFO level (count=True)."""
         result = _invoke(["-v", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         # -v is INFO; the DEBUG message is filtered out.
         assert "setforge.cli DEBUG: logging configured at level" not in result.stderr
 
     def test_root_vv_flag_enables_debug_stderr(self, fixture_repo: Path) -> None:
-        """-vv sets DEBUG level per setforge-a1tn (count=True)."""
+        """-vv sets DEBUG level (count=True)."""
         result = _invoke(["-vv", "validate", "--all", f"--config={fixture_repo}"])
         assert result.exit_code == 0, result.output
         assert "setforge.cli DEBUG: logging configured at level" in result.stderr

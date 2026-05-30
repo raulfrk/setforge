@@ -1,4 +1,4 @@
-"""Unit tests for the setforge-k0uj reconcile failure-action wizard.
+"""Unit tests for the reconcile failure-action wizard.
 
 Exercises :class:`setforge.cli._confirm.FailureAction` plus
 :func:`setforge.cli._confirm.prompt_failure_action` — the arrow-key
@@ -128,7 +128,7 @@ def test_non_tty_without_yes_falls_back_to_default_with_warning(
     RAISES on non-TTY+no-yes: ``confirm_auto_operation`` gates mutating
     writes that need explicit consent, but a reconcile failure is
     downstream of an already-attempted operation, and the safe default
-    (SKIP-and-continue) preserves the pre-setforge-k0uj warn-and-skip
+    (SKIP-and-continue) preserves the pre-existing warn-and-skip
     semantics that non-interactive install runs (CI, scripts) depend on.
     """
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)

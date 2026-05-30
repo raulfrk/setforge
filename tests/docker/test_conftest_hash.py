@@ -1,4 +1,4 @@
-"""Tests for the conftest hash-input filter (setforge-lyi).
+"""Tests for the conftest hash-input filter.
 
 Covers :func:`tests.docker.conftest._parse_dockerignore` (pattern
 classification) plus the integration behavior that the parsed patterns

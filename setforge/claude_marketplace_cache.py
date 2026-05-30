@@ -412,7 +412,7 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
     record the canonical URL into a sidecar file at clone time and
     reduce this helper to a single byte-equal comparison — that path
     also picks up SSH variants and arbitrary hosts the prefix list
-    cannot enumerate. Follow-up issue: ``setforge-msc``.
+    cannot enumerate.
     """
 
     def _normalize(url: str) -> str:

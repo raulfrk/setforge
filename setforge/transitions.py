@@ -118,14 +118,14 @@ class TransitionMeta:
     """Metadata for one transition. Serialized to ``meta.json``.
 
     ``source_sha`` records the config-repo HEAD at install time so
-    ``setforge status`` can compute ``commits-since-last-install``
-    (setforge-xra8). It is ``None`` for transitions recorded before the
+    ``setforge status`` can compute ``commits-since-last-install``.
+    It is ``None`` for transitions recorded before the
     schema bump and for transitions whose source directory is not a git
     repo; :meth:`to_dict` omits the key entirely when ``None`` so old
     meta.json files round-trip byte-identically through load + re-dump.
 
     The trailing three fields (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) were added in setforge-8ohd so
+    ``preserve_user_keys_applied``) were added in a later schema bump so
     ``setforge transitions show`` can display per-invocation duration,
     the exact argv, and whether any preserve_user_keys overlay matched
     a live key during deploy. All three follow the same omit-when-None
@@ -139,7 +139,7 @@ class TransitionMeta:
     host: str  # platform.node()
     version: str  # setforge.__version__
     source_sha: str | None = None  # config-repo HEAD at install time; None pre-xra8
-    # setforge-8ohd: all None pre-bump. List/bool/str all use the None sentinel
+    # all None pre-bump. List/bool/str all use the None sentinel
     # (NOT default_factory=list) so the omit-when-None invariant holds for every
     # field and slots=True doesn't allocate a per-instance default container.
     end_timestamp: str | None = None
@@ -172,7 +172,7 @@ def _git_head(source_dir: Path) -> str | None:
     """Return the HEAD commit sha of ``source_dir`` or ``None``.
 
     Used by :func:`make_meta` to record the config-repo state at install
-    time (setforge-xra8). Returns ``None`` when ``source_dir`` is not a
+    time. Returns ``None`` when ``source_dir`` is not a
     git repo, when ``git`` is not on ``PATH``, or when the subprocess
     fails for any reason — the field is informational, not load-bearing,
     and a missing value is the documented "no provenance" state.
@@ -209,13 +209,13 @@ def make_meta(
 
     When ``source_dir`` is provided AND is a git repo, records its HEAD
     commit sha as ``source_sha`` so ``setforge status`` can compute
-    ``commits-since-last-install`` (setforge-xra8). Otherwise leaves
+    ``commits-since-last-install``. Otherwise leaves
     ``source_sha`` as ``None``; callers that don't have a source dir
     handy (revert, plugin reconcile sub-record) keep the pre-bump call
     shape.
 
     The three trailing kwargs (``end_timestamp``, ``command_line``,
-    ``preserve_user_keys_applied``) are the setforge-8ohd schema bump.
+    ``preserve_user_keys_applied``) are a later schema bump.
     All default to ``None`` so pre-bump callers compile unchanged;
     each field is omitted from ``meta.json`` when ``None`` so old
     records still round-trip byte-identically.
@@ -239,7 +239,7 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
 
     Reads the JSON payload written by :func:`write_meta` and reconstructs
     the dataclass. Falls back to ``source_sha = None`` for transitions
-    recorded before the setforge-xra8 schema bump (no ``source_sha`` key
+    recorded before the schema bump (no ``source_sha`` key
     in the payload). Raises :class:`InvalidTransitionRecord` on missing
     or malformed required fields; on ``ValueError`` from
     :class:`TransitionCommand` membership or
@@ -265,7 +265,7 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
             host=str(payload["host"]),
             version=str(payload["version"]),
             source_sha=payload.get("source_sha"),
-            # setforge-8ohd: optional, all None pre-bump. .get() (NOT
+            # optional, all None pre-bump. .get() (NOT
             # payload[<field>]) so dozens of existing transition records
             # written before the bump still load cleanly.
             end_timestamp=payload.get("end_timestamp"),
@@ -475,7 +475,7 @@ class ReconcileOutcome:
     which items landed only partially.
 
     Backward compatibility: old transition records written before
-    setforge-k0uj have no ``reconcile_outcomes.json`` file;
+    the reconcile-outcomes schema bump have no ``reconcile_outcomes.json`` file;
     :func:`load_reconcile_outcomes` returns ``()`` in that case.
     Within ``reconcile_outcomes.json``, ``kind`` and ``status``
     continue to serialize as their string values (``"plugin"`` /
@@ -602,7 +602,7 @@ def load_reconcile_outcomes(
     """Return the reconcile-outcome tuple for a transition directory.
 
     Returns ``()`` when the ``reconcile_outcomes.json`` file is absent —
-    the backward-compat path for transitions written before setforge-k0uj.
+    the backward-compat path for transitions written before that schema bump.
     Raises :class:`InvalidTransitionRecord` when the file exists but its
     shape is corrupt (delegated to :func:`reconcile_outcomes_from_json`).
     """
@@ -759,7 +759,7 @@ def write_transition(
     meta.json filter).
 
     ``reconcile_outcomes`` defaults to an empty tuple so the
-    pre-setforge-k0uj call shape stays backward-compatible.
+    legacy call shape stays backward-compatible.
 
     Returns the absolute path of the committed directory.
     """

@@ -1,4 +1,4 @@
-"""Docker E2E tests for the ``tracked_files.<id>.symlink:`` field (setforge-m483).
+"""Docker E2E tests for the ``tracked_files.<id>.symlink:`` field.
 
 Five named scenarios per the user's per-CLI-flag-row coverage preference:
 

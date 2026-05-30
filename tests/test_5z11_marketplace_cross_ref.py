@@ -1,6 +1,6 @@
 """Tests for the marketplace cross-ref check fired by apply_local_overlay.
 
-Spec: ``setforge-5z11`` / SPEC 2. The cross-ref check fires at BOTH
+Spec: SPEC 2. The cross-ref check fires at BOTH
 ``setforge validate`` (offline) AND ``setforge install`` (defensive
 backstop) per Q8 — every plugin's resolved marketplace must exist in
 ``cfg.marketplaces`` joined with ``local.marketplaces.add``.
@@ -407,7 +407,7 @@ def test_apply_local_overlay_check_returns_false_on_load_phase_failure(
     fallback. This test asserts the boundary directly at the helper
     level — the CLI-end integration path through
     :func:`apply_preserve_user_keys_overlay` has a pre-existing
-    documented gap (setforge-b1lg) that is out of scope here.
+    documented gap that is out of scope here.
     """
 
     # cfg has a pre-existing marketplace inconsistency: ``sp`` references

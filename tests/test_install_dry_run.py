@@ -1,4 +1,4 @@
-"""Unit tests for ``setforge install --dry-run`` (setforge-lnvq).
+"""Unit tests for ``setforge install --dry-run``.
 
 Eight tests, one per acceptance criterion from SPEC 4:
 

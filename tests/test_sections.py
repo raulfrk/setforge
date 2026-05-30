@@ -162,7 +162,7 @@ def test_extract_unnamed_indices_in_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-xyw — marker regex extension: optional hash= segment on end markers
+# Marker regex extension: optional hash= segment on end markers
 # ---------------------------------------------------------------------------
 
 _HASH_HEX_64: str = "a" * 64
@@ -201,7 +201,7 @@ def test_extract_sections_hashless_end_marker_under_allow_legacy_parses() -> Non
 
 
 # ---------------------------------------------------------------------------
-# setforge-xyw — hash_sections primitive
+# hash_sections primitive
 # ---------------------------------------------------------------------------
 
 
@@ -303,7 +303,7 @@ def test_hash_sections_propagates_marker_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-xyw — extract_marker_hashes
+# extract_marker_hashes
 # ---------------------------------------------------------------------------
 
 
@@ -362,7 +362,7 @@ def test_extract_marker_hashes_propagates_marker_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-xyw — set_marker_hashes
+# set_marker_hashes
 # ---------------------------------------------------------------------------
 
 
@@ -394,7 +394,7 @@ def test_set_marker_hashes_replaces_existing_hash() -> None:
 
 def test_set_marker_hashes_raises_when_key_absent_from_dict() -> None:
     """Sections present in text but absent from hashes dict raise
-    ValueError — strict-by-default, no silent strip (setforge-pto)."""
+    ValueError — strict-by-default, no silent strip."""
     text = (
         "<!-- setforge:user-section start shared a -->\n"
         "body\n"
@@ -464,7 +464,7 @@ def test_set_marker_hashes_bad_key_raises_value_error() -> None:
 
 def test_set_marker_hashes_missing_key_message_format() -> None:
     """The missing-keys ValueError message matches the unknown-keys shape:
-    sorted, repr-quoted names joined by ', ' (setforge-pto)."""
+    sorted, repr-quoted names joined by ', '."""
     text = (
         "<!-- setforge:user-section start shared b -->\n"
         "body b\n"
@@ -483,7 +483,7 @@ def test_set_marker_hashes_missing_key_message_format() -> None:
 
 def test_set_marker_hashes_allow_legacy_does_not_bypass_strict_check() -> None:
     """``allow_legacy=True`` tolerates pre-9by input markers but does NOT
-    weaken the strict missing-keys check (setforge-pto)."""
+    weaken the strict missing-keys check."""
     text = (
         "<!-- setforge:user-section start shared a -->\n"
         "body\n"
@@ -526,7 +526,7 @@ def test_extract_marker_hashes_extracted_form_matches_writer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-9by — required host-local|shared keyword
+# Required host-local|shared keyword
 # ---------------------------------------------------------------------------
 
 
@@ -742,7 +742,7 @@ def test_section_semantics_value_is_canonical_string() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-9ln — strict parser + allow_legacy migration mode
+# Strict parser + allow_legacy migration mode
 # ---------------------------------------------------------------------------
 
 
@@ -846,7 +846,7 @@ def test_walk_markers_allow_legacy_accepts_pre_9by_fixture() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-9ln — detect_legacy_markers helper
+# detect_legacy_markers helper
 # ---------------------------------------------------------------------------
 
 
@@ -901,7 +901,7 @@ def test_detect_legacy_markers_flags_malformed_end_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# setforge-2ba.7 — detect_legacy_namespace_markers helper
+# detect_legacy_namespace_markers helper
 # (post-rename detection of pre-rename `my-setup:user-section` markers)
 # ---------------------------------------------------------------------------
 

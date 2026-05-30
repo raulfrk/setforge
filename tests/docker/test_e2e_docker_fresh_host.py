@@ -1,4 +1,4 @@
-"""Docker E2E tests for the fresh-host welcome gate (setforge-7jg4).
+"""Docker E2E tests for the fresh-host welcome gate.
 
 Two cases:
 

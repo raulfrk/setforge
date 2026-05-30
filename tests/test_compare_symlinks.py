@@ -1,4 +1,4 @@
-"""Tests for symlink-aware compare dispatch (setforge-m483).
+"""Tests for symlink-aware compare dispatch.
 
 Three drift shapes the new ``_compare_symlinked`` helper classifies:
 

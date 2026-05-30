@@ -5,7 +5,7 @@ Exercises ``resolve_marketplace_source`` (install-mode dispatch),
 guards, and ``sync_marketplace_cache`` semantics. The ``fake_git``
 fixture (defined in :mod:`tests.conftest`) wires :class:`FakeGit` into
 the new module's ``subprocess`` / ``shutil`` namespace so
-monkeypatch paths track the split (setforge-qo23).
+monkeypatch paths track the split.
 """
 
 from pathlib import Path

@@ -3,8 +3,8 @@
 The function writes ``~/.config/setforge/local.yaml`` on every Typer
 callback invocation. The previous shape used
 ``if LOCAL_CONFIG_PATH.exists(): return`` followed by
-``write_text(...)``, racing on the file under parallel pytest workers
-(setforge-hpd4). The new shape uses ``open("x")`` + ``FileExistsError``
+``write_text(...)``, racing on the file under parallel pytest workers.
+The new shape uses ``open("x")`` + ``FileExistsError``
 suppression for an atomic create-or-skip.
 
 Three test surfaces here:

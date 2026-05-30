@@ -1,4 +1,4 @@
-"""``setforge config`` subcommand group — granular config CRUD (setforge-7dav).
+"""``setforge config`` subcommand group — granular config CRUD.
 
 Three verbs operate on either the host-local ``~/.config/setforge/local.yaml``
 (``--local`` scope) or the tracked ``setforge.yaml`` (``--tracked`` scope):

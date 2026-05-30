@@ -94,7 +94,7 @@ def prompt_failure_action(
     which RAISES on non-TTY+no-yes: ``confirm_auto_operation`` gates
     mutating writes that need explicit consent, but a reconcile failure
     is downstream of an already-attempted operation, and the safe default
-    (SKIP-and-continue) preserves the pre-setforge-k0uj warn-and-skip
+    (SKIP-and-continue) preserves the prior warn-and-skip
     semantics that CI / non-interactive install runs depend on.
     """
     if yes:

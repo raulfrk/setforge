@@ -1,5 +1,4 @@
-"""Install-side hash + idempotency unit tests for host-local injection
-(setforge-xsco).
+"""Install-side hash + idempotency unit tests for host-local injection.
 
 Exercises :func:`setforge.deploy.copy_atomic` with the ``host_local_sections``
 parameter against on-disk markdown fixtures. Asserts the post-install

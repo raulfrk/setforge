@@ -285,7 +285,7 @@ from setforge.cli import status as _status  # noqa: E402, F401  (xra8)
 from setforge.cli import profile as _profile  # noqa: E402, F401 (profile subgroup)
 from setforge.cli import snapshot as _snapshot  # noqa: E402, F401 (of3a)
 from setforge.cli import completion as _completion  # noqa: E402, F401
-from setforge.cli import config as _config  # noqa: E402, F401 (setforge-7dav)
+from setforge.cli import config as _config  # noqa: E402, F401
 # isort: on
 
 

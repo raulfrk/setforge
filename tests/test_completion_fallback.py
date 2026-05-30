@@ -1,4 +1,4 @@
-"""Unit tests for the static-template fallback (setforge-gtqv).
+"""Unit tests for the static-template fallback.
 
 When ``setforge --show-completion=<shell>`` fails, ``_render_completion_script``
 must:

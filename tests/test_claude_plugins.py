@@ -11,7 +11,7 @@ is "found" vs absent.
 
 The shared :class:`FakeClaude` driver, :class:`FakeGit` git fake, and
 ``fake_claude`` / ``fake_git`` fixtures live in :mod:`tests.conftest`
-(setforge-qo23 split); yaml-editor + marketplace-cache helper tests
+(split out); yaml-editor + marketplace-cache helper tests
 moved out to :mod:`tests.test_claude_yaml_editor` and
 :mod:`tests.test_claude_marketplace_cache` respectively.
 """
@@ -338,7 +338,7 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
 def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
     """Fresh install must trigger an enable so the plugin lands active.
 
-    Primary acceptance gate for setforge-l37: a freshly-declared plugin
+    Primary acceptance gate: a freshly-declared plugin
     must be both installed AND enabled in a single reconcile run, even
     though `claude plugin install` alone leaves it disabled.
     `to_enable` in the report keeps clean β2 semantics: only the
@@ -771,9 +771,9 @@ def test_reconcile_undeclared_bare_name_raises_config_error(fake_claude) -> None
 # ---------------------------------------------------------------------------
 #
 # YAML editor tests for the ``yaml_add_*`` / ``yaml_remove_*`` verbs
-# moved to :mod:`tests.test_claude_yaml_editor` (setforge-qo23). The
-# fixture below is retained because the setforge-l37 / setforge-oyv
-# ``plugin add`` CLI tests still need a config-file fixture to mutate.
+# moved to :mod:`tests.test_claude_yaml_editor`. The
+# fixture below is retained because the ``plugin add`` CLI tests still
+# need a config-file fixture to mutate.
 
 _YAML_FIXTURE = """\
 version: 1
@@ -900,7 +900,7 @@ def test_reconcile_marketplaces_dry_run_not_added(
 
 
 # ---------------------------------------------------------------------------
-# setforge-l37 — `plugin add` strict enable behavior
+# `plugin add` strict enable behavior
 # ---------------------------------------------------------------------------
 
 
@@ -985,7 +985,7 @@ def test_plugin_add_strict_exits_nonzero_when_enable_fails(
 
 
 # ---------------------------------------------------------------------------
-# setforge-oyv — `plugin add` install subprocess error handling
+# `plugin add` install subprocess error handling
 # ---------------------------------------------------------------------------
 
 
@@ -1120,7 +1120,7 @@ def test_plugin_add_warns_and_skips_when_install_raises_plugin_tool_missing(
 
 
 # ---------------------------------------------------------------------------
-# setforge-nen.13 — PluginDelta in transition records + revert inverse
+# PluginDelta in transition records + revert inverse
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the install → transition-record → revert round-trip
@@ -1326,9 +1326,9 @@ def test_install_records_plugin_delta_with_enable_failure(
     monkeypatch.setattr("setforge.claude_plugins.subprocess.run", failing_run)
 
     runner = CliRunner()
-    # --yes short-circuits the per-item failure prompt added in
-    # setforge-k0uj to its default (SKIP), preserving the historic
-    # warn-and-continue behavior this regression test exercises.
+    # --yes short-circuits the per-item failure prompt to its default
+    # (SKIP), preserving the historic warn-and-continue behavior this
+    # regression test exercises.
     installed = runner.invoke(
         app,
         [
@@ -1539,8 +1539,7 @@ def test_roundtrip_file_and_plugin_state(
     both match the pre-install bytes.
 
     This is the load-bearing acceptance: revert must converge full
-    external state, not just file content (the gap setforge-nen.13
-    closes).
+    external state, not just file content (the gap this closes).
     """
     from typer.testing import CliRunner
 
@@ -1589,7 +1588,7 @@ def test_roundtrip_file_and_plugin_state(
 # ---------------------------------------------------------------------------
 #
 # Pure marketplace-cache helper tests and sync-cache tests moved to
-# :mod:`tests.test_claude_marketplace_cache` (setforge-qo23). The
+# :mod:`tests.test_claude_marketplace_cache`. The
 # integration cases below stay here because they exercise
 # ``reconcile()`` end-to-end (claude_plugins orchestration crossing into
 # the marketplace-cache module via :func:`resolve_marketplace_source`).

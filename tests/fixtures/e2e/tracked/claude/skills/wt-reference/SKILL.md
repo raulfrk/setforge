@@ -25,7 +25,7 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 
 ## Beads integration
 
-- One bd issue = one worktree. Slug should match or include the bd issue ID (`wt switch --create setforge-g20-py-rewrite`).
+- One bd issue = one worktree. Slug should match or include the bd issue ID (`wt switch --create <bd-id>-py-rewrite`).
 - After `wt switch --create`, `bd update <id> --claim` locks the issue. Combo gives: isolated tree + claimed issue + atomic ownership.
 - bd auto-discovers the worktree's database via git common-directory — no `--db` redirect.
 - After `wt merge`: `bd close <id>`, then `wt remove` to clean both layers.
@@ -48,7 +48,7 @@ wt merge --no-squash
 
 **Convention when planning multi-worktree batches:** size sibling worktrees so their file footprints don't overlap with the parent's review-fix surface. If overlap is unavoidable, document the rebase plan up front.
 
-*(empirical observation G from setforge-23k: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
+*(empirical observation G: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
 
 ## Parallel dispatch via pre-prepared worktrees
 
@@ -71,7 +71,7 @@ wt switch --create setforge-<id>-<slug>
 
 For multi-bead waves: run `wt switch --create` N times serially (avoids git index lock races), then dispatch the N subagents in a single message of parallel Agent calls.
 
-*(empirical 2026-05-12; see bd setforge-7gf)*
+*(empirical 2026-05-12)*
 
 ## Anti-patterns
 
@@ -81,4 +81,4 @@ For multi-bead waves: run `wt switch --create` N times serially (avoids git inde
 - Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.
 - Don't run multiple agents in the same worktree — the whole point is isolation.
-- Don't use `Agent` tool's `isolation: worktree` parameter for parallel dispatch in this build — auto-worktrees branch from a stale base AND their sandboxes deny git ops + file edits (empirical 2026-05-12; see bd setforge-7gf).
+- Don't use `Agent` tool's `isolation: worktree` parameter for parallel dispatch in this build — auto-worktrees branch from a stale base AND their sandboxes deny git ops + file edits (empirical 2026-05-12).

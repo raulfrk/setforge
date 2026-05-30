@@ -1,4 +1,4 @@
-"""Docker E2E tests for the ``tracked_files.<id>.mode:`` field (setforge-8z91).
+"""Docker E2E tests for the ``tracked_files.<id>.mode:`` field.
 
 Three named scenarios per the user's per-CLI-flag-row coverage preference:
 

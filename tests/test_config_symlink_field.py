@@ -1,4 +1,4 @@
-"""Tests for the ``TrackedFile.symlink`` Pydantic field (setforge-m483).
+"""Tests for the ``TrackedFile.symlink`` Pydantic field.
 
 The schema must:
 

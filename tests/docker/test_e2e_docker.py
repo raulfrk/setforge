@@ -1,4 +1,4 @@
-"""Docker E2E test ring for ``setforge`` (setforge-nen.9 outer ring).
+"""Docker E2E test ring for ``setforge`` (outer ring).
 
 Every test runs inside a fresh Debian 12 container with real
 ``claude`` + ``code`` binaries, exercising the actual install / sync
@@ -541,7 +541,7 @@ def test_install_comprehensive_plugins_extensions(
     assert proc.returncode == 0, "comprehensive bootstrap stub missing"
 
 
-# --- Variant L1 (setforge-58x verbosity surface) --------------------------
+# --- Variant L1 (verbosity surface) --------------------------
 
 
 @pytest.mark.xdist_group("docker_daemon")
@@ -555,13 +555,12 @@ def test_install_verbose_emits_setforge_debug(
     test interpreter but not real-subprocess logging propagation). Runs
     the comprehensive profile under ``-v`` in a fresh Debian container
     and asserts a ``setforge.claude_marketplace_cache DEBUG:`` line
-    lands on stderr — proving the setforge-58x verbosity surface threads
+    lands on stderr — proving the verbosity surface threads
     end-to-end through CLI startup,
     ``logging.basicConfig(stream=sys.stderr)``, and the production
     ``setforge.claude_marketplace_cache`` LOGGER call sites (``_run_git``
     / ``_clone_marketplace`` / ``_cache_origin_url``). The git helpers
-    moved out of ``claude_plugins`` into ``claude_marketplace_cache``
-    in setforge-qo23.
+    moved out of ``claude_plugins`` into ``claude_marketplace_cache``.
 
     The ``claude.install_mode: local-clone`` opt-in via host-local
     ``local.yaml`` is required: under default ``regular`` mode the git
@@ -999,7 +998,7 @@ def test_validate_clean_yaml_exit_zero(
 
 
 # ===========================================================================
-# Section: Legacy (pre-9by) marker migration (setforge-9ln)
+# Section: Legacy (pre-9by) marker migration
 # ===========================================================================
 #
 # These variants exercise the install / compare flow against a live
@@ -1131,7 +1130,7 @@ def test_compare_after_legacy_install_is_clean(
 
 
 # ===========================================================================
-# Section: Prose-reviewer artifacts (setforge-h5k)
+# Section: Prose-reviewer artifacts
 # ===========================================================================
 #
 # The four variants below exercise the install / compare / revert
@@ -1142,7 +1141,7 @@ def test_compare_after_legacy_install_is_clean(
 # compare must report no drift, and revert must remove every deployed
 # artifact (each starts absent on a fresh container).
 #
-# Implicitly verifies (per setforge-h5k --notes): 9by's strict-tag
+# Implicitly verifies: 9by's strict-tag
 # parser does not reject pure-tracked agent files that contain no
 # user-section markers.
 
@@ -1484,7 +1483,7 @@ def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
 
 
 # ===========================================================================
-# Section: Pre-deploy secrets scan (setforge-nz5x)
+# Section: Pre-deploy secrets scan
 # ===========================================================================
 
 
@@ -1643,12 +1642,12 @@ def test_e2e_docker_install_no_gitleaks_warns_and_continues(
 
 
 # ===========================================================================
-# setforge-k0uj — per-item reconcile failure UX (skip / retry / abort / diagnose)
+# Per-item reconcile failure UX (skip / retry / abort / diagnose)
 # ===========================================================================
 
 
 _FAILING_CODE_STUB = """#!/bin/bash
-# Wrapper stub for the `code` CLI used by the setforge-k0uj e2e tests.
+# Wrapper stub for the `code` CLI used by the reconcile-failure e2e tests.
 #
 # Behavior:
 # - For ``--install-extension force-fail.ext``, exits 1 (fixed failure).
@@ -1719,7 +1718,7 @@ def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> 
     if needle not in text:
         raise AssertionError(
             f"fixture {CONFIG_FIXTURE!r} no longer carries the "
-            "editorconfig anchor; setforge-k0uj patches need refresh"
+            "editorconfig anchor; reconcile-failure patches need refresh"
         )
     patched = text.replace(needle, needle + f"        - {extra_ext}\n", 1)
     # ``write_text`` accepts an absolute container path; the fixture
@@ -1860,7 +1859,7 @@ def test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes(
     stay landed even when one fails.
 
     The interactive ABORT branch requires a pty-driven test (deferred
-    to setforge-ffs0 follow-up bead) — ``--yes`` short-circuits the
+    to a follow-up) — ``--yes`` short-circuits the
     arrow-key picker to the default ``SKIP`` action, so the abort
     code path cannot be exercised from this entry point. The rollback
     machinery itself is covered by unit tests in
@@ -1928,7 +1927,7 @@ def test_e2e_docker_install_retry_failed_flag(
     assert result.returncode == 0, result.stderr
 
 
-# Section: `setforge init` bootstrap (setforge-n2la, mockup J)
+# Section: `setforge init` bootstrap (mockup J)
 # ===========================================================================
 #
 # Four scenarios from mockup J:
@@ -2157,7 +2156,7 @@ def test_e2e_docker_upgrade_check_mode(
     )
 
 
-# Section: setforge migrate — schema migration registry (setforge-s5pq)
+# Section: setforge migrate — schema migration registry
 # ===========================================================================
 #
 # Two variants pin the v0.2.0 contract:
@@ -2360,7 +2359,7 @@ def test_e2e_docker_migrate_multi_file_fake(
 
 
 # ===========================================================================
-# setforge-g40x — pre-deploy git-status check on the config source
+# Pre-deploy git-status check on the config source
 # ===========================================================================
 
 
@@ -2401,7 +2400,7 @@ def _git_init_workspace(container: ContainerHandle) -> None:
 def test_e2e_docker_install_path_source_clean_no_warn(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """setforge-g40x: clean path source → install proceeds with no warning.
+    """Clean path source → install proceeds with no warning.
 
     Initializes the workspace as a git repo, commits the fixture state,
     then runs ``setforge install`` WITHOUT ``--no-git-check``. The new
@@ -2422,7 +2421,7 @@ def test_e2e_docker_install_path_source_clean_no_warn(
 def test_e2e_docker_install_path_source_dirty_warns_abort(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """setforge-g40x: dirty path source + non-TTY install → ABORT via mutate-gate.
+    """Dirty path source + non-TTY install → ABORT via mutate-gate.
 
     Initializes the workspace as a git repo, commits the fixture state,
     then **modifies a tracked fixture file** so ``git status`` reports
@@ -2469,7 +2468,7 @@ def test_e2e_docker_install_path_source_dirty_warns_abort(
 def test_e2e_docker_install_path_source_dirty_no_git_check_bypasses(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """setforge-g40x: dirty path source + ``--no-git-check`` → install proceeds.
+    """Dirty path source + ``--no-git-check`` → install proceeds.
 
     Same dirty-tree setup as the prior test, but the install passes
     ``--no-git-check``; the new gate is skipped entirely and the
@@ -2494,7 +2493,7 @@ def test_e2e_docker_install_path_source_dirty_no_git_check_bypasses(
 def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """setforge-g40x: git-source cache lagging behind origin → mutate-gate aborts.
+    """Git-source cache lagging behind origin → mutate-gate aborts.
 
     Sets up a bare "remote" repo + a clone "cache" inside the
     container, advances the remote by one commit, then configures

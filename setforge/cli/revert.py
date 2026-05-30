@@ -5,7 +5,7 @@ and records its own reverse transition (so a second ``revert`` acts as
 redo). ``transitions list`` / ``transitions show`` inspect the recorded
 history.
 
-Per setforge-p1vl (mockup A): revert is gated by a confirm-explain-redo
+Per mockup A: revert is gated by a confirm-explain-redo
 wizard that shows the full diff, RISKS, and REDO instructions before
 applying. ``--yes`` short-circuits the wizard for non-interactive use.
 """
@@ -689,7 +689,7 @@ def transitions_show(
         console.print(f"  host:    {meta['host']}")
     if "version" in meta:
         console.print(f"  version: {meta['version']}")
-    # setforge-8ohd: render the forward-compat fields populated by
+    # Render the forward-compat fields populated by
     # install/sync/revert/wizard make_meta call sites. Each field is
     # omit-when-None in the on-disk shape, so absence here is the
     # pre-bump backward-compat path — silently skip.
