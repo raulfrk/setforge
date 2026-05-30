@@ -28,7 +28,7 @@ escape hatch ``allow_legacy=True`` tolerates all three: missing semantics
 parses as :attr:`SectionSemantics.SHARED`; missing or malformed hash
 yields ``embedded_hash=None``.
 Only the install path's live-side parsing opts in via ``allow_legacy=True``
-so pre-9by user files can be migrated in place on first install; compare /
+so pre-hash user files can be migrated in place on first install; compare /
 sync remain strict and surface a user-actionable error before the raw
 :class:`MarkerError` propagates. Start and end keywords must match. Nested
 sections are not supported. End-marker names must match start-marker names.
@@ -49,7 +49,7 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 LiveSections = NewType("LiveSections", dict[str, str])
 """Section bodies parsed from a live file with ``allow_legacy=True``.
 
-Construct via :func:`extract_live_sections`; the install path's pre-9by
+Construct via :func:`extract_live_sections`; the install path's pre-hash
 migration tolerance lives in that factory so consumer call sites (deploy,
 cli) cannot accidentally pass a strict-extract result that would refuse
 legacy markers a live file may still carry.
@@ -297,7 +297,7 @@ def _parse_marker_line(
     is present but not exactly 64 lowercase hex chars and
     ``allow_legacy=False``; under ``allow_legacy=True`` a malformed
     ``hash=`` is treated as if the segment were absent
-    (``embedded_hash=None``), tolerating pre-9by files that may carry
+    (``embedded_hash=None``), tolerating pre-hash files that may carry
     garbled hash values.
     """
     match = _MARKER_RE.match(line)
@@ -387,7 +387,7 @@ def detect_legacy_namespace_markers(text: str) -> bool:
 
 
 def detect_legacy_markers(text: str) -> bool:
-    """Return ``True`` if ``text`` contains any pre-9by-form marker.
+    """Return ``True`` if ``text`` contains any pre-hash-form marker.
 
     Regex-only scan (does NOT call :func:`_walk_markers`). Used by the
     CLI layer to surface a "run install first" error before the strict
@@ -429,7 +429,7 @@ def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]
     default (``allow_legacy=False``) also raises on markers missing the
     ``host-local``/``shared`` keyword or end markers missing
     ``hash=<...>``; pass ``allow_legacy=True`` to tolerate both (the
-    install path's migration-only mode for pre-9by live files).
+    install path's migration-only mode for pre-hash live files).
     """
     sections: dict[str, str] = {}
     section_lines: list[str] = []
@@ -453,7 +453,7 @@ def extract_live_sections(text: str) -> LiveSections:
     """Parse ``text`` into a :class:`LiveSections` using ``allow_legacy=True``.
 
     The single legitimate constructor for :class:`LiveSections`. Install is
-    the verb that re-tags and stamps pre-9by markers in place, so the
+    the verb that re-tags and stamps pre-hash markers in place, so the
     install path's live-side parsing opts into the migration-only legacy
     tolerance here; compare / sync remain strict by routing through
     :func:`extract_sections` directly.
@@ -516,7 +516,7 @@ def hash_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]:
     :func:`extract_sections` returns it: 64 lowercase hex chars.
     Coverage-equivalent to :func:`extract_sections`. Raises
     :class:`MarkerError` on the same malformed-marker inputs. Pass
-    ``allow_legacy=True`` to tolerate pre-9by markers (see
+    ``allow_legacy=True`` to tolerate pre-hash markers (see
     :func:`_walk_markers`).
     """
     return {
@@ -553,7 +553,7 @@ def set_marker_hashes(
     must cover EVERY section present in ``text`` — missing keys are a
     contract violation and raise :class:`ValueError`. Section bodies,
     start markers, and all non-marker content are preserved byte-for-byte.
-    Pass ``allow_legacy=True`` to tolerate pre-9by input markers (see
+    Pass ``allow_legacy=True`` to tolerate pre-hash input markers (see
     :func:`_walk_markers`); the output markers are always fully formed.
 
     Raises :class:`MarkerError` on malformed markers and :class:`ValueError`
@@ -622,7 +622,7 @@ def section_semantics(
     are :class:`SectionSemantics` enum members; since ``SectionSemantics``
     is a :class:`StrEnum`, callers may compare against ``"host-local"`` /
     ``"shared"`` directly (``SectionSemantics.SHARED == "shared"``). Pass
-    ``allow_legacy=True`` to tolerate pre-9by markers (untagged markers
+    ``allow_legacy=True`` to tolerate pre-hash markers (untagged markers
     parse as :attr:`SectionSemantics.SHARED`).
     """
     return {
@@ -646,7 +646,7 @@ def strip_host_local_sections(
     in tracked (carried through to live) passes through unchanged.
     Shared marker pairs always pass through. ``allow_legacy`` mirrors
     the strip/extract default — capture reads live-side text that may
-    contain pre-9by markers.
+    contain pre-hash markers.
 
     No-op when ``names`` is empty.
     """
@@ -692,13 +692,13 @@ def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
 
     ``allow_legacy`` defaults to ``True`` because the historical callers
     (compare's drift gate, capture's strip path) both consume live-side
-    text that may contain pre-9by markers. Pass ``allow_legacy=False``
+    text that may contain pre-hash markers. Pass ``allow_legacy=False``
     explicitly where canonical-form input is guaranteed and you want
     strict parsing to surface malformed input. Symmetric comparisons
     across (tracked, live) — e.g. ``compare.diff_file``'s strip-template
     gate at ``strip_section_content(src) == strip_section_content(dst)``
     — pass ``allow_legacy=True`` on the tracked side too because the
-    live side may carry pre-9by markers; mixing regimes is safe only
+    live side may carry pre-hash markers; mixing regimes is safe only
     when each side independently satisfies its own regime (cf. the
     sibling ``hash_sections`` call at the same gate, which mixes
     strict-tracked + lenient-live successfully).

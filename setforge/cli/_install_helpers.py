@@ -10,7 +10,7 @@ Helpers extracted from ``install()`` body:
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
 - :func:`_confirm_legacy_drift_or_exit` /
-  :func:`_confirm_section_reconcile_or_exit`: bviv confirm-or-exit
+  :func:`_confirm_section_reconcile_or_exit`: auto-confirm confirm-or-exit
   wrappers that pair a plan-builder with
   :func:`setforge.cli._confirm.confirm_auto_operation`.
 - :func:`_build_unexpected_drift_plan` /
@@ -665,7 +665,7 @@ def _dry_run_pipeline(
     plugin reconcile, extension reconcile, transition record) and prints
     a ``WOULD ``-prefixed action line per mutating verb. Calls only
     read-only helpers; never writes files, never touches the transition
-    state dir, never invokes the bviv confirm wizard, never runs git
+    state dir, never invokes the auto-confirm confirm wizard, never runs git
     fetch (the source-layer git check runs BEFORE this function but is
     itself read-only).
     """
@@ -725,7 +725,7 @@ def _dry_run_emit_drift_gate(
     unexpected drift over the existing live tree) — counts stay
     unprefixed. When unexpected drift IS present, surface the count so
     users can see what the real install would gate on, but do NOT
-    invoke the bviv confirm wizard (the dry-run path is the preview;
+    invoke the auto-confirm confirm wizard (the dry-run path is the preview;
     short-circuiting before the confirm is a hard requirement per spec).
     ``live_sections_map`` is the read-only output of
     :func:`_extract_live_sections_map`; the count is informational.

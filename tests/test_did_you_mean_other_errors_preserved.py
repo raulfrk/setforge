@@ -1,7 +1,7 @@
-"""Tests that non-tmln errors keep their existing routing.
+"""Tests that non-did-you-mean errors keep their existing routing.
 
-The 5twm change ONLY routes Pydantic ``ValidationError`` (raw shape
-errors) through the tmln formatter. Cross-field violations raised as
+The did-you-mean change ONLY routes Pydantic ``ValidationError`` (raw shape
+errors) through the did-you-mean formatter. Cross-field violations raised as
 :class:`setforge.errors.SetforgeError` subclasses (cycle detection,
 missing-profile reference, plugin reference to unknown marketplace,
 etc.) must keep their existing bail-on-first ``schema:`` echo path —
@@ -23,9 +23,12 @@ def _write_tracked_src(tmp_path: Path) -> None:
     (tmp_path / "tracked" / "tracked_file.txt").write_text("x\n", encoding="utf-8")
 
 
-def test_validate_setforge_yaml_cycle_error_not_routed_to_tmln(tmp_path: Path) -> None:
+def test_validate_setforge_yaml_cycle_error_not_routed_to_did_you_mean(
+    tmp_path: Path,
+) -> None:
     """A profile-extends cycle surfaces via the existing ``schema:`` echo
-    path, NOT the tmln carrier (cycle messages have their own contract).
+    path, NOT the did-you-mean carrier (cycle messages have their own
+    contract).
     """
     _write_tracked_src(tmp_path)
     cfg = tmp_path / "setforge.yaml"
@@ -52,12 +55,12 @@ def test_validate_setforge_yaml_cycle_error_not_routed_to_tmln(tmp_path: Path) -
     assert "✗ SCHEMA VALIDATION ERROR" not in result.output
 
 
-def test_validate_setforge_yaml_missing_profile_not_routed_to_tmln(
+def test_validate_setforge_yaml_missing_profile_not_routed_to_did_you_mean(
     tmp_path: Path,
 ) -> None:
     """A ``--profile=<name>`` that doesn't exist surfaces via the
-    existing path (not tmln). The existing flow appends a string
-    failure to the failures list; we just confirm tmln did NOT fire.
+    existing path (not did-you-mean). The existing flow appends a string
+    failure to the failures list; we just confirm did-you-mean did NOT fire.
     """
     _write_tracked_src(tmp_path)
     cfg = tmp_path / "setforge.yaml"
@@ -76,7 +79,7 @@ def test_validate_setforge_yaml_missing_profile_not_routed_to_tmln(
         app, ["validate", "--profile=does_not_exist", f"--config={cfg}"]
     )
     assert result.exit_code == 1, result.output
-    # The tmln schema header MUST NOT be in the output — missing-profile
+    # The did-you-mean schema header MUST NOT be in the output — missing-profile
     # errors flow through the existing string-failures path.
     assert "✗ SCHEMA VALIDATION ERROR" not in result.output
     # The unknown-profile text surfaces verbatim.

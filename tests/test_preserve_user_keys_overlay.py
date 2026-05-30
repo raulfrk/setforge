@@ -129,7 +129,7 @@ def test_collision_subclasses_config_error() -> None:
 def test_remove_of_key_not_in_profile_chain_raises() -> None:
     """A `remove:` referencing a key the resolved profile chain never
     declared is a misconfiguration — surface with the canonical phrase
-    so tmln's setforge validate can format it."""
+    so did-you-mean's setforge validate can format it."""
     with pytest.raises(PreserveUserKeysOverlayError) as exc_info:
         resolve_overlay(
             profile_keys=["a", "b"],

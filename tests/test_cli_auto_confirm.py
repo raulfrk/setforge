@@ -1,4 +1,4 @@
-"""Unit tests for setforge.cli._confirm — bviv --auto* confirmation wizard."""
+"""Unit tests for setforge.cli._confirm — auto-confirm --auto* confirmation wizard."""
 
 import re
 from dataclasses import FrozenInstanceError

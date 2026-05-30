@@ -142,7 +142,7 @@ def test_no_personal_config_in_epilog(
 
 
 def test_install_help_advertises_dry_run(runner: CliRunner) -> None:
-    """install --help cites --dry-run (cross-link to lnvq dry-run bead)."""
+    """install --help cites --dry-run."""
     result = runner.invoke(app, ["install", "--help"], env={"COLUMNS": "100"})
     assert result.exit_code == 0, result.stdout
     stdout = _strip_ansi(result.stdout)
@@ -150,7 +150,7 @@ def test_install_help_advertises_dry_run(runner: CliRunner) -> None:
 
 
 def test_install_help_advertises_auto_flag(runner: CliRunner) -> None:
-    """install --help cites --auto=use-tracked (cross-link to bviv --auto bead)."""
+    """install --help cites --auto=use-tracked (cross-link to auto-confirm --auto)."""
     result = runner.invoke(app, ["install", "--help"], env={"COLUMNS": "100"})
     assert result.exit_code == 0, result.stdout
     stdout = _strip_ansi(result.stdout)

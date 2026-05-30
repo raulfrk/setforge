@@ -1,4 +1,4 @@
-"""dg2a Q10 Option B — secrets-scan findings surface in the confirm panel.
+"""auto-promote Q10 Option B — secrets-scan findings surface in the confirm panel.
 
 The confirm panel renders gitleaks findings as a non-blocking warning
 in the RISKS section; default=No still applies so a fat-finger Enter

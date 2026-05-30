@@ -2,7 +2,7 @@
 
 These primitives originally lived in :mod:`setforge.merge`. They were
 factored out so that the install-time wizard (`setforge.merge.run_wizard`)
-and the capture-time wizard (`nen.23`'s upcoming
+and the capture-time wizard (capture-wizard's upcoming
 `setforge.capture.run_capture_wizard`) can share a single implementation.
 
 What lives here:
@@ -106,7 +106,7 @@ class DriftItem:
     """One diverged key path between tracked and live for a drift item.
 
     Produced by trigger-specific walkers (:func:`setforge.merge.walk_unexpected_drift`
-    for install, :func:`walk_capture_drift` for capture in `nen.23`); consumed by
+    for install, :func:`walk_capture_drift` for capture in capture-wizard); consumed by
     the merge wizard.
     """
 
@@ -344,7 +344,7 @@ def apply_action(
 def _action_use_live(item: DriftItem) -> ActionResult:
     """Write the live key value into the tracked file.
 
-    Per the `nen.23` locked design (spec table line 51), ``mode`` on a
+    Per the capture-wizard locked design (spec table line 51), ``mode`` on a
     :class:`DriftItem` is informational only — both ``"shallow"`` and
     ``"deep"`` walker output reach this action as per-leaf items, and
     a shallow whole-leaf overlay write covers both. The deep-overlay
@@ -497,7 +497,7 @@ def run_wizard_loop(  # noqa: C901 — empty-drift short-circuit adds one branch
         ``None`` enables interactive prompts and signal handlers.
     transition_command:
         Which :class:`TransitionCommand` variant to record on success
-        (e.g. ``MERGE`` for install, ``CAPTURE``-flavored for `nen.23`).
+        (e.g. ``MERGE`` for install, ``CAPTURE``-flavored for capture-wizard).
     profile:
         Profile name (used in the transition meta).
     pending_message:

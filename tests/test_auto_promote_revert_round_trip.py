@@ -1,4 +1,4 @@
-"""dg2a revert round-trip — promote then revert restores pre-promote bytes.
+"""auto-promote revert round-trip — promote then revert restores pre-promote bytes.
 
 The :class:`setforge.transitions.TransitionCommand.PROMOTE` transition
 records a unified diff covering the three mutated files. Standard

@@ -672,7 +672,7 @@ def apply_preserve_user_keys_overlay(
 
 @dataclass(frozen=True, slots=True)
 class HostLocalTrackedFileOverride:
-    """One tracked_file's resolved m3qx overlay state.
+    """One tracked_file's resolved overlay-fields overlay state.
 
     Carried by the mapping returned from
     :func:`apply_host_local_tracked_file_overrides` so compare's
@@ -699,7 +699,7 @@ def apply_host_local_tracked_file_overrides(
     overlay.
 
     For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
-    block that declares one of the three m3qx fields, rebuild the
+    block that declares one of the three overlay-fields fields, rebuild the
     matching :class:`TrackedFile` with the override applied:
 
     - ``mode`` (int) overrides :attr:`TrackedFile.mode` verbatim.
@@ -771,7 +771,7 @@ def apply_host_local_tracked_file_overrides(
         # symlink == dst (the _symlink_no_self_loop check would never
         # re-fire) or push a mode value past TrackedFile's stricter
         # field-level rules. The dump-and-revalidate path re-runs every
-        # TrackedFile invariant against the merged shape so the m3qx
+        # TrackedFile invariant against the merged shape so the overlay-fields
         # override layer cannot weaken the contract.
         merged = {**tracked_file.model_dump(), **updates}
         config.tracked_files[tf_id] = TrackedFile.model_validate(merged)

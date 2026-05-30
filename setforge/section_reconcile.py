@@ -123,7 +123,7 @@ def classify_section_drift(
     Raises :class:`setforge.errors.MarkerError` via the section
     primitives on malformed markers.
     """
-    # Live side is parsed with allow_legacy=True so pre-9by user files
+    # Live side is parsed with allow_legacy=True so pre-hash user files
     # (no semantics keyword, no end-marker hash) survive the migration
     # install. Tracked side is strict — tracked content ships with proper
     # markers and a parse failure there is a real bug, not a legacy

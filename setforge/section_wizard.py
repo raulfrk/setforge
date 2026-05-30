@@ -527,7 +527,7 @@ def run_host_local_promote_wizard(
 ) -> list[PromoteOutcome]:
     """Walk promotable host-local sections; prompt + dispatch promote per the spec.
 
-    Sync's pre-capture entry point for the dg2a ``[p]`` flow. For each
+    Sync's pre-capture entry point for the auto-promote ``[p]`` flow. For each
     promotable section (declared in ``local.yaml`` ``host_local_sections``
     AND present in the live file):
 

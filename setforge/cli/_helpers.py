@@ -205,7 +205,7 @@ def _resolve_drift_paths(
 
 def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
     """Raise :class:`SetforgeError` if any live ``preserve_user_sections``
-    file carries pre-9by markers.
+    file carries pre-hash markers.
 
     Walks every tracked_file in ``resolved`` whose tracked entry has
     ``preserve_user_sections=True`` and runs
@@ -239,7 +239,7 @@ def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
         if detect_legacy_markers(live_text):
             raise SetforgeError(
                 f"{sub_dst}: legacy user-section marker format detected "
-                f"(pre-9by markers without 'host-local'/'shared' keyword "
+                f"(pre-hash markers without 'host-local'/'shared' keyword "
                 f"or 'hash=<sha256>' segment). 'setforge {command}' is "
                 f"strict on live-side markers. Run "
                 f"'uv run setforge install --profile=<name>' first to "
@@ -349,7 +349,7 @@ def _extract_live_sections_map(
     The install loop passes the matching entry to ``deploy.copy_atomic``
     via ``precomputed_live_sections`` so ``_compute_content`` does not
     re-read + re-parse the same live file a second time. The factory
-    routes through ``allow_legacy=True`` so pre-9by live files (untagged
+    routes through ``allow_legacy=True`` so pre-hash live files (untagged
     markers, no end-marker hash) flow through install's migration path;
     install is the verb that re-tags + stamps. Compare / sync use the
     strict parser and refuse legacy via :func:`_refuse_legacy_live_markers`.

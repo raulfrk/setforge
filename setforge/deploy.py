@@ -254,7 +254,7 @@ def _compute_content(
             live_sections = {}
             if dst_existed:
                 live_text = dst.read_text(encoding="utf-8")
-                # allow_legacy=True so pre-9by live files (untagged markers,
+                # allow_legacy=True so pre-hash live files (untagged markers,
                 # no end-marker hash) migrate in place on first install: the
                 # subsequent merge_sections + maintain_marker_hashes pipeline
                 # emits a fully-tagged, hash-stamped live file. The
@@ -393,7 +393,7 @@ def deploy_symlinked_file(
 
     if dst.exists() and not dst.is_symlink():
         # Distinguish directory-at-dst from regular-file-at-dst so the
-        # m3qx symlink_target overlay surfaces the
+        # overlay-fields symlink_target overlay surfaces the
         # "directory in the way" case with a targeted message — silently
         # clobbering or recursing into a real directory layout is
         # almost certainly a config mistake.

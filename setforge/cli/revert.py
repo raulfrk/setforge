@@ -321,7 +321,7 @@ def _apply_revert(
     ``patch -R`` loop reverses target-file content only — the symlink
     itself at ``dst`` is a separate object that must be unlinked
     explicitly via :func:`revert_symlink_deployment`. This wiring closes
-    the symlink-revert side of the m483 contract; the helper refuses
+    the symlink-revert side of the symlink-compare contract; the helper refuses
     cleanly on user-mutated links (target retargeted or replaced with
     a regular file) so user data is never deleted.
     """

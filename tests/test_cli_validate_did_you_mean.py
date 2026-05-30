@@ -403,7 +403,7 @@ def test_validate_local_yaml_nested_extra_forbidden_resolves_real_line(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
     """Nested ``extra_forbidden`` (``len(loc) > 1``) resolves to the
-    real offending line via the b1lg ``.lc`` walker, NOT the (1, 1)
+    real offending line via the error-line-walker ``.lc`` walker, NOT the (1, 1)
     fallback.
 
     A ``tracked_files.<id>.<unknown>`` shape produces a Pydantic error

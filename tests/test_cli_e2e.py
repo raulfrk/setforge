@@ -284,7 +284,7 @@ class TestInstall:
     ) -> None:
         """No pre-existing live file → live equals tracked with hashes maintained.
 
-        Post-9by, install always rewrites end-marker ``hash=<...>``
+        Post-hash, install always rewrites end-marker ``hash=<...>``
         segments so the embedded hash matches the body actually written;
         the post-install live byte-matches ``maintain_marker_hashes``
         applied to tracked, not the raw tracked bytes.

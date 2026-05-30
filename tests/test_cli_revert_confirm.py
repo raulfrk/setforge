@@ -1,4 +1,4 @@
-"""Unit tests for setforge.cli._revert_confirm — p1vl revert wizard."""
+"""Unit tests for setforge.cli._revert_confirm — revert-confirm revert wizard."""
 
 import re
 from dataclasses import FrozenInstanceError

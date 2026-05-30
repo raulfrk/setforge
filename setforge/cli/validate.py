@@ -69,7 +69,7 @@ def _local_yaml_top_keys() -> list[str]:
     Introspects :class:`setforge.local_config.LocalConfig.model_fields`
     rather than hand-maintaining a parallel tuple — the source of truth
     is the model itself, so adding a new top-level overlay block (e.g.
-    ``marketplaces:`` post-5z11) automatically extends the candidate
+    ``marketplaces:`` post-local-overlay) automatically extends the candidate
     list with no edit needed here.
     """
     return list(_LocalConfig.model_fields.keys())
@@ -131,7 +131,7 @@ def _apply_preserve_user_keys_check(
     which surfaces nested ``extra_forbidden`` / shape errors for the
     source / tracked_files / plugins / extensions / marketplaces
     blocks BEFORE :func:`_check_local_yaml` runs at the end of
-    validate. Without broadening the catch (b1lg), these raw
+    validate. Without broadening the catch (error-line-walker), these raw
     exceptions bubble past the narrow ``PreserveUserKeysOverlayError``
     clause and abort the whole validate run — defeating the
     report-all-then-refuse contract.
@@ -599,7 +599,7 @@ def _validation_error_to_context(
 
     Walks the error's ``loc`` tuple against ``data``'s ``.lc`` table to
     map the field path to a source line/column — including nested
-    overlay-class errors (``len(loc) > 1``) via the b1lg walker. Builds
+    overlay-class errors (``len(loc) > 1``) via the error-line-walker. Builds
     a 1-3-line snippet from ``raw_text`` around the offending line.
     When the error is an ``extra_forbidden`` shape, the offending key
     itself is the ``field_value`` and we consult the close-match
@@ -860,7 +860,7 @@ def _route_setforge_yaml_validation_error(
     exc: ValidationError,
     failures: list[ValidationErrorWithContext | str],
 ) -> None:
-    """Route ``ValidationError`` from ``load_config`` through tmln formatters.
+    """Route ``ValidationError`` from ``load_config`` through did-you-mean formatters.
 
     Re-loads ``setforge.yaml`` with ``YAML(typ="rt")`` (lazy — only when
     a ValidationError fired) so the resulting ``CommentedMap`` carries
@@ -912,7 +912,7 @@ def _setforge_yaml_error_to_context(
     raw: Mapping[str, object],
     err: Mapping[str, object],
 ) -> ValidationErrorWithContext:
-    """Convert one Pydantic error from ``load_config`` to a tmln carrier.
+    """Convert one Pydantic error from ``load_config`` to a did-you-mean carrier.
 
     Sibling of :func:`_validation_error_to_context` for the engine
     config side. Walks the error's ``loc`` against ``raw``'s nested
@@ -1150,7 +1150,7 @@ def validate(
     failures: list[ValidationErrorWithContext | str] = []
 
     # Check 1: Pydantic schema validation + cross-field checks in load_config.
-    # ValidationError → tmln close-match UX; SetforgeError
+    # ValidationError → did-you-mean close-match UX; SetforgeError
     # (cycle / missing-profile / file-not-found / etc.) keeps its existing
     # bail-on-first routing — these are cross-field violations that don't
     # have a useful "Did you mean" suggestion path.

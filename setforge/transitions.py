@@ -138,7 +138,9 @@ class TransitionMeta:
     timestamp: datetime  # UTC; serialized as ISO 8601
     host: str  # platform.node()
     version: str  # setforge.__version__
-    source_sha: str | None = None  # config-repo HEAD at install time; None pre-xra8
+    source_sha: str | None = (
+        None  # config-repo HEAD at install time; None pre-source-sha
+    )
     # all None pre-bump. List/bool/str all use the None sentinel
     # (NOT default_factory=list) so the omit-when-None invariant holds for every
     # field and slots=True doesn't allocate a per-instance default container.

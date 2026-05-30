@@ -303,7 +303,7 @@ def test_install_bare_no_warn_when_host_local_drift_only(
 def test_install_hash_maintained_on_host_local(fixture: dict[str, Path]) -> None:
     """Even for host-local sections, install rewrites the end-marker hash."""
     body = "host body\n"
-    # Post-9ln: tracked must ship with a stamped end-marker hash.
+    # Post-strict-hash: tracked must ship with a stamped end-marker hash.
     fixture["src"].write_text(
         _make_section_text("notes", "host-local", body, _sha256(body))
     )
@@ -578,7 +578,7 @@ def test_install_with_use_tracked_records_transition(
 
 
 def _legacy_live_section_text(name: str, body: str) -> str:
-    """Build a pre-9by live file shape: untagged markers, no hash segment."""
+    """Build a pre-hash live file shape: untagged markers, no hash segment."""
     return (
         "preamble\n"
         f"<!-- setforge:user-section start {name} -->\n"

@@ -121,7 +121,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 [tool.pytest.ini_options]
 markers = [
     "e2e_docker: end-to-end Docker tests against a real Debian + claude + code container (opt-in via -m e2e_docker; not run by default)",
-    "fresh_host: opt this test out of the autouse fresh-host suppression fixture so the install welcome gate fires (setforge-7jg4)",
+    "fresh_host: opt this test out of the autouse fresh-host suppression fixture so the install welcome gate fires",
     "xdist_group: serialize tagged tests to one xdist worker for daemon-bound resources (see tests/docker/conftest.py docker_daemon convention)",
 ]
 # Default run skips e2e_docker so plain `pytest` stays fast and docker-free.

@@ -1,4 +1,4 @@
-"""dg2a rollback tests — partial-failure path restores every file.
+"""auto-promote rollback tests — partial-failure path restores every file.
 
 The :class:`setforge.wizard.Snapshot` context manager wraps the three
 file writes; if any mutation raises, every file is restored from the

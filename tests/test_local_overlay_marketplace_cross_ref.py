@@ -566,7 +566,7 @@ def test_resolver_error_via_cli_surfaces_check_6_fallback(
 ) -> None:
     """End-to-end CLI integration of the boundary fix.
 
-    YAML parses cleanly (no b1lg integration gap) but the extensions
+    YAML parses cleanly (no error-line-walker integration gap) but the extensions
     resolver fires. The helper returns ``False`` → Check 6 runs →
     BOTH the resolver error AND the pre-existing marketplace
     inconsistency surface in the validate output.

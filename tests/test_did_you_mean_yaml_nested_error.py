@@ -1,4 +1,4 @@
-"""Tests for nested-error tmln routing on setforge.yaml.
+"""Tests for nested-error did-you-mean routing on setforge.yaml.
 
 Covers the nested ``loc`` paths emitted by Pydantic for
 ``extra_forbidden`` inside ``profiles.<name>`` and
@@ -21,10 +21,10 @@ def _write_tracked_src(tmp_path: Path) -> None:
     (tmp_path / "tracked" / "tracked_file.txt").write_text("x\n", encoding="utf-8")
 
 
-def test_validate_setforge_yaml_profile_nested_typo_routes_to_tmln(
+def test_validate_setforge_yaml_profile_nested_typo_routes_to_did_you_mean(
     tmp_path: Path,
 ) -> None:
-    """A typo'd profile-level key (``extends_to``) routes through tmln.
+    """A typo'd profile-level key (``extends_to``) routes through did-you-mean.
 
     The error surfaces as a schema-error carrier with file:line + snippet
     + Fix; close-match against :attr:`Profile.model_fields.keys()` is
@@ -55,10 +55,10 @@ def test_validate_setforge_yaml_profile_nested_typo_routes_to_tmln(
     assert "Did you mean 'extends'" in result.output
 
 
-def test_validate_setforge_yaml_tracked_files_nested_typo_routes_to_tmln(
+def test_validate_setforge_yaml_tracked_files_nested_typo_routes_to_did_you_mean(
     tmp_path: Path,
 ) -> None:
-    """A typo'd tracked_files-entry key (``srcc``) routes through tmln.
+    """A typo'd tracked_files-entry key (``srcc``) routes through did-you-mean.
 
     Candidate list = :attr:`TrackedFile.model_fields.keys()`; ``srcc`` is
     distance 1 from ``src`` so the suggestion fires.

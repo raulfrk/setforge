@@ -1,6 +1,6 @@
-# xsco fixture
+# host-local fixture
 
-A tracked markdown file used by the xsco docker e2e suite. Carries an
+A tracked markdown file used by the host-local docker e2e suite. Carries an
 existing user-section and several headings that local.yaml's
 host_local_sections can anchor against.
 

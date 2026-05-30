@@ -260,7 +260,7 @@ setforge is the post-rename + post-split form of the older `my-setup` tool. If y
 
    `setforge install` detects pre-rename markers and refuses to clobber section bodies, pointing you at this sed command — but running it preemptively is safer.
 
-3. **Repo split**: your old monorepo had engine + config together. Post-2ba.4, separate them:
+3. **Repo split**: your old monorepo had engine + config together. Separate them:
 
    - **Option A** (clean): clone the new engine repo afresh, then create / clone a config repo containing your `my_setup.yaml` + `tracked/` (you can use `git filter-repo --path tracked/ --path my_setup.yaml` to extract them from your old monorepo with full history).
    - **Option B** (migrated): if you're `raulfrk` (the author), your config now lives at `git@github.com:raulfrk/setforge-config.git`.

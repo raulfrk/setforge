@@ -16,7 +16,7 @@ Atomicity is enforced via :class:`setforge.wizard.Snapshot`: a snapshot
 of the three mutated files (local.yaml, tracked-file, live-file) is
 taken before the first write; on any exception, every file is restored.
 
-The pre-promote confirm UI mirrors the bviv ``_render_panel`` shape —
+The pre-promote confirm UI mirrors the auto-confirm ``_render_panel`` shape —
 one rich ``Panel`` carrying file mutations + body preview + secrets-scan
 results + RISKS — followed by a ``radiolist_dialog`` whose default is
 ``no, abort`` so a fat-finger ``Enter`` aborts cleanly.
@@ -189,7 +189,7 @@ def confirm_promote_to_shared(
     Returns ``True`` only when the user explicitly selects ``yes``;
     ``False`` on default-no (Enter without arrows), explicit no, or
     Esc. Non-TTY callers are rejected — promote is an interactive-only
-    flow per the spec (the bviv ``yes=`` short-circuit does NOT apply).
+    flow per the spec (the auto-confirm ``yes=`` short-circuit does NOT apply).
     """
     if not sys.stdin.isatty():
         raise SetforgeError(

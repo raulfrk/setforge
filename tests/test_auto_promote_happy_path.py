@@ -1,4 +1,4 @@
-"""dg2a happy-path unit tests for setforge.section_promote.
+"""auto-promote happy-path unit tests for setforge.section_promote.
 
 Covers the executor's atomic four-mutation contract directly (no CLI,
 no PTY): set up a tempdir-rooted local.yaml + tracked.md + live.md

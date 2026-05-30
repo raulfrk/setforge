@@ -239,7 +239,7 @@ def sync(
 
     Symmetric with ``setforge install``'s drift gate: the merge wizard
     fires interactively for ``preserve_user_keys_deep`` and non-preserve
-    top-level drift. Pass ``--auto=use-live`` (pre-`nen.23` silent
+    top-level drift. Pass ``--auto=use-live`` (pre-`capture-wizard` silent
     absorb) or ``--auto=keep-tracked`` (refuse) for scripted runs.
     """
     config = _resolve_config_arg(config)
@@ -288,7 +288,7 @@ def _run_capture_confirm_gate(
     auto_enum: capture_mod.CaptureAuto | None,
     yes: bool,
 ) -> None:
-    """Run the bviv ``sync --auto=use-live`` drift-confirm gate.
+    """Run the auto-confirm ``sync --auto=use-live`` drift-confirm gate.
 
     No-op unless ``auto_enum`` is :attr:`CaptureAuto.USE_LIVE`. Compares
     live vs tracked with the host_local_sections overlay threaded
@@ -381,7 +381,7 @@ def _run_promote_wizard(
     auto_enum: capture_mod.CaptureAuto | None,
     no_transition: bool,
 ) -> list[section_wizard.PromoteOutcome]:
-    """Walk host-local promotables; prompt + dispatch promote per spec dg2a.
+    """Walk host-local promotables; prompt + dispatch promote per spec auto-promote.
 
     Skipped when ``--auto`` is set (sync's non-interactive paths cannot
     drive the radiolist confirm dialog) or when no overlays are

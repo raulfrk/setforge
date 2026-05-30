@@ -1,4 +1,4 @@
-# setforge global preferences (pre-9by fixture)
+# setforge global preferences (pre-hash fixture)
 
 This fixture mimics a real `~/.claude/CLAUDE.md` from before the
 parser tightening: every user-section marker is missing

@@ -6,7 +6,7 @@ Three drift shapes the new ``_compare_symlinked`` helper classifies:
    not exist) — DRIFTED, NOT MISSING. Fixes the existing-bug surface
    where ``compare.py:_compare_one`` used ``if not dst.exists()`` as
    the existence probe; ``Path.exists()`` returns False on a broken
-   link, which misclassified the case as MISSING. m483's contract is
+   link, which misclassified the case as MISSING. symlink-compare's contract is
    that the link IS present and is what setforge installed — the
    drift is that the target is gone, not that the link is gone.
 
@@ -45,10 +45,10 @@ def _make(src: Path, dst: Path, *, symlink: str | None) -> TrackedFile:
 def test_broken_symlink_is_not_missing(tmp_path: Path) -> None:
     """A broken symlink (link present, target absent) is NOT MISSING.
 
-    The spec acceptance #3 invariant: pre-m483 ``compare.py:_compare_one``
+    The spec acceptance #3 invariant: pre-symlink-compare ``compare.py:_compare_one``
     used ``if not dst.exists()`` as the existence probe; ``exists()``
     returns False on a broken link, so dangling tracked symlinks
-    classified as MISSING. The m483 dispatch via ``is_symlink()`` (BEFORE
+    classified as MISSING. The symlink-compare dispatch via ``is_symlink()`` (BEFORE
     the ``exists()`` branch) catches the link, then probes ``os.readlink``
     for target match — so the link's classification is decoupled from the
     target's reachability.
@@ -82,8 +82,8 @@ def test_broken_symlink_is_not_missing(tmp_path: Path) -> None:
 def test_broken_symlink_with_correct_target_is_unchanged(tmp_path: Path) -> None:
     """Defensive re-statement of the broken-link-correct-target case.
 
-    The spec's existing-bug surface note: pre-m483 the case classified
-    as MISSING because ``exists()`` returned False. m483's contract:
+    The spec's existing-bug surface note: pre-symlink-compare the case classified
+    as MISSING because ``exists()`` returned False. symlink-compare's contract:
     a broken link is NOT MISSING. Whether it counts as DRIFTED or
     UNCHANGED depends on the target — if the declared symlink target
     matches ``os.readlink``, the LINK is correct; only the target

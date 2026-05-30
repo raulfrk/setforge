@@ -191,7 +191,7 @@ def test_extract_sections_parses_unnamed_end_marker_with_hash() -> None:
 
 def test_extract_sections_hashless_end_marker_under_allow_legacy_parses() -> None:
     """Hashless end markers parse under the migration-only ``allow_legacy``
-    escape hatch (9ln); strict default rejects them."""
+    escape hatch (strict-hash); strict default rejects them."""
     text = (
         "<!-- setforge:user-section start shared a -->\n"
         "body\n"
@@ -482,7 +482,7 @@ def test_set_marker_hashes_missing_key_message_format() -> None:
 
 
 def test_set_marker_hashes_allow_legacy_does_not_bypass_strict_check() -> None:
-    """``allow_legacy=True`` tolerates pre-9by input markers but does NOT
+    """``allow_legacy=True`` tolerates pre-hash input markers but does NOT
     weaken the strict missing-keys check."""
     text = (
         "<!-- setforge:user-section start shared a -->\n"
@@ -772,7 +772,7 @@ def test_walk_markers_allow_legacy_yields_shared_and_none_hash() -> None:
 
 
 def test_walk_markers_strict_default_rejects_missing_semantics() -> None:
-    """Untagged markers + strict (default) → MarkerError (preserved 9by
+    """Untagged markers + strict (default) → MarkerError (preserved hashed-marker
     behavior)."""
     with pytest.raises(MarkerError, match="missing required"):
         extract_sections(_LEGACY_UNTAGGED_TEXT)
@@ -780,7 +780,7 @@ def test_walk_markers_strict_default_rejects_missing_semantics() -> None:
 
 def test_walk_markers_strict_default_rejects_missing_hash() -> None:
     """Tagged markers without hash= + strict (default) → MarkerError on
-    the end marker. NEW strictness from 9ln."""
+    the end marker. NEW strictness from strict-hash."""
     with pytest.raises(MarkerError, match="missing required 'hash="):
         extract_sections(_LEGACY_TAGGED_HASHLESS_TEXT)
 
@@ -820,21 +820,21 @@ def test_extract_marker_hashes_legacy_returns_none() -> None:
     assert hashes == {"workflow": None, "commits": None}
 
 
-def test_walk_markers_strict_rejects_pre_9by_fixture() -> None:
-    """The on-disk pre-9by fixture is rejected by the strict parser."""
-    fixture_text = (Path(__file__).parent / "fixtures" / "pre_9by_CLAUDE.md").read_text(
-        encoding="utf-8"
-    )
+def test_walk_markers_strict_rejects_pre_hash_fixture() -> None:
+    """The on-disk pre-hash fixture is rejected by the strict parser."""
+    fixture_text = (
+        Path(__file__).parent / "fixtures" / "pre_hash_CLAUDE.md"
+    ).read_text(encoding="utf-8")
     with pytest.raises(MarkerError, match="missing required"):
         extract_sections(fixture_text)
 
 
-def test_walk_markers_allow_legacy_accepts_pre_9by_fixture() -> None:
-    """The on-disk pre-9by fixture parses under allow_legacy=True with two
+def test_walk_markers_allow_legacy_accepts_pre_hash_fixture() -> None:
+    """The on-disk pre-hash fixture parses under allow_legacy=True with two
     sections (workflow, commits) and all-None embedded hashes."""
-    fixture_text = (Path(__file__).parent / "fixtures" / "pre_9by_CLAUDE.md").read_text(
-        encoding="utf-8"
-    )
+    fixture_text = (
+        Path(__file__).parent / "fixtures" / "pre_hash_CLAUDE.md"
+    ).read_text(encoding="utf-8")
     bodies = extract_sections(fixture_text, allow_legacy=True)
     assert set(bodies) == {"workflow", "commits"}
     assert "Stay focused" in bodies["workflow"]

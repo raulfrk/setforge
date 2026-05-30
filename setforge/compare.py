@@ -250,7 +250,7 @@ def diff_file(
     if preserve_user_sections and not host_local_sections:
         src_text = src.read_text(encoding="utf-8")
         # Live side is parsed with allow_legacy=True so install's
-        # pre-deploy compare step survives a pre-9by user file. The
+        # pre-deploy compare step survives a pre-hash user file. The
         # compare CLI command surfaces a user-actionable error via
         # ``cli._refuse_legacy_live_markers`` BEFORE reaching here when
         # invoked directly; this branch is reached only from install's
@@ -473,7 +473,7 @@ def compare_profile(
     via :func:`setforge.cli._install_helpers._load_validated_host_local_sections`
     before passing it in; callers that don't carry an overlay (e.g.
     the orphan-detection and status commands) pass ``None`` and get the
-    pre-xsco behavior.
+    pre-host-local behavior.
 
     Overlay contract (SPEC 2): this function re-resolves
     the profile via :func:`resolve_profile` and intentionally discards
@@ -614,7 +614,7 @@ def _compare_symlinked(
 
     Probes ``is_symlink()`` BEFORE ``exists()`` to avoid misclassifying
     a dangling symlink (``exists()`` returns False on broken links) as
-    MISSING — the existing-bug surface m483 fixes.
+    MISSING — the existing-bug surface symlink-compare fixes.
 
     Four drift shapes count as DRIFTED (returns ``(entry, True)``):
 
@@ -776,7 +776,7 @@ def render_host_local_tracked_file_overrides_block(
     ``mode`` / ``dst`` / ``symlink_target`` overrides.
 
     Returns an empty list when ``overrides`` is empty — the block
-    is suppressed when local.yaml introduces no m3qx override.
+    is suppressed when local.yaml introduces no overlay-fields override.
     Otherwise returns one line per tracked_file with one
     bracketed provenance tag per overridden field, mirroring the
     SPEC 2 ``[from local.yaml]`` style:

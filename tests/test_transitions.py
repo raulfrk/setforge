@@ -259,7 +259,7 @@ def test_load_meta_old_record_without_source_sha_round_trips_to_none(
     deserialize cleanly."""
     target = TransitionDir(tmp_path / "20260507T120000000000Z-install-vmh")
     target.mkdir()
-    # Hand-craft a pre-xra8 payload — no ``source_sha`` key.
+    # Hand-craft a pre-source-sha payload — no ``source_sha`` key.
     payload = {
         "command": "install",
         "profile": "vmh",

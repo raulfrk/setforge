@@ -51,7 +51,7 @@ class CaptureAction(StrEnum):
 class CaptureAuto(StrEnum):
     """Closed set of non-interactive resolutions for capture-time drift.
 
-    ``USE_LIVE`` — absorb all drift (reproduces pre-`nen.23` silent-absorb).
+    ``USE_LIVE`` — absorb all drift (reproduces pre-`capture-wizard` silent-absorb).
     ``KEEP_TRACKED`` — refuse to absorb any drift.
 
     ``None`` is the third valid value the CLI seam accepts (interactive mode);
@@ -107,7 +107,7 @@ def capture_tracked_file(
 
     if preserve_user_sections:
         # Markdown / preserve_user_sections path: capture's section
-        # handling is unchanged from pre-`nen.23` (the capture-time wizard
+        # handling is unchanged from pre-`capture-wizard` (the capture-time wizard
         # does not fire for these tracked_files). Read live, optionally
         # strip shallow keys, merge tracked sections.
         content = _read_with_shallow_strip(dst, preserve_user_keys)
@@ -148,7 +148,7 @@ def capture_tracked_file(
         # No preserve declarations on this tracked_file — capture's
         # contract for unstructured files (plain text, markdown
         # without sections, list-only YAML) is unchanged from
-        # pre-`nen.23`: wholesale live → tracked. The capture-time
+        # pre-`capture-wizard`: wholesale live → tracked. The capture-time
         # wizard didn't fire here (the walker silently skips files
         # whose parsed root isn't a dict), so live's content is
         # the desired tracked content.

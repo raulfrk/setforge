@@ -145,7 +145,7 @@ def test_atomic_write_has_no_exdev_branch() -> None:
 
 def test_markdown_user_section_preserved(tmp_path: Path) -> None:
     src = tmp_path / "src.md"
-    # Tracked side ships with a hash-stamped end marker (post-9by canonical).
+    # Tracked side ships with a hash-stamped end marker (post-hash canonical).
     src.write_text(
         "header\n"
         "<!-- setforge:user-section start host-local -->\n"
@@ -467,7 +467,7 @@ def test_copy_atomic_legacy_live_body_preserved(tmp_path: Path) -> None:
         "footer\n"
     )
     dst = tmp_path / "dst.md"
-    # Live with pre-9by untagged markers and no hash segment.
+    # Live with pre-hash untagged markers and no hash segment.
     dst.write_text(
         "header\n"
         "<!-- setforge:user-section start notes -->\n"

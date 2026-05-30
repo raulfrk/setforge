@@ -10,7 +10,7 @@ The contract:
 - Setting a tighter mode (e.g. ``0o600`` over a previously-``0o644``
   live file) is honored on UPDATE, not just CREATE.
 - fchmod failure is contractual — propagates rather than being
-  silently swallowed (the pre-8z91 ``contextlib.suppress(OSError)``
+  silently swallowed (the pre-mode-on-update ``contextlib.suppress(OSError)``
   wrapper is gone).
 - AST guarantee: the source of ``_atomic_write`` has ``os.fchmod``
   appearing strictly before ``os.replace`` (the source-text-ordering
@@ -116,7 +116,7 @@ def test_fchmod_failure_propagates(
 ) -> None:
     """fchmod OSError is contractual — must propagate, not be swallowed.
 
-    The pre-8z91 ``contextlib.suppress(OSError)`` wrapped the
+    The pre-mode-on-update ``contextlib.suppress(OSError)`` wrapped the
     ``shutil.copystat`` call; the refactored path drops the wrapper.
     """
     src = tmp_path / "src"
@@ -189,7 +189,7 @@ def test_atomic_write_source_orders_fchmod_before_replace() -> None:
 
 def test_no_shutil_copystat_in_atomic_write() -> None:
     """``shutil.copystat`` is gone — fchmod is the only perm-set path
-    (the old copystat+OSError-suppress block was the 8z91 target).
+    (the old copystat+OSError-suppress block was the mode-on-update target).
     """
     src = Path(deploy_mod.__file__).read_text(encoding="utf-8")
     assert "shutil.copystat" not in src

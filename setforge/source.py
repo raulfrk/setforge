@@ -345,7 +345,7 @@ class _LocalTrackedFileOverlay(BaseModel):
     path-expansion semantics as ``dst``. Mutually exclusive with
     ``mode``. Deploy-time semantics (mirrors
     :func:`setforge.deploy.deploy_symlinked_file`, the shared code
-    path the m3qx override rides through):
+    path the overlay-fields override rides through):
 
     - Missing target file → :func:`_deploy_target_content` writes
       the tracked content to the target BEFORE
@@ -408,7 +408,7 @@ class _LocalTrackedFileOverlay(BaseModel):
 
     @model_validator(mode="after")
     def _validate_host_local_overrides(self) -> "_LocalTrackedFileOverlay":
-        """Enforce mutual-exclusion + bounds + ``$VAR`` ban for the m3qx fields.
+        """Enforce mutual-exclusion + bounds + ``$VAR`` ban for the overlay fields.
 
         Four invariants in one validator so each call to
         ``_LocalTrackedFileOverlay.model_validate(...)`` sees the

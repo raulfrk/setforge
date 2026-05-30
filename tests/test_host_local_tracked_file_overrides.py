@@ -61,7 +61,7 @@ def test_empty_overlay_returns_no_applied_entries(tmp_path: Path) -> None:
 
 def test_overlay_with_only_preserve_user_keys_is_no_op(tmp_path: Path) -> None:
     """An overlay that only declares preserve_user_keys / host_local_sections
-    does not trigger the m3qx applied-entry surface."""
+    does not trigger the overlay-fields applied-entry surface."""
     (tmp_path / "local.yaml").write_text(
         "tracked_files:\n"
         "  hook:\n"

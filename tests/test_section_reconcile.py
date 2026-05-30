@@ -142,7 +142,7 @@ def test_classify_section_drift_conflict() -> None:
 
 
 def test_classify_section_drift_strict_tracked_rejects_hashless_tracked() -> None:
-    """Post-9ln, the classifier parses tracked strictly — hashless tracked
+    """Post-strict-hash, the classifier parses tracked strictly — hashless tracked
     is unreachable in steady state and surfaces as :class:`MarkerError`.
 
     The LEGACY drift state is preserved (see
@@ -232,7 +232,7 @@ def test_classify_section_drift_propagates_marker_error() -> None:
 
 
 def test_classify_section_drift_legacy_live_returns_LEGACY_state() -> None:
-    """Migration scenario: pre-9by live (no semantics
+    """Migration scenario: pre-hash live (no semantics
     keyword, no end-marker hash) + stamped tracked passes through the
     classifier's ``allow_legacy=True`` live-side path and yields the
     :attr:`SectionDriftState.LEGACY` state for every section. The
@@ -257,7 +257,7 @@ def test_classify_section_drift_legacy_live_returns_LEGACY_state() -> None:
 
 
 def test_maintain_marker_hashes_writes_body_hashes_into_markers() -> None:
-    """Post-9ln, ``maintain_marker_hashes`` runs over output of
+    """Post-strict-hash, ``maintain_marker_hashes`` runs over output of
     :func:`merge_sections`, which copies tracked's hash-stamped markers
     verbatim. A stale or placeholder hash is the legitimate input shape."""
     body = "rule A\nrule B\n"

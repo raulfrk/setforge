@@ -180,10 +180,10 @@ def install(
     apply_preserve_user_keys_overlay(cfg, profile)
     # Apply local.yaml host-local mode/dst/symlink_target overlay
     # — also AFTER profile resolution. Rebuilds each TrackedFile with the
-    # m3qx overrides applied so downstream resolve_dst / deploy /
+    # overlay-fields overrides applied so downstream resolve_dst / deploy /
     # deploy_symlinked_file consume the override transparently.
     apply_host_local_tracked_file_overrides(cfg)
-    # Load + validate the local.yaml host_local_sections overlay (xsco).
+    # Load + validate the local.yaml host_local_sections overlay (host-local).
     # Validation is file-type only at this layer: anchors / bodies are
     # resolved during deploy._compute_content. Empty mapping when local.yaml
     # is absent or declares no host-local sections.

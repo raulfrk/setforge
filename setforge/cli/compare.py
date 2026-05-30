@@ -267,7 +267,7 @@ def _render_host_local_preview(
         tracked_file = cfg.tracked_files[tf_id]
         dst = resolve_dst(tracked_file)
         # Existing live-section names — used to classify already-injected
-        # vs would-be-injected per section. allow_legacy=True so a pre-9by
+        # vs would-be-injected per section. allow_legacy=True so a pre-hash
         # live file does not crash the preview.
         try:
             live_text = dst.read_text(encoding="utf-8")

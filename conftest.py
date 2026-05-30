@@ -56,7 +56,7 @@ import pytest
 
 # Cap rationale (per investigation, 2026-05-20):
 # -n 2 is the empirically-validated stable equilibrium on this host (109 tests,
-# zero TimeoutExpired flakes, zero daemon crashes). The original hpd4 spec
+# zero TimeoutExpired flakes, zero daemon crashes). The original spec
 # target of < 6 min wall-time was aspirational, set pre-daemon-saturation;
 # current measurements span ~6:30 to ~7:45 wall depending on host load
 # (idle host ≈ 6:30; under concurrent ambient load ≈ 7:45). That slip is

@@ -241,7 +241,7 @@ def test_auto_use_tracked_no_confirm_under_dry_run(
 ) -> None:
     """``--auto=use-tracked --dry-run`` short-circuits before the section confirm.
 
-    Per spec anti-pattern #5: the bviv ``confirm_auto_operation``
+    Per spec anti-pattern #5: the auto-confirm ``confirm_auto_operation``
     wizard MUST NOT fire under ``--auto=*`` + ``--dry-run``. The two
     call sites in :mod:`setforge.cli._install_helpers` live inside
     ``_run_predeploy_gates``, which the dry-run pipeline does not

@@ -348,7 +348,7 @@ def test_walker_skips_section_tracked_files(tmp_path: Path) -> None:
 def test_walker_jsonc_top_level_non_preserve_drift(tmp_path: Path) -> None:
     """JSONC: top-level non-preserve shared-different key yields one
     shallow item. (JSONC deep-merge sub-key walking is out of scope
-    for nen.23 v1; the wizard's [u] action uses
+    for capture-wizard v1; the wizard's [u] action uses
     :func:`setforge.jsonc.overlay_user_keys` which only handles
     top-level literal key names.)"""
     config, repo, _src, _dst = _make_config(

@@ -271,7 +271,7 @@ def _root(
 # isort: off
 from setforge.cli import install as _install  # noqa: E402, F401
 from setforge.cli import compare as _compare  # noqa: E402, F401
-from setforge.cli import orphans as _orphans  # noqa: E402, F401 (cleanup-orphans — o3h8)
+from setforge.cli import orphans as _orphans  # noqa: E402, F401 (cleanup-orphans)
 from setforge.cli import sync as _sync  # noqa: E402, F401 (capture+merge+sync)
 from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transitions subgroup)
 from setforge.cli import ext as _ext  # noqa: E402, F401
@@ -281,9 +281,9 @@ from setforge.cli import section as _section  # noqa: E402, F401 (section subgro
 from setforge.cli import init as _init  # noqa: E402, F401
 from setforge.cli import upgrade as _upgrade  # noqa: E402, F401
 from setforge.cli import migrate as _migrate  # noqa: E402, F401 (schema migration)
-from setforge.cli import status as _status  # noqa: E402, F401  (xra8)
+from setforge.cli import status as _status  # noqa: E402, F401
 from setforge.cli import profile as _profile  # noqa: E402, F401 (profile subgroup)
-from setforge.cli import snapshot as _snapshot  # noqa: E402, F401 (of3a)
+from setforge.cli import snapshot as _snapshot  # noqa: E402, F401
 from setforge.cli import completion as _completion  # noqa: E402, F401
 from setforge.cli import config as _config  # noqa: E402, F401
 # isort: on

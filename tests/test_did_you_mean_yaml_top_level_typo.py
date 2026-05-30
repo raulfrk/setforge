@@ -1,6 +1,6 @@
-"""Top-level typo tmln routing for ``setforge validate``.
+"""Top-level typo did-you-mean routing for ``setforge validate``.
 
-Mirrors the local.yaml tmln close-match UX but exercises
+Mirrors the local.yaml did-you-mean close-match UX but exercises
 the engine-config side: a typo'd top-level key in setforge.yaml routes
 through ``format_schema_validation_error`` + ``suggest_close_match``
 against ``Config.model_fields.keys()`` instead of bailing on first error
@@ -26,7 +26,7 @@ def _write_tracked_src(tmp_path: Path) -> None:
 def test_validate_setforge_yaml_top_level_typo_suggests_known_key(
     tmp_path: Path,
 ) -> None:
-    """A typo'd top-level key (``proffiles:``) routes through the tmln
+    """A typo'd top-level key (``proffiles:``) routes through the did-you-mean
     formatter and surfaces a "Did you mean 'profiles'" suggestion.
 
     Acceptance: exit code 1, structured schema-error output (header +

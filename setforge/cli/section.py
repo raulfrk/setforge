@@ -206,7 +206,7 @@ def _validate_anchor_line(*, anchor_line: int, total_lines: int) -> None:
 
 
 def _check_duplicate_name(*, file_text: str, name: str) -> None:
-    # Strict parse: tracked files post-9by must carry a ``hash=`` segment
+    # Strict parse: tracked files post-hash must carry a ``hash=`` segment
     # on every end marker. Passing ``allow_legacy=True`` here would
     # silently absorb malformed semantics keywords or garbled hash
     # segments rather than surfacing the corruption to the user before
