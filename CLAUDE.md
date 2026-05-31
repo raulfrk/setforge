@@ -24,7 +24,7 @@ End markers may carry an optional `hash=<sha256-hex>` segment that records the b
 
 ## Profiles — always pass --profile=
 
-Profiles are defined in the USER's config repo's `setforge.yaml`. The author's daily-driver profile is `vm-headless`. Never run a `setforge` command without `--profile=`.
+Profiles are defined in the USER's config repo's `setforge.yaml`. The author's daily-driver profile is `debian-vm`. Never run a `setforge` command without `--profile=`.
 
 ## Workflow verbs
 
