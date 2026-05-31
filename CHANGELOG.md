@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-05-31
 
 The rename release. setforge is the renamed, re-architected successor
 to the prior `my-setup` tool. v0.2.0 is the first release under the new
