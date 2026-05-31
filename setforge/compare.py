@@ -96,10 +96,44 @@ class CompareReport:
     entries: list[FileCompare]
     has_unexpected_drift: bool
     orphans: list[OrphanEntry] = field(default_factory=list)
+    orphan_skipped_absent: int = 0
+    orphan_skipped_source: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class OrphanDetection:
+    """Result of :func:`detect_orphans`.
+
+    ``orphans`` is the kept set (deployed dst paths that still exist on
+    disk and are no longer tracked). ``skipped_absent`` /
+    ``skipped_source`` tally the candidates the guards filtered out — a
+    path no longer on disk, or a path that is a tracked SOURCE rather
+    than a deployed dst — so the CLI can surface a transparency note.
+    """
+
+    orphans: list[OrphanEntry]
+    skipped_absent: int = 0
+    skipped_source: int = 0
+
+
+def _norm(path: Path) -> Path:
+    """Lexically normalize ``path`` (expand ``~``, collapse ``.``/``..``).
+
+    Purely lexical via :func:`os.path.normpath` — NEVER resolves
+    symlinks. A candidate orphan that is a symlink must reach ``unlink``
+    un-dereferenced; resolving first would target the pointed-to file.
+    Applied to BOTH sides of every orphan comparison so relative / ``~``
+    / ``..`` aliasing cannot make a guard fail open.
+    """
+    return Path(os.path.normpath(path.expanduser()))
 
 
 def _resolved_tracked_dsts(
-    resolved: ResolvedProfile, config: Config, *, extra_ids: frozenset[str]
+    resolved: ResolvedProfile,
+    config: Config,
+    repo_root: Path,
+    *,
+    extra_ids: frozenset[str],
 ) -> set[Path]:
     """Resolved destination set for orphan exclusion.
 
@@ -108,15 +142,37 @@ def _resolved_tracked_dsts(
     ``extra_ids`` are silently skipped — a user may have removed an
     ignore entry without cleaning the corresponding file; treating the
     id as still-tracked is the safer default.
+
+    Directory-type tracked_files are expanded via
+    :func:`expand_tracked_file` so every deployed CHILD dst joins the
+    set — without this a directory tracked_file's children surface as
+    orphans (touched-but-absent from the parent-only dst set). All paths
+    are lexically normalized to match the candidate side.
     """
+    names = list(resolved.tracked_files) + [
+        name for name in extra_ids if name in config.tracked_files
+    ]
     tracked_paths: set[Path] = set()
-    for name in resolved.tracked_files:
-        tracked_paths.add(resolve_dst(config.tracked_files[name]))
-    for name in extra_ids:
-        tracked_file = config.tracked_files.get(name)
-        if tracked_file is not None:
-            tracked_paths.add(resolve_dst(tracked_file))
+    for name in names:
+        tracked_file = config.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for _, _, sub_dst in expand_tracked_file(name, src, dst):
+            tracked_paths.add(_norm(sub_dst))
     return tracked_paths
+
+
+def _tracked_source_paths(config: Config, repo_root: Path) -> set[Path]:
+    """Resolved SRC path of every configured tracked_file, normalized.
+
+    A source path can never be a legitimate orphan — orphans are by
+    definition deployed dst copies. Built from ALL ``config.tracked_files``
+    (not just the active profile): a stale ``meta.json`` may carry a src
+    belonging to a tracked_file outside the resolved profile. This set is
+    the backstop for a ``src`` that escapes ``repo_root/tracked`` via
+    ``..`` (the field permits it).
+    """
+    return {_norm(resolve_src(tf, repo_root)) for tf in config.tracked_files.values()}
 
 
 def _touched_paths_from_meta(transitions_dir: Path) -> set[Path]:
@@ -141,7 +197,7 @@ def _touched_paths_from_meta(transitions_dir: Path) -> set[Path]:
             continue
         for raw in raw_paths:
             if isinstance(raw, str):
-                touched.add(Path(raw))
+                touched.add(_norm(Path(raw)))
     return touched
 
 
@@ -149,26 +205,61 @@ def detect_orphans(
     resolved: ResolvedProfile,
     config: Config,
     transitions_dir: Path,
+    repo_root: Path,
     *,
     ignored: frozenset[str] = frozenset(),
-) -> list[OrphanEntry]:
+) -> OrphanDetection:
     """Find live files setforge previously deployed that no longer appear
     in ``resolved.tracked_files``.
 
     Walks every ``transitions_dir/*/meta.json`` ``paths`` field (the
-    set of paths setforge actually touched on this host) and subtracts
-    the set of currently-resolved tracked destinations. The result is
-    sorted by string path for deterministic output.
+    set of paths setforge actually touched on this host), subtracts the
+    set of currently-resolved tracked destinations, then applies two
+    guards so the result can never schedule a non-orphan for deletion:
 
-    ``ignored`` is a set of tracked_file IDs that the user has marked
-    as "keep orphan" via ``cleanup-orphans --ignore <id>``; their
-    resolved destinations are added to the tracked set so they never
-    surface as orphans.
+    1. **Source guard** — a candidate under ``repo_root/tracked`` or
+       equal to any tracked_file's resolved SRC is dropped. A source
+       file is never a deployed dst, so it can never be an orphan;
+       without this a stale ``meta.json`` that recorded src paths would
+       list the config source of truth for deletion.
+    2. **Existence gate** — a candidate no longer present on disk is
+       dropped. Uses :func:`os.path.lexists` (lstat semantics) to match
+       the apply path's ``_lstat_safe`` delete check, so a dangling
+       symlink (still a real, deletable dir entry) is RETAINED while a
+       fully-absent path is filtered. The report then equals exactly
+       what ``--apply`` would delete.
+
+    The source guard runs BEFORE the existence gate so a tracked source
+    that happens to exist on disk is tallied as a source skip, not
+    leaked through. ``ignored`` is a set of tracked_file IDs the user
+    marked "keep orphan" via ``cleanup-orphans --ignore <id>``; their
+    resolved destinations join the tracked set so they never surface.
+    Returns an :class:`OrphanDetection` carrying the kept orphans and
+    the per-guard skip tallies.
     """
-    tracked_paths = _resolved_tracked_dsts(resolved, config, extra_ids=ignored)
+    tracked_paths = _resolved_tracked_dsts(
+        resolved, config, repo_root, extra_ids=ignored
+    )
     touched_paths = _touched_paths_from_meta(transitions_dir)
-    orphan_paths = sorted(touched_paths - tracked_paths, key=str)
-    return [OrphanEntry(path=p) for p in orphan_paths]
+    src_root = _norm(repo_root / "tracked")
+    src_paths = _tracked_source_paths(config, repo_root)
+
+    kept: list[OrphanEntry] = []
+    skipped_absent = 0
+    skipped_source = 0
+    for path in sorted(touched_paths - tracked_paths, key=str):
+        if path.is_relative_to(src_root) or path in src_paths:
+            skipped_source += 1
+            continue
+        if not os.path.lexists(path):
+            skipped_absent += 1
+            continue
+        kept.append(OrphanEntry(path=path))
+    return OrphanDetection(
+        orphans=kept,
+        skipped_absent=skipped_absent,
+        skipped_source=skipped_source,
+    )
 
 
 def load_ignored_orphans() -> frozenset[str]:
@@ -511,11 +602,22 @@ def compare_profile(
                 has_unexpected = True
 
     orphans: list[OrphanEntry] = []
+    skipped_absent = 0
+    skipped_source = 0
     if transitions_dir is not None:
-        orphans = detect_orphans(resolved, config, transitions_dir, ignored=ignored)
+        detection = detect_orphans(
+            resolved, config, transitions_dir, repo_root, ignored=ignored
+        )
+        orphans = detection.orphans
+        skipped_absent = detection.skipped_absent
+        skipped_source = detection.skipped_source
 
     return CompareReport(
-        entries=entries, has_unexpected_drift=has_unexpected, orphans=orphans
+        entries=entries,
+        has_unexpected_drift=has_unexpected,
+        orphans=orphans,
+        orphan_skipped_absent=skipped_absent,
+        orphan_skipped_source=skipped_source,
     )
 
 

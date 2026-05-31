@@ -90,6 +90,9 @@ def test_detect_orphans_finds_removed_from_yaml(tmp_path: Path) -> None:
     transitions_dir = tmp_path / "transitions"
     live_orphan = tmp_path / "live" / "orphan.txt"
     live_kept = tmp_path / "live" / "kept.txt"
+    # The orphan must EXIST on disk to survive the existence gate.
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan body\n", encoding="utf-8")
     _write_meta_record(
         transitions_dir,
         "20260518T120000000000Z-install-p",
@@ -100,12 +103,13 @@ def test_detect_orphans_finds_removed_from_yaml(tmp_path: Path) -> None:
         {"kept": TrackedFile(src=Path("kept.txt"), dst=str(live_kept))}
     )
 
-    orphans = detect_orphans(
+    detection = detect_orphans(
         resolve_profile_wrap(config, "p"),
         config,
         transitions_dir,
+        tmp_path,
     )
-    assert orphans == [OrphanEntry(path=live_orphan)]
+    assert detection.orphans == [OrphanEntry(path=live_orphan)]
 
 
 def test_detect_orphans_empty_when_transitions_missing(tmp_path: Path) -> None:
@@ -114,7 +118,10 @@ def test_detect_orphans_empty_when_transitions_missing(tmp_path: Path) -> None:
         {"x": TrackedFile(src=Path("x"), dst=str(tmp_path / "x"))}
     )
     assert (
-        detect_orphans(resolve_profile_wrap(config, "p"), config, transitions_dir) == []
+        detect_orphans(
+            resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+        ).orphans
+        == []
     )
 
 
@@ -125,14 +132,18 @@ def test_detect_orphans_ignores_corrupt_meta(tmp_path: Path) -> None:
     (target / "meta.json").write_text("{not json", encoding="utf-8")
     # Second, valid record with one orphan.
     live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("body\n", encoding="utf-8")
     _write_meta_record(
         transitions_dir,
         "20260518T130000000000Z-install-p",
         [str(live_orphan)],
     )
     config = _make_config_with({})
-    orphans = detect_orphans(resolve_profile_wrap(config, "p"), config, transitions_dir)
-    assert orphans == [OrphanEntry(path=live_orphan)]
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == [OrphanEntry(path=live_orphan)]
 
 
 def test_detect_orphans_respects_ignore_list(tmp_path: Path) -> None:
@@ -154,13 +165,122 @@ def test_detect_orphans_respects_ignore_list(tmp_path: Path) -> None:
         },
         profiles={"p": Profile(tracked_files=[])},
     )
-    orphans = detect_orphans(
+    detection = detect_orphans(
         resolve_profile_wrap(config, "p"),
         config,
         transitions_dir,
+        tmp_path,
         ignored=frozenset({"ignored_id"}),
     )
-    assert orphans == []
+    assert detection.orphans == []
+
+
+def test_detect_orphans_excludes_tracked_source(tmp_path: Path) -> None:
+    """A path under the config-repo `tracked/` tree (a tracked SOURCE)
+    is never an orphan — even when it exists on disk and is absent from
+    the active dst set. Guards against a meta.json that recorded src
+    paths scheduling the config source of truth for deletion."""
+    repo_root = tmp_path / "config-repo"
+    transitions_dir = tmp_path / "transitions"
+    src_file = repo_root / "tracked" / "claude" / "CLAUDE.md"
+    src_file.parent.mkdir(parents=True, exist_ok=True)
+    src_file.write_text("# source of truth\n", encoding="utf-8")
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(src_file), str(live_orphan)],
+    )
+    config = _make_config_with({})
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
+    )
+    assert detection.orphans == [OrphanEntry(path=live_orphan)]
+    assert detection.skipped_source == 1
+
+
+def test_detect_orphans_src_set_catches_dotdot_escape(tmp_path: Path) -> None:
+    """A tracked_file `src` that escapes `tracked/` via `..` is guarded
+    by the explicit resolved-src set — the `tracked/` dir-prefix alone
+    would miss a src that lexically lands outside it."""
+    repo_root = tmp_path / "repo"
+    transitions_dir = tmp_path / "transitions"
+    # `src: ../outside/x.txt` resolves (lexically) to repo_root/outside/x.txt.
+    escaped = repo_root / "outside" / "x.txt"
+    escaped.parent.mkdir(parents=True, exist_ok=True)
+    escaped.write_text("src\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(repo_root / "tracked" / ".." / "outside" / "x.txt")],
+    )
+    config = _make_config_with(
+        {
+            "x": TrackedFile(
+                src=Path("../outside/x.txt"), dst=str(tmp_path / "live" / "x")
+            )
+        }
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
+    )
+    assert detection.orphans == []
+    assert detection.skipped_source == 1
+
+
+def test_detect_orphans_expands_directory_tracked_file_children(tmp_path: Path) -> None:
+    """A directory tracked_file's deployed CHILD dst is excluded: the
+    dst set expands directories via `expand_tracked_file`, so children
+    are not flagged as orphans (regression guard for the third
+    false-positive class)."""
+    repo_root = tmp_path / "repo"
+    transitions_dir = tmp_path / "transitions"
+    src_dir = repo_root / "tracked" / "skills"
+    (src_dir / "a").mkdir(parents=True, exist_ok=True)
+    (src_dir / "a" / "SKILL.md").write_text("skill\n", encoding="utf-8")
+    dst_dir = tmp_path / "live" / "skills"
+    child_dst = dst_dir / "a" / "SKILL.md"
+    child_dst.parent.mkdir(parents=True, exist_ok=True)
+    child_dst.write_text("skill\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(child_dst)],
+    )
+    config = _make_config_with(
+        {"skills": TrackedFile(src=Path("skills"), dst=str(dst_dir))}
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
+    )
+    assert detection.orphans == []
+
+
+def test_detect_orphans_retains_dangling_symlink_drops_absent(tmp_path: Path) -> None:
+    """lexists gate (matches the apply path's lstat): a dangling symlink
+    is a real, deletable dir entry → RETAINED; a fully-absent path is
+    dropped and tallied in `skipped_absent`."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    transitions_dir = tmp_path / "transitions"
+    dangling = tmp_path / "live" / "dangling_link"
+    dangling.parent.mkdir(parents=True, exist_ok=True)
+    dangling.symlink_to(tmp_path / "nonexistent_target")
+    absent = tmp_path / "live" / "gone.txt"
+    _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(dangling), str(absent)],
+    )
+    config = _make_config_with({})
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
+    )
+    assert detection.orphans == [OrphanEntry(path=dangling)]
+    assert detection.skipped_absent == 1
+    assert detection.skipped_source == 0
 
 
 def resolve_profile_wrap(config: Config, name: str) -> Any:
@@ -244,6 +364,56 @@ def test_apply_default_is_dry_run(
     plain = _strip_ansi_and_newlines(result.stdout)
     assert "WOULD delete" in plain
     assert live_orphan.name in plain
+
+
+def test_dry_run_prints_skip_note(
+    runner: CliRunner, tmp_path: Path, isolated_state_dir: Path
+) -> None:
+    """When the guards filter candidates, the dry-run prints a one-line
+    skip note with absent / tracked-source counts."""
+    cfg = _write_minimal_yaml(tmp_path)
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan\n", encoding="utf-8")
+    absent = tmp_path / "live" / "gone.txt"  # recorded but never created.
+    _write_meta_record(
+        isolated_state_dir / "transitions",
+        "20260518T120000000000Z-install-p",
+        [str(live_orphan), str(absent)],
+    )
+
+    result = runner.invoke(
+        app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
+    )
+    assert result.exit_code == 0, result.stdout
+    plain = _strip_ansi_and_newlines(result.stdout)
+    assert "WOULD delete" in plain
+    assert "skipped 1 previously-touched path(s)" in plain
+    assert "1 no longer on disk" in plain
+    assert "0 tracked source" in plain
+
+
+def test_dry_run_no_skip_note_when_clean(
+    runner: CliRunner, tmp_path: Path, isolated_state_dir: Path
+) -> None:
+    """No skip note when nothing was filtered — the note is suppressed."""
+    cfg = _write_minimal_yaml(tmp_path)
+    live_orphan = tmp_path / "live" / "orphan.txt"
+    live_orphan.parent.mkdir(parents=True, exist_ok=True)
+    live_orphan.write_text("orphan\n", encoding="utf-8")
+    _write_meta_record(
+        isolated_state_dir / "transitions",
+        "20260518T120000000000Z-install-p",
+        [str(live_orphan)],
+    )
+
+    result = runner.invoke(
+        app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
+    )
+    assert result.exit_code == 0, result.stdout
+    plain = _strip_ansi_and_newlines(result.stdout)
+    assert "WOULD delete" in plain
+    assert "skipped" not in plain
 
 
 def test_apply_non_tty_raises(

@@ -107,26 +107,56 @@ def _append_ignored_orphan(ignore_id: str) -> None:
         yaml.dump(data, fh)
 
 
-def _print_dry_run(orphans: list[OrphanEntry], console: Console) -> None:
+def _print_skip_note(
+    console: Console, *, skipped_absent: int, skipped_source: int
+) -> None:
+    """Print a one-line note when the detection guards filtered candidates.
+
+    Suppressed when nothing was filtered. For a destructive tool the
+    count is a trust signal — it explains why a previously-touched path
+    is absent from the WOULD-delete list (gone from disk, or a tracked
+    source that can never be an orphan).
+    """
+    total = skipped_absent + skipped_source
+    if total == 0:
+        return
+    console.print(
+        f"note: skipped {total} previously-touched path(s) — "
+        f"{skipped_absent} no longer on disk, {skipped_source} tracked source"
+    )
+
+
+def _print_dry_run(
+    orphans: list[OrphanEntry],
+    console: Console,
+    *,
+    skipped_absent: int = 0,
+    skipped_source: int = 0,
+) -> None:
     """Print the default-mode dry-run output."""
     if not orphans:
         console.print("=== no orphans ===")
-        return
-    console.print("=== DRY-RUN — nothing will be deleted ===")
-    for orphan in orphans:
-        console.print(f"WOULD delete  {orphan.path}")
-    console.print("=== rerun with --apply to delete ===")
+    else:
+        console.print("=== DRY-RUN — nothing will be deleted ===")
+        for orphan in orphans:
+            console.print(f"WOULD delete  {orphan.path}")
+        console.print("=== rerun with --apply to delete ===")
+    _print_skip_note(
+        console, skipped_absent=skipped_absent, skipped_source=skipped_source
+    )
 
 
 def _detect_orphans_live(
     profile: str, config_path: Path
-) -> tuple[Any, list[OrphanEntry]]:
+) -> tuple[Any, list[OrphanEntry], int, int]:
     """Re-detect orphans live for the apply path.
 
-    Returns ``(cfg, orphans)``. The cfg is re-loaded inside the call so
-    callers cannot accidentally pass a stale snapshot from a prior
-    ``compare`` invocation. Catches the "stale snapshot deletes
-    re-added file" race called out in the SPEC 2 anti-pattern checks.
+    Returns ``(cfg, orphans, skipped_absent, skipped_source)`` — the
+    skip tallies feed the dry-run transparency note. The cfg is
+    re-loaded inside the call so callers cannot accidentally pass a
+    stale snapshot from a prior ``compare`` invocation. Catches the
+    "stale snapshot deletes re-added file" race called out in the SPEC 2
+    anti-pattern checks.
     """
     cfg = load_config(config_path)
     report = compare_mod.compare_profile(
@@ -136,7 +166,12 @@ def _detect_orphans_live(
         transitions_dir=transitions.transitions_root(),
         ignored=load_ignored_orphans(),
     )
-    return cfg, report.orphans
+    return (
+        cfg,
+        report.orphans,
+        report.orphan_skipped_absent,
+        report.orphan_skipped_source,
+    )
 
 
 def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
@@ -406,8 +441,15 @@ def cleanup_orphans(
         return
 
     if not apply:
-        _, orphans = _detect_orphans_live(profile, resolved_config)
-        _print_dry_run(orphans, console)
+        _, orphans, skipped_absent, skipped_source = _detect_orphans_live(
+            profile, resolved_config
+        )
+        _print_dry_run(
+            orphans,
+            console,
+            skipped_absent=skipped_absent,
+            skipped_source=skipped_source,
+        )
         return
 
     _apply_orphan_cleanup(profile, resolved_config, yes=yes, console=console)
