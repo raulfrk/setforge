@@ -65,7 +65,12 @@ jobs:
           cache-from: type=gha,scope=e2e
           cache-to: type=gha,scope=e2e,mode=max
       - name: Run E2E variants
-        run: uv run pytest -m e2e_docker -v
+        # --no-cov is mandatory: the project conftest auto-activates xdist
+        # (-n 2) for `-m e2e_docker`, and pytest-cov's Central controller
+        # crashes at xdist worker setup (AttributeError: 'Central' object
+        # has no attribute 'configure_node') when --cov is in default
+        # addopts. Coverage is meaningless for e2e tests anyway.
+        run: uv run pytest -m e2e_docker -v --no-cov
 
   secrets-scan:
     name: Secrets scan (gitleaks)
