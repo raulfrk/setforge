@@ -40,7 +40,7 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import CLEANUP_ORPHANS_EXAMPLES
-from setforge.compare import OrphanEntry, load_ignored_orphans
+from setforge.compare import OrphanDetection, OrphanEntry, load_ignored_orphans
 from setforge.config import load_config
 from setforge.errors import OrphanCleanupRequiresInteractive
 
@@ -148,15 +148,15 @@ def _print_dry_run(
 
 def _detect_orphans_live(
     profile: str, config_path: Path
-) -> tuple[Any, list[OrphanEntry], int, int]:
+) -> tuple[Any, OrphanDetection]:
     """Re-detect orphans live for the apply path.
 
-    Returns ``(cfg, orphans, skipped_absent, skipped_source)`` — the
-    skip tallies feed the dry-run transparency note. The cfg is
-    re-loaded inside the call so callers cannot accidentally pass a
-    stale snapshot from a prior ``compare`` invocation. Catches the
-    "stale snapshot deletes re-added file" race called out in the SPEC 2
-    anti-pattern checks.
+    Returns ``(cfg, detection)`` — ``detection`` carries the kept
+    orphans plus the guard skip tallies that feed the dry-run
+    transparency note. The cfg is re-loaded inside the call so callers
+    cannot accidentally pass a stale snapshot from a prior ``compare``
+    invocation. Catches the "stale snapshot deletes re-added file" race
+    called out in the SPEC 2 anti-pattern checks.
     """
     cfg = load_config(config_path)
     report = compare_mod.compare_profile(
@@ -166,12 +166,12 @@ def _detect_orphans_live(
         transitions_dir=transitions.transitions_root(),
         ignored=load_ignored_orphans(),
     )
-    return (
-        cfg,
-        report.orphans,
-        report.orphan_skipped_absent,
-        report.orphan_skipped_source,
+    detection = OrphanDetection(
+        orphans=report.orphans,
+        skipped_absent=report.orphan_skipped_absent,
+        skipped_source=report.orphan_skipped_source,
     )
+    return cfg, detection
 
 
 def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
@@ -441,14 +441,12 @@ def cleanup_orphans(
         return
 
     if not apply:
-        _, orphans, skipped_absent, skipped_source = _detect_orphans_live(
-            profile, resolved_config
-        )
+        _, detection = _detect_orphans_live(profile, resolved_config)
         _print_dry_run(
-            orphans,
+            detection.orphans,
             console,
-            skipped_absent=skipped_absent,
-            skipped_source=skipped_source,
+            skipped_absent=detection.skipped_absent,
+            skipped_source=detection.skipped_source,
         )
         return
 
