@@ -55,7 +55,6 @@ import hashlib
 import posixpath
 import shutil
 import subprocess
-import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -364,38 +363,29 @@ class ContainerHandle:
         )
 
     def write_text(self, path_in_container: str, content: str) -> None:
-        """Write text to a file inside the container via ``docker cp``.
+        """Write text to a file inside the container.
 
-        Stages the content via a heredoc-style write to a tmp file on
-        the host, then ``docker cp`` it in. Handles arbitrary content
-        without shell-escaping headaches.
+        Streams the content into ``tee`` via ``docker exec -i`` so the
+        file is created BY the container's runtime user (``tester``) and
+        is therefore owned by it. An earlier implementation staged the
+        content in a host tmp file and ``docker cp``'d it in, but
+        ``docker cp`` preserves the host file's numeric owner uid: on CI
+        runners (uid 1001 != tester's 1000) the container user could
+        neither read nor ``chmod`` the result, failing every
+        file-touching test. Streaming from stdin also keeps arbitrary
+        content free of shell-escaping headaches.
         """
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as fh:
-            fh.write(content)
-            staging = fh.name
-        # ``docker cp`` preserves the host file's numeric owner uid and
-        # mode. ``NamedTemporaryFile`` defaults to mode 0600 owned by the
-        # uid running the suite, so the in-container ``tester`` user can
-        # read/write the copied file only when that uid happens to equal
-        # tester's (1000) — true on a dev box, false on CI runners (the
-        # GitHub runner is uid 1001), where every config-dependent test
-        # then fails with "Path ... is not readable". Make the staged
-        # file world-rw so ``tester`` can read AND write it regardless of
-        # the host uid that owns it.
-        Path(staging).chmod(0o666)
-        try:
-            # Ensure parent dir exists in the container.
-            parent = posixpath.dirname(path_in_container) or "/"
-            self.exec(["mkdir", "-p", parent], check=True)
-            subprocess.run(
-                ["docker", "cp", staging, f"{self.cid}:{path_in_container}"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=DOCKER_EXEC_TIMEOUT_S,
-            )
-        finally:
-            Path(staging).unlink(missing_ok=True)
+        # Ensure parent dir exists in the container.
+        parent = posixpath.dirname(path_in_container) or "/"
+        self.exec(["mkdir", "-p", parent], check=True)
+        subprocess.run(
+            ["docker", "exec", "-i", self.cid, "tee", path_in_container],
+            input=content,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_EXEC_TIMEOUT_S,
+        )
 
     def read_text(self, path_in_container: str) -> str:
         """Read a file inside the container; return its text content."""
