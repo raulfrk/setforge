@@ -373,6 +373,16 @@ class ContainerHandle:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as fh:
             fh.write(content)
             staging = fh.name
+        # ``docker cp`` preserves the host file's numeric owner uid and
+        # mode. ``NamedTemporaryFile`` defaults to mode 0600 owned by the
+        # uid running the suite, so the in-container ``tester`` user can
+        # read/write the copied file only when that uid happens to equal
+        # tester's (1000) — true on a dev box, false on CI runners (the
+        # GitHub runner is uid 1001), where every config-dependent test
+        # then fails with "Path ... is not readable". Make the staged
+        # file world-rw so ``tester`` can read AND write it regardless of
+        # the host uid that owns it.
+        Path(staging).chmod(0o666)
         try:
             # Ensure parent dir exists in the container.
             parent = posixpath.dirname(path_in_container) or "/"
