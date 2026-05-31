@@ -27,6 +27,7 @@ Named scenarios (per memory ``feedback_docker_e2e_coverage_preference``):
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable
 
@@ -38,6 +39,32 @@ pytestmark = pytest.mark.e2e_docker
 
 _LIVE_MINIMAL = "/home/tester/.setforge_e2e/minimal/text.txt"
 _HOST_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
+# Resolved SRC of the ``minimal_text`` tracked_file (under CONFIG_FIXTURE's
+# repo_root ``/workspace/tests/fixtures/e2e`` → its ``tracked/`` root).
+_SRC_MINIMAL = "/workspace/tests/fixtures/e2e/tracked/minimal/text.txt"
+_TRANSITIONS_DIR = "/home/tester/.local/state/setforge/transitions"
+
+
+def _inject_meta_record(
+    container: ContainerHandle, dirname: str, paths: list[str]
+) -> None:
+    """Write a synthetic transitions ``meta.json`` recording ``paths``.
+
+    Reproduces a historical meta.json whose ``paths`` field carried
+    entries setforge should never schedule for deletion (e.g. a tracked
+    SOURCE path) — orphan detection aggregates every ``*/meta.json``.
+    """
+    record_dir = f"{_TRANSITIONS_DIR}/{dirname}"
+    container.exec(["mkdir", "-p", record_dir], check=True)
+    payload = {
+        "command": "install",
+        "profile": "test-minimal",
+        "timestamp": "2020-01-01T00:00:00+00:00",
+        "host": "e2e",
+        "version": "0.2.0",
+        "paths": paths,
+    }
+    container.write_text(f"{record_dir}/meta.json", json.dumps(payload, indent=2))
 
 
 def _setforge(
@@ -280,3 +307,74 @@ def test_orphan_e2e_ignore_writes_local_yaml_not_tracked(
     local_yaml = c.read_text(_HOST_LOCAL_YAML)
     assert "orphan_ignore" in local_yaml
     assert "some_old_id" in local_yaml
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: a tracked SOURCE path is NEVER in the WOULD-delete set
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_e2e_tracked_source_never_listed(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A meta.json that recorded a tracked SOURCE path must never make
+    that source a delete candidate — the source guard drops it and the
+    dry-run tallies it under ``tracked source``."""
+    c = docker_container()
+    _install_minimal(c)
+    # The source file is real and must survive untouched.
+    assert c.exec(["test", "-f", _SRC_MINIMAL], check=False).returncode == 0
+    # Reproduce the historical leak: a meta.json recording the SRC path.
+    _inject_meta_record(
+        c, "20200101T000000000000Z-install-test-minimal", [_SRC_MINIMAL]
+    )
+
+    # Run with the FULL config so repo_root/tracked covers the source and
+    # the only candidate is the injected src path.
+    result = _setforge(
+        c,
+        ["cleanup-orphans", "--profile=test-minimal", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert result.returncode == 0, result.stderr
+    # Collapse Rich's 80-col line wrapping before substring asserts.
+    out = " ".join(result.stdout.split())
+    # No orphan surfaced — the source was filtered, not listed.
+    assert "no orphans" in out
+    assert "tracked source" in out
+    # The tracked source file is untouched on disk.
+    assert c.exec(["test", "-f", _SRC_MINIMAL], check=False).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8: an already-removed deploy path is omitted from WOULD-delete
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_e2e_already_absent_path_not_listed(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A deploy path that was removed after its transition is omitted
+    from the WOULD-delete set — the existence gate drops it and the
+    dry-run tallies it under ``no longer on disk``."""
+    c = docker_container()
+    _install_minimal(c)
+    # Remove the deployed file so its meta-recorded path is now absent.
+    c.exec(["rm", "-f", _LIVE_MINIMAL], check=True)
+    assert c.exec(["test", "-e", _LIVE_MINIMAL], check=False).returncode != 0
+    # Drop the entry from the config so the (now-gone) dst would be an orphan.
+    c.write_text("/workspace/setforge.yaml.orphan", _orphan_yaml())
+
+    result = _setforge(
+        c,
+        [
+            "cleanup-orphans",
+            "--profile=test-minimal",
+            "--config=/workspace/setforge.yaml.orphan",
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    # Collapse Rich's 80-col line wrapping before substring asserts.
+    out = " ".join(result.stdout.split())
+    # The absent path is filtered, not listed.
+    assert "no orphans" in out
+    assert "no longer on disk" in out
