@@ -52,8 +52,8 @@ git clone https://github.com/raulfrk/setforge ~/setforge && cd ~/setforge
 uv sync --extra dev
 ```
 
-Run it with `uv run setforge …` from the repo. (`setforge --version` may print
-`0.0.0+local` from a source tree until the package is installed from PyPI.)
+Run it with `uv run setforge …` from the repo (`uv sync` installs the package,
+so `setforge --version` reports the real version).
 
 **3. Create a minimal config repo**
 

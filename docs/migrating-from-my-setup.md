@@ -6,8 +6,8 @@ prior my-setup user, you can ignore this page.)
 
 ## 1. Rename
 
-The Python package, CLI binary, env vars, XDG dirs, and bd issue prefix all
-changed (`my_setup` → `setforge`, `MY_SETUP_` → `SETFORGE_`,
+The Python package, CLI binary, env vars, and XDG dirs all changed
+(`my_setup` → `setforge`, `MY_SETUP_` → `SETFORGE_`,
 `~/.local/state/my-setup/` → `~/.local/state/setforge/`, etc.). Migrate XDG
 state:
 

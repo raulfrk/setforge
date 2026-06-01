@@ -25,8 +25,8 @@ uv run python scripts/release_preflight.py
 
 It runs eight checks: `uv build` → `twine check` → temp `UV_TOOL_DIR` install →
 `setforge --version` / `--help` / `__version__` assertions → workflow YAML
-parse → `bd ready` P0–P2 empty check. It exits 0 on success, or non-zero with
-the failing step name.
+parse → an open-high-priority-issues check. It exits 0 on success, or non-zero
+with the failing step name.
 
 Once preflight is green, push `main` then the tag:
 
