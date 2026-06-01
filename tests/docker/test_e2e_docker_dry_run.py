@@ -453,8 +453,18 @@ def test_dry_run_reports_plugin_reconcile(
     has_action = any(line.lstrip().startswith("WOULD ") for line in block)
     has_skip = any("skipped (" in line for line in block)
     has_nothing = any("nothing to reconcile" in line for line in block)
-    assert has_action or has_skip or has_nothing, (
-        f"plugin reconcile block has no recognized line shape:\n{block!r}"
+    # ``superpowers`` IS declared and the container is empty, so the phase
+    # always has work: it emits WOULD-lines, or skips when the ``claude`` plugin
+    # tool surfaces ``PluginToolMissing`` (e.g. no marketplaces installed yet —
+    # ``claude`` itself is installed in the image). "nothing to reconcile" is
+    # impossible here — pinning its ABSENCE is the tightening (the old 3-way
+    # any-of accepted that impossible state). The action/skip split stays
+    # environmental.
+    assert has_action or has_skip, (
+        f"plugin reconcile block has no actionable outcome:\n{block!r}"
+    )
+    assert not has_nothing, (
+        f"declared plugin reported 'nothing to reconcile':\n{block!r}"
     )
 
 
@@ -468,11 +478,14 @@ def test_dry_run_reports_ext_reconcile(
 ) -> None:
     """Extension reconcile phase appears in dry-run output (parallel to plugins).
 
-    The comprehensive profile declares no extensions in the test
-    fixture, but the phase header MUST still appear. When the ``code``
-    binary is absent the phase emits a ``skipped (extension tool
-    unavailable: ...)`` line; otherwise it emits ``WOULD install`` /
-    ``WOULD uninstall`` lines or ``nothing to reconcile``.
+    The comprehensive profile declares one ``editorconfig.editorconfig``
+    extension; the e2e image ships ``code`` and the container starts empty,
+    so the extension is enumerated as uninstalled and the phase has work.
+    When the ``code`` binary is absent the phase emits a ``skipped
+    (extension tool unavailable: ...)`` line; otherwise it emits a ``WOULD
+    install`` line. "nothing to reconcile" cannot occur in this environment
+    (a declared extension, uninstalled on the empty container, always
+    leaves either a WOULD-line or a skip).
     """
     c = docker_container()
     result = _dry_run_install(c, _PROFILE_COMPREHENSIVE)
@@ -482,8 +495,15 @@ def test_dry_run_reports_ext_reconcile(
     has_action = any(line.lstrip().startswith("WOULD ") for line in block)
     has_skip = any("skipped (" in line for line in block)
     has_nothing = any("nothing to reconcile" in line for line in block)
-    assert has_action or has_skip or has_nothing, (
-        f"extension reconcile block has no recognized line shape:\n{block!r}"
+    # editorconfig IS declared and not installed, so the phase always has
+    # work: a WOULD-line, or a skip when ``code`` is unavailable. Pin the
+    # ABSENCE of "nothing to reconcile" (the impossible state the old any-of
+    # wrongly accepted); the action/skip split stays environmental (binary).
+    assert has_action or has_skip, (
+        f"extension reconcile block has no actionable outcome:\n{block!r}"
+    )
+    assert not has_nothing, (
+        f"declared extension reported 'nothing to reconcile':\n{block!r}"
     )
 
 
