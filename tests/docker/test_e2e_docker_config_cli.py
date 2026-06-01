@@ -94,6 +94,11 @@ def test_config_completion_path_works(
     session.expect_in_display("DONE_EVAL", timeout=30)
     session.send_keys("setforge config add --local \t")
     session.expect_in_display("source.kind", timeout=15)
+    # Multi-candidate: a second schema-derived dotted path must also render,
+    # proving the completion menu actually enumerated the schema rather than a
+    # stray "source.kind" landing elsewhere in the buffer. Both are stable
+    # LocalConfig paths (``_enumerate_paths(ConfigScope.LOCAL)``).
+    session.expect_in_display("source.path", timeout=15)
 
 
 def test_config_add_tracked_dirty_repo_refuses_non_pty(
@@ -101,21 +106,18 @@ def test_config_add_tracked_dirty_repo_refuses_non_pty(
 ) -> None:
     """Tracked-side ``add`` refuses on a dirty config repo (non-PTY).
 
-    Non-interactive variant: ``--yes`` + dirty repo must still refuse
-    via :func:`run_git_check_or_raise`. The PTY variant
-    :func:`test_config_add_tracked_pty_git_check_aborts` (below)
-    exercises the same gate inside a real PTY for the prompt_toolkit
-    code path.
+    Seeds a clean git repo with a valid ``setforge.yaml`` (so source-validate
+    passes) and points ``source.path`` at it, then dirties a committed tracked
+    file so the git-clean gate is the one that trips. ``--yes`` + non-TTY ⇒
+    :func:`run_git_check_or_raise` raises the uncommitted/stale refusal rather
+    than prompting off a TTY. The PTY variant
+    :func:`test_config_add_tracked_pty_git_check_aborts` drives the same gate
+    through the prompt_toolkit dialog.
     """
     c = docker_container()
-    # Dirty up the config repo by writing an uncommitted file.
-    c.write_text("/workspace/tests/fixtures/e2e/dirt.txt", "uncommitted\n")
-    # Configure local.yaml `source.path` to point at the dirty tree so
-    # the tracked subcommand resolves to that path.
-    c.write_text(
-        _HOME_LOCAL_YAML,
-        "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n",
-    )
+    repo_dir = _seed_tracked_git_repo(c)
+    # Modify a committed tracked file — the source repo is now genuinely dirty.
+    c.write_text(f"{repo_dir}/tracked/ex.txt", "dirtied\n")
     result = c.exec(
         [
             "uv",
@@ -124,17 +126,21 @@ def test_config_add_tracked_dirty_repo_refuses_non_pty(
             "config",
             "add",
             "--tracked",
-            "schema_version",
-            "1.1",
+            "profiles.base.tracked_files",
+            "newfile",
+            "--profile=base",
             "--yes",
         ],
         check=False,
     )
-    # Either the git check refuses (non-zero) or — if the e2e fixture
-    # dir isn't a git repo at all — the source-validate fires first
-    # and still produces non-zero. Both shapes assert dirty-side
-    # refusal in spirit.
     assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    # Pin the git-clean gate specifically (_git_check.py:386-390): source-validate
+    # passes (valid setforge.yaml present), so a genuinely dirty git repo makes
+    # the git check the gate that fires. ``--yes`` is the mutate-confirm, not the
+    # git-check escape hatch (that is ``--no-git-check``).
+    assert "uncommitted/stale" in combined, combined
+    assert "--no-git-check" in combined, combined
 
 
 def test_config_add_invalid_value_refuses_write_non_pty(
@@ -294,9 +300,11 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
         check=False,
     )
     assert result.returncode != 0
-    # The error message must point users at --yes.
+    # Pin the single mutate-gate message (config.py:308-310): both halves of
+    # the same sentence, not an any-of over different gates.
     combined = result.stdout + result.stderr
-    assert "--yes" in combined or "TTY" in combined
+    assert "requires --yes" in combined, combined
+    assert "not a TTY" in combined, combined
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +491,9 @@ def test_config_add_local_list_duplicate_raises_non_pty(
     )
     assert result.returncode != 0
     combined = result.stdout + result.stderr
-    assert "already" in combined, combined
+    # Pin the exact dup-raise phrase (_config_helpers.py:335), not a bare
+    # "already" that could match an unrelated error message.
+    assert "already contains" in combined, combined
 
 
 def test_config_add_local_list_new_value_pty_confirm_yes(
@@ -656,8 +666,11 @@ def test_config_completion_value_works(
     )
     session.expect_in_display("DONE_EVAL", timeout=30)
     session.send_keys("setforge config add --local source.kind \t")
-    # The enum value should appear in the rendered completion menu.
+    # Multi-candidate: BOTH enum values (Literal[PATH, GIT]) must render,
+    # proving the value-completion menu enumerated the enum rather than a stray
+    # "path" landing elsewhere in the buffer.
     session.expect_in_display("path", timeout=15)
+    session.expect_in_display("git", timeout=15)
 
 
 def test_config_completion_value_callback_contract(
@@ -702,14 +715,16 @@ def test_config_add_tracked_pty_git_check_aborts(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY counterpart of the non-PTY git-check abort test."""
+    """PTY counterpart: the dirty-repo git-clean gate renders its dialog; abort exits 1.
+
+    Seeds a clean git repo (valid setforge.yaml) and dirties a committed
+    tracked file, so the git-clean gate — not source-validate — is what trips.
+    On a TTY the gate renders its pre-deploy radiolist; selecting the default
+    ABORT exits 1 before any mutation.
+    """
     c = docker_container()
-    # Dirty the e2e config-repo working tree so the tracked-side gate trips.
-    c.write_text("/workspace/tests/fixtures/e2e/dirt.txt", "uncommitted\n")
-    c.write_text(
-        _HOME_LOCAL_YAML,
-        "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n",
-    )
+    repo_dir = _seed_tracked_git_repo(c)
+    c.write_text(f"{repo_dir}/tracked/ex.txt", "dirtied\n")
     session = pyte_pty_session(
         container=c.cid,
         cmd=[
@@ -719,19 +734,19 @@ def test_config_add_tracked_pty_git_check_aborts(
             "config",
             "add",
             "--tracked",
-            "schema_version",
-            "1.1",
+            "profiles.base.tracked_files",
+            "newfile",
+            "--profile=base",
         ],
     )
-    # The tracked-side gate surfaces a non-zero exit before the diff-
-    # preview panel. The refusal message can come from either the
-    # git-clean check ("dirty") or, when the e2e fixture is not a git
-    # repo, the source-validate ("does not contain setforge.yaml" or
-    # similar). Both shapes are accepted as "gate tripped"; the
-    # contract under test is the non-zero exit.
+    # The git-clean gate renders its pre-deploy dialog — proof THIS gate fired
+    # (source-validate would never reach a dialog). Confirm the default ABORT
+    # radio is rendered+selected, then submit it (Tab→OK→Enter) so a label/
+    # default regression fails at the dialog rather than silently mis-selecting.
+    session.expect_in_display("pre-deploy git check", timeout=30.0)
+    session.expect_in_display("(*) abort", timeout=10.0)
+    _confirm_radiolist_abort(session)
     session.wait_for_exit(timeout=60.0, expected_code=1)
-    final = "\n".join(session.display)
-    assert "error" in final.lower() or "dirty" in final.lower()
 
 
 def test_config_add_invalid_pty_validates_before_write(
@@ -757,10 +772,9 @@ def test_config_add_invalid_pty_validates_before_write(
     # The schema-validate hook fires before the diff-preview panel and
     # raises a SetforgeError surfaced as a non-zero exit with the field
     # name in the message.
-    try:
-        session.expect_in_display("validation", timeout=30.0)
-    except TimeoutError:
-        session.expect_in_display("source", timeout=5.0)
+    # The validate hook emits a deterministic "candidate failed validation:"
+    # message (config.py:254/261) before any write — pin it, drop the any-of.
+    session.expect_in_display("failed validation", timeout=30.0)
     session.wait_for_exit(timeout=60.0, expected_code=1)
 
 
@@ -786,8 +800,7 @@ def test_config_add_non_tty_without_yes_raises(
             "uv run setforge config add --local binaries.code /x </dev/null",
         ],
     )
-    try:
-        session.expect_in_display("--yes", timeout=30.0)
-    except TimeoutError:
-        session.expect_in_display("TTY", timeout=5.0)
+    # Pin the single mutate-gate message (config.py:308-310); drop the
+    # try/except any-of (the gate emits one deterministic message).
+    session.expect_in_display("requires --yes", timeout=30.0)
     session.wait_for_exit(timeout=60.0, expected_code=1)
