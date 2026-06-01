@@ -225,7 +225,11 @@ def test_install_empty_body_rejected_at_validate(
     assert rc != 0
     # ``setforge validate`` renders failure context via ``typer.echo``
     # (stdout) — same stream the sibling rejection tests below assert on.
-    assert "non-empty" in stdout.lower() or "body" in stdout.lower()
+    # Pin the app-owned validator message (source.py:271); the backtick-quoted
+    # ``body`` field + ``must be non-empty`` together are unique to this gate,
+    # and each token is short enough to survive any formatter line-wrap.
+    assert "`body`" in stdout, stdout
+    assert "must be non-empty" in stdout, stdout
 
 
 def test_validate_rejects_host_local_sections_on_json_tracked_file(
@@ -255,7 +259,11 @@ def test_validate_rejects_host_local_sections_on_json_tracked_file(
     # (stdout); ``--check`` / strict-mode stream choice is a separate
     # axis from where the validate report itself lands.
     assert rc != 0
-    assert ".json" in stdout or ".md" in stdout
+    # Pin the file-type gate phrase (source.py:644) AND the rejected extension.
+    # The old ``.md`` branch always passed (``.md`` is in the suffix list the
+    # message prints regardless of the failure).
+    assert "supported only for markdown" in stdout, stdout
+    assert ".json" in stdout, stdout
 
 
 def test_validate_rejects_host_local_sections_on_yaml_tracked_file(
@@ -285,7 +293,9 @@ def test_validate_rejects_host_local_sections_on_yaml_tracked_file(
     # ``setforge validate`` renders failure context via ``typer.echo``
     # (stdout); see _on_json_tracked_file for the same stream choice.
     assert rc != 0
-    assert ".yaml" in stdout or ".md" in stdout
+    # Same file-type gate as the JSON case, pinned by phrase + extension.
+    assert "supported only for markdown" in stdout, stdout
+    assert ".yaml" in stdout, stdout
 
 
 # ---------------------------------------------------------------------------
