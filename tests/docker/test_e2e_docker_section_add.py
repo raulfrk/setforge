@@ -233,6 +233,8 @@ def test_section_add_refuses_non_markdown_in_container(
 ) -> None:
     c = docker_container()
     # json_settings -> json/settings.json (not markdown).
+    target = "/workspace/tests/fixtures/e2e/tracked/json/settings.json"
+    before = c.read_text(target)
     result = _setforge(
         c,
         [
@@ -250,6 +252,9 @@ def test_section_add_refuses_non_markdown_in_container(
         check=False,
     )
     assert result.returncode == 2
+    # The markdown-suffix gate raises before any write — the tracked file
+    # must be byte-for-byte unchanged (rc==2 alone could be any refusal path).
+    assert c.read_text(target) == before, "non-markdown refusal modified the target"
     # Hint should mention `section emit`.
     combined = result.stderr + result.stdout
     assert "section emit" in combined or "markdown" in combined.lower()
@@ -319,7 +324,9 @@ def test_section_add_non_tty_no_flags_exits_2_in_container(
     )
     assert result.returncode == 2
     combined = result.stderr + result.stdout
-    assert "interactive" in combined.lower() or "--yes" in combined
+    # Pin the non-TTY no-prompt gate specifically (section.py:615), not any
+    # other rc==2 path (missing-flag scripted errors also exit 2).
+    assert "interactive flags missing in non-TTY" in combined, combined
 
 
 # --- help-surface presence ---
