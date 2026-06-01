@@ -118,6 +118,13 @@ def test_bash_completion_install_falls_back(
     written = c.read_text("/home/tester/.config/setforge/completions/setforge.bash")
     vendored = _vendored_content(c, "setforge.bash")
     assert written == vendored
+    # The name claims ``falls_back`` — assert the fallback warning actually
+    # surfaced (shell-agnostic: completion.py:202-208 uses ``shell.value``),
+    # mirroring the zsh sibling above.
+    combined = result.stdout + result.stderr
+    assert "fallback" in combined.lower() or "typer regression" in combined.lower(), (
+        combined
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +150,13 @@ def test_fish_completion_install_falls_back(
     written = c.read_text(target)
     vendored = _vendored_content(c, "setforge.fish")
     assert written == vendored
+    # The name claims ``falls_back`` — assert the fallback warning actually
+    # surfaced (shell-agnostic: completion.py:202-208 uses ``shell.value``),
+    # mirroring the zsh sibling above.
+    combined = result.stdout + result.stderr
+    assert "fallback" in combined.lower() or "typer regression" in combined.lower(), (
+        combined
+    )
 
 
 # ---------------------------------------------------------------------------
