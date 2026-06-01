@@ -14,6 +14,7 @@ captured stdout/stderr substrings.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 
 import pytest
@@ -25,12 +26,22 @@ pytestmark = pytest.mark.e2e_docker
 _HOME_LOCAL_YAML: str = "/home/tester/.config/setforge/local.yaml"
 
 
-def _run_validate(c: ContainerHandle) -> tuple[int, str]:
-    """Invoke ``setforge validate --all`` and return (returncode, combined output)."""
-    result = c.exec(
+def _run_validate_streams(c: ContainerHandle) -> subprocess.CompletedProcess[str]:
+    """Invoke ``setforge validate --all`` and return the completed process.
+
+    Callers needing a single ordered stream (e.g. ``.index()`` ordering
+    asserts) read ``result.stdout`` alone; concatenating stdout+stderr would
+    interleave non-deterministically.
+    """
+    return c.exec(
         ["uv", "run", "setforge", "validate", "--all", f"--config={CONFIG_FIXTURE}"],
         check=False,
     )
+
+
+def _run_validate(c: ContainerHandle) -> tuple[int, str]:
+    """Invoke ``setforge validate --all`` and return (returncode, combined output)."""
+    result = _run_validate_streams(c)
     return result.returncode, result.stdout + result.stderr
 
 
@@ -85,11 +96,17 @@ def test_validate_local_yaml_multi_error_reports_all_then_refuses(
     report-all-then-refuse contract)."""
     c = docker_container()
     c.write_text(_HOME_LOCAL_YAML, "unknown_a: 1\nunknown_b: 2\n")
-    rc, out = _run_validate(c)
-    assert rc == 1, out
+    # Ordering assertion must read a single stream: the summary and refusal
+    # are both ``typer.echo`` → stdout (validate.py:1187-1188), and indexing
+    # into a stdout+stderr concat would be non-deterministic (interleave).
+    result = _run_validate_streams(c)
+    out = result.stdout
+    assert result.returncode == 1, result.stdout + result.stderr
     assert out.count("✗ SCHEMA VALIDATION ERROR") >= 2
     assert "validation FAILED:" in out
     assert "no changes will be made" in out
+    # The refusal line trails the error summary (mockup-D report-all-then-refuse).
+    assert out.index("no changes will be made") > out.index("validation FAILED:"), out
 
 
 # ---------------------------------------------------------------------------
