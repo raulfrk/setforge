@@ -412,6 +412,11 @@ def test_install_reconcile_with_no_drift_exits_silently(
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
+    # A no-drift pass returns early (section_wizard.py:170-171) and never reaches
+    # the interactive prompt (section_wizard.py:190). Assert that prompt marker is
+    # absent rather than leaning solely on the timeout guard to detect a hang.
+    combined = result.stdout + result.stderr
+    assert "Choice (" not in combined, combined
 
 
 @pytest.mark.xdist_group("docker_daemon")
@@ -731,3 +736,11 @@ def test_compare_reconcile_dry_run_no_prompt(
         f"compare blocked (timeout exit): stdout={result.stdout!r} "
         f"stderr={result.stderr!r}"
     )
+    # compare --reconcile-user-sections is read-only and never invokes the
+    # wizard, so there is no prompt string to assert absent. Pin the positive
+    # dry-run output instead: the diverged ``workflow`` section is reported as
+    # three-way drift (compare.py:325-332). Real output here proves the path ran
+    # to completion (not killed by the timeout) far more directly than rc==0.
+    combined = result.stdout + result.stderr
+    assert "workflow" in combined, combined
+    assert "three-way" in combined, combined
