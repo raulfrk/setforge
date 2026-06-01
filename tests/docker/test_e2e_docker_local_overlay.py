@@ -178,7 +178,10 @@ def test_install_marketplaces_add_lands(
         ],
     )
     assert rc == 0, stderr
-    assert "work-internal" in stdout, stdout
+    # Pin the full dry-run verb+name line, not a bare-name substring that
+    # could match anywhere in stdout (source emits ``WOULD add-marketplace
+    # {name}`` at _install_helpers.py:881).
+    assert "WOULD add-marketplace work-internal" in stdout, stdout
 
 
 # ---------------------------------------------------------------------------
