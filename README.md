@@ -1,279 +1,159 @@
 # setforge
 
 [![CI](https://github.com/raulfrk/setforge/actions/workflows/ci.yml/badge.svg)](https://github.com/raulfrk/setforge/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/setforge.svg)](https://pypi.org/project/setforge/)
-[![Python](https://img.shields.io/pypi/pyversions/setforge.svg)](https://pypi.org/project/setforge/)
 
-Tracked-file + VSCode-extension + Claude-plugin orchestration CLI for personal config (dotfiles + extensions + Claude plugins). Single Python CLI (`setforge`) driven by a `setforge.yaml` declarative config that lives in a SEPARATE config repo (you bring your own).
+One CLI to deploy your dotfiles, VSCode extensions, and Claude Code plugins
+from a declarative config repo you own — idempotent, drift-aware, and
+revertible.
 
-## Stack
+## What is setforge?
 
-The Claude Code workflow setforge is built around relies on four tools:
+setforge keeps a machine's personal config in sync with a single source of
+truth. You describe what should be on a host — tracked files (dotfiles,
+rules, hooks), VSCode extensions, and Claude plugins — in a `setforge.yaml`
+that lives in **your own config repo**. `setforge install` makes the machine
+match it; `setforge compare` shows what drifted; `setforge revert` undoes the
+last change.
 
-| Tool | Role | Configured by setforge |
-|---|---|---|
-| Beads | Task tracking | Yes (deploys `~/.claude/beads/` and `bd` skill into Claude config) |
-| Superpowers | Development methodology | Yes (deploys `superpowers-prefs.md`) |
-| Repomix | Repo packaging | No — install separately |
-| worktrunk | Worktree management for parallel agents | No — install separately |
+The tool (this repo) and your config are deliberately separate: the engine
+ships no personal data, and your config repo carries no engine code. That
+split is what lets one published tool drive many different people's setups.
 
-`setforge install` doesn't install these tools themselves; install them yourself.
+## How it works
 
-## Prerequisites
+- **Engine repo** (`raulfrk/setforge`, this one): the `setforge` CLI plus the
+  source-discovery and git-management layers. No user config.
+- **Config repo** (yours): a `setforge.yaml` declaring `tracked_files`,
+  `profiles`, extensions, and plugins, alongside a `tracked/` tree holding the
+  source files.
 
-- `git`
-- [`uv`](https://github.com/astral-sh/uv)
-- `code` on PATH if you want VSCode extension reconcile (auto-injected inside a VSCode terminal, including Remote-SSH sessions). Optional.
-- `claude` CLI on PATH if you want Claude plugin reconcile. Optional.
+setforge finds your config repo through a 4-layer precedence — first match
+wins: `--source` flag → `SETFORGE_SOURCE` env → `~/.config/setforge/local.yaml`
+→ a `setforge.yaml` in the current directory. The full precedence rules and
+`local.yaml` shapes live in [docs/configuration.md](docs/configuration.md).
 
-## Architecture: engine + config repos
+## Quickstart
 
-setforge is a TOOL; the config it deploys is YOUR data. Since v0.2.0, the two live in separate repos:
+> **PyPI is coming soon.** A `v*.*.*` tag push publishes setforge to PyPI
+> (`uv tool install setforge`), but the package isn't there yet — install from
+> source for now.
 
-- **Engine repo (this one)**: ships the `setforge` CLI + the source-discovery layer + git-management subsystem. No user-specific config.
-- **Config repo (your repo)**: holds `setforge.yaml` + `tracked/<paths>` for the dotfiles you want managed. The author's personal config repo is `raulfrk/setforge-config` (private).
+**1. Prerequisites**
 
-setforge discovers your config repo via a 4-layer precedence (first non-empty wins):
+- [`uv`](https://github.com/astral-sh/uv) and `git`.
+- Optional: `code` on PATH for VSCode extension reconcile (auto-injected inside
+  a VSCode terminal, including Remote-SSH); `claude` on PATH for Claude plugin
+  reconcile.
 
-1. CLI flag: `--source PATH` (paths only).
-2. Env var: `SETFORGE_SOURCE=PATH` (paths only).
-3. Host-local config file `~/.config/setforge/local.yaml` `source:` block (path OR git).
-4. Fallback: CWD if it contains `setforge.yaml`.
-
-## Install on a new machine
-
-Two pieces: install the engine, then point it at your config.
-
-> Heads-up: PyPI publishing fires on any `v*.*.*` tag push (idempotent
-> via `skip-existing: true` in `.github/workflows/publish-pypi.yml`).
-> Until v0.2.0 lands on PyPI, the from-source path below is the way to
-> get setforge on a new machine.
-
-### 1a. Install from PyPI (once v0.2.0 ships)
-
-```bash
-uv tool install setforge
-# or, to pin a specific version once published:
-uv tool install "setforge==0.2.0"
-```
-
-`setforge --version` prints the installed version. The CLI lands on your PATH as `setforge` (`uv tool install` symlinks it for you).
-
-### 1b. Install the engine from source (current path; pre-PyPI)
+**2. Install the engine from source**
 
 ```bash
 git clone https://github.com/raulfrk/setforge ~/setforge && cd ~/setforge
 uv sync --extra dev
 ```
 
-### 2. Configure a source
+Run it with `uv run setforge …` from the repo. (`setforge --version` may print
+`0.0.0+local` from a source tree until the package is installed from PyPI.)
 
-Either clone a config repo manually and point setforge at it:
+**3. Create a minimal config repo**
 
-```bash
-git clone git@github.com:raulfrk/setforge-config.git ~/setforge-config
+setforge needs a config repo of your own. The smallest one that works:
 
-mkdir -p ~/.config/setforge
-cat > ~/.config/setforge/local.yaml <<'EOF'
-source:
-  kind: path
-  path: ~/setforge-config
-EOF
+```
+your-config/
+├── setforge.yaml
+└── tracked/
+    └── example.txt
 ```
 
-Or let setforge clone + manage a git source:
-
-```bash
-mkdir -p ~/.config/setforge
-cat > ~/.config/setforge/local.yaml <<'EOF'
-source:
-  kind: git
-  url: git@github.com:raulfrk/setforge-config.git
-  ref: main
-EOF
-
-uv run setforge fetch
+```yaml
+# your-config/setforge.yaml
+version: 1
+tracked_files:
+  example:
+    src: example.txt            # lives at tracked/example.txt
+    dst: ~/.config/example.txt  # where it deploys on the host
+profiles:
+  default:
+    tracked_files:
+      - example
 ```
 
-### 3. Install
+Put any content in `tracked/example.txt`, then `git init` the directory.
+See [docs/configuration.md](docs/configuration.md) for the full schema
+(templates, file modes, extensions, plugins, per-host preservation).
+
+**4. Wire setforge to your config**
 
 ```bash
-uv run setforge install --profile=<profile>
+setforge init --path-source=~/your-config
+# or, for a git-hosted config repo:
+# setforge init --git-source=git@github.com:you/your-config.git --git-ref=main
 ```
 
-`setforge install` deploys tracked files to their live destinations and reconciles VSCode extensions and Claude plugins.
+`setforge init` writes `~/.config/setforge/local.yaml` with the `source:` block
+for you — no hand-editing.
 
-## Development setup
+**5. Deploy**
 
-The repo's [.pre-commit-config.yaml](.pre-commit-config.yaml) declares hooks (gitleaks, ruff, ruff-format) that only fire after `pre-commit install` registers the git hook in `.git/hooks/`. Run this once per fresh clone or worktree — otherwise commits sail past local quality gates and only fail on CI:
+```bash
+uv run setforge install --profile=default
+```
+
+This deploys your tracked files to their live destinations and reconciles
+VSCode extensions and Claude plugins.
+
+## Daily workflow
+
+Core commands (all deploy/compare/sync commands require `--profile=<name>`):
+
+```bash
+uv run setforge compare  --profile=<profile>   # show drift between live and tracked/
+uv run setforge sync     --profile=<profile>   # capture live edits into tracked/ + record a transition
+uv run setforge install  --profile=<profile>   # deploy tracked/ -> live
+uv run setforge revert   --profile=<profile>   # undo the most recent install/sync
+uv run setforge status   --profile=<profile>   # one-screen status summary (read-only)
+uv run setforge validate --profile=<profile>   # config-shape check (no live target paths)
+```
+
+`validate` takes exactly one of `--profile=<name>` or `--all`. For the full
+command surface, run `setforge --help` or see
+[docs/commands.md](docs/commands.md).
+
+## Concepts & deep reference
+
+- **Configuration & the config repo** — source discovery, the `setforge.yaml`
+  schema, per-host preservation: [docs/configuration.md](docs/configuration.md).
+- **Command reference & subcommand groups** — every command, the nine
+  subcommand groups, and `--auto=*` confirmation:
+  [docs/commands.md](docs/commands.md).
+- **Cutting a release** — CI gates and the tag-push flow:
+  [docs/releasing.md](docs/releasing.md).
+- **Upgrading from my-setup v0.x** — the rename + repo-split migration:
+  [docs/migrating-from-my-setup.md](docs/migrating-from-my-setup.md).
+
+## The four-tool stack
+
+The Claude Code workflow setforge is built around relies on four tools:
+
+| Tool | Role | Configured by setforge |
+|---|---|---|
+| Beads | Task tracking | Yes (deploys `bd` skill + config into Claude) |
+| Superpowers | Development methodology | Yes (deploys `superpowers-prefs.md`) |
+| Repomix | Repo packaging | No — install separately |
+| worktrunk | Worktree management for parallel agents | No — install separately |
+
+`setforge install` configures Beads and Superpowers; install Repomix and
+worktrunk yourself.
+
+## Development
+
+Install the pre-commit hooks once per fresh clone or worktree — otherwise
+commits sail past local gates (gitleaks, ruff, ruff-format) and only fail on
+CI:
 
 ```bash
 uv run pre-commit install
 ```
 
-## Daily workflow
-
-All commands require `--profile=<name>`. Profiles live in YOUR config repo's `setforge.yaml`.
-
-```bash
-uv run setforge fetch                              # clone/fetch + checkout the configured git source
-uv run setforge compare --profile=<profile>       # show drift between live and tracked/
-uv run setforge capture --profile=<profile>       # run the merge wizard on tracked-file drift
-uv run setforge merge   --profile=<profile>       # standalone merge wizard (no profile capture)
-uv run setforge sync    --profile=<profile>       # capture + record a transition (for revert)
-uv run setforge install --profile=<profile>       # deploy tracked/ -> live
-uv run setforge revert  --profile=<profile>       # undo the most recent install/sync
-uv run setforge validate --profile=<profile>      # config-shape check (no live target paths needed)
-uv run setforge --help                            # list all commands
-```
-
-`sync` is `capture`'s transition-recording sibling — "I tweaked something live, now save it and record a transition I can revert later." Both write the captured content into your config repo's `<source-dir>/tracked/`; `git diff` + commit + push from inside the config repo to lock in.
-
-### Subcommand groups
-
-setforge ships four subcommand groups for narrow inspections and edits:
-
-- `setforge transitions list` / `show` — inspect the install/sync/revert history under `~/.local/state/setforge/transitions/`.
-- `setforge ext list` / `add` / `remove` / `reconcile` — manage VSCode extensions in your profile's `extensions:` block.
-- `setforge plugin list` / `add` / `remove` / `reconcile` / `sync-cache` — manage Claude plugins in your profile's `claude_plugins:` block.
-- `setforge marketplace add` / `remove` / `update` — manage Claude plugin marketplaces (the upstream sources plugins are installed from).
-
-When tracked declares `preserve_user_keys_deep` or carries top-level non-preserve drift between tracked and live, `sync` fires the merge wizard interactively (symmetric with `install`'s drift gate). For non-interactive contexts (CI, scripted runs):
-
-- `--auto=use-live` reproduces today's silent-absorb behavior — every drift item is absorbed into tracked.
-- `--auto=keep-tracked` is the safer alternative — every drift item is rejected, tracked stays as-is.
-- Without TTY and without `--auto`, `sync` exits 1 with `CaptureRequiresInteractive`.
-
-### Mutating `--auto=*` confirmation
-
-When `setforge install` or `setforge sync` runs with a mutating `--auto*` flag (`--auto=use-tracked`, `--auto=use-live`, `--auto-accept-tracked`, `--auto-accept-live`), setforge shows a risks panel describing what will change in which direction, plus the exact `setforge revert` command to undo, then prompts arrow-key yes/no. Default selection is **No** (safe).
-
-For non-interactive use (CI, scripts) pass `--yes` (`-y`) to bypass the prompt. Without `--yes` in a non-TTY context the command exits 1 with a clear error.
-
-`revert` undoes the most recent `install` or `sync` for the named profile by replaying its transition record in reverse — file diffs via `patch -R`, plus uninstalling extensions that were installed (and reinstalling extensions that were uninstalled). Drift on any touched file aborts cleanly with no partial revert. A second `revert` acts as redo. Transition records are written to `~/.local/state/setforge/transitions/` and kept indefinitely; if that directory grows large, you can `rm -rf` it.
-
-## User-section preservation
-
-Markdown tracked files can opt into per-host preservation. Wrap any region in HTML-comment markers and the live content survives subsequent `install` runs. Markers require a `host-local` or `shared` semantics keyword on both start and end:
-
-```markdown
-<!-- setforge:user-section start host-local NAME -->
-... live edits to this body always survive re-install (host-specific) ...
-<!-- setforge:user-section end host-local NAME -->
-
-<!-- setforge:user-section start shared NAME -->
-... live edits survive, and tracked-side updates surface via
-    `install --reconcile-user-sections` ...
-<!-- setforge:user-section end shared NAME -->
-```
-
-See the project-root [CLAUDE.md](CLAUDE.md) marker-syntax section for the full grammar (including the `hash=<sha256-hex>` segment install rewrites on every run).
-
-YAML tracked files can declare `preserve_user_keys: list[str]` per tracked file in your config repo's `setforge.yaml`. Live values at those JSONPath-lite paths overlay tracked content on every deploy and are stripped from tracked on every capture.
-
-## Host-local files
-
-Edit `~/.claude/additional-content.md` directly on each host for machine-specific Claude Code rules. `setforge install` creates it as an empty file if missing; the engine never tracks its content.
-
-## Add a new tracked file or extension
-
-Both happen in YOUR config repo, not in this engine repo:
-
-1. Edit `<config-repo>/setforge.yaml` to add an entry under `tracked_files:` and reference it from the relevant profile's `tracked_files:` list. (Extensions: add the extension ID to the profile's `extensions.include:` list.)
-2. Place tracked-file source files under `<config-repo>/tracked/<src>` (matching each entry's `src:` path).
-3. Commit + push to your config repo.
-4. On every machine: `uv run setforge fetch` (for git sources) or `git pull` (for path sources), then `uv run setforge install --profile=<profile>`.
-
-## Managing user-section markers
-
-Adding `<!-- setforge:user-section ... -->` marker pairs to tracked
-markdown files is automated by `setforge section`:
-
-```bash
-# Interactive: arrow-key picker for semantics + TUI anchor picker + confirm.
-uv run setforge section add --profile=<profile>
-
-# Scripted: every flag set, --yes bypasses the final confirm.
-uv run setforge section add --profile=<profile> \
-    --tracked-file=<key-from-setforge.yaml> \
-    --semantics=shared \
-    --name=my-notes \
-    --anchor-line=42 \
-    --body-source=empty \
-    --yes
-
-# Print a paste-ready marker pair for files setforge cannot edit
-# (anything not .md or .markdown).
-uv run setforge section emit shared my-notes
-```
-
-`section add` only edits markdown (`.md` / `.markdown`); other suffixes
-print a hint to use `section emit` and paste the marker pair manually.
-The end marker is stamped with the body's sha256 hash on write so the
-new pair passes strict parsing immediately — install / compare / sync
-read it without an explicit migration step.
-
-## CI
-
-Push/PR to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml): unit tests (`uv run pytest`), config validation against the e2e test fixture (`uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all`), and gitleaks.
-
-The engine repo no longer carries a `setforge.yaml` at root (it lives in your config repo since v0.2.0); CI validates against the e2e test fixture instead.
-
-## Cutting a release
-
-Run the preflight script BEFORE pushing a `v*.*.*` tag:
-
-```bash
-uv run python scripts/release_preflight.py
-```
-
-It runs 8 checks: `uv build` → `twine check` → tmp `UV_TOOL_DIR` install → `setforge --version` / `--help` / `__version__` assertions → workflow YAML parse → `bd ready` P0-P2 empty check. Exits 0 on success; non-zero with the failing step name on the first failure.
-
-After preflight green, the tag-push sequence is:
-
-```bash
-cd ~/setforge
-git push origin main
-git tag -a vX.Y.Z -m 'vX.Y.Z: summary'
-git push origin vX.Y.Z
-```
-
-This fires `.github/workflows/publish-pypi.yml` (build + twine + PyPI upload via `PYPI_API_TOKEN`) and `.github/workflows/release.yml` (`gh release create` with auto-generated notes). Verify on https://pypi.org/project/setforge/ and the Releases tab.
-
-## Upgrading from my-setup v0.x to setforge
-
-setforge is the post-rename + post-split form of the older `my-setup` tool. If you have an existing my-setup checkout, the migration is:
-
-1. **Rename**: the Python package, CLI binary, env vars, XDG dirs, and bd issue prefix all changed (my_setup → setforge, MY_SETUP_ → SETFORGE_, ~/.local/state/my-setup/ → ~/.local/state/setforge/, etc.). Migrate XDG state:
-
-   ```bash
-   mv ~/.config/my-setup ~/.config/setforge      # if it exists
-   mv ~/.local/state/my-setup ~/.local/state/setforge   # if it exists
-   ```
-
-2. **User-section markers in deployed live files**: the marker namespace changed from `my-setup:user-section` to `setforge:user-section`. Run this on every host, per markered live file:
-
-   ```bash
-   sed -i 's/my-setup:user-section/setforge:user-section/g' ~/.claude/CLAUDE.md
-   # repeat for any other live file you've installed with markers
-   ```
-
-   `setforge install` detects pre-rename markers and refuses to clobber section bodies, pointing you at this sed command — but running it preemptively is safer.
-
-3. **Repo split**: your old monorepo had engine + config together. Separate them:
-
-   - **Option A** (clean): clone the new engine repo afresh, then create / clone a config repo containing your `my_setup.yaml` + `tracked/` (you can use `git filter-repo --path tracked/ --path my_setup.yaml` to extract them from your old monorepo with full history).
-   - **Option B** (migrated): if you're `raulfrk` (the author), your config now lives at `git@github.com:raulfrk/setforge-config.git`.
-
-4. **Rename your config file**: setforge now expects `setforge.yaml` (was `my_setup.yaml`). In your config repo:
-
-   ```bash
-   git mv my_setup.yaml setforge.yaml
-   git commit -m "Rename my_setup.yaml to setforge.yaml"
-   ```
-
-   If you forget, `setforge` refuses to run with a `ConfigError` pointing at this exact command.
-
-5. **Configure the source layer** so setforge finds your config repo (see "Architecture: engine + config repos" above).
-
-6. **Run**: `setforge install --profile=<your-profile>` should be a no-op on a host that was already on the latest my-setup state.
+CI runs on every push/PR to `main`; see [docs/releasing.md](docs/releasing.md).
