@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import pexpect  # type: ignore[import-untyped]
 import pytest
 
 from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
+from tests.docker.pyte_session import PyteSession
 
 pytestmark = pytest.mark.e2e_docker
 
@@ -137,21 +137,23 @@ def test_auto_on_fresh_host_rejected(
 
 def test_welcome_panel_rendered_on_tty(
     docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
+    pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """On a real TTY, the welcome panel renders before the radiolist dialog.
+    """On a real TTY, the welcome header renders AND the radiolist dialog appears.
 
-    Drives ``setforge install`` via ``docker exec -it`` + pexpect so
-    stdin is a TTY. Expects the welcome header to appear on the
-    captured terminal stream, then sends Ctrl-C to abort (default safe
-    choice). The assertion is on the header substring only — the
-    radiolist dialog's rendering varies by terminal emulator and we
-    don't want to assert against ANSI escape minutiae.
+    Drives ``setforge install`` via the pyte harness (``docker exec -it``)
+    so stdin is a TTY and the full-screen prompt_toolkit dialog paints into
+    the emulated screen. The old test asserted the welcome header only and
+    sent Ctrl-C — the docstring's "before the radiolist dialog" claim was
+    never verified. Now assert BOTH: the header first (earliest output,
+    caught before the dialog redraws the screen), then the dialog's prompt
+    text. Anchor on the short ``What would you like to`` rather than the
+    em-dash title (a long needle risks straddling pyte's 120-col boundary).
     """
     c = docker_container(env={"SETFORGE_NO_WELCOME": ""})
-    pty = docker_pty_session(
-        c,
-        [
+    session = pyte_pty_session(
+        container=c.cid,
+        cmd=[
             "uv",
             "run",
             "setforge",
@@ -160,15 +162,13 @@ def test_welcome_panel_rendered_on_tty(
             f"--config={CONFIG_FIXTURE}",
             "--no-git-check",
         ],
-        timeout=60,
+        timeout=60.0,
     )
-    try:
-        pty.expect("fresh-host detected")
-        # Send Ctrl-C; the SIGINT handler restores the terminal and
-        # exits the process. The handler is wrapped in try/finally so
-        # the terminal state isn't left in raw mode.
-        pty.sendcontrol("c")
-        pty.expect(pexpect.EOF)
-    finally:
-        if pty.isalive():
-            pty.close(force=True)
+    # Welcome header — printed to the main screen before the dialog opens.
+    session.expect_in_display("fresh-host detected", timeout=30.0)
+    # The radiolist dialog renders AFTER the header (the previously-unverified
+    # ordering claim); its prompt text proves the full widget chain executed.
+    session.expect_in_display("What would you like to", timeout=10.0)
+    # Abort via Ctrl-C (the default safe choice); the SIGINT handler restores
+    # the terminal. The fixture finalizer closes the session.
+    session.send_keys("\x03")
