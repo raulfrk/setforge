@@ -171,6 +171,11 @@ def test_symlink_e2e_compare_detects_broken_link(
     # string) or DRIFTED (target-content drift, post-symlink-compare IMPORTANT #4),
     # so the ``MISSING:`` line must NOT appear at all.
     assert "MISSING:" not in combined, combined
+    # Positive pin: a broken link whose recorded target string still matches
+    # classifies as UNCHANGED (compare.py:810-818 — ``diff_file`` returns ""
+    # for the absent target), so the CLI prints an ``UNCHANGED:`` count line.
+    # Asserting only the MISSING absence left the actual bucket unverified.
+    assert "UNCHANGED:" in combined, combined
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +282,14 @@ def test_symlink_e2e_revert_reverses_target_content(
         check=False,
     )
     assert revert.returncode == 0, revert.stdout + revert.stderr
+    # rc==0 alone would miss a silent revert failure (the audit's top concern).
+    # Install recorded the target as a new-file diff (pre-install it did not
+    # exist), so ``patch -R`` reverses the creation and the target is REMOVED.
+    # Assert that via the same ``test -e`` existence idiom the sibling
+    # revert-unlinks test uses for the link — a stale target here = revert no-op.
+    assert c.exec(["test", "-e", _TARGET], check=False).returncode != 0, (
+        "revert did not reverse the target-file creation"
+    )
 
 
 # ---------------------------------------------------------------------------
