@@ -18,6 +18,12 @@ jobs:
     name: Build and publish setforge to PyPI
     runs-on: ubuntu-latest
     environment: pypi
+    # Disabled: PyPI trusted publishing is not yet configured. The job
+    # needs `permissions: id-token: write` plus a PyPI-side trusted
+    # publisher (or a valid PYPI_API_TOKEN secret); without them the
+    # publish step fails the OIDC token exchange. Skip the job until that
+    # setup lands so release-tag pushes do not produce a failing run.
+    if: false
     steps:
       - uses: actions/checkout@v4
         with:
