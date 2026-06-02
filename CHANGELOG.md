@@ -6,6 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-02
+
+Patch release: Docker e2e test-suite hardening. No user-facing behavior
+changes — the engine surfaces are byte-for-byte identical to 0.2.1. The
+release banks the verification work before the v0.3.0 feature cycle.
+
+### Changed
+- **Tightened the Docker e2e assertion surface** — audited the full
+  end-to-end suite and rewrote 24 weak-but-passing assertions across 10
+  test files so each pins the specific gate, content, or ordering it
+  intends, rather than a bare return code or a substring that could
+  match anywhere. Several were reframed to assert an impossible state's
+  *absence*, positive dry-run output, or post-revert target removal.
+- **Rewrote the two `config_cli` git-check e2e tests** to genuinely trip
+  the git-clean gate — seed a tracked git repo, dirty a committed file,
+  and drive the pre-deploy abort dialog. The e2e image excludes `.git`,
+  so the prior setup silently exercised source-validation instead of the
+  git-dirty path; the test names now match the behavior.
+
+## [0.2.1] - 2026-06-01
+
+Documentation and CI-maintenance release. Folded into the v0.2.2 tag —
+never released to PyPI separately.
+
+### Changed
+- **Restructured the README as a landing page**, splitting the detailed
+  command reference into `docs/`. Added an install version note and
+  tightened the beads-invisibility guidance.
+
+### Fixed
+- **Docker e2e CI reliability** — write container files via `tee` so the
+  in-container tester owns them, make `docker cp` staging files
+  world-readable, and pass `--no-cov` to the CI e2e pytest invocation
+  (avoids the pytest-cov + xdist controller crash).
+
 ## [0.2.0] - 2026-05-31
 
 The rename release. setforge is the renamed, re-architected successor
@@ -107,7 +142,9 @@ to the YAML config surface beyond the file rename.
 Earlier development series under the `my-setup` name (no formal release
 tag). See the migration section of the README for the upgrade recipe.
 
-<!-- Compare-URL and release-URL refs are placeholders until the v0.2.0
-tag lands on origin/main; before push they resolve to 404. -->
-[Unreleased]: https://github.com/raulfrk/setforge/compare/v0.2.0...HEAD
+<!-- 0.2.1 is documented for history but was never tagged (it folded
+into the v0.2.2 tag), so it carries no compare ref. The 0.2.2 refs
+resolve once the v0.2.2 tag lands on origin/main. -->
+[Unreleased]: https://github.com/raulfrk/setforge/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/raulfrk/setforge/compare/v0.2.0...v0.2.2
 [0.2.0]: https://github.com/raulfrk/setforge/releases/tag/v0.2.0
