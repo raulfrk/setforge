@@ -31,7 +31,13 @@ from ruamel.yaml import YAML
 
 from setforge import host_local_inject, jsonc, section_reconcile, sections, yaml_merge
 from setforge.binaries import LOCAL_CONFIG_PATH
-from setforge.config import Config, ResolvedProfile, TrackedFile, resolve_profile
+from setforge.config import (
+    Config,
+    Disposition,
+    ResolvedProfile,
+    TrackedFile,
+    resolve_profile,
+)
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -64,6 +70,16 @@ class CompareStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class FileCompare:
+    """Per-file drift result from :func:`compare_profile`.
+
+    ``disposition`` carries the tracked_file's :class:`~setforge.config.Disposition`
+    value (``None`` for legacy preserve-based files). The derived property
+    ``drift_is_expected`` is ``True`` when drift is classified as intentional
+    host divergence — i.e., disposition is ``FORKED`` or ``PINNED`` AND the
+    file is ``DRIFTED``. ``SHARED`` drift and all non-disposition-file drift
+    is *not* expected (needs attention).
+    """
+
     name: str
     status: CompareStatus
     diff: str
@@ -74,6 +90,24 @@ class FileCompare:
     permission bits (via :func:`stat.S_IMODE`) differ. Always False when
     ``mode:`` is unset — the drift axis is opt-in per tracked_file.
     """
+    disposition: Disposition | None = None
+    """The :class:`~setforge.config.Disposition` of the source tracked_file,
+    or ``None`` for files without a disposition (legacy preserve-* model).
+    """
+
+    @property
+    def drift_is_expected(self) -> bool:
+        """True when the file's drift is classified as intentionally expected.
+
+        Drift is expected only when the tracked_file's disposition is
+        ``FORKED`` or ``PINNED`` AND the file is ``DRIFTED``.  A ``SHARED``
+        file's drift always needs attention, and a ``None``-disposition file
+        never uses this axis (returns False regardless of drift status).
+        """
+        return self.status is CompareStatus.DRIFTED and self.disposition in (
+            Disposition.FORKED,
+            Disposition.PINNED,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +673,8 @@ def _compare_one(
             name, src, dst, tracked_file, host_local_sections=host_local_sections
         )
 
+    disposition = tracked_file.disposition
+
     if not dst.exists():
         return (
             FileCompare(
@@ -647,6 +683,7 @@ def _compare_one(
                 diff="",
                 expected_drift_keys=[],
                 unexpected_drift_keys=[],
+                disposition=disposition,
             ),
             True,
         )
@@ -691,17 +728,20 @@ def _compare_one(
     )
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
 
-    return (
-        FileCompare(
-            name=name,
-            status=status,
-            diff=diff,
-            expected_drift_keys=expected_keys,
-            unexpected_drift_keys=unexpected_keys,
-            mode_drift=mode_drift,
-        ),
-        bool(diff) or mode_drift,
+    entry = FileCompare(
+        name=name,
+        status=status,
+        diff=diff,
+        expected_drift_keys=expected_keys,
+        unexpected_drift_keys=unexpected_keys,
+        mode_drift=mode_drift,
+        disposition=disposition,
     )
+    # A disposition file with FORKED or PINNED drift is intentionally
+    # host-diverged: it does NOT count as unexpected drift.  SHARED drift
+    # (or any non-disposition-file drift) needs attention → unexpected.
+    is_unexpected = (bool(diff) or mode_drift) and not entry.drift_is_expected
+    return entry, is_unexpected
 
 
 def _compare_symlinked(
@@ -742,20 +782,18 @@ def _compare_symlinked(
         raise AssertionError(
             "_compare_symlinked called with tracked_file.symlink == None"
         )
+    disposition = tracked_file.disposition
     if not dst.is_symlink():
         if dst.exists():
-            return (
-                FileCompare(
-                    name=name,
-                    status=CompareStatus.DRIFTED,
-                    diff=(
-                        f"expected symlink to {expected!r}, found regular file at {dst}"
-                    ),
-                    expected_drift_keys=[],
-                    unexpected_drift_keys=[],
-                ),
-                True,
+            entry = FileCompare(
+                name=name,
+                status=CompareStatus.DRIFTED,
+                diff=(f"expected symlink to {expected!r}, found regular file at {dst}"),
+                expected_drift_keys=[],
+                unexpected_drift_keys=[],
+                disposition=disposition,
             )
+            return entry, not entry.drift_is_expected
         return (
             FileCompare(
                 name=name,
@@ -763,21 +801,21 @@ def _compare_symlinked(
                 diff="",
                 expected_drift_keys=[],
                 unexpected_drift_keys=[],
+                disposition=disposition,
             ),
             True,
         )
     actual = os.readlink(dst)
     if actual != expected:
-        return (
-            FileCompare(
-                name=name,
-                status=CompareStatus.DRIFTED,
-                diff=(f"symlink target drift at {dst}: {actual!r} != {expected!r}"),
-                expected_drift_keys=[],
-                unexpected_drift_keys=[],
-            ),
-            True,
+        entry = FileCompare(
+            name=name,
+            status=CompareStatus.DRIFTED,
+            diff=(f"symlink target drift at {dst}: {actual!r} != {expected!r}"),
+            expected_drift_keys=[],
+            unexpected_drift_keys=[],
+            disposition=disposition,
         )
+        return entry, not entry.drift_is_expected
 
     # Link metadata is correct; probe the target's CONTENT for drift.
     # ``diff_file`` returns ``""`` when its second argument does not
@@ -796,16 +834,15 @@ def _compare_symlinked(
         host_local_sections=host_local_sections,
     )
     if target_diff:
-        return (
-            FileCompare(
-                name=name,
-                status=CompareStatus.DRIFTED,
-                diff=target_diff,
-                expected_drift_keys=[],
-                unexpected_drift_keys=[],
-            ),
-            True,
+        entry = FileCompare(
+            name=name,
+            status=CompareStatus.DRIFTED,
+            diff=target_diff,
+            expected_drift_keys=[],
+            unexpected_drift_keys=[],
+            disposition=disposition,
         )
+        return entry, not entry.drift_is_expected
 
     return (
         FileCompare(
@@ -814,6 +851,7 @@ def _compare_symlinked(
             diff="",
             expected_drift_keys=[],
             unexpected_drift_keys=[],
+            disposition=disposition,
         ),
         False,
     )
@@ -1058,8 +1096,11 @@ def compare_summary_table(report: CompareReport) -> Table:
     """Build a rich :class:`~rich.table.Table` summarising the compare report.
 
     One row per ``DRIFTED`` entry with columns: ``file``, ``expected drift``,
-    ``unexpected drift``. Expected-drift counts render in dim cyan; unexpected
-    in bold red when > 0.
+    ``unexpected drift``.  When a file carries a ``disposition``, a bracketed
+    tag (``[shared]`` / ``[forked]`` / ``[pinned]``) is appended to the file
+    name; forked/pinned drift also appends an ``(expected)`` note to signal
+    the drift is intentional host divergence.  Expected-drift counts render
+    in dim cyan; unexpected in bold red when > 0.
     """
     table = Table(title="Drift Summary", show_header=True, header_style="bold")
     table.add_column("file")
@@ -1076,6 +1117,12 @@ def compare_summary_table(report: CompareReport) -> Table:
             unexp_str = f"[bold red]{unexp_count}[/bold red]"
         else:
             unexp_str = str(unexp_count)
-        table.add_row(entry.name, exp_str, unexp_str)
+
+        file_label = entry.name
+        if entry.disposition is not None:
+            file_label = f"{file_label} [{entry.disposition.value}]"
+            if entry.drift_is_expected:
+                file_label = f"{file_label} (expected)"
+        table.add_row(file_label, exp_str, unexp_str)
 
     return table

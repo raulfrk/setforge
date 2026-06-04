@@ -172,7 +172,8 @@ def _compare_json_data(report: compare_mod.CompareReport) -> dict[str, Any]:
     dict/list/string shapes so ``json.dumps`` can serialise without
     custom encoders. Per-entry fields: ``name``, ``status`` (StrEnum
     value), ``unexpected_drift_keys`` (sorted), ``expected_drift_keys``
-    (sorted). Orphans surface as a list of strings. No diff bodies in
+    (sorted), ``disposition`` (string or null), ``drift_is_expected``
+    (bool). Orphans surface as a list of strings. No diff bodies in
     JSON mode — they belong to the human view; ``compare --full-diff``
     is a human-oriented surface.
     """
@@ -182,6 +183,10 @@ def _compare_json_data(report: compare_mod.CompareReport) -> dict[str, Any]:
             "status": entry.status.value,
             "unexpected_drift_keys": sorted(entry.unexpected_drift_keys),
             "expected_drift_keys": sorted(entry.expected_drift_keys),
+            "disposition": entry.disposition.value
+            if entry.disposition is not None
+            else None,
+            "drift_is_expected": entry.drift_is_expected,
         }
         for entry in report.entries
     ]
