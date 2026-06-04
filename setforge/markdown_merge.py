@@ -18,6 +18,7 @@ AFTER, so a base/ours/theirs disagreement on the final ``\\n`` is not a spurious
 last-line conflict and a clean ``merge_markdown(x, x, x)`` stays byte-exact.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -46,6 +47,20 @@ class LineConflict:
     base: list[str]
     ours: list[str]
     theirs: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class CleanSegment:
+    """A run of cleanly-resolved lines in document order.
+
+    ``lines`` carry their own terminators (as split by
+    :func:`str.splitlines(keepends=True)`), with the document's final
+    terminator stripped exactly as :func:`merge_markdown` does — it is
+    reattached by :func:`resolve_segments`. A segment groups one or more
+    consecutive non-conflicting :meth:`merge3.Merge3.merge_groups` runs.
+    """
+
+    lines: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,3 +171,91 @@ def merge_markdown(base: str, ours: str, theirs: str) -> MarkdownMergeResult:
 
     merged_text = _restore_final(resolved, ours_term)
     return MarkdownMergeResult(clean=True, merged_text=merged_text, conflicts=[])
+
+
+def merge_markdown_segments(
+    base: str, ours: str, theirs: str
+) -> list[CleanSegment | LineConflict]:
+    """Re-walk the 3-way merge into an ordered clean/conflict segment list.
+
+    Unlike :func:`merge_markdown` — which discards the interleaving and yields
+    a single ``merged_text`` or ``None`` — this returns the document's segments
+    IN ORDER: each cleanly-resolved run (``unchanged``/``a``/``b``/``same``)
+    becomes a :class:`CleanSegment` and each conflicting hunk a
+    :class:`LineConflict`. Consecutive clean runs are coalesced into one
+    :class:`CleanSegment`, so a conflict is always flanked by at most one clean
+    segment on each side. The line splitting / final-terminator handling is the
+    same as :func:`merge_markdown` (via :func:`_split_strip_final` and
+    :data:`_PATIENCE_MATCHER`), so a caller's rebuild via
+    :func:`resolve_segments` is byte-exact with ``merge_markdown`` on the clean
+    path. The stripped final terminator is reattached by
+    :func:`resolve_segments`, not carried in the segments.
+    """
+    base_lines, _base_term = _split_strip_final(base)
+    ours_lines, _ours_term = _split_strip_final(ours)
+    theirs_lines, _theirs_term = _split_strip_final(theirs)
+
+    merger = merge3.Merge3(
+        base_lines,
+        ours_lines,
+        theirs_lines,
+        sequence_matcher=_PATIENCE_MATCHER,
+    )
+
+    segments: list[CleanSegment | LineConflict] = []
+    pending: list[str] = []
+
+    def _flush() -> None:
+        if pending:
+            segments.append(CleanSegment(lines=list(pending)))
+            pending.clear()
+
+    for group in merger.merge_groups():
+        match group:
+            case ("unchanged", lines):
+                pending.extend(lines)
+            case ("a", lines):
+                pending.extend(lines)
+            case ("b", lines):
+                pending.extend(lines)
+            case ("same", lines):
+                # Both sides made the identical change -> take it ONCE.
+                pending.extend(lines)
+            case ("conflict", base_block, a_block, b_block):
+                _flush()
+                segments.append(
+                    LineConflict(
+                        base=list(base_block),
+                        ours=list(a_block),
+                        theirs=list(b_block),
+                    )
+                )
+            case _:  # pragma: no cover - defensive against merge3 API drift
+                raise ValueError(f"unexpected merge group tag: {group[0]!r}")
+
+    _flush()
+    return segments
+
+
+def resolve_segments(
+    segments: list[CleanSegment | LineConflict],
+    choose: Callable[[LineConflict], list[str]],
+    ours_terminator: str,
+) -> str:
+    """Join ``segments`` into a document, resolving each conflict via ``choose``.
+
+    For a :class:`CleanSegment` the lines pass through unchanged; for a
+    :class:`LineConflict` the lines returned by ``choose`` (typically one of
+    ``conflict.ours`` / ``conflict.theirs``) are spliced in its place. The
+    ``ours`` final terminator — stripped by :func:`merge_markdown_segments` — is
+    reattached via :func:`_restore_final`, so an all-clean rebuild that chooses
+    ``ours`` is byte-exact with :func:`merge_markdown`.
+    """
+    lines: list[str] = []
+    for segment in segments:
+        match segment:
+            case CleanSegment(lines=clean_lines):
+                lines.extend(clean_lines)
+            case LineConflict():
+                lines.extend(choose(segment))
+    return _restore_final(lines, ours_terminator)
