@@ -75,22 +75,32 @@ def _split_strip_final(text: str) -> tuple[list[str], str]:
     if not lines:
         return [], ""
     last = lines[-1]
-    stripped = last.rstrip("\r\n")
-    terminator = last[len(stripped) :]
-    lines[-1] = stripped
+    # Strip exactly ONE trailing terminator (``\r\n``/``\n``/``\r`` as a unit),
+    # not a run of newline chars, so a doubled terminator or a literal final
+    # ``\r`` line is not over-stripped.
+    if last.endswith("\r\n"):
+        terminator = "\r\n"
+    elif last.endswith(("\n", "\r")):
+        terminator = last[-1]
+    else:
+        terminator = ""
+    lines[-1] = last[: len(last) - len(terminator)]
     return lines, terminator
 
 
 def _restore_final(lines: list[str], terminator: str) -> str:
-    """Join ``lines`` and reattach ``terminator`` to the final non-empty line.
+    """Join ``lines`` and reattach ``terminator`` to the document.
 
     The terminator was removed by :func:`_split_strip_final`; reattaching the
-    ``ours`` terminator makes a clean self-merge byte-exact. A trailing
-    terminator is only meaningful when there is content to terminate, so an
-    empty result is returned unchanged.
+    ``ours`` terminator makes a clean self-merge byte-exact. The guard is on
+    ``lines`` being non-empty, NOT on the joined text: a sole-terminator input
+    (e.g. ``"\\n"``) splits to ``lines=[""]`` with the terminator carried
+    separately, so its joined text is empty yet it must still restore its
+    terminator. A genuinely empty document yields ``lines=[]`` and returns
+    ``""`` with no spurious terminator.
     """
     text = "".join(lines)
-    if text:
+    if lines:
         return text + terminator
     return text
 

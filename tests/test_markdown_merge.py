@@ -73,6 +73,32 @@ def test_idempotency_byte_exact(text: str) -> None:
     assert result.merged_text == text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\n",  # sole LF terminator -> must restore the byte
+        "\r\n",  # sole CRLF terminator -> restore both bytes as one unit
+        "\n\n",  # doubled terminator -> only one is the final terminator
+        "a\n",  # single content line with terminator
+        "a",  # single content line, no trailing terminator
+        "",  # genuinely empty -> no spurious terminator
+    ],
+)
+def test_idempotency_terminator_edge_cases(text: str) -> None:
+    """merge_markdown(x, x, x) is byte-exact for terminator-only edge inputs.
+
+    Pins the single-terminator regression: a sole ``"\\n"``/``"\\r\\n"`` input
+    splits to one empty line plus a separately-carried terminator, and must
+    restore that terminator rather than collapsing to ``""``. The empty-string
+    case confirms no spurious terminator is added.
+    """
+    result = merge_markdown(text, text, text)
+
+    assert result.clean is True
+    assert result.conflicts == []
+    assert result.merged_text == text
+
+
 def test_disagree_on_trailing_newline_is_not_a_conflict() -> None:
     """A final-newline-only disagreement must not produce a spurious conflict."""
     base = "x\ny"
