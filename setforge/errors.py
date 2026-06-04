@@ -162,9 +162,13 @@ class ReconcileAborted(SetforgeError):
 
 
 class MergeTypeMismatch(SetforgeError):
-    """Raised by yaml_merge.overlay when a preserved key path has
-    incompatible leaf types in src vs live (e.g. tracked str vs live
-    list)."""
+    """Raised when a merge encounters incompatible leaf types at a key
+    path (e.g. a str on one side vs a list on the other).
+
+    Raised by the YAML/JSONC merge paths (``yaml_merge.overlay``) and by
+    the scalar 3-way resolver (``scalar_merge.resolve_scalar``) when a
+    non-scalar operand reaches a scalar merge boundary.
+    """
 
 
 class ExtensionInstallFailed(SetforgeError):
@@ -295,7 +299,8 @@ class BaseStoreError(SetforgeError):
     verbatim last-deployed bytes of each tracked file under
     ``<state_root>/base/<profile>/<file-id>``. Failures reading or
     writing that store inherit from this class so the CLI top-level
-    handler renders them as ``error: <message>`` and exits 1."""
+    handler renders them as ``error: <message>`` and exits 1.
+    """
 
 
 class BaseStoreIOError(BaseStoreError):
@@ -304,7 +309,8 @@ class BaseStoreIOError(BaseStoreError):
     Wraps the underlying :class:`OSError` (permissions, disk full,
     missing parent that cannot be created) so callers see a setforge
     diagnostic naming the profile and file-id rather than an opaque
-    filesystem traceback."""
+    filesystem traceback.
+    """
 
 
 class BinaryOverrideInvalid(SetforgeError):

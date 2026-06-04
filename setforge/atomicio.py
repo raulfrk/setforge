@@ -1,9 +1,14 @@
 """Shared atomic-write primitive: crash-safe file replacement.
 
-Both the live-side deploy path and the tracked-side hash-maintenance
-writer need the same durability guarantee: a SIGTERM, power loss, or
-disk-full mid-write must never leave the destination truncated or
-half-written. The recipe is the standard write-temp-then-rename dance:
+Consumers — the per-host stored-base store (:mod:`setforge.base_store`)
+and the tracked-side hash-maintenance writer
+(:func:`setforge.section_reconcile._atomic_write_text`) — need the same
+durability guarantee: a SIGTERM, power loss, or disk-full mid-write must
+never leave the destination truncated or half-written. (The live-side
+deploy path, :func:`setforge.deploy._atomic_write`, implements the same
+recipe independently — it carries extra ``fchmod`` / ``.bak`` / symlink
+handling and is not yet migrated onto this primitive.) The recipe is the
+standard write-temp-then-rename dance:
 
 1. Write the payload to a sibling temp file in the *same directory* as
    the destination (never ``/tmp`` — a cross-device ``os.replace`` would
