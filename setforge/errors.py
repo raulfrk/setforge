@@ -288,6 +288,25 @@ class UpgradeError(SetforgeError):
     """
 
 
+class BaseStoreError(SetforgeError):
+    """Base class for per-host stored-base failures.
+
+    The stored-base layer (:mod:`setforge.base_store`) persists the
+    verbatim last-deployed bytes of each tracked file under
+    ``<state_root>/base/<profile>/<file-id>``. Failures reading or
+    writing that store inherit from this class so the CLI top-level
+    handler renders them as ``error: <message>`` and exits 1."""
+
+
+class BaseStoreIOError(BaseStoreError):
+    """Raised when a stored-base read or write fails at the OS level.
+
+    Wraps the underlying :class:`OSError` (permissions, disk full,
+    missing parent that cannot be created) so callers see a setforge
+    diagnostic naming the profile and file-id rather than an opaque
+    filesystem traceback."""
+
+
 class BinaryOverrideInvalid(SetforgeError):
     """Raised when a host-local binary override (CLI flag, env var, or
     ``~/.config/setforge/local.yaml``) points at a path that does not
