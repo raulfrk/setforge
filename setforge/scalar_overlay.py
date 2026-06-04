@@ -165,6 +165,38 @@ def resolve_scalar_overlay(
     )
 
 
+def seed_scalar_bases(
+    dst: Path, tracked_text: str, preserve_user_keys: list[str]
+) -> dict[str, object]:
+    """Seed a scalar base map from ``tracked_text`` for a first-install dst.
+
+    Used by the deploy path when ``dst`` does not yet exist: the file is
+    created from tracked verbatim, so each shallow scalar path's stored base
+    must be seeded to its TRACKED value (the deployed value) — the ancestor
+    the NEXT install resolves against. ``dst`` selects the format (JSONC when
+    :func:`setforge.jsonc.is_jsonc_file`, else YAML). A path terminating on a
+    non-scalar leaf is skipped (no base for a non-scalar path, mirroring the
+    overlay's fallback); an absent key seeds :data:`ABSENT`. A list-suffix
+    path raises :class:`ValueError` from the scalar_path layer (a config
+    error surfaced elsewhere) — it is NOT caught here.
+    """
+    read: Callable[[object, str], object]
+    if jsonc.is_jsonc_file(dst):
+        tracked_doc = loads(tracked_text, loader=ModelLoader())
+        read = read_scalar_jsonc
+    else:
+        tracked_doc = _yaml().load(tracked_text)
+        read = read_scalar_yaml
+
+    seed: dict[str, object] = {}
+    for path in preserve_user_keys:
+        try:
+            seed[path] = read(tracked_doc, path)
+        except MergeTypeMismatch:
+            continue
+    return seed
+
+
 def _apply_resolution(
     write: Callable[[object, str, ScalarResolution], None],
     live_doc: object,

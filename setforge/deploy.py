@@ -339,13 +339,24 @@ def _render_with_preserve_keys(
     tracked-structured contract — non-preserved keys, new tracked keys and
     deep overlay all behave exactly as before — while the shallow scalar
     values now ride the 3-way merge rather than a blind live-wins splice.
-    On a base-absent first run the driver keeps live verbatim, so the
-    overlay output is byte-for-byte the legacy blind result.
+    On a base-absent first run (live exists, no stored base) the driver keeps
+    live verbatim, so the overlay output is byte-for-byte the legacy blind
+    result. When ``dst`` does NOT yet exist (true first install) the content
+    is tracked verbatim — the legacy behaviour — but, on the scalar path, the
+    deployed (tracked) scalar values are seeded as ``new_scalar_bases`` so the
+    NEXT install has a stored ancestor to 3-way against.
     """
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
     if not (dst_existed and (shallow or deep)):
-        return src.read_text(encoding="utf-8"), None, []
+        tracked_text = src.read_text(encoding="utf-8")
+        seed: dict[str, object] | None = None
+        if scalar_bases is not None and shallow and not dst_existed:
+            # True first install: dst is created from tracked verbatim, so
+            # seed each shallow scalar path's base to its tracked value
+            # (non-scalar / absent leaves are skipped by the seeder).
+            seed = scalar_overlay.seed_scalar_bases(dst, tracked_text, shallow)
+        return tracked_text, seed, []
 
     tracked_text = src.read_text(encoding="utf-8")
     live_text = dst.read_text(encoding="utf-8")

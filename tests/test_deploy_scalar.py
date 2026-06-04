@@ -158,6 +158,30 @@ def test_scalar_bases_none_identical_to_legacy_blind_overlay(
     assert legacy.new_scalar_bases is None
 
 
+def test_scalar_first_install_dst_absent_seeds_tracked_values(
+    tmp_path: Path,
+) -> None:
+    # dst does NOT exist: the file is created from tracked verbatim and each
+    # shallow scalar path's base is seeded to its tracked value so the next
+    # install has an ancestor to 3-way against.
+    src = tmp_path / "src.yaml"
+    src.write_text("a: 1\nb: 2\nc:\n  nested: 3\n")
+    dst = tmp_path / "dst.yaml"  # absent
+
+    result = copy_atomic(
+        src,
+        dst,
+        preserve_user_keys=["a", "b", "c"],
+        scalar_bases={},
+    )
+
+    # Created verbatim from tracked (legacy behavior).
+    assert dst.read_text() == "a: 1\nb: 2\nc:\n  nested: 3\n"
+    # Scalar paths seeded; the non-scalar `c` is skipped.
+    assert result.new_scalar_bases == {"a": 1, "b": 2}
+    assert result.scalar_conflicts == []
+
+
 def test_jsonc_scalar_conflict_bare_keeps_live(tmp_path: Path) -> None:
     src = tmp_path / "src.json"
     src.write_text('{\n  "a": 8\n}\n')

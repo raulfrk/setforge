@@ -35,6 +35,7 @@ import typer
 from setforge import (
     base_store,
     deploy,
+    scalar_base_store,
     section_reconcile,
     transitions,
 )
@@ -229,6 +230,23 @@ def _deploy_all_tracked_files(
     for files that left the profile (or dropped their disposition) are
     cleaned up. The symlink branch never touches the base store.
 
+    A SEPARATE, mutually-exclusive lifecycle covers the SHALLOW
+    ``preserve_user_keys`` scalar overlay (:mod:`setforge.scalar_base_store`)
+    for every regular-file sub-entry whose ``disposition is None`` and whose
+    ``preserve_user_keys`` is non-empty. It mirrors the byte-base ordering:
+    READ each shallow path's stored scalar base BEFORE the deploy (the
+    ancestor :func:`deploy.copy_atomic`'s scalar driver resolves against),
+    then — and ONLY after the live write returns cleanly — ADVANCE the bases
+    the driver signalled via ``result.new_scalar_bases`` in ONE batched
+    :func:`scalar_base_store.set_bases` call (deferred bare conflicts are
+    already omitted from that map). A deferred scalar conflict
+    (``result.scalar_conflicts`` non-empty with the path absent from
+    ``new_scalar_bases``) keeps live and warns. After the per-file deploy,
+    :func:`scalar_base_store.prune` drops any stored path no longer in the
+    file's live shallow set. The two lifecycles never overlap on one file:
+    ``disposition`` and ``preserve_user_keys`` are mutually exclusive in
+    config.
+
     ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
     (``name`` for plain files, ``name/relpath`` for directory entries) —
     the same stable per-profile identifier the prune keep-set and
@@ -274,6 +292,12 @@ def _deploy_all_tracked_files(
                 disposition_file_ids.add(sub_name)
                 raw = base_store.read_base(profile, sub_name)
                 base_text = raw.decode("utf-8") if raw is not None else None
+            # Scalar-base path (mutually exclusive with disposition): READ the
+            # stored base for every shallow preserve path BEFORE the deploy.
+            shallow_preserve_paths = tracked_file.preserve_user_keys
+            scalar_bases = _read_scalar_bases(
+                profile, sub_name, tracked_file.disposition, shallow_preserve_paths
+            )
             result = deploy.copy_atomic(
                 sub_src,
                 sub_dst,
@@ -287,37 +311,113 @@ def _deploy_all_tracked_files(
                 disposition=tracked_file.disposition,
                 base_text=base_text,
                 merge_auto=section_auto,
+                scalar_bases=scalar_bases,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
             _echo_preserve_user_keys_provenance(tracked_file)
             _echo_host_local_sections_provenance(host_local)
             if tracked_file.preserve_user_sections:
                 section_reconcile.stamp_tracked_baseline(sub_src)
-            # ADVANCE the base only AFTER the live write returned cleanly.
-            # A write_base failure PROPAGATES (no suppress): base lagging
-            # live is the safe failure direction, base ahead of live is
-            # corruption.
+            # ADVANCE the disposition base only AFTER the live write.
             if tracked_file.disposition is not None:
-                if result.new_base is not None:
-                    base_store.write_base(
-                        profile, sub_name, result.new_base.encode("utf-8")
-                    )
-                elif result.merge_conflicts:
-                    # Deferred: bare conflict kept live, base NOT advanced.
-                    # Warn so the user knows the conflict re-surfaces next
-                    # install and how to resolve it non-interactively.
-                    typer.secho(
-                        f"warning: {sub_dst}: merge conflict kept live, base "
-                        f"not advanced — conflict re-surfaces next install "
-                        f"(re-run with --auto=use-tracked or the merge wizard)",
-                        err=True,
-                        fg=typer.colors.YELLOW,
-                    )
+                _advance_disposition_base(profile, sub_name, sub_dst, result)
+            # SCALAR-base lifecycle (mutually exclusive with disposition):
+            # advance / prune / warn, ordered AFTER the live write.
+            if scalar_bases is not None:
+                _advance_scalar_bases(
+                    profile, sub_name, sub_dst, result, shallow_preserve_paths
+                )
     # PRUNE after the whole loop: bases whose file_id is not in this run's
     # disposition keep-set (file left the profile, or lost its disposition)
     # are removed. Non-disposition files never have a base, so an empty
     # keep-set still correctly clears any stale bases under the profile.
     base_store.prune(profile, disposition_file_ids)
+
+
+def _advance_disposition_base(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+    result: deploy.DeployResult,
+) -> None:
+    """Advance the disposition byte-base AFTER a clean live write, or warn.
+
+    ADVANCE to ``result.new_base`` when the driver signalled re-baselining; a
+    :func:`base_store.write_base` failure PROPAGATES (no suppress) — base
+    lagging live is the safe failure direction, base ahead of live is
+    corruption. A deferred conflict (``new_base is None`` with non-empty
+    ``merge_conflicts``) keeps live and WARNs so the user knows it re-surfaces
+    next install.
+    """
+    if result.new_base is not None:
+        base_store.write_base(profile, file_id, result.new_base.encode("utf-8"))
+    elif result.merge_conflicts:
+        typer.secho(
+            f"warning: {sub_dst}: merge conflict kept live, base not advanced "
+            f"— conflict re-surfaces next install (re-run with "
+            f"--auto=use-tracked or the merge wizard)",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+
+
+def _read_scalar_bases(
+    profile: str,
+    file_id: str,
+    disposition: object | None,
+    shallow_preserve_paths: list[str],
+) -> dict[str, object] | None:
+    """Read the stored scalar base for every shallow preserve path, or None.
+
+    Returns ``None`` (the scalar overlay is off for this file) when a
+    ``disposition`` is declared — the two models are mutually exclusive — or
+    when the file declares no shallow ``preserve_user_keys``. Otherwise maps
+    each shallow path to its stored base (a typed scalar, ``None`` for a
+    stored ``null``, or :data:`setforge.scalar_merge.ABSENT` for no base).
+    The whole shallow list is passed to the driver, which skips any
+    non-scalar path; reading the base for all of them is harmless.
+    """
+    if disposition is not None or not shallow_preserve_paths:
+        return None
+    return {
+        path: scalar_base_store.get_base(profile, file_id, path)
+        for path in shallow_preserve_paths
+    }
+
+
+def _advance_scalar_bases(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+    result: deploy.DeployResult,
+    shallow_preserve_paths: list[str],
+) -> None:
+    """Advance / prune / warn the scalar bases AFTER a clean live write.
+
+    ADVANCE every path the driver signalled (``result.new_scalar_bases``,
+    deferred bare conflicts already omitted) in ONE batched
+    :func:`scalar_base_store.set_bases`; a failure PROPAGATES (base lagging
+    live is the safe failure direction). PRUNE any stored path no longer in
+    the file's live shallow set. WARN on each deferred scalar conflict (a
+    path in ``scalar_conflicts`` but absent from ``new_scalar_bases``) so the
+    user knows the divergence re-surfaces next install.
+    """
+    if result.new_scalar_bases:
+        scalar_base_store.set_bases(profile, file_id, result.new_scalar_bases)
+    advanced_paths = result.new_scalar_bases or {}
+    deferred_scalar = [
+        path for path in result.scalar_conflicts if path not in advanced_paths
+    ]
+    if deferred_scalar:
+        joined = ", ".join(deferred_scalar)
+        typer.secho(
+            f"warning: {sub_dst}: scalar conflict kept live for {joined}, "
+            f"base not advanced — conflict re-surfaces next install "
+            f"(re-run with --auto=use-tracked or the merge wizard)",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+    scalar_base_store.prune(profile, file_id, set(shallow_preserve_paths))
 
 
 def _echo_host_local_sections_provenance(
