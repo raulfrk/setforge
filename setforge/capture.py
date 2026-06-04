@@ -34,10 +34,10 @@ from pathlib import Path
 from rich.console import Console
 from ruamel.yaml import YAML
 
-from setforge import jsonc, sections, yaml_merge
+from setforge import base_store, jsonc, sections, yaml_merge
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, SectionMode, resolve_profile
+from setforge.config import Config, Disposition, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -307,16 +307,73 @@ def capture_profile(
         # directly in tracked carries through unchanged.
         host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            result = capture_tracked_file(
-                sub_src,
-                sub_dst,
-                preserve_user_sections=tracked_file.preserve_user_sections,
-                preserve_user_keys=tracked_file.preserve_user_keys,
-                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
-                preserve_user_sections_mode=tracked_file.preserve_user_sections_mode,
-                host_local_section_names=host_local_names,
-            )
+            if tracked_file.disposition is not None:
+                result = _capture_disposition_file(
+                    sub_name,
+                    sub_src,
+                    sub_dst,
+                    disposition=tracked_file.disposition,
+                    profile=profile_name,
+                )
+            else:
+                result = capture_tracked_file(
+                    sub_src,
+                    sub_dst,
+                    preserve_user_sections=tracked_file.preserve_user_sections,
+                    preserve_user_keys=tracked_file.preserve_user_keys,
+                    preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
+                    preserve_user_sections_mode=(
+                        tracked_file.preserve_user_sections_mode
+                    ),
+                    host_local_section_names=host_local_names,
+                )
             results.append(
                 CaptureResult(name=sub_name, action=result.action, reason=result.reason)
             )
     return results
+
+
+def _capture_disposition_file(
+    sub_name: str,
+    src: Path,
+    dst: Path,
+    *,
+    disposition: Disposition,
+    profile: str,
+) -> CaptureResult:
+    """Capture one disposition-bearing tracked (sub-)file under the 3-way model.
+
+    ``PINNED`` / ``FORKED`` never capture: tracked content stays as-is and
+    the stored base is left untouched (a :class:`CaptureAction.SKIPPED`
+    result carries the disposition as the skip reason).
+
+    ``SHARED`` writes the live file's bytes verbatim to ``src`` (a
+    disposition file has no preserve config, so the captured content IS
+    the live content) and — ONLY after the tracked write returns cleanly —
+    re-baselines the stored base to the same bytes via
+    :func:`setforge.base_store.write_base`, converging
+    ``base == tracked == live``. A base-write failure propagates; base
+    lagging live is the safe failure direction.
+
+    ``sub_name`` is the ``expand_tracked_file`` synthetic id (the same
+    stable per-profile ``file_id`` the install loop keys the base by), so
+    install and sync share one base per file.
+    """
+    if disposition in (Disposition.PINNED, Disposition.FORKED):
+        return CaptureResult(
+            name=src.name,
+            action=CaptureAction.SKIPPED,
+            reason=f"disposition={disposition.value}",
+        )
+    # SHARED: capture live → tracked verbatim, then re-baseline the base.
+    if not dst.exists():
+        return CaptureResult(
+            name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
+        )
+    live_text = dst.read_text(encoding="utf-8")
+    result = _write_if_changed(src, live_text)
+    # Re-baseline AFTER the tracked write succeeded: write tracked first,
+    # then base, so a base-write failure leaves base lagging (safe) rather
+    # than ahead of tracked (corruption). Failure propagates.
+    base_store.write_base(profile, sub_name, live_text.encode("utf-8"))
+    return result

@@ -120,6 +120,13 @@ def walk_capture_drift(
         if tracked_file_filter is not None and name != tracked_file_filter:
             continue
         tracked_file = config.tracked_files[name]
+        if tracked_file.disposition is not None:
+            # Disposition-bearing tracked_files use the stored-base 3-way
+            # model, not the legacy 2-way merge wizard — capture gates
+            # them by disposition in ``capture_profile`` (shared captures
+            # verbatim + re-baselines; forked/pinned skip). Never prompt
+            # the legacy drift wizard for them.
+            continue
         if tracked_file.preserve_user_sections:
             # Markdown / section tracked_files — capture's section handling
             # stays as today; not part of the wizard's contract.
