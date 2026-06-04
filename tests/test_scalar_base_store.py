@@ -153,6 +153,30 @@ def test_corrupt_manifest_not_treated_as_empty(state_dir: Path) -> None:
         scalar_base_store.set_base("vm", "f", "x", 1)
 
 
+def test_non_object_top_level_raises_base_store_error(state_dir: Path) -> None:
+    path = _manifest_path(state_dir, "vm", "f")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[1, 2, 3]")
+    with pytest.raises(BaseStoreError):
+        scalar_base_store.get_base("vm", "f", "x")
+
+
+def test_scalar_record_raises_on_get(state_dir: Path) -> None:
+    path = _manifest_path(state_dir, "vm", "f")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"a.b": 5}')
+    with pytest.raises(BaseStoreError):
+        scalar_base_store.get_base("vm", "f", "a.b")
+
+
+def test_scalar_record_raises_on_set_bases(state_dir: Path) -> None:
+    path = _manifest_path(state_dir, "vm", "f")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"a.b": 5}')
+    with pytest.raises(BaseStoreError):
+        scalar_base_store.set_bases("vm", "f", {"c.d": 1})
+
+
 # --- NaN / Inf rejection -------------------------------------------------
 
 

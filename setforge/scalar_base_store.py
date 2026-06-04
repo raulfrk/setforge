@@ -16,6 +16,10 @@ key-path to a record::
 
     { "<dotted-path>": {"present": bool, "value": <json scalar>} }
 
+The dotted-path string is used verbatim as the manifest key — no
+normalize step is applied on either set or get, so the raw key written by
+:func:`set_bases` is the exact key :func:`get_base` looks up.
+
 * ``present: false`` -> the key-path was deployed *absent* (no ``value``
   key is written).
 * ``present: true, value: null`` -> the key-path was deployed as a literal
@@ -37,10 +41,10 @@ Single-writer invariant
 writer at a time. :func:`set_bases` is the PRIMARY entry point: it does ONE
 read-modify-write of the whole manifest for every path it is given, which
 closes the lost-update race a per-path read-modify-write would open.
-:func:`set_base` and :func:`re_baseline` are thin one-key shims over the
-same read-modify-write-one-key primitive; correctness still relies on the
-single-writer invariant, since two concurrent writers could interleave
-their read and write phases.
+:func:`set_base` and :func:`re_baseline` are thin one-key shims over
+:func:`set_bases`; correctness still relies on the single-writer
+invariant, since two concurrent writers could interleave their read and
+write phases.
 
 No install/deploy/revert wiring lives here — the scope is the store
 primitive only.
@@ -82,7 +86,7 @@ def _resolve_target(profile: str, file_id: str) -> Path:
             "'..' components"
         )
     profile_root = _profile_root(profile)
-    target = (profile_root / f"{file_id}.json").resolve()
+    target = (profile_root / f"{candidate}.json").resolve()
     if profile_root not in target.parents:
         raise BaseStoreError(
             f"file-id {file_id!r} resolves outside scalar-base/{profile}/"
@@ -96,6 +100,10 @@ def _read_manifest(profile: str, file_id: str) -> _Manifest:
     A missing manifest (no key-path ever stored) reads as an empty dict —
     every path is then :data:`ABSENT`. A corrupt/hand-edited manifest
     raises :class:`BaseStoreError`; it is NEVER silently treated as empty.
+    Corruption includes a non-object top level and any path whose record
+    is not itself an object — both are validated here so the
+    :data:`_Manifest` shape this returns is a true contract, not a lie at
+    the trust boundary.
     """
     target = _resolve_target(profile, file_id)
     try:
@@ -107,11 +115,24 @@ def _read_manifest(profile: str, file_id: str) -> _Manifest:
             f"failed to read scalar base for {profile}/{file_id}: {err}"
         ) from err
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as err:
         raise BaseStoreError(
             f"corrupt scalar-base manifest for {profile}/{file_id}: {err}"
         ) from err
+    if not isinstance(parsed, dict):
+        raise BaseStoreError(
+            f"corrupt scalar-base manifest for {profile}/{file_id}: "
+            f"top level must be an object, got {type(parsed).__name__}"
+        )
+    for path, record in parsed.items():
+        if not isinstance(record, dict):
+            raise BaseStoreError(
+                f"corrupt scalar-base manifest for {profile}/{file_id}: "
+                f"record for {path!r} must be an object, got "
+                f"{type(record).__name__}"
+            )
+    return parsed
 
 
 def _write_manifest(profile: str, file_id: str, manifest: _Manifest) -> None:
