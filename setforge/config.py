@@ -84,6 +84,21 @@ class ClaudeInstallMode(StrEnum):
     LOCAL_CLONE = "local-clone"
 
 
+class Disposition(StrEnum):
+    """How a tracked file is reconciled under the stored-base 3-way model.
+
+    ``shared`` 3-way merges and captures live edits back to tracked;
+    ``forked`` 3-way merges but never captures back; ``pinned`` is never
+    merged or captured (the live copy is authoritative — today's
+    "host-local", renamed). ``None`` on a tracked file keeps the legacy
+    2-way preserve behavior unchanged.
+    """
+
+    SHARED = "shared"
+    FORKED = "forked"
+    PINNED = "pinned"
+
+
 class SectionMode(StrEnum):
     """How capture treats marker bodies in tracked_files with
     ``preserve_user_sections: true``.
@@ -192,6 +207,16 @@ class TrackedFile(BaseModel):
     The model validator refuses a self-loop where the (expanded)
     target equals the (expanded) ``dst`` — config-time guard against
     a tracked_file pointing at itself.
+    """
+    disposition: Disposition | None = None
+    """File-level reconciliation policy (opt-in).
+
+    ``None`` ⇒ the legacy 2-way preserve path, byte-for-byte unchanged.
+    When set, the file is reconciled by the stored-base 3-way merge per
+    :class:`Disposition`. Mutually exclusive with the legacy
+    ``preserve_*`` family (see
+    :meth:`_disposition_excludes_legacy_preserve`) — a file uses one
+    model or the other, never both.
     """
 
     @model_validator(mode="before")
@@ -310,6 +335,34 @@ class TrackedFile(BaseModel):
                     f"preserve_user_keys_deep; the two semantics conflict. "
                     f"Drop one or rename the head."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _disposition_excludes_legacy_preserve(self) -> Self:
+        """A file uses EITHER the disposition model OR legacy ``preserve_*``.
+
+        The two are distinct reconciliation models — whole-file stored-base
+        3-way (disposition) versus per-key / per-section live-preserve
+        (``preserve_*``). Allowing both on one tracked_file would make the
+        deploy path ambiguous, so the combination is refused at load time.
+        """
+        if self.disposition is None:
+            return self
+        offenders: list[str] = []
+        if self.preserve_user_sections:
+            offenders.append("preserve_user_sections")
+        if self.preserve_user_keys:  # computed view; excludes REMOVED_VIA_LOCAL
+            offenders.append("preserve_user_keys")
+        if self.preserve_user_keys_deep:
+            offenders.append("preserve_user_keys_deep")
+        if self.preserve_user_sections_mode is not SectionMode.KEEP_DEFAULTS:
+            offenders.append("preserve_user_sections_mode")
+        if offenders:
+            raise ValueError(
+                f"disposition: {self.disposition.value!r} is mutually exclusive "
+                f"with legacy preserve field(s): {sorted(offenders)}. A file uses "
+                f"either the disposition model or preserve_*, not both."
+            )
         return self
 
     @field_validator("preserve_user_keys_deep")
