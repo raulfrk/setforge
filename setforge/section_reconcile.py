@@ -21,13 +21,12 @@ updates.
 
 from __future__ import annotations
 
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from setforge import atomicio
 from setforge.errors import MarkerError
 from setforge.sections import (
     SectionSemantics,
@@ -288,25 +287,16 @@ def stamp_tracked_baseline(tracked_path: Path) -> bool:
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via tempfile + ``os.replace``.
+    """Write ``content`` to ``path`` via the shared atomic-write primitive.
 
-    Honours the install-time atomic-writes-everywhere invariant the
-    project already enforces on the live side (see
-    :func:`setforge.deploy._atomic_write`). A SIGTERM mid-write leaves
+    Thin delegator to :func:`setforge.atomicio.atomic_write_text`, which
+    honours the install-time atomic-writes-everywhere invariant the
+    project already enforces on the live side. A SIGTERM mid-write leaves
     ``path`` intact rather than truncated; the temp file in the same
-    directory is unlinked on the exception path.
+    directory is unlinked on the exception path. The shared primitive
+    additionally fsyncs the data and parent directory for durability.
     """
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    atomicio.atomic_write_text(path, content)
 
 
 def has_shared_drift(drifts: Mapping[str, SectionDrift]) -> bool:
