@@ -38,6 +38,7 @@ from json5.model import (
     JSONArray,
     JSONObject,
     JSONText,
+    Value,
 )
 from ruamel.yaml.comments import CommentedMap
 
@@ -299,8 +300,10 @@ class _Json5Backend:
     splices the two lists together to keep the derived view consistent.
 
     Comment provenance: a value's trailing ``//`` comment lives in that value
-    node's ``wsc_after``, so a TAKE-theirs swaps the whole key+value node pair
-    (carrying theirs' comment with the winning value).
+    node's ``wsc_after``, so a TAKE-theirs swaps the VALUE node only; theirs'
+    trailing comment rides its value node's ``wsc_after``, leaving the key node
+    in place (swapping the whole pair would clobber the preceding sibling's
+    ``wsc_before``).
     """
 
     def __init__(self, base: object, ours: JSONObject, theirs: object) -> None:
@@ -389,8 +392,6 @@ def _json5_key_text(key_node: object) -> str:
 
 def _is_json5_scalar(node: object) -> bool:
     """Whether ``node`` is a json-five scalar leaf (not object/array)."""
-    from json5.model import Value
-
     return isinstance(node, Value) and not isinstance(node, JSONObject | JSONArray)
 
 
