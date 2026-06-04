@@ -27,10 +27,18 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from setforge import disposition_merge, host_local_inject, jsonc, sections, yaml_merge
+from setforge import (
+    disposition_merge,
+    host_local_inject,
+    jsonc,
+    scalar_overlay,
+    sections,
+    yaml_merge,
+)
 from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
+from setforge.scalar_merge import ABSENT
 from setforge.section_reconcile import maintain_marker_hashes
 from setforge.section_wizard import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
@@ -52,6 +60,8 @@ class DeployResult:
     backup_path: Path | None
     new_base: str | None = None
     merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
+    new_scalar_bases: dict[str, object] | None = None
+    scalar_conflicts: list[str] = field(default_factory=list)
 
 
 def copy_atomic(
@@ -69,6 +79,7 @@ def copy_atomic(
     disposition: Disposition | None = None,
     base_text: str | None = None,
     merge_auto: ReconcileAuto | None = None,
+    scalar_bases: dict[str, object] | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -125,6 +136,26 @@ def copy_atomic(
     TOCTOU symlink-swap window and bypasses umask). When ``None``,
     the temp file inherits the source's mode via
     :func:`stat.S_IMODE` (today's behavior, zero regression).
+
+    ``scalar_bases`` upgrades the SHALLOW ``preserve_user_keys`` overlay
+    from a blind live-wins splice to a stored-base 3-way merge (see
+    :mod:`setforge.scalar_overlay`). It is mutually exclusive with
+    ``disposition`` (a file uses one model or the other) and only takes
+    effect when ``disposition is None`` AND ``preserve_user_keys`` is
+    non-empty AND ``dst`` already exists. It maps each shallow path to its
+    stored base value (a typed scalar, ``None`` for a stored ``null``, or
+    :data:`setforge.scalar_merge.ABSENT` for no stored base). The driver
+    resolves every shallow scalar 3-way against ``merge_auto`` (the install
+    ``--auto``) and the resolved values flow back into the legacy overlay
+    pipeline, so deep keys (``preserve_user_keys_deep``), user-sections and
+    non-preserved/new tracked keys keep their tracked-structured legacy
+    behavior byte-for-byte. The returned :class:`DeployResult` carries
+    ``new_scalar_bases`` (the paths whose stored base should advance, with
+    deferred bare conflicts omitted) and ``scalar_conflicts`` (every path
+    that conflicted, even when ``merge_auto`` resolved it). When
+    ``scalar_bases is None`` the legacy blind overlay runs verbatim and both
+    fields stay inert (``None`` / ``[]``) — so non-install callers and
+    files without preserve keys are byte-for-byte unchanged.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -138,6 +169,8 @@ def copy_atomic(
 
     new_base: str | None = None
     merge_conflicts: list[LineConflict | PathConflict] = []
+    new_scalar_bases: dict[str, object] | None = None
+    scalar_conflicts: list[str] = []
     if disposition is not None:
         live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
         tracked = src.read_text(encoding="utf-8")
@@ -151,7 +184,7 @@ def copy_atomic(
         new_base = resolution.text if resolution.advance_base else None
         merge_conflicts = resolution.conflicts
     else:
-        content = _compute_content(
+        content, new_scalar_bases, scalar_conflicts = _compute_content(
             src,
             real_dst,
             dst_existed,
@@ -161,6 +194,8 @@ def copy_atomic(
             section_bodies_override,
             precomputed_live_sections=precomputed_live_sections,
             host_local_sections=host_local_sections,
+            scalar_bases=scalar_bases,
+            merge_auto=merge_auto,
         )
 
     return _write_resolved_content(
@@ -172,6 +207,8 @@ def copy_atomic(
         mode,
         new_base=new_base,
         merge_conflicts=merge_conflicts,
+        new_scalar_bases=new_scalar_bases,
+        scalar_conflicts=scalar_conflicts,
     )
 
 
@@ -185,16 +222,22 @@ def _write_resolved_content(
     *,
     new_base: str | None,
     merge_conflicts: list[LineConflict | PathConflict],
+    new_scalar_bases: dict[str, object] | None = None,
+    scalar_conflicts: list[str] | None = None,
 ) -> DeployResult:
     """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
 
     Shared by the legacy preserve branch and the disposition branch of
     :func:`copy_atomic` so the NOOP-detection, mode-only-drift fixup and
     :func:`_atomic_write` logic live in one place. ``new_base`` and
-    ``merge_conflicts`` are threaded onto EVERY returned
-    :class:`DeployResult` — including the NOOP and mode-only-drift paths —
-    so a clean disposition merge that equals live still re-baselines.
+    ``merge_conflicts`` (disposition path) plus ``new_scalar_bases`` and
+    ``scalar_conflicts`` (shallow scalar-overlay path) are threaded onto
+    EVERY returned :class:`DeployResult` — including the NOOP and
+    mode-only-drift paths — so a clean disposition merge that equals live
+    still re-baselines and a scalar overlay whose result equals live still
+    advances its per-path bases.
     """
+    scalar_conflicts = scalar_conflicts or []
     if dst_existed:
         existing = real_dst.read_text(encoding="utf-8")
         action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
@@ -214,6 +257,8 @@ def _write_resolved_content(
                 backup_path=None,
                 new_base=new_base,
                 merge_conflicts=merge_conflicts,
+                new_scalar_bases=new_scalar_bases,
+                scalar_conflicts=scalar_conflicts,
             )
         return DeployResult(
             dst=real_dst,
@@ -221,6 +266,8 @@ def _write_resolved_content(
             backup_path=None,
             new_base=new_base,
             merge_conflicts=merge_conflicts,
+            new_scalar_bases=new_scalar_bases,
+            scalar_conflicts=scalar_conflicts,
         )
 
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
@@ -230,6 +277,8 @@ def _write_resolved_content(
         backup_path=backup_path,
         new_base=new_base,
         merge_conflicts=merge_conflicts,
+        new_scalar_bases=new_scalar_bases,
+        scalar_conflicts=scalar_conflicts,
     )
 
 
@@ -265,8 +314,14 @@ def _render_with_preserve_keys(
     dst_existed: bool,
     preserve_user_keys: list[str] | None,
     preserve_user_keys_deep: list[str] | None,
-) -> str:
+    scalar_bases: dict[str, object] | None = None,
+    merge_auto: ReconcileAuto | None = None,
+) -> tuple[str, dict[str, object] | None, list[str]]:
     """Render ``src`` with ``dst``'s shallow + deep user keys overlaid.
+
+    Returns ``(content, new_scalar_bases, scalar_conflicts)``. The latter
+    two are non-inert only on the scalar-overlay path (below); the legacy
+    path returns ``(content, None, [])``.
 
     Returns ``src`` verbatim when ``dst`` does not yet exist or no
     preserve-keys are configured. Otherwise dispatches on suffix:
@@ -274,22 +329,71 @@ def _render_with_preserve_keys(
     everything else is treated as YAML and routed through
     :func:`yaml_merge.overlay`. User-section merging is the next step in
     :func:`_compute_content` and is upstream of this helper's concern.
+
+    When ``scalar_bases is not None`` and shallow ``preserve_user_keys``
+    exist, the SHALLOW step is upgraded to a stored-base 3-way merge: the
+    live text is first resolved path-by-path by
+    :func:`setforge.scalar_overlay.resolve_scalar_overlay`, and that
+    resolved text is then fed as the LIVE source into the SAME legacy
+    overlay (with the same shallow list). This keeps the legacy
+    tracked-structured contract — non-preserved keys, new tracked keys and
+    deep overlay all behave exactly as before — while the shallow scalar
+    values now ride the 3-way merge rather than a blind live-wins splice.
+    On a base-absent first run the driver keeps live verbatim, so the
+    overlay output is byte-for-byte the legacy blind result.
     """
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
     if not (dst_existed and (shallow or deep)):
-        return src.read_text(encoding="utf-8")
+        return src.read_text(encoding="utf-8"), None, []
+
+    tracked_text = src.read_text(encoding="utf-8")
+    live_text = dst.read_text(encoding="utf-8")
+    new_scalar_bases: dict[str, object] | None = None
+    scalar_conflicts: list[str] = []
+    if scalar_bases is not None and shallow:
+        scalar_result = scalar_overlay.resolve_scalar_overlay(
+            dst,
+            live_text,
+            tracked_text,
+            shallow,
+            lambda path: scalar_bases.get(path, ABSENT),
+            merge_auto,
+        )
+        live_text = scalar_result.merged_text
+        # Deferred bare conflicts are already omitted from ``rebaseline``
+        # by the driver, so this map is exactly the set of paths whose
+        # stored base the caller should advance.
+        new_scalar_bases = scalar_result.rebaseline
+        scalar_conflicts = scalar_result.conflicts
+
+    content = _overlay_preserve_keys(src, tracked_text, live_text, shallow, deep)
+    return content, new_scalar_bases, scalar_conflicts
+
+
+def _overlay_preserve_keys(
+    src: Path,
+    tracked_text: str,
+    live_text: str,
+    shallow: list[str],
+    deep: list[str],
+) -> str:
+    """Run the legacy shallow+deep preserve overlay of ``live_text`` onto tracked.
+
+    Dispatches on suffix: JSONC-family files go through
+    :func:`jsonc.overlay_user_keys`; everything else is treated as YAML and
+    routed through :func:`yaml_merge.overlay`. ``live_text`` is the source
+    of overlaid values — either ``dst``'s raw bytes (legacy blind path) or
+    the scalar driver's 3-way-resolved text (scalar path); both produce a
+    tracked-structured result, so the two paths share this body verbatim.
+    """
     if jsonc.is_jsonc_file(src):
-        tracked_text = src.read_text(encoding="utf-8")
-        live_text = dst.read_text(encoding="utf-8")
         return jsonc.overlay_user_keys(
             tracked_text, live_text, shallow, deep_key_names=deep
         )
     yaml = YAML(typ="rt")
-    with src.open("r", encoding="utf-8") as fh:
-        src_doc = yaml.load(fh)
-    with dst.open("r", encoding="utf-8") as fh:
-        live_doc = yaml.load(fh)
+    src_doc = yaml.load(tracked_text)
+    live_doc = yaml.load(live_text)
     merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
     buf = io.StringIO()
     yaml.dump(merged, buf)
@@ -307,8 +411,16 @@ def _compute_content(
     *,
     precomputed_live_sections: sections.LiveSections | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
-) -> str:
+    scalar_bases: dict[str, object] | None = None,
+    merge_auto: ReconcileAuto | None = None,
+) -> tuple[str, dict[str, object] | None, list[str]]:
     """Render the bytes ``copy_atomic`` will write to ``dst``.
+
+    Returns ``(content, new_scalar_bases, scalar_conflicts)`` — the latter
+    two ride the shallow scalar-overlay path (see
+    :func:`_render_with_preserve_keys`) and stay inert (``None`` / ``[]``)
+    when ``scalar_bases is None``. The user-section merge runs on top of
+    ``content`` exactly as before, untouched by the scalar wiring.
 
     When ``preserve_user_sections`` is True the function normally re-reads
     ``dst`` and calls :func:`sections.extract_sections` to recover the
@@ -331,12 +443,14 @@ def _compute_content(
     needs the text. See also: that function's docstring for the
     symmetric rationale.
     """
-    content = _render_with_preserve_keys(
+    content, new_scalar_bases, scalar_conflicts = _render_with_preserve_keys(
         src,
         dst,
         dst_existed=dst_existed,
         preserve_user_keys=preserve_user_keys,
         preserve_user_keys_deep=preserve_user_keys_deep,
+        scalar_bases=scalar_bases,
+        merge_auto=merge_auto,
     )
 
     if preserve_user_sections:
@@ -373,7 +487,7 @@ def _compute_content(
         # invariant extract_marker_hashes(content) == hash_sections(content).
         content = maintain_marker_hashes(content)
 
-    return content
+    return content, new_scalar_bases, scalar_conflicts
 
 
 def _atomic_write(
@@ -528,7 +642,10 @@ def _deploy_target_content(
     symlink-deployed tracked_files. ``mode`` rides through unchanged.
     """
     target_existed = target.exists()
-    content = _compute_content(
+    # Symlink-deployed files never wire the scalar-overlay path (the stored
+    # base lifecycle is regular-file-only), so the scalar tuple fields are
+    # discarded here — the legacy preserve overlay runs exactly as before.
+    content, _new_scalar_bases, _scalar_conflicts = _compute_content(
         src,
         target,
         target_existed,
