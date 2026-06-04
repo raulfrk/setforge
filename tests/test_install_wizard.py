@@ -9,7 +9,7 @@ so no real tty is needed. Assert:
   (KEEP_OURS / TAKE_THEIRS / EDIT);
 - a SKIP keeps live and does NOT advance the base (conflict re-detects);
 - under ``--auto=use-tracked`` the wizard resolver is NEVER invoked (auto wins);
-- a bare non-interactive install still warns + defers (p5qc.7 unchanged).
+- a bare non-interactive install still warns + defers (non-interactive path).
 """
 
 from __future__ import annotations
@@ -230,7 +230,7 @@ def test_auto_use_tracked_does_not_invoke_wizard(
 
 
 def test_bare_noninteractive_install_warns_and_defers(repo: Path) -> None:
-    """No resolver injected (bare, non-tty CliRunner): warn + defer, p5qc.7 path."""
+    """No resolver injected (bare, non-tty CliRunner): warn + defer path."""
     config = _seed_conflict(repo)
     base_before = base_store.read_base(_PROFILE, _FILE_ID)
     result = _install(config)

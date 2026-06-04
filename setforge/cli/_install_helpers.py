@@ -215,7 +215,7 @@ def _build_conflict_resolver(
     ``section_auto`` is set the auto policy resolves every conflict
     (``merge_auto`` in the driver), so no resolver is built; a non-tty install
     (piped / scripted) likewise gets ``None`` so the bare warn-and-defer path
-    from p5qc.7 is unchanged.
+    is unchanged.
 
     The tty check is the seam that keeps a non-interactive ``setforge install``
     (CliRunner, CI) from ever prompting: tests inject a scripted resolver by

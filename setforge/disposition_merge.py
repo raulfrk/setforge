@@ -408,7 +408,10 @@ def _make_resolver_choose(
             case ConflictChoice.TAKE_THEIRS:
                 return conflict.theirs
             case ConflictChoice.EDIT:
-                assert res.edited_lines is not None
+                if res.edited_lines is None:
+                    raise ValueError(
+                        "ConflictResolution(choice=EDIT) requires edited_lines"
+                    )
                 return res.edited_lines
             case ConflictChoice.SKIP:
                 any_skip[0] = True

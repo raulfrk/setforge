@@ -317,7 +317,7 @@ def install(
         # Interactive disposition conflict wizard: built ONLY when this install
         # is in interactive-reconcile mode AND stdout is a tty (the same gate
         # the shared user-section wizard uses). Non-tty / --auto ⇒ None, so the
-        # driver keeps p5qc.7's bare warn-and-defer / auto behavior.
+        # driver keeps the bare warn-and-defer / auto behavior.
         conflict_resolver = _build_conflict_resolver(
             reconcile_user_sections=reconcile_user_sections,
             section_auto=section_auto,
