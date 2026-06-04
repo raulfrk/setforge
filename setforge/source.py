@@ -36,7 +36,7 @@ from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge import git_ops
-from setforge.config import MarketplaceSourceKind
+from setforge.config import Disposition, MarketplaceSourceKind
 from setforge.errors import (
     ConfigError,
     DirtySourceCheckout,
@@ -364,6 +364,24 @@ class _LocalTrackedFileOverlay(BaseModel):
       :class:`setforge.errors.SetforgeError`. A tracked_file
       pointing at a real directory layout is almost certainly a
       config mistake.
+    """
+
+    disposition: Disposition | None = None
+    """Host-local override for the tracked_file's merge disposition.
+
+    Use case: a tracked file is declared without a disposition in the
+    shared ``setforge.yaml`` but a specific host needs to opt it into
+    the ``forked`` or ``pinned`` behaviour (e.g. a host that should
+    never contribute live edits back to the shared base). The override
+    lives in ``local.yaml`` so the profile remains portable.
+
+    Accepts exactly the StrEnum member names ``"shared"``, ``"forked"``,
+    ``"pinned"``; any other casing or value is rejected at parse time
+    (:class:`pydantic.ValidationError`). The merged result is re-validated
+    by :func:`setforge.config.TrackedFile.model_validate` — so a
+    disposition override on a file that already declares a legacy
+    ``preserve_*`` field raises :class:`pydantic.ValidationError` via
+    :func:`~setforge.config.TrackedFile._disposition_excludes_legacy_preserve`.
     """
 
     @field_validator("mode", mode="before")

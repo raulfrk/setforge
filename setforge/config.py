@@ -729,11 +729,11 @@ class HostLocalTrackedFileOverride:
 
     Carried by the mapping returned from
     :func:`apply_host_local_tracked_file_overrides` so compare's
-    provenance-tag renderer can read which of the three fields were
+    provenance-tag renderer can read which of the four fields were
     actually overridden host-locally without re-loading local.yaml.
 
     ``None`` on a field means "no override; the profile-side value
-    wins". The mapping never contains an entry where all three are
+    wins". The mapping never contains an entry where all four are
     ``None`` (the resolver short-circuits the empty-overlay case so
     callers can treat presence as "at least one override applied").
     """
@@ -741,6 +741,7 @@ class HostLocalTrackedFileOverride:
     mode: int | None
     dst: Path | None
     symlink_target: Path | None
+    disposition: Disposition | None
 
 
 def apply_host_local_tracked_file_overrides(
@@ -748,11 +749,11 @@ def apply_host_local_tracked_file_overrides(
     *,
     local_config_path: Path | None = None,
 ) -> dict[str, HostLocalTrackedFileOverride]:
-    """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target``
-    overlay.
+    """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target`` /
+    ``disposition`` overlay.
 
     For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
-    block that declares one of the three overlay-fields fields, rebuild the
+    block that declares one of the four overlay-fields fields, rebuild the
     matching :class:`TrackedFile` with the override applied:
 
     - ``mode`` (int) overrides :attr:`TrackedFile.mode` verbatim.
@@ -767,15 +768,21 @@ def apply_host_local_tracked_file_overrides(
       override transparently and writes a symlink at the resolved
       dst pointing at the raw user string (cross-host portability
       invariant preserved).
+    - ``disposition`` (:class:`Disposition`) overrides
+      :attr:`TrackedFile.disposition`. Attempting to add a disposition
+      to a file that carries a legacy ``preserve_*`` field raises
+      :class:`pydantic.ValidationError` because the dump-and-revalidate
+      path re-runs :func:`TrackedFile._disposition_excludes_legacy_preserve`
+      against the merged shape.
 
     Returns a mapping ``{tracked_file_id: HostLocalTrackedFileOverride}``
     of which overrides actually applied — used by compare to render
     ``[host-local mode=...]`` / ``[host-local dst=...]`` /
-    ``[host-local symlink → ...]`` provenance tags without
-    re-loading local.yaml.
+    ``[host-local symlink → ...]`` / ``[host-local disposition=...]``
+    provenance tags without re-loading local.yaml.
 
     No-op (empty mapping) when ``local.yaml`` is absent or no
-    tracked_file declares any of the three overrides — preserves
+    tracked_file declares any of the four overrides — preserves
     today's behavior for hosts that have not adopted the overlay.
     Lazy-imports :mod:`setforge.source` to dodge the config <->
     source cycle.
@@ -785,10 +792,11 @@ def apply_host_local_tracked_file_overrides(
     violates a TrackedFile invariant — e.g. an overlay whose
     ``symlink_target`` equals the tracked-side ``dst`` after
     :func:`Path.expanduser` (the ``_symlink_no_self_loop``
-    model_validator fires on the merged model). Parse-time
-    invariants on the overlay itself (mutual-exclusion, mode
-    bounds, ``$VAR`` in dst) surface earlier in
-    :func:`setforge.source.load_local_tracked_file_overlays`,
+    model_validator fires on the merged model), or a ``disposition``
+    override on a file that already declares a ``preserve_*`` field.
+    Parse-time invariants on the overlay itself (mutual-exclusion, mode
+    bounds, ``$VAR`` in dst, invalid disposition value) surface earlier
+    in :func:`setforge.source.load_local_tracked_file_overlays`,
     not here.
     """
     from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
@@ -801,6 +809,7 @@ def apply_host_local_tracked_file_overrides(
             overlay.mode is None
             and overlay.dst is None
             and overlay.symlink_target is None
+            and overlay.disposition is None
         ):
             continue
         if tf_id not in config.tracked_files:
@@ -818,20 +827,25 @@ def apply_host_local_tracked_file_overrides(
             updates["dst"] = str(overlay.dst)
         if overlay.symlink_target is not None:
             updates["symlink"] = str(overlay.symlink_target)
+        if overlay.disposition is not None:
+            updates["disposition"] = overlay.disposition.value
         # Build a fresh model via model_validate(dump | updates) rather
         # than model_copy(update=...) — model_copy bypasses field +
         # model validators, which would let a hostile overlay set
         # symlink == dst (the _symlink_no_self_loop check would never
         # re-fire) or push a mode value past TrackedFile's stricter
-        # field-level rules. The dump-and-revalidate path re-runs every
-        # TrackedFile invariant against the merged shape so the overlay-fields
-        # override layer cannot weaken the contract.
+        # field-level rules, or add a disposition to a file that carries
+        # legacy preserve_* fields (_disposition_excludes_legacy_preserve
+        # would never re-fire). The dump-and-revalidate path re-runs
+        # every TrackedFile invariant against the merged shape so the
+        # overlay-fields override layer cannot weaken the contract.
         merged = {**tracked_file.model_dump(), **updates}
         config.tracked_files[tf_id] = TrackedFile.model_validate(merged)
         applied[tf_id] = HostLocalTrackedFileOverride(
             mode=overlay.mode,
             dst=overlay.dst,
             symlink_target=overlay.symlink_target,
+            disposition=overlay.disposition,
         )
     return applied
 
