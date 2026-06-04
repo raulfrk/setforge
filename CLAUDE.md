@@ -62,6 +62,11 @@ only hit on first push to main); the Docker e2e suite catches
 integration-emergent install / sync / revert / plugin / extension regressions
 that unit tests cannot exercise.
 
+When the merge touches the config schema or migrations, also confirm the
+change honors the standing guarantees in [`COMPATIBILITY.md`](COMPATIBILITY.md)
+(additive-first, expand → contract, up + down migration per `schema_version`
+bump).
+
 **Why `--no-cov` on the Docker e2e invocation:** pytest-cov's controller is
 selected at master `pytest_configure` time (before xdist worker setup). With
 `--cov` in default addopts and the conftest auto-xdist
