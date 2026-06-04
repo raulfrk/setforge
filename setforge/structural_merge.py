@@ -43,17 +43,20 @@ from json5.model import (
 from ruamel.yaml.comments import CommentedMap
 
 from setforge.errors import MergeTypeMismatch
+from setforge.jsonc import _find_key_index
 from setforge.scalar_merge import (
     ABSENT,
     ScalarOutcome,
     _scalar_eq,
     resolve_scalar,
 )
+from setforge.scalar_path import _set_jsonc_leaf
 
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
     "merge_structural",
+    "set_at_path",
 ]
 
 
@@ -632,3 +635,85 @@ def _apply_take(backend: _MappingBackend, key: str, side: str, raw: object) -> N
         backend.take_theirs(key)
     else:
         backend.take_ours(key)
+
+
+# ---------------------------------------------------------------------------
+# Comment-preserving set-value-at-path (post-conflict rebuild seam).
+# ---------------------------------------------------------------------------
+
+
+def set_at_path(model: object, path: str, value: object) -> None:
+    """Set the leaf at dotted ``path`` in ``model`` to ``value`` in place.
+
+    The seam the take-tracked disposition uses to write a chosen value back at
+    a :class:`PathConflict`'s path after the 3-way merge. ``path`` is the same
+    DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); a list-suffix
+    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError` because this
+    seam addresses mapping leaves only. ``value`` is a plain-python value — a
+    scalar, ``list`` or ``dict`` (matching :attr:`PathConflict.theirs`, which is
+    already unwrapped).
+
+    Across all backends the write is comment-preserving:
+
+    * ruamel ``CommentedMap`` round-trips, so sibling comments / anchors / quotes
+      survive a plain assignment;
+    * the json-five model splices the parent's stored ``.keys`` / ``.values`` in
+      lockstep (never the derived ``key_value_pairs``) and, on REPLACING an
+      existing leaf, carries that leaf's ``wsc_before`` forward — both via
+      :func:`setforge.scalar_path._set_jsonc_leaf`;
+    * a plain ``dict`` carries no comments, so assignment suffices.
+
+    A missing intermediate PARENT raises :class:`KeyError` (no
+    auto-vivification), matching the :mod:`setforge.scalar_path` semantics.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for set-at-path: {path!r}")
+    segments = path.split(".")
+    parent = _descend_set_parent(_json5_inner(model), segments, path)
+    leaf = segments[-1]
+    _set_leaf(parent, leaf, value, path)
+
+
+def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
+    """Walk ``segments[:-1]`` and return the leaf's parent node.
+
+    Raises :class:`KeyError` when any intermediate parent is missing (no
+    auto-vivification), mirroring :func:`setforge.scalar_path` navigation.
+    """
+    for depth, seg in enumerate(segments[:-1]):
+        child = _child_node(node, seg)
+        if child is ABSENT:
+            prefix = ".".join(segments[: depth + 1])
+            raise KeyError(f"missing parent on path {path!r}: {prefix!r} is absent")
+        node = child
+    return node
+
+
+def _child_node(node: object, key: str) -> object:
+    """Return ``node``'s child at ``key`` or :data:`ABSENT` if missing."""
+    if isinstance(node, JSONObject):
+        idx = _find_key_index(node, key)
+        return ABSENT if idx is None else node.values[idx]
+    if isinstance(node, Mapping):
+        return node.get(key, ABSENT)
+    return ABSENT
+
+
+def _set_leaf(parent: object, leaf: str, value: object, path: str) -> None:
+    """Set ``parent[leaf]`` to ``value`` per the parent's backend.
+
+    json-five parents go through :func:`setforge.scalar_path._set_jsonc_leaf`
+    (keys/values spliced in lockstep, replaced-leaf ``wsc_before`` preserved);
+    ruamel ``CommentedMap`` and plain ``dict`` take a plain assignment (ruamel's
+    round-trip mode keeps sibling comments). A parent that is not a mapping is a
+    shape error and raises :class:`~setforge.errors.MergeTypeMismatch`.
+    """
+    if isinstance(parent, JSONObject):
+        _set_jsonc_leaf(parent, leaf, value)
+        return
+    if isinstance(parent, MutableMapping):
+        parent[leaf] = value
+        return
+    raise MergeTypeMismatch(
+        f"cannot set leaf at {path!r}: parent is {type(parent).__name__}, not a mapping"
+    )
