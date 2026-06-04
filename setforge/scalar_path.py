@@ -26,7 +26,7 @@ Contract notes:
 """
 
 import json
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any
 
 from json5.model import (
@@ -60,12 +60,14 @@ _LIST_SUFFIX_KINDS: frozenset[str] = frozenset({"key_each", "key_whole"})
 # ---------------------------------------------------------------------------
 
 
-def _yaml_key_tokens(path: str) -> list[str]:
-    """Parse ``path`` into plain dict-key segments, rejecting list suffixes.
+def _yaml_key_tokens(path: str) -> list[tuple[str, str]]:
+    """Parse ``path`` into ``(kind, key)`` tokens, rejecting list suffixes.
 
     Reuses :func:`setforge.yaml_merge._parse_path` (which already forbids a
     ``[*]`` / ``[]`` suffix mid-path) and additionally rejects a TERMINAL
-    list suffix — this seam handles single scalars only.
+    list suffix — this seam handles single scalars only. Returns the parsed
+    tokens so a caller can both navigate (via :func:`_navigate`) and read off
+    plain key names without re-parsing.
     """
     tokens = _parse_path(path)
     for kind, _key in tokens:
@@ -73,7 +75,7 @@ def _yaml_key_tokens(path: str) -> list[str]:
             raise ValueError(
                 f"list suffix not allowed for single-scalar path: {path!r}"
             )
-    return [key for _kind, key in tokens]
+    return tokens
 
 
 def read_scalar_yaml(doc: object, path: str) -> object:
@@ -82,12 +84,19 @@ def read_scalar_yaml(doc: object, path: str) -> object:
     Returns the typed scalar value, ``None`` for a present ``null``, or
     :data:`setforge.scalar_merge.ABSENT` for an absent key (including a
     missing intermediate parent). Rejects list-suffix paths with
-    :class:`ValueError`.
+    :class:`ValueError`. A path terminating on a non-scalar (a
+    ``CommentedMap`` / ``CommentedSeq`` leaf) is rejected with
+    :class:`~setforge.errors.MergeTypeMismatch`, mirroring the JSONC seam so
+    both formats enforce the single-scalar contract at this boundary.
     """
-    _yaml_key_tokens(path)
-    value = _navigate(doc, _parse_path(path))
+    tokens = _yaml_key_tokens(path)
+    value = _navigate(doc, tokens)
     if value is _MISSING:
         return ABSENT
+    if isinstance(value, Mapping | Sequence) and not isinstance(value, str | bytes):
+        raise MergeTypeMismatch(
+            f"path does not terminate on a scalar: leaf is {type(value).__name__}"
+        )
     return value
 
 
@@ -101,7 +110,7 @@ def write_scalar_yaml(doc: object, path: str, resolution: ScalarResolution) -> N
     ``doc`` in place; a missing intermediate PARENT raises :class:`KeyError`
     (no auto-vivification).
     """
-    keys = _yaml_key_tokens(path)
+    keys = [key for _kind, key in _yaml_key_tokens(path)]
     parent = _descend_yaml_parent(doc, keys, path)
     leaf = keys[-1]
     _apply_resolution_mapping(parent, leaf, resolution)
@@ -169,12 +178,13 @@ def read_scalar_jsonc(model: object, path: str) -> object:
 
     Returns the typed scalar value, ``None`` for a present ``NullLiteral``,
     or :data:`setforge.scalar_merge.ABSENT` for an absent key (including a
-    missing intermediate parent). This FIXES the absent-vs-null conflation
-    in :func:`setforge.jsonc._walk_jsonobject_path`, which returns the same
-    ``None`` for a missing parent and would surface a present ``null`` as a
-    miss — here the leaf is looked up by index AFTER the parent walk, so a
-    present ``NullLiteral`` is distinguishable from an absent key. Rejects
-    list-suffix paths with :class:`ValueError`.
+    missing intermediate parent). :func:`setforge.jsonc._walk_jsonobject_path`
+    returns ``None`` only for a missing parent, never a leaf — so a leaf
+    fetched off its result cannot tell an absent key from a present ``null``.
+    Here the leaf is looked up by index AFTER the walk, restoring that
+    distinction: a present ``NullLiteral`` reads back as ``None`` while an
+    absent key reads back as ``ABSENT``. Rejects list-suffix paths with
+    :class:`ValueError`.
     """
     segments = _jsonc_segments(path)
     top = _require_top_object(model)

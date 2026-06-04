@@ -293,6 +293,39 @@ def test_write_jsonc_scalar_intermediate_raises_type_mismatch() -> None:
     assert _dump_jsonc(model) == '{\n  "a": 1\n}'
 
 
+# ---------------------------------------------------------------------------
+# READ: non-scalar leaf rejected symmetrically on both formats.
+# ---------------------------------------------------------------------------
+
+
+def test_read_yaml_mapping_leaf_raises_type_mismatch() -> None:
+    """A YAML path terminating on a mapping is rejected at the read seam."""
+    doc = _load_yaml("a:\n  b: 1\n")
+    with pytest.raises(MergeTypeMismatch, match="does not terminate on a scalar"):
+        read_scalar_yaml(doc, "a")
+
+
+def test_read_yaml_sequence_leaf_raises_type_mismatch() -> None:
+    """A YAML path terminating on a sequence is rejected at the read seam."""
+    doc = _load_yaml("a:\n  - 1\n  - 2\n")
+    with pytest.raises(MergeTypeMismatch, match="does not terminate on a scalar"):
+        read_scalar_yaml(doc, "a")
+
+
+def test_read_jsonc_object_leaf_raises_type_mismatch() -> None:
+    """A JSONC path terminating on an object is rejected at the read seam."""
+    model = _load_jsonc('{\n  "a": {\n    "b": 1\n  }\n}')
+    with pytest.raises(MergeTypeMismatch, match="does not terminate on a scalar"):
+        read_scalar_jsonc(model, "a")
+
+
+def test_read_jsonc_array_leaf_raises_type_mismatch() -> None:
+    """A JSONC path terminating on an array is rejected at the read seam."""
+    model = _load_jsonc('{\n  "a": [\n    1,\n    2\n  ]\n}')
+    with pytest.raises(MergeTypeMismatch, match="does not terminate on a scalar"):
+        read_scalar_jsonc(model, "a")
+
+
 def test_write_yaml_delete_missing_leaf_is_noop() -> None:
     """DELETE of an already-absent leaf in an existing parent is a no-op."""
     doc = _load_yaml("a:\n  b: 1\n")
