@@ -35,6 +35,7 @@ import typer
 from setforge import (
     base_store,
     deploy,
+    disposition_merge,
     scalar_base_store,
     section_reconcile,
     transitions,
@@ -199,6 +200,38 @@ def _check_unexpected_drift(
     )
 
 
+def _build_conflict_resolver(
+    *,
+    reconcile_user_sections: bool,
+    section_auto: ReconcileAuto | None,
+) -> disposition_merge.ConflictResolver | None:
+    """Build the interactive disposition conflict resolver, or ``None``.
+
+    Returns a keyboard wizard (:func:`setforge.conflict_wizard.make_wizard_resolver`)
+    ONLY when the install is in the interactive-reconcile mode AND stdout is a
+    tty — the SAME gate the shared user-section wizard uses
+    (``reconcile_user_sections`` is the interactive switch; ``section_auto`` and
+    ``reconcile_user_sections`` are already mutually exclusive at the CLI). When
+    ``section_auto`` is set the auto policy resolves every conflict
+    (``merge_auto`` in the driver), so no resolver is built; a non-tty install
+    (piped / scripted) likewise gets ``None`` so the bare warn-and-defer path
+    from p5qc.7 is unchanged.
+
+    The tty check is the seam that keeps a non-interactive ``setforge install``
+    (CliRunner, CI) from ever prompting: tests inject a scripted resolver by
+    monkeypatching this function so no real tty is needed.
+    """
+    if not reconcile_user_sections or section_auto is not None:
+        return None
+    if not sys.stdout.isatty():
+        return None
+    # Local import: pulls rich Console + the wizard machinery only on the
+    # interactive path (validate / dry-run cold-start budget).
+    from setforge import conflict_wizard
+
+    return conflict_wizard.make_wizard_resolver()
+
+
 def _deploy_all_tracked_files(
     ctx: ProfileContext,
     *,
@@ -206,6 +239,7 @@ def _deploy_all_tracked_files(
     live_sections_map: Mapping[Path, LiveSections],
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
     section_auto: ReconcileAuto | None = None,
+    conflict_resolver: disposition_merge.ConflictResolver | None = None,
 ) -> None:
     """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
 
@@ -254,6 +288,11 @@ def _deploy_all_tracked_files(
     component (``name`` is a config key; ``relpath`` is taken
     ``relative_to`` the src dir), so it satisfies ``base_store``'s
     traversal guard (:func:`setforge.base_store._resolve_target`).
+
+    ``conflict_resolver`` is the OPTIONAL interactive disposition conflict
+    resolver (built by :func:`_build_conflict_resolver`), threaded into every
+    disposition :func:`deploy.copy_atomic` call. ``None`` (non-interactive /
+    non-tty / ``--auto``) leaves the bare warn-and-defer behavior unchanged.
     """
     profile = ctx.profile
     disposition_file_ids: set[str] = set()
@@ -312,6 +351,7 @@ def _deploy_all_tracked_files(
                 base_text=base_text,
                 merge_auto=section_auto,
                 scalar_bases=scalar_bases,
+                conflict_resolver=conflict_resolver,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
             _echo_preserve_user_keys_provenance(tracked_file)

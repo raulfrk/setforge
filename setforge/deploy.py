@@ -88,6 +88,7 @@ def copy_atomic(
     base_text: str | None = None,
     merge_auto: ReconcileAuto | None = None,
     scalar_bases: dict[str, object] | None = None,
+    conflict_resolver: disposition_merge.ConflictResolver | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -119,6 +120,15 @@ def copy_atomic(
     (``None`` / ``[]``). Symlinked tracked_files (deployed via the separate
     :func:`deploy_symlinked_file`, not this function) ignore ``disposition``
     for now.
+
+    ``conflict_resolver`` is an OPTIONAL per-conflict resolver (a
+    :data:`setforge.disposition_merge.ConflictResolver`) threaded straight into
+    the disposition driver. When supplied AND the merge conflicts, each conflict
+    is resolved by the resolver instead of the blanket ``merge_auto`` policy
+    (the interactive install builds a keyboard wizard here). When ``None`` the
+    driver behaves exactly as before. It is only consulted on the disposition
+    path; ``None`` on every other branch leaves behavior byte-for-byte
+    unchanged.
 
     When ``preserve_user_sections`` is True, the rendered content has
     every end-marker's ``hash=<...>`` rewritten via
@@ -192,7 +202,13 @@ def copy_atomic(
         live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
         tracked = src.read_text(encoding="utf-8")
         resolution = disposition_merge.resolve_file(
-            disposition, real_dst, base_text, live, tracked, merge_auto
+            disposition,
+            real_dst,
+            base_text,
+            live,
+            tracked,
+            merge_auto,
+            conflict_resolver,
         )
         content = resolution.text
         # new_base rides the resolution's advance decision, NOT the write

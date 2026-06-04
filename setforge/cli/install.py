@@ -39,6 +39,7 @@ from setforge.cli._helpers import (
     _resolve_section_decisions,
 )
 from setforge.cli._install_helpers import (
+    _build_conflict_resolver,
     _compute_preserve_user_keys_applied,
     _deploy_all_tracked_files,
     _dry_run_pipeline,
@@ -313,12 +314,22 @@ def install(
 
         file_pre = transitions.snapshot_paths(dst_paths)
 
+        # Interactive disposition conflict wizard: built ONLY when this install
+        # is in interactive-reconcile mode AND stdout is a tty (the same gate
+        # the shared user-section wizard uses). Non-tty / --auto ⇒ None, so the
+        # driver keeps p5qc.7's bare warn-and-defer / auto behavior.
+        conflict_resolver = _build_conflict_resolver(
+            reconcile_user_sections=reconcile_user_sections,
+            section_auto=section_auto,
+        )
+
         _deploy_all_tracked_files(
             ctx,
             section_decisions=section_decisions,
             live_sections_map=live_sections_map,
             host_local_sections_map=host_local_sections_map,
             section_auto=section_auto,
+            conflict_resolver=conflict_resolver,
         )
 
         retry_failed_ids = (
