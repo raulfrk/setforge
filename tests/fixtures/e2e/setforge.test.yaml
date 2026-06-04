@@ -155,6 +155,28 @@ tracked_files:
     src: host-local/settings.json
     dst: ~/.setforge_e2e/host-local/settings.json
 
+  # ---- Disposition fixtures (shared / forked / pinned) -----------------
+  # Each disposition gets its own dst (and thus file_id) so the per-host
+  # stored base is independent across the three policies. The markdown src
+  # routes through the line-based 3-way merge engine; the YAML src routes
+  # through the comment-preserving structural engine.
+  disposition_shared_md:
+    src: disposition/note.md
+    dst: ~/.setforge_e2e/disposition/shared.md
+    disposition: shared
+  disposition_forked_md:
+    src: disposition/note.md
+    dst: ~/.setforge_e2e/disposition/forked.md
+    disposition: forked
+  disposition_pinned_md:
+    src: disposition/note.md
+    dst: ~/.setforge_e2e/disposition/pinned.md
+    disposition: pinned
+  disposition_forked_yaml:
+    src: disposition/config.yaml
+    dst: ~/.setforge_e2e/disposition/forked.yaml
+    disposition: forked
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -285,3 +307,21 @@ profiles:
   test-host-local-reject-json:
     tracked_files:
       - host_local_json_reject
+
+  # ---- Disposition (shared / forked / pinned) --------------------------
+  # One profile per disposition so each test installs/syncs/compares a
+  # single file in isolation and the stored-base lifecycle never crosses
+  # policies. The forked-yaml profile drives the structural-engine and
+  # compare-expected-drift surfaces.
+  test-disposition-shared:
+    tracked_files:
+      - disposition_shared_md
+  test-disposition-forked:
+    tracked_files:
+      - disposition_forked_md
+  test-disposition-pinned:
+    tracked_files:
+      - disposition_pinned_md
+  test-disposition-forked-yaml:
+    tracked_files:
+      - disposition_forked_yaml

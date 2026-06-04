@@ -1,0 +1,3 @@
+# Disposition YAML fixture.
+trackedKey: tracked-value
+sharedKey: original
