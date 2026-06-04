@@ -21,17 +21,20 @@ import os
 import shutil
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from setforge import host_local_inject, jsonc, sections, yaml_merge
-from setforge.config import Config, ResolvedProfile, TrackedFile
+from setforge import disposition_merge, host_local_inject, jsonc, sections, yaml_merge
+from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
+from setforge.markdown_merge import LineConflict
 from setforge.section_reconcile import maintain_marker_hashes
+from setforge.section_wizard import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -47,6 +50,8 @@ class DeployResult:
     dst: Path
     action: DeployAction
     backup_path: Path | None
+    new_base: str | None = None
+    merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
 
 
 def copy_atomic(
@@ -61,6 +66,9 @@ def copy_atomic(
     precomputed_live_sections: sections.LiveSections | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
+    disposition: Disposition | None = None,
+    base_text: str | None = None,
+    merge_auto: ReconcileAuto | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -70,6 +78,26 @@ def copy_atomic(
 
     When the resulting content is byte-identical to the existing ``dst``,
     no write or backup is performed (action == :attr:`DeployAction.NOOP`).
+
+    When ``disposition`` is not None the file is resolved via the
+    stored-base 3-way merge driver
+    (:func:`setforge.disposition_merge.resolve_file`) instead of the
+    legacy preserve path: live (``dst``'s current bytes, ``""`` when
+    absent), tracked (``src``'s bytes) and the stored ``base_text`` (the
+    previously deployed base, ``None`` on first run) are merged under
+    ``disposition`` + ``merge_auto`` (the install ``--auto``, threaded to
+    the driver). The merged text flows through the same
+    NOOP/CREATED/UPDATED detection + :func:`_atomic_write` as the legacy
+    branch. The returned :class:`DeployResult` carries ``new_base`` (the
+    bytes the caller should write to the stored base, or ``None`` to
+    defer re-baselining) and ``merge_conflicts`` (every conflicting
+    hunk/path, for the caller to warn — non-empty even when ``merge_auto``
+    resolved them). ``new_base`` is computed from the driver resolution
+    INDEPENDENTLY of the write action: a clean merge whose result equals
+    live is a NOOP write but still re-baselines (``new_base`` set). When
+    ``disposition`` is None the legacy preserve path runs byte-for-byte
+    unchanged and ``new_base``/``merge_conflicts`` stay inert
+    (``None`` / ``[]``). The symlink path ignores ``disposition`` for now.
 
     When ``preserve_user_sections`` is True, the rendered content has
     every end-marker's ``hash=<...>`` rewritten via
@@ -106,18 +134,65 @@ def copy_atomic(
     real_dst.parent.mkdir(parents=True, exist_ok=True)
     dst_existed = real_dst.exists()
 
-    content = _compute_content(
+    new_base: str | None = None
+    merge_conflicts: list[LineConflict | PathConflict] = []
+    if disposition is not None:
+        live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
+        tracked = src.read_text(encoding="utf-8")
+        resolution = disposition_merge.resolve_file(
+            disposition, real_dst, base_text, live, tracked, merge_auto
+        )
+        content = resolution.text
+        # new_base rides the resolution's advance decision, NOT the write
+        # action: a clean merge whose result equals live is a NOOP write
+        # that still re-baselines the stored base.
+        new_base = resolution.text if resolution.advance_base else None
+        merge_conflicts = resolution.conflicts
+    else:
+        content = _compute_content(
+            src,
+            real_dst,
+            dst_existed,
+            preserve_user_sections,
+            preserve_user_keys,
+            preserve_user_keys_deep,
+            section_bodies_override,
+            precomputed_live_sections=precomputed_live_sections,
+            host_local_sections=host_local_sections,
+        )
+
+    return _write_resolved_content(
+        content,
         src,
         real_dst,
         dst_existed,
-        preserve_user_sections,
-        preserve_user_keys,
-        preserve_user_keys_deep,
-        section_bodies_override,
-        precomputed_live_sections=precomputed_live_sections,
-        host_local_sections=host_local_sections,
+        backup,
+        mode,
+        new_base=new_base,
+        merge_conflicts=merge_conflicts,
     )
 
+
+def _write_resolved_content(
+    content: str,
+    src: Path,
+    real_dst: Path,
+    dst_existed: bool,
+    backup: bool,
+    mode: int | None,
+    *,
+    new_base: str | None,
+    merge_conflicts: list[LineConflict | PathConflict],
+) -> DeployResult:
+    """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
+
+    Shared by the legacy preserve branch and the disposition branch of
+    :func:`copy_atomic` so the NOOP-detection, mode-only-drift fixup and
+    :func:`_atomic_write` logic live in one place. ``new_base`` and
+    ``merge_conflicts`` are threaded onto EVERY returned
+    :class:`DeployResult` — including the NOOP and mode-only-drift paths —
+    so a clean disposition merge that equals live still re-baselines.
+    """
     if dst_existed:
         existing = real_dst.read_text(encoding="utf-8")
         action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
@@ -132,12 +207,28 @@ def copy_atomic(
         if mode is not None and stat.S_IMODE(real_dst.stat().st_mode) != mode:
             os.chmod(real_dst, mode)
             return DeployResult(
-                dst=real_dst, action=DeployAction.UPDATED, backup_path=None
+                dst=real_dst,
+                action=DeployAction.UPDATED,
+                backup_path=None,
+                new_base=new_base,
+                merge_conflicts=merge_conflicts,
             )
-        return DeployResult(dst=real_dst, action=action, backup_path=None)
+        return DeployResult(
+            dst=real_dst,
+            action=action,
+            backup_path=None,
+            new_base=new_base,
+            merge_conflicts=merge_conflicts,
+        )
 
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
-    return DeployResult(dst=real_dst, action=action, backup_path=backup_path)
+    return DeployResult(
+        dst=real_dst,
+        action=action,
+        backup_path=backup_path,
+        new_base=new_base,
+        merge_conflicts=merge_conflicts,
+    )
 
 
 def _resolve_for_copy(dst: Path) -> Path:
