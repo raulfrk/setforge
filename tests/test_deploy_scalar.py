@@ -200,3 +200,76 @@ def test_jsonc_scalar_conflict_bare_keeps_live(tmp_path: Path) -> None:
     assert result.scalar_conflicts == ["a"]
     assert result.new_scalar_bases is not None
     assert "a" not in result.new_scalar_bases
+
+
+def test_yaml_quoted_scalar_quoting_preserved(tmp_path: Path) -> None:
+    """Quoted YAML scalar values keep their double-quote style end-to-end.
+
+    A ``preserve_user_keys`` file with a quoted string value (``"quoted"``)
+    must retain the double-quote style after the full scalar 3-way deploy
+    pipeline. This is a regression pin: stage-2's ``_overlay_preserve_keys``
+    previously used a plain ``YAML(typ="rt")`` (no ``preserve_quotes=True``),
+    which silently stripped the quoting on round-trip.
+    """
+    src = tmp_path / "src.yaml"
+    # tracked == base == 'quoted'; both sides unchanged → TAKE ours (noop).
+    src.write_text('userKeyA: "quoted"\nuserKeyB: 2\n')
+    dst = tmp_path / "dst.yaml"
+    dst.write_text('userKeyA: "quoted"\nuserKeyB: 2\n')
+
+    result = copy_atomic(
+        src,
+        dst,
+        preserve_user_keys=["userKeyA"],
+        scalar_bases={"userKeyA": "quoted"},
+    )
+
+    text = dst.read_text()
+    # The double-quote style must survive the pipeline.
+    assert 'userKeyA: "quoted"' in text, f"quoting lost; got: {text!r}"
+    assert result.scalar_conflicts == []
+
+
+def test_yaml_scalar_and_user_sections_compose(tmp_path: Path) -> None:
+    """preserve_user_keys (scalar 3-way) and preserve_user_sections compose.
+
+    Tests that the two preservation branches execute together in a single
+    ``copy_atomic`` call without error and that the scalar-key 3-way result
+    is correct.
+
+    Format limitation: ``preserve_user_keys`` parses the file as YAML
+    (via ruamel), so bare HTML-comment section markers embedded in the same
+    file cause a YAML ``ScannerError`` — YAML does not support HTML-comment
+    syntax. In practice a file is either YAML-with-scalar-keys OR
+    markdown-with-section-markers; the full section-body composition is
+    covered by the markdown-section tests in ``tests/test_deploy.py``.
+
+    Here we verify the code-level composition: both branches are active
+    (``preserve_user_sections=True`` AND ``preserve_user_keys`` non-empty),
+    the scalar 3-way merge resolves correctly, and the ``preserve_user_sections``
+    path runs without error (the YAML file has no marker pairs, so
+    ``merge_sections`` is a no-op on this input, but the branch still executes
+    and stamp_marker_hashes still runs).
+    """
+    src = tmp_path / "src.yaml"
+    src.write_text("a: 1\nb: TRACKED\n")
+    dst = tmp_path / "dst.yaml"
+    # live has `a` edited to 99; tracked has `a` = 1 = base → user edit preserved.
+    dst.write_text("a: 99\nb: LIVE\n")
+
+    # base for `a` == 1; live moved it to 99, tracked kept 1 → user edit wins.
+    result = copy_atomic(
+        src,
+        dst,
+        preserve_user_keys=["a"],
+        preserve_user_sections=True,
+        scalar_bases={"a": 1},
+    )
+
+    text = dst.read_text()
+    # Scalar key: user edited `a` to 99 (tracked == base == 1) → preserved.
+    assert "a: 99" in text
+    # Non-preserved key: `b` takes tracked value.
+    assert "b: TRACKED" in text
+    assert result.scalar_conflicts == []
+    assert result.new_scalar_bases == {"a": 99}

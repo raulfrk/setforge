@@ -1,8 +1,9 @@
 """Stored-base 3-way driver for SCALAR ``preserve_user_keys`` paths.
 
-The legacy ``preserve_user_keys`` overlay (``setforge.deploy._render_with_
-preserve_keys`` → ``jsonc.overlay_user_keys`` / ``yaml_merge.overlay``) does a
-BLIND live-wins splice: the live value always overwrites tracked for every
+The legacy ``preserve_user_keys`` overlay
+(``setforge.deploy._render_with_preserve_keys`` →
+``jsonc.overlay_user_keys`` / ``yaml_merge.overlay``) does a BLIND
+live-wins splice: the live value always overwrites tracked for every
 listed key. This module upgrades the SCALAR-path subset to a stored-base
 3-way merge so an upstream (tracked) change to a key the user did NOT locally
 edit propagates, while the user's own edits survive.
@@ -93,6 +94,30 @@ def _yaml() -> YAML:
     return yaml
 
 
+def _to_plain_scalar(value: object) -> object:
+    """Normalize a ruamel-tagged scalar subtype to its plain Python base type.
+
+    ``preserve_quotes=True`` causes ruamel to return ``DoubleQuotedScalarString``
+    and similar tagged ``str`` subclasses from ``yaml.load``. These fail
+    :func:`setforge.scalar_merge._is_scalar`'s exact-type guard (by design —
+    arbitrary subclasses are not admitted). Normalizing here keeps the
+    resolve-scalar contract tight while letting quote-style survive in the
+    dumped output (the live doc is dumped after the write-back, which
+    re-emits the node's original tagged form).
+
+    :data:`setforge.scalar_merge.ABSENT` passes through unchanged.
+    ``None`` (YAML ``null``) passes through unchanged. Other plain scalars
+    (``int``, ``float``, ``bool``) are returned as-is; only ``str`` subclasses
+    need normalizing because ruamel does not subclass numeric types with
+    preserve-quotes.
+    """
+    if value is ABSENT or value is None:
+        return value
+    if type(value) is not str and isinstance(value, str):
+        return str(value)
+    return value
+
+
 def resolve_scalar_overlay(
     dst: Path,
     live_text: str,
@@ -143,16 +168,30 @@ def resolve_scalar_overlay(
         except MergeTypeMismatch:
             continue
 
+        # Normalize ruamel-tagged string subtypes (e.g. DoubleQuotedScalarString)
+        # to plain Python scalars for resolve_scalar's exact-type guard;
+        # the output doc still holds the tagged form for round-trip fidelity.
+        ours_plain = _to_plain_scalar(ours)
+        theirs_plain = _to_plain_scalar(theirs)
+
         base = base_lookup(path)
         if base is ABSENT:
             # First-run fallback: keep ours (live already carries it) and
             # SEED the base so next run has a stored anchor.
-            rebaseline[path] = ours
+            rebaseline[path] = ours_plain
             continue
 
-        res = resolve_scalar(base, ours, theirs)
+        res = resolve_scalar(base, ours_plain, theirs_plain)
         path_deferred = _apply_resolution(
-            write, live_doc, path, res, ours, theirs, auto, rebaseline, conflicts
+            write,
+            live_doc,
+            path,
+            res,
+            ours_plain,
+            theirs_plain,
+            auto,
+            rebaseline,
+            conflicts,
         )
         deferred = deferred or path_deferred
 

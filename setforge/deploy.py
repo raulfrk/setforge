@@ -55,6 +55,14 @@ class DeployAction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DeployResult:
+    """Outcome of a :func:`copy_atomic` call.
+
+    ``new_base``, ``merge_conflicts``, ``new_scalar_bases``, and
+    ``scalar_conflicts`` are populated by :func:`copy_atomic` and are
+    non-inert only on the disposition (byte-base 3-way) or scalar-overlay
+    paths respectively; both are inert on the legacy blind-overlay path.
+    """
+
     dst: Path
     action: DeployAction
     backup_path: Path | None
@@ -140,22 +148,31 @@ def copy_atomic(
     ``scalar_bases`` upgrades the SHALLOW ``preserve_user_keys`` overlay
     from a blind live-wins splice to a stored-base 3-way merge (see
     :mod:`setforge.scalar_overlay`). It is mutually exclusive with
-    ``disposition`` (a file uses one model or the other) and only takes
-    effect when ``disposition is None`` AND ``preserve_user_keys`` is
-    non-empty AND ``dst`` already exists. It maps each shallow path to its
-    stored base value (a typed scalar, ``None`` for a stored ``null``, or
-    :data:`setforge.scalar_merge.ABSENT` for no stored base). The driver
-    resolves every shallow scalar 3-way against ``merge_auto`` (the install
-    ``--auto``) and the resolved values flow back into the legacy overlay
-    pipeline, so deep keys (``preserve_user_keys_deep``), user-sections and
-    non-preserved/new tracked keys keep their tracked-structured legacy
-    behavior byte-for-byte. The returned :class:`DeployResult` carries
-    ``new_scalar_bases`` (the paths whose stored base should advance, with
-    deferred bare conflicts omitted) and ``scalar_conflicts`` (every path
-    that conflicted, even when ``merge_auto`` resolved it). When
-    ``scalar_bases is None`` the legacy blind overlay runs verbatim and both
-    fields stay inert (``None`` / ``[]``) — so non-install callers and
-    files without preserve keys are byte-for-byte unchanged.
+    ``disposition`` (a file uses one model or the other) and requires
+    ``disposition is None`` and ``preserve_user_keys`` non-empty to have any
+    effect. It maps each shallow path to its stored base value (a typed
+    scalar, ``None`` for a stored ``null``, or
+    :data:`setforge.scalar_merge.ABSENT` for no stored base). Two scenarios:
+
+    - **dst exists** — the driver resolves every shallow scalar 3-way
+      against ``merge_auto`` (the install ``--auto``) and the resolved
+      values flow back into the legacy overlay pipeline, so deep keys
+      (``preserve_user_keys_deep``), user-sections and non-preserved/new
+      tracked keys keep their tracked-structured legacy behavior
+      byte-for-byte.
+    - **dst absent (first install)** — the file is written from tracked
+      verbatim (legacy behaviour), and the shallow scalar values found in
+      the tracked source are SEEDED as ``new_scalar_bases`` so the NEXT
+      install has a stored ancestor to 3-way against.
+
+    The returned :class:`DeployResult` carries ``new_scalar_bases`` (the
+    paths whose stored base should advance — seeded on first install,
+    resolved on subsequent installs, with deferred bare conflicts omitted)
+    and ``scalar_conflicts`` (every path that conflicted, even when
+    ``merge_auto`` resolved it). When ``scalar_bases is None`` the legacy
+    blind overlay runs verbatim and both fields stay inert (``None`` /
+    ``[]``) — so non-install callers and files without preserve keys are
+    byte-for-byte unchanged.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()
@@ -324,27 +341,21 @@ def _render_with_preserve_keys(
     path returns ``(content, None, [])``.
 
     Returns ``src`` verbatim when ``dst`` does not yet exist or no
-    preserve-keys are configured. Otherwise dispatches on suffix:
-    JSONC-family files go through :func:`jsonc.overlay_user_keys`;
-    everything else is treated as YAML and routed through
-    :func:`yaml_merge.overlay`. User-section merging is the next step in
-    :func:`_compute_content` and is upstream of this helper's concern.
+    preserve-keys are configured. When ``dst`` exists and preserve-keys
+    are declared, the suffix-dispatch (JSONC vs YAML) and deep-key merging
+    are handled by :func:`_overlay_preserve_keys`. User-section merging is
+    the next step in :func:`_compute_content` and is upstream of this
+    helper's concern.
 
     When ``scalar_bases is not None`` and shallow ``preserve_user_keys``
     exist, the SHALLOW step is upgraded to a stored-base 3-way merge: the
     live text is first resolved path-by-path by
     :func:`setforge.scalar_overlay.resolve_scalar_overlay`, and that
-    resolved text is then fed as the LIVE source into the SAME legacy
-    overlay (with the same shallow list). This keeps the legacy
-    tracked-structured contract — non-preserved keys, new tracked keys and
-    deep overlay all behave exactly as before — while the shallow scalar
-    values now ride the 3-way merge rather than a blind live-wins splice.
-    On a base-absent first run (live exists, no stored base) the driver keeps
-    live verbatim, so the overlay output is byte-for-byte the legacy blind
-    result. When ``dst`` does NOT yet exist (true first install) the content
-    is tracked verbatim — the legacy behaviour — but, on the scalar path, the
-    deployed (tracked) scalar values are seeded as ``new_scalar_bases`` so the
-    NEXT install has a stored ancestor to 3-way against.
+    resolved text is then fed as the LIVE source into
+    :func:`_overlay_preserve_keys`. When ``dst`` does NOT yet exist (true
+    first install) the content is tracked verbatim — the legacy behaviour
+    — but the deployed scalar values are seeded as ``new_scalar_bases`` so
+    the NEXT install has a stored ancestor to 3-way against.
     """
     shallow = preserve_user_keys or []
     deep = preserve_user_keys_deep or []
@@ -403,6 +414,7 @@ def _overlay_preserve_keys(
             tracked_text, live_text, shallow, deep_key_names=deep
         )
     yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
     src_doc = yaml.load(tracked_text)
     live_doc = yaml.load(live_text)
     merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)

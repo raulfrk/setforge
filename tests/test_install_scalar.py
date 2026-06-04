@@ -20,6 +20,7 @@ The cases mirror Task 3's acceptance grid:
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from click.testing import Result
@@ -188,3 +189,64 @@ def test_prune_drops_removed_path_base(repo: Path) -> None:
     assert result.exit_code == 0, result.output
     assert scalar_base_store.get_base(_PROFILE, _FILE_ID, "a") == 1
     assert scalar_base_store.get_base(_PROFILE, _FILE_ID, "b") is ABSENT
+
+
+def test_second_install_no_edits_is_noop(repo: Path) -> None:
+    """Self-install idempotency: re-installing unchanged files changes nothing.
+
+    First install writes tracked verbatim and seeds the scalar bases.
+    A second install with NO edits between the two must produce an identical
+    live file (NOOP action) and leave every scalar base value unchanged.
+    This guards the "install twice = zero drift" property.
+    """
+    _write_tracked(repo, "a: 1\nb: 2\n")
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    # Capture state after first install.
+    live_after_first = _live_path().read_text(encoding="utf-8")
+    base_a = scalar_base_store.get_base(_PROFILE, _FILE_ID, "a")
+    base_b = scalar_base_store.get_base(_PROFILE, _FILE_ID, "b")
+
+    # Second install: no edits to tracked or live.
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+
+    # Live file must be unchanged (NOOP).
+    assert _live_path().read_text(encoding="utf-8") == live_after_first
+    # Scalar bases must be unchanged.
+    assert scalar_base_store.get_base(_PROFILE, _FILE_ID, "a") == base_a
+    assert scalar_base_store.get_base(_PROFILE, _FILE_ID, "b") == base_b
+
+
+def test_batched_set_bases_not_per_path_set_base(repo: Path) -> None:
+    """Scalar base advancement uses ONE batched set_bases call per file.
+
+    The install loop must call ``scalar_base_store.set_bases`` ONCE per file
+    (with all advancing paths in one dict), never per-path ``set_base`` calls
+    in a loop. This guards the single-write contract documented in
+    :mod:`setforge.scalar_base_store`.
+    """
+    _write_tracked(repo, "a: 1\nb: 2\n")
+    config = _write_config(repo)
+
+    set_bases_calls: list[tuple[str, str, dict[str, object]]] = []
+
+    original_set_bases = scalar_base_store.set_bases
+
+    def _spy_set_bases(profile: str, file_id: str, values: dict[str, object]) -> None:
+        set_bases_calls.append((profile, file_id, values))
+        original_set_bases(profile, file_id, values)
+
+    with patch.object(scalar_base_store, "set_bases", side_effect=_spy_set_bases):
+        result = _install(config)
+
+    assert result.exit_code == 0, result.output
+    # The settings file (file_id "settings") must have had set_bases called
+    # exactly ONCE, with both `a` and `b` in the same dict.
+    settings_calls = [c for c in set_bases_calls if c[1] == _FILE_ID]
+    assert len(settings_calls) == 1, (
+        f"expected 1 set_bases call for {_FILE_ID!r}, got {len(settings_calls)}"
+    )
+    _, _, values = settings_calls[0]
+    assert set(values.keys()) == {"a", "b"}

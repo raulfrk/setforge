@@ -72,7 +72,7 @@ from setforge.compare import (
     resolve_dst,
     resolve_src,
 )
-from setforge.config import Config, ResolvedProfile, TrackedFile
+from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
 from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.section_reconcile import SectionDriftState
@@ -364,7 +364,7 @@ def _advance_disposition_base(
 def _read_scalar_bases(
     profile: str,
     file_id: str,
-    disposition: object | None,
+    disposition: Disposition | None,
     shallow_preserve_paths: list[str],
 ) -> dict[str, object] | None:
     """Read the stored scalar base for every shallow preserve path, or None.
