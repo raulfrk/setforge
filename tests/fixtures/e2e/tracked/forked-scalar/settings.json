@@ -1,0 +1,6 @@
+{
+  // tracked side comment for forked-scalar JSONC fixture
+  "trackedKey": "tracked-value",
+  "userKeyA": "tracked-A",
+  "userKeyB": "tracked-B"
+}

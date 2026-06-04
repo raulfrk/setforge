@@ -1,0 +1,4 @@
+# Forked-scalar YAML fixture.
+trackedKey: tracked-value
+userKeyA: tracked-A
+userKeyB: tracked-B

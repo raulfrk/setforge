@@ -177,6 +177,26 @@ tracked_files:
     dst: ~/.setforge_e2e/disposition/forked.yaml
     disposition: forked
 
+  # ---- Forked-scalar fixtures (3-way preserve_user_keys scalar merge) ----
+  # Shallow ``preserve_user_keys`` with NO disposition routes through the
+  # stored-base 3-way SCALAR overlay (setforge.scalar_overlay). Each format
+  # gets its own dst (and thus file_id) so the per-host scalar base under
+  # ``state_root()/scalar-base/<profile>/<file_id>.json`` stays independent.
+  # The JSONC src exercises the json5 read/write seam; the YAML src exercises
+  # the ruamel round-trip seam.
+  forked_scalar_jsonc:
+    src: forked-scalar/settings.json
+    dst: ~/.setforge_e2e/forked-scalar/settings.json
+    preserve_user_keys:
+      - userKeyA
+      - userKeyB
+  forked_scalar_yaml:
+    src: forked-scalar/config.yaml
+    dst: ~/.setforge_e2e/forked-scalar/config.yaml
+    preserve_user_keys:
+      - userKeyA
+      - userKeyB
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -325,3 +345,13 @@ profiles:
   test-disposition-forked-yaml:
     tracked_files:
       - disposition_forked_yaml
+
+  # ---- Forked-scalar (3-way preserve_user_keys scalar merge) ------------
+  # One profile per format so each test installs/compares a single file in
+  # isolation and the stored scalar base lifecycle never crosses formats.
+  test-forked-scalar-jsonc:
+    tracked_files:
+      - forked_scalar_jsonc
+  test-forked-scalar-yaml:
+    tracked_files:
+      - forked_scalar_yaml
