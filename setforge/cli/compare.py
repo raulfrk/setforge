@@ -38,6 +38,7 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
+from setforge.locking import profile_lock
 from setforge.section_reconcile import SectionDriftState
 from setforge.sections import SectionSemantics, extract_sections
 from setforge.source import HostLocalSection, HostLocalSectionName
@@ -98,22 +99,24 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(profile_ctx, command="compare")
-    # Load + validate the local.yaml host_local_sections
-    # overlay so ``compare_profile`` threads it into ``diff_file`` —
-    # a live file that already received its host-local sections must
-    # not surface as drift. Same validator install uses (anchors
-    # resolved at deploy time; this layer only sniffs file-type).
-    host_local_sections_map = _load_validated_host_local_sections(
-        cfg, resolved, repo_root
-    )
-    report = compare_mod.compare_profile(
-        cfg,
-        profile,
-        repo_root,
-        transitions_dir=transitions.transitions_root(),
-        ignored=load_ignored_orphans(),
-        host_local_sections=host_local_sections_map,
-    )
+
+    with profile_lock(profile):
+        # Load + validate the local.yaml host_local_sections
+        # overlay so ``compare_profile`` threads it into ``diff_file`` —
+        # a live file that already received its host-local sections must
+        # not surface as drift. Same validator install uses (anchors
+        # resolved at deploy time; this layer only sniffs file-type).
+        host_local_sections_map = _load_validated_host_local_sections(
+            cfg, resolved, repo_root
+        )
+        report = compare_mod.compare_profile(
+            cfg,
+            profile,
+            repo_root,
+            transitions_dir=transitions.transitions_root(),
+            ignored=load_ignored_orphans(),
+            host_local_sections=host_local_sections_map,
+        )
 
     console = Console()
 

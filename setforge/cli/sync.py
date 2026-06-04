@@ -69,6 +69,7 @@ from setforge.errors import (
     NoSourceConfigured,
     SourceNotCloned,
 )
+from setforge.locking import profile_lock
 from setforge.source import (
     LOCAL_CONFIG_PATH,
     get_resolved_source,
@@ -253,33 +254,36 @@ def sync(
     )
     _refuse_legacy_live_markers(ctx, command="sync")
 
-    if not no_transition:
-        transitions.ensure_state_dir_writable()
+    with profile_lock(profile):
+        if not no_transition:
+            transitions.ensure_state_dir_writable()
 
-    _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
+        _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
 
-    _run_promote_wizard(
-        ctx,
-        auto_enum=auto_enum,
-        no_transition=no_transition,
-    )
-
-    src_paths = _sync_snapshot_paths(ctx, config)
-    file_pre = transitions.snapshot_paths(src_paths)
-
-    results = _run_capture(cfg, profile, repo_root, config, auto_enum, command="sync")
-    for result in results:
-        typer.echo(f"{result.action.value:>8}  {result.name}")
-
-    _capture_extensions(config, profile)
-
-    file_post = transitions.snapshot_paths(src_paths)
-    if not no_transition:
-        _write_sync_transition(
+        _run_promote_wizard(
             ctx,
-            file_pre=file_pre,
-            file_post=file_post,
+            auto_enum=auto_enum,
+            no_transition=no_transition,
         )
+
+        src_paths = _sync_snapshot_paths(ctx, config)
+        file_pre = transitions.snapshot_paths(src_paths)
+
+        results = _run_capture(
+            cfg, profile, repo_root, config, auto_enum, command="sync"
+        )
+        for result in results:
+            typer.echo(f"{result.action.value:>8}  {result.name}")
+
+        _capture_extensions(config, profile)
+
+        file_post = transitions.snapshot_paths(src_paths)
+        if not no_transition:
+            _write_sync_transition(
+                ctx,
+                file_pre=file_pre,
+                file_post=file_post,
+            )
 
 
 def _run_capture_confirm_gate(

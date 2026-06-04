@@ -66,6 +66,7 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
+from setforge.locking import profile_lock
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
@@ -253,96 +254,99 @@ def install(
         _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
         return
 
-    if not no_transition:
-        transitions.ensure_state_dir_writable()
-    deploy.validate_srcs_exist(cfg, resolved, repo_root)
-    deploy.bootstrap_local(resolved.bootstrap)
+    with profile_lock(profile):
+        if not no_transition:
+            transitions.ensure_state_dir_writable()
+        deploy.validate_srcs_exist(cfg, resolved, repo_root)
+        deploy.bootstrap_local(resolved.bootstrap)
 
-    # P4.3: check for unexpected drift before deploying.
-    # Only DRIFTED entries (existing live files that diverge from tracked
-    # in unexpected ways) gate install. MISSING entries are expected on
-    # first install and are handled by deploy below.
-    drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+        # P4.3: check for unexpected drift before deploying.
+        # Only DRIFTED entries (existing live files that diverge from tracked
+        # in unexpected ways) gate install. MISSING entries are expected on
+        # first install and are handled by deploy below.
+        drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
 
-    _run_predeploy_gates(
-        drift_report=drift_report,
-        ctx=ctx,
-        config=config,
-        auto_accept_tracked=auto_accept_tracked,
-        auto_accept_live=auto_accept_live,
-        section_auto=section_auto,
-        yes=yes,
-    )
-
-    tracked_root = config.resolve().parent / "tracked"
-    scan_result = secrets_mod.run_pre_deploy_scan(
-        tracked_root=tracked_root,
-        skip=no_secrets_scan,
-    )
-    if scan_result.findings and not _handle_secret_findings(scan_result, yes=yes):
-        typer.secho("install aborted by secrets scan", err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    # Resolve user-section drift (shared sections) into per-tracked_file
-    # decisions BEFORE the deploy loop so wizard prompts and the
-    # bare-install warning fire once, deterministically.
-    section_decisions = _resolve_section_decisions(
-        ctx,
-        section_auto=section_auto,
-        interactive=reconcile_user_sections,
-    )
-
-    # Pre-extract live user-sections for every section-bearing tracked_file
-    # so deploy.copy_atomic can skip its own re-read + re-parse pass.
-    # See `precomputed_live_sections` on copy_atomic.
-    live_sections_map = _extract_live_sections_map(ctx)
-
-    # For symlink-deployed tracked_files the recorded "touched path" is
-    # the symlink's TARGET (where bytes actually land), not the link
-    # path itself: GNU patch refuses to patch a symlink as a regular
-    # file, so a transition recording the link path would brick revert.
-    dst_paths: list[Path] = [
-        Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
-        for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
-    ]
-    dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
-
-    file_pre = transitions.snapshot_paths(dst_paths)
-
-    _deploy_all_tracked_files(
-        ctx,
-        section_decisions=section_decisions,
-        live_sections_map=live_sections_map,
-        host_local_sections_map=host_local_sections_map,
-    )
-
-    retry_failed_ids = (
-        _collect_retry_failed_ids(profile) if retry_failed else frozenset()
-    )
-    ext_delta, ext_outcomes = _reconcile_extensions(
-        resolved, retry_failed_ids=retry_failed_ids, yes=yes
-    )
-    plugin_delta, plugin_outcomes = _reconcile_plugins(
-        cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes
-    )
-
-    file_post = transitions.snapshot_paths(dst_paths)
-
-    _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
-
-    if not no_transition:
-        target = _write_install_transition(
-            profile,
-            file_pre,
-            file_post,
-            ext_delta,
-            plugin_delta,
-            source_dir=ctx.repo_root,
-            reconcile_outcomes=plugin_outcomes + ext_outcomes,
-            preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
+        _run_predeploy_gates(
+            drift_report=drift_report,
+            ctx=ctx,
+            config=config,
+            auto_accept_tracked=auto_accept_tracked,
+            auto_accept_live=auto_accept_live,
+            section_auto=section_auto,
+            yes=yes,
         )
-        typer.echo(f"transition: {target}")
-        typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+
+        tracked_root = config.resolve().parent / "tracked"
+        scan_result = secrets_mod.run_pre_deploy_scan(
+            tracked_root=tracked_root,
+            skip=no_secrets_scan,
+        )
+        if scan_result.findings and not _handle_secret_findings(scan_result, yes=yes):
+            typer.secho(
+                "install aborted by secrets scan", err=True, fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1)
+
+        # Resolve user-section drift (shared sections) into per-tracked_file
+        # decisions BEFORE the deploy loop so wizard prompts and the
+        # bare-install warning fire once, deterministically.
+        section_decisions = _resolve_section_decisions(
+            ctx,
+            section_auto=section_auto,
+            interactive=reconcile_user_sections,
+        )
+
+        # Pre-extract live user-sections for every section-bearing tracked_file
+        # so deploy.copy_atomic can skip its own re-read + re-parse pass.
+        # See `precomputed_live_sections` on copy_atomic.
+        live_sections_map = _extract_live_sections_map(ctx)
+
+        # For symlink-deployed tracked_files the recorded "touched path" is
+        # the symlink's TARGET (where bytes actually land), not the link
+        # path itself: GNU patch refuses to patch a symlink as a regular
+        # file, so a transition recording the link path would brick revert.
+        dst_paths: list[Path] = [
+            Path(tf.symlink).expanduser() if tf.symlink is not None else sub_dst
+            for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
+        ]
+        dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
+
+        file_pre = transitions.snapshot_paths(dst_paths)
+
+        _deploy_all_tracked_files(
+            ctx,
+            section_decisions=section_decisions,
+            live_sections_map=live_sections_map,
+            host_local_sections_map=host_local_sections_map,
+        )
+
+        retry_failed_ids = (
+            _collect_retry_failed_ids(profile) if retry_failed else frozenset()
+        )
+        ext_delta, ext_outcomes = _reconcile_extensions(
+            resolved, retry_failed_ids=retry_failed_ids, yes=yes
+        )
+        plugin_delta, plugin_outcomes = _reconcile_plugins(
+            cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes
+        )
+
+        file_post = transitions.snapshot_paths(dst_paths)
+
+        _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
+
+        if not no_transition:
+            target = _write_install_transition(
+                profile,
+                file_pre,
+                file_post,
+                ext_delta,
+                plugin_delta,
+                source_dir=ctx.repo_root,
+                reconcile_outcomes=plugin_outcomes + ext_outcomes,
+                preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
+            )
+            typer.echo(f"transition: {target}")
+            typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
 
 def _handle_secret_findings(
