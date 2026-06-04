@@ -318,6 +318,7 @@ def install(
             section_decisions=section_decisions,
             live_sections_map=live_sections_map,
             host_local_sections_map=host_local_sections_map,
+            section_auto=section_auto,
         )
 
         retry_failed_ids = (

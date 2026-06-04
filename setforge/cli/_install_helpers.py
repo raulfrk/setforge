@@ -33,15 +33,16 @@ from typing import Final, assert_never
 import typer
 
 from setforge import (
+    base_store,
+    deploy,
+    section_reconcile,
+    transitions,
+)
+from setforge import (
     claude_plugins as claude_plugins_mod,
 )
 from setforge import (
     compare as compare_mod,
-)
-from setforge import (
-    deploy,
-    section_reconcile,
-    transitions,
 )
 from setforge import (
     merge as merge_mod,
@@ -203,6 +204,7 @@ def _deploy_all_tracked_files(
     section_decisions: Mapping[Path, dict[str, str]],
     live_sections_map: Mapping[Path, LiveSections],
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
+    section_auto: ReconcileAuto | None = None,
 ) -> None:
     """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
 
@@ -210,20 +212,47 @@ def _deploy_all_tracked_files(
     pre-refactor format) and stamps tracked-side embedded section hashes
     after each ``preserve_user_sections`` deploy so the three-way
     classifier has a baseline on the next install.
+
+    For every regular-file sub-entry whose ``tracked_file.disposition`` is
+    set, the per-host stored base (:mod:`setforge.base_store`) is woven into
+    the deploy: the base is READ before the deploy (the merge ancestor for
+    :func:`deploy.copy_atomic`'s 3-way driver), then — and ONLY after the
+    live write returns successfully — ADVANCED to the merged bytes when the
+    driver signals re-baselining. The ordering is load-bearing: a base that
+    lags live is the safe failure direction (the next install re-merges
+    against a stale-but-valid ancestor); a base written before or around
+    the live write could end up ahead of live, which is corruption. A
+    deferred conflict (``merge_conflicts`` non-empty, ``new_base is None``)
+    keeps live and warns; its base stays put so the divergence re-surfaces
+    next install. After the loop, every base under the profile whose
+    file_id is NOT in this run's disposition keep-set is pruned, so bases
+    for files that left the profile (or dropped their disposition) are
+    cleaned up. The symlink branch never touches the base store.
+
+    ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
+    (``name`` for plain files, ``name/relpath`` for directory entries) —
+    the same stable per-profile identifier the prune keep-set and
+    transitions use. ``sub_name`` is always a relative path with no ``..``
+    component (``name`` is a config key; ``relpath`` is taken
+    ``relative_to`` the src dir), so it satisfies ``base_store``'s
+    traversal guard (:func:`setforge.base_store._resolve_target`).
     """
+    profile = ctx.profile
+    disposition_file_ids: set[str] = set()
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         host_local = host_local_sections_map.get(name) or None
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
-        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if tracked_file.symlink is not None:
                 # Symlink-deployed: the link lands at ``sub_dst`` and
                 # the tracked content lands at
                 # ``Path(tracked_file.symlink).expanduser()``.
                 # preserve_user_{sections,keys} still composes;
                 # deploy.deploy_symlinked_file routes through the same
-                # _compute_content path as copy_atomic.
+                # _compute_content path as copy_atomic. The stored base
+                # lifecycle is regular-file-only — never wired here.
                 result = deploy.deploy_symlinked_file(
                     sub_src, sub_dst, tracked_file, host_local_sections=host_local
                 )
@@ -237,6 +266,14 @@ def _deploy_all_tracked_files(
                 continue
             override = section_decisions.get(sub_dst)
             precomputed = live_sections_map.get(sub_dst)
+            # Stored-base 3-way path is gated on a declared disposition.
+            # READ the base BEFORE the deploy: it is the merge ancestor
+            # copy_atomic's driver diffs live/tracked against.
+            base_text: str | None = None
+            if tracked_file.disposition is not None:
+                disposition_file_ids.add(sub_name)
+                raw = base_store.read_base(profile, sub_name)
+                base_text = raw.decode("utf-8") if raw is not None else None
             result = deploy.copy_atomic(
                 sub_src,
                 sub_dst,
@@ -247,12 +284,40 @@ def _deploy_all_tracked_files(
                 precomputed_live_sections=precomputed,
                 host_local_sections=host_local,
                 mode=tracked_file.mode,
+                disposition=tracked_file.disposition,
+                base_text=base_text,
+                merge_auto=section_auto,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
             _echo_preserve_user_keys_provenance(tracked_file)
             _echo_host_local_sections_provenance(host_local)
             if tracked_file.preserve_user_sections:
                 section_reconcile.stamp_tracked_baseline(sub_src)
+            # ADVANCE the base only AFTER the live write returned cleanly.
+            # A write_base failure PROPAGATES (no suppress): base lagging
+            # live is the safe failure direction, base ahead of live is
+            # corruption.
+            if tracked_file.disposition is not None:
+                if result.new_base is not None:
+                    base_store.write_base(
+                        profile, sub_name, result.new_base.encode("utf-8")
+                    )
+                elif result.merge_conflicts:
+                    # Deferred: bare conflict kept live, base NOT advanced.
+                    # Warn so the user knows the conflict re-surfaces next
+                    # install and how to resolve it non-interactively.
+                    typer.secho(
+                        f"warning: {sub_dst}: merge conflict kept live, base "
+                        f"not advanced — conflict re-surfaces next install "
+                        f"(re-run with --auto=use-tracked or the merge wizard)",
+                        err=True,
+                        fg=typer.colors.YELLOW,
+                    )
+    # PRUNE after the whole loop: bases whose file_id is not in this run's
+    # disposition keep-set (file left the profile, or lost its disposition)
+    # are removed. Non-disposition files never have a base, so an empty
+    # keep-set still correctly clears any stale bases under the profile.
+    base_store.prune(profile, disposition_file_ids)
 
 
 def _echo_host_local_sections_provenance(
