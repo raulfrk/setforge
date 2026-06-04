@@ -72,9 +72,10 @@ class FileResolution:
     empty on a clean merge and otherwise lists every conflicting hunk/path —
     it stays non-empty even when an ``auto`` mode resolved the conflict, so the
     caller can still warn. ``advance_base`` is ``True`` when the caller should
-    re-baseline the stored base to ``text``; ``False`` defers (a bare conflict
-    is re-detected next run). ``base_absent`` is ``True`` only on the first-run
-    fallback (no stored base), where ``text == tracked``.
+    re-baseline the stored base to ``text``; ``False`` means leave the base
+    untouched — either a deferred bare conflict (re-detected next run) or a
+    ``pinned`` file (which never re-baselines). ``base_absent`` is ``True``
+    only on the first-run fallback (no stored base), where ``text == tracked``.
     """
 
     text: str

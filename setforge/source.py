@@ -375,7 +375,7 @@ class _LocalTrackedFileOverlay(BaseModel):
     never contribute live edits back to the shared base). The override
     lives in ``local.yaml`` so the profile remains portable.
 
-    Accepts exactly the StrEnum member names ``"shared"``, ``"forked"``,
+    Accepts exactly the StrEnum member values ``"shared"``, ``"forked"``,
     ``"pinned"``; any other casing or value is rejected at parse time
     (:class:`pydantic.ValidationError`). The merged result is re-validated
     by :func:`setforge.config.TrackedFile.model_validate` — so a

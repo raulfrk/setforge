@@ -1,8 +1,10 @@
 """Profile-scoped advisory lock for setforge state-mutating commands.
 
-Prevents concurrent ``install``, ``sync``, or ``compare`` runs on the same
-profile from interleaving their reads and writes to the stored-base and
-transition state under ``state_root()``.
+Serializes ``install``, ``sync``, and ``compare`` runs on the same profile
+so their access to the stored-base and transition state under
+``state_root()`` does not interleave: ``install`` / ``sync`` write that
+state, while ``compare`` only reads it and takes the lock to get a
+consistent snapshot rather than a half-written one.
 
 The lockfile lives at ``state_root() / "locks" / "<profile>.lock"``.  On
 POSIX, ``fcntl.flock(fd, LOCK_EX)`` is kernel-mediated: the OS releases the

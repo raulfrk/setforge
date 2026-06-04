@@ -665,6 +665,11 @@ def set_at_path(model: object, path: str, value: object) -> None:
 
     A missing intermediate PARENT raises :class:`KeyError` (no
     auto-vivification), matching the :mod:`setforge.scalar_path` semantics.
+    A list-suffix segment raises :class:`ValueError`. When the resolved
+    parent is not a mapping (so the leaf cannot be addressed by key),
+    :class:`~setforge.errors.MergeTypeMismatch` propagates from the
+    leaf-set step — callers wrapping this seam must account for it
+    alongside ``KeyError`` / ``ValueError``.
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for set-at-path: {path!r}")

@@ -97,7 +97,9 @@ def copy_atomic(
     live is a NOOP write but still re-baselines (``new_base`` set). When
     ``disposition`` is None the legacy preserve path runs byte-for-byte
     unchanged and ``new_base``/``merge_conflicts`` stay inert
-    (``None`` / ``[]``). The symlink path ignores ``disposition`` for now.
+    (``None`` / ``[]``). Symlinked tracked_files (deployed via the separate
+    :func:`deploy_symlinked_file`, not this function) ignore ``disposition``
+    for now.
 
     When ``preserve_user_sections`` is True, the rendered content has
     every end-marker's ``hash=<...>`` rewritten via
