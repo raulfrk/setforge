@@ -30,6 +30,8 @@ dependencies = [
     "json-five>=1.1,<2",
     "rich>=13",
     "packaging>=21",
+    "merge3>=0.0.16",
+    "patiencediff>=0.2.18",
 ]
 
 [project.urls]
