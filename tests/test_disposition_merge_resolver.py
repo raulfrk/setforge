@@ -23,6 +23,7 @@ from setforge.disposition_merge import (
     resolve_file,
 )
 from setforge.markdown_merge import LineConflict
+from setforge.scalar_merge import ScalarConflict
 from setforge.section_wizard import ReconcileAuto
 from setforge.structural_merge import PathConflict
 
@@ -41,7 +42,9 @@ _JSONC = ('{\n  "a": 1\n}\n', '{\n  "a": 2\n}\n', '{\n  "a": 3\n}\n')
 def _const_resolver(res: ConflictResolution) -> ConflictResolver:
     """A resolver that returns ``res`` for every conflict."""
 
-    def _resolve(_conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _resolve(
+        _conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         return res
 
     return _resolve
@@ -208,9 +211,11 @@ def test_mixed_markdown_take_theirs_and_skip() -> None:
     live = "top-live\nMID\nbottom-live\n"
     tracked = "top-tracked\nMID\nbottom-tracked\n"
 
-    seen: list[LineConflict | PathConflict] = []
+    seen: list[LineConflict | PathConflict | ScalarConflict] = []
 
-    def _resolve(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _resolve(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         seen.append(conflict)
         # First conflict take theirs, second skip.
         if len(seen) == 1:
@@ -245,7 +250,9 @@ def test_mixed_yaml_take_theirs_and_skip() -> None:
 
     seen: list[str] = []
 
-    def _resolve(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _resolve(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         assert isinstance(conflict, PathConflict)
         seen.append(conflict.path)
         if conflict.path == "a":
@@ -320,9 +327,11 @@ def test_resolver_called_once_per_conflict_in_order_markdown() -> None:
     live = "top-live\nMID\nbottom-live\n"
     tracked = "top-tracked\nMID\nbottom-tracked\n"
 
-    calls: list[LineConflict | PathConflict] = []
+    calls: list[LineConflict | PathConflict | ScalarConflict] = []
 
-    def _record(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _record(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         calls.append(conflict)
         return ConflictResolution(ConflictChoice.KEEP_OURS)
 
@@ -349,9 +358,11 @@ def test_resolver_called_once_per_conflict_in_order_yaml() -> None:
     live = "a: 2\nb: 2\n"
     tracked = "a: 3\nb: 3\n"
 
-    calls: list[LineConflict | PathConflict] = []
+    calls: list[LineConflict | PathConflict | ScalarConflict] = []
 
-    def _record(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _record(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         calls.append(conflict)
         return ConflictResolution(ConflictChoice.KEEP_OURS)
 

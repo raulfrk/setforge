@@ -67,6 +67,7 @@ from setforge.markdown_merge import (
     merge_markdown_segments,
     resolve_segments,
 )
+from setforge.scalar_merge import ScalarConflict
 from setforge.section_wizard import ReconcileAuto
 from setforge.structural_merge import (
     PathConflict,
@@ -117,9 +118,13 @@ class ConflictResolution:
 
 # A per-conflict resolver mapping one conflict to a verdict. Injected by an
 # interactive caller (a wizard); the I/O lives in the caller, keeping this
-# module pure. The conflict is a line-based ``LineConflict`` (line path) or a
-# structural ``PathConflict`` (structural path).
-type ConflictResolver = Callable[[LineConflict | PathConflict], ConflictResolution]
+# module pure. The conflict is a line-based ``LineConflict`` (line path), a
+# structural ``PathConflict`` (structural path), or a scalar ``ScalarConflict``
+# (the SHALLOW ``preserve_user_keys`` overlay, dispatched by
+# :mod:`setforge.scalar_overlay`).
+type ConflictResolver = Callable[
+    [LineConflict | PathConflict | ScalarConflict], ConflictResolution
+]
 
 
 @dataclass(frozen=True, slots=True)

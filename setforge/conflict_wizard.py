@@ -20,10 +20,13 @@ Conflict kind is dispatched by ``isinstance``: a
 :class:`~setforge.markdown_merge.LineConflict` is line-based (a ``.md``
 tmpfile, lines read back with terminators), a
 :class:`~setforge.structural_merge.PathConflict` is structural (a ``.yaml``
-tmpfile carrying a serialized scalar / list / dict, parsed back). A structural
-edit whose tmpfile does not parse re-prompts the whole conflict rather than
-crashing. The :data:`~setforge.scalar_merge.ABSENT` sentinel (a side where the
-key is missing) renders as ``(absent)`` and seeds an empty edit buffer.
+tmpfile carrying a serialized scalar / list / dict, parsed back), and a
+:class:`~setforge.scalar_merge.ScalarConflict` is a SHALLOW
+``preserve_user_keys`` scalar (a ``.yaml`` tmpfile carrying a single scalar,
+parsed back and REJECTED if the edit yields a mapping / list). A structural or
+scalar edit whose tmpfile does not parse re-prompts the whole conflict rather
+than crashing. The :data:`~setforge.scalar_merge.ABSENT` sentinel (a side where
+the key is missing) renders as ``(absent)`` and seeds an empty edit buffer.
 
 POSIX-only: the editor sub-action shells out to ``$EDITOR`` via
 :func:`setforge._editor.run_editor`; the single-keypress prompter is
@@ -48,7 +51,7 @@ from setforge.disposition_merge import (
     ConflictResolver,
 )
 from setforge.markdown_merge import LineConflict
-from setforge.scalar_merge import ABSENT
+from setforge.scalar_merge import ABSENT, ScalarConflict
 from setforge.structural_merge import PathConflict
 from setforge.wizard import read_one_choice
 
@@ -66,9 +69,13 @@ def make_wizard_resolver(console: Console | None = None) -> ConflictResolver:
     """
     active_console = console if console is not None else Console()
 
-    def _resolve(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _resolve(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         if isinstance(conflict, LineConflict):
             return _resolve_line_conflict(conflict, active_console)
+        if isinstance(conflict, ScalarConflict):
+            return _resolve_scalar_conflict(conflict, active_console)
         return _resolve_path_conflict(conflict, active_console)
 
     return _resolve
@@ -184,6 +191,72 @@ def _render_path_conflict(conflict: PathConflict, console: Console) -> None:
         f" [yellow]theirs (tracked):[/yellow] {_display_value(conflict.theirs)}"
     )
     _render_choices(console)
+
+
+# ---------------------------------------------------------------------------
+# Scalar (shallow preserve_user_keys) conflict.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_scalar_conflict(
+    conflict: ScalarConflict, console: Console
+) -> ConflictResolution:
+    """Render a scalar conflict, prompt, and return its resolution.
+
+    Mirrors :func:`_resolve_path_conflict` exactly, with one added guard:
+    ``EDIT`` opens ``$EDITOR`` on a ``.yaml`` tmpfile seeded with the ours
+    scalar, parses the result back, and RE-PROMPTS the whole conflict both when
+    the buffer fails to parse (a typo) AND when it parses to a NON-scalar
+    (a mapping / list) — a shallow ``preserve_user_keys`` leaf must stay a
+    scalar, so a structured edit is rejected rather than written.
+    """
+    while True:
+        _render_scalar_conflict(conflict, console)
+        choice = read_one_choice("  Choice (k/t/e/s): ", {"k", "t", "e", "s"})
+        if choice == "k":
+            return ConflictResolution(ConflictChoice.KEEP_OURS)
+        if choice == "t":
+            return ConflictResolution(ConflictChoice.TAKE_THEIRS)
+        if choice == "s":
+            return ConflictResolution(ConflictChoice.SKIP)
+        try:
+            value = _edit_value(conflict.ours)
+        except YAMLError as exc:
+            console.print(f"[red]parse error: {exc}[/red]")
+            console.print("[dim]re-prompting this conflict…[/dim]")
+            continue
+        if not _is_plain_scalar(value):
+            console.print(
+                "[red]not a scalar: a preserve_user_keys leaf must be a "
+                "single value, not a mapping or list[/red]"
+            )
+            console.print("[dim]re-prompting this conflict…[/dim]")
+            continue
+        return ConflictResolution(ConflictChoice.EDIT, edited_value=value)
+
+
+def _render_scalar_conflict(conflict: ScalarConflict, console: Console) -> None:
+    """Print the path plus the base / ours / theirs scalar sides for ``conflict``."""
+    sep = "─" * 57
+    console.print(f"\n[dim]{sep}[/dim]")
+    console.print(f" [bold]scalar conflict[/bold]  [cyan]{conflict.path}[/cyan]")
+    console.print(f"[dim]{sep}[/dim]")
+    console.print(f" [dim]base:[/dim]              {_display_value(conflict.base)}")
+    console.print(f" [green]ours (live):[/green]    {_display_value(conflict.ours)}")
+    console.print(
+        f" [yellow]upstream (tracked):[/yellow] {_display_value(conflict.theirs)}"
+    )
+    _render_choices(console)
+
+
+def _is_plain_scalar(value: object) -> bool:
+    """Return whether an edited value is an acceptable scalar leaf.
+
+    A ``preserve_user_keys`` leaf must be a single scalar (str / int / float /
+    bool / ``None``). A mapping or list (and any other container) is rejected so
+    the scalar edit re-prompts. ``None`` (YAML ``null``) is a legitimate scalar.
+    """
+    return isinstance(value, str | int | float | bool | None.__class__)
 
 
 def _display_value(value: object) -> str:

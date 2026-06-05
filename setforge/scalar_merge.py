@@ -62,6 +62,25 @@ class ScalarResolution:
     value: object = None
 
 
+@dataclass(frozen=True, slots=True)
+class ScalarConflict:
+    """A single ``preserve_user_keys`` scalar path whose three sides diverge.
+
+    Mirrors :class:`setforge.structural_merge.PathConflict` for the SCALAR
+    overlay: ``base`` / ``ours`` (live) / ``theirs`` (tracked) are plain-python
+    scalars (or the :data:`ABSENT` sentinel for a side where the key is
+    missing), so the record is comparable and printable. The interactive
+    conflict wizard (:mod:`setforge.conflict_wizard`) renders these three sides
+    and the scalar overlay (:mod:`setforge.scalar_overlay`) hands one to the
+    injected resolver per conflicting path when ``--auto`` is not set.
+    """
+
+    path: str
+    base: object
+    ours: object
+    theirs: object
+
+
 # Scalar operand allowlist. ``bool`` is included despite subclassing ``int``;
 # the type-aware equality helper keeps ``True`` distinct from ``1``.
 _SCALAR_TYPES: tuple[type, ...] = (str, int, float, bool, type(None))

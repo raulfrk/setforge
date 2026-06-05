@@ -29,6 +29,7 @@ from setforge.disposition_merge import (
     ConflictResolver,
 )
 from setforge.markdown_merge import LineConflict
+from setforge.scalar_merge import ScalarConflict
 from setforge.structural_merge import PathConflict
 
 _PROFILE = "test-wizard"
@@ -101,7 +102,7 @@ def _install(config: Path, *, extra: list[str] | None = None) -> Result:
 
 def _inject_resolver(
     monkeypatch: pytest.MonkeyPatch, resolver: ConflictResolver
-) -> list[LineConflict | PathConflict]:
+) -> list[LineConflict | PathConflict | ScalarConflict]:
     """Force ``install`` to use ``resolver`` regardless of tty; record conflicts.
 
     Patches the ``_build_conflict_resolver`` seam so the wizard gate (tty +
@@ -109,9 +110,11 @@ def _inject_resolver(
     appends each seen conflict to, so a test can assert the resolver was (or was
     not) invoked.
     """
-    seen: list[LineConflict | PathConflict] = []
+    seen: list[LineConflict | PathConflict | ScalarConflict] = []
 
-    def _wrapped(conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _wrapped(
+        conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         seen.append(conflict)
         return resolver(conflict)
 
@@ -132,7 +135,9 @@ def _inject_resolver(
 def _const_resolver(res: ConflictResolution) -> ConflictResolver:
     """A resolver returning ``res`` for every conflict."""
 
-    def _resolve(_conflict: LineConflict | PathConflict) -> ConflictResolution:
+    def _resolve(
+        _conflict: LineConflict | PathConflict | ScalarConflict,
+    ) -> ConflictResolution:
         return res
 
     return _resolve
