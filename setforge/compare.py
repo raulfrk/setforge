@@ -29,7 +29,14 @@ from jinja2 import Template
 from rich.table import Table
 from ruamel.yaml import YAML
 
-from setforge import host_local_inject, jsonc, section_reconcile, sections, yaml_merge
+from setforge import (
+    host_local_inject,
+    jsonc,
+    section_reconcile,
+    sections,
+    spans_overlay,
+    yaml_merge,
+)
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import (
     Config,
@@ -94,20 +101,30 @@ class FileCompare:
     """The :class:`~setforge.config.Disposition` of the source tracked_file,
     or ``None`` for files without a disposition (legacy preserve-* model).
     """
+    span_only_drift: bool = False
+    """True when this file carries sub-file spans AND every drifting region
+    is confined to a pinned/forked span (Invariant I13). A SHARED file whose
+    ONLY divergence lives inside its spans is intentional host divergence,
+    not unsynced shared drift — so it must NOT render identically to a real
+    shared-drift case. Always False for files without spans.
+    """
 
     @property
     def drift_is_expected(self) -> bool:
         """True when the file's drift is classified as intentionally expected.
 
-        Drift is expected only when the tracked_file's disposition is
-        ``FORKED`` or ``PINNED`` AND the file is ``DRIFTED``.  A ``SHARED``
-        file's drift always needs attention, and a ``None``-disposition file
+        Drift is expected when the tracked_file's disposition is ``FORKED``
+        or ``PINNED`` AND the file is ``DRIFTED``, OR when the file is
+        ``DRIFTED`` but every diverging region is confined to a pinned/forked
+        span (``span_only_drift``, Invariant I13). A ``SHARED`` file's
+        non-span drift always needs attention; a ``None``-disposition file
         never uses this axis (returns False regardless of drift status).
         """
-        return self.status is CompareStatus.DRIFTED and self.disposition in (
-            Disposition.FORKED,
-            Disposition.PINNED,
-        )
+        if self.status is not CompareStatus.DRIFTED:
+            return False
+        if self.disposition in (Disposition.FORKED, Disposition.PINNED):
+            return True
+        return self.span_only_drift
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,6 +745,8 @@ def _compare_one(
     )
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
 
+    span_only_drift = _span_only_drift(src, dst, tracked_file) if diff else False
+
     entry = FileCompare(
         name=name,
         status=status,
@@ -736,12 +755,39 @@ def _compare_one(
         unexpected_drift_keys=unexpected_keys,
         mode_drift=mode_drift,
         disposition=disposition,
+        span_only_drift=span_only_drift,
     )
     # A disposition file with FORKED or PINNED drift is intentionally
     # host-diverged: it does NOT count as unexpected drift.  SHARED drift
-    # (or any non-disposition-file drift) needs attention → unexpected.
+    # OUTSIDE a span needs attention → unexpected; drift confined to a
+    # pinned/forked span is expected (Invariant I13).
     is_unexpected = (bool(diff) or mode_drift) and not entry.drift_is_expected
     return entry, is_unexpected
+
+
+def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
+    """True when the live↔tracked drift is confined to pinned/forked spans.
+
+    Replaces every span region in the live bytes with the tracked bytes
+    (:func:`setforge.spans_overlay.exclude_spans_for_capture`); if the
+    result equals tracked, the only divergence lived inside spans —
+    intentional host divergence, not unsynced shared drift (Invariant
+    I13). False when the file declares no spans, isn't markdown, or has
+    drift outside a span.
+    """
+    if not tracked_file.spans:
+        return False
+    if src.suffix.lower() not in {".md", ".markdown"}:
+        return False
+    try:
+        tracked_text = src.read_text(encoding="utf-8")
+        live_text = dst.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    excluded = spans_overlay.exclude_spans_for_capture(
+        live_text, tracked_text, tracked_file.spans, {}
+    )
+    return excluded == tracked_text
 
 
 def _compare_symlinked(
