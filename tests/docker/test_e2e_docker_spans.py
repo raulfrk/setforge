@@ -1,4 +1,4 @@
-"""Docker e2e tests for the sub-file pinned / forked span engine (p5qc.8).
+"""Docker e2e tests for the sub-file pinned / forked span engine.
 
 Exercises the span mechanism end-to-end against a fresh Debian container
 with the actual installed ``setforge`` CLI, through the non-interactive
