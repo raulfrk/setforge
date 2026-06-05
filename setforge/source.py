@@ -853,6 +853,32 @@ def check_source_clean(source: Source) -> None:
     )
 
 
+def check_source_yaml_clean(source: Source) -> None:
+    """Pre-write gate for a ``setforge.yaml``-root write (the ``--shared`` path).
+
+    The sibling of :func:`check_source_clean`, but scoped to the
+    version-controlled ``setforge.yaml`` at the source ROOT rather than
+    the engine's ``tracked/`` write surface — :func:`check_source_clean`
+    deliberately misses the root config (B-C2). The ``override --shared``
+    write mutates ``setforge.yaml`` in place, so a dirty / mid-rebase
+    config must refuse before the round-trip clobbers an uncommitted edit.
+
+    Non-git PathSource dirs skip the check (no git, nothing to protect).
+    GitSource always runs; a missing clone surfaces
+    :class:`SourceNotCloned` from :func:`resolve_source_dir`.
+    """
+    source_dir = resolve_source_dir(source)
+    if not git_ops.is_git_repo(source_dir):
+        return
+    porcelain = git_ops.status_porcelain(source_dir, path=CONFIG_FILENAME)
+    if not porcelain:
+        return
+    raise DirtySourceCheckout(
+        f"{source_dir}/{CONFIG_FILENAME} has uncommitted changes. "
+        "Commit or stash before retrying the --shared override."
+    )
+
+
 def fetch_source(source: Source) -> str:
     """Clone-on-missing + fetch + ref-checkout the given git source.
 
@@ -932,6 +958,7 @@ __all__ = [
     "Source",
     "SourceKind",
     "check_source_clean",
+    "check_source_yaml_clean",
     "fetch_source",
     "format_post_write_hint",
     "get_resolved_source",
