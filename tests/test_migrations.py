@@ -25,12 +25,14 @@ from typing import Final
 
 import pytest
 
+from setforge.errors import ConfigError
 from setforge.migrations import (
     MIGRATIONS,
     ManifestEntry,
     ManifestType,
     Migration,
     MigrationRoots,
+    VersionStampMigration,
     current_expected_schema_version,
     detect_current_schema,
     find_migration_path,
@@ -314,8 +316,6 @@ def test_multi_file_migration_full_lifecycle(tmp_path: Path) -> None:
 # First real migration — version-stamp 1.0 → 1.1 (+ reverse). B-M1…B-M8.
 # ---------------------------------------------------------------------------
 
-from setforge.migrations import VersionStampMigration  # noqa: E402
-
 _CFG_BODY_NO_VERSION: Final[str] = (
     "# top comment\n"
     "version: 1\n"
@@ -559,3 +559,44 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
     assert "1.1" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Trust-boundary shape validation — a hand-edited non-mapping root raises a
+# domain ConfigError, not a bare TypeError / AttributeError.
+# ---------------------------------------------------------------------------
+
+_NON_MAPPING_ROOTS: Final[tuple[str, ...]] = (
+    "- one\n- two\n",  # YAML sequence root
+    "just-a-scalar\n",  # bare scalar root
+)
+
+
+@pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
+def test_apply_non_mapping_root_raises_config_error(
+    tmp_path: Path, body: str
+) -> None:
+    """``apply`` on a non-mapping setforge.yaml raises ConfigError, not TypeError."""
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError):
+        VersionStampMigration().apply(roots=_roots_for(cfg))
+
+
+@pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
+def test_reverse_non_mapping_root_raises_config_error(
+    tmp_path: Path, body: str
+) -> None:
+    """The reverse on a non-mapping root raises ConfigError, not TypeError."""
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError):
+        VersionStampMigration().reverse.apply(roots=_roots_for(cfg))
+
+
+@pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
+def test_detect_current_schema_non_mapping_root_raises_config_error(
+    tmp_path: Path, body: str
+) -> None:
+    """``detect_current_schema`` on a non-mapping root raises ConfigError."""
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError):
+        detect_current_schema(cfg)

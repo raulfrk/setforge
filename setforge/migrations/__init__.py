@@ -30,8 +30,28 @@ from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
+from setforge.errors import ConfigError
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+
+def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
+    """Return ``data`` as a mapping or raise :class:`ConfigError`.
+
+    ``setforge.yaml`` is hand-editable, so a syntactically-valid YAML
+    document whose root is a list or bare scalar can reach the apply /
+    detect call sites. Indexing such a root with ``data[...]`` /
+    ``data.get(...)`` would leak an unwrapped ``TypeError`` /
+    ``AttributeError``; this guard converts that into a domain
+    :class:`ConfigError` naming the file and the problem.
+    """
+    if not isinstance(data, CommentedMap):
+        raise ConfigError(
+            f"setforge.yaml root must be a mapping, got "
+            f"{type(data).__name__}: {yaml_path}"
+        )
+    return data
 
 __all__ = [
     "MIGRATIONS",
@@ -241,8 +261,11 @@ class VersionStampMigration:
         yaml = yaml_rt()
         with roots.cfg_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
-        # Overwrite-or-insert — idempotent on replay (B-M2). Writes
-        # exactly the schema_version key (extra="forbid"-safe, B-M3).
+        data = _require_mapping_root(data, roots.cfg_path)
+        # Overwrite-or-insert — idempotent on replay; re-applying
+        # converges instead of raising on an already-present key. Writes
+        # exactly the schema_version key, so the post-migration config
+        # still loads under the schema's extra="forbid".
         data["schema_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
 
@@ -280,6 +303,7 @@ class _VersionStampReverse:
         yaml = yaml_rt()
         with roots.cfg_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
+        data = _require_mapping_root(data, roots.cfg_path)
         if "schema_version" in data:
             del data["schema_version"]
         atomic_write_yaml(roots.cfg_path, data)
@@ -313,6 +337,7 @@ def detect_current_schema(yaml_path: Path) -> str:
         data = yaml.load(fh)
     if data is None:
         return _DEFAULT_SCHEMA_VERSION
+    data = _require_mapping_root(data, yaml_path)
     raw = data.get("schema_version")
     if raw is None:
         return _DEFAULT_SCHEMA_VERSION
