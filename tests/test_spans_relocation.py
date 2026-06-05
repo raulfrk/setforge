@@ -122,3 +122,32 @@ def test_relocate_orphan_when_content_wholly_different() -> None:
     unrelated = "# Other\n\nCompletely different content here.\n"
     result = relocate_span(unrelated, "## Foo", state)
     assert result.status is RelocationStatus.ORPHAN
+
+
+def test_relocate_malformed_stored_anchor_orphans_no_crash() -> None:
+    # A stored anchor that is NOT a well-formed ATX heading line must
+    # orphan, never crash: _parse_anchor raising would break the
+    # "never a crash" contract apply_spans / capture rely on.
+    state = SpanState(
+        anchor="not a heading at all",
+        fingerprint="deadbeef",
+        prefix=[],
+        suffix=[],
+        position_hint_start_line=0,
+        position_hint_n_lines=1,
+        heading_level=2,
+    )
+    result = relocate_span(_DOC, "not a heading at all", state)
+    assert result.status is RelocationStatus.ORPHAN
+    assert result.span is None
+
+
+def test_fuzzy_post_match_rejects_non_heading_landing() -> None:
+    # The fuzzy stage's char-offset match could drift onto a non-heading
+    # line; the post-match structural guard rejects it (orphan) rather
+    # than accept a confident wrong-relocation. Here the heading is gone
+    # and only a prose line vaguely resembling it remains.
+    state = _state_for(_DOC, "## Foo")
+    drifted = _DOC.replace("## Foo\n", "Foo discussion paragraph\n")
+    result = relocate_span(drifted, "## Foo", state)
+    assert result.status is RelocationStatus.ORPHAN

@@ -37,6 +37,7 @@ from setforge.markdown_spans import (
     _parse_anchor,
     _scan_end,
     bound_span,
+    heading_level,
 )
 from setforge.spans_store import SpanState
 
@@ -107,9 +108,17 @@ def relocate_span(text: str, anchor: str, state: SpanState) -> RelocationResult:
     ``state`` is the stored :class:`SpanState` (fingerprint + context +
     advisory hint + level). Returns a :class:`RelocationResult`; an
     unrelocatable span is an ORPHAN (never a crash, never a pick-first
-    guess). See the module docstring for the per-stage policy.
+    guess). A malformed stored ``anchor`` (one that is not a well-formed
+    ATX heading line) is itself an ORPHAN — :func:`_parse_anchor` raising
+    here would crash install, breaking the "never a crash" contract that
+    :func:`~setforge.spans_overlay.apply_spans` /
+    :func:`~setforge.spans_overlay.exclude_spans_for_capture` rely on.
+    See the module docstring for the per-stage policy.
     """
-    level, heading_text = _parse_anchor(anchor)
+    try:
+        level, heading_text = _parse_anchor(anchor)
+    except (AnchorNotFoundError, AnchorAmbiguousError):
+        return _ORPHAN
     heading_lines = _find_heading_lines(text, level, heading_text)
 
     # Bound every candidate heading once; reused across stages.
@@ -151,20 +160,28 @@ def relocate_span(text: str, anchor: str, state: SpanState) -> RelocationResult:
 def _fuzzy_relocate(text: str, state: SpanState) -> MarkdownSpan | None:
     """Attempt a conservative fuzzy relocation of the span's heading line.
 
-    Uses ``diff_match_patch.match_main`` to find the span's first body
-    line (its heading) near the stored hint's char offset. A match below
-    the conservative threshold returns ``None`` (orphan). On a confident
-    match the heading line is re-bounded with the recorded level so the
-    returned span is fence/level-correct. Returns ``None`` when the span
-    body has no first line to anchor on.
+    Uses ``diff_match_patch.match_main`` to find ``state.anchor`` (the
+    full heading line, e.g. ``"## Foo"``) near the stored hint's char
+    offset. Returns ``None`` (orphan) on any of: a recorded
+    ``heading_level`` outside 1-6; no fuzzy match below the conservative
+    threshold; a match whose char offset lands past EOF; or a landed line
+    that is NOT an ATX heading of the recorded level (the post-match
+    structural guard makes the orphan bias structural, not merely
+    threshold-dependent). On a confident, structurally valid match the
+    heading line is re-bounded with the recorded level so the returned
+    span is fence/level-correct.
     """
     if not (1 <= state.heading_level <= 6):
         return None
     # ``state.anchor`` is already the full heading line (e.g. "## Foo").
     pattern = state.anchor
+    keep = text.splitlines(keepends=True)
     lines = text.splitlines()
-    # Char offset of the hint's start line is the search anchor.
-    hint_offset = len("\n".join(lines[: state.position_hint_start_line]))
+    # Exact char start of the hint line is the search anchor — sum the
+    # byte lengths of the preceding lines WITH their trailing newlines
+    # (a plain "\n".join drops the newline after the last joined line and
+    # biases the offset one char short).
+    hint_offset = len("".join(keep[: state.position_hint_start_line]))
     dmp = diff_match_patch()
     dmp.Match_Threshold = _FUZZY_THRESHOLD
     dmp.Match_Distance = _FUZZY_DISTANCE
@@ -173,5 +190,12 @@ def _fuzzy_relocate(text: str, state: SpanState) -> MarkdownSpan | None:
         return None
     start_line = text.count("\n", 0, char_idx)
     if start_line >= len(lines):
+        return None
+    # Post-match structural guard: the landed line MUST itself be an ATX
+    # heading of the recorded level. A fuzzy char-offset match can drift
+    # onto a non-heading or wrong-level line; accepting it would risk a
+    # confident wrong-relocation (as harmful as silent loss). Re-validating
+    # the structure makes the orphan-bias guarantee structural.
+    if heading_level(lines[start_line]) != state.heading_level:
         return None
     return _bounded_at(text, state.heading_level, start_line)
