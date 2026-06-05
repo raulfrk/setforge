@@ -55,6 +55,7 @@ from setforge.scalar_path import _set_jsonc_leaf
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
+    "get_at_path",
     "merge_structural",
     "set_at_path",
 ]
@@ -627,7 +628,20 @@ def _apply_scalar_take(
 
 
 def _apply_take(backend: _MappingBackend, key: str, side: str, raw: object) -> None:
-    """Apply an opaque take from ``side``, adding the key if ours lacks it."""
+    """Apply an opaque take from ``side``, adding / deleting as the side dictates.
+
+    A take toward a side that LACKS the key is a DELETE: when ``side`` deleted a
+    container key ours kept unchanged (``raw is ABSENT``), the result must drop
+    the key from ours rather than copy a non-existent node. Without this guard
+    a ``take_theirs`` on an absent ``theirs`` raised ``KeyError`` mid-merge — an
+    install-aborting crash for the legal "upstream deleted a sub-map I left
+    untouched" case (and the seam a structural pin's missing-parent orphan needs
+    to reach its re-assert step).
+    """
+    if not backend.has(side, key):
+        if backend.has("ours", key):
+            backend.delete(key)
+        return
     if not backend.has("ours", key):
         backend.add(side, key)
         return
@@ -677,6 +691,35 @@ def set_at_path(model: object, path: str, value: object) -> None:
     parent = _descend_set_parent(_json5_inner(model), segments, path)
     leaf = segments[-1]
     _set_leaf(parent, leaf, value, path)
+
+
+def get_at_path(model: object, path: str) -> object:
+    """Return the value at dotted ``path`` as an UNWRAPPED plain-python value.
+
+    The snapshot seam a structural span pin uses to capture the live value at
+    ``P`` BEFORE :func:`merge_structural` mutates ``ours`` in place. The result
+    is a deep-copied plain ``dict`` / ``list`` / scalar (via :func:`_to_plain`),
+    never a held ruamel / json-five node alias — so a later in-place mutation of
+    the source model cannot clobber the snapshot (B-S1, B-S2). ``path`` is the
+    same DOTTED grammar :attr:`PathConflict.path` uses (``a.b.c``); a list-suffix
+    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError`.
+
+    Returns the :data:`setforge.scalar_merge.ABSENT` sentinel when any segment
+    on the path (intermediate parent OR the leaf itself) is missing, so an
+    absent ``P`` stays distinct from a present ``null`` (B-S4). Never raises on
+    a missing key — absence is the sentinel, not an exception.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for get-at-path: {path!r}")
+    node = _json5_inner(model)
+    for seg in path.split("."):
+        if not _is_mapping_node(node):
+            return ABSENT
+        child = _child_node(node, seg)
+        if child is ABSENT:
+            return ABSENT
+        node = child
+    return _to_plain(node)
 
 
 def _descend_set_parent(node: object, segments: list[str], path: str) -> object:

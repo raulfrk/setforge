@@ -211,6 +211,13 @@ def copy_atomic(
     if disposition is not None:
         live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
         tracked = src.read_text(encoding="utf-8")
+        # Structural (yaml/json/jsonc) spans are re-asserted INSIDE the merge
+        # driver (the pin snapshot must be taken from the FRESH live parse
+        # before the in-place merge, then re-asserted onto the merged model);
+        # markdown spans use the separate text-splice overlay below. Dispatch
+        # by file type so each span flavor takes its own path.
+        structural = disposition_merge._is_structural(real_dst)
+        structural_spans = spans if (spans and structural) else None
         resolution = disposition_merge.resolve_file(
             disposition,
             real_dst,
@@ -219,6 +226,7 @@ def copy_atomic(
             tracked,
             merge_auto,
             conflict_resolver,
+            structural_spans=structural_spans,
         )
         content = resolution.text
         # new_base rides the resolution's advance decision, NOT the write
@@ -226,13 +234,21 @@ def copy_atomic(
         # that still re-baselines the stored base.
         new_base = resolution.text if resolution.advance_base else None
         merge_conflicts = resolution.conflicts
-        # Span re-overlay (NEVER threaded into merge internals): splice
-        # live bytes over each PINNED span AFTER the whole-file merge, then
-        # re-baseline the byte base to the POST-splice bytes — the bytes
-        # that actually land on disk — not the pre-splice resolution.text
-        # (Invariant I1). Forked spans get no override but still recompute
-        # their derived state for capture exclusion.
-        if spans:
+        if resolution.structural_span_orphans:
+            # Structural pins re-asserted inside the merge; the re-baseline
+            # already used the post-reassert dump (B-S6). Surface any orphan
+            # through the same warn machinery as markdown (anchor + kind).
+            span_orphans = [
+                SpanOrphan(anchor=o.anchor, kind=o.kind)
+                for o in resolution.structural_span_orphans
+            ]
+        # Markdown span re-overlay (NEVER threaded into merge internals):
+        # splice live bytes over each PINNED heading span AFTER the whole-file
+        # merge, then re-baseline the byte base to the POST-splice bytes —
+        # the bytes that actually land on disk (Invariant I1). Forked spans
+        # get no override but still recompute their derived state for capture
+        # exclusion. Skipped for structural files (handled above).
+        if spans and not structural:
             overlay = apply_spans(content, live, spans, span_states or {})
             content = overlay.text
             new_span_states = overlay.new_states

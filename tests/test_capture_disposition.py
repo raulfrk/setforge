@@ -217,6 +217,57 @@ def test_none_disposition_regression_preserve_user_keys(
     assert base_store.read_base(_PROFILE, "settings") is None
 
 
+def test_shared_structural_span_excluded_from_drift_absorption(repo: Path) -> None:
+    """B-S5: a structural span path is excluded from ``sync`` drift absorption.
+
+    A ``shared`` yaml file carries a pinned span (``pinned_key``) and a forked
+    span (``forked_key``). After ``install`` seeds live==tracked, the user edits
+    BOTH span values live. ``sync --auto=use-live`` (the drift-absorption path)
+    must keep TRACKED's value at both span paths (Invariant I2 totality), while
+    a non-span shared key absorbs the live edit normally.
+    """
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  settings:\n"
+        "    src: yaml/settings.yaml\n"
+        "    dst: ~/.setforge_disp/settings.yaml\n"
+        "    disposition: shared\n"
+        "    spans:\n"
+        "      - anchor: pinned_key\n"
+        "        kind: pinned\n"
+        "      - anchor: forked_key\n"
+        "        kind: forked\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - settings\n",
+        encoding="utf-8",
+    )
+    src = repo / "tracked" / "yaml" / "settings.yaml"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    tracked_body = "pinned_key: T-pin\nforked_key: T-fork\nshared_key: T-shared\n"
+    src.write_text(tracked_body, encoding="utf-8")
+
+    assert _install(config).exit_code == 0
+    live = Path.home() / ".setforge_disp" / "settings.yaml"
+    # User edits all three keys live.
+    live.write_text(
+        "pinned_key: L-pin\nforked_key: L-fork\nshared_key: L-shared\n",
+        encoding="utf-8",
+    )
+
+    result = _sync(config)
+    assert result.exit_code == 0, result.output
+    captured = src.read_text(encoding="utf-8")
+    # Both span paths keep TRACKED's value (excluded from capture).
+    assert "pinned_key: T-pin" in captured
+    assert "forked_key: T-fork" in captured
+    # The non-span shared key absorbs the live edit.
+    assert "shared_key: L-shared" in captured
+
+
 def test_shared_capture_then_install_is_noop(repo: Path) -> None:
     """After a shared capture, a re-install is a clean no-op (zero drift)."""
     src = _write_tracked(repo, "a\nb\n")

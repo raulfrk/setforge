@@ -7,6 +7,7 @@ delete-vs-edit conflict detection, and byte-stable idempotency.
 """
 
 import io
+from typing import cast
 
 import pytest
 from json5.dumper import ModelDumper
@@ -20,7 +21,9 @@ from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
     PathConflict,
     StructuralMergeResult,
+    get_at_path,
     merge_structural,
+    set_at_path,
 )
 
 # --------------------------------------------------------------------------
@@ -388,3 +391,106 @@ def test_result_is_dataclass_shape() -> None:
     assert isinstance(result, StructuralMergeResult)
     assert result.merged_model == {"a": 1}
     assert isinstance(result.conflicts, list)
+
+
+# --------------------------------------------------------------------------
+# get_at_path: unwrapped, deep-copied snapshot seam for structural pins.
+# --------------------------------------------------------------------------
+
+
+def test_get_at_path_scalar_leaf() -> None:
+    assert get_at_path({"a": {"b": 3}}, "a.b") == 3
+
+
+def test_get_at_path_whole_subtree() -> None:
+    assert get_at_path({"a": {"b": {"c": 1}}}, "a.b") == {"c": 1}
+
+
+def test_get_at_path_absent_missing_leaf_is_sentinel() -> None:
+    assert get_at_path({"a": {"b": 1}}, "a.z") is ABSENT
+
+
+def test_get_at_path_absent_missing_parent_is_sentinel() -> None:
+    assert get_at_path({"a": 1}, "x.y.z") is ABSENT
+
+
+def test_get_at_path_present_null_distinct_from_absent() -> None:
+    # A present null must NOT collapse to the ABSENT sentinel (B-S4).
+    snap = get_at_path({"a": {"b": None}}, "a.b")
+    assert snap is None
+    assert snap is not ABSENT
+
+
+def test_get_at_path_rejects_list_suffix() -> None:
+    with pytest.raises(ValueError, match="list suffix"):
+        get_at_path({"a": [1, 2]}, "a[*]")
+
+
+def test_get_at_path_snapshot_is_deep_copy_plain_dict() -> None:
+    # B-S1/B-S2: a snapshot must survive a later in-place mutation of source.
+    model = {"a": {"b": {"c": 1}}}
+    snap = get_at_path(model, "a.b")
+    model["a"]["b"]["c"] = 999
+    assert snap == {"c": 1}
+
+
+def test_get_at_path_snapshot_is_deep_copy_yaml() -> None:
+    # The snapshot from a ruamel CommentedMap must be an unwrapped plain value,
+    # NOT a held node alias — mutating the live model after the snapshot must
+    # not clobber it (B-S1).
+    model = cast("dict[str, dict[str, int]]", _yload("a:\n  b: 1  # c\n"))
+    snap = get_at_path(model, "a")
+    assert snap == {"b": 1}
+    # Mutate the live model in place; the snapshot must be unaffected.
+    model["a"]["b"] = 42
+    assert snap == {"b": 1}
+
+
+def test_get_at_path_then_merge_does_not_clobber_snapshot_jsonc() -> None:
+    # End-to-end B-S1: snapshot a json-five subtree, then run a merge that
+    # mutates ours in place toward theirs; the snapshot stays the live value.
+    base = _jload('{"a": 1}')
+    ours = _jload('{"a": 1}')
+    theirs = _jload('{"a": 2}')
+    snap = get_at_path(ours, "a")
+    assert snap == 1
+    merge_structural(base, ours, theirs)
+    assert get_at_path(ours, "a") == 2  # merge took theirs
+    assert snap == 1  # snapshot untouched
+
+
+def test_set_at_path_rejects_list_suffix() -> None:
+    # I10: list-index pins are rejected at the set seam.
+    with pytest.raises(ValueError, match="list suffix"):
+        set_at_path({"a": [1]}, "a[*]", 9)
+
+
+def test_set_at_path_missing_parent_raises_keyerror() -> None:
+    with pytest.raises(KeyError):
+        set_at_path({"a": 1}, "x.y", 9)
+
+
+def test_set_at_path_parent_not_mapping_raises_mismatch() -> None:
+    with pytest.raises(MergeTypeMismatch):
+        set_at_path({"a": 5}, "a.b", 9)
+
+
+def test_theirs_deletes_container_ours_unchanged_yaml() -> None:
+    # Regression: ours==base, theirs DELETED a nested-map key -> the key is
+    # dropped (a take toward the deleting side), no KeyError mid-merge.
+    base = _yload("a:\n  b: 1\nkeep: yes\n")
+    ours = _yload("a:\n  b: 1\nkeep: yes\n")
+    theirs = _yload("keep: yes\n")
+    result = merge_structural(base, ours, theirs)
+    assert result.clean
+    assert result.merged_model == {"keep": "yes"}
+
+
+def test_ours_deletes_container_theirs_unchanged_yaml() -> None:
+    # Symmetric: theirs==base, ours DELETED the nested-map key -> stays deleted.
+    base = _yload("a:\n  b: 1\nkeep: yes\n")
+    ours = _yload("keep: yes\n")
+    theirs = _yload("a:\n  b: 1\nkeep: yes\n")
+    result = merge_structural(base, ours, theirs)
+    assert result.clean
+    assert result.merged_model == {"keep": "yes"}

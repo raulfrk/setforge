@@ -219,6 +219,22 @@ tracked_files:
       - anchor: "## Forked Section"
         kind: forked
         semantics: shared
+  # ---- Structural (yaml dotted-path) span fixtures (p5qc.8.1) -----------
+  # A yaml tracked_file whose span anchors are DOTTED PATHS (mapping leaves),
+  # not headings. The pinned path is re-asserted to live post-merge; the
+  # forked path merges upstream; both are excluded from capture. Editing the
+  # shared src per fresh container simulates an upstream change at the path.
+  spans_structural_yaml:
+    src: spans/structural.yaml
+    dst: ~/.setforge_e2e/spans/structural.yaml
+    disposition: shared
+    spans:
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+      - anchor: telemetry.level
+        kind: forked
+        semantics: shared
 
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
@@ -389,3 +405,6 @@ profiles:
   test-spans-forked:
     tracked_files:
       - spans_forked_md
+  test-spans-structural:
+    tracked_files:
+      - spans_structural_yaml

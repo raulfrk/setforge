@@ -560,11 +560,12 @@ def test_validate_preserve_user_keys_unknown_remove_exits_1(tmp_path: Path) -> N
 
 
 def test_validate_span_on_non_markdown_file_exits_1(tmp_path: Path) -> None:
-    """A span anchor declared on a yaml/json tracked_file → exit 1.
+    """A HEADING span anchor declared on a yaml/json tracked_file → exit 1.
 
     Mirrors the install-time file-type gate so the offline CI gate
-    (``setforge validate``) catches a wrong-file-type span anchor before
-    install would fail with a confusing runtime relocation miss.
+    (``setforge validate``) catches a wrong-grammar span anchor (here a
+    heading anchor on a structural file) before install would fail with a
+    confusing runtime re-assert miss.
     """
     span_yaml = """\
 version: 1
@@ -584,8 +585,32 @@ profiles:
     (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert "spans are supported only for markdown" in result.output, result.output
+    # A heading anchor on a structural file is rejected: anchors must be dotted.
+    assert "dotted path" in result.output, result.output
     assert "'d'" in result.output, result.output
+
+
+def test_validate_dotted_span_on_structural_file_exits_0(tmp_path: Path) -> None:
+    """A DOTTED-PATH span anchor on a yaml/json tracked_file passes the gate."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
 
 
 def test_validate_span_on_markdown_file_exits_0(tmp_path: Path) -> None:

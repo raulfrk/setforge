@@ -1,0 +1,8 @@
+editor:
+  fontSize: 12
+  tabSize: 4
+telemetry:
+  level: all
+  endpoint: tracked-endpoint
+shared:
+  theme: dark

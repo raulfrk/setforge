@@ -367,13 +367,14 @@ def _check_spans_file_types(
     ctx: str,
     failures: list[ValidationErrorWithContext | str],
 ) -> None:
-    """Check: tracked_file spans are declared only on markdown sources.
+    """Check: tracked_file span anchors match their source's file type.
 
     Mirrors the file-type gate of :func:`_check_host_local_sections` (and
     the install-time :func:`setforge.cli._install_helpers._validate_span_file_types`)
     so ``setforge validate --all`` — the offline CI gate — catches a
-    heading-text span anchor declared on a yaml/json tracked_file BEFORE
-    install would fail with a confusing runtime relocation miss.
+    wrong-grammar span anchor (a heading anchor on yaml/json, or a dotted-path
+    anchor on markdown) BEFORE install would fail with a confusing runtime
+    relocation / re-assert miss.
 
     Routes every :class:`~setforge.errors.ConfigError` from
     :func:`setforge.spans.validate_spans_file_type` to a string failure

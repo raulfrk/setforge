@@ -48,7 +48,7 @@ still merges as text rather than crashing the install.
 
 import io
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -60,17 +60,19 @@ from ruamel.yaml import YAML
 
 from setforge import jsonc
 from setforge.config import Disposition
-from setforge.errors import MergeTypeMismatch
+from setforge.errors import ConfigError, MergeTypeMismatch
 from setforge.markdown_merge import (
     LineConflict,
     _split_strip_final,
     merge_markdown_segments,
     resolve_segments,
 )
-from setforge.scalar_merge import ScalarConflict
+from setforge.scalar_merge import ABSENT, ScalarConflict
 from setforge.section_wizard import ReconcileAuto
+from setforge.spans import SpanEntry, SpanKind
 from setforge.structural_merge import (
     PathConflict,
+    get_at_path,
     merge_structural,
     set_at_path,
 )
@@ -80,7 +82,11 @@ __all__ = [
     "ConflictResolution",
     "ConflictResolver",
     "FileResolution",
+    "StructuralSpanOrphan",
+    "StructuralSpanOrphanReason",
+    "exclude_structural_spans_for_capture",
     "resolve_file",
+    "validate_structural_span_overlap",
 ]
 
 
@@ -127,6 +133,41 @@ type ConflictResolver = Callable[
 ]
 
 
+class StructuralSpanOrphanReason(StrEnum):
+    """Why a structural span pin could not be re-asserted / located.
+
+    ``ABSENT_IN_LIVE`` — the pinned path is gone from the FRESH live parse (the
+    user deleted ``P`` locally); the snapshot is the ABSENT sentinel so there is
+    nothing to re-impose (B-S4). ``MISSING_PARENT`` — an intermediate parent on
+    the path is gone from the merged model (``set_at_path`` raised ``KeyError``
+    / ``ValueError``); the seam the I9 key-identity orphan posture surfaces
+    (B-S3). ``PARENT_NOT_MAPPING`` — the resolved parent is a scalar/list, not a
+    mapping (``set_at_path`` raised ``MergeTypeMismatch``), so the leaf cannot be
+    addressed by key (B-S3).
+    """
+
+    ABSENT_IN_LIVE = "absent-in-live"
+    MISSING_PARENT = "missing-parent"
+    PARENT_NOT_MAPPING = "parent-not-mapping"
+
+
+@dataclass(frozen=True, slots=True)
+class StructuralSpanOrphan:
+    """One structural span pin that could not be re-asserted onto the merge.
+
+    ``anchor`` is the dotted path; ``kind`` distinguishes a pinned orphan from a
+    forked one (forked spans never re-assert, so a forked orphan only ever
+    arises in capture exclusion, which is silent — this is reported by the
+    install / pin path). ``reason`` is the seam that failed. An orphan is
+    PRESERVED (the merged value is left intact at ``P``) and warned, never
+    dropped and never an uncaught raise (B-S3 / B-S4).
+    """
+
+    anchor: str
+    kind: SpanKind
+    reason: StructuralSpanOrphanReason
+
+
 @dataclass(frozen=True, slots=True)
 class FileResolution:
     """Outcome of :func:`resolve_file`.
@@ -139,12 +180,21 @@ class FileResolution:
     untouched — either a deferred bare conflict (re-detected next run) or a
     ``pinned`` file (which never re-baselines). ``base_absent`` is ``True``
     only on the first-run fallback (no stored base), where ``text == tracked``.
+
+    ``structural_span_orphans`` lists every STRUCTURAL span pin whose path could
+    not be re-asserted onto the merged model (absent in live, or a missing /
+    non-mapping parent). It is always empty on the markdown / line-based path
+    (markdown span orphans flow through the separate
+    :mod:`setforge.spans_overlay` ladder). When non-empty the merged value is
+    preserved at each orphaned path; the caller warns and never aborts (B-S3 /
+    B-S4 / Invariant I6).
     """
 
     text: str
     conflicts: list[LineConflict | PathConflict]
     advance_base: bool
     base_absent: bool
+    structural_span_orphans: list[StructuralSpanOrphan] = field(default_factory=list)
 
 
 def resolve_file(
@@ -155,6 +205,7 @@ def resolve_file(
     tracked: str,
     auto: ReconcileAuto | None,
     resolver: ConflictResolver | None = None,
+    structural_spans: list[SpanEntry] | None = None,
 ) -> FileResolution:
     """Resolve one file to deployed text + a re-baseline decision.
 
@@ -171,6 +222,14 @@ def resolve_file(
     (any :data:`ConflictChoice.SKIP` defers, so the file re-detects the still-
     pending divergence next run). ``resolver`` is irrelevant on the PINNED and
     base-absent paths (no merge runs there).
+
+    ``structural_spans`` are the STRUCTURAL (dotted-path) span pins for this
+    file. They are honored only on the structural merge path: each PINNED span's
+    live value at ``P`` is snapshotted BEFORE the merge and re-asserted onto the
+    merged model AFTER it (so an upstream-changed-but-live-unchanged ``P`` is
+    not silently taken toward tracked); the re-baseline dump is taken AFTER the
+    re-assert (B-S6). FORKED spans are not re-asserted (capture exclusion only).
+    Spans are ignored on the PINNED / base-absent / line-based paths.
     """
     if disposition is Disposition.PINNED:
         return FileResolution(
@@ -186,7 +245,9 @@ def resolve_file(
 
     if _is_structural(dst):
         try:
-            return _resolve_structural(dst, base, live, tracked, auto, resolver)
+            return _resolve_structural(
+                dst, base, live, tracked, auto, resolver, structural_spans
+            )
         except MergeTypeMismatch:
             # A structurally-incompatible file (shape clash between sides)
             # still merges as raw text via the line-based path.
@@ -212,6 +273,7 @@ def _resolve_structural(
     tracked: str,
     auto: ReconcileAuto | None,
     resolver: ConflictResolver | None = None,
+    structural_spans: list[SpanEntry] | None = None,
 ) -> FileResolution:
     """Run the comment-preserving 3-way merge over ``dst``'s structural model.
 
@@ -225,24 +287,37 @@ def _resolve_structural(
     is driven through it once, in document order: ``KEEP_OURS`` / ``SKIP`` leave
     ours (already in the model), ``TAKE_THEIRS`` writes theirs, ``EDIT`` writes
     the resolution's ``edited_value``. Any ``SKIP`` defers re-baselining.
+
+    STRUCTURAL span pins (``structural_spans``) re-impose live over the merge:
+    each PINNED span's live value at ``P`` is SNAPSHOTTED as an unwrapped plain
+    value from the FRESH ``live_model`` BEFORE the merge mutates it (B-S1 / B-S2),
+    then re-asserted via :func:`~setforge.structural_merge.set_at_path` AFTER the
+    merge (B-S3). The re-baseline dump (``text``) is taken AFTER the re-assert so
+    base == what landed live (B-S6). FORKED spans are NOT re-asserted. Each
+    re-assert is wrapped so a missing parent (``KeyError`` / ``ValueError``) or a
+    non-mapping parent (``MergeTypeMismatch``) orphan-warns + skips instead of
+    aborting the install.
     """
+    pinned = _pinned_structural_spans(structural_spans)
+
     is_jsonc = jsonc.is_jsonc_file(dst)
     base_model = _load_structural(base, is_jsonc)
     live_model = _load_structural(live, is_jsonc)
     tracked_model = _load_structural(tracked, is_jsonc)
 
+    # SNAPSHOT each pinned path's live value BEFORE the merge mutates live_model
+    # in place — as an unwrapped, deep-copied plain value (B-S1 / B-S2). ABSENT
+    # marks a path the user deleted locally (B-S4).
+    live_snapshots: dict[str, object] = {
+        span.anchor: get_at_path(live_model, span.anchor) for span in pinned
+    }
+
     result = merge_structural(base_model, live_model, tracked_model)
     conflicts: list[LineConflict | PathConflict] = list(result.conflicts)
 
     if not result.conflicts:
-        return FileResolution(
-            text=_dump_structural(result.merged_model, is_jsonc),
-            conflicts=[],
-            advance_base=True,
-            base_absent=False,
-        )
-
-    if resolver is not None:
+        advance = True
+    elif resolver is not None:
         advance = _apply_structural_resolver(
             result.merged_model, result.conflicts, resolver
         )
@@ -254,12 +329,176 @@ def _resolve_structural(
         # KEEP_LIVE or bare: ours is already in the model; nothing to write.
         advance = auto is ReconcileAuto.KEEP_LIVE
 
+    # RE-ASSERT pinned spans AFTER the merge / conflict resolution, so the live
+    # value wins over an upstream auto-resolved-toward-theirs ``P`` (the whole
+    # point of a pin). Orphans are preserved + reported, never raised.
+    orphans = _reassert_pinned_spans(result.merged_model, pinned, live_snapshots)
+
+    # Re-baseline dump is taken AFTER the re-assert (B-S6).
     return FileResolution(
         text=_dump_structural(result.merged_model, is_jsonc),
         conflicts=conflicts,
         advance_base=advance,
         base_absent=False,
+        structural_span_orphans=orphans,
     )
+
+
+def _pinned_structural_spans(
+    structural_spans: list[SpanEntry] | None,
+) -> list[SpanEntry]:
+    """Return the PINNED structural spans in deterministic apply order (I11).
+
+    Forked spans never re-assert, so they are dropped here. The remaining pins
+    are validated pairwise non-overlapping (:func:`validate_structural_span_overlap`)
+    and returned sorted by anchor so the apply order is deterministic (B-S7).
+    """
+    if not structural_spans:
+        return []
+    _reject_list_index_anchors(structural_spans)
+    validate_structural_span_overlap(structural_spans)
+    pinned = [s for s in structural_spans if s.kind is SpanKind.PINNED]
+    return sorted(pinned, key=lambda s: s.anchor)
+
+
+def _reject_list_index_anchors(spans: list[SpanEntry]) -> None:
+    """Reject any list-suffix span anchor at pin time (Invariant I10).
+
+    :func:`~setforge.structural_merge.set_at_path` addresses MAPPING leaves
+    only; a list-element-by-index pin (``a[*]`` / ``a[]``) has no stable key
+    identity across an upstream reorder, so it is refused up front with a clear
+    :class:`~setforge.errors.ConfigError` rather than failing opaquely at the
+    get / set seam.
+    """
+    for span in spans:
+        if "[*]" in span.anchor or "[]" in span.anchor:
+            raise ConfigError(
+                f"structural span anchor {span.anchor!r} uses a list suffix; "
+                "list-element pins are not supported (anchors must address a "
+                "mapping leaf or whole subtree by key)."
+            )
+
+
+def _reassert_pinned_spans(
+    model: object,
+    pinned: list[SpanEntry],
+    live_snapshots: dict[str, object],
+) -> list[StructuralSpanOrphan]:
+    """Re-impose each pinned span's snapshotted live value onto ``model``.
+
+    Returns the orphan list (paths that could not be re-asserted). An ABSENT
+    snapshot (the user deleted ``P`` locally) skips-with-warn (B-S4); a
+    ``KeyError`` / ``ValueError`` (missing parent / list suffix) or a
+    ``MergeTypeMismatch`` (non-mapping parent) from
+    :func:`~setforge.structural_merge.set_at_path` orphan-warns + skips, never
+    an uncaught raise (B-S3).
+    """
+    orphans: list[StructuralSpanOrphan] = []
+    for span in pinned:
+        snapshot = live_snapshots[span.anchor]
+        if snapshot is ABSENT:
+            orphans.append(
+                StructuralSpanOrphan(
+                    anchor=span.anchor,
+                    kind=span.kind,
+                    reason=StructuralSpanOrphanReason.ABSENT_IN_LIVE,
+                )
+            )
+            continue
+        try:
+            set_at_path(model, span.anchor, snapshot)
+        except (KeyError, ValueError):
+            orphans.append(
+                StructuralSpanOrphan(
+                    anchor=span.anchor,
+                    kind=span.kind,
+                    reason=StructuralSpanOrphanReason.MISSING_PARENT,
+                )
+            )
+        except MergeTypeMismatch:
+            orphans.append(
+                StructuralSpanOrphan(
+                    anchor=span.anchor,
+                    kind=span.kind,
+                    reason=StructuralSpanOrphanReason.PARENT_NOT_MAPPING,
+                )
+            )
+    return orphans
+
+
+def validate_structural_span_overlap(spans: list[SpanEntry]) -> None:
+    """Reject overlapping / nested structural span pins (Invariant I11, B-S7).
+
+    Two dotted-path anchors overlap when one is a prefix of the other (so a
+    whole-subtree :func:`~setforge.structural_merge.set_at_path` at the ancestor
+    would clobber the descendant pin's value, a last-writer-wins hazard). The
+    ONLY legal nesting in the file+span model is a pinned subtree containing a
+    forked leaf; that is out of scope for the dotted-path engine, so any prefix
+    overlap (including duplicate anchors) is refused with :class:`ConfigError`.
+    """
+    seen: list[str] = []
+    for span in spans:
+        anchor = span.anchor
+        for other in seen:
+            if _paths_overlap(anchor, other):
+                raise ConfigError(
+                    "overlapping / nested structural span anchors are not "
+                    f"allowed: {other!r} and {anchor!r} (one is a prefix of the "
+                    "other). Pin disjoint paths, or pin the common ancestor only."
+                )
+        seen.append(anchor)
+
+
+def _paths_overlap(a: str, b: str) -> bool:
+    """Whether dotted paths ``a`` / ``b`` are equal or one prefixes the other.
+
+    Prefix is matched at SEGMENT granularity (``a`` prefixes ``a.b`` but ``a``
+    does NOT prefix ``ab``), so sibling keys sharing a string prefix do not
+    spuriously collide.
+    """
+    if a == b:
+        return True
+    sa = a.split(".")
+    sb = b.split(".")
+    shorter, longer = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    return longer[: len(shorter)] == shorter
+
+
+def exclude_structural_spans_for_capture(
+    live_text: str,
+    tracked_text: str,
+    spans: list[SpanEntry],
+    is_jsonc: bool,
+) -> str:
+    """Return capture text: live with every span path kept as TRACKED's value.
+
+    The structural sibling of
+    :func:`setforge.spans_overlay.exclude_spans_for_capture`. Capture exclusion
+    is TOTAL (Invariant I2): BOTH pinned AND forked span paths are restored to
+    tracked's value in a live→tracked writeback, so a host-local span value
+    never bakes into the shared config repo (B-S5). The rest of the live file
+    captures normally.
+
+    A span whose path is absent in tracked is left as live (nothing to restore);
+    a path whose parent is missing in live is silently skipped — capture never
+    aborts (the orphan is surfaced loudly by the install path, not here).
+    """
+    if not spans:
+        return live_text
+    live_model = _load_structural(live_text, is_jsonc)
+    tracked_model = _load_structural(tracked_text, is_jsonc)
+    for span in spans:
+        tracked_value = get_at_path(tracked_model, span.anchor)
+        if tracked_value is ABSENT:
+            # Tracked has no value at P — leave live as-is (nothing to restore).
+            continue
+        try:
+            set_at_path(live_model, span.anchor, tracked_value)
+        except (KeyError, ValueError, MergeTypeMismatch):
+            # P's parent missing / non-mapping in live: skip silently; the
+            # install path reports the orphan loudly.
+            continue
+    return _dump_structural(live_model, is_jsonc)
 
 
 def _apply_structural_resolver(

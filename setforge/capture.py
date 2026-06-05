@@ -34,7 +34,15 @@ from pathlib import Path
 from rich.console import Console
 from ruamel.yaml import YAML
 
-from setforge import base_store, jsonc, sections, spans_overlay, spans_store, yaml_merge
+from setforge import (
+    base_store,
+    disposition_merge,
+    jsonc,
+    sections,
+    spans_overlay,
+    spans_store,
+    yaml_merge,
+)
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, Disposition, SectionMode, resolve_profile
@@ -386,12 +394,20 @@ def _capture_disposition_file(
     if spans:
         # Capture exclusion is TOTAL: keep tracked over live inside every
         # span region (Invariant I2). The existing tracked content is the
-        # source of the kept-region bytes.
+        # source of the kept-region bytes. Structural (yaml/json/jsonc) spans
+        # restore tracked's VALUE at each dotted path; markdown spans splice
+        # tracked's heading region — dispatch by file type so each flavor
+        # takes its own exclusion path (B-S5).
         tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
-        span_states = spans_store.get_states(profile, sub_name)
-        capture_text = spans_overlay.exclude_spans_for_capture(
-            live_text, tracked_text, spans, span_states
-        )
+        if disposition_merge._is_structural(dst):
+            capture_text = disposition_merge.exclude_structural_spans_for_capture(
+                live_text, tracked_text, spans, jsonc.is_jsonc_file(dst)
+            )
+        else:
+            span_states = spans_store.get_states(profile, sub_name)
+            capture_text = spans_overlay.exclude_spans_for_capture(
+                live_text, tracked_text, spans, span_states
+            )
     result = _write_if_changed(src, capture_text)
     # Re-baseline AFTER the tracked write succeeded: write tracked first,
     # then base, so a base-write failure leaves base lagging (safe) rather

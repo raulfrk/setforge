@@ -15,13 +15,16 @@ deliberately free of any merge / capture / relocation logic so both
 :mod:`setforge.source` (host-local overlay) and :mod:`setforge.config`
 (tracked-side ``TrackedFile``) can import the same shape without a cycle.
 
-Scope note: this wave implements MARKDOWN heading-text anchors only.
-Structural dotted-path anchors are representable in the schema
-(``anchor`` is a free string) but their *validation* and *resolution*
-land in a sibling bead; :func:`validate_spans_file_type` enforces the
-markdown-only constraint at install time (wired in
-:mod:`setforge.cli._install_helpers`) and leaves the dispatch seam for
-the structural case.
+Scope note: this module supports BOTH markdown heading-text anchors and
+structural (yaml/json/jsonc) dotted-path anchors. The legal anchor grammar
+is file-type-dispatched at install / validate time by
+:func:`validate_spans_file_type` (markdown → heading anchor only; structural
+→ dotted-path anchor only), so an ``anchor: str`` that is shaped for the
+wrong file type is rejected up front rather than failing as a confusing
+runtime relocation error. Resolution of structural dotted paths lives in
+:mod:`setforge.disposition_merge` (the 3-way merge re-assert) and
+:mod:`setforge.structural_merge` (:func:`~setforge.structural_merge.set_at_path`
+/ :func:`~setforge.structural_merge.get_at_path`).
 """
 
 from collections.abc import Sequence
@@ -37,6 +40,7 @@ __all__ = [
     "SpanEntry",
     "SpanKind",
     "SpanSemantics",
+    "is_heading_anchor",
     "validate_spans_file_type",
 ]
 
@@ -46,6 +50,26 @@ _STRICT = ConfigDict(extra="forbid")
 # :data:`setforge.source._MARKDOWN_SUFFIXES` (kept independent so this
 # module imports nothing heavy).
 _MARKDOWN_SUFFIXES: Final[frozenset[str]] = frozenset({".md", ".markdown"})
+
+# Structural (comment-preserving tree) suffixes a dotted-path span anchor is
+# permitted on. Mirrors the dispatch in
+# :func:`setforge.disposition_merge._is_structural` (kept independent so this
+# leaf module imports nothing heavy).
+_STRUCTURAL_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".yaml", ".yml", ".json", ".jsonc"}
+)
+
+
+def is_heading_anchor(anchor: str) -> bool:
+    """Whether ``anchor`` is markdown-heading-shaped (leading ``#`` run).
+
+    A markdown span anchor encodes the heading level via its ``#`` run; a
+    structural dotted-path anchor (``a.b.c``) never starts with ``#``. The
+    classification is the file-type dispatch's discriminator: heading-shaped
+    anchors are legal only on markdown, dotted-path anchors only on structural
+    files.
+    """
+    return anchor.lstrip().startswith("#")
 
 
 class SpanKind(StrEnum):
@@ -81,11 +105,13 @@ class SpanSemantics(StrEnum):
 class SpanEntry(BaseModel):
     """One declarative span: an anchor plus its kind + semantics.
 
-    ``anchor`` is a markdown heading-text anchor in this wave (e.g.
-    ``"## My Tweaks"`` — the ``#`` run encodes the heading level and the
-    trailing text is matched byte-exact). Structural dotted-path anchors
-    reuse the same free-string field but are validated + resolved in a
-    sibling bead. ``kind`` defaults to :data:`SpanKind.PINNED` and
+    ``anchor`` is EITHER a markdown heading-text anchor (e.g. ``"## My
+    Tweaks"`` — the ``#`` run encodes the heading level and the trailing text
+    is matched byte-exact) OR a structural dotted path (e.g.
+    ``"editor.fontSize"`` — a mapping leaf or whole-subtree in the
+    :func:`~setforge.structural_merge.set_at_path` grammar). Which grammar is
+    legal is file-type-dispatched by :func:`validate_spans_file_type`. ``kind``
+    defaults to :data:`SpanKind.PINNED` and
     ``semantics`` to :data:`SpanSemantics.HOST_LOCAL` — the common case
     is a host-local pin; both fields are explicit in the schema so the
     forked / shared siblings are representable today.
@@ -113,28 +139,64 @@ def validate_spans_file_type(
 ) -> None:
     """Raise :class:`ConfigError` if any span anchor is illegal for ``src``.
 
-    Mirrors :func:`setforge.source.validate_host_local_sections_file_type`:
-    a heading-text span anchor is supported only for markdown tracked_files
-    (.md / .markdown). Structural dotted-path anchors (for yaml / json)
-    are validated in a sibling bead; until then a span on a non-markdown
-    file is rejected here so a wrong-file-type anchor surfaces at install
-    time (and at ``validate`` time, the offline CI gate), not as a
+    File-type-dispatched anchor-grammar validation (mirrors
+    :func:`setforge.source.validate_host_local_sections_file_type`):
+
+    * markdown (``.md`` / ``.markdown``): a span anchor must be heading-shaped
+      (a leading ``#`` run, per :func:`is_heading_anchor`). A dotted-path anchor
+      on markdown is rejected.
+    * structural (``.yaml`` / ``.yml`` / ``.json`` / ``.jsonc``): a span anchor
+      must be a dotted path (NOT heading-shaped). A heading anchor on a
+      structural file is rejected.
+    * any other suffix: spans are unsupported entirely.
+
+    Resolving the grammar at parse / validate time (no runtime
+    ``--heading/--structural`` flag) means a wrong-file-type anchor surfaces at
+    install time AND at ``validate`` time (the offline CI gate), not as a
     confusing runtime relocation failure.
 
-    No-op when ``spans`` is empty — the file may not be markdown but no
-    span was declared. The ``src``-suffix dispatch is the seam the
-    structural sibling extends (it will route dotted-path anchors to the
-    structural validator instead of rejecting them here).
+    No-op when ``spans`` is empty — the file's type is irrelevant if nothing was
+    declared.
     """
     if not spans:
         return
     suffix = src.suffix.lower()
     if suffix in _MARKDOWN_SUFFIXES:
+        _validate_anchors_for_markdown(tracked_file_id, spans, src)
+        return
+    if suffix in _STRUCTURAL_SUFFIXES:
+        _validate_anchors_for_structural(tracked_file_id, spans, src)
         return
     raise ConfigError(
-        "spans are supported only for markdown tracked_files "
-        f"(.md / .markdown) in this release. tracked_file {tracked_file_id!r} "
-        f"resolves to src={src} (extension {suffix!r} not in "
-        f"{sorted(_MARKDOWN_SUFFIXES)}). Structural dotted-path span anchors "
-        "for JSON/YAML are a follow-up."
+        "spans are supported only for markdown (.md / .markdown) and structural "
+        f"(.yaml / .yml / .json / .jsonc) tracked_files. tracked_file "
+        f"{tracked_file_id!r} resolves to src={src} (extension {suffix!r})."
     )
+
+
+def _validate_anchors_for_markdown(
+    tracked_file_id: str, spans: Sequence[SpanEntry], src: Path
+) -> None:
+    """Reject any non-heading-shaped anchor on a markdown ``src``."""
+    for span in spans:
+        if not is_heading_anchor(span.anchor):
+            raise ConfigError(
+                f"tracked_file {tracked_file_id!r} (src={src}) is markdown, so "
+                f"span anchors must be heading-shaped (a leading '#' run), but "
+                f"anchor {span.anchor!r} is not. Dotted-path anchors are for "
+                "structural (yaml/json/jsonc) files."
+            )
+
+
+def _validate_anchors_for_structural(
+    tracked_file_id: str, spans: Sequence[SpanEntry], src: Path
+) -> None:
+    """Reject any heading-shaped anchor on a structural ``src``."""
+    for span in spans:
+        if is_heading_anchor(span.anchor):
+            raise ConfigError(
+                f"tracked_file {tracked_file_id!r} (src={src}) is structural "
+                f"(yaml/json/jsonc), so span anchors must be dotted paths, but "
+                f"anchor {span.anchor!r} is heading-shaped. Heading anchors are "
+                "for markdown files."
+            )
