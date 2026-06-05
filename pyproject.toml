@@ -32,6 +32,7 @@ dependencies = [
     "packaging>=21",
     "merge3>=0.0.16",
     "patiencediff>=0.2.18",
+    "diff-match-patch>=20241021",
 ]
 
 [project.urls]

@@ -36,6 +36,7 @@ from setforge.local_overlay import (
 )
 from setforge.migrations import current_expected_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
+from setforge.spans import SpanEntry
 
 if TYPE_CHECKING:
     from setforge.source import (
@@ -217,6 +218,17 @@ class TrackedFile(BaseModel):
     ``preserve_*`` family (see
     :meth:`_disposition_excludes_legacy_preserve`) — a file uses one
     model or the other, never both.
+    """
+    spans: list[SpanEntry] = []
+    """Shared (tracked-side) sub-file span intents (pinned / forked regions).
+
+    The tracked-side counterpart of
+    :attr:`setforge.source._LocalTrackedFileOverlay.spans`. Carries
+    ``semantics: shared`` span intents that propagate across hosts;
+    host-local span intents live in ``local.yaml`` instead. Each entry is
+    a :class:`~setforge.spans.SpanEntry` (markdown heading-text anchor +
+    kind + semantics). Resolved offsets and baseline bytes are derived
+    state in the spans sidecar, never duplicated here (Invariant I12).
     """
 
     @model_validator(mode="before")

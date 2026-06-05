@@ -43,6 +43,7 @@ from setforge.errors import (
     NoSourceConfigured,
     SourceNotCloned,
 )
+from setforge.spans import SpanEntry
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -364,6 +365,20 @@ class _LocalTrackedFileOverlay(BaseModel):
       :class:`setforge.errors.SetforgeError`. A tracked_file
       pointing at a real directory layout is almost certainly a
       config mistake.
+    """
+
+    spans: list[SpanEntry] = []
+    """Host-local sub-file span intents (pinned / forked regions).
+
+    Each :class:`~setforge.spans.SpanEntry` freezes (``pinned``) or
+    host-isolates (``forked``) a sub-file region identified by a markdown
+    heading-text anchor, with no in-file marker. Host-local intent lives
+    here in ``local.yaml``; shared intent lives on the tracked-side
+    :class:`~setforge.config.TrackedFile.spans`. The resolved offsets +
+    baseline bytes are derived state in the spans sidecar
+    (:mod:`setforge.spans_store`), never duplicated into this intent
+    (Invariant I12). Anchor file-type legality is enforced by
+    :func:`setforge.spans.validate_spans_file_type` at load time.
     """
 
     disposition: Disposition | None = None
