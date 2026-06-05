@@ -870,10 +870,10 @@ def apply_host_local_tracked_file_overrides(
     prefer_shared_anchors: frozenset[tuple[str, str]] = frozenset(),
 ) -> dict[str, HostLocalTrackedFileOverride]:
     """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target`` /
-    ``disposition`` overlay.
+    ``disposition`` / ``spans`` overlay.
 
     For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
-    block that declares one of the four overlay-fields fields, rebuild the
+    block that declares one of the overlay fields, rebuild the
     matching :class:`TrackedFile` with the override applied:
 
     - ``mode`` (int) overrides :attr:`TrackedFile.mode` verbatim.
@@ -894,6 +894,20 @@ def apply_host_local_tracked_file_overrides(
       :class:`pydantic.ValidationError` because the dump-and-revalidate
       path re-runs :func:`TrackedFile._disposition_excludes_legacy_preserve`
       against the merged shape.
+    - ``spans`` (list of :class:`~setforge.spans.SpanEntry`) are folded
+      over :attr:`TrackedFile.spans` per anchor by
+      :func:`_fold_overlay_spans`. Host-local spans win each shared anchor
+      by default (the silent host-local-wins fold); host-local-only
+      anchors (no shared counterpart) are always added. ``prefer_shared_anchors``
+      (below) flips the winner for selected anchors.
+
+    ``prefer_shared_anchors`` is the set of ``(tracked_file_id, anchor)``
+    pairs whose tracked-side SHARED span must keep the anchor instead of
+    the host-local default — the ``--auto=use-tracked`` / interactive
+    "adopt the shared intent" resolution for a same-anchor host-local↔shared
+    collision (see :func:`detect_shared_span_collisions`). The empty default
+    preserves today's silent host-local-wins for every anchor; only the
+    reconcile path passes a non-empty set.
 
     Returns a mapping ``{tracked_file_id: HostLocalTrackedFileOverride}``
     of which overrides actually applied — used by compare to render
@@ -902,7 +916,7 @@ def apply_host_local_tracked_file_overrides(
     provenance tags without re-loading local.yaml.
 
     No-op (empty mapping) when ``local.yaml`` is absent or no
-    tracked_file declares any of the four overrides — preserves
+    tracked_file declares any overlay field — preserves
     today's behavior for hosts that have not adopted the overlay.
     Lazy-imports :mod:`setforge.source` to dodge the config <->
     source cycle.
