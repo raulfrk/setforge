@@ -17,9 +17,10 @@ Every Migration declares its full set of :meth:`Migration.affected_paths`
 so the ``migrate`` CLI's backup + multi-file diff preview + atomic
 rollback cover the whole footprint, not just ``setforge.yaml``.
 
-The current registry :data:`MIGRATIONS` is empty — the Protocol +
-registry shape work today; the first real migration ships in v0.3.0
-and is appended here.
+The registry :data:`MIGRATIONS` holds the first real migration
+(version-stamp 1.0 → 1.1, :class:`VersionStampMigration`). Future
+migrations are appended in ``from_version`` order so
+:func:`find_migration_path` can walk the chain forward.
 """
 
 from __future__ import annotations
@@ -228,8 +229,11 @@ class VersionStampMigration:
     intentionally NOT registered in :data:`MIGRATIONS` (which
     :func:`find_migration_path` walks FORWARD) — a 1.1 → 1.0 forward
     entry would create a 1.0 ↔ 1.1 cycle. Because ``down`` removes the
-    very key ``up`` inserts, ``down → up → down`` on a config that had no
-    ``schema_version`` key restores its absence byte-for-byte.
+    very key ``up`` inserts, the ``up → down`` pair adds-then-removes
+    nothing net, so key-absence is restored — byte-identity holds vs the
+    post-ruamel-normalization document (the first load→dump normalizes
+    the hand-written source), not vs the original bytes. See the
+    reverse test for the precise round-trip wording.
     """
 
     from_version: str = "1.0"
@@ -314,10 +318,10 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (VersionStampMigration(),)
 
 Holds the first real migration (version-stamp 1.0 → 1.1). Future
 migrations are appended in ``from_version`` order so
-:func:`find_migration_path` can walk the chain forward. The reverse of
-each migration is attached to the forward instance (e.g.
-:attr:`VersionStampMigration.reverse`) and is deliberately NOT a member
-of this tuple — a backward entry would make the forward walk cycle.
+:func:`find_migration_path` can walk the chain forward. Each
+migration's reverse is attached to its forward instance, never added
+here — that would make the forward walk cycle (see
+:class:`VersionStampMigration`).
 """
 
 
@@ -349,7 +353,7 @@ def find_migration_path(*, from_v: str, to_v: str) -> tuple[Migration, ...]:
 
     Returns an empty tuple when ``from_v == to_v`` (nothing to do) or
     when no chain bridges the two versions in the current registry
-    (the v0.2.0 empty-registry steady state).
+    (e.g. a target version no migration reaches).
 
     Implementation: greedy forward walk — at each step, pick the
     migration whose ``from_version`` matches the current cursor. The

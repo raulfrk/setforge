@@ -25,6 +25,7 @@ from typing import Final
 
 import pytest
 
+from setforge.config import load_config
 from setforge.errors import ConfigError
 from setforge.migrations import (
     MIGRATIONS,
@@ -516,8 +517,6 @@ def test_find_migration_path_future_sibling_does_not_perturb(
 # Config-load interaction — B-M3 (extra=forbid), B-M6 (mismatch warning),
 # B-M7 (frozen 1.0 fixture still loads).
 # ---------------------------------------------------------------------------
-
-from setforge.config import load_config  # noqa: E402
 
 _LOADABLE_CFG: Final[str] = (
     "version: 1\n"
