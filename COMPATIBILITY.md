@@ -47,14 +47,26 @@ A newer engine must fully understand config written for any older
 `schema_version`. Old configs keep working, with full functionality, with no
 edits required from the user. This guarantee does not expire.
 
-### Forward compatibility — forward-safe permanent, full within the window
+### Forward compatibility — forward-safe within a major, refuse across a major
 
-An older engine must never crash on newer config: it reads what it understands
-and ignores unknown fields. That *forward-safe* behavior is permanent. *Full*
-forward functionality — the older engine acting on everything the config
-expresses — holds only within the expand-contract window, while the fields it
-knows are still present. Once a field has passed through contract, an older
-engine simply will not see it.
+*Within a major version*, an older engine must never crash on newer config: it
+reads what it understands and ignores unknown fields, emitting a warning naming
+each ignored key. That *forward-safe* behavior is permanent for the major, and
+is safe precisely because same-major changes are additive-only (see
+*Principles*) — an unrecognized field never changes the meaning of a field the
+engine already knows. *Full* forward functionality — the older engine acting on
+everything the config expresses — holds only within the expand-contract window,
+while the fields it knows are still present. Once a field has passed through
+contract, an older engine simply will not see it.
+
+*Across a major boundary* the guarantee changes. A major bump is where the
+schema may restructure or retire fields, so an older engine cannot safely act
+on a newer-major config. Rather than best-effort read it, the engine **refuses
+cleanly** — a one-line `upgrade setforge to >= N.0` message and a non-zero exit,
+mutating nothing. A clean refusal is **distinct from a crash**: the user gets an
+actionable instruction, never a Python traceback. To run an older engine against
+a newer-major config, first down-convert it on the newer engine with
+`setforge migrate --to=<older>`.
 
 ### Upgrade — always zero-touch
 

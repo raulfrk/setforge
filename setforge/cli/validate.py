@@ -1201,7 +1201,10 @@ def validate(
     # bail-on-first routing — these are cross-field violations that don't
     # have a useful "Did you mean" suggestion path.
     try:
-        cfg = load_config(config)
+        # tolerate_unknown=False keeps validate a strict linter: an unknown
+        # key raises ValidationError (routed to the did-you-mean formatter)
+        # rather than being warned-and-stripped as on the runtime path.
+        cfg = load_config(config, tolerate_unknown=False)
     except ValidationError as exc:
         _route_setforge_yaml_validation_error(config, exc, failures)
         typer.echo(_render_failures(failures))

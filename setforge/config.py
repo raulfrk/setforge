@@ -6,6 +6,8 @@ round-trip mode so comments and key order survive subsequent capture
 writes that re-serialize the document.
 """
 
+import copy
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -34,7 +36,7 @@ from setforge.local_overlay import (
     resolve_marketplace_overlay,
     resolve_plugin_overlay,
 )
-from setforge.migrations import current_expected_schema_version
+from setforge.migrations import current_expected_schema_version, parse_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
 from setforge.spans import SpanEntry, SpanSemantics
 
@@ -46,6 +48,17 @@ if TYPE_CHECKING:
     )
 
 _STRICT = ConfigDict(extra="forbid")
+"""Strict model config for the ``setforge.yaml`` schema.
+
+The models stay ``extra="forbid"`` so ``setforge validate`` keeps its
+strict typo detection (unknown keys → schema error + "did you mean"
+suggestion). Forward-tolerance for the RUNTIME load path is provided one
+layer up, in :func:`load_config`: it warns about and STRIPS unknown keys
+(``tolerate_unknown=True``, the default) before validating, so a config
+from a newer same-major engine still loads. ``validate`` opts out
+(``tolerate_unknown=False``) to surface those unknowns as errors instead.
+Cross-major refusal is handled by :func:`_guard_schema_version`.
+"""
 
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
@@ -622,8 +635,14 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     return resolved
 
 
-def load_config(path: Path) -> Config:
+def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     """Parse ``setforge.yaml`` from disk and validate against the schema.
+
+    ``tolerate_unknown`` (default ``True``) is the forward-tolerant runtime
+    path: unknown keys are warned about and stripped before validation, so
+    a config from a newer same-major engine still loads. ``setforge
+    validate`` passes ``False`` so an unknown key surfaces as a strict
+    schema error with a "did you mean" suggestion instead.
 
     Raises :class:`ConfigError` on file-not-found, YAML parse errors, or
     cross-field violations (e.g. profile ``claude_plugins`` referencing
@@ -646,10 +665,113 @@ def load_config(path: Path) -> Config:
         data = yaml.load(fh)
     if data is None:
         raise ConfigError(f"config file is empty: {path}")
-    config = Config.model_validate(data)
+    _guard_schema_version(data, path)
+    config = (
+        _validate_tolerant(data) if tolerate_unknown else Config.model_validate(data)
+    )
     _validate_plugin_references(config)
     _warn_on_schema_mismatch(config)
     return config
+
+
+def _validate_tolerant(data: object) -> Config:
+    """Validate ``data`` forward-tolerantly: ignore (warn about) unknown keys.
+
+    Lets Pydantic decide what is genuinely extra — running ``model_validate``
+    once and inspecting the error set. This correctly accounts for keys an
+    alias or a ``mode="before"`` validator legitimately consumes (e.g.
+    ``preserve_user_keys``), which a raw key-vs-``model_fields`` diff cannot
+    see. If EVERY error is ``extra_forbidden`` (a newer-version field or a
+    typo), strip exactly those locations, warn, and retry. Any non-extra
+    error means a real validation failure and propagates unchanged.
+    """
+    try:
+        return Config.model_validate(data)
+    except ValidationError as exc:
+        errors = exc.errors()
+        extra_locs = [e["loc"] for e in errors if e.get("type") == "extra_forbidden"]
+        if not extra_locs or len(extra_locs) != len(errors):
+            raise  # mixed with real errors (or none extra) — a genuine failure
+        _warn_unknown_keys([_format_loc(loc) for loc in extra_locs])
+        return Config.model_validate(_strip_extra_locs(data, extra_locs))
+
+
+def _format_loc(loc: tuple[object, ...]) -> str:
+    """Render a Pydantic error ``loc`` tuple as a dotted config path."""
+    return ".".join(str(part) for part in loc)
+
+
+def _strip_extra_locs(data: object, locs: Sequence[tuple[object, ...]]) -> object:
+    """Return a deep copy of ``data`` with each ``loc`` path removed.
+
+    ``loc`` is a Pydantic error location (``("tracked_files", "a", "tipo")``).
+    The copy feeds a retry ``model_validate`` and is discarded, so ruamel
+    formatting need not survive. A loc that no longer resolves (e.g. a list
+    index) is skipped defensively.
+    """
+    cleaned = copy.deepcopy(data)
+    for loc in locs:
+        *parents, last = loc
+        node: object = cleaned
+        for part in parents:
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                node = None
+                break
+        if isinstance(node, MutableMapping) and last in node:
+            del node[last]
+    return cleaned
+
+
+def _guard_schema_version(data: object, path: Path) -> None:
+    """Refuse a cross-major-newer config cleanly, BEFORE model validation.
+
+    Reads ``schema_version`` from the raw mapping (default ``"1.0"`` on
+    absence), parses it semantically, and compares MAJORS against the
+    build's :data:`current_expected_schema_version`:
+
+    - newer MAJOR → :class:`ConfigError` ("upgrade setforge") — a clean,
+      non-zero, traceback-free refusal. The engine never best-effort reads
+      a config whose major it does not understand.
+    - same major (newer minor or older) / older major → proceed.
+      ``extra="ignore"`` + :func:`_warn_unknown_keys` make same-major
+      forward reads safe; :func:`_warn_on_schema_mismatch` nags on older.
+
+    Running BEFORE ``model_validate`` is what keeps a malformed or
+    future-major config from leaking a raw Pydantic traceback. A malformed
+    ``schema_version`` raises a clean :class:`ConfigError` via
+    :func:`~setforge.migrations.parse_schema_version`.
+    """
+    raw = data.get("schema_version") if isinstance(data, Mapping) else None
+    detected = str(raw) if raw is not None else "1.0"
+    detected_major = parse_schema_version(detected)[0]
+    expected_major = parse_schema_version(current_expected_schema_version)[0]
+    if detected_major > expected_major:
+        raise ConfigError(
+            f"{path}: schema_version {detected!r} requires a newer setforge "
+            f"(this build supports schema "
+            f"{current_expected_schema_version!r}); upgrade setforge to "
+            f">= {detected_major}.0 to read this config"
+        )
+
+
+def _warn_unknown_keys(unknown: list[str]) -> None:
+    """Warn (one line per key) for every stripped, schema-undeclared key.
+
+    Covers BOTH forward-compat (a newer config's added fields) AND typos (a
+    misspelled key). Text is always written; only the color is TTY-gated,
+    so the warning survives CliRunner / Docker e2e / CI capture.
+    """
+    import sys
+
+    color = sys.stderr.isatty()
+    prefix = "\033[33mwarning:\033[0m" if color else "warning:"
+    for field_path in unknown:
+        sys.stderr.write(
+            f"{prefix} ignoring unknown setforge.yaml key {field_path!r} "
+            f"(unrecognized by this setforge — a newer-version field or a typo)\n"
+        )
 
 
 def _warn_on_schema_mismatch(config: Config) -> None:
