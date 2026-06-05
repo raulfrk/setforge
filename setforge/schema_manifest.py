@@ -2,9 +2,10 @@
 
 The additive-first guarantee (``COMPATIBILITY.md``) says a schema field is
 never removed, renamed, or retyped *within a major version* — only added.
-That invariant is what makes forward-tolerant reading (``extra="ignore"``)
-safe: an older engine can ignore a newer minor's extra fields precisely
-because the fields it *does* know never changed meaning.
+That invariant is what makes forward-tolerant reading safe: an older engine
+can ignore a newer minor's extra fields (see :func:`setforge.config.load_config`,
+which warns about and strips them) precisely because the fields it *does*
+know never changed meaning.
 
 The invariant cannot be checked at runtime (an old engine has no knowledge
 of fields added after it shipped). It is a property of the engine's own
@@ -15,9 +16,8 @@ forcing a major ``schema_version`` bump (and a fresh manifest section). An
 addition fails too, until the manifest is updated in the same commit — so
 the manifest can never silently drift.
 
-This is the minimal in-wave seed of the broader field-removal CI gate
-(p5qc.14.9), which extends the same manifest with migration-coverage and
-reverse-required enforcement.
+This is the minimal seed of the broader field-removal CI gate, which extends
+the same manifest with migration-coverage and reverse-required enforcement.
 """
 
 from __future__ import annotations

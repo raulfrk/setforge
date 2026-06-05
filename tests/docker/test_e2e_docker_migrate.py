@@ -150,7 +150,7 @@ def test_frozen_pre_bump_config_still_installs(
 
 
 # ---------------------------------------------------------------------------
-# version-switching: downgrade round-trip + forward-tolerant reads (p5qc.14.10/14.2)
+# version-switching: downgrade round-trip + forward-tolerant reads
 # ---------------------------------------------------------------------------
 
 

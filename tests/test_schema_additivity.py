@@ -1,4 +1,4 @@
-"""Additive-only schema gate (p5qc.14.2).
+"""Additive-only schema gate.
 
 Enforces the invariant that makes forward-tolerant reading safe: within a
 major version, schema fields are only ever ADDED — never removed,

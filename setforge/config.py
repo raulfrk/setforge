@@ -706,8 +706,12 @@ def _strip_extra_locs(data: object, locs: Sequence[tuple[object, ...]]) -> objec
 
     ``loc`` is a Pydantic error location (``("tracked_files", "a", "tipo")``).
     The copy feeds a retry ``model_validate`` and is discarded, so ruamel
-    formatting need not survive. A loc that no longer resolves (e.g. a list
-    index) is skipped defensively.
+    formatting need not survive. A loc whose final segment is a list index
+    (rather than a mapping key) is left in place; the retry then re-raises
+    that error, so an unknown key nested inside a LIST is not
+    forward-tolerated. That is acceptable given the schema shape — unknown
+    keys land in dict-valued mappings — but it is a real bound on tolerance,
+    not merely a defensive no-op.
     """
     cleaned = copy.deepcopy(data)
     for loc in locs:
@@ -734,9 +738,10 @@ def _guard_schema_version(data: object, path: Path) -> None:
     - newer MAJOR → :class:`ConfigError` ("upgrade setforge") — a clean,
       non-zero, traceback-free refusal. The engine never best-effort reads
       a config whose major it does not understand.
-    - same major (newer minor or older) / older major → proceed.
-      ``extra="ignore"`` + :func:`_warn_unknown_keys` make same-major
-      forward reads safe; :func:`_warn_on_schema_mismatch` nags on older.
+    - same major (newer minor or older) / older major → proceed. The
+      strip-and-retry in :func:`_validate_tolerant` (warning via
+      :func:`_warn_unknown_keys`) makes same-major forward reads safe;
+      :func:`_warn_on_schema_mismatch` nags on older.
 
     Running BEFORE ``model_validate`` is what keeps a malformed or
     future-major config from leaking a raw Pydantic traceback. A malformed

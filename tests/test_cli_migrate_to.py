@@ -1,6 +1,6 @@
 """CLI tests for ``setforge migrate --to`` + migration write-safety.
 
-Covers the p5qc.14.10 surface: the ``--to=<version>`` target modifier
+Covers the ``--to=<version>`` target modifier
 (up/down), its guards (mutex with ``--pin``, unknown-target rejection,
 already-at no-op), and the partial-chain rollback / backup no-clobber
 write-safety behaviors.
@@ -50,6 +50,14 @@ def test_to_unknown_version_rejected(tmp_path: Path) -> None:
     result = runner.invoke(app, ["migrate", "--config", str(cfg), "--to", "9.9"])
     assert result.exit_code != 0
     assert "unknown schema version" in result.output
+
+
+def test_pin_rejects_non_mapping_root(tmp_path: Path) -> None:
+    """A list/scalar-root config yields a clean CLI error, not a TypeError."""
+    cfg = _write(tmp_path, "- just\n- a\n- list\n")
+    result = runner.invoke(app, ["migrate", "--config", str(cfg), "--pin", "1.1"])
+    assert result.exit_code != 0
+    assert "root must be a mapping" in result.output
 
 
 def test_to_and_pin_mutually_exclusive(tmp_path: Path) -> None:

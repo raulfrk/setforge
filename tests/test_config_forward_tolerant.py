@@ -1,4 +1,4 @@
-"""``load_config`` forward-tolerance (p5qc.14.2).
+"""``load_config`` forward-tolerance.
 
 Cross-major refusal, same-major tolerate-and-warn, unknown-key warnings,
 and clean errors on malformed ``schema_version`` — all asserted at the

@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import MutableMapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
@@ -671,6 +671,17 @@ def _write_pin(*, cfg_path: Path, pin: str) -> None:
         data = yaml.load(fh)
     if data is None:
         typer.echo(f"error: setforge.yaml is empty: {cfg_path}", err=True)
+        raise typer.Exit(1)
+    if not isinstance(data, MutableMapping):
+        # A hand-edited config whose root is a YAML list or bare scalar
+        # would otherwise leak an unwrapped TypeError on the assignment
+        # below. Guard it like every other parse site in the migration
+        # layer (a clean CLI error, not a traceback).
+        typer.echo(
+            f"error: setforge.yaml root must be a mapping, got "
+            f"{type(data).__name__}: {cfg_path}",
+            err=True,
+        )
         raise typer.Exit(1)
     data["schema_version"] = pin
     _yaml_ops.atomic_write_yaml(cfg_path, data)

@@ -414,9 +414,10 @@ def known_versions() -> frozenset[str]:
 
     The build's :data:`current_expected_schema_version` plus every
     ``from_version`` / ``to_version`` in :data:`MIGRATIONS`. The
-    ``migrate --to`` / ``--pin`` CLI validates a user-supplied target
-    against this set so an unknown version errors cleanly instead of
-    falling through a string-range "reachable" check.
+    ``migrate --to`` CLI validates a user-supplied target against this set
+    so an unknown version errors cleanly instead of falling through a
+    string-range "reachable" check. (``migrate --pin`` validates against an
+    equivalent set it builds inline.)
     """
     versions = {current_expected_schema_version}
     for m in MIGRATIONS:
