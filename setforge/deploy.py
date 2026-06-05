@@ -129,13 +129,14 @@ def copy_atomic(
     for now.
 
     ``conflict_resolver`` is an OPTIONAL per-conflict resolver (a
-    :data:`setforge.disposition_merge.ConflictResolver`) threaded straight into
-    the disposition driver. When supplied AND the merge conflicts, each conflict
-    is resolved by the resolver instead of the blanket ``merge_auto`` policy
-    (the interactive install builds a keyboard wizard here). When ``None`` the
-    driver behaves exactly as before. It is only consulted on the disposition
-    path; ``None`` on every other branch leaves behavior byte-for-byte
-    unchanged.
+    :data:`setforge.disposition_merge.ConflictResolver`) threaded into BOTH the
+    disposition driver AND the SHALLOW ``preserve_user_keys`` scalar overlay
+    (:mod:`setforge.scalar_overlay`). When supplied AND a conflict arises (and
+    ``merge_auto`` is None), each conflict is resolved by the resolver instead
+    of the blanket policy — the interactive install builds a keyboard wizard
+    here. ``merge_auto`` (``--auto``) takes precedence on both paths, so a
+    non-``None`` auto resolves every conflict without consulting the resolver.
+    When ``None`` both paths behave exactly as before, byte-for-byte unchanged.
 
     When ``preserve_user_sections`` is True, the rendered content has
     every end-marker's ``hash=<...>`` rewritten via
@@ -252,6 +253,7 @@ def copy_atomic(
             host_local_sections=host_local_sections,
             scalar_bases=scalar_bases,
             merge_auto=merge_auto,
+            conflict_resolver=conflict_resolver,
         )
 
     return _write_resolved_content(
@@ -386,6 +388,7 @@ def _render_with_preserve_keys(
     preserve_user_keys_deep: list[str] | None,
     scalar_bases: dict[str, object] | None = None,
     merge_auto: ReconcileAuto | None = None,
+    conflict_resolver: disposition_merge.ConflictResolver | None = None,
 ) -> tuple[str, dict[str, object] | None, list[str]]:
     """Render ``src`` with ``dst``'s shallow + deep user keys overlaid.
 
@@ -434,6 +437,7 @@ def _render_with_preserve_keys(
             shallow,
             lambda path: scalar_bases.get(path, ABSENT),
             merge_auto,
+            conflict_resolver,
         )
         live_text = scalar_result.merged_text
         # Deferred bare conflicts are already omitted from ``rebaseline``
@@ -489,6 +493,7 @@ def _compute_content(
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     scalar_bases: dict[str, object] | None = None,
     merge_auto: ReconcileAuto | None = None,
+    conflict_resolver: disposition_merge.ConflictResolver | None = None,
 ) -> tuple[str, dict[str, object] | None, list[str]]:
     """Render the bytes ``copy_atomic`` will write to ``dst``.
 
@@ -527,6 +532,7 @@ def _compute_content(
         preserve_user_keys_deep=preserve_user_keys_deep,
         scalar_bases=scalar_bases,
         merge_auto=merge_auto,
+        conflict_resolver=conflict_resolver,
     )
 
     if preserve_user_sections:

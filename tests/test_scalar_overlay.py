@@ -9,9 +9,33 @@ non-scalar-leaf fallback. ``ours`` = live, ``theirs`` = tracked/upstream.
 
 from pathlib import Path
 
-from setforge.scalar_merge import ABSENT
+from setforge.disposition_merge import (
+    ConflictChoice,
+    ConflictResolution,
+    ConflictResolver,
+)
+from setforge.scalar_merge import ABSENT, ScalarConflict
 from setforge.scalar_overlay import ScalarOverlayResult, resolve_scalar_overlay
 from setforge.section_wizard import ReconcileAuto
+
+
+def _resolver(*resolutions: ConflictResolution) -> ConflictResolver:
+    """Return a resolver that pops ``resolutions`` in call order.
+
+    Records each conflict it is handed on the returned callable's ``seen``
+    attribute so a test can assert the wizard saw a ``ScalarConflict`` with the
+    expected base/ours/theirs sides.
+    """
+    it = iter(resolutions)
+    seen: list[object] = []
+
+    def _resolve(conflict: object) -> ConflictResolution:
+        seen.append(conflict)
+        return next(it)
+
+    _resolve.seen = seen  # type: ignore[attr-defined]
+    return _resolve
+
 
 YAML_DST = Path("settings.yaml")
 JSONC_DST = Path("settings.json")
@@ -375,3 +399,150 @@ def test_result_dataclass_is_frozen() -> None:
         merged_text="x", rebaseline={}, conflicts=[], deferred=False
     )
     assert res.merged_text == "x"
+
+
+# ---------------------------------------------------------------------------
+# 10. interactive conflict_resolver path (auto=None + resolver supplied).
+#     keep/take/edit ADVANCE the base; skip DEFERS (no rebaseline).
+# ---------------------------------------------------------------------------
+
+
+def test_resolver_keep_ours_advances_base() -> None:
+    resolver = _resolver(ConflictResolution(ConflictChoice.KEEP_OURS))
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert "k: 7" in res.merged_text
+    assert res.rebaseline["a.k"] == 7
+    assert res.conflicts == ["a.k"]
+    assert res.deferred is False
+    # The resolver was handed a ScalarConflict carrying all three sides.
+    seen = resolver.seen  # type: ignore[attr-defined]
+    assert seen == [ScalarConflict(path="a.k", base=1, ours=7, theirs=8)]
+
+
+def test_resolver_take_theirs_advances_base() -> None:
+    resolver = _resolver(ConflictResolution(ConflictChoice.TAKE_THEIRS))
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert "k: 8" in res.merged_text
+    assert res.rebaseline["a.k"] == 8
+    assert res.conflicts == ["a.k"]
+    assert res.deferred is False
+
+
+def test_resolver_edit_writes_and_advances_base() -> None:
+    resolver = _resolver(ConflictResolution(ConflictChoice.EDIT, edited_value=42))
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert "k: 42" in res.merged_text
+    assert res.rebaseline["a.k"] == 42
+    assert res.conflicts == ["a.k"]
+    assert res.deferred is False
+
+
+def test_resolver_skip_keeps_ours_and_defers() -> None:
+    resolver = _resolver(ConflictResolution(ConflictChoice.SKIP))
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert "k: 7" in res.merged_text
+    assert "a.k" not in res.rebaseline
+    assert res.conflicts == ["a.k"]
+    assert res.deferred is True
+
+
+def test_jsonc_resolver_take_theirs_advances_base() -> None:
+    resolver = _resolver(ConflictResolution(ConflictChoice.TAKE_THEIRS))
+    res = resolve_scalar_overlay(
+        dst=JSONC_DST,
+        live_text=_jsonc_doc("7"),
+        tracked_text=_jsonc_doc("8"),
+        preserve_user_keys=["a > k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert '"k": 8' in res.merged_text
+    assert res.rebaseline["a > k"] == 8
+    assert res.conflicts == ["a > k"]
+    assert res.deferred is False
+
+
+def test_resolver_edit_take_theirs_when_theirs_absent_deletes() -> None:
+    # theirs deletes the key; resolver TAKE_THEIRS must remove it on the live
+    # doc and rebaseline to ABSENT (mirrors the --auto=use-tracked DELETE path).
+    resolver = _resolver(ConflictResolution(ConflictChoice.TAKE_THEIRS))
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text="a:\n  other: 1\n",
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=resolver,
+    )
+    assert "k:" not in res.merged_text
+    assert res.rebaseline["a.k"] is ABSENT
+    assert res.conflicts == ["a.k"]
+    assert res.deferred is False
+
+
+def test_auto_takes_precedence_over_resolver() -> None:
+    # When --auto is set the auto policy resolves the conflict; the resolver is
+    # never consulted (byte-identical to today's non-interactive behavior).
+    resolver = _resolver()  # would StopIteration if called.
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=ReconcileAuto.USE_TRACKED,
+        conflict_resolver=resolver,
+    )
+    assert "k: 8" in res.merged_text
+    assert res.rebaseline["a.k"] == 8
+    assert resolver.seen == []  # type: ignore[attr-defined]
+
+
+def test_no_resolver_no_auto_defers() -> None:
+    # No resolver and no auto: the bare warn-and-defer path (today's behavior).
+    res = resolve_scalar_overlay(
+        dst=YAML_DST,
+        live_text=_yaml_doc("7"),
+        tracked_text=_yaml_doc("8"),
+        preserve_user_keys=["a.k"],
+        base_lookup=lambda _p: 1,
+        auto=None,
+        conflict_resolver=None,
+    )
+    assert "k: 7" in res.merged_text
+    assert "a.k" not in res.rebaseline
+    assert res.deferred is True

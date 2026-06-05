@@ -24,8 +24,12 @@ Per-path logic (see :func:`resolve_scalar_overlay`):
   is absent too) so the caller persists a base for next run.
 * **base present** → :func:`setforge.scalar_merge.resolve_scalar`; TAKE /
   DELETE write through + rebaseline; CONFLICT resolves per ``auto`` (a bare
-  ``auto is None`` conflict keeps ours, defers re-baselining, and flags
-  ``deferred``).
+  ``auto is None`` conflict with no ``conflict_resolver`` keeps ours, defers
+  re-baselining, and flags ``deferred``). When ``auto is None`` AND a
+  ``conflict_resolver`` is supplied (the interactive install), the resolver is
+  asked per conflicting path: ``KEEP_OURS`` keeps live + rebaselines ours,
+  ``TAKE_THEIRS`` takes tracked + rebaselines theirs, ``EDIT`` writes the edited
+  scalar + rebaselines it, ``SKIP`` keeps ours WITHOUT re-baselining and defers.
 
 CRITICAL: the :data:`~setforge.scalar_merge.ABSENT` sentinel is compared with
 ``is`` / ``is not`` ONLY, never ``==``. ``ABSENT`` (absent key) and ``None``
@@ -44,9 +48,11 @@ from json5.loader import ModelLoader, loads
 from ruamel.yaml import YAML
 
 from setforge import jsonc
+from setforge.disposition_merge import ConflictChoice, ConflictResolver
 from setforge.errors import MergeTypeMismatch
 from setforge.scalar_merge import (
     ABSENT,
+    ScalarConflict,
     ScalarOutcome,
     ScalarResolution,
     resolve_scalar,
@@ -125,6 +131,7 @@ def resolve_scalar_overlay(
     preserve_user_keys: list[str],
     base_lookup: Callable[[str], object],
     auto: ReconcileAuto | None,
+    conflict_resolver: ConflictResolver | None = None,
 ) -> ScalarOverlayResult:
     """Resolve scalar ``preserve_user_keys`` via a stored-base 3-way merge.
 
@@ -134,7 +141,12 @@ def resolve_scalar_overlay(
     ``base_lookup`` maps a path to its stored base (typed scalar | ``None`` for
     a ``null`` base | :data:`~setforge.scalar_merge.ABSENT` for no base).
     ``auto`` is the install ``--auto`` reconcile decision (``None`` =
-    interactive/bare). See the module docstring for the full per-path logic.
+    interactive/bare). ``conflict_resolver`` is the OPTIONAL interactive
+    per-conflict resolver (a :data:`setforge.disposition_merge.ConflictResolver`,
+    built by the install path's wizard); it is consulted ONLY when ``auto is
+    None`` — ``auto`` takes precedence and resolves every conflict
+    non-interactively, leaving the resolver untouched. See the module docstring
+    for the full per-path logic.
 
     A list-suffix path raises :class:`ValueError` from the scalar_path layer
     (a config error surfaced elsewhere) — it is NOT caught here.
@@ -187,9 +199,11 @@ def resolve_scalar_overlay(
             live_doc,
             path,
             res,
+            base,
             ours_plain,
             theirs_plain,
             auto,
+            conflict_resolver,
             rebaseline,
             conflicts,
         )
@@ -241,19 +255,23 @@ def _apply_resolution(
     live_doc: object,
     path: str,
     res: ScalarResolution,
+    base: object,
     ours: object,
     theirs: object,
     auto: ReconcileAuto | None,
+    conflict_resolver: ConflictResolver | None,
     rebaseline: dict[str, object],
     conflicts: list[str],
 ) -> bool:
     """Apply one ``resolve_scalar`` outcome to ``live_doc`` at ``path``.
 
     Mutates ``live_doc`` (TAKE/DELETE writes; CONFLICT keeps or takes per
-    ``auto``), appends to ``rebaseline`` / ``conflicts`` as the spec dictates,
-    and returns whether this path DEFERRED (a bare ``auto is None`` conflict —
-    its base must NOT advance). ``ours`` / ``theirs`` are the already-read live
-    and tracked values, reused for the conflict branches.
+    ``auto`` / ``conflict_resolver``), appends to ``rebaseline`` / ``conflicts``
+    as the spec dictates, and returns whether this path DEFERRED (a bare
+    ``auto is None`` conflict that was kept-live — its base must NOT advance).
+    ``base`` / ``ours`` / ``theirs`` are the already-read base, live and tracked
+    values, reused for the conflict branches (``base`` only for the interactive
+    :class:`~setforge.scalar_merge.ScalarConflict` record).
     """
     match res.outcome:
         case ScalarOutcome.TAKE:
@@ -267,7 +285,15 @@ def _apply_resolution(
         case ScalarOutcome.CONFLICT:
             conflicts.append(path)
             return _resolve_conflict(
-                write, live_doc, path, ours, theirs, auto, rebaseline
+                write,
+                live_doc,
+                path,
+                base,
+                ours,
+                theirs,
+                auto,
+                conflict_resolver,
+                rebaseline,
             )
 
 
@@ -275,17 +301,21 @@ def _resolve_conflict(
     write: Callable[[object, str, ScalarResolution], None],
     live_doc: object,
     path: str,
+    base: object,
     ours: object,
     theirs: object,
     auto: ReconcileAuto | None,
+    conflict_resolver: ConflictResolver | None,
     rebaseline: dict[str, object],
 ) -> bool:
-    """Resolve a CONFLICT at ``path`` per ``auto``; return whether deferred.
+    """Resolve a CONFLICT at ``path`` per ``auto`` / resolver; return deferred.
 
     ``USE_TRACKED`` writes theirs (TAKE, or DELETE when theirs is absent) and
     rebaselines theirs. ``KEEP_LIVE`` keeps ours (live already carries it) and
-    rebaselines ours. ``None`` (bare) keeps ours, does NOT rebaseline, and
-    DEFERS — the caller must hold the base where it is.
+    rebaselines ours. ``None`` (bare) with no ``conflict_resolver`` keeps ours,
+    does NOT rebaseline, and DEFERS — the caller holds the base where it is.
+    ``None`` WITH a ``conflict_resolver`` asks the resolver and applies its
+    verdict (see :func:`_apply_resolver_verdict`).
     """
     match auto:
         case ReconcileAuto.USE_TRACKED:
@@ -296,6 +326,59 @@ def _resolve_conflict(
             rebaseline[path] = ours
             return False
         case None:
+            if conflict_resolver is None:
+                return True
+            return _apply_resolver_verdict(
+                write,
+                live_doc,
+                path,
+                base,
+                ours,
+                theirs,
+                conflict_resolver,
+                rebaseline,
+            )
+
+
+def _apply_resolver_verdict(
+    write: Callable[[object, str, ScalarResolution], None],
+    live_doc: object,
+    path: str,
+    base: object,
+    ours: object,
+    theirs: object,
+    conflict_resolver: ConflictResolver,
+    rebaseline: dict[str, object],
+) -> bool:
+    """Ask the interactive resolver and apply its verdict; return deferred.
+
+    Hands the resolver a :class:`~setforge.scalar_merge.ScalarConflict` carrying
+    all three sides, then maps the verdict (same semantics as p5qc.9):
+
+    - ``KEEP_OURS`` — keep live (already on the doc), rebaseline ours, advance.
+    - ``TAKE_THEIRS`` — write theirs (DELETE when theirs is ABSENT), rebaseline
+      theirs, advance.
+    - ``EDIT`` — write the edited scalar (DELETE when the edit yields ABSENT,
+      though the wizard never returns ABSENT today), rebaseline it, advance.
+    - ``SKIP`` — keep ours, do NOT rebaseline, DEFER.
+    """
+    verdict = conflict_resolver(
+        ScalarConflict(path=path, base=base, ours=ours, theirs=theirs)
+    )
+    match verdict.choice:
+        case ConflictChoice.KEEP_OURS:
+            rebaseline[path] = ours
+            return False
+        case ConflictChoice.TAKE_THEIRS:
+            write(live_doc, path, _take_or_delete(theirs))
+            rebaseline[path] = theirs
+            return False
+        case ConflictChoice.EDIT:
+            edited = verdict.edited_value
+            write(live_doc, path, _take_or_delete(edited))
+            rebaseline[path] = edited
+            return False
+        case ConflictChoice.SKIP:
             return True
 
 
