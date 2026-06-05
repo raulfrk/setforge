@@ -256,7 +256,7 @@ def _is_plain_scalar(value: object) -> bool:
     bool / ``None``). A mapping or list (and any other container) is rejected so
     the scalar edit re-prompts. ``None`` (YAML ``null``) is a legitimate scalar.
     """
-    return isinstance(value, str | int | float | bool | None.__class__)
+    return isinstance(value, str | int | float | bool | type(None))
 
 
 def _display_value(value: object) -> str:
