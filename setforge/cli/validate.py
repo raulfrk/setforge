@@ -61,6 +61,7 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
+from setforge.spans import validate_spans_file_type
 
 
 def _local_yaml_top_keys() -> list[str]:
@@ -91,6 +92,8 @@ def _check_profile(
     _apply_preserve_user_keys_check(cfg, prof_name, ctx, failures)
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
+
+    _check_spans_file_types(cfg, resolved, repo_root, ctx, failures)
 
     # Check 1c: apply the local.yaml plugin / extension
     # / marketplace overlay so its collision / unknown-remove and
@@ -355,6 +358,36 @@ def _check_host_local_sections(
                     f"{ctx}: tracked_file {tf_id!r}: "
                     f"host_local_sections.{section_name}: {exc}"
                 )
+
+
+def _check_spans_file_types(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Check: tracked_file spans are declared only on markdown sources.
+
+    Mirrors the file-type gate of :func:`_check_host_local_sections` (and
+    the install-time :func:`setforge.cli._install_helpers._validate_span_file_types`)
+    so ``setforge validate --all`` — the offline CI gate — catches a
+    heading-text span anchor declared on a yaml/json tracked_file BEFORE
+    install would fail with a confusing runtime relocation miss.
+
+    Routes every :class:`~setforge.errors.ConfigError` from
+    :func:`setforge.spans.validate_spans_file_type` to a string failure
+    (existing UX). No-op for tracked_files without spans.
+    """
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[tf_id]
+        if not tracked_file.spans:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        try:
+            validate_spans_file_type(tf_id, tracked_file.spans, src)
+        except ConfigError as exc:
+            failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
 
 
 def _check_extension_includes(
