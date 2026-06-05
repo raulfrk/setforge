@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -42,15 +43,24 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_one_zero() -> None:
-    assert current_expected_schema_version == "1.0"
+def test_current_expected_schema_version_is_one_one() -> None:
+    """The build now expects schema 1.1 after the first expand migration."""
+    assert current_expected_schema_version == "1.1"
 
 
-def test_migrations_registry_is_empty_in_v020() -> None:
-    assert MIGRATIONS == ()
+def test_migrations_registry_has_the_first_migration() -> None:
+    """The registry now ships exactly the 1.0 → 1.1 version-stamp migration."""
+    assert len(MIGRATIONS) == 1
+    only = MIGRATIONS[0]
+    assert only.from_version == "1.0"
+    assert only.to_version == "1.1"
 
 
-def test_find_migration_path_empty_registry_returns_empty() -> None:
+def test_find_migration_path_empty_registry_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The empty-registry path still returns () (registry forced empty)."""
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
     assert find_migration_path(from_v="1.0", to_v="1.1") == ()
 
 
@@ -298,3 +308,254 @@ def test_multi_file_migration_full_lifecycle(tmp_path: Path) -> None:
     # State now identical to pre-migration.
     for p, snapshot in pre_snapshots.items():
         assert p.read_text(encoding="utf-8") == snapshot
+
+
+# ---------------------------------------------------------------------------
+# First real migration — version-stamp 1.0 → 1.1 (+ reverse). B-M1…B-M8.
+# ---------------------------------------------------------------------------
+
+from setforge.migrations import VersionStampMigration  # noqa: E402
+
+_CFG_BODY_NO_VERSION: Final[str] = (
+    "# top comment\n"
+    "version: 1\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md  # eol comment\n"
+    "    dst: foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def _roots_for(cfg_path: Path) -> MigrationRoots:
+    return MigrationRoots(
+        cfg_path=cfg_path,
+        repo_root=cfg_path.resolve().parent,
+        home=cfg_path.resolve().parent / "home",
+    )
+
+
+def _seed_cfg(tmp_path: Path, body: str) -> Path:
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(body, encoding="utf-8")
+    return cfg
+
+
+def test_version_stamp_migration_is_registered() -> None:
+    """The single registered migration is a VersionStampMigration 1.0 → 1.1."""
+    assert (VersionStampMigration(),) == MIGRATIONS
+    assert isinstance(MIGRATIONS[0], Migration)
+
+
+def test_version_stamp_apply_stamps_schema_version(tmp_path: Path) -> None:
+    """``apply`` writes ``schema_version: '1.1'`` into setforge.yaml."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    VersionStampMigration().apply(roots=_roots_for(cfg))
+    assert detect_current_schema(cfg) == "1.1"
+
+
+def test_version_stamp_apply_is_identity_on_data(tmp_path: Path) -> None:
+    """Apply touches ONLY schema_version — every other key/comment survives."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    VersionStampMigration().apply(roots=_roots_for(cfg))
+    after = cfg.read_text(encoding="utf-8")
+    assert "# top comment" in after
+    assert "# eol comment" in after
+    assert "version: 1" in after
+    assert "- foo" in after
+    # The only new top-level key is schema_version.
+    yaml = yaml_rt()
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert data["schema_version"] == "1.1"
+    assert set(data.keys()) == {
+        "version",
+        "schema_version",
+        "tracked_files",
+        "profiles",
+    }
+
+
+def test_version_stamp_apply_idempotent_on_replay(tmp_path: Path) -> None:
+    """B-M2: applying twice equals applying once (overwrite-or-insert)."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    roots = _roots_for(cfg)
+    VersionStampMigration().apply(roots=roots)
+    once = cfg.read_text(encoding="utf-8")
+    VersionStampMigration().apply(roots=roots)
+    twice = cfg.read_text(encoding="utf-8")
+    assert once == twice
+    assert detect_current_schema(cfg) == "1.1"
+
+
+def test_version_stamp_apply_overwrites_present_key(tmp_path: Path) -> None:
+    """B-M2: a stale schema_version is overwritten, not duplicated or raised on."""
+    cfg = _seed_cfg(tmp_path, "schema_version: '0.9'\n" + _CFG_BODY_NO_VERSION)
+    VersionStampMigration().apply(roots=_roots_for(cfg))
+    assert detect_current_schema(cfg) == "1.1"
+    assert cfg.read_text(encoding="utf-8").count("schema_version") == 1
+
+
+def test_version_stamp_apply_single_atomic_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-M8: exactly one ``atomic_write_yaml`` per ``apply`` (no two-write skew)."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    import setforge.migrations as _mig
+
+    calls: list[Path] = []
+    real = _mig.atomic_write_yaml
+
+    def _spy(path: Path, data: object) -> None:
+        calls.append(path)
+        real(path, data)
+
+    monkeypatch.setattr("setforge.migrations.atomic_write_yaml", _spy)
+    VersionStampMigration().apply(roots=_roots_for(cfg))
+    assert calls == [cfg]
+
+
+def test_version_stamp_manifest_and_affected_paths(tmp_path: Path) -> None:
+    """manifest()/affected_paths() describe exactly the single-file stamp."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    roots = _roots_for(cfg)
+    migration = VersionStampMigration()
+    assert migration.affected_paths(roots=roots) == (cfg,)
+    manifest = migration.manifest(roots=roots)
+    assert len(manifest) == 1
+    (entry,) = manifest
+    assert entry.affected_path == cfg
+    assert "schema_version" in entry.description
+
+
+def test_reverse_strips_stamp_restoring_absence_when_originally_absent(
+    tmp_path: Path,
+) -> None:
+    """B-M1: down→up→down on a key-ABSENT config restores absence byte-identically.
+
+    The reverse simply removes the schema_version key. Because up→down on a
+    key-absent config removes the very key the up inserted, the down→up→down
+    cycle returns to the post-first-down bytes (a ruamel round-trip
+    normalizes the hand-written source on the very first load→dump; what
+    matters for byte-identity is that up→down adds-then-removes nothing
+    net, and that the key absence is restored).
+    """
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)
+    roots = _roots_for(cfg)
+    migration = VersionStampMigration()
+    reverse = migration.reverse
+
+    # First down (no-op strip on an absent key) normalizes the document.
+    reverse.apply(roots=roots)
+    normalized = cfg.read_bytes()
+    assert b"schema_version" not in normalized
+
+    # up (stamp) → down (strip) must return to the normalized bytes.
+    migration.apply(roots=roots)
+    reverse.apply(roots=roots)
+
+    assert cfg.read_bytes() == normalized
+    # Absence restored — detect_current_schema falls back to the 1.0 baseline.
+    assert detect_current_schema(cfg) == "1.0"
+
+
+def test_reverse_restores_value_when_key_present(tmp_path: Path) -> None:
+    """B-M1: on a key-PRESENT config, the reverse leaves no schema_version key.
+
+    A config that already declared a schema_version (e.g. a downgraded 1.1)
+    has its stamp stripped by the reverse; re-applying up + down round-trips
+    cleanly because the down removes whatever the up wrote.
+    """
+    cfg = _seed_cfg(tmp_path, "schema_version: '1.1'\n" + _CFG_BODY_NO_VERSION)
+    roots = _roots_for(cfg)
+    reverse = VersionStampMigration().reverse
+    reverse.apply(roots=roots)
+    yaml = yaml_rt()
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert "schema_version" not in data
+    assert detect_current_schema(cfg) == "1.0"
+
+
+def test_reverse_is_not_in_forward_registry() -> None:
+    """The reverse is NOT a forward MIGRATIONS entry — no 1.0↔1.1 cycle."""
+    assert all(m.from_version != "1.1" or m.to_version != "1.0" for m in MIGRATIONS)
+    reverse = VersionStampMigration().reverse
+    assert reverse.from_version == "1.1"
+    assert reverse.to_version == "1.0"
+
+
+def test_find_migration_path_one_step_no_loop() -> None:
+    """B-M4: 1.0 → 1.1 resolves to exactly one step and does not loop."""
+    found = find_migration_path(from_v="1.0", to_v="1.1")
+    assert len(found) == 1
+    assert found[0].from_version == "1.0"
+    assert found[0].to_version == "1.1"
+
+
+def test_find_migration_path_future_sibling_does_not_perturb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-M4: injecting a future 1.1 → 2.0 forward entry leaves 1.0 → 1.1 intact."""
+    from setforge.migrations import MIGRATIONS as _real
+
+    extended = (*_real, _NoopMigration(from_version="1.1", to_version="2.0"))
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", extended)
+    found = find_migration_path(from_v="1.0", to_v="1.1")
+    assert len(found) == 1
+    assert found[0].to_version == "1.1"
+    # And the longer chain still resolves end-to-end without looping.
+    full = find_migration_path(from_v="1.0", to_v="2.0")
+    assert tuple(m.to_version for m in full) == ("1.1", "2.0")
+
+
+# ---------------------------------------------------------------------------
+# Config-load interaction — B-M3 (extra=forbid), B-M6 (mismatch warning),
+# B-M7 (frozen 1.0 fixture still loads).
+# ---------------------------------------------------------------------------
+
+from setforge.config import load_config  # noqa: E402
+
+_LOADABLE_CFG: Final[str] = (
+    "version: 1\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md\n"
+    "    dst: foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def test_post_migration_config_loads_under_extra_forbid(tmp_path: Path) -> None:
+    """B-M3: a stamped schema_version: '1.1' config loads with no ValidationError."""
+    cfg = _seed_cfg(tmp_path, _LOADABLE_CFG)
+    VersionStampMigration().apply(roots=_roots_for(cfg))
+    config = load_config(cfg)
+    assert config.schema_version == "1.1"
+
+
+def test_frozen_1_0_fixture_still_loads(tmp_path: Path) -> None:
+    """B-M7: a frozen 1.0 fixture (no schema_version key) still loads."""
+    cfg = _seed_cfg(tmp_path, _LOADABLE_CFG)
+    config = load_config(cfg)
+    # Absent key defaults to the 1.0 baseline.
+    assert config.schema_version == "1.0"
+
+
+def test_unmigrated_1_0_config_warns_once_non_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """B-M6: a 1.0-default config emits exactly one non-fatal mismatch warning."""
+    cfg = _seed_cfg(tmp_path, _LOADABLE_CFG)
+    config = load_config(cfg)  # must NOT raise
+    assert config.schema_version == "1.0"
+    captured = capsys.readouterr()
+    assert captured.err.count("warning:") == 1
+    assert "schema_version" in captured.err
+    assert "1.1" in captured.err

@@ -106,10 +106,20 @@ def _write_minimal_setforge_yaml(path: Path, *, with_old_key: bool = False) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_check_reports_no_migrations_today(tmp_path: Path) -> None:
-    """Empty registry yields ``"no migrations available"`` and exits 0."""
+def test_check_reports_no_migrations_when_registry_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty registry yields ``"no migrations available"`` and exits 0.
+
+    The real registry now ships the 1.0 → 1.1 stamp, so this empty-registry
+    path is exercised via monkeypatch (keeping the original assertion alive
+    rather than deleting it).
+    """
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.0")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.0")
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
@@ -139,9 +149,15 @@ def test_check_lists_chain_when_registry_populated(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_empty_registry_says_nothing_to_apply(tmp_path: Path) -> None:
+def test_apply_empty_registry_says_nothing_to_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty-registry ``--apply`` short-circuit (registry forced empty)."""
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg)
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", ())
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.0")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.0")
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--apply", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
@@ -403,6 +419,55 @@ def test_pin_rejects_invalid_value_before_writing(tmp_path: Path, bad_pin: str) 
     # File is byte-for-byte unchanged — validation fires before any write.
     assert cfg.read_text(encoding="utf-8") == original
     assert "schema_version" not in cfg.read_text(encoding="utf-8")
+
+
+def test_pin_accepts_one_one_real_registry(tmp_path: Path) -> None:
+    """B-M5: ``--pin=1.1`` (to_version + current_expected) exits 0 — real registry."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--pin=1.1", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "schema_version" in cfg.read_text(encoding="utf-8")
+    assert "1.1" in cfg.read_text(encoding="utf-8")
+
+
+def test_pin_accepts_one_zero_real_registry(tmp_path: Path) -> None:
+    """B-M5: ``--pin=1.0`` (the migration's from_version) exits 0 — real registry."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--pin=1.0", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "1.0" in cfg.read_text(encoding="utf-8")
+
+
+def test_pin_rejects_unknown_version_real_registry(tmp_path: Path) -> None:
+    """B-M5: an unregistered version (``9.9``) is rejected against the real registry."""
+    cfg = tmp_path / "setforge.yaml"
+    original = "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n"
+    cfg.write_text(original, encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--pin=9.9", f"--config={cfg}"])
+    assert result.exit_code != 0
+    assert cfg.read_text(encoding="utf-8") == original
+
+
+def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
+    """B-M5: ``migrate --check`` lists the real 1.0 → 1.1 stamp on a 1.0 config."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "1 migration(s) available" in result.output
+    assert "1.0 → 1.1" in result.output
 
 
 def test_pin_accepts_current_known_version(tmp_path: Path) -> None:

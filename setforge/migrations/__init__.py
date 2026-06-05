@@ -31,19 +31,22 @@ from typing import Final, Protocol, runtime_checkable
 
 from ruamel.yaml import YAML
 
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
 __all__ = [
     "MIGRATIONS",
     "ManifestEntry",
     "ManifestType",
     "Migration",
     "MigrationRoots",
+    "VersionStampMigration",
     "current_expected_schema_version",
     "detect_current_schema",
     "find_migration_path",
 ]
 
 
-current_expected_schema_version: Final[str] = "1.0"
+current_expected_schema_version: Final[str] = "1.1"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -185,13 +188,112 @@ class Migration(Protocol):
         ...
 
 
-MIGRATIONS: Final[tuple[Migration, ...]] = ()
-"""Ordered registry of available migrations.
+@dataclass(slots=True, frozen=True)
+class VersionStampMigration:
+    """Thin version-stamp migration — the first real schema bump (1.0 → 1.1).
 
-Empty in v0.2.0 — the Protocol + registry shape ship first; the first
-real migration appends here in v0.3.0. Future migrations are appended
-in ``from_version`` order so :func:`find_migration_path` can walk the
-chain forward.
+    EXPAND step, not the breaking 1.0 → 2.0 contract. ``apply`` stamps a
+    single ``schema_version`` key into ``setforge.yaml`` and changes
+    nothing else: the disposition / spans surfaces are already additive
+    and optional under 1.0, so no data reshape is needed
+    (identity-on-data). The write goes through a SINGLE
+    :func:`atomic_write_yaml`, so a partial-write never leaves a
+    version-bump-without-reshape skew on disk.
+
+    The stamp is overwrite-or-insert and therefore idempotent on replay:
+    re-applying converges (no ``rename_key``-style raise-on-absent).
+
+    Reverse: :attr:`reverse` returns the inverse 1.1 → 1.0 migration,
+    which simply removes the ``schema_version`` key. The reverse is
+    intentionally NOT registered in :data:`MIGRATIONS` (which
+    :func:`find_migration_path` walks FORWARD) — a 1.1 → 1.0 forward
+    entry would create a 1.0 ↔ 1.1 cycle. Because ``down`` removes the
+    very key ``up`` inserts, ``down → up → down`` on a config that had no
+    ``schema_version`` key restores its absence byte-for-byte.
+    """
+
+    from_version: str = "1.0"
+    to_version: str = "1.1"
+
+    @property
+    def reverse(self) -> _VersionStampReverse:
+        """The inverse 1.1 → 1.0 migration that strips the stamp."""
+        return _VersionStampReverse(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        """Single-file stamp: an ADD of the ``schema_version`` key."""
+        return (
+            ManifestEntry(
+                type=ManifestType.ADD,
+                description=f"stamp schema_version: {self.to_version!r}",
+                affected_path=roots.cfg_path,
+            ),
+        )
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        """Only ``setforge.yaml`` is touched."""
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        """Stamp ``schema_version: <to_version>`` via a single atomic write."""
+        yaml = yaml_rt()
+        with roots.cfg_path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+        # Overwrite-or-insert — idempotent on replay (B-M2). Writes
+        # exactly the schema_version key (extra="forbid"-safe, B-M3).
+        data["schema_version"] = self.to_version
+        atomic_write_yaml(roots.cfg_path, data)
+
+
+@dataclass(slots=True, frozen=True)
+class _VersionStampReverse:
+    """Inverse of :class:`VersionStampMigration` — strips the ``schema_version`` key.
+
+    NOT a forward-registry entry (see :class:`VersionStampMigration`).
+    ``apply`` removes the ``schema_version`` key when present and is a
+    no-op when absent, so the original key-absent baseline is restored.
+    """
+
+    from_version: str = "1.1"
+    to_version: str = "1.0"
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        return (
+            ManifestEntry(
+                type=ManifestType.REMOVE,
+                description="strip schema_version stamp",
+                affected_path=roots.cfg_path,
+            ),
+        )
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        """Remove the ``schema_version`` key via a single atomic write.
+
+        No-op on absence (never raise-on-absent), so down→up→down on a
+        key-absent config restores its absence.
+        """
+        yaml = yaml_rt()
+        with roots.cfg_path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+        if "schema_version" in data:
+            del data["schema_version"]
+        atomic_write_yaml(roots.cfg_path, data)
+
+
+MIGRATIONS: Final[tuple[Migration, ...]] = (VersionStampMigration(),)
+"""Ordered registry of available FORWARD migrations.
+
+Holds the first real migration (version-stamp 1.0 → 1.1). Future
+migrations are appended in ``from_version`` order so
+:func:`find_migration_path` can walk the chain forward. The reverse of
+each migration is attached to the forward instance (e.g.
+:attr:`VersionStampMigration.reverse`) and is deliberately NOT a member
+of this tuple — a backward entry would make the forward walk cycle.
 """
 
 

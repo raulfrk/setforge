@@ -653,13 +653,22 @@ def load_config(path: Path) -> Config:
 
 
 def _warn_on_schema_mismatch(config: Config) -> None:
-    """Emit a one-line yellow stderr warning when schema_version diverges."""
+    """Emit a one-line stderr warning when schema_version diverges.
+
+    The warning is non-fatal: the user may have explicitly pinned an
+    older schema via ``setforge migrate --pin=X.Y``, so raising would
+    block every other subcommand on a soft signal. The yellow color is
+    suppressed when stderr is not a TTY (CliRunner / piped capture), so
+    captured output stays ANSI-free.
+    """
     import sys
 
     if config.schema_version == current_expected_schema_version:
         return
+    color = sys.stderr.isatty()
+    prefix = "\033[33mwarning:\033[0m" if color else "warning:"
     sys.stderr.write(
-        f"\033[33mwarning:\033[0m setforge.yaml declares "
+        f"{prefix} setforge.yaml declares "
         f"schema_version={config.schema_version!r} "
         f"but this setforge expects {current_expected_schema_version!r}; "
         f"run `setforge migrate --check` for details\n"

@@ -2178,8 +2178,19 @@ def test_e2e_docker_upgrade_check_mode(
 def test_e2e_docker_migrate_check_no_migrations_available(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """--check reports no migrations available in the v0.2.0 empty-registry state."""
+    """--check reports no migrations available when already at the expected schema.
+
+    A config already pinned to the build's current expected schema (1.1)
+    has nothing to bridge, so ``--check`` reports ``no migrations
+    available`` and exits 0. The frozen-1.0-config case (which now DOES
+    surface the 1.0 → 1.1 stamp) is covered in
+    ``test_e2e_docker_migrate.py``.
+    """
     c = docker_container()
+    c.write_text(
+        "/tmp/at-current/setforge.yaml",
+        "schema_version: '1.1'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+    )
     result = c.exec(
         [
             "uv",
@@ -2187,12 +2198,12 @@ def test_e2e_docker_migrate_check_no_migrations_available(
             "setforge",
             "migrate",
             "--check",
-            f"--config={CONFIG_FIXTURE}",
+            "--config=/tmp/at-current/setforge.yaml",
         ],
         check=False,
     )
     assert result.returncode == 0, (
-        f"migrate --check should exit 0 with empty registry; "
+        f"migrate --check should exit 0 when already at the expected schema; "
         f"got returncode={result.returncode}\n"
         f"stdout:{result.stdout}\nstderr:{result.stderr}"
     )
