@@ -154,6 +154,47 @@ def test_orphaned_pinned_span_warns_and_install_succeeds(repo: Path) -> None:
     assert "could not be relocated" in result.output
 
 
+def _sync(config: Path, *, extra: list[str] | None = None) -> Result:
+    args = [
+        "sync",
+        f"--profile={_PROFILE}",
+        f"--config={config}",
+        "--auto=use-live",
+        "--no-transition",
+        "--yes",
+    ]
+    if extra:
+        args.extend(extra)
+    return CliRunner().invoke(app, args)
+
+
+def test_capture_excludes_pinned_span_body_from_tracked(repo: Path) -> None:
+    # Invariant I2: a host-local pinned-span edit must NEVER bake into the
+    # tracked source on capture (sync --auto=use-live).
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    live = _live_path()
+    # User edits BOTH the pinned region and the shared region in live.
+    live.write_text(
+        live.read_text()
+        .replace("Pinned body original.", "SECRET host-local pin.")
+        .replace("Shared body original.", "Shared body LIVE edit."),
+        encoding="utf-8",
+    )
+
+    result = _sync(config)
+    assert result.exit_code == 0, result.output
+
+    tracked_src = (repo / "tracked" / "doc.md").read_text(encoding="utf-8")
+    # Pinned span region excluded -> tracked keeps its original body.
+    assert "SECRET host-local pin." not in tracked_src
+    assert "Pinned body original." in tracked_src
+    # Non-span edit captured normally.
+    assert "Shared body LIVE edit." in tracked_src
+
+
 def test_strict_spans_refuses_on_pinned_orphan(repo: Path) -> None:
     _write_tracked(repo, _DOC)
     config = _write_config(repo)

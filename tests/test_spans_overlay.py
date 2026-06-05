@@ -10,7 +10,7 @@ import hashlib
 
 from setforge.markdown_spans import bound_span
 from setforge.spans import SpanEntry, SpanKind
-from setforge.spans_overlay import apply_spans
+from setforge.spans_overlay import apply_spans, exclude_spans_for_capture
 from setforge.spans_store import SpanState
 
 
@@ -105,3 +105,38 @@ def test_no_spans_is_identity() -> None:
     assert result.text == _BASE
     assert not result.orphans
     assert result.new_states == {}
+
+
+def test_exclude_spans_for_capture_keeps_tracked_in_region() -> None:
+    # Live edited BOTH the pinned region and the shared region. Capture
+    # must keep tracked's bytes for the pinned region but let the shared
+    # region's live edit flow through.
+    live = _BASE.replace("Pinned body original.", "Pinned LIVE edit.").replace(
+        "Shared body original.", "Shared LIVE edit."
+    )
+    tracked = _BASE
+    state = _state_for(tracked, "## Foo")
+    spans = [SpanEntry(anchor="## Foo", kind=SpanKind.PINNED)]
+
+    captured = exclude_spans_for_capture(live, tracked, spans, {"## Foo": state})
+
+    assert "Pinned body original." in captured  # span region kept as tracked
+    assert "Pinned LIVE edit." not in captured
+    assert "Shared LIVE edit." in captured  # non-span region captures live
+
+
+def test_exclude_spans_for_capture_excludes_forked_too() -> None:
+    # Invariant I2: capture exclusion is total — forked is excluded too.
+    live = _BASE.replace("Pinned body original.", "Forked LIVE edit.")
+    tracked = _BASE
+    state = _state_for(tracked, "## Foo")
+    spans = [SpanEntry(anchor="## Foo", kind=SpanKind.FORKED)]
+
+    captured = exclude_spans_for_capture(live, tracked, spans, {"## Foo": state})
+
+    assert "Pinned body original." in captured
+    assert "Forked LIVE edit." not in captured
+
+
+def test_exclude_spans_no_spans_is_identity() -> None:
+    assert exclude_spans_for_capture(_BASE, _BASE, [], {}) == _BASE

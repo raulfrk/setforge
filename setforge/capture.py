@@ -34,12 +34,13 @@ from pathlib import Path
 from rich.console import Console
 from ruamel.yaml import YAML
 
-from setforge import base_store, jsonc, sections, yaml_merge
+from setforge import base_store, jsonc, sections, spans_overlay, spans_store, yaml_merge
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, Disposition, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.spans import SpanEntry
 
 
 class CaptureAction(StrEnum):
@@ -314,6 +315,7 @@ def capture_profile(
                     sub_dst,
                     disposition=tracked_file.disposition,
                     profile=profile_name,
+                    spans=tracked_file.spans,
                 )
             else:
                 result = capture_tracked_file(
@@ -340,6 +342,7 @@ def _capture_disposition_file(
     *,
     disposition: Disposition,
     profile: str,
+    spans: list[SpanEntry] | None = None,
 ) -> CaptureResult:
     """Capture one disposition-bearing tracked (sub-)file under the 3-way model.
 
@@ -347,13 +350,21 @@ def _capture_disposition_file(
     the stored base is left untouched (a :class:`CaptureAction.SKIPPED`
     result carries the disposition as the skip reason).
 
-    ``SHARED`` writes the live file's bytes verbatim to ``src`` (a
-    disposition file has no preserve config, so the captured content IS
-    the live content) and — ONLY after the tracked write returns cleanly —
-    re-baselines the stored base to the same bytes via
-    :func:`setforge.base_store.write_base`, converging
+    ``SHARED`` writes the live file's bytes to ``src`` and — ONLY after the
+    tracked write returns cleanly — re-baselines the stored base to the
+    same bytes via :func:`setforge.base_store.write_base`, converging
     ``base == tracked == live``. A base-write failure propagates; base
     lagging live is the safe failure direction.
+
+    When ``spans`` is non-empty the SHARED writeback is NOT a verbatim
+    live copy: every span region (BOTH pinned AND forked) is excluded
+    (Invariant I2) — the existing TRACKED bytes are kept for those regions
+    while the rest of the live file captures normally. This blocks a
+    host-local span body from baking into the shared config repo, and
+    governs the ``sync --auto=use-live`` drift-absorption path too (the
+    same verbatim writeback this function performs). The re-baselined base
+    is the SAME span-excluded bytes so the next merge has a consistent
+    ancestor.
 
     ``sub_name`` is the ``expand_tracked_file`` synthetic id (the same
     stable per-profile ``file_id`` the install loop keys the base by), so
@@ -365,15 +376,25 @@ def _capture_disposition_file(
             action=CaptureAction.SKIPPED,
             reason=f"disposition={disposition.value}",
         )
-    # SHARED: capture live → tracked verbatim, then re-baseline the base.
+    # SHARED: capture live → tracked, then re-baseline the base.
     if not dst.exists():
         return CaptureResult(
             name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
         )
     live_text = dst.read_text(encoding="utf-8")
-    result = _write_if_changed(src, live_text)
+    capture_text = live_text
+    if spans:
+        # Capture exclusion is TOTAL: keep tracked over live inside every
+        # span region (Invariant I2). The existing tracked content is the
+        # source of the kept-region bytes.
+        tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
+        span_states = spans_store.get_states(profile, sub_name)
+        capture_text = spans_overlay.exclude_spans_for_capture(
+            live_text, tracked_text, spans, span_states
+        )
+    result = _write_if_changed(src, capture_text)
     # Re-baseline AFTER the tracked write succeeded: write tracked first,
     # then base, so a base-write failure leaves base lagging (safe) rather
     # than ahead of tracked (corruption). Failure propagates.
-    base_store.write_base(profile, sub_name, live_text.encode("utf-8"))
+    base_store.write_base(profile, sub_name, capture_text.encode("utf-8"))
     return result

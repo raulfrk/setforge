@@ -35,6 +35,7 @@ __all__ = [
     "SpanOrphan",
     "SpanOverlayResult",
     "apply_spans",
+    "exclude_spans_for_capture",
 ]
 
 _CONTEXT_LINES = 3
@@ -174,6 +175,47 @@ def apply_spans(
         )
 
     return SpanOverlayResult(text=post, new_states=new_states, orphans=orphans)
+
+
+def exclude_spans_for_capture(
+    live_text: str,
+    tracked_text: str,
+    spans: list[SpanEntry],
+    stored_states: dict[str, SpanState],
+) -> str:
+    """Return the capture text: live with every span region kept as tracked.
+
+    Capture exclusion is TOTAL (Invariant I2): BOTH pinned AND forked span
+    regions are excluded from a live→tracked writeback, so a host-local
+    span body never bakes into the shared config repo. This reuses the
+    "keep tracked over live for these regions" splice pattern — the live
+    bytes are written back EXCEPT inside each span, where the existing
+    tracked bytes are preserved.
+
+    A span whose anchor cannot be relocated in BOTH live and tracked is
+    silently left alone (the live bytes flow through for that region) —
+    capture never aborts, and the orphan is surfaced loudly by the install
+    path, not here.
+    """
+    if not spans:
+        return live_text
+    splices: list[_Splice] = []
+    tracked_lines = tracked_text.splitlines(keepends=True)
+    for span in spans:
+        stored = stored_states.get(span.anchor)
+        live_loc = _relocate(live_text, span.anchor, stored)
+        tracked_loc = _relocate(tracked_text, span.anchor, stored)
+        if live_loc is None or tracked_loc is None:
+            continue
+        replacement = "".join(tracked_lines[tracked_loc[0] : tracked_loc[1]])
+        splices.append(
+            _Splice(
+                start_line=live_loc[0],
+                end_line=live_loc[1],
+                replacement=replacement,
+            )
+        )
+    return _apply_splices(live_text, splices)
 
 
 def _relocate(
