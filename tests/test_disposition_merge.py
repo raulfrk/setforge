@@ -567,6 +567,74 @@ def test_pinned_jsonc_reasserts_live() -> None:
     assert model["editor"]["fontSize"] == 12
 
 
+# ---- pinned BOTH-sides changed: conflict suppressed, base advances ----
+
+
+def test_pinned_both_sides_changed_suppresses_conflict_and_advances() -> None:
+    # Live froze P (live != base) AND upstream changed the SAME P (tracked !=
+    # base, tracked != live) -> merge_structural records a real PathConflict at
+    # P. The pin is deterministic live-wins, so that conflict must be SUPPRESSED
+    # (not deferred): the resolution carries NO conflict for P, advance_base is
+    # True, P holds the live value, and a second pass is byte-stable with no
+    # phantom conflict.
+    base = "editor:\n  fontSize: 1\nkeep: yes\n"
+    live = "editor:\n  fontSize: 12\nkeep: yes\n"
+    tracked = "editor:\n  fontSize: 99\nkeep: yes\n"
+    span = [_pin("editor.fontSize")]
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=span,
+    )
+    assert res.conflicts == []  # the pinned-path conflict is suppressed
+    assert res.advance_base is True
+    assert _yaml_value_at(res.text, "editor.fontSize") == 12
+    # Second pass with the re-baselined base is byte-stable, no phantom conflict.
+    res2 = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=res.text,
+        live=res.text,
+        tracked=tracked,
+        auto=None,
+        structural_spans=span,
+    )
+    assert res2.conflicts == []
+    assert res2.advance_base is True
+    assert res2.text == res.text
+
+
+def test_pinned_conflict_suppressed_but_nonpinned_conflict_still_defers() -> None:
+    # Suppression is scoped to PINNED paths only: a genuine conflict on a
+    # NON-pinned path (no override) must still defer under bare auto. Here both
+    # `editor.fontSize` (pinned) and `editor.tabSize` (un-pinned) conflict; only
+    # the pinned one is suppressed, the un-pinned one keeps the base from
+    # advancing.
+    base = "editor:\n  fontSize: 1\n  tabSize: 1\n"
+    live = "editor:\n  fontSize: 12\n  tabSize: 2\n"
+    tracked = "editor:\n  fontSize: 99\n  tabSize: 3\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("editor.fontSize")],
+    )
+    assert all(isinstance(c, PathConflict) for c in res.conflicts)
+    assert [c.path for c in res.conflicts if isinstance(c, PathConflict)] == [
+        "editor.tabSize"
+    ]
+    assert res.advance_base is False
+    # The pin still held live at its own path.
+    assert _yaml_value_at(res.text, "editor.fontSize") == 12
+
+
 # ---- forked: merges upstream (no re-assert) ----
 
 

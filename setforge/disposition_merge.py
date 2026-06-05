@@ -341,6 +341,30 @@ def _resolve_structural(
     # point of a pin). Orphans are preserved + reported, never raised.
     orphans = _reassert_pinned_spans(result.merged_model, pinned, live_snapshots)
 
+    # SUPPRESS pinned-path conflicts (B-S6 / I1): a pin is deterministic
+    # live-wins, so a ``PathConflict`` whose path is a pinned span is NOT a real
+    # deferrable conflict — the re-assert above already imposed live there. If
+    # such a conflict were left in the list, the caller would warn ("kept live,
+    # base not advanced") and ``advance_base`` would follow the bare-defer rule,
+    # so the base never advances and the phantom conflict re-surfaces every
+    # install. We strip exactly the pinned-path conflicts (NOT a non-pinned
+    # conflict, which has no override and must still defer/advance per the
+    # normal rule) and, if every suppressed conflict was a pin, force the base
+    # to advance.
+    pinned_anchors = {span.anchor for span in pinned}
+    suppressed_any = any(
+        isinstance(c, PathConflict) and c.path in pinned_anchors for c in conflicts
+    )
+    conflicts = [
+        c
+        for c in conflicts
+        if not (isinstance(c, PathConflict) and c.path in pinned_anchors)
+    ]
+    if suppressed_any and not conflicts:
+        # The only conflicts were pinned-path ones: there is nothing left to
+        # defer, so re-baseline to the post-reassert dump (live-wins is final).
+        advance = True
+
     # Re-baseline dump is taken AFTER the re-assert (B-S6).
     return FileResolution(
         text=_dump_structural(result.merged_model, is_jsonc),
