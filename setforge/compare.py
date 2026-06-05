@@ -768,25 +768,36 @@ def _compare_one(
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
     """True when the live↔tracked drift is confined to pinned/forked spans.
 
-    Replaces every span region in the live bytes with the tracked bytes
-    (:func:`setforge.spans_overlay.exclude_spans_for_capture`); if the
-    result equals tracked, the only divergence lived inside spans —
-    intentional host divergence, not unsynced shared drift (Invariant
-    I13). False when the file declares no spans, isn't markdown, or has
-    drift outside a span.
+    Replaces every span region in the live bytes with the tracked bytes and,
+    if the result equals tracked, the only divergence lived inside spans —
+    intentional host divergence, not unsynced shared drift (Invariant I13).
+    Dispatches by file type so each span flavor mirrors its own capture
+    exclusion path: markdown heading spans via
+    :func:`setforge.spans_overlay.exclude_spans_for_capture`; structural
+    (yaml/json/jsonc dotted-path) spans via
+    :func:`setforge.disposition_merge.exclude_structural_spans_for_capture`.
+    False when the file declares no spans, is neither markdown nor structural,
+    or has drift outside a span.
     """
+    from setforge import disposition_merge
+
     if not tracked_file.spans:
-        return False
-    if src.suffix.lower() not in {".md", ".markdown"}:
         return False
     try:
         tracked_text = src.read_text(encoding="utf-8")
         live_text = dst.read_text(encoding="utf-8")
     except OSError:
         return False
-    excluded = spans_overlay.exclude_spans_for_capture(
-        live_text, tracked_text, tracked_file.spans, {}
-    )
+    if disposition_merge.is_structural(src):
+        excluded = disposition_merge.exclude_structural_spans_for_capture(
+            live_text, tracked_text, tracked_file.spans, jsonc.is_jsonc_file(src)
+        )
+    elif src.suffix.lower() in {".md", ".markdown"}:
+        excluded = spans_overlay.exclude_spans_for_capture(
+            live_text, tracked_text, tracked_file.spans, {}
+        )
+    else:
+        return False
     return excluded == tracked_text
 
 

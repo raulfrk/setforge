@@ -68,6 +68,48 @@ def test_span_only_drift_false_without_spans(tmp_path: Path) -> None:
     assert _span_only_drift(src, dst, tf) is False
 
 
+_YAML_DOC = "editor:\n  fontSize: 12\n  tabSize: 4\nshared:\n  theme: dark\n"
+
+
+def _tracked_yaml(spans: list[dict[str, str]]) -> TrackedFile:
+    return TrackedFile.model_validate(
+        {
+            "src": "doc.yaml",
+            "dst": "~/.x/doc.yaml",
+            "disposition": "shared",
+            "spans": spans,
+        }
+    )
+
+
+def test_span_only_drift_true_when_structural_drift_inside_span(
+    tmp_path: Path,
+) -> None:
+    # A structural (yaml dotted-path) file whose ONLY live divergence is at the
+    # pinned path classifies as span-only — the compare gate must dispatch the
+    # structural exclusion path, not hard-bail because the file isn't markdown.
+    src = tmp_path / "doc.yaml"
+    src.write_text(_YAML_DOC, encoding="utf-8")
+    dst = tmp_path / "live.yaml"
+    dst.write_text(_YAML_DOC.replace("fontSize: 12", "fontSize: 20"), encoding="utf-8")
+    tf = _tracked_yaml([{"anchor": "editor.fontSize", "kind": "pinned"}])
+    assert _span_only_drift(src, dst, tf) is True
+
+
+def test_span_only_drift_false_when_structural_drift_outside_span(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "doc.yaml"
+    src.write_text(_YAML_DOC, encoding="utf-8")
+    dst = tmp_path / "live.yaml"
+    # Drift at a NON-pinned path -> not span-only, needs attention.
+    dst.write_text(
+        _YAML_DOC.replace("theme: dark", "theme: solarized"), encoding="utf-8"
+    )
+    tf = _tracked_yaml([{"anchor": "editor.fontSize", "kind": "pinned"}])
+    assert _span_only_drift(src, dst, tf) is False
+
+
 def test_file_compare_span_drift_is_expected() -> None:
     entry = FileCompare(
         name="doc",
