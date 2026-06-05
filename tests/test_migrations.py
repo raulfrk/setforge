@@ -572,9 +572,7 @@ _NON_MAPPING_ROOTS: Final[tuple[str, ...]] = (
 
 
 @pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
-def test_apply_non_mapping_root_raises_config_error(
-    tmp_path: Path, body: str
-) -> None:
+def test_apply_non_mapping_root_raises_config_error(tmp_path: Path, body: str) -> None:
     """``apply`` on a non-mapping setforge.yaml raises ConfigError, not TypeError."""
     cfg = _seed_cfg(tmp_path, body)
     with pytest.raises(ConfigError):

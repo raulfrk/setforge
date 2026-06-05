@@ -54,6 +54,7 @@ def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
         )
     return data
 
+
 __all__ = [
     "MIGRATIONS",
     "ManifestEntry",

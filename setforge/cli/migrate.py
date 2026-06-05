@@ -12,10 +12,12 @@ schema YAML. Backups, diff preview, and rollback all operate at
 multi-file granularity (see :mod:`setforge.migrations` for the
 Protocol definition).
 
-In v0.2.0 :data:`setforge.migrations.MIGRATIONS` is empty: ``--check``
-reports ``"no migrations available"`` and exits 0; ``--apply`` says
-``"nothing to apply"`` and exits 0; ``--pin`` writes the pin
-unconditionally. The first real migration ships in v0.3.0.
+When :data:`setforge.migrations.MIGRATIONS` resolves no chain for the
+current ``schema_version`` (e.g. a config already at the expected
+version), ``--check`` reports ``"no migrations available"`` and exits 0
+and ``--apply`` says ``"nothing to apply"`` and exits 0; ``--pin`` writes
+the pin unconditionally. The registry holds the first real migration as
+of v0.3.0 (the 1.0->1.1 schema-version expand).
 """
 
 from __future__ import annotations
