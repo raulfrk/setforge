@@ -859,7 +859,7 @@ def check_source_yaml_clean(source: Source) -> None:
     The sibling of :func:`check_source_clean`, but scoped to the
     version-controlled ``setforge.yaml`` at the source ROOT rather than
     the engine's ``tracked/`` write surface — :func:`check_source_clean`
-    deliberately misses the root config (B-C2). The ``override --shared``
+    deliberately misses the root config. The ``override --shared``
     write mutates ``setforge.yaml`` in place, so a dirty / mid-rebase
     config must refuse before the round-trip clobbers an uncommitted edit.
 
@@ -911,8 +911,17 @@ def fetch_source(source: Source) -> str:
     return f"{action} {source.ref} at {clone_dest}"
 
 
-def format_post_write_hint(source: Source, file_count: int) -> str:
+def format_post_write_hint(
+    source: Source, file_count: int, *, subpath: str = "tracked/"
+) -> str:
     """Build the post-sync/capture hint message pointing at the source dir.
+
+    ``subpath`` is the source-root-relative path the write landed at,
+    rendered verbatim in the hint. The default ``tracked/`` matches the
+    sync/capture target. Pass the actual file (e.g. ``setforge.yaml``) when
+    the write lands directly on the source root — as an ``override --shared``
+    write does — so the hint names the path the user must ``git diff``, not a
+    ``tracked/`` they never touched.
 
     Three shapes (decided by source kind + git upstream presence):
 
@@ -925,7 +934,7 @@ def format_post_write_hint(source: Source, file_count: int) -> str:
     except SourceNotCloned:
         return f"→ wrote {file_count} files to <source> (not on disk?)"
     plural = "s" if file_count != 1 else ""
-    base = f"→ wrote {file_count} file{plural} to {source_dir}/tracked/"
+    base = f"→ wrote {file_count} file{plural} to {source_dir}/{subpath}"
     if not git_ops.is_git_repo(source_dir):
         return base
     upstream = git_ops.rev_parse_upstream(source_dir)

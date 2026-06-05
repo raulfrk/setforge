@@ -465,6 +465,23 @@ def test_shared_b_c3_post_write_hint_emitted(tmp_path: Path) -> None:
     assert "git commit" in result.output
 
 
+def test_shared_post_write_hint_names_setforge_yaml_not_tracked(
+    tmp_path: Path,
+) -> None:
+    """The --shared hint names the written setforge.yaml, not tracked/.
+
+    The --shared write lands on the source-root setforge.yaml, so the hint's
+    ``git diff`` would surface nothing if it named tracked/ (which the write
+    never touches).
+    """
+    cfg = _make_repo(tmp_path)
+    _git_init(tmp_path)
+    result = _invoke(cfg, "override", "pin", "doc", "--shared")
+    assert result.exit_code == 0, result.output
+    assert "setforge.yaml" in result.output
+    assert "tracked/" not in result.output
+
+
 def test_shared_b_c4_resolves_via_source_not_cwd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -404,12 +404,21 @@ def _shared_write_preflight(cfg_path: Path) -> None:
 
 
 def _shared_post_write_hint(cfg_path: Path, console: Console) -> None:
-    """Emit the commit/push hint after a successful ``--shared`` write (B-C3)."""
+    """Emit the commit/push hint after a successful ``--shared`` write.
+
+    The shared span is otherwise silently lost on the next config-repo pull,
+    so the hint reminds the user to commit + push. Emitted via
+    :func:`typer.echo` (raw stdout, no rich word-wrapping) so the
+    ``cd ... && git diff && git commit && git push`` shell command survives
+    intact even on a narrow terminal — a wrapped command copies broken.
+    """
     try:
-        hint = source_mod.format_post_write_hint(_source_for_config(cfg_path), 1)
+        hint = source_mod.format_post_write_hint(
+            _source_for_config(cfg_path), 1, subpath=cfg_path.name
+        )
     except SetforgeError:
         return
-    console.print(hint)
+    typer.echo(hint)
 
 
 def _shared_apply(
