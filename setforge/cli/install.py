@@ -44,6 +44,7 @@ from setforge.cli._install_helpers import (
     _deploy_all_tracked_files,
     _dry_run_pipeline,
     _load_validated_host_local_sections,
+    _reconcile_shared_spans,
     _run_predeploy_gates,
     _span_lockstep_paths,
     _validate_span_file_types,
@@ -191,11 +192,26 @@ def install(
     # preserve_user_keys derived view stays back-compat for callers
     # that don't read provenance.
     apply_preserve_user_keys_overlay(cfg, profile)
+    # Resolve host-local↔shared span intent collisions BEFORE the overlay
+    # fold so the chosen winner per collided anchor flows into the fold.
+    # Bare install stays silent host-local-wins (B-R6); --auto routes the
+    # adopt-shared / keep-host-local decision (B-R7); a non-tty
+    # --reconcile-user-sections raises rather than burying the collision
+    # (B-R8). Returns the (tf_id, anchor) pairs whose SHARED span should
+    # win the fold.
+    prefer_shared_anchors = _reconcile_shared_spans(
+        cfg,
+        profile=profile,
+        reconcile_user_sections=reconcile_user_sections,
+        section_auto=section_auto,
+    )
     # Apply local.yaml host-local mode/dst/symlink_target overlay
     # — also AFTER profile resolution. Rebuilds each TrackedFile with the
     # overlay-fields overrides applied so downstream resolve_dst / deploy /
     # deploy_symlinked_file consume the override transparently.
-    apply_host_local_tracked_file_overrides(cfg)
+    apply_host_local_tracked_file_overrides(
+        cfg, prefer_shared_anchors=prefer_shared_anchors
+    )
     # Load + validate the local.yaml host_local_sections overlay (host-local).
     # Validation is file-type only at this layer: anchors / bodies are
     # resolved during deploy._compute_content. Empty mapping when local.yaml

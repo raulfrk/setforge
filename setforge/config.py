@@ -36,7 +36,7 @@ from setforge.local_overlay import (
 )
 from setforge.migrations import current_expected_schema_version
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
-from setforge.spans import SpanEntry
+from setforge.spans import SpanEntry, SpanSemantics
 
 if TYPE_CHECKING:
     from setforge.source import (
@@ -765,10 +765,109 @@ class HostLocalTrackedFileOverride:
     disposition: Disposition | None
 
 
+@dataclass(frozen=True, slots=True)
+class SharedSpanCollision:
+    """One same-anchor host-local-vs-shared span intent collision.
+
+    A *shared* span carries pure intent (anchor/kind/semantics) on the
+    tracked-side :attr:`TrackedFile.spans`; a host-local span on the SAME
+    anchor (declared in ``local.yaml``) shadows it silently in the
+    :func:`apply_host_local_tracked_file_overrides` fold. This record is
+    what :func:`detect_shared_span_collisions` returns so the install path
+    can surface the collision under ``--reconcile-user-sections`` (rather
+    than dropping the shared intent silently). ``anchor`` is the markdown
+    heading-text OR structural dotted-path string the two spans share —
+    the detector is file-type-agnostic (it compares anchors verbatim).
+    """
+
+    tracked_file_id: str
+    anchor: str
+
+
+def detect_shared_span_collisions(
+    config: Config,
+    *,
+    local_config_path: Path | None = None,
+) -> list[SharedSpanCollision]:
+    """Return same-anchor host-local↔shared span collisions per tracked_file.
+
+    A collision exists when a tracked_file declares a ``shared`` span on an
+    anchor AND ``local.yaml`` declares a host-local span on the SAME anchor
+    for the same tracked_file. The host-local span would silently win the
+    per-anchor fold in :func:`apply_host_local_tracked_file_overrides`,
+    dropping the shared intent without a trace — this detector is the
+    surface the install path consults so the drop is opt-in-visible under
+    ``--reconcile-user-sections``.
+
+    Only ``shared``-semantics tracked-side spans participate: a host-local
+    span shadowing a host-local tracked-side span is a plain config dup,
+    not a cross-repo intent collision, and is excluded. Host-local-only
+    spans (no shared counterpart) are likewise never reported.
+
+    Deterministic order: tracked_files are walked in ``config.tracked_files``
+    insertion order, anchors within a file in the tracked-side span order.
+    Pure + read-only — reads ``local.yaml`` but mutates nothing. No-op
+    (empty list) when ``local.yaml`` is absent or declares no overlapping
+    span. Lazy-imports :mod:`setforge.source` to dodge the config ↔ source
+    cycle.
+    """
+    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
+
+    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    overlays = load_local_tracked_file_overlays(path)
+    collisions: list[SharedSpanCollision] = []
+    for tf_id, tracked_file in config.tracked_files.items():
+        overlay = overlays.get(tf_id)
+        if overlay is None or not overlay.spans:
+            continue
+        host_local_anchors = {span.anchor for span in overlay.spans}
+        for span in tracked_file.spans:
+            if (
+                span.semantics is SpanSemantics.SHARED
+                and span.anchor in host_local_anchors
+            ):
+                collisions.append(
+                    SharedSpanCollision(tracked_file_id=tf_id, anchor=span.anchor)
+                )
+    return collisions
+
+
+def _fold_overlay_spans(
+    *,
+    tf_id: str,
+    tracked_spans: list[SpanEntry],
+    overlay_spans: list[SpanEntry],
+    prefer_shared_anchors: frozenset[tuple[str, str]],
+) -> list[dict[str, object]]:
+    """Fold host-local overlay spans over tracked-side shared spans per anchor.
+
+    Host-local (``local.yaml``) spans win each anchor by default — the
+    silent host-local-wins fold. ``prefer_shared_anchors`` flips the winner
+    for the listed ``(tf_id, anchor)`` pairs: the tracked-side SHARED span
+    keeps that anchor instead, i.e. the ``--auto=use-tracked`` / interactive
+    "adopt the shared intent" resolution for a detected same-anchor
+    collision (see :func:`detect_shared_span_collisions`). Anchors NOT in
+    the set keep the host-local default; host-local-only anchors (no shared
+    counterpart) are always added.
+
+    Returns the merged spans as plain dicts (``model_dump``) so the
+    ``TrackedFile.model_validate`` revalidation re-runs the
+    :class:`~setforge.spans.SpanEntry` validators against the combined
+    shape.
+    """
+    merged_spans = {span.anchor: span for span in tracked_spans}
+    for span in overlay_spans:
+        if (tf_id, span.anchor) in prefer_shared_anchors:
+            continue
+        merged_spans[span.anchor] = span
+    return [span.model_dump() for span in merged_spans.values()]
+
+
 def apply_host_local_tracked_file_overrides(
     config: Config,
     *,
     local_config_path: Path | None = None,
+    prefer_shared_anchors: frozenset[tuple[str, str]] = frozenset(),
 ) -> dict[str, HostLocalTrackedFileOverride]:
     """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target`` /
     ``disposition`` overlay.
@@ -852,13 +951,12 @@ def apply_host_local_tracked_file_overrides(
         if overlay.disposition is not None:
             updates["disposition"] = overlay.disposition.value
         if overlay.spans:
-            # Host-local spans (local.yaml) are FOLDED INTO the tracked-side
-            # shared spans, host-local winning per anchor. The merged list
-            # is dumped to plain dicts so the model_validate revalidation
-            # re-runs the SpanEntry validators against the combined shape.
-            merged_spans = {span.anchor: span for span in tracked_file.spans}
-            merged_spans.update({span.anchor: span for span in overlay.spans})
-            updates["spans"] = [span.model_dump() for span in merged_spans.values()]
+            updates["spans"] = _fold_overlay_spans(
+                tf_id=tf_id,
+                tracked_spans=tracked_file.spans,
+                overlay_spans=overlay.spans,
+                prefer_shared_anchors=prefer_shared_anchors,
+            )
         # Build a fresh model via model_validate(dump | updates) rather
         # than model_copy(update=...) — model_copy bypasses field +
         # model validators, which would let a hostile overlay set

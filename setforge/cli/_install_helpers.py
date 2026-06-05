@@ -47,6 +47,7 @@ from setforge import (
 from setforge import (
     compare as compare_mod,
 )
+from setforge import config as config_mod
 from setforge import (
     merge as merge_mod,
 )
@@ -74,8 +75,19 @@ from setforge.compare import (
     resolve_dst,
     resolve_src,
 )
-from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
-from setforge.errors import ExtensionToolMissing, PluginToolMissing, SetforgeError
+from setforge.config import (
+    Config,
+    Disposition,
+    ResolvedProfile,
+    SharedSpanCollision,
+    TrackedFile,
+)
+from setforge.errors import (
+    ExtensionToolMissing,
+    PluginToolMissing,
+    SetforgeError,
+    SharedSpanReconcileRequiresInteractive,
+)
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
@@ -181,6 +193,116 @@ def _validate_span_file_types(
             continue
         src = resolve_src(tracked_file, repo_root)
         validate_spans_file_type(tf_id, tracked_file.spans, src)
+
+
+def _reconcile_shared_spans(
+    cfg: Config,
+    *,
+    profile: str,
+    reconcile_user_sections: bool,
+    section_auto: ReconcileAuto | None,
+) -> frozenset[tuple[str, str]]:
+    """Resolve host-local↔shared span intent collisions before the overlay fold.
+
+    Returns the set of ``(tracked_file_id, anchor)`` pairs whose SHARED
+    span should win the per-anchor fold — i.e. the collisions the user
+    chose to resolve toward the tracked-side (shared) intent. The caller
+    threads the result into
+    :func:`setforge.config.apply_host_local_tracked_file_overrides` as
+    ``prefer_shared_anchors``; an empty set leaves every collision at the
+    silent host-local-wins default.
+
+    Routing (mirrors the shared user-section reconcile surface):
+
+    - **No collisions** → empty set, no output (the shared span just
+      applies; nothing to reconcile).
+    - **Bare install** (``reconcile_user_sections`` False, ``section_auto``
+      None) → empty set, NO warning. An intentional host-local shadow must
+      not nag (B-R6); the silent host-local-wins matches shared
+      user-sections.
+    - ``--auto=use-tracked`` → every collision resolves to the shared
+      intent AND an explicit "host-local span X overwritten" risk line is
+      printed per collision — never a silent host-local drop (B-R7).
+    - ``--auto=keep-live`` → empty set, no risk line (the host-local
+      override is the protected side).
+    - ``--reconcile-user-sections`` (no ``--auto``):
+      - non-tty → raise :class:`SharedSpanReconcileRequiresInteractive`
+        rather than a silent keep-live that buries the collision (B-R8).
+      - tty → per-collision arrow-key prompt; each prompt's outcome adds
+        (or omits) the pair from the prefer-shared set.
+
+    ``section_auto`` and ``reconcile_user_sections`` are already mutually
+    exclusive at the CLI (:func:`_parse_section_auto`), so at most one of
+    the auto / interactive branches fires.
+    """
+    collisions = config_mod.detect_shared_span_collisions(cfg)
+    if not collisions:
+        return frozenset()
+
+    if section_auto is ReconcileAuto.USE_TRACKED:
+        for collision in collisions:
+            typer.secho(
+                f"shared-span reconcile: host-local span {collision.anchor!r} "
+                f"on tracked_file {collision.tracked_file_id!r} overwritten by "
+                "the shared intent (--auto=use-tracked)",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+        return frozenset((c.tracked_file_id, c.anchor) for c in collisions)
+    if section_auto is ReconcileAuto.KEEP_LIVE:
+        # Protected side: keep every host-local override, no risk line.
+        return frozenset()
+    if section_auto is not None:
+        assert_never(section_auto)
+
+    if not reconcile_user_sections:
+        # Bare install: silent host-local-wins, no nag (B-R6).
+        return frozenset()
+
+    # Interactive reconcile requested.
+    if not sys.stdout.isatty():
+        raise SharedSpanReconcileRequiresInteractive(
+            "setforge install --reconcile-user-sections detected "
+            f"{len(collisions)} host-local/shared span collision(s) but stdout "
+            "is not a TTY. Re-run with --auto=use-tracked (adopt the shared "
+            "intent) or --auto=keep-live (keep the host-local override)."
+        )
+    return _prompt_shared_span_collisions(collisions, profile=profile)
+
+
+def _prompt_shared_span_collisions(
+    collisions: list[SharedSpanCollision],
+    *,
+    profile: str,
+) -> frozenset[tuple[str, str]]:
+    """Per-collision arrow-key prompt; return the adopt-shared pairs.
+
+    Reuses the :func:`setforge.cli._confirm.confirm_auto_operation` gate
+    one collision at a time: a "yes" adopts the shared intent for that
+    anchor (the pair joins the prefer-shared set), a "no" keeps the
+    host-local override. Only reached on the interactive (tty) path; the
+    non-tty branch raises in :func:`_reconcile_shared_spans` before here.
+    """
+    prefer: set[tuple[str, str]] = set()
+    for collision in collisions:
+        plan = AutoPlan(
+            direction=AutoDirection.TRACKED_TO_LIVE,
+            file_changes=(),
+            risks=(
+                f"host-local span {collision.anchor!r} on tracked_file "
+                f"{collision.tracked_file_id!r} will be overwritten by the "
+                "shared intent",
+            ),
+            revert_command=f"setforge revert --profile={profile}",
+        )
+        if confirm_auto_operation(
+            command="install --reconcile-user-sections",
+            profile=profile,
+            plan=plan,
+            yes=False,
+        ):
+            prefer.add((collision.tracked_file_id, collision.anchor))
+    return frozenset(prefer)
 
 
 def _check_unexpected_drift(
