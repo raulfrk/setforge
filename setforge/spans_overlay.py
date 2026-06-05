@@ -162,6 +162,10 @@ def apply_spans(
 
     # Recompute every located span's state from the POST-splice text so
     # the sidecar (and the re-baselined byte base) reflect what landed.
+    # This re-resolves the ladder a second time intentionally: a pinned
+    # splice replaces the merged region with live bytes, so the located
+    # offsets / fingerprint can differ from the pre-splice pass and MUST
+    # be read from the bytes that actually hit disk (Invariant I1).
     orphan_anchors = {o.anchor for o in orphans}
     for span in spans:
         if span.anchor in orphan_anchors:
