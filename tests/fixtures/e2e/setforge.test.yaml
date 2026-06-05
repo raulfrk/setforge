@@ -177,6 +177,19 @@ tracked_files:
     dst: ~/.setforge_e2e/disposition/forked.yaml
     disposition: forked
 
+  # ---- override CLI fixtures --------------------------------------------
+  # Clean shared md + yaml tracked_files with NO pre-declared spans so the
+  # ``override pin`` user-journey adds a fresh host-local (or --shared) span
+  # at runtime, then install / compare exercise the new override end-to-end.
+  override_md:
+    src: disposition/note.md
+    dst: ~/.setforge_e2e/override/note.md
+    disposition: shared
+  override_yaml:
+    src: disposition/config.yaml
+    dst: ~/.setforge_e2e/override/config.yaml
+    disposition: shared
+
   # ---- Forked-scalar fixtures (3-way preserve_user_keys scalar merge) ----
   # Shallow ``preserve_user_keys`` with NO disposition routes through the
   # stored-base 3-way SCALAR overlay (setforge.scalar_overlay). Each format
@@ -408,3 +421,11 @@ profiles:
   test-spans-structural:
     tracked_files:
       - spans_structural_yaml
+
+  # ---- override CLI journey ---------------------------------------------
+  # A markdown + a yaml shared tracked_file, each with no declared spans, so
+  # the override pin/show/install/compare round-trip starts from a clean slate.
+  test-override:
+    tracked_files:
+      - override_md
+      - override_yaml
