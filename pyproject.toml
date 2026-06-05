@@ -168,3 +168,12 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["json5", "json5.*"]
 follow_imports = "skip"
+
+# diff-match-patch ships neither stubs nor a ``py.typed`` marker, so its
+# ``match_main`` import is an [import-untyped] miss. The span relocation
+# fuzzy stage uses a single, narrow surface (``match_main`` + two scalar
+# threshold attrs); treat the module as the untyped seam rather than
+# vendoring stubs for one call.
+[[tool.mypy.overrides]]
+module = ["diff_match_patch", "diff_match_patch.*"]
+ignore_missing_imports = true
