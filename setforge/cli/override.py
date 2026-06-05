@@ -311,9 +311,10 @@ def _guard_span_transition(
 ) -> list[SpanEntry] | None:
     """Apply idempotency + upgrade/downgrade for a span write on ``anchor``.
 
-    Returns the new span list to write, or ``None`` when the write is a
-    no-op (an identical span already exists). Raises
-    :class:`typer.BadParameter` on a fork-over-pin downgrade.
+    Returns ``existing`` unchanged as a proceed-sentinel (the caller rebuilds
+    the span list itself), or ``None`` when the write is a no-op (an identical
+    span already exists). Raises :class:`typer.BadParameter` on a fork-over-pin
+    downgrade.
     """
     by_anchor = {s.anchor: s for s in existing}
     prior = by_anchor.get(anchor)
