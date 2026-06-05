@@ -218,16 +218,16 @@ def _reconcile_shared_spans(
       applies; nothing to reconcile).
     - **Bare install** (``reconcile_user_sections`` False, ``section_auto``
       None) → empty set, NO warning. An intentional host-local shadow must
-      not nag (B-R6); the silent host-local-wins matches shared
+      not nag; the silent host-local-wins matches shared
       user-sections.
     - ``--auto=use-tracked`` → every collision resolves to the shared
       intent AND an explicit "host-local span X overwritten" risk line is
-      printed per collision — never a silent host-local drop (B-R7).
+      printed per collision — never a silent host-local drop.
     - ``--auto=keep-live`` → empty set, no risk line (the host-local
       override is the protected side).
     - ``--reconcile-user-sections`` (no ``--auto``):
       - non-tty → raise :class:`SharedSpanReconcileRequiresInteractive`
-        rather than a silent keep-live that buries the collision (B-R8).
+        rather than a silent keep-live that buries the collision.
       - tty → per-collision arrow-key prompt; each prompt's outcome adds
         (or omits) the pair from the prefer-shared set.
 
@@ -256,7 +256,7 @@ def _reconcile_shared_spans(
         assert_never(section_auto)
 
     if not reconcile_user_sections:
-        # Bare install: silent host-local-wins, no nag (B-R6).
+        # Bare install: silent host-local-wins, no nag.
         return frozenset()
 
     # Interactive reconcile requested.

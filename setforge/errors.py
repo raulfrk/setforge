@@ -245,7 +245,7 @@ class SharedSpanReconcileRequiresInteractive(SetforgeError):
     is the interactive switch; when a same-anchor collision exists and
     stdout is not a TTY (and no ``--auto`` was passed), there is no safe
     default — silently keeping the host-local side would bury the
-    collision (B-R8). The escape hatch is ``--auto=use-tracked`` (adopt
+    collision. The escape hatch is ``--auto=use-tracked`` (adopt
     the shared intent) or ``--auto=keep-live`` (keep the host-local
     override), both of which resolve every collision non-interactively."""
 

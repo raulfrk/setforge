@@ -194,10 +194,10 @@ def install(
     apply_preserve_user_keys_overlay(cfg, profile)
     # Resolve host-local↔shared span intent collisions BEFORE the overlay
     # fold so the chosen winner per collided anchor flows into the fold.
-    # Bare install stays silent host-local-wins (B-R6); --auto routes the
-    # adopt-shared / keep-host-local decision (B-R7); a non-tty
-    # --reconcile-user-sections raises rather than burying the collision
-    # (B-R8). Returns the (tf_id, anchor) pairs whose SHARED span should
+    # Bare install stays silent host-local-wins; --auto routes the
+    # adopt-shared / keep-host-local decision; a non-tty
+    # --reconcile-user-sections raises rather than burying the collision.
+    # Returns the (tf_id, anchor) pairs whose SHARED span should
     # win the fold.
     prefer_shared_anchors = _reconcile_shared_spans(
         cfg,
