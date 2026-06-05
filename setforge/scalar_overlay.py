@@ -268,7 +268,8 @@ def _apply_resolution(
     Mutates ``live_doc`` (TAKE/DELETE writes; CONFLICT keeps or takes per
     ``auto`` / ``conflict_resolver``), appends to ``rebaseline`` / ``conflicts``
     as the spec dictates, and returns whether this path DEFERRED (a bare
-    ``auto is None`` conflict that was kept-live — its base must NOT advance).
+    ``auto is None`` conflict that was kept-live, or a resolver ``SKIP`` —
+    either way its base must NOT advance).
     ``base`` / ``ours`` / ``theirs`` are the already-read base, live and tracked
     values, reused for the conflict branches (``base`` only for the interactive
     :class:`~setforge.scalar_merge.ScalarConflict` record).
@@ -353,7 +354,8 @@ def _apply_resolver_verdict(
     """Ask the interactive resolver and apply its verdict; return deferred.
 
     Hands the resolver a :class:`~setforge.scalar_merge.ScalarConflict` carrying
-    all three sides, then maps the verdict (same semantics as p5qc.9):
+    all three sides, then maps the verdict (same semantics as the disposition
+    wizard):
 
     - ``KEEP_OURS`` — keep live (already on the doc), rebaseline ours, advance.
     - ``TAKE_THEIRS`` — write theirs (DELETE when theirs is ABSENT), rebaseline
@@ -380,6 +382,8 @@ def _apply_resolver_verdict(
             return False
         case ConflictChoice.SKIP:
             return True
+        case _:  # pragma: no cover - exhaustiveness guard
+            raise AssertionError(f"unhandled choice: {verdict.choice}")
 
 
 def _take_or_delete(value: object) -> ScalarResolution:
