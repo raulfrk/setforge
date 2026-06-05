@@ -88,6 +88,7 @@ __all__ = [
     "is_structural",
     "resolve_file",
     "validate_structural_span_overlap",
+    "validate_structural_spans",
 ]
 
 
@@ -386,10 +387,24 @@ def _pinned_structural_spans(
     """
     if not structural_spans:
         return []
-    _reject_list_index_anchors(structural_spans)
-    validate_structural_span_overlap(structural_spans)
+    validate_structural_spans(structural_spans)
     pinned = [s for s in structural_spans if s.kind is SpanKind.PINNED]
     return sorted(pinned, key=lambda s: s.anchor)
+
+
+def validate_structural_spans(spans: list[SpanEntry]) -> None:
+    """Run the structural-span integrity checks (list-index + overlap).
+
+    The single offline-validate seam over a tracked_file's STRUCTURAL spans:
+    rejects a list-index anchor (Invariant I10) and any overlapping / nested
+    pins (Invariant I11), the same two guards the install-time merge enforces
+    via :func:`_pinned_structural_spans`. Surfacing them here lets
+    ``setforge validate`` (the offline CI gate) catch a malformed structural
+    span declaration BEFORE install would abort mid-deploy with a
+    :class:`~setforge.errors.ConfigError`.
+    """
+    _reject_list_index_anchors(spans)
+    validate_structural_span_overlap(spans)
 
 
 def _reject_list_index_anchors(spans: list[SpanEntry]) -> None:

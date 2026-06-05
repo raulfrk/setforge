@@ -39,6 +39,7 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
+from setforge.disposition_merge import is_structural, validate_structural_spans
 from setforge.errors import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
@@ -376,9 +377,18 @@ def _check_spans_file_types(
     anchor on markdown) BEFORE install would fail with a confusing runtime
     relocation / re-assert miss.
 
+    For STRUCTURAL tracked_files it additionally runs the structural-span
+    integrity guards (:func:`setforge.disposition_merge.validate_structural_spans`
+    — list-index rejection per Invariant I10 + overlap/nesting rejection per
+    Invariant I11). These otherwise fire only at merge / install time
+    (a :class:`~setforge.errors.ConfigError` mid-install), so a config with an
+    ``a[*]`` index anchor or overlapping pins would pass ``validate`` clean and
+    then abort install; surfacing them here keeps the offline gate complete.
+
     Routes every :class:`~setforge.errors.ConfigError` from
-    :func:`setforge.spans.validate_spans_file_type` to a string failure
-    (existing UX). No-op for tracked_files without spans.
+    :func:`setforge.spans.validate_spans_file_type` /
+    :func:`setforge.disposition_merge.validate_structural_spans` to a string
+    failure (existing UX). No-op for tracked_files without spans.
     """
     for tf_id in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tf_id]
@@ -387,6 +397,8 @@ def _check_spans_file_types(
         src = resolve_src(tracked_file, repo_root)
         try:
             validate_spans_file_type(tf_id, tracked_file.spans, src)
+            if is_structural(src):
+                validate_structural_spans(list(tracked_file.spans))
         except ConfigError as exc:
             failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
 

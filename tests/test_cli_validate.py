@@ -613,6 +613,69 @@ profiles:
     assert result.exit_code == 0, result.output
 
 
+def test_validate_overlapping_structural_pins_exits_1(tmp_path: Path) -> None:
+    """Overlapping structural span pins are caught by the offline gate (I11).
+
+    The overlap guard otherwise fires only mid-install (a ConfigError); the
+    offline ``validate`` gate must reject ``editor`` and ``editor.fontSize``
+    (one prefixes the other) up front with a clear message.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor
+        kind: pinned
+        semantics: shared
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "overlapping" in result.output, result.output
+    assert "'d'" in result.output, result.output
+
+
+def test_validate_list_index_structural_anchor_exits_1(tmp_path: Path) -> None:
+    """A list-index structural span anchor is caught by the offline gate (I10).
+
+    A ``a[*]`` index anchor has no stable key identity; the install-time merge
+    rejects it, and so must ``validate`` — a dotted-path anchor must address a
+    mapping leaf or whole subtree.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: "servers[*]"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "list suffix" in result.output, result.output
+    assert "'d'" in result.output, result.output
+
+
 def test_validate_span_on_markdown_file_exits_0(tmp_path: Path) -> None:
     """A span anchor on a markdown tracked_file passes the file-type gate."""
     span_yaml = """\
