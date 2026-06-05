@@ -47,6 +47,8 @@ from setforge.migrations import (
     current_expected_schema_version,
     detect_current_schema,
     find_migration_path,
+    known_versions,
+    parse_schema_version,
 )
 
 # Strict anchored version-token: digits and dots only (e.g. ``1.0``,
@@ -97,6 +99,12 @@ def migrate(
         "--pin",
         help="Write `schema_version: <X.Y>` into setforge.yaml and exit.",
     ),
+    to: str | None = typer.Option(
+        None,
+        "--to",
+        help="Target schema version (up OR down). Default: the version "
+        "this setforge expects. Mutually exclusive with --pin.",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -106,9 +114,12 @@ def migrate(
 ) -> None:
     """Run schema migrations against the active ``setforge.yaml``.
 
-    Mutually exclusive: ``--check`` + ``--apply``. ``--pin`` short-
-    circuits both. ``--yes`` collapses the arrow-key confirm to the
-    ``APPLY_WITH_BACKUP`` outcome — required when stdin is not a TTY.
+    Mutually exclusive: ``--check`` + ``--apply``, and ``--pin`` +
+    ``--to``. ``--pin`` short-circuits both check/apply. ``--to=X.Y``
+    targets a specific version (up OR down); without it the target is
+    :data:`current_expected_schema_version`. ``--yes`` collapses the
+    arrow-key confirm to ``APPLY_WITH_BACKUP`` — required when stdin is
+    not a TTY (and the only non-interactive route through a downgrade).
 
     Thin router: each branch delegates to a ``_dispatch_*`` helper so
     the Typer-decorated entry point stays focused on flag-shape and
@@ -116,26 +127,55 @@ def migrate(
     """
     if check and apply_flag:
         raise typer.BadParameter("--check and --apply are mutually exclusive")
+    if pin is not None and to is not None:
+        raise typer.BadParameter("--pin and --to are mutually exclusive")
     cfg_path = _resolve_config_arg(config)
     if pin is not None:
         _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return
 
     current = detect_current_schema(cfg_path)
-    expected = current_expected_schema_version
-    chain = find_migration_path(from_v=current, to_v=expected)
+    target = _resolve_target(to=to)
+
+    # --to == current is a no-op (distinct from "no migration path"):
+    # report it and exit 0 without touching the file.
+    if to is not None and parse_schema_version(current) == parse_schema_version(target):
+        typer.echo(f"already at schema_version {target}; nothing to do.")
+        return
+
+    chain = find_migration_path(from_v=current, to_v=target)
 
     if check or not apply_flag:
         _dispatch_check(
             cfg_path=cfg_path,
             current=current,
-            expected=expected,
+            expected=target,
             chain=chain,
             bare=not check and not apply_flag,
         )
         return
 
     _dispatch_apply(cfg_path=cfg_path, chain=chain, yes=yes)
+
+
+def _resolve_target(*, to: str | None) -> str:
+    """Resolve the migration target version, validating an explicit ``--to``.
+
+    Without ``--to`` the target is the build's
+    :data:`current_expected_schema_version`. An explicit ``--to`` must be
+    a KNOWN version (:func:`known_versions`) — an unknown target raises
+    :class:`typer.BadParameter` BEFORE any walk, so it can never fall
+    through a string-range "reachable" check.
+    """
+    if to is None:
+        return current_expected_schema_version
+    if to not in known_versions():
+        known = ", ".join(sorted(known_versions()))
+        raise typer.BadParameter(
+            f"unknown schema version {to!r}; known versions: {known}",
+            param_hint="--to",
+        )
+    return to
 
 
 def _dispatch_pin(*, cfg_path: Path, pin: str) -> None:
@@ -457,12 +497,20 @@ def _execute_chain(
     user gets the full failure inventory in one pass.
     """
     typer.echo("=== applying ===")
+    affected_paths = _all_affected_paths(chain=chain, roots=roots)
     if choice is MigrateChoice.APPLY_WITH_BACKUP:
         backup_failures: list[tuple[Path, OSError]] = []
-        for affected in _all_affected_paths(chain=chain, roots=roots):
+        for affected in affected_paths:
             if not affected.exists():
                 continue
             backup = _fs_ops.backup_path(affected, chain[-1].to_version)
+            if backup.exists():
+                # No-clobber: a backup from a prior run holds the pristine
+                # pre-migration bytes. Overwriting it with the (possibly
+                # already-migrated) current content would destroy the only
+                # clean copy — keep the existing one.
+                typer.echo(f"  backup kept (prior exists): {backup.name}")
+                continue
             try:
                 shutil.copy2(affected, backup)
             except OSError as exc:
@@ -481,9 +529,47 @@ def _execute_chain(
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)
+    # Snapshot every affected file BEFORE mutating so a mid-chain failure
+    # rolls back to a consistent pre-migration state — never a
+    # half-migrated file at a schema_version inconsistent with its
+    # content. Independent of the backup choice: APPLY_NO_BACKUP still
+    # gets crash-consistency across a multi-step chain.
+    snapshots: dict[Path, bytes | None] = {
+        path: (path.read_bytes() if path.exists() else None) for path in affected_paths
+    }
+    applied: list[str] = []
     for migration in chain:
-        migration.apply(roots=roots)
-        typer.echo(f"  applied: {migration.from_version} → {migration.to_version}")
+        step = f"{migration.from_version} → {migration.to_version}"
+        try:
+            migration.apply(roots=roots)
+        except Exception as exc:
+            _rollback(snapshots)
+            typer.secho(
+                f"migration step {step} failed after "
+                f"{len(applied)} completed step(s) "
+                f"({', '.join(applied) or 'none'}); "
+                f"rolled back to the pre-migration state: {exc}",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1) from exc
+        applied.append(step)
+        typer.echo(f"  applied: {step}")
+
+
+def _rollback(snapshots: dict[Path, bytes | None]) -> None:
+    """Restore each affected path to its pre-migration snapshot.
+
+    ``None`` marks a path that did not exist before the migration — it is
+    removed if a partial apply created it. Best-effort recovery path:
+    direct writes (not atomic), since the goal is to undo a failed
+    multi-step apply rather than to survive a crash mid-rollback.
+    """
+    for path, original in snapshots.items():
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(original)
 
 
 def _run_post_apply_validate(*, cfg_path: Path) -> None:
