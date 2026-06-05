@@ -147,3 +147,107 @@ def test_frozen_pre_bump_config_still_installs(
     combined = result.stdout + result.stderr
     assert "schema_version" in combined, combined
     assert c.read_text("/home/tester/.foo.md") == "hello\n"
+
+
+# ---------------------------------------------------------------------------
+# version-switching: downgrade round-trip + forward-tolerant reads (p5qc.14.10/14.2)
+# ---------------------------------------------------------------------------
+
+
+def _cfg_with_schema(extra: str = "") -> str:
+    """A minimal valid config; ``extra`` injects top-level lines (e.g. a stamp)."""
+    return (
+        "version: 1\n"
+        f"{extra}"
+        "tracked_files:\n"
+        "  foo:\n"
+        "    src: foo.md\n"
+        "    dst: ~/.foo.md\n"
+        "profiles:\n"
+        "  base:\n"
+        "    tracked_files:\n"
+        "      - foo\n"
+    )
+
+
+def _seed_cfg(c: ContainerHandle, body: str) -> None:
+    c.exec(["mkdir", "-p", f"{_CFG_DIR}/tracked"])
+    c.write_text(_CFG_PATH, body)
+    c.write_text(f"{_CFG_DIR}/tracked/foo.md", "hello\n")
+    c.write_text(_HOME_LOCAL_YAML, f"source:\n  kind: path\n  path: {_CFG_DIR}\n")
+
+
+def test_migrate_to_downgrade_round_trip(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """1.0 -> apply (1.1) -> migrate --to=1.0 strips the stamp back to 1.0."""
+    c = docker_container()
+    _seed_frozen_config(c)
+    up = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert up.returncode == 0, up.stdout + up.stderr
+    assert "schema_version: '1.1'" in c.read_text(_CFG_PATH)
+    down = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--to=1.0",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert down.returncode == 0, down.stdout + down.stderr
+    # stamp removed -> declared schema is the 1.0 baseline again
+    assert "schema_version" not in c.read_text(_CFG_PATH)
+    check = c.exec(
+        ["uv", "run", "setforge", "migrate", "--check", f"--config={_CFG_PATH}"],
+        check=False,
+    )
+    assert "1.0" in (check.stdout + check.stderr)
+
+
+def test_install_cross_major_config_refuses_clean(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A 2.0 config on this (1.x) engine refuses cleanly — no traceback."""
+    c = docker_container()
+    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\n'))
+    result = c.exec(
+        ["uv", "run", "setforge", "install", "--profile=base"],
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined
+    assert "upgrade setforge" in combined, combined
+    assert "Traceback (most recent call last)" not in combined, combined
+
+
+def test_install_forward_tolerant_warns_on_unknown_key(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A same-major-newer config with an extra field loads + warns, not refuses."""
+    c = docker_container()
+    _seed_cfg(c, _cfg_with_schema('schema_version: "1.9"\nfuture_field: 42\n'))
+    result = c.exec(
+        ["uv", "run", "setforge", "install", "--profile=base"],
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "future_field" in combined, combined
+    assert "upgrade setforge" not in combined, combined
+    assert c.read_text("/home/tester/.foo.md") == "hello\n"
