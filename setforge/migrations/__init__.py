@@ -25,6 +25,7 @@ migrations are appended in ``from_version`` order so
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -35,6 +36,36 @@ from ruamel.yaml.comments import CommentedMap
 
 from setforge.errors import ConfigError
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+# A schema version is exactly ``MAJOR.MINOR`` — two non-negative integer
+# components. This is stricter than the ``--pin`` token (which tolerates
+# ``X.Y.Z``): schema versions are the engine's own contract surface, so
+# the format is pinned. Rejecting ``"1"`` / ``"1.2.3"`` / ``""`` / ``"v2"``
+# here is what keeps the forward-tolerant gate and the migration
+# path-finder from leaking a ``ValueError``/``IndexError`` traceback on a
+# malformed ``schema_version``.
+_SCHEMA_VERSION_RE: Final = re.compile(r"^\d+\.\d+$")
+
+
+def parse_schema_version(raw: str) -> tuple[int, int]:
+    """Parse a ``MAJOR.MINOR`` schema version into an ``(int, int)`` tuple.
+
+    The tuple form is what makes version comparison *semantic* rather than
+    lexical: ``parse_schema_version("1.10") > parse_schema_version("1.9")``
+    is ``True`` (a string sort gets this wrong). ``[0]`` is the major.
+
+    Raises :class:`ConfigError` — never a bare ``ValueError`` /
+    ``IndexError`` — on any value that is not exactly two dot-separated
+    integers (``"1"``, ``"1.2.3"``, ``""``, ``"v2"``, ``"2.0.0"`` …), so
+    callers get a clean, traceback-free message.
+    """
+    if _SCHEMA_VERSION_RE.fullmatch(raw) is None:
+        raise ConfigError(
+            f"malformed schema_version {raw!r}: expected MAJOR.MINOR "
+            f"(two integers, e.g. '1.0')"
+        )
+    major, minor = raw.split(".")
+    return (int(major), int(minor))
 
 
 def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
@@ -65,6 +96,8 @@ __all__ = [
     "current_expected_schema_version",
     "detect_current_schema",
     "find_migration_path",
+    "known_versions",
+    "parse_schema_version",
 ]
 
 
@@ -169,6 +202,20 @@ class Migration(Protocol):
     @property
     def to_version(self) -> str:
         """Target schema version this migration upgrades to."""
+        ...
+
+    @property
+    def reverse(self) -> Migration:
+        """The inverse migration (``to_version`` → ``from_version``).
+
+        Required on every registered migration so a downgrade
+        (``migrate --to=<older>``) can walk the chain backward. The
+        registry :data:`MIGRATIONS` stays forward-only — the reverse is
+        attached to its forward instance, never registered, so the
+        forward walk cannot cycle. ``runtime_checkable`` does NOT enforce
+        property presence, so :func:`_validate_registry` checks it at
+        import time instead.
+        """
         ...
 
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
@@ -287,6 +334,19 @@ class _VersionStampReverse:
     from_version: str = "1.1"
     to_version: str = "1.0"
 
+    @property
+    def reverse(self) -> VersionStampMigration:
+        """The forward 1.0 → 1.1 stamp — keeps the Protocol symmetric.
+
+        A reverse-of-a-reverse is the original forward migration. Defined
+        so ``_VersionStampReverse`` satisfies the ``reverse``-bearing
+        :class:`Migration` Protocol when it is used as a chain element in
+        a downgrade walk.
+        """
+        return VersionStampMigration(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
         return (
             ManifestEntry(
@@ -349,32 +409,88 @@ def detect_current_schema(yaml_path: Path) -> str:
     return str(raw)
 
 
-def find_migration_path(*, from_v: str, to_v: str) -> tuple[Migration, ...]:
-    """Walk :data:`MIGRATIONS` to find a chain from ``from_v`` to ``to_v``.
+def known_versions() -> frozenset[str]:
+    """Every schema version the current registry can resolve to.
 
-    Returns an empty tuple when ``from_v == to_v`` (nothing to do) or
-    when no chain bridges the two versions in the current registry
-    (e.g. a target version no migration reaches).
-
-    Implementation: greedy forward walk — at each step, pick the
-    migration whose ``from_version`` matches the current cursor. The
-    registry is expected to be ordered linearly; branching version
-    graphs are explicitly out of scope until a real migration ships
-    that needs them.
+    The build's :data:`current_expected_schema_version` plus every
+    ``from_version`` / ``to_version`` in :data:`MIGRATIONS`. The
+    ``migrate --to`` / ``--pin`` CLI validates a user-supplied target
+    against this set so an unknown version errors cleanly instead of
+    falling through a string-range "reachable" check.
     """
-    if from_v == to_v:
+    versions = {current_expected_schema_version}
+    for m in MIGRATIONS:
+        versions.add(m.from_version)
+        versions.add(m.to_version)
+    return frozenset(versions)
+
+
+def find_migration_path(*, from_v: str, to_v: str) -> tuple[Migration, ...]:
+    """Find a chain from ``from_v`` to ``to_v`` — walking forward OR backward.
+
+    Direction is decided **semantically** (:func:`parse_schema_version`
+    → ``(int, int)``), never by string sort, so the 1.9 ↔ 1.10 boundary
+    is correct.
+
+    - ``to_v == from_v`` → ``()`` (nothing to do).
+    - ``to_v`` newer → forward chain via :data:`MIGRATIONS` (each step
+      picks the migration whose ``from_version`` matches the cursor).
+    - ``to_v`` older → reverse chain: at each step pick the forward
+      migration whose ``to_version`` matches the cursor and append its
+      ``.reverse`` (the registry itself stays forward-only).
+
+    Returns ``()`` when no chain bridges the two versions. The walk is
+    bounded by ``len(MIGRATIONS) + 1`` in BOTH directions, so an
+    unreachable target terminates with ``()`` instead of looping.
+
+    Raises :class:`ConfigError` (never a bare ``ValueError`` /
+    ``IndexError``) when either version is not a valid ``MAJOR.MINOR``
+    token.
+    """
+    from_t = parse_schema_version(from_v)
+    to_t = parse_schema_version(to_v)
+    if from_t == to_t:
         return ()
     chain: list[Migration] = []
     cursor = from_v
-    for _ in range(len(MIGRATIONS) + 1):
-        if cursor == to_v:
+    bound = len(MIGRATIONS) + 1
+    forward = to_t > from_t
+    for _ in range(bound):
+        if parse_schema_version(cursor) == to_t:
             return tuple(chain)
-        match = next(
-            (m for m in MIGRATIONS if m.from_version == cursor),
-            None,
-        )
-        if match is None:
-            return ()
-        chain.append(match)
-        cursor = match.to_version
+        if forward:
+            match = next((m for m in MIGRATIONS if m.from_version == cursor), None)
+            if match is None:
+                return ()
+            chain.append(match)
+            cursor = match.to_version
+        else:
+            match = next((m for m in MIGRATIONS if m.to_version == cursor), None)
+            if match is None:
+                return ()
+            chain.append(match.reverse)
+            cursor = match.from_version
     return ()
+
+
+def _validate_registry() -> None:
+    """Assert every registered migration carries a correctly-swapped ``reverse``.
+
+    ``@runtime_checkable`` Protocols verify attribute *names* at
+    isinstance time but do NOT check property presence or behavior, so a
+    migration appended to :data:`MIGRATIONS` without a ``reverse`` (or
+    with a mis-swapped one) would crash only at downgrade time, deep in
+    the reverse walk. This import-time guard turns that latent failure
+    into a loud one at module load.
+    """
+    for m in MIGRATIONS:
+        rev = m.reverse
+        if rev.from_version != m.to_version or rev.to_version != m.from_version:
+            raise ConfigError(
+                f"migration {type(m).__name__} has a mis-swapped reverse: "
+                f"forward {m.from_version}->{m.to_version}, "
+                f"reverse {rev.from_version}->{rev.to_version}"
+            )
+
+
+_validate_registry()

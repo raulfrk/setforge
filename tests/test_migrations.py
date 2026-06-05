@@ -72,6 +72,159 @@ def test_find_migration_path_same_version_returns_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
+# parse_schema_version — semantic, guarded
+# ---------------------------------------------------------------------------
+
+
+def test_parse_schema_version_returns_int_tuple() -> None:
+    from setforge.migrations import parse_schema_version
+
+    assert parse_schema_version("1.0") == (1, 0)
+    assert parse_schema_version("2.13") == (2, 13)
+
+
+def test_parse_schema_version_is_semantic_not_lexical() -> None:
+    """1.10 must sort ABOVE 1.9 — the bug a string compare gets wrong."""
+    from setforge.migrations import parse_schema_version
+
+    assert parse_schema_version("1.10") > parse_schema_version("1.9")
+    assert "1.10" < "1.9"  # the lexical trap this guards against
+
+
+@pytest.mark.parametrize("bad", ["1", "1.2.3", "", "v2", "2.0.0", "1.x", "1."])
+def test_parse_schema_version_rejects_malformed_cleanly(bad: str) -> None:
+    """Malformed versions raise ConfigError, never ValueError/IndexError."""
+    from setforge.migrations import parse_schema_version
+
+    with pytest.raises(ConfigError, match="malformed schema_version"):
+        parse_schema_version(bad)
+
+
+# ---------------------------------------------------------------------------
+# reverse + registry guard
+# ---------------------------------------------------------------------------
+
+
+def test_version_stamp_reverse_is_swapped() -> None:
+    fwd = VersionStampMigration()
+    rev = fwd.reverse
+    assert (rev.from_version, rev.to_version) == (fwd.to_version, fwd.from_version)
+    # reverse-of-reverse is the original forward direction (Protocol symmetric)
+    assert (rev.reverse.from_version, rev.reverse.to_version) == (
+        fwd.from_version,
+        fwd.to_version,
+    )
+
+
+def test_every_registered_migration_has_a_swapped_reverse() -> None:
+    """The contract the import-time guard enforces, asserted explicitly."""
+    for migration in MIGRATIONS:
+        rev = migration.reverse
+        assert rev.from_version == migration.to_version
+        assert rev.to_version == migration.from_version
+
+
+def test_registry_guard_rejects_missing_or_misswapped_reverse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mis-swapped reverse fails loudly at the guard, not at downgrade time."""
+    from setforge.migrations import _validate_registry
+
+    @dataclass(frozen=True)
+    class _BadReverse:
+        from_version: str = "1.1"
+        to_version: str = "9.9"  # NOT the swap of 1.0->1.1
+
+    @dataclass(frozen=True)
+    class _BadMigration:
+        from_version: str = "1.0"
+        to_version: str = "1.1"
+
+        @property
+        def reverse(self) -> _BadReverse:
+            return _BadReverse()
+
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_BadMigration(),))
+    with pytest.raises(ConfigError, match="mis-swapped reverse"):
+        _validate_registry()
+
+
+# ---------------------------------------------------------------------------
+# bidirectional find_migration_path
+# ---------------------------------------------------------------------------
+
+
+def test_find_migration_path_reverse_one_step() -> None:
+    """1.1 -> 1.0 walks the registered migration's .reverse."""
+    chain = find_migration_path(from_v="1.1", to_v="1.0")
+    assert len(chain) == 1
+    assert (chain[0].from_version, chain[0].to_version) == ("1.1", "1.0")
+
+
+def test_find_migration_path_unreachable_target_returns_empty() -> None:
+    """A target no chain reaches terminates with () — never hangs."""
+    assert find_migration_path(from_v="1.1", to_v="0.9") == ()
+    assert find_migration_path(from_v="1.0", to_v="5.0") == ()
+
+
+def test_find_migration_path_malformed_version_raises_configerror() -> None:
+    with pytest.raises(ConfigError, match="malformed schema_version"):
+        find_migration_path(from_v="1.0", to_v="2")
+
+
+def test_find_migration_path_semantic_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 1.9 -> 1.10 step resolves forward (semantic), not backward (lexical)."""
+
+    @dataclass(frozen=True)
+    class _Rev:
+        from_version: str = "1.10"
+        to_version: str = "1.9"
+
+        @property
+        def reverse(self) -> _Step:
+            return _Step()
+
+    @dataclass(frozen=True)
+    class _Step:
+        from_version: str = "1.9"
+        to_version: str = "1.10"
+
+        @property
+        def reverse(self) -> _Rev:
+            return _Rev()
+
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", (_Step(),))
+    fwd = find_migration_path(from_v="1.9", to_v="1.10")
+    assert len(fwd) == 1
+    assert fwd[0].to_version == "1.10"
+    rev = find_migration_path(from_v="1.10", to_v="1.9")
+    assert len(rev) == 1
+    assert rev[0].to_version == "1.9"
+
+
+def test_known_versions_covers_registry_and_expected() -> None:
+    from setforge.migrations import known_versions
+
+    kv = known_versions()
+    assert "1.0" in kv
+    assert "1.1" in kv
+
+
+def test_atomic_write_yaml_preserves_file_mode(tmp_path: Path) -> None:
+    """A migrate write must not narrow a 0644 config to mkstemp's 0600."""
+    import stat
+
+    p = tmp_path / "setforge.yaml"
+    p.write_text("a: 1\n", encoding="utf-8")
+    p.chmod(0o644)
+    data = yaml_rt().load("a: 2\n")
+    atomic_write_yaml(p, data)
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+# ---------------------------------------------------------------------------
 # detect_current_schema
 # ---------------------------------------------------------------------------
 
@@ -112,6 +265,12 @@ class _NoopMigration:
 
     from_version: str
     to_version: str
+
+    @property
+    def reverse(self) -> _NoopMigration:
+        return _NoopMigration(
+            from_version=self.to_version, to_version=self.from_version
+        )
 
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
         return (ManifestEntry(type=ManifestType.NOTE, description="noop"),)

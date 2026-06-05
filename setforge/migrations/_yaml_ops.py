@@ -18,6 +18,7 @@ write never leaves a half-rendered YAML document on disk.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,13 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             yaml.dump(data, fh)
+        # Preserve the destination's permission bits. ``mkstemp`` creates
+        # the tmp file at 0600, so a plain ``os.replace`` would silently
+        # narrow a group/other-readable config to owner-only on every
+        # migrate/pin write. Copy the existing file's mode onto the tmp
+        # before the rename (new files keep the 0600 default).
+        if yaml_path.exists():
+            os.chmod(tmp, stat.S_IMODE(yaml_path.stat().st_mode))
         os.replace(tmp, yaml_path)
     except BaseException:
         tmp.unlink(missing_ok=True)
