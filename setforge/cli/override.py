@@ -17,16 +17,21 @@ The user-facing surface over the stored-base disposition model
   injected at render time, to STDOUT ONLY (the file byte-stays unchanged).
 
 Every span / disposition mutation is guarded before any write: a per-
-file-type anchor validator, a legacy-``preserve_*`` refusal (I14), a
+file-type anchor validator, a refusal on legacy-``preserve_*`` files
+(disposition / spans are mutually exclusive with the preserve model), a
 user-section-marker overlap refusal, idempotency, a pin-over-fork upgrade /
-fork-over-pin downgrade rule, and the structural non-overlap / nesting check
-(I11). The ``--shared`` write rides the B-C1..B-C5 discipline: atomic write
-(B-C1), a ``setforge.yaml``-root clean-check (B-C2), the post-write hint
-(B-C3), source-layer target resolution (B-C4), and a symlink refusal (B-C5).
+fork-over-pin downgrade rule, and the structural non-overlap / nesting check.
+The ``--shared`` write rides a five-part discipline: an atomic round-trip
+write (never a torn version-controlled file), a clean-check covering the
+``setforge.yaml`` root (not just ``tracked/``), the post-write commit/push
+hint (the span is otherwise lost on the next config-repo pull), source-layer
+target resolution (never a hard-coded / CWD path), and a symlink refusal (no
+silent link replacement).
 """
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import typer
@@ -118,10 +123,11 @@ def _tracked_file_or_fail(cfg_path: Path, file_id: str) -> tuple[TrackedFile, Pa
 
 
 def _refuse_legacy_preserve(tracked_file: TrackedFile, file_id: str) -> None:
-    """Refuse pin/fork on a legacy ``preserve_*`` file (I14, early BadParameter).
+    """Refuse pin/fork on a legacy ``preserve_*`` file (early BadParameter).
 
-    Surfaces the same mutual-exclusion the config model enforces, but at
-    parse time on the CLI rather than as a deferred install-time
+    Disposition / spans are mutually exclusive with the legacy preserve
+    model. This surfaces that same mutual-exclusion the config model enforces,
+    but at parse time on the CLI rather than as a deferred install-time
     :class:`pydantic.ValidationError`.
     """
     offenders: list[str] = []
@@ -370,7 +376,7 @@ def _existing_spans_shared(cfg_path: Path, file_id: str) -> list[SpanEntry]:
 
 
 # ---------------------------------------------------------------------------
-# Shared (setforge.yaml) atomic round-trip write — B-C1..B-C5.
+# Shared (setforge.yaml) atomic round-trip write — discipline gates below.
 # ---------------------------------------------------------------------------
 
 
@@ -378,8 +384,8 @@ def _source_for_config(cfg_path: Path) -> Source:
     """Build a :class:`Source` rooted at the resolved config's directory.
 
     The ``--shared`` write target is the path :func:`_resolve_config_arg`
-    already produced (B-C4: full ``--source`` / env / local.yaml / CWD
-    precedence, never ``Path.cwd()``). The clean-check + post-write hint
+    already produced (full ``--source`` / env / local.yaml / CWD precedence,
+    never ``Path.cwd()``). The clean-check + post-write hint
     operate on THAT same directory, so we wrap its parent in a
     :class:`PathSource` rather than re-running the source layer (which would
     diverge from the actual write target, or raise ``NoSourceConfigured``
@@ -389,11 +395,11 @@ def _source_for_config(cfg_path: Path) -> Source:
 
 
 def _shared_write_preflight(cfg_path: Path) -> None:
-    """B-C2 + B-C5 pre-write gates for a ``--shared`` setforge.yaml write.
+    """Pre-write gates for a ``--shared`` setforge.yaml write.
 
-    B-C5: a symlinked ``setforge.yaml`` is refused outright (no silent link
-    replace). B-C2: a dirty ``setforge.yaml`` at the source root refuses,
-    via the :func:`setforge.source.check_source_yaml_clean` extension.
+    A symlinked ``setforge.yaml`` is refused outright (no silent link
+    replace). A dirty ``setforge.yaml`` at the source root refuses, via the
+    :func:`setforge.source.check_source_yaml_clean` extension.
     """
     if cfg_path.is_symlink():
         raise SetforgeError(
@@ -433,8 +439,8 @@ def _shared_apply(
 
     Loads the round-trip model (comment + key-order preserving), mutates the
     ``tracked_files.<id>`` entry, dumps to a string, and writes via
-    :func:`atomicio.atomic_write_text` (B-C1) so the version-controlled file
-    is never torn.
+    :func:`atomicio.atomic_write_text` so the version-controlled file is
+    never torn.
     """
     data = _RT_YAML.load(cfg_path.read_text(encoding="utf-8"))
     entry = data["tracked_files"][file_id]
@@ -450,8 +456,6 @@ def _shared_apply(
         ]
         spans.append(span.model_dump(mode="json"))
         entry["spans"] = spans
-    import io
-
     buffer = io.StringIO()
     _RT_YAML.dump(data, buffer)
     atomic_write_text(cfg_path, buffer.getvalue())
@@ -478,7 +482,7 @@ def _override_apply(
     semantics = SpanSemantics.SHARED if shared else SpanSemantics.HOST_LOCAL
 
     # SetforgeError covers the --shared write-discipline refusals
-    # (DirtySourceCheckout B-C2, symlink-refuse B-C5). Surface them as a
+    # (DirtySourceCheckout, symlink-refuse). Surface them as a
     # clean error + exit 1 here — CliRunner invokes ``app`` directly, not the
     # ``main()`` wrapper that pretty-prints SetforgeError in production — so a
     # bare raise would otherwise propagate as an uncaught traceback.
@@ -558,7 +562,7 @@ def _apply_span(
         return
 
     new_span = SpanEntry(anchor=anchor, kind=kind, semantics=semantics)
-    # Validate the COMBINED span set (overlap / nesting, I11) before writing.
+    # Validate the COMBINED span set (overlap / nesting) before writing.
     combined = [s for s in existing if s.anchor != anchor] + [new_span]
     _validate_combined_spans(combined, src)
 
@@ -576,9 +580,9 @@ def _validate_combined_spans(spans: list[SpanEntry], src: Path) -> None:
 
     Markdown spans are pairwise non-overlapping by heading bounding (the
     install merge enforces it); the dotted-path engine has no such guard, so
-    :func:`setforge.disposition_merge.validate_structural_spans` (I10 / I11)
-    runs over the structural set up front and surfaces as a
-    :class:`typer.BadParameter`.
+    :func:`setforge.disposition_merge.validate_structural_spans` (rejecting
+    list-index pins and overlapping / illegally-nested dotted paths) runs over
+    the structural set up front and surfaces as a :class:`typer.BadParameter`.
     """
     if not disposition_merge.is_structural(src):
         return
@@ -636,7 +640,7 @@ def override_list(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
 ) -> None:
-    """List each tracked_file's disposition + span state (markdown + structural)."""
+    """List each tracked_file's disposition, declared-span count, and drift state."""
     console = Console()
     cfg_path = _resolve_config_arg(config)
     cfg = load_config(cfg_path)
@@ -698,13 +702,16 @@ def override_show(
         help="Render the span summary table + virtual-annotated body (stdout only).",
     ),
 ) -> None:
-    """Show a tracked_file's spans: a summary table + a virtual-annotated body.
+    """Show a tracked_file's spans, optionally with a virtual-annotated body.
 
-    The annotation is synthesized at render time and printed to STDOUT only —
-    the tracked file on disk is never touched. Markdown spans render as
-    ``<!-- pinned:ANCHOR (virtual) -->``; structural spans as ``#`` (yaml) or
-    ``//`` (jsonc) virtual comments. For strict JSON the comment is still only
-    displayed, never persisted, so an invalid-on-disk comment is harmless.
+    Without ``--spans`` this prints only the declared-span count. With
+    ``--spans`` it adds the span summary table (with an ``ORPHANED`` column)
+    and a synthesized annotated body. The annotation is synthesized at render
+    time and printed to STDOUT only — the tracked file on disk is never
+    touched. Markdown spans render as ``<!-- pinned:ANCHOR (virtual) -->``;
+    structural spans as ``#`` (yaml) or ``//`` (jsonc) virtual comments. For
+    strict JSON the comment is still only displayed, never persisted, so an
+    invalid-on-disk comment is harmless.
     """
     # A wide console so rich never wraps / ellipsises a long anchor (e.g.
     # ``editor.fontSize``) or the ``(virtual)`` comment token in the table.
