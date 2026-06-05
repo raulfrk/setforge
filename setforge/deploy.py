@@ -42,6 +42,9 @@ from setforge.scalar_merge import ABSENT
 from setforge.section_reconcile import maintain_marker_hashes
 from setforge.section_wizard import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.spans import SpanEntry
+from setforge.spans_overlay import SpanOrphan, apply_spans
+from setforge.spans_store import SpanState
 from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -70,6 +73,8 @@ class DeployResult:
     merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
     new_scalar_bases: dict[str, object] | None = None
     scalar_conflicts: list[str] = field(default_factory=list)
+    new_span_states: dict[str, SpanState] | None = None
+    span_orphans: list[SpanOrphan] = field(default_factory=list)
 
 
 def copy_atomic(
@@ -89,6 +94,8 @@ def copy_atomic(
     merge_auto: ReconcileAuto | None = None,
     scalar_bases: dict[str, object] | None = None,
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
+    spans: list[SpanEntry] | None = None,
+    span_states: dict[str, SpanState] | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
@@ -198,6 +205,8 @@ def copy_atomic(
     merge_conflicts: list[LineConflict | PathConflict] = []
     new_scalar_bases: dict[str, object] | None = None
     scalar_conflicts: list[str] = []
+    new_span_states: dict[str, SpanState] | None = None
+    span_orphans: list[SpanOrphan] = []
     if disposition is not None:
         live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
         tracked = src.read_text(encoding="utf-8")
@@ -216,6 +225,20 @@ def copy_atomic(
         # that still re-baselines the stored base.
         new_base = resolution.text if resolution.advance_base else None
         merge_conflicts = resolution.conflicts
+        # Span re-overlay (NEVER threaded into merge internals): splice
+        # live bytes over each PINNED span AFTER the whole-file merge, then
+        # re-baseline the byte base to the POST-splice bytes — the bytes
+        # that actually land on disk — not the pre-splice resolution.text
+        # (Invariant I1). Forked spans get no override but still recompute
+        # their derived state for capture exclusion.
+        if spans:
+            overlay = apply_spans(content, live, spans, span_states or {})
+            content = overlay.text
+            new_span_states = overlay.new_states
+            span_orphans = overlay.orphans
+            if new_base is not None:
+                # The base advances to what landed live, post-splice (I1).
+                new_base = content
     else:
         content, new_scalar_bases, scalar_conflicts = _compute_content(
             src,
@@ -242,6 +265,8 @@ def copy_atomic(
         merge_conflicts=merge_conflicts,
         new_scalar_bases=new_scalar_bases,
         scalar_conflicts=scalar_conflicts,
+        new_span_states=new_span_states,
+        span_orphans=span_orphans,
     )
 
 
@@ -257,6 +282,8 @@ def _write_resolved_content(
     merge_conflicts: list[LineConflict | PathConflict],
     new_scalar_bases: dict[str, object] | None = None,
     scalar_conflicts: list[str] | None = None,
+    new_span_states: dict[str, SpanState] | None = None,
+    span_orphans: list[SpanOrphan] | None = None,
 ) -> DeployResult:
     """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
 
@@ -268,9 +295,13 @@ def _write_resolved_content(
     EVERY returned :class:`DeployResult` — including the NOOP and
     mode-only-drift paths — so a clean disposition merge that equals live
     still re-baselines and a scalar overlay whose result equals live still
-    advances its per-path bases.
+    advances its per-path bases. ``new_span_states`` / ``span_orphans``
+    (span re-overlay path) ride the same EVERY-return contract so the
+    spans sidecar advances even on a NOOP write whose post-splice content
+    already equals live.
     """
     scalar_conflicts = scalar_conflicts or []
+    span_orphans = span_orphans or []
     if dst_existed:
         existing = real_dst.read_text(encoding="utf-8")
         action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
@@ -292,6 +323,8 @@ def _write_resolved_content(
                 merge_conflicts=merge_conflicts,
                 new_scalar_bases=new_scalar_bases,
                 scalar_conflicts=scalar_conflicts,
+                new_span_states=new_span_states,
+                span_orphans=span_orphans,
             )
         return DeployResult(
             dst=real_dst,
@@ -301,6 +334,8 @@ def _write_resolved_content(
             merge_conflicts=merge_conflicts,
             new_scalar_bases=new_scalar_bases,
             scalar_conflicts=scalar_conflicts,
+            new_span_states=new_span_states,
+            span_orphans=span_orphans,
         )
 
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
@@ -312,6 +347,8 @@ def _write_resolved_content(
         merge_conflicts=merge_conflicts,
         new_scalar_bases=new_scalar_bases,
         scalar_conflicts=scalar_conflicts,
+        new_span_states=new_span_states,
+        span_orphans=span_orphans,
     )
 
 

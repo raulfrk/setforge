@@ -822,6 +822,7 @@ def apply_host_local_tracked_file_overrides(
             and overlay.dst is None
             and overlay.symlink_target is None
             and overlay.disposition is None
+            and not overlay.spans
         ):
             continue
         if tf_id not in config.tracked_files:
@@ -841,6 +842,14 @@ def apply_host_local_tracked_file_overrides(
             updates["symlink"] = str(overlay.symlink_target)
         if overlay.disposition is not None:
             updates["disposition"] = overlay.disposition.value
+        if overlay.spans:
+            # Host-local spans (local.yaml) are FOLDED INTO the tracked-side
+            # shared spans, host-local winning per anchor. The merged list
+            # is dumped to plain dicts so the model_validate revalidation
+            # re-runs the SpanEntry validators against the combined shape.
+            merged_spans = {span.anchor: span for span in tracked_file.spans}
+            merged_spans.update({span.anchor: span for span in overlay.spans})
+            updates["spans"] = [span.model_dump() for span in merged_spans.values()]
         # Build a fresh model via model_validate(dump | updates) rather
         # than model_copy(update=...) — model_copy bypasses field +
         # model validators, which would let a hostile overlay set

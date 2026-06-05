@@ -45,6 +45,7 @@ from setforge.cli._install_helpers import (
     _dry_run_pipeline,
     _load_validated_host_local_sections,
     _run_predeploy_gates,
+    _validate_span_file_types,
     _write_install_transition,
 )
 from setforge.cli._plugin_helpers import (
@@ -143,6 +144,15 @@ def install(
             "cache-lag warning on path / git sources respectively."
         ),
     ),
+    strict_spans: bool = typer.Option(
+        False,
+        "--strict-spans",
+        help=(
+            "Escalate an orphaned PINNED span (its anchor went missing "
+            "upstream) from a warning to a refuse-install. Forked-span and "
+            "non-strict orphans always warn and continue."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -192,6 +202,10 @@ def install(
     host_local_sections_map = _load_validated_host_local_sections(
         cfg, resolved, repo_root
     )
+    # Reject spans on non-markdown tracked_files BEFORE any file is
+    # written (the host-local overlay has already folded host-local spans
+    # into each TrackedFile.spans above).
+    _validate_span_file_types(cfg, resolved, repo_root)
     # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
     # — also AFTER profile resolution. Mutates resolved
     # and cfg in place so the existing reconcile path consumes the
@@ -330,6 +344,7 @@ def install(
             host_local_sections_map=host_local_sections_map,
             section_auto=section_auto,
             conflict_resolver=conflict_resolver,
+            strict_spans=strict_spans,
         )
 
         retry_failed_ids = (

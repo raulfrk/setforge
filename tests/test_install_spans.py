@@ -1,0 +1,168 @@
+"""Integration tests for the span lifecycle in the install loop.
+
+Drive the real ``setforge install`` CLI against a temp config repo with a
+sandboxed ``$HOME`` + ``$SETFORGE_STATE_DIR`` and assert on the span
+sidecar (:mod:`setforge.spans_store`) it seeds + advances, plus the
+end-to-end acceptance: a pinned md section survives an upstream edit
+ELSEWHERE in the file across two installs with no phantom conflict and a
+byte-stable live region.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from click.testing import Result
+from typer.testing import CliRunner
+
+from setforge import spans_store
+from setforge.cli import app
+
+_PROFILE = "test-spans"
+_FILE_ID = "doc"
+
+_DOC = """\
+# Title
+
+## Pinned
+
+Pinned body original.
+
+## Shared
+
+Shared body original.
+"""
+
+
+def _write_config(repo: Path) -> Path:
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    src: doc.md\n"
+        "    dst: ~/.setforge_spans/doc.md\n"
+        "    disposition: shared\n"
+        "    spans:\n"
+        '      - anchor: "## Pinned"\n'
+        "        kind: pinned\n"
+        "        semantics: shared\n"
+        "  anchor:\n"
+        "    src: anchor.txt\n"
+        "    dst: ~/.setforge_spans/anchor.txt\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - doc\n"
+        "      - anchor\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def _write_tracked(repo: Path, body: str) -> None:
+    src = repo / "tracked" / "doc.md"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(body, encoding="utf-8")
+    (src.parent / "anchor.txt").write_text("anchor\n", encoding="utf-8")
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "repo"
+    target.mkdir()
+    return target
+
+
+def _live_path() -> Path:
+    return Path.home() / ".setforge_spans" / "doc.md"
+
+
+def _install(config: Path, *, extra: list[str] | None = None) -> Result:
+    args = [
+        "install",
+        f"--profile={_PROFILE}",
+        f"--config={config}",
+        "--no-transition",
+        "--no-secrets-scan",
+        "--no-git-check",
+        "--yes",
+    ]
+    if extra:
+        args.extend(extra)
+    return CliRunner().invoke(app, args)
+
+
+def test_first_install_seeds_span_state(repo: Path) -> None:
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    states = spans_store.get_states(_PROFILE, _FILE_ID)
+    assert "## Pinned" in states
+
+
+def test_pinned_span_survives_upstream_edit_two_installs(repo: Path) -> None:
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    # User edits the live pinned region; upstream edits the shared region.
+    live = _live_path()
+    live.write_text(
+        live.read_text().replace("Pinned body original.", "MY PINNED EDIT."),
+        encoding="utf-8",
+    )
+    _write_tracked(repo, _DOC.replace("Shared body original.", "Shared body UPSTREAM."))
+
+    # Second install: pinned region kept live, shared region took upstream,
+    # NO phantom conflict warning.
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "merge conflict" not in result.output
+    body = live.read_text()
+    assert "MY PINNED EDIT." in body
+    assert "Shared body UPSTREAM." in body
+
+    # Third no-edit install: byte-stable, still no conflict.
+    before = live.read_text()
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert live.read_text() == before
+
+
+def test_orphaned_pinned_span_warns_and_install_succeeds(repo: Path) -> None:
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    # Upstream removes the pinned heading entirely AND the live copy loses
+    # it too -> orphan. Default install must warn yet still exit 0 (I6).
+    gone = _DOC.replace("## Pinned\n\nPinned body original.\n\n", "")
+    _write_tracked(repo, gone)
+    live = _live_path()
+    live.write_text(gone, encoding="utf-8")
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "could not be relocated" in result.output
+
+
+def test_strict_spans_refuses_on_pinned_orphan(repo: Path) -> None:
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+
+    gone = _DOC.replace("## Pinned\n\nPinned body original.\n\n", "")
+    _write_tracked(repo, gone)
+    live = _live_path()
+    live.write_text(gone, encoding="utf-8")
+
+    result = _install(config, extra=["--strict-spans"])
+    assert result.exit_code != 0

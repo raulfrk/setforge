@@ -38,6 +38,7 @@ from setforge import (
     disposition_merge,
     scalar_base_store,
     section_reconcile,
+    spans_store,
     transitions,
 )
 from setforge import (
@@ -85,6 +86,7 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
+from setforge.spans import SpanEntry, SpanKind, validate_spans_file_type
 
 
 def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
@@ -141,6 +143,26 @@ def _load_validated_host_local_sections(
         validate_host_local_sections_file_type(tf_id, len(sections_map), src)
         result[tf_id] = sections_map
     return result
+
+
+def _validate_span_file_types(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> None:
+    """Reject spans declared on non-markdown tracked_files BEFORE deploy.
+
+    Iterates every tracked_file in the resolved profile (whose ``spans``
+    list already folds in the host-local overlay via
+    :func:`setforge.config.apply_host_local_tracked_file_overrides`) and
+    routes it through :func:`setforge.spans.validate_spans_file_type`, so a
+    heading-text span anchor on a yaml/json file aborts the install
+    cleanly instead of failing as a confusing runtime relocation miss.
+    """
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[tf_id]
+        if not tracked_file.spans:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        validate_spans_file_type(tf_id, tracked_file.spans, src)
 
 
 def _check_unexpected_drift(
@@ -240,6 +262,7 @@ def _deploy_all_tracked_files(
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
     section_auto: ReconcileAuto | None = None,
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
+    strict_spans: bool = False,
 ) -> None:
     """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
 
@@ -331,6 +354,16 @@ def _deploy_all_tracked_files(
                 disposition_file_ids.add(sub_name)
                 raw = base_store.read_base(profile, sub_name)
                 base_text = raw.decode("utf-8") if raw is not None else None
+            # Span re-overlay path: READ the spans sidecar BEFORE the deploy
+            # so the relocation ladder has its derived state. Spans ride the
+            # disposition path (the 3-way merge is where the re-overlay +
+            # re-baseline happen).
+            file_spans = (
+                tracked_file.spans if tracked_file.disposition is not None else []
+            )
+            span_states = (
+                spans_store.get_states(profile, sub_name) if file_spans else {}
+            )
             # Scalar-base path (mutually exclusive with disposition): READ the
             # stored base for every shallow preserve path BEFORE the deploy.
             shallow_preserve_paths = tracked_file.preserve_user_keys
@@ -352,6 +385,8 @@ def _deploy_all_tracked_files(
                 merge_auto=section_auto,
                 scalar_bases=scalar_bases,
                 conflict_resolver=conflict_resolver,
+                spans=file_spans or None,
+                span_states=span_states or None,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
             _echo_preserve_user_keys_provenance(tracked_file)
@@ -361,6 +396,17 @@ def _deploy_all_tracked_files(
             # ADVANCE the disposition base only AFTER the live write.
             if tracked_file.disposition is not None:
                 _advance_disposition_base(profile, sub_name, sub_dst, result)
+            # ADVANCE the spans sidecar + warn on orphans AFTER the live
+            # write, in lockstep with the byte base.
+            if file_spans:
+                _advance_span_states(
+                    profile,
+                    sub_name,
+                    sub_dst,
+                    result,
+                    file_spans,
+                    strict_spans=strict_spans,
+                )
             # SCALAR-base lifecycle (mutually exclusive with disposition):
             # advance / prune / warn, ordered AFTER the live write.
             if scalar_bases is not None:
@@ -398,6 +444,45 @@ def _advance_disposition_base(
             f"--auto=use-tracked or the merge wizard)",
             err=True,
             fg=typer.colors.YELLOW,
+        )
+
+
+def _advance_span_states(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+    result: deploy.DeployResult,
+    file_spans: list[SpanEntry],
+    *,
+    strict_spans: bool,
+) -> None:
+    """Advance the spans sidecar, prune left spans, and warn on orphans.
+
+    Writes every recomputed :class:`~setforge.spans_store.SpanState` from
+    the deploy AND prunes any anchor no longer in the file's intent — both
+    in LOCKSTEP with the byte base just advanced (Invariant I5). Each
+    orphan emits a loud per-span warning; an orphan NEVER aborts the
+    default install (Invariant I6). When ``strict_spans`` is set a PINNED
+    orphan escalates to a refuse-install :class:`SetforgeError`.
+    """
+    if result.new_span_states is not None:
+        spans_store.set_states(profile, file_id, result.new_span_states)
+    spans_store.prune(profile, file_id, {span.anchor for span in file_spans})
+    pinned_orphans: list[str] = []
+    for orphan in result.span_orphans:
+        typer.secho(
+            f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
+            f"could not be relocated upstream — region preserved, not dropped",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        if orphan.kind is SpanKind.PINNED:
+            pinned_orphans.append(orphan.anchor)
+    if strict_spans and pinned_orphans:
+        joined = ", ".join(repr(a) for a in pinned_orphans)
+        raise SetforgeError(
+            f"{sub_dst}: --strict-spans: pinned span(s) {joined} orphaned "
+            "(anchor gone upstream); refusing install"
         )
 
 
