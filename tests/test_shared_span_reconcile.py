@@ -25,7 +25,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge.cli import app
+from setforge.cli import _install_helpers, app
 from setforge.config import (
     Config,
     SharedSpanCollision,
@@ -373,3 +373,91 @@ def test_non_tty_reconcile_without_auto_raises(
     assert isinstance(result.exception, SharedSpanReconcileRequiresInteractive) or (
         "requires" in result.output.lower()
     )
+
+
+# --------------------------------------------------------------------------- #
+# interactive (tty) reconcile path — _prompt_shared_span_collisions           #
+# (CliRunner stdin is never a tty, so the prompt branch needs a direct unit   #
+#  test that stubs the confirm primitive and the stdout.isatty() guard.)      #
+# --------------------------------------------------------------------------- #
+
+
+def test_prompt_collects_per_collision_user_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive prompt builds prefer-shared from each per-collision yes.
+
+    Stub :func:`confirm_auto_operation` to simulate the user choosing
+    "adopt shared" for one anchor and "keep host-local" for another; the
+    returned set must contain exactly the adopted pair.
+    """
+    collisions = [
+        SharedSpanCollision(tracked_file_id="doc", anchor="## Pinned"),
+        SharedSpanCollision(tracked_file_id="conf", anchor="editor.fontSize"),
+    ]
+    # User adopts the shared intent for "## Pinned" (True) and keeps the
+    # host-local override for "editor.fontSize" (False).
+    choices = {"## Pinned": True, "editor.fontSize": False}
+    seen_commands: list[str] = []
+
+    def _fake_confirm(*, command: str, profile: str, plan, yes: bool) -> bool:
+        seen_commands.append(command)
+        assert profile == "p"
+        assert yes is False
+        # The plan carries the per-collision "will be overwritten" risk.
+        (risk,) = plan.risks
+        anchor = next(a for a in choices if a in risk)
+        return choices[anchor]
+
+    monkeypatch.setattr(_install_helpers, "confirm_auto_operation", _fake_confirm)
+
+    prefer = _install_helpers._prompt_shared_span_collisions(collisions, profile="p")
+
+    assert prefer == frozenset({("doc", "## Pinned")})
+    # One prompt per collision, all routed through the reconcile command label.
+    assert seen_commands == ["install --reconcile-user-sections"] * 2
+
+
+def test_reconcile_tty_branch_routes_into_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stdout.isatty()-true branch of _reconcile_shared_spans prompts.
+
+    Force ``sys.stdout.isatty()`` True so the non-tty guard is bypassed and
+    stub the prompt primitive — proving the interactive branch hands the
+    detected collisions to :func:`_prompt_shared_span_collisions` and
+    returns its result.
+    """
+
+    class _FakeConfig:
+        pass
+
+    cfg = _FakeConfig()
+    collisions = [SharedSpanCollision(tracked_file_id="doc", anchor="## Pinned")]
+    monkeypatch.setattr(
+        _install_helpers.config_mod,
+        "detect_shared_span_collisions",
+        lambda _cfg: collisions,
+    )
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict[str, object] = {}
+
+    def _fake_prompt(passed, *, profile: str) -> frozenset[tuple[str, str]]:
+        captured["collisions"] = passed
+        captured["profile"] = profile
+        return frozenset({("doc", "## Pinned")})
+
+    monkeypatch.setattr(
+        _install_helpers, "_prompt_shared_span_collisions", _fake_prompt
+    )
+
+    result = _install_helpers._reconcile_shared_spans(
+        cfg,  # type: ignore[arg-type]
+        profile="p",
+        reconcile_user_sections=True,
+        section_auto=None,
+    )
+
+    assert result == frozenset({("doc", "## Pinned")})
+    assert captured["collisions"] is collisions
+    assert captured["profile"] == "p"

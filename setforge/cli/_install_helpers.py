@@ -281,7 +281,10 @@ def _prompt_shared_span_collisions(
     one collision at a time: a "yes" adopts the shared intent for that
     anchor (the pair joins the prefer-shared set), a "no" keeps the
     host-local override. Only reached on the interactive (tty) path; the
-    non-tty branch raises in :func:`_reconcile_shared_spans` before here.
+    non-tty *stdout* branch (``sys.stdout.isatty()`` False) raises in
+    :func:`_reconcile_shared_spans` before here, so the inner
+    ``confirm_auto_operation`` ``sys.stdin.isatty()`` gate sees a tty stdin
+    on every reachable call.
     """
     prefer: set[tuple[str, str]] = set()
     for collision in collisions:
