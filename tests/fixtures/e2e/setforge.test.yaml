@@ -219,7 +219,7 @@ tracked_files:
       - anchor: "## Forked Section"
         kind: forked
         semantics: shared
-  # ---- Structural (yaml dotted-path) span fixtures (p5qc.8.1) -----------
+  # ---- Structural (yaml dotted-path) span fixtures -----------------------
   # A yaml tracked_file whose span anchors are DOTTED PATHS (mapping leaves),
   # not headings. The pinned path is re-asserted to live post-merge; the
   # forked path merges upstream; both are excluded from capture. Editing the

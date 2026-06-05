@@ -445,7 +445,7 @@ def test_shape_mismatch_falls_back_to_line_merge() -> None:
 
 
 # ===========================================================================
-# Structural span pinning (p5qc.8.1): B-S1..B-S8 + I9/I10/I11.
+# Structural span pinning: B-S1..B-S8 + I9/I10/I11.
 # ===========================================================================
 
 

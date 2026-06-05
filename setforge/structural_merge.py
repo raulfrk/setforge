@@ -568,9 +568,9 @@ def _resolve_opaque(
     # Container opaque take: ours==base -> theirs; theirs==base -> ours;
     # ours==theirs -> ours; else conflict.
     if _plain_eq(o_plain, b_plain):
-        _apply_take(backend, key, "theirs", t_raw)
+        _apply_take(backend, key, "theirs")
     elif _plain_eq(t_plain, b_plain):
-        _apply_take(backend, key, "ours", o_raw)
+        _apply_take(backend, key, "ours")
     elif _plain_eq(o_plain, t_plain):
         backend.take_ours(key)
     else:
@@ -627,12 +627,12 @@ def _apply_scalar_take(
         backend.take_ours(key)
 
 
-def _apply_take(backend: _MappingBackend, key: str, side: str, raw: object) -> None:
+def _apply_take(backend: _MappingBackend, key: str, side: str) -> None:
     """Apply an opaque take from ``side``, adding / deleting as the side dictates.
 
     A take toward a side that LACKS the key is a DELETE: when ``side`` deleted a
-    container key ours kept unchanged (``raw is ABSENT``), the result must drop
-    the key from ours rather than copy a non-existent node. Without this guard
+    container key ours kept unchanged, the result must drop the key from ours
+    rather than copy a non-existent node. Without this guard
     a ``take_theirs`` on an absent ``theirs`` raised ``KeyError`` mid-merge — an
     install-aborting crash for the legal "upstream deleted a sub-map I left
     untouched" case (and the seam a structural pin's missing-parent orphan needs

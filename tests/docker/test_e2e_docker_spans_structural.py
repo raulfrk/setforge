@@ -5,7 +5,7 @@ covers markdown heading spans). A structural span's anchor is a DOTTED PATH
 (a mapping leaf or whole subtree) in the ``set_at_path`` grammar, validated +
 resolved against the comment-preserving 3-way merge — not a heading region.
 
-Behavior under exercise (p5qc.8.1 acceptance):
+Behavior under exercise (structural sub-span acceptance):
 
 - **install (pinned)** re-asserts the LIVE value at the pinned dotted path
   AFTER the whole-file merge, so an upstream-changed-but-live-unchanged path

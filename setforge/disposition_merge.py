@@ -85,6 +85,7 @@ __all__ = [
     "StructuralSpanOrphan",
     "StructuralSpanOrphanReason",
     "exclude_structural_spans_for_capture",
+    "is_structural",
     "resolve_file",
     "validate_structural_span_overlap",
 ]
@@ -155,10 +156,11 @@ class StructuralSpanOrphanReason(StrEnum):
 class StructuralSpanOrphan:
     """One structural span pin that could not be re-asserted onto the merge.
 
-    ``anchor`` is the dotted path; ``kind`` distinguishes a pinned orphan from a
-    forked one (forked spans never re-assert, so a forked orphan only ever
-    arises in capture exclusion, which is silent — this is reported by the
-    install / pin path). ``reason`` is the seam that failed. An orphan is
+    ``anchor`` is the dotted path; ``kind`` records the span kind and is
+    currently always :data:`~setforge.spans.SpanKind.PINNED` — only pinned spans
+    re-assert, so only a pinned re-assert can orphan (forked spans never
+    re-assert; their capture exclusion is silent). ``reason`` is the seam that
+    failed. An orphan is
     PRESERVED (the merged value is left intact at ``P``) and warned, never
     dropped and never an uncaught raise (B-S3 / B-S4).
     """
@@ -243,7 +245,7 @@ def resolve_file(
             text=tracked, conflicts=[], advance_base=True, base_absent=True
         )
 
-    if _is_structural(dst):
+    if is_structural(dst):
         try:
             return _resolve_structural(
                 dst, base, live, tracked, auto, resolver, structural_spans
@@ -256,8 +258,13 @@ def resolve_file(
     return _resolve_line_based(base, live, tracked, auto, resolver)
 
 
-def _is_structural(dst: Path) -> bool:
-    """Whether ``dst`` routes through the structural (comment-tree) engine."""
+def is_structural(dst: Path) -> bool:
+    """Whether ``dst`` routes through the structural (comment-tree) engine.
+
+    Public seam: the install (``deploy``) and capture paths dispatch span
+    handling on this predicate, so it is part of the module's surface rather
+    than a private helper.
+    """
     return jsonc.is_jsonc_file(dst) or dst.suffix in {".yaml", ".yml"}
 
 
@@ -388,7 +395,7 @@ def _reassert_pinned_spans(
 
     Returns the orphan list (paths that could not be re-asserted). An ABSENT
     snapshot (the user deleted ``P`` locally) skips-with-warn (B-S4); a
-    ``KeyError`` / ``ValueError`` (missing parent / list suffix) or a
+    ``KeyError`` / ``ValueError`` (missing parent) or a
     ``MergeTypeMismatch`` (non-mapping parent) from
     :func:`~setforge.structural_merge.set_at_path` orphan-warns + skips, never
     an uncaught raise (B-S3).

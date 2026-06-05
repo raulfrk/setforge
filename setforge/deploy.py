@@ -216,7 +216,7 @@ def copy_atomic(
         # before the in-place merge, then re-asserted onto the merged model);
         # markdown spans use the separate text-splice overlay below. Dispatch
         # by file type so each span flavor takes its own path.
-        structural = disposition_merge._is_structural(real_dst)
+        structural = disposition_merge.is_structural(real_dst)
         structural_spans = spans if (spans and structural) else None
         resolution = disposition_merge.resolve_file(
             disposition,

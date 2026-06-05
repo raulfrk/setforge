@@ -399,7 +399,7 @@ def _capture_disposition_file(
         # tracked's heading region — dispatch by file type so each flavor
         # takes its own exclusion path (B-S5).
         tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
-        if disposition_merge._is_structural(dst):
+        if disposition_merge.is_structural(dst):
             capture_text = disposition_merge.exclude_structural_spans_for_capture(
                 live_text, tracked_text, spans, jsonc.is_jsonc_file(dst)
             )

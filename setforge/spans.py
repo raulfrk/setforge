@@ -53,7 +53,7 @@ _MARKDOWN_SUFFIXES: Final[frozenset[str]] = frozenset({".md", ".markdown"})
 
 # Structural (comment-preserving tree) suffixes a dotted-path span anchor is
 # permitted on. Mirrors the dispatch in
-# :func:`setforge.disposition_merge._is_structural` (kept independent so this
+# :func:`setforge.disposition_merge.is_structural` (kept independent so this
 # leaf module imports nothing heavy).
 _STRUCTURAL_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".yaml", ".yml", ".json", ".jsonc"}

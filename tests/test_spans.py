@@ -5,7 +5,7 @@ anchor through a grammar check chosen by the source's file type: markdown
 sources permit only heading-shaped anchors; structural (yaml/json/jsonc)
 sources permit only dotted-path anchors. A wrong-grammar anchor raises
 :class:`~setforge.errors.ConfigError` at parse / validate / install time
-(p5qc.8.1, the file-type-dispatch acceptance row).
+(the file-type-dispatch acceptance row).
 """
 
 from pathlib import Path
