@@ -197,6 +197,29 @@ tracked_files:
       - userKeyA
       - userKeyB
 
+  # ---- Sub-file span fixtures (pinned / forked markdown spans) ----------
+  # Spans require a disposition (the span engine rides the stored-base
+  # 3-way merge path). Each span scenario gets its own dst (and thus
+  # file_id) so its per-host byte-base AND spans sidecar never cross.
+  # All share src spans/note.md — editing it (per fresh container)
+  # simulates an upstream change ELSEWHERE in the file.
+  spans_pinned_md:
+    src: spans/note.md
+    dst: ~/.setforge_e2e/spans/pinned.md
+    disposition: shared
+    spans:
+      - anchor: "## Pinned Section"
+        kind: pinned
+        semantics: shared
+  spans_forked_md:
+    src: spans/note.md
+    dst: ~/.setforge_e2e/spans/forked.md
+    disposition: shared
+    spans:
+      - anchor: "## Forked Section"
+        kind: forked
+        semantics: shared
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -355,3 +378,14 @@ profiles:
   test-forked-scalar-yaml:
     tracked_files:
       - forked_scalar_yaml
+
+  # ---- Sub-file spans (pinned / forked markdown spans) ------------------
+  # One profile per span scenario so each test installs / syncs / compares /
+  # reverts a single span-bearing file in isolation and the per-host base +
+  # spans sidecar lifecycle never crosses scenarios.
+  test-spans-pinned:
+    tracked_files:
+      - spans_pinned_md
+  test-spans-forked:
+    tracked_files:
+      - spans_forked_md
