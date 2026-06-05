@@ -410,7 +410,7 @@ def _shared_write_preflight(cfg_path: Path) -> None:
     source_mod.check_source_yaml_clean(_source_for_config(cfg_path))
 
 
-def _shared_post_write_hint(cfg_path: Path, console: Console) -> None:
+def _shared_post_write_hint(cfg_path: Path) -> None:
     """Emit the commit/push hint after a successful ``--shared`` write.
 
     The shared span is otherwise silently lost on the next config-repo pull,
@@ -528,7 +528,7 @@ def _apply_file_level(
         return
     if shared:
         _shared_apply(cfg_path, file_id, disposition=kind)
-        _shared_post_write_hint(cfg_path, console)
+        _shared_post_write_hint(cfg_path)
     else:
         _set_disposition_host_local(file_id, kind)
     scope = "shared" if shared else "host-local"
@@ -568,7 +568,7 @@ def _apply_span(
 
     if shared:
         _shared_apply(cfg_path, file_id, span=new_span)
-        _shared_post_write_hint(cfg_path, console)
+        _shared_post_write_hint(cfg_path)
     else:
         _append_span_host_local(file_id, new_span)
     scope = "shared" if shared else "host-local"
