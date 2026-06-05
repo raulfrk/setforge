@@ -16,7 +16,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import spans_store
+from setforge import base_store, spans_store
 from setforge.cli import app
 
 _PROFILE = "test-spans"
@@ -207,3 +207,44 @@ def test_strict_spans_refuses_on_pinned_orphan(repo: Path) -> None:
 
     result = _install(config, extra=["--strict-spans"])
     assert result.exit_code != 0
+
+
+def _install_with_transition(config: Path) -> Result:
+    args = [
+        "install",
+        f"--profile={_PROFILE}",
+        f"--config={config}",
+        "--no-secrets-scan",
+        "--no-git-check",
+        "--yes",
+    ]
+    return CliRunner().invoke(app, args)
+
+
+def test_revert_rolls_spans_sidecar_in_lockstep(repo: Path) -> None:
+    # Invariant I5: revert restores live + base + spans sidecar atomically.
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install_with_transition(config).exit_code == 0
+
+    live = _live_path()
+    sidecar_before = spans_store.get_states(_PROFILE, _FILE_ID)
+    base_before = base_store.read_base(_PROFILE, _FILE_ID)
+
+    # Second install with a live pin edit + upstream shared edit advances
+    # live, base, AND the sidecar.
+    live.write_text(
+        live.read_text().replace("Pinned body original.", "MY PIN."),
+        encoding="utf-8",
+    )
+    _write_tracked(repo, _DOC.replace("Shared body original.", "Shared body UPSTREAM."))
+    assert _install_with_transition(config).exit_code == 0
+    assert spans_store.get_states(_PROFILE, _FILE_ID) != sidecar_before
+
+    # Revert the second install: live + base + sidecar all roll back.
+    result = CliRunner().invoke(
+        app, ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    assert spans_store.get_states(_PROFILE, _FILE_ID) == sidecar_before
+    assert base_store.read_base(_PROFILE, _FILE_ID) == base_before

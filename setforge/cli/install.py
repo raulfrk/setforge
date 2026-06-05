@@ -45,6 +45,7 @@ from setforge.cli._install_helpers import (
     _dry_run_pipeline,
     _load_validated_host_local_sections,
     _run_predeploy_gates,
+    _span_lockstep_paths,
     _validate_span_file_types,
     _write_install_transition,
 )
@@ -325,6 +326,11 @@ def install(
             for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
         ]
         dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
+        # Roll the spans sidecar AND its byte base in LOCKSTEP with live on
+        # revert (Invariant I5): snapshot each span-bearing file's sidecar
+        # manifest + stored base into the transition so the patch -R
+        # mechanism reverts all three together.
+        dst_paths.extend(_span_lockstep_paths(ctx))
 
         file_pre = transitions.snapshot_paths(dst_paths)
 

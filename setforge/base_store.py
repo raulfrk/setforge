@@ -75,6 +75,17 @@ def _resolve_target(profile: str, file_id: str) -> Path:
     return target
 
 
+def base_path(profile: str, file_id: str) -> Path:
+    """Return the on-disk base path for ``(profile, file_id)``.
+
+    Public so the revert-lockstep integration can snapshot the stored
+    base into the transition record alongside the live file and the spans
+    sidecar (Invariant I5: live + base + sidecar roll back atomically).
+    Applies the same traversal guard as the read/write entry points.
+    """
+    return _resolve_target(profile, file_id)
+
+
 def read_base(profile: str, file_id: str) -> bytes | None:
     """Return the stored base bytes for ``file_id`` under ``profile``.
 

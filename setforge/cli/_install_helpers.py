@@ -145,6 +145,24 @@ def _load_validated_host_local_sections(
     return result
 
 
+def _span_lockstep_paths(ctx: ProfileContext) -> list[Path]:
+    """Return the spans sidecar + byte-base paths to snapshot for revert.
+
+    For every span-bearing disposition tracked (sub-)file in the resolved
+    profile, returns both its spans sidecar manifest path and its stored
+    byte-base path so the install transition snapshots all three (live +
+    base + sidecar) and ``patch -R`` reverts them in lockstep (Invariant
+    I5). Scoped to span-bearing files so non-span disposition files keep
+    today's re-seed-on-next-install base behaviour unchanged.
+    """
+    paths: list[Path] = []
+    for tracked_file, sub_name, _, _ in _iter_all_tracked_files(ctx):
+        if tracked_file.disposition is not None and tracked_file.spans:
+            paths.append(spans_store.manifest_path(ctx.profile, sub_name))
+            paths.append(base_store.base_path(ctx.profile, sub_name))
+    return paths
+
+
 def _validate_span_file_types(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> None:
