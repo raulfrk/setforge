@@ -19,7 +19,8 @@ Scope note: this wave implements MARKDOWN heading-text anchors only.
 Structural dotted-path anchors are representable in the schema
 (``anchor`` is a free string) but their *validation* and *resolution*
 land in a sibling bead; :func:`validate_spans_file_type` enforces the
-markdown-only constraint at parse time and leaves the dispatch seam for
+markdown-only constraint at install time (wired in
+:mod:`setforge.cli._install_helpers`) and leaves the dispatch seam for
 the structural case.
 """
 
@@ -116,8 +117,9 @@ def validate_spans_file_type(
     a heading-text span anchor is supported only for markdown tracked_files
     (.md / .markdown). Structural dotted-path anchors (for yaml / json)
     are validated in a sibling bead; until then a span on a non-markdown
-    file is rejected here so a wrong-file-type anchor surfaces at parse
-    time, not as a confusing runtime relocation failure.
+    file is rejected here so a wrong-file-type anchor surfaces at install
+    time (and at ``validate`` time, the offline CI gate), not as a
+    confusing runtime relocation failure.
 
     No-op when ``spans`` is empty — the file may not be markdown but no
     span was declared. The ``src``-suffix dispatch is the seam the

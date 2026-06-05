@@ -378,7 +378,7 @@ class _LocalTrackedFileOverlay(BaseModel):
     baseline bytes are derived state in the spans sidecar
     (:mod:`setforge.spans_store`), never duplicated into this intent
     (Invariant I12). Anchor file-type legality is enforced by
-    :func:`setforge.spans.validate_spans_file_type` at load time.
+    :func:`setforge.spans.validate_spans_file_type` at install time.
     """
 
     disposition: Disposition | None = None
