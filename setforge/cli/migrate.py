@@ -28,13 +28,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
+from datetime import UTC
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
 import typer
 
+from setforge import transitions
+from setforge._redact import redact_argv
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import MIGRATE_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive
@@ -209,12 +212,23 @@ def _dispatch_check(
         typer.echo("specify --check, --apply, or --pin=X.Y.")
 
 
+# Transitions written by ``migrate --apply`` are profile-agnostic — a
+# schema migration mutates ``setforge.yaml`` and shared/tracked content,
+# never a profile-specific deploy. They are recorded under this fixed
+# label so ``setforge revert --profile=migrate`` (and the matching
+# ``transitions list`` filter) can find them. The label is intentionally
+# NOT a real profile name from ``setforge.yaml``; the revert side
+# tolerates a label that does not resolve to a config profile.
+_MIGRATE_TRANSITION_PROFILE: Final = "migrate"
+
+
 def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) -> None:
     """Handle the ``--apply`` branch.
 
     Short-circuits with ``"nothing to apply"`` when the chain is
     empty, otherwise stages the preview / confirm / execute /
-    post-apply-validate sequence end-to-end.
+    post-apply-validate sequence end-to-end, then records a revertible
+    transition capturing the pre/post bytes of every mutated file.
     """
     if not chain:
         typer.echo("nothing to apply: no migrations available for this version.")
@@ -225,6 +239,12 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         repo_root=cfg_path.resolve().parent,
         home=Path.home(),
     )
+    affected = _transition_affected_paths(chain=chain, roots=roots, cfg_path=cfg_path)
+    # Snapshot BEFORE any mutation: file_pre is the byte image ``revert``
+    # restores to. Captured here (not aliased to file_post) so the
+    # recorded patch reverses to the exact pre-migration state.
+    file_pre = transitions.snapshot_paths(affected)
+
     _print_multi_file_diff_preview(chain=chain, roots=roots)
     choice = _confirm_migrate(chain=chain, roots=roots, yes=yes)
     if choice is MigrateChoice.ABORT:
@@ -232,7 +252,56 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
         return
     _execute_chain(chain=chain, roots=roots, choice=choice)
     _run_post_apply_validate(cfg_path=cfg_path)
+    # file_post AFTER the chain (and post-apply validate) so the recorded
+    # patch covers the full forward delta. ``_execute_chain`` raises
+    # ``typer.Exit`` on any failure, so reaching here means success.
+    file_post = transitions.snapshot_paths(affected)
+    _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     _print_completion_report(cfg_path=cfg_path, chain=chain, roots=roots, choice=choice)
+
+
+def _transition_affected_paths(
+    *, chain: Sequence[Migration], roots: MigrationRoots, cfg_path: Path
+) -> tuple[Path, ...]:
+    """Union of every chain step's affected paths plus ``cfg_path``.
+
+    ``cfg_path`` is force-included so a migration that bumps only the
+    ``schema_version`` stamp (and declares no other affected file) still
+    has its ``setforge.yaml`` edit captured in the recorded transition.
+    First-occurrence order is preserved to match ``_all_affected_paths``.
+    """
+    paths = list(_all_affected_paths(chain=chain, roots=roots))
+    if cfg_path not in paths:
+        paths.insert(0, cfg_path)
+    return tuple(paths)
+
+
+def _write_migrate_transition(
+    *,
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+) -> None:
+    """Record a revertible ``migrate`` transition for the applied chain.
+
+    The recorded ``changes.patch`` (computed from ``file_pre`` /
+    ``file_post``) is the SOLE reverse authority: ``setforge revert``
+    reverses it via ``patch -R`` to restore every mutated file —
+    including ``setforge.yaml``'s ``schema_version`` — to its exact
+    pre-migration bytes. Revert never re-runs the down-migration, so no
+    ruamel re-dump skew can creep in. ``ext_delta`` / ``plugin_delta``
+    are empty: a schema migration touches neither.
+    """
+    transitions.write_transition(
+        transitions.make_meta(
+            transitions.TransitionCommand.MIGRATE,
+            _MIGRATE_TRANSITION_PROFILE,
+            end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
+            command_line=redact_argv(sys.argv[1:]),
+        ),
+        file_pre,
+        file_post,
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------

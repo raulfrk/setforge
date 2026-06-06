@@ -51,7 +51,12 @@ from setforge.cli._revert_confirm import (
     confirm_revert_operation,
 )
 from setforge.config import load_config, resolve_profile
-from setforge.errors import NoTransitionFound, RevertFailed, SetforgeError
+from setforge.errors import (
+    NoTransitionFound,
+    ProfileNotFound,
+    RevertFailed,
+    SetforgeError,
+)
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -351,10 +356,19 @@ def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
     the resolved ``sub_dst`` (the link path). The helper is idempotent
     on absent links (returns False) and refuses on user-mutated state
     (raises :class:`setforge.errors.SetforgeError`).
+
+    A transition recorded under a profile-agnostic label (e.g. the
+    ``migrate`` label, which never deploys symlinks) may not resolve to
+    a config profile; in that case there are no symlink deploys to
+    reverse, so the step no-ops cleanly instead of raising
+    :class:`ProfileNotFound`.
     """
     cfg = load_config(config)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
+    try:
+        resolved = resolve_profile(cfg, profile)
+    except ProfileNotFound:
+        return
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )

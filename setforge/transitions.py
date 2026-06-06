@@ -50,6 +50,7 @@ class TransitionCommand(StrEnum):
     MERGE = "merge"
     CLEANUP_ORPHANS = "cleanup-orphans"
     PROMOTE = "promote"
+    MIGRATE = "migrate"
 
 
 _STATE_ENV = "SETFORGE_STATE_DIR"

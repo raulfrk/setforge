@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -220,6 +220,7 @@ def test_apply_radiolist_abort_writes_nothing(
 
     class _Sys:
         stdin = _TtyStdin()
+        argv: ClassVar[list[str]] = ["setforge", "migrate", "--apply"]
 
     monkeypatch.setattr("setforge.cli.migrate.sys", _Sys)
 
@@ -259,6 +260,7 @@ def test_apply_radiolist_no_backup_skips_backup_files(
 
     class _Sys:
         stdin = _TtyStdin()
+        argv: ClassVar[list[str]] = ["setforge", "migrate", "--apply"]
 
     monkeypatch.setattr("setforge.cli.migrate.sys", _Sys)
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
