@@ -397,11 +397,13 @@ class RestampMigration:
 
     EXPAND step, identity-on-data: nothing in the document is reshaped.
     Overwrite-IN-PLACE (assignment to an existing key, never
-    ``del``-then-reinsert) keeps the key at its original position, so a
-    ``up → down → up`` cycle is byte-identical and reorder-safe — the
-    ruamel ``CommentedMap`` would otherwise move a re-inserted key to the
-    document end. The single :func:`atomic_write_yaml` makes the stamp
-    crash-safe; the overwrite makes it idempotent on replay.
+    ``del``-then-reinsert) keeps the key at its original position, so an
+    ``up → down → up`` cycle is byte-identical (vs the post-ruamel-
+    normalization document — the first load→dump normalizes the source)
+    and reorder-safe — the ruamel ``CommentedMap`` would otherwise move a
+    re-inserted key to the document end. The single
+    :func:`atomic_write_yaml` makes the stamp crash-safe; the overwrite
+    makes it idempotent on replay.
     """
 
     from_version: str
@@ -439,7 +441,11 @@ class RestampMigration:
         return (roots.cfg_path,)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        """Overwrite ``schema_version`` in place via a single atomic write."""
+        """Overwrite ``schema_version`` in place via a single atomic write.
+
+        Raises :class:`ConfigError` (never a bare ``TypeError`` /
+        ``AttributeError``) when ``setforge.yaml``'s root is not a mapping.
+        """
         yaml = yaml_rt()
         with roots.cfg_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)

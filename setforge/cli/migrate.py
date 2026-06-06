@@ -16,8 +16,8 @@ When :data:`setforge.migrations.MIGRATIONS` resolves no chain for the
 current ``schema_version`` (e.g. a config already at the expected
 version), ``--check`` reports ``"no migrations available"`` and exits 0
 and ``--apply`` says ``"nothing to apply"`` and exits 0; ``--pin`` writes
-the pin unconditionally. The registry holds the first real migration as
-of v0.3.0 (the 1.0->1.1 schema-version expand).
+the pin unconditionally. The registry holds the v0.3.0 version-stamp
+chain (the 1.0->1.1->1.2 schema-version expand).
 """
 
 from __future__ import annotations
