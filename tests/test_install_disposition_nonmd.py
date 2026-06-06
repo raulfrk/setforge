@@ -114,12 +114,13 @@ def _install(config: Path, *, extra: list[str] | None = None) -> Result:
     return CliRunner().invoke(app, args)
 
 
-# Live carries the user's customized value of a shared key (``shared``). Tracked
-# shares that key at its template value and ADDS a key the live file lacks
-# (``added``). Seeding base == live means: for the shared key ours == base so the
-# merge takes tracked's template value (3-way semantics now own that key — the
-# legacy preserve-key live-wins overlay is retired); the tracked-added key is an
-# upstream addition folded in. Nothing the user holds is silently dropped.
+# Live carries a shared key (``shared``) at the SAME value tracked holds, and
+# tracked ADDS a key the live file lacks (``added``). With base == live this
+# fixture demonstrates the no-data-loss invariant: the shared key survives (no
+# spurious both-add conflict) and the tracked-added key folds in. (Because
+# shared == live == tracked here, this fixture does NOT isolate "tracked value
+# wins over a differing live value" — the divergent-value behaviour is pinned by
+# the drop test below and the conflict cases later.)
 _JSON_LIVE = '{\n  "a": 1,\n  "shared": "user-value"\n}\n'
 _JSON_TRACKED = (
     '{\n  "a": 1,\n  "shared": "user-value",\n  "added": "from-tracked"\n}\n'
@@ -144,11 +145,12 @@ def test_first_install_seeds_base_equals_live(
     A pre-existing live file is present and NO stored base exists. The merge
     ancestor is seeded from the LIVE bytes (not absent), so the structural
     three-way merge runs with base == live: an upstream-added key is folded in
-    and the shared key the user already holds is NOT manufactured into a
-    spurious both-add conflict — the clean no-delta path a ``None`` base (which
-    would treat the whole file as a both-add against tracked) could not give.
-    After the clean merge the durable base re-baselines to the merged result
-    (== final live), the steady-state contract.
+    and the shared key the user already holds survives with no spurious
+    conflict. After the clean merge the durable base re-baselines to the merged
+    result (== final live), the steady-state contract. (The seed's load-bearing
+    payoff — avoiding a both-add conflict on a shared key whose value DIVERGES
+    between live and tracked — is pinned by the conflict cases below; this
+    equal-value fixture only checks the no-loss happy path.)
     """
     _write_tracked(repo, tracked, suffix=suffix)
     config = _write_config(repo, suffix=suffix)
@@ -187,6 +189,10 @@ def test_seed_base_equals_live_at_merge_read_level(repo: Path, suffix: str) -> N
     """
     live_body = _JSON_LIVE if suffix == ".json" else _YAML_LIVE
     live = _seed_live(live_body.replace("\n", "\r\n"), suffix)
+    # Guarantee the SEED path runs: the helper short-circuits when a base
+    # already exists, so remove any base a differently-ordered sibling test
+    # left behind (this test calls the helper directly, outside `_install`).
+    base_store.base_path(_PROFILE, _FILE_ID).unlink(missing_ok=True)
 
     seeded = _read_or_migrate_disposition_base(_PROFILE, _FILE_ID, live)
     assert seeded is not None
@@ -196,6 +202,36 @@ def test_seed_base_equals_live_at_merge_read_level(repo: Path, suffix: str) -> N
     merge_ours = live.read_text(encoding="utf-8")
     assert seeded == merge_ours
     assert stored.decode("utf-8") == merge_ours
+
+
+@pytest.mark.parametrize(
+    ("suffix", "live", "tracked"),
+    [
+        (".json", '{\n  "a": 1,\n  "liveonly": "mine"\n}\n', '{\n  "a": 1\n}\n'),
+        (".yaml", "a: 1\nliveonly: mine\n", "a: 1\n"),
+    ],
+)
+def test_first_install_drops_live_only_key_absent_from_tracked(
+    repo: Path, suffix: str, live: str, tracked: str
+) -> None:
+    """A live-only key tracked lacks is dropped on first install (intended).
+
+    Seeding base == live puts a user's live-only key in base+ours but ABSENT in
+    theirs (tracked) — a clean tracked-side delete under structural three-way.
+    This is the deliberate retirement of the legacy ``preserve_user_keys``
+    live-wins overlay; pinned here so a future re-introduction of live-wins
+    cannot pass silently. (Contrast the shared-key case, which keeps the user's
+    value where tracked agrees and folds in upstream additions.)
+    """
+    _write_tracked(repo, tracked, suffix=suffix)
+    config = _write_config(repo, suffix=suffix)
+    _seed_live(live, suffix)
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    merged = _live_path(suffix).read_text(encoding="utf-8")
+    # The live-only key is dropped by structural 3-way (NOT preserved).
+    assert "liveonly" not in merged
 
 
 @pytest.mark.parametrize(
