@@ -398,6 +398,17 @@ profiles:
     tracked_files:
       - disposition_forked_yaml
 
+  # ---- Dual representation (expand window) ------------------------------
+  # One profile carrying BOTH reconciliation models: a legacy
+  # preserve_user_sections file AND a disposition: shared file. Exercises
+  # that the two coexist in a single install run without interference
+  # (distinct dst => distinct file_id => per-host base never crosses; the
+  # run-global keep-set prune retains the disposition base).
+  test-dual-representation:
+    tracked_files:
+      - sections_md
+      - disposition_shared_md
+
   # ---- Forked-scalar (3-way preserve_user_keys scalar merge) ------------
   # One profile per format so each test installs/compares a single file in
   # isolation and the stored scalar base lifecycle never crosses formats.
