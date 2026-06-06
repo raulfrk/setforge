@@ -681,16 +681,19 @@ _RECONCILIATION_DIRECTIVE_KEYS: Final[tuple[str, ...]] = (
     "preserve_user_keys_deep",
 )
 # preserve_user_sections_mode is intentionally excluded: degenerate without
-# preserve_user_sections (already covered), so it never signals intent alone.
+# preserve_user_sections (which is already a directive key), so it never
+# signals reconciliation intent on its own.
 
 
 def _has_reconciliation_directive(mapping: Mapping[str, object]) -> bool:
     """Return whether a raw tracked-file mapping declares a reconciliation directive.
 
     True when any of disposition / preserve_user_sections / preserve_user_keys /
-    preserve_user_keys_deep is present with a truthy value — mirroring the
-    truthiness the XOR validator checks, so a falsy ``preserve_user_sections:
-    false`` or an empty list does not count.
+    preserve_user_keys_deep is present with a truthy value — the same per-field
+    truthiness rule the XOR validator applies, so a falsy
+    ``preserve_user_sections: false`` or an empty list does not count. This is
+    not the XOR validator's offender set: it adds ``disposition`` and omits
+    ``preserve_user_sections_mode`` (degenerate alone, see above).
     """
     return any(bool(mapping.get(key)) for key in _RECONCILIATION_DIRECTIVE_KEYS)
 
