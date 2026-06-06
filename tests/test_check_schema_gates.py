@@ -105,14 +105,14 @@ def test_migration_coverage_unbridged_bump_fails(
     assert any("1.2" in v for v in violations)
 
 
-def test_migration_coverage_path_not_landing_on_expected_fails(
+def test_migration_coverage_partial_chain_not_reaching_target_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A chain whose last step never lands on ``expected`` must fail.
+    """A registry that bridges 1.0→1.2 but not to ``expected`` 1.3 fails.
 
-    Reachability to ``expected`` SPECIFICALLY is asserted: a registry that
-    can walk 1.0→1.2 but ``expected`` is 1.3 (no bridge to 1.3) fails even
-    though a non-empty path to *some* version exists from the baseline.
+    ``find_migration_path`` returns ``()`` here (1.3 unreachable), so this
+    exercises the empty-path branch with a *multi-step* registry — distinct
+    from ``unbridged_bump`` which has a single-step registry.
     """
     monkeypatch.setattr(
         "setforge.migrations.MIGRATIONS",
@@ -123,6 +123,26 @@ def test_migration_coverage_path_not_landing_on_expected_fails(
     )
     violations = gate_migration_coverage(baseline="1.0", expected="1.3")
     assert violations != []
+
+
+def test_migration_coverage_non_empty_path_ending_off_target_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defensive guard: a non-empty path whose last step misses ``expected``.
+
+    ``find_migration_path``'s contract is to return a path that reaches the
+    target or ``()``, so this branch is unreachable through the real walker.
+    Monkeypatch it to return a chain ending at 1.1 while asking for 1.2 —
+    confirming the last-step ``to_version`` guard fires rather than silently
+    passing a non-empty-but-wrong path.
+    """
+    monkeypatch.setattr(
+        "scripts.check_schema_gates.find_migration_path",
+        lambda *, from_v, to_v: (_Step(from_version="1.0", to_version="1.1"),),
+    )
+    violations = gate_migration_coverage(baseline="1.0", expected="1.2")
+    assert violations != []
+    assert any("ends at" in v for v in violations)
 
 
 def test_migration_coverage_semantic_not_lexical(

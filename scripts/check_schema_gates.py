@@ -96,7 +96,7 @@ def gate_migration_coverage(
             f"reaches {expected!r} (or revert the current_expected_schema_version "
             f"bump)."
         ]
-    if path[-1].to_version != expected:
+    if parse_schema_version(path[-1].to_version) != parse_schema_version(expected):
         return [
             f"migration-coverage: the chain from baseline {baseline!r} ends at "
             f"{path[-1].to_version!r}, not the expected {expected!r}; the "
@@ -107,20 +107,24 @@ def gate_migration_coverage(
 
 def gate_field_removal(
     *,
-    frozen: dict[str, dict[str, str]] = FROZEN_FIELD_MANIFEST,
+    frozen: dict[str, dict[str, str]] | None = None,
     live: dict[str, dict[str, str]] | None = None,
 ) -> list[str]:
     """Fail on any additive-only violation between frozen and live schema.
 
     Reuses :func:`additivity_violations` verbatim (blanket-forbid: a
     marker-aware allowance is explicitly out of scope, deferred to a
-    contract bead). ``live`` defaults to the live Pydantic models;
-    injectable so a test can simulate a removal on a deep-copied manifest.
+    contract bead). ``frozen`` defaults to :data:`FROZEN_FIELD_MANIFEST` and
+    ``live`` to the live Pydantic models; both are injectable (via the
+    ``None`` sentinel, not a mutable default) so a test can simulate a
+    removal on a deep-copied manifest.
 
     Note: this gate compares only models the manifest enumerates; a
     brand-new model absent from ``_MODELS`` is invisible to it (the
     seed-gate limitation documented in the module docstring).
     """
+    if frozen is None:
+        frozen = FROZEN_FIELD_MANIFEST
     if live is None:
         live = live_field_manifest()
     return additivity_violations(frozen, live)
