@@ -291,12 +291,12 @@ def test_migration_seeds_base_byte_identical_to_stripped_live(repo: Path) -> Non
 
 
 def test_migration_crlf_live_base_matches_merge_view(repo: Path) -> None:
-    """A CRLF live file seeds a base equal to copy_atomic's read_text view.
+    """A CRLF live file yields an LF base equal to copy_atomic's read_text view.
 
-    Regression for the read_bytes-vs-read_text trap: seeding base from the
-    in-memory stripped string keeps CRLF, but copy_atomic reads live via
-    read_text (CRLF -> LF), so the base must be seeded from the read_text view
-    or every line diverges and the first merge manufactures a spurious delta.
+    Install reads live via read_text (universal-newline, CRLF -> LF), so a CRLF
+    live file is normalized to LF before stripping; the seeded base is that LF
+    form, matching what copy_atomic reads as ``ours``. Pins that this newline
+    normalization keeps base == ours (a clean first merge) for CRLF input.
     """
     _write_tracked(repo, _STRIPPED_LIVE)
     config = _write_config(repo)
@@ -315,10 +315,10 @@ def test_migration_crlf_live_base_matches_merge_view(repo: Path) -> None:
 def test_migration_first_merge_clean_no_spurious_conflict(repo: Path) -> None:
     """base == stripped-live makes the first merge clean; bodies byte-intact.
 
-    Bead contract test #3. With base seeded == stripped-live, the first 3-way
-    merge against a tracked that equals the stripped steady state is a clean
-    no-op: NO spurious conflict (which a ``None`` base would manufacture as a
-    whole-file both-add), markers GONE, and every body byte preserved.
+    With base seeded == stripped-live, the first 3-way merge against a tracked
+    that equals the stripped steady state is a clean no-op: NO spurious conflict
+    (which a ``None`` base would manufacture as a whole-file both-add), markers
+    GONE, and every body byte preserved.
     """
     # Tracked is the stripped steady state (markers already absent upstream).
     _write_tracked(repo, _STRIPPED_LIVE)

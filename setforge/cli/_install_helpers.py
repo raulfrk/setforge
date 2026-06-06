@@ -639,17 +639,16 @@ def _migrate_shared_markers_for_base(
     # Rewrite live to the stripped bytes, preserving the EXISTING live mode.
     existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
     _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
-    # Seed the base from a post-rewrite read_text — the EXACT text copy_atomic
-    # re-reads as `ours`. read_text applies universal-newline translation
-    # (CRLF -> LF), so seeding from the in-memory `stripped` (which keeps CRLF)
-    # would leave base != ours on every line of a CRLF file and manufacture a
-    # spurious first-merge delta. Re-reading the file we just wrote keeps
-    # base == ours == landed-live. (The post-deploy advance re-seeds the
-    # durable base; this write is the merge ancestor + a crash mitigation so a
-    # kill before the advance still finds a seeded base, not base-absent.)
-    seeded = sub_dst.read_text(encoding="utf-8")
-    base_store.write_base(profile, file_id, seeded.encode("utf-8"))
-    return seeded
+    # Seed base from the in-memory stripped text — which equals what copy_atomic
+    # re-reads as `ours`: live_text came from read_text (universal-newline, so
+    # CRLF/CR are already collapsed to LF), so `stripped` is LF-normalized and
+    # round-trips byte-identically through the rewrite. base == stripped ==
+    # landed-live == ours, so the first 3-way merge sees no spurious delta. (The
+    # post-deploy advance re-seeds the durable base; this write is the merge
+    # ancestor + a crash mitigation so a kill before the advance still finds a
+    # seeded base, not base-absent.)
+    base_store.write_base(profile, file_id, stripped.encode("utf-8"))
+    return stripped
 
 
 def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None:
