@@ -11,7 +11,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Final, Self
 
 from pydantic import (
     BaseModel,
@@ -674,6 +674,91 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     return config
 
 
+_RECONCILIATION_DIRECTIVE_KEYS: Final[tuple[str, ...]] = (
+    "disposition",
+    "preserve_user_sections",
+    "preserve_user_keys",
+    "preserve_user_keys_deep",
+)
+# preserve_user_sections_mode is intentionally excluded: degenerate without
+# preserve_user_sections (already covered), so it never signals intent alone.
+
+
+def _has_reconciliation_directive(mapping: Mapping[str, object]) -> bool:
+    """Return whether a raw tracked-file mapping declares a reconciliation directive.
+
+    True when any of disposition / preserve_user_sections / preserve_user_keys /
+    preserve_user_keys_deep is present with a truthy value — mirroring the
+    truthiness the XOR validator checks, so a falsy ``preserve_user_sections:
+    false`` or an empty list does not count.
+    """
+    return any(bool(mapping.get(key)) for key in _RECONCILIATION_DIRECTIVE_KEYS)
+
+
+def _tracked_file_mapping_for_loc(
+    data: object, loc: tuple[object, ...]
+) -> Mapping[str, object] | None:
+    """Return the ``tracked_files.<id>`` mapping a loc points into, or None.
+
+    A loc shaped ``("tracked_files", <id>, <key>)`` resolves to the ``<id>``
+    tracked-file mapping; any other shape or a missing path returns None, so the
+    caller treats it as an ordinary unknown key.
+    """
+    if len(loc) != 3 or loc[0] != "tracked_files":
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    tracked = data.get("tracked_files")
+    if not isinstance(tracked, Mapping):
+        return None
+    entry = tracked.get(loc[1])
+    return entry if isinstance(entry, Mapping) else None
+
+
+def _partition_reconciliation_adjacent(
+    data: object, locs: Sequence[tuple[object, ...]]
+) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    """Split stripped ``extra_forbidden`` locs into reconciliation-adjacent vs ordinary.
+
+    A loc is reconciliation-adjacent when it removes a key from a
+    ``tracked_files.<id>`` mapping that itself declares a reconciliation directive
+    (:func:`_has_reconciliation_directive`); dropping an unknown field beside such
+    a directive may silently discard merge semantics, so it earns the escalated
+    warning. Everything else is an ordinary unknown key.
+    """
+    adjacent: list[tuple[object, ...]] = []
+    ordinary: list[tuple[object, ...]] = []
+    for loc in locs:
+        tf_mapping = _tracked_file_mapping_for_loc(data, loc)
+        if tf_mapping is not None and _has_reconciliation_directive(tf_mapping):
+            adjacent.append(loc)
+        else:
+            ordinary.append(loc)
+    return adjacent, ordinary
+
+
+def _warn_reconciliation_adjacent_strip(fields: list[str]) -> None:
+    """Warn (one line per field) when a reconciliation-adjacent unknown key is stripped.
+
+    Louder than :func:`_warn_unknown_keys`: the dropped key sits on a tracked
+    file that declares a reconciliation directive, so it may carry merge
+    semantics this engine does not implement. Text is always written; only the
+    color is TTY-gated, so the warning survives CliRunner / Docker e2e capture.
+    """
+    import sys
+
+    color = sys.stderr.isatty()
+    prefix = "\033[33mwarning:\033[0m" if color else "warning:"
+    for field_path in fields:
+        sys.stderr.write(
+            f"{prefix} dropping unrecognized key {field_path!r} from a tracked "
+            f"file that declares a reconciliation directive "
+            f"(disposition/preserve_*); it may carry merge semantics this "
+            f"setforge does not implement, so this file's reconciliation may be "
+            f"INCOMPLETE on this engine — upgrade setforge to act on it\n"
+        )
+
+
 def _validate_tolerant(data: object) -> Config:
     """Validate ``data`` forward-tolerantly: ignore (warn about) unknown keys.
 
@@ -692,7 +777,11 @@ def _validate_tolerant(data: object) -> Config:
         extra_locs = [e["loc"] for e in errors if e.get("type") == "extra_forbidden"]
         if not extra_locs or len(extra_locs) != len(errors):
             raise  # mixed with real errors (or none extra) — a genuine failure
-        _warn_unknown_keys([_format_loc(loc) for loc in extra_locs])
+        adjacent, ordinary = _partition_reconciliation_adjacent(data, extra_locs)
+        if ordinary:
+            _warn_unknown_keys([_format_loc(loc) for loc in ordinary])
+        if adjacent:
+            _warn_reconciliation_adjacent_strip([_format_loc(loc) for loc in adjacent])
         return Config.model_validate(_strip_extra_locs(data, extra_locs))
 
 
