@@ -767,7 +767,7 @@ def test_detect_current_schema_non_mapping_root_raises_config_error(
 
 
 # ---------------------------------------------------------------------------
-# Second real migration — restamp 1.1 → 1.2 (+ symmetric reverse). 14.13.
+# Second real migration — restamp 1.1 → 1.2 (+ symmetric reverse).
 #
 # RestampMigration differs from VersionStampMigration in the load-bearing
 # way: its reverse RESTAMPS the older version (overwrite-in-place) rather
@@ -852,7 +852,7 @@ def test_restamp_reverse_restamps_older_version_not_strips(tmp_path: Path) -> No
 def test_restamp_up_down_up_is_byte_identical(tmp_path: Path) -> None:
     """up → down → up on a key-present config is byte-identical + reorder-safe.
 
-    The pitfall this guards (14.13): the existing VersionStampMigration
+    The pitfall this guards: the existing VersionStampMigration
     round-trip test only covers the down → up → down key-ABSENT cycle. A
     config that already carries schema_version with keys after it can be
     reordered by a del + reinsert. Overwrite-in-place must not.
