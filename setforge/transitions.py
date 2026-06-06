@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import NewType
+from typing import Final, NewType
 
 from setforge import __version__
 from setforge.binaries import resolve_binary
@@ -51,6 +51,15 @@ class TransitionCommand(StrEnum):
     CLEANUP_ORPHANS = "cleanup-orphans"
     PROMOTE = "promote"
     MIGRATE = "migrate"
+
+
+# The profile label recorded on a ``migrate`` transition. A schema migration
+# is profile-agnostic (it mutates setforge.yaml / shared content, not a
+# profile-specific deploy), so it is recorded under this fixed label rather
+# than a real ``setforge.yaml`` profile name — and the revert side tolerates
+# a label that does not resolve to a config profile. Lives here (not in the
+# migrate command) so revert can reference it without importing the command.
+MIGRATE_TRANSITION_PROFILE: Final[str] = "migrate"
 
 
 _STATE_ENV = "SETFORGE_STATE_DIR"

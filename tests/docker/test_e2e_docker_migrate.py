@@ -94,6 +94,51 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     assert "schema_version" not in backup, backup
 
 
+def test_migrate_apply_is_revertible(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A migrate --apply is revertible: revert restores the pre-migration config.
+
+    The frozen 1.0 config (no schema_version) is stamped to 1.1, then
+    ``setforge revert --profile=migrate`` reverses the recorded transition,
+    restoring the byte-exact pre-migration setforge.yaml (schema_version gone).
+    """
+    c = docker_container()
+    _seed_frozen_config(c)
+    before = c.read_text(_CFG_PATH)
+
+    apply_res = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
+    assert "1.1" in c.read_text(_CFG_PATH)
+
+    revert_res = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=migrate",
+            f"--config={_CFG_PATH}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert revert_res.returncode == 0, revert_res.stdout + revert_res.stderr
+    # The pre-migration config is restored byte-for-byte (schema_version gone).
+    assert c.read_text(_CFG_PATH) == before, c.read_text(_CFG_PATH)
+
+
 def test_migrate_pin_round_trips_to_from_version(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

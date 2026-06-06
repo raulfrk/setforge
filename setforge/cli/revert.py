@@ -357,18 +357,20 @@ def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
     on absent links (returns False) and refuses on user-mutated state
     (raises :class:`setforge.errors.SetforgeError`).
 
-    A transition recorded under a profile-agnostic label (e.g. the
-    ``migrate`` label, which never deploys symlinks) may not resolve to
-    a config profile; in that case there are no symlink deploys to
-    reverse, so the step no-ops cleanly instead of raising
-    :class:`ProfileNotFound`.
+    The profile-agnostic ``migrate`` transition label has no config profile
+    and never deploys symlinks, so it no-ops cleanly. Any OTHER profile that
+    fails to resolve (e.g. one deleted from ``setforge.yaml`` since its
+    install) is surfaced rather than silently skipping a symlink revert that
+    should have run.
     """
     cfg = load_config(config)
     repo_root = config.resolve().parent
     try:
         resolved = resolve_profile(cfg, profile)
     except ProfileNotFound:
-        return
+        if profile == transitions.MIGRATE_TRANSITION_PROFILE:
+            return
+        raise
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
