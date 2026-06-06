@@ -208,6 +208,14 @@ def copy_atomic(
     scalar_conflicts: list[str] = []
     new_span_states: dict[str, SpanState] | None = None
     span_orphans: list[SpanOrphan] = []
+    # Effective write mode. ``mode`` (config ``mode:``) wins when set. On the
+    # disposition path a re-baselined rewrite must NOT widen the existing live
+    # mode toward the tracked source's (a live 0600 staying 0600), so when no
+    # explicit mode is configured and a live file already exists, preserve its
+    # mode rather than letting ``_atomic_write`` fall back to the source's mode.
+    effective_mode = mode
+    if effective_mode is None and disposition is not None and dst_existed:
+        effective_mode = stat.S_IMODE(real_dst.stat().st_mode)
     if disposition is not None:
         live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
         tracked = src.read_text(encoding="utf-8")
@@ -278,7 +286,7 @@ def copy_atomic(
         real_dst,
         dst_existed,
         backup,
-        mode,
+        effective_mode,
         new_base=new_base,
         merge_conflicts=merge_conflicts,
         new_scalar_bases=new_scalar_bases,

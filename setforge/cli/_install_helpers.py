@@ -577,18 +577,66 @@ def _read_or_migrate_disposition_base(
     Reads the stored base for ``file_id`` under ``profile``. When a base
     already exists it is returned verbatim (steady state). When NO base
     exists (a file entering the disposition world for the first time) the
-    SHARED-section strip + base-seed migration runs via
-    :func:`_migrate_shared_markers_for_base`: if the live file still carries
-    legacy SHARED markers they are stripped in place and the base is seeded
-    from the stripped bytes, and those stripped bytes are returned so the
-    first 3-way merge has base == live (no spurious delta, zero data loss).
-    Returns ``None`` — the ordinary base-absent (deploy-tracked-verbatim)
-    path — when no base exists and the live file has no SHARED markers.
+    file enters its format-specific base-seed path:
+
+    * **Structured (JSON / JSONC / YAML)** files have no inline markers to
+      strip, so :func:`_seed_nonmd_base_from_live` seeds the base from the
+      current LIVE bytes and returns them — the first structural three-way
+      merge then runs with base == live (no spurious delta), preserving the
+      user's live edits instead of clobbering them with a verbatim tracked
+      deploy.
+    * **Markdown / line-based** files run the SHARED-section strip + base-seed
+      migration via :func:`_migrate_shared_markers_for_base`: legacy SHARED
+      markers are stripped in place and the base is seeded from the stripped
+      bytes, which are returned so the first 3-way merge has base == live.
+
+    Both paths fall through to ``None`` — the ordinary base-absent
+    (deploy-tracked-verbatim) path — when there is no live file to seed from
+    (and, for markdown, no SHARED markers to strip).
     """
     raw = base_store.read_base(profile, file_id)
     if raw is not None:
         return raw.decode("utf-8")
+    if disposition_merge.is_structural(sub_dst):
+        return _seed_nonmd_base_from_live(profile, file_id, sub_dst)
     return _migrate_shared_markers_for_base(profile, file_id, sub_dst)
+
+
+def _seed_nonmd_base_from_live(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+) -> str | None:
+    """Seed the stored base from the live bytes of a non-md disposition file.
+
+    Called only when ``sub_dst``'s stored base is ABSENT and ``sub_dst`` routes
+    through the structural (JSON / JSONC / YAML) merge engine. A structured file
+    has NO inline markers, so the seed is simply the current live bytes: this
+    retires the legacy ``preserve_user_keys`` two-way semantics in favor of the
+    structural three-way merge without losing the user's live keys on the first
+    install.
+
+    The seed is taken from :meth:`~pathlib.Path.read_text` (universal-newline)
+    — the EXACT view :func:`setforge.deploy.copy_atomic` re-reads as ``ours`` —
+    so base == ours at the level the merge parses, not merely at ``read_bytes``
+    (CRLF / CR live bytes are collapsed to LF on both sides). The seeded base is
+    written back byte-for-byte from that LF-normalized text.
+
+    Returns the seeded text so the caller threads it as ``base_text`` into the
+    merge (base == live == ours → zero spurious delta). Returns ``None`` —
+    leaving the caller on the ordinary base-absent (deploy-tracked-verbatim)
+    path — when the live file is ABSENT (nothing to seed from). The live file is
+    NOT rewritten here (no markers to strip); only the stored base is seeded, so
+    the live file's mode is untouched. The post-deploy advance re-seeds the
+    durable base; this write is the merge ancestor plus a crash mitigation so a
+    kill before the advance still finds a seeded base, not base-absent.
+    """
+    try:
+        live_text = sub_dst.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    base_store.write_base(profile, file_id, live_text.encode("utf-8"))
+    return live_text
 
 
 def _migrate_shared_markers_for_base(
