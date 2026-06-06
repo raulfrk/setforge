@@ -577,7 +577,7 @@ def _read_or_migrate_disposition_base(
     Reads the stored base for ``file_id`` under ``profile``. When a base
     already exists it is returned verbatim (steady state). When NO base
     exists (a file entering the disposition world for the first time) the
-    SHARED-section strip + base-seed migration (bead 10.1) runs via
+    SHARED-section strip + base-seed migration runs via
     :func:`_migrate_shared_markers_for_base`: if the live file still carries
     legacy SHARED markers they are stripped in place and the base is seeded
     from the stripped bytes, and those stripped bytes are returned so the
@@ -598,7 +598,7 @@ def _migrate_shared_markers_for_base(
 ) -> str | None:
     """Strip live SHARED markers in place + seed base; return the seeded base text.
 
-    The EXPAND half of the section→disposition migration (bead 10.1), called
+    The EXPAND half of the section→disposition migration, called
     only when ``sub_dst``'s stored base is ABSENT (a file entering the
     disposition world for the first time). When the live file exists AND
     still carries legacy ``shared`` user-section markers, this:
@@ -619,7 +619,7 @@ def _migrate_shared_markers_for_base(
     invariant). Returns ``None`` — leaving the caller's ``base_text`` at
     ``None`` for the ordinary base-absent (deploy-tracked-verbatim) path —
     when the live file is absent OR carries no SHARED markers. Host-local
-    markers and tracked-side markers are NOT touched here (10.2 / later).
+    markers and tracked-side markers are NOT touched here.
 
     The gate is strict on the ``(base absent, shared markers present)`` pair
     (base-absence is the caller's precondition; shared-marker presence is
@@ -639,10 +639,17 @@ def _migrate_shared_markers_for_base(
     # Rewrite live to the stripped bytes, preserving the EXISTING live mode.
     existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
     _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
-    # SEED base from the SAME in-memory stripped bytes (never a re-read of
-    # live, which could drift): base == stripped-live == what landed live.
-    base_store.write_base(profile, file_id, stripped.encode("utf-8"))
-    return stripped
+    # Seed the base from a post-rewrite read_text — the EXACT text copy_atomic
+    # re-reads as `ours`. read_text applies universal-newline translation
+    # (CRLF -> LF), so seeding from the in-memory `stripped` (which keeps CRLF)
+    # would leave base != ours on every line of a CRLF file and manufacture a
+    # spurious first-merge delta. Re-reading the file we just wrote keeps
+    # base == ours == landed-live. (The post-deploy advance re-seeds the
+    # durable base; this write is the merge ancestor + a crash mitigation so a
+    # kill before the advance still finds a seeded base, not base-absent.)
+    seeded = sub_dst.read_text(encoding="utf-8")
+    base_store.write_base(profile, file_id, seeded.encode("utf-8"))
+    return seeded
 
 
 def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None:

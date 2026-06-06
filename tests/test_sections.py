@@ -1017,7 +1017,7 @@ def test_unknown_semantics_raises_under_allow_legacy() -> None:
 
 # ---------------------------------------------------------------------------
 # strip_shared_markers — drop SHARED marker LINES, keep bodies + outside text.
-# The migration helper for bead 10.1 (shared-section strip on install).
+# The migration helper for the shared-section strip on install.
 # ---------------------------------------------------------------------------
 
 
@@ -1081,6 +1081,14 @@ _MIXED_HOST_LOCAL_AND_SHARED = (
     "<!-- setforge:user-section end shared SH -->\n"
 )
 
+# A marker not at line-start: _MARKER_RE anchors ``^\s*...\s*$``, so this is
+# treated as an ordinary body line, never stripped — and stays stable.
+_SHARED_MIDLINE_MARKER = (
+    "<!-- setforge:user-section start shared MID -->\n"
+    "prefix <!-- setforge:user-section end shared MID --> suffix\n"
+    "<!-- setforge:user-section end shared MID -->\n"
+)
+
 _STRIP_FIXTURES = [
     _SHARED_MULTILINE,
     _SHARED_IN_CODE_FENCE,
@@ -1089,6 +1097,7 @@ _STRIP_FIXTURES = [
     _SHARED_BOM,
     _SHARED_DUP_NAMES,
     _MIXED_HOST_LOCAL_AND_SHARED,
+    _SHARED_MIDLINE_MARKER,
 ]
 
 

@@ -700,8 +700,10 @@ def strip_shared_markers(text: str, *, allow_legacy: bool = True) -> str:
 
     The whole file is parsed via :func:`_walk_markers` (which validates
     pairing and raises :class:`MarkerError` on any malformed / unclosed /
-    nested / mismatched marker) BEFORE any output line is committed, so a
-    malformed file never yields partial output. The result is exact-bytes:
+    nested / mismatched marker). The function either returns the complete
+    stripped string or raises — never a partial result — so the caller, which
+    writes only the returned value, never leaves a half-stripped file on disk.
+    The result is exact-bytes:
     no normalization, no trailing-newline policy, no encoding change — a BOM,
     CRLF endings, or a missing final newline all survive on the kept lines.
 

@@ -19,6 +19,7 @@ The cases mirror Task 8's acceptance grid:
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -225,7 +226,7 @@ def test_prune_removes_dropped_file_base(repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bead 10.1: SHARED-section strip + base-seed migration on install.
+# SHARED-section strip + base-seed migration on install.
 #
 # When a file moves from the legacy marker-based ``preserve_user_sections``
 # model into the disposition stored-base model, its FIRST install under a
@@ -274,16 +275,41 @@ def test_migration_strips_shared_markers_and_lands_stripped_live(repo: Path) -> 
 
 
 def test_migration_seeds_base_byte_identical_to_stripped_live(repo: Path) -> None:
-    """Data-loss invariant: base == stripped-live bytes == what landed live."""
+    """Data-loss invariant: base == stripped-live == what copy_atomic reads as ours."""
     _write_tracked(repo, _STRIPPED_LIVE)
     config = _write_config(repo)
     _seed_live_markers()
 
     assert _install(config).exit_code == 0
     base = base_store.read_base(_PROFILE, _FILE_ID)
-    live = _live_path().read_bytes()
-    assert base == _STRIPPED_LIVE.encode("utf-8")
-    assert base == live
+    assert base is not None
+    # Merge-level equality: the base must equal what copy_atomic re-reads as
+    # ``ours`` (read_text, universal-newline) — not merely read_bytes, which
+    # would miss a CRLF base/ours mismatch.
+    assert base.decode("utf-8") == _live_path().read_text(encoding="utf-8")
+    assert base.decode("utf-8") == _STRIPPED_LIVE
+
+
+def test_migration_crlf_live_base_matches_merge_view(repo: Path) -> None:
+    """A CRLF live file seeds a base equal to copy_atomic's read_text view.
+
+    Regression for the read_bytes-vs-read_text trap: seeding base from the
+    in-memory stripped string keeps CRLF, but copy_atomic reads live via
+    read_text (CRLF -> LF), so the base must be seeded from the read_text view
+    or every line diverges and the first merge manufactures a spurious delta.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers(content=_LIVE_WITH_SHARED_MARKERS.replace("\n", "\r\n"))
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "conflict" not in result.output.lower()
+    base = base_store.read_base(_PROFILE, _FILE_ID)
+    assert base is not None
+    # Merge-level equality holds for CRLF input too (base == ours).
+    assert base.decode("utf-8") == _live_path().read_text(encoding="utf-8")
+    assert "user-section" not in _live_path().read_text(encoding="utf-8")
 
 
 def test_migration_first_merge_clean_no_spurious_conflict(repo: Path) -> None:
@@ -389,8 +415,6 @@ def test_migration_preserves_live_mode(repo: Path) -> None:
     live = _seed_live_markers(mode=0o600)
 
     assert _install(config).exit_code == 0
-    import stat
-
     assert stat.S_IMODE(live.stat().st_mode) == 0o600
 
 
