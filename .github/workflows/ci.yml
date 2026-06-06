@@ -22,7 +22,12 @@ jobs:
       - run: uv run setforge validate --config=tests/fixtures/e2e/setforge.test.yaml --all
       - run: uv run ruff check
       - run: uv run ruff format --check
-      - run: uv run mypy setforge/ tests/
+      - run: uv run mypy setforge/ tests/ scripts/check_schema_gates.py
+      # Non-bypassable schema gates (migration-coverage / field-removal /
+      # reverse-required). Its own step, no continue-on-error: a violation
+      # is a hard CI failure. Standalone — NOT a pytest test, because
+      # pytest is skippable via markers / addopts.
+      - run: uv run python scripts/check_schema_gates.py
       - run: uv run pytest
 
   build-verify:

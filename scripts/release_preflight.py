@@ -24,7 +24,7 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
-from ruamel.yaml import YAML  # type: ignore[import-not-found]
+from ruamel.yaml import YAML
 
 _REQUIRED_COMMANDS = (
     "install",
