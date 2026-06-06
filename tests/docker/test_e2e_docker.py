@@ -2060,6 +2060,63 @@ def test_e2e_docker_init_force_with_backup(
 
 
 @pytest.mark.xdist_group("docker_daemon")
+def test_e2e_docker_init_config_repo_scaffolds_and_validates(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """init --config-repo scaffolds a repo, wires source, and validate --all passes.
+
+    One-shot end-to-end: wipe setforge state, run
+    ``init --config-repo --no-prompt`` (default target
+    ``~/projects/<host>-config``), then assert the scaffolded ``.git`` +
+    empty ``tracked/`` + starter ``setforge.yaml`` exist, the wired
+    ``source:`` block landed in ``local.yaml``, and ``validate --all``
+    (resolving the source through that wired block) exits 0. A second run
+    leaves ``local.yaml`` byte-identical (dedup guard).
+    """
+    c = docker_container()
+    c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
+    c.exec(["rm", "-rf", "/home/tester/projects"], check=False)
+
+    result = _init(c, extra=["--config-repo", "--no-prompt"])
+    assert "init --config-repo complete" in result.stdout, result.stdout
+
+    # The default target is ~/projects/<host>-config; resolve it.
+    repo = c.exec(
+        ["bash", "-lc", "ls -d /home/tester/projects/*-config"], check=True
+    ).stdout.strip()
+    assert repo, "no scaffolded config repo under ~/projects"
+    assert c.exec(["test", "-d", f"{repo}/.git"], check=False).returncode == 0, (
+        ".git not initialized"
+    )
+    assert c.exec(["test", "-d", f"{repo}/tracked"], check=False).returncode == 0, (
+        "tracked/ tree missing"
+    )
+    # tracked/ is empty.
+    tracked_ls = c.exec(["bash", "-lc", f"ls -A {repo}/tracked"], check=False).stdout
+    assert tracked_ls.strip() == "", f"tracked/ not empty: {tracked_ls!r}"
+
+    starter = c.read_text(f"{repo}/setforge.yaml")
+    assert "schema_version:" in starter, starter
+    assert "profiles:" in starter, starter
+
+    local_yaml = c.read_text("/home/tester/.config/setforge/local.yaml")
+    assert "source:" in local_yaml, local_yaml
+    assert "kind: path" in local_yaml, local_yaml
+
+    # validate --all resolves the wired source and passes.
+    vresult = c.exec(["uv", "run", "setforge", "validate", "--all"], check=False)
+    assert vresult.returncode == 0, f"validate failed: {vresult.stdout}{vresult.stderr}"
+    assert "ok" in vresult.stdout, vresult.stdout
+
+    # Idempotent second run: local.yaml byte-identical (no duplicate source).
+    before = c.read_text("/home/tester/.config/setforge/local.yaml")
+    _init(c, extra=["--config-repo", "--no-prompt"])
+    after = c.read_text("/home/tester/.config/setforge/local.yaml")
+    assert after == before, "second --config-repo run mutated local.yaml"
+
+
+@pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_check_readonly(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

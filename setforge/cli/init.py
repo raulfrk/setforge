@@ -22,6 +22,12 @@ from rich.console import Console
 
 from setforge.binaries import _STUB_TEMPLATE, LOCAL_CONFIG_PATH
 from setforge.cli import app
+from setforge.cli._config_repo import (
+    ConfigRepoScaffoldError,
+    default_config_repo_dir,
+    local_yaml_has_source,
+    scaffold_config_repo,
+)
 from setforge.cli._help_examples import INIT_EXAMPLES
 from setforge.cli._init_helpers import (
     BinaryProbe,
@@ -58,7 +64,13 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["ApplyChoice", "ForceChoice", "SourceChoice", "SourceSpec", "init"]
+__all__ = [
+    "ApplyChoice",
+    "ForceChoice",
+    "SourceChoice",
+    "SourceSpec",
+    "init",
+]
 
 
 class SourceChoice(StrEnum):
@@ -388,6 +400,105 @@ def _build_source_block(spec: SourceSpec) -> str:
             assert_never(unreachable)
 
 
+def _wire_source_block(target_dir: Path, *, console: Console) -> bool:
+    """Append a path ``source:`` block pointing at ``target_dir``, dedup-guarded.
+
+    Returns ``True`` when the block was appended, ``False`` when
+    ``local.yaml`` already carried a ``source:`` key (the dedup guard: a
+    second ``init --config-repo`` run must leave ``local.yaml``
+    byte-identical). The append preserves the file's existing permission
+    bits — it must never widen a ``0600`` stub to ``0644``. The new bytes
+    are staged into a temp file in the destination's own directory (never
+    ``/tmp``, to avoid a cross-device rename), then atomically renamed over
+    the target.
+    """
+    if local_yaml_has_source(LOCAL_CONFIG_PATH):
+        console.print("  source: block already present — left unchanged")
+        return False
+    spec = SourceSpec(choice=SourceChoice.PATH, path=target_dir)
+    existing = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    new_content = existing + _build_source_block(spec)
+    mode = LOCAL_CONFIG_PATH.stat().st_mode
+    tmp = LOCAL_CONFIG_PATH.with_name(f"{LOCAL_CONFIG_PATH.name}.tmp")
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        tmp.chmod(mode)
+        tmp.replace(LOCAL_CONFIG_PATH)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    console.print(f"  wired local.yaml source: → {target_dir}")
+    return True
+
+
+def _prompt_config_repo_dir(*, no_prompt: bool) -> Path:
+    """Resolve the config-repo target directory.
+
+    Default is ``~/projects/<name>-config`` per
+    :func:`setforge.cli._config_repo.default_config_repo_dir`. Under
+    ``--no-prompt`` the default is taken verbatim. Interactively, an
+    :func:`input_dialog` collects the directory (blank → default). A
+    non-TTY without ``--no-prompt`` raises
+    :class:`ConfirmRequiresInteractive` consistent with the other prompts.
+    """
+    default = default_config_repo_dir()
+    if no_prompt:
+        return default
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge init requires --no-prompt when stdin is not a TTY"
+        )
+    from setforge.cli import init as _self
+
+    entered = _self.input_dialog(
+        title="config-repo directory",
+        text=f"Where to scaffold the config repo? (blank = {default}):",
+    ).run()
+    entered = (entered or "").strip()
+    if not entered:
+        return default
+    return Path(entered).expanduser()
+
+
+def _handle_config_repo(*, no_prompt: bool, console: Console) -> int:
+    """``--config-repo`` path: ensure host-local, scaffold repo, wire source.
+
+    Returns an exit code. The host-local bootstrap runs first when the
+    host-local layer is not yet fully initialized (idempotent reuse
+    otherwise), then the config-repo layer is scaffolded and
+    ``local.yaml``'s ``source:`` block is wired at it (dedup-guarded). A
+    scaffold failure surfaces as a clean ``error:`` line and exit 1 rather
+    than a traceback.
+
+    The gate is :func:`is_initialized`, NOT a bare ``local.yaml`` existence
+    check: the Typer root callback writes the ``local.yaml`` stub on every
+    invocation, so an existence check would always skip the bootstrap and
+    leave the host-local share dir uncreated. ``is_initialized`` (sentinel
+    file AND host-local dir both present) is the same gate bare ``init``
+    uses, so ``--config-repo`` performs the identical host-local bootstrap.
+    """
+    probe = probe_environment()
+    if is_initialized(probe):
+        console.print("  host-local layer already initialized — reusing")
+    else:
+        _apply_bootstrap(
+            probe, source_spec=SourceSpec(choice=SourceChoice.SKIP), console=console
+        )
+    target_dir = _prompt_config_repo_dir(no_prompt=no_prompt)
+    try:
+        scaffolded = scaffold_config_repo(target_dir)
+    except ConfigRepoScaffoldError as err:
+        console.print(f"[red]error:[/red] {err}")
+        return 1
+    console.print(f"  scaffolded config repo at {scaffolded}")
+    _wire_source_block(scaffolded, console=console)
+    console.print("=== init --config-repo complete ===")
+    console.print(
+        "  next steps: setforge validate --all; add tracked files to setforge.yaml"
+    )
+    return 0
+
+
 def _apply_bootstrap(
     probe: EnvProbe,
     *,
@@ -566,6 +677,14 @@ def init(
         "--git-ref",
         help="Ref to clone when --git-source is supplied (default: main).",
     ),
+    config_repo: bool = typer.Option(
+        False,
+        "--config-repo",
+        help=(
+            "Also scaffold a config-repo (git init + starter setforge.yaml + "
+            "tracked/) and wire it as the source. Idempotent."
+        ),
+    ),
 ) -> None:
     """Bootstrap setforge config dirs + local.yaml template + env health.
 
@@ -577,6 +696,12 @@ def init(
     console.print("=== setforge init ===")
     if check:
         _handle_check_mode(console=console)
+        return
+
+    if config_repo:
+        exit_code = _handle_config_repo(no_prompt=no_prompt, console=console)
+        if exit_code != 0:
+            sys.exit(exit_code)
         return
 
     probe = probe_environment()
