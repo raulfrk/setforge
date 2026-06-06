@@ -106,22 +106,22 @@ live file* (not the config) the first time it installs under a stored-base
 
 This class is **not** a `schema_version` bump and does **not** go through
 `setforge migrate`. It runs automatically inside `setforge install`, once per
-file, when a `disposition`-bearing tracked file's first install finds the live
-file carrying legacy section markers (or, for structured files, no stored base
-yet). On that first install the engine:
+file, when a `disposition`-bearing tracked file's first install finds **no
+stored base yet** — and, for markdown files, a live file still carrying legacy
+shared-section markers. On that first install the engine:
 
 - seeds a **per-host base** from the current live file (the merge ancestor the
   stored-base three-way model needs), and
-- strips legacy section markers from the live file in place (markdown), leaving
-  every body byte intact.
+- strips legacy **shared-section** markers from the live file in place (markdown
+  only; host-local markers are left untouched, and structured files have none),
+  leaving every body byte intact.
 
 It honors the same **additive-first / expand → contract** framing as the schema
 class: the stored-base model is the *expand* shape introduced alongside the
-legacy marker model, the auto-migration is the one-time *contract* step that
-retires the legacy markers for a given file, and no live body content is
-dropped (base seeded == stripped-live, so the first three-way merge has zero
-spurious delta). It differs from the schema class on two axes that this carve-out
-fixes in place:
+legacy marker model, and the auto-migration is the one-time *contract* step that
+retires the legacy markers for a given file. No live body content is dropped:
+the seeded base equals the stripped-live file, so the first three-way merge has
+zero spurious delta. It differs from the schema class on two axes:
 
 - **Backup-not-prompt, no interactive gate.** Unlike `setforge migrate`'s
   diff-preview confirm, the auto-on-install migration runs without prompting. It

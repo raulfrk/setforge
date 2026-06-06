@@ -603,7 +603,8 @@ class DispositionBaseResult:
     :func:`deploy.copy_atomic` as ``base_text`` (``None`` keeps the ordinary
     base-absent, deploy-tracked-verbatim path). ``migrated`` is ``True`` ONLY
     when this install actually performed an auto-migration (seeded a per-host
-    base from the live file, stripping legacy markers where present) — the
+    base from the live file, stripping legacy shared-section markers where
+    present) — the
     one-time install warning fires on that signal. A steady-state read (base
     already present, no markers) and a crash-resume completion (base present,
     live re-stripped without re-seeding) both report ``migrated=False`` so the
@@ -626,13 +627,14 @@ def _read_or_migrate_disposition_base(
 
     * **Base present, live has NO legacy markers** — steady state. The stored
       base is returned verbatim (``migrated=False``).
-    * **Base present, live STILL carries legacy markers** — the crash-resume
+    * **Base present, live STILL carries legacy markers** (markdown / line-based
+      files only — structured files have no inline markers) — the crash-resume
       state (a kill landed AFTER the seed-first base write but BEFORE the live
       strip). The strip is COMPLETED (live rewritten to the stripped form,
       which re-strips the unchanged marker-bearing live → byte-matches the
       already-seeded base) WITHOUT re-seeding; the seeded base is returned
-      (``migrated=False`` — the warning already fired, or will not double-fire
-      on resume).
+      (``migrated=False`` — the seed ran on a prior install, so no warning
+      fires this run).
     * **Base ABSENT** — a file entering the disposition world for the first
       time, routed by format:
 
@@ -647,6 +649,11 @@ def _read_or_migrate_disposition_base(
     ``migrated=False`` — the ordinary base-absent (deploy-tracked-verbatim)
     path — when there is no live file to seed from (and, for markdown, no
     SHARED markers to strip).
+
+    Raises :class:`~setforge.errors.MarkerError` on a malformed marker file
+    (via the strip) and :class:`~setforge.errors.SetforgeError` when a
+    crash-resume re-strip does not reproduce the already-seeded base (both
+    propagate from the leaf helpers rather than being swallowed here).
     """
     raw = base_store.read_base(profile, file_id)
     if raw is not None:
@@ -835,17 +842,18 @@ def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None
 def _warn_auto_migration(sub_dst: Path, profile: str) -> None:
     """Emit the one-time actionable warning for an auto-on-install migration.
 
-    Fired ONCE per file, only when an auto-migration actually ran this install
+    Fired only when an auto-migration actually ran this install
     (``DispositionBaseResult.migrated`` True) — never on a steady-state or
     crash-resumed install. States WHAT changed (a per-host base was seeded from
-    the current live file; legacy section markers, if any, were stripped) and
+    the current live file; any legacy SHARED-section markers were stripped —
+    host-local markers are left in place, and structured files have none) and
     HOW to undo it (``setforge revert``), so the silent strip + seed surfaces a
     visible, reversible footprint to the user.
     """
     typer.secho(
         f"{sub_dst}: first install under a stored-base disposition: seeded a "
-        "per-host base from your current live file; legacy section markers "
-        "stripped. To restore the pre-migration state, run "
+        "per-host base from your current live file; any legacy shared-section "
+        "markers were stripped. To restore the pre-migration state, run "
         f"`setforge revert --profile={profile}`.",
         err=True,
         fg=typer.colors.YELLOW,

@@ -129,6 +129,57 @@ def test_shared_clean_three_way_merge(
     assert "footer-LIVE" in merged, merged
 
 
+_SHARED_BASE_PATH = (
+    "/home/tester/.local/state/setforge/base/"
+    "test-disposition-shared/disposition_shared_md"
+)
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_shared_auto_migrate_on_install_warns_and_reverts(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A marker-bearing live auto-migrates on first install: warn + revertible.
+
+    Pre-seed the live file with legacy SHARED user-section markers (the
+    pre-disposition world). The first disposition install strips them, seeds a
+    per-host base from the stripped live, and emits a one-time warning. A single
+    ``setforge revert`` restores the marker-bearing live AND removes the seeded
+    base in lockstep — the auto-on-install migration round-trip.
+    """
+    c = docker_container()
+    marker_live = (
+        "# Disposition fixture\n\n"
+        "<!-- setforge:user-section start shared S -->\n"
+        "intro line\nmiddle line\nfooter line\n"
+        "<!-- setforge:user-section end shared S -->\n"
+    )
+    c.exec(["mkdir", "-p", "/home/tester/.setforge_e2e/disposition"])
+    c.write_text(_LIVE_SHARED, marker_live)
+
+    rc, stdout, stderr = _install(c, "test-disposition-shared")
+    assert rc == 0, stderr
+    combined = stdout + stderr
+    # The one-time auto-migration warning fired, and markers were stripped.
+    assert "first install under a stored-base disposition" in combined, combined
+    assert "user-section" not in c.read_text(_LIVE_SHARED), c.read_text(_LIVE_SHARED)
+    assert c.exec(["test", "-f", _SHARED_BASE_PATH], check=False).returncode == 0
+
+    # Revert restores the marker-bearing live AND removes the seeded base.
+    rc, _o, stderr = _setforge(
+        c,
+        [
+            "revert",
+            "--profile=test-disposition-shared",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ],
+    )
+    assert rc == 0, stderr
+    assert "user-section" in c.read_text(_LIVE_SHARED), c.read_text(_LIVE_SHARED)
+    assert c.exec(["test", "-f", _SHARED_BASE_PATH], check=False).returncode != 0
+
+
 # ---------------------------------------------------------------------------
 # shared — same-line conflict, bare install defers (keeps live, warns, succeeds)
 # ---------------------------------------------------------------------------
