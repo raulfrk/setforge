@@ -1013,3 +1013,185 @@ def test_unknown_semantics_raises_under_allow_legacy() -> None:
     with pytest.raises(MarkerError) as excinfo:
         extract_sections(text, allow_legacy=True)
     assert "unknown semantics" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# strip_shared_markers — drop SHARED marker LINES, keep bodies + outside text.
+# The migration helper for bead 10.1 (shared-section strip on install).
+# ---------------------------------------------------------------------------
+
+
+_SHARED_MULTILINE = (
+    "before\n"
+    "<!-- setforge:user-section start shared RULES -->\n"
+    "rule one\n"
+    "rule two\n"
+    "<!-- setforge:user-section end shared RULES "
+    f"hash={'a' * 64} -->\n"
+    "after\n"
+)
+
+_SHARED_IN_CODE_FENCE = (
+    "intro\n"
+    "<!-- setforge:user-section start shared CODE -->\n"
+    "```python\n"
+    "x = 1  # not a marker\n"
+    "```\n"
+    "<!-- setforge:user-section end shared CODE -->\n"
+    "outro\n"
+)
+
+_SHARED_NO_TRAILING_NEWLINE = (
+    "<!-- setforge:user-section start shared TAIL -->\n"
+    "body line\n"
+    "<!-- setforge:user-section end shared TAIL -->"
+)
+
+_SHARED_CRLF = (
+    "before\r\n"
+    "<!-- setforge:user-section start shared WIN -->\r\n"
+    "win body\r\n"
+    "<!-- setforge:user-section end shared WIN -->\r\n"
+    "after\r\n"
+)
+
+_SHARED_BOM = (
+    "﻿head line\n"
+    "<!-- setforge:user-section start shared BOM -->\n"
+    "bom body\n"
+    "<!-- setforge:user-section end shared BOM -->\n"
+)
+
+_SHARED_DUP_NAMES = (
+    "<!-- setforge:user-section start shared DUP -->\n"
+    "first\n"
+    "<!-- setforge:user-section end shared DUP -->\n"
+    "mid\n"
+    "<!-- setforge:user-section start shared DUP -->\n"
+    "second\n"
+    "<!-- setforge:user-section end shared DUP -->\n"
+)
+
+_MIXED_HOST_LOCAL_AND_SHARED = (
+    "<!-- setforge:user-section start host-local HL -->\n"
+    "host body\n"
+    "<!-- setforge:user-section end host-local HL -->\n"
+    "<!-- setforge:user-section start shared SH -->\n"
+    "shared body\n"
+    "<!-- setforge:user-section end shared SH -->\n"
+)
+
+_STRIP_FIXTURES = [
+    _SHARED_MULTILINE,
+    _SHARED_IN_CODE_FENCE,
+    _SHARED_NO_TRAILING_NEWLINE,
+    _SHARED_CRLF,
+    _SHARED_BOM,
+    _SHARED_DUP_NAMES,
+    _MIXED_HOST_LOCAL_AND_SHARED,
+]
+
+
+def test_strip_shared_markers_drops_marker_lines_keeps_body() -> None:
+    """SHARED marker lines vanish; body + outside text byte-survive."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_MULTILINE)
+    assert out == "before\nrule one\nrule two\nafter\n"
+
+
+def test_strip_shared_markers_keeps_code_fence_body() -> None:
+    """A code fence inside a SHARED section is preserved verbatim."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_IN_CODE_FENCE)
+    assert out == "intro\n```python\nx = 1  # not a marker\n```\noutro\n"
+
+
+def test_strip_shared_markers_leaves_host_local_intact() -> None:
+    """host-local marker pairs survive untouched; only SHARED markers strip."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_MIXED_HOST_LOCAL_AND_SHARED)
+    assert out == (
+        "<!-- setforge:user-section start host-local HL -->\n"
+        "host body\n"
+        "<!-- setforge:user-section end host-local HL -->\n"
+        "shared body\n"
+    )
+
+
+def test_strip_shared_markers_no_trailing_newline_preserved() -> None:
+    """A body with no final newline keeps its no-final-newline shape."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_NO_TRAILING_NEWLINE)
+    assert out == "body line\n"
+
+
+def test_strip_shared_markers_crlf_preserved() -> None:
+    """CRLF line endings survive byte-for-byte on non-marker lines."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_CRLF)
+    assert out == "before\r\nwin body\r\nafter\r\n"
+
+
+def test_strip_shared_markers_bom_preserved() -> None:
+    """A leading BOM is preserved (it rides the first outside line)."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_BOM)
+    assert out == "﻿head line\nbom body\n"
+
+
+def test_strip_shared_markers_duplicate_names() -> None:
+    """Two SHARED sections sharing a name both strip; both bodies kept."""
+    from setforge.sections import strip_shared_markers
+
+    out = strip_shared_markers(_SHARED_DUP_NAMES)
+    assert out == "first\nmid\nsecond\n"
+
+
+@pytest.mark.parametrize("fixture", _STRIP_FIXTURES)
+def test_strip_shared_markers_idempotent(fixture: str) -> None:
+    """Data-loss invariant: strip(strip(x)) == strip(x) over every fixture."""
+    from setforge.sections import strip_shared_markers
+
+    once = strip_shared_markers(fixture)
+    twice = strip_shared_markers(once)
+    assert twice == once
+
+
+def test_strip_shared_markers_no_markers_passthrough() -> None:
+    """Text with no markers passes through byte-for-byte."""
+    from setforge.sections import strip_shared_markers
+
+    text = "just\nplain\ntext\n"
+    assert strip_shared_markers(text) == text
+
+
+def test_strip_shared_markers_malformed_raises_no_partial_output() -> None:
+    """A malformed marker raises MarkerError, validating the whole file first."""
+    from setforge.sections import strip_shared_markers
+
+    text = (
+        "<!-- setforge:user-section start shared OPEN -->\nbody\n"
+        # unclosed: no end marker
+    )
+    with pytest.raises(MarkerError):
+        strip_shared_markers(text)
+
+
+def test_strip_shared_markers_legacy_untagged_treated_shared() -> None:
+    """Untagged (pre-keyword) markers parse as SHARED under allow_legacy and strip."""
+    from setforge.sections import strip_shared_markers
+
+    text = (
+        "head\n"
+        "<!-- setforge:user-section start -->\n"
+        "legacy body\n"
+        "<!-- setforge:user-section end -->\n"
+        "tail\n"
+    )
+    assert strip_shared_markers(text) == "head\nlegacy body\ntail\n"

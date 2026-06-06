@@ -222,3 +222,192 @@ def test_prune_removes_dropped_file_base(repo: Path) -> None:
     result = _install(config)
     assert result.exit_code == 0, result.output
     assert base_store.read_base(_PROFILE, _FILE_ID) is None
+
+
+# ---------------------------------------------------------------------------
+# Bead 10.1: SHARED-section strip + base-seed migration on install.
+#
+# When a file moves from the legacy marker-based ``preserve_user_sections``
+# model into the disposition stored-base model, its FIRST install under a
+# ``disposition`` finds the live file still carrying SHARED markers and no
+# stored base. Install strips the SHARED marker LINES (keeping bodies), writes
+# the stripped form live, and seeds base == stripped-live so the first 3-way
+# merge sees no spurious delta (zero data loss).
+# ---------------------------------------------------------------------------
+
+_LIVE_WITH_SHARED_MARKERS = (
+    "intro line\n"
+    "<!-- setforge:user-section start shared RULES -->\n"
+    "user rule one\n"
+    "user rule two\n"
+    "<!-- setforge:user-section end shared RULES -->\n"
+    "outro line\n"
+)
+
+_STRIPPED_LIVE = "intro line\nuser rule one\nuser rule two\noutro line\n"
+
+
+def _seed_live_markers(
+    content: str = _LIVE_WITH_SHARED_MARKERS, *, mode: int = 0o600
+) -> Path:
+    """Pre-create the live dst carrying SHARED markers at ``mode``."""
+    live = _live_path()
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(content, encoding="utf-8")
+    live.chmod(mode)
+    return live
+
+
+def test_migration_strips_shared_markers_and_lands_stripped_live(repo: Path) -> None:
+    """First disposition install over marker-bearing live strips markers in place."""
+    # Tracked side equals the stripped bodies (the steady-state shared content
+    # once the markers are gone) so the merge is a no-op beyond the strip.
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    # Markers gone, bodies + outside text intact byte-for-byte.
+    assert _live_path().read_text(encoding="utf-8") == _STRIPPED_LIVE
+    assert "user-section" not in _live_path().read_text(encoding="utf-8")
+
+
+def test_migration_seeds_base_byte_identical_to_stripped_live(repo: Path) -> None:
+    """Data-loss invariant: base == stripped-live bytes == what landed live."""
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+
+    assert _install(config).exit_code == 0
+    base = base_store.read_base(_PROFILE, _FILE_ID)
+    live = _live_path().read_bytes()
+    assert base == _STRIPPED_LIVE.encode("utf-8")
+    assert base == live
+
+
+def test_migration_first_merge_clean_no_spurious_conflict(repo: Path) -> None:
+    """base == stripped-live makes the first merge clean; bodies byte-intact.
+
+    Bead contract test #3. With base seeded == stripped-live, the first 3-way
+    merge against a tracked that equals the stripped steady state is a clean
+    no-op: NO spurious conflict (which a ``None`` base would manufacture as a
+    whole-file both-add), markers GONE, and every body byte preserved.
+    """
+    # Tracked is the stripped steady state (markers already absent upstream).
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "conflict" not in result.output.lower()
+    merged = _live_path().read_text(encoding="utf-8")
+    # Markers gone, every body + outside byte intact.
+    assert merged == _STRIPPED_LIVE
+    assert "user-section" not in merged
+
+
+def test_migration_seeds_base_from_stripped_not_tracked(repo: Path) -> None:
+    """The seed is stripped-LIVE, not tracked — distinguishes strip from verbatim.
+
+    On the migration install the live body diverges from tracked. The strip
+    path lands stripped-LIVE live and seeds base from it; because base == live
+    the clean merge is a no-op against the user's content for any line the
+    user holds and tracked left at base. The DISTINGUISHING assertion: live
+    keeps the user's body verbatim (the strip wrote stripped-live in place),
+    whereas the naive base-absent deploy-tracked-verbatim path would have
+    replaced live with tracked's (markerless) body wholesale.
+
+    Tracked here is byte-identical to the stripped live body so the merge is a
+    pure no-op and the post-merge live + base are exactly stripped-live — the
+    in-memory seed bytes, never a tracked substitution.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    live = _seed_live_markers()
+    # Sanity: tracked file's on-disk mode differs from the live 0600 so a
+    # verbatim deploy would be visible via mode too.
+    (repo / "tracked" / "text" / "note.txt").chmod(0o644)
+
+    assert _install(config).exit_code == 0
+    # base == stripped-live in-memory bytes (NOT seeded from a re-read).
+    assert base_store.read_base(_PROFILE, _FILE_ID) == _STRIPPED_LIVE.encode("utf-8")
+    assert live.read_bytes() == _STRIPPED_LIVE.encode("utf-8")
+
+
+def test_migration_then_live_edit_survives_clean_merge(repo: Path) -> None:
+    """ZERO-DATA-LOSS: a post-migration live edit survives the next merge.
+
+    Proves the seeded base is a usable 3-way ancestor: after migration
+    (base == stripped-live), the user edits a DISJOINT live line and tracked
+    edits a different disjoint line. The next install clean-merges both —
+    the user's live edit is NOT clobbered.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+    assert _install(config).exit_code == 0  # migration install seeds base.
+
+    # User edits the LAST line; tracked edits the FIRST — disjoint hunks.
+    _live_path().write_text(
+        "intro line\nuser rule one\nuser rule two\noutro-EDITED\n", encoding="utf-8"
+    )
+    _write_tracked(repo, "intro-EDITED\nuser rule one\nuser rule two\noutro line\n")
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "conflict" not in result.output.lower()
+    merged = _live_path().read_text(encoding="utf-8")
+    assert "intro-EDITED" in merged  # tracked's change landed.
+    assert "outro-EDITED" in merged  # user's live edit SURVIVED.
+
+
+def test_migration_rerun_does_not_re_seed_or_double_strip(repo: Path) -> None:
+    """Re-running the install does not re-seed or re-strip (gate on the pair)."""
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+
+    assert _install(config).exit_code == 0
+    base_after_first = base_store.read_base(_PROFILE, _FILE_ID)
+    live_after_first = _live_path().read_bytes()
+
+    # Second run: base is now present and live has no SHARED markers, so the
+    # migration gate must NOT fire again.
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert base_store.read_base(_PROFILE, _FILE_ID) == base_after_first
+    assert _live_path().read_bytes() == live_after_first
+    assert "conflict" not in result.output.lower()
+
+
+def test_migration_preserves_live_mode(repo: Path) -> None:
+    """The in-place live rewrite preserves the existing mode (0600 stays 0600)."""
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    live = _seed_live_markers(mode=0o600)
+
+    assert _install(config).exit_code == 0
+    import stat
+
+    assert stat.S_IMODE(live.stat().st_mode) == 0o600
+
+
+def test_migration_skipped_when_no_shared_markers(repo: Path) -> None:
+    """A live file with NO shared markers takes the ordinary base-absent path.
+
+    The gate is the (base is None, live-has-shared-markers) pair: a plain live
+    file (no markers) must NOT be rewritten by the strip path; it follows the
+    today's first-install seed == tracked behavior.
+    """
+    _write_tracked(repo, "tracked-body\n")
+    config = _write_config(repo)
+    # Pre-existing plain live file, no markers.
+    _seed_live_markers(content="plain live\n")
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    # Base-absent path deploys tracked verbatim and seeds base == tracked.
+    assert _live_path().read_text(encoding="utf-8") == "tracked-body\n"
+    assert base_store.read_base(_PROFILE, _FILE_ID) == b"tracked-body\n"

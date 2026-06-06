@@ -23,8 +23,11 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import stat
 import sys
+import tempfile
 from collections.abc import Mapping
 from datetime import UTC
 from pathlib import Path
@@ -91,7 +94,7 @@ from setforge.errors import (
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
-from setforge.sections import LiveSections, SectionSemantics
+from setforge.sections import LiveSections, SectionSemantics, strip_shared_markers
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -495,8 +498,9 @@ def _deploy_all_tracked_files(
             base_text: str | None = None
             if tracked_file.disposition is not None:
                 disposition_file_ids.add(sub_name)
-                raw = base_store.read_base(profile, sub_name)
-                base_text = raw.decode("utf-8") if raw is not None else None
+                base_text = _read_or_migrate_disposition_base(
+                    profile, sub_name, sub_dst
+                )
             # Span re-overlay path: READ the spans sidecar BEFORE the deploy
             # so the relocation ladder has its derived state. Spans ride the
             # disposition path (the 3-way merge is where the re-overlay +
@@ -561,6 +565,111 @@ def _deploy_all_tracked_files(
     # are removed. Non-disposition files never have a base, so an empty
     # keep-set still correctly clears any stale bases under the profile.
     base_store.prune(profile, disposition_file_ids)
+
+
+def _read_or_migrate_disposition_base(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+) -> str | None:
+    """Return the disposition merge-ancestor base text, migrating if needed.
+
+    Reads the stored base for ``file_id`` under ``profile``. When a base
+    already exists it is returned verbatim (steady state). When NO base
+    exists (a file entering the disposition world for the first time) the
+    SHARED-section strip + base-seed migration (bead 10.1) runs via
+    :func:`_migrate_shared_markers_for_base`: if the live file still carries
+    legacy SHARED markers they are stripped in place and the base is seeded
+    from the stripped bytes, and those stripped bytes are returned so the
+    first 3-way merge has base == live (no spurious delta, zero data loss).
+    Returns ``None`` — the ordinary base-absent (deploy-tracked-verbatim)
+    path — when no base exists and the live file has no SHARED markers.
+    """
+    raw = base_store.read_base(profile, file_id)
+    if raw is not None:
+        return raw.decode("utf-8")
+    return _migrate_shared_markers_for_base(profile, file_id, sub_dst)
+
+
+def _migrate_shared_markers_for_base(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+) -> str | None:
+    """Strip live SHARED markers in place + seed base; return the seeded base text.
+
+    The EXPAND half of the section→disposition migration (bead 10.1), called
+    only when ``sub_dst``'s stored base is ABSENT (a file entering the
+    disposition world for the first time). When the live file exists AND
+    still carries legacy ``shared`` user-section markers, this:
+
+    1. Computes the stripped-live bytes IN MEMORY via
+       :func:`setforge.sections.strip_shared_markers` (which parses the WHOLE
+       file via the marker state machine first, so a malformed file raises
+       :class:`~setforge.errors.MarkerError` BEFORE any write — no partial
+       output, no half-migrated file).
+    2. Rewrites the live file to those exact stripped bytes, preserving the
+       file's EXISTING mode (0600 stays 0600) via the
+       fchmod-before-replace pattern (no symlink-follow, no mode widening).
+    3. Seeds the stored base to the SAME in-memory stripped bytes.
+
+    Returns the stripped text so the caller threads it as ``base_text`` into
+    :func:`deploy.copy_atomic`: base == stripped-live == what now sits live,
+    so the first 3-way merge has zero spurious delta (the data-loss
+    invariant). Returns ``None`` — leaving the caller's ``base_text`` at
+    ``None`` for the ordinary base-absent (deploy-tracked-verbatim) path —
+    when the live file is absent OR carries no SHARED markers. Host-local
+    markers and tracked-side markers are NOT touched here (10.2 / later).
+
+    The gate is strict on the ``(base absent, shared markers present)`` pair
+    (base-absence is the caller's precondition; shared-marker presence is
+    ``stripped != live_text``), so a second install — where the base now
+    exists OR the markers are already stripped — never re-seeds or
+    double-strips.
+    """
+    try:
+        live_text = sub_dst.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    stripped = strip_shared_markers(live_text)
+    if stripped == live_text:
+        # No SHARED markers to strip: fall through to the ordinary
+        # base-absent path (deploy tracked verbatim, seed base == tracked).
+        return None
+    # Rewrite live to the stripped bytes, preserving the EXISTING live mode.
+    existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
+    _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
+    # SEED base from the SAME in-memory stripped bytes (never a re-read of
+    # live, which could drift): base == stripped-live == what landed live.
+    base_store.write_base(profile, file_id, stripped.encode("utf-8"))
+    return stripped
+
+
+def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None:
+    """Atomically write ``content`` to ``path`` at ``mode`` (fchmod-before-replace).
+
+    Mirrors :func:`setforge.deploy._atomic_write`'s safety contract for a
+    live rewrite that is NOT a tracked-source deploy: a same-directory temp
+    file gets ``content`` and ``mode`` applied to its fd via
+    :func:`os.fchmod` BEFORE :func:`os.replace`, so the final mode lands in
+    the same FS object (closing the TOCTOU symlink-swap window a path-based
+    chmod would open) and a pre-existing ``path`` symlink is REPLACED rather
+    than followed. ``mode`` is the file's existing mode, so 0600 stays 0600
+    — the rewrite never widens permissions.
+    """
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fchmod(fh.fileno(), mode)
+        os.replace(tmp_path, path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink(missing_ok=True)
 
 
 def _advance_disposition_base(

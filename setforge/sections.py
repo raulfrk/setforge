@@ -685,6 +685,55 @@ def strip_host_local_sections(
     return "".join(out_lines)
 
 
+def strip_shared_markers(text: str, *, allow_legacy: bool = True) -> str:
+    """Return ``text`` with SHARED user-section marker LINES removed, bodies kept.
+
+    The migration helper for moving a ``shared``-section file from the
+    legacy ``preserve_user_sections`` (marker-based) model into the
+    whole-file stored-base disposition model. Unlike
+    :func:`strip_section_content` (which drops BODIES and keeps MARKERS) and
+    :func:`strip_host_local_sections` (which drops whole host-local pairs,
+    markers AND body), this drops the SHARED ``start`` / ``end`` marker
+    lines while keeping every body line and every outside line byte-for-byte.
+    ``host-local`` marker pairs pass through untouched — only the SHARED
+    disposition migration is in scope here.
+
+    The whole file is parsed via :func:`_walk_markers` (which validates
+    pairing and raises :class:`MarkerError` on any malformed / unclosed /
+    nested / mismatched marker) BEFORE any output line is committed, so a
+    malformed file never yields partial output. The result is exact-bytes:
+    no normalization, no trailing-newline policy, no encoding change — a BOM,
+    CRLF endings, or a missing final newline all survive on the kept lines.
+
+    Idempotent: once the SHARED markers are gone, a second pass finds no
+    SHARED markers and returns its input unchanged
+    (``strip_shared_markers(strip_shared_markers(x)) == strip_shared_markers(x)``).
+
+    ``allow_legacy`` defaults to ``True`` because the only caller is the
+    install path's live-side migration, where pre-hash / untagged markers
+    (which parse as :attr:`SectionSemantics.SHARED`) are exactly what must be
+    stripped. Pass ``allow_legacy=False`` for strict-form input.
+    """
+    out_lines: list[str] = []
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
+        match event:
+            case (
+                _StartMarker(semantics=SectionSemantics.SHARED)
+                | _EndMarker(semantics=SectionSemantics.SHARED)
+            ):
+                continue
+            case (
+                _BodyLine(line=line)
+                | _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
+    return "".join(out_lines)
+
+
 def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
     """Return ``text`` with content between every user-section marker pair
     removed. Markers themselves are kept so the file remains a valid
