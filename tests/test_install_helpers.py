@@ -9,13 +9,26 @@ explicitly.
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 from typing import cast
 
+import pytest
+
+from setforge import base_store
 from setforge.cli import _install_helpers
 from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
 from setforge.compare import CompareReport, CompareStatus, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
+
+_LIVE_WITH_MARKERS = (
+    "intro\n"
+    "<!-- setforge:user-section start shared R -->\n"
+    "body\n"
+    "<!-- setforge:user-section end shared R -->\n"
+    "outro\n"
+)
+_STRIPPED = "intro\nbody\noutro\n"
 
 
 def test_install_helpers_module_imports() -> None:
@@ -103,3 +116,87 @@ def test_resolve_drift_paths_directory_subfiles_do_not_collide(
     # The earlier sub-file did NOT collapse onto the later one.
     assert by_name[name1][0] != by_name[name2][0]
     assert by_name[name1][1] != by_name[name2][1]
+
+
+def test_migrate_shared_markers_seeds_base_before_stripping_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-safe ordering: the base is seeded BEFORE live is rewritten to stripped.
+
+    The seed-first ordering is the crash-safety invariant — a kill between the
+    two steps must leave base-present + live-marker-bearing (resumable), never
+    base-absent-after-strip. Records the interleaving of ``write_base`` and the
+    live rewrite and asserts the base write lands first.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "note.md"
+    live.write_text(_LIVE_WITH_MARKERS, encoding="utf-8")
+
+    order: list[str] = []
+    real_write_base = base_store.write_base
+    real_rewrite = _install_helpers._atomic_rewrite_preserving_mode
+
+    def _record_write_base(profile: str, file_id: str, data: bytes) -> None:
+        order.append("base")
+        real_write_base(profile, file_id, data)
+
+    def _record_rewrite(path: Path, content: str, mode: int) -> None:
+        order.append("live")
+        real_rewrite(path, content, mode)
+
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.base_store.write_base", _record_write_base
+    )
+    monkeypatch.setattr(
+        _install_helpers, "_atomic_rewrite_preserving_mode", _record_rewrite
+    )
+
+    seeded = _install_helpers._migrate_shared_markers_for_base("p", "f", live)
+
+    assert seeded == _STRIPPED
+    # base seeded FIRST, live stripped SECOND.
+    assert order == ["base", "live"]
+    assert base_store.read_base("p", "f") == _STRIPPED.encode("utf-8")
+    assert live.read_text(encoding="utf-8") == _STRIPPED
+
+
+def test_resume_marker_strip_completes_without_reseeding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-resume: a base-present, live-marker-bearing file finishes the strip.
+
+    Reproduces the crash-resume state (base seeded, live still marker-bearing)
+    and drives the resume path directly: it rewrites live to the stripped form
+    matching the already-seeded base, WITHOUT calling ``write_base`` again.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "note.md"
+    live.write_text(_LIVE_WITH_MARKERS, encoding="utf-8")
+    live.chmod(0o600)
+
+    reseeded: list[bytes] = []
+    monkeypatch.setattr(
+        "setforge.cli._install_helpers.base_store.write_base",
+        lambda profile, file_id, data: reseeded.append(data),
+    )
+
+    _install_helpers._resume_marker_strip(live, _STRIPPED)
+
+    # Strip landed; mode preserved; NO re-seed.
+    assert live.read_text(encoding="utf-8") == _STRIPPED
+    assert stat.S_IMODE(live.stat().st_mode) == 0o600
+    assert reseeded == []
+
+
+def test_resume_marker_strip_steady_state_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live file with no markers (steady state) is left untouched by the resume."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "note.md"
+    live.write_text(_STRIPPED, encoding="utf-8")
+    before = live.read_bytes()
+
+    _install_helpers._resume_marker_strip(live, _STRIPPED)
+
+    assert live.read_bytes() == before

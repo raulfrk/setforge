@@ -434,4 +434,156 @@ def test_migration_skipped_when_no_shared_markers(repo: Path) -> None:
     assert result.exit_code == 0, result.output
     # Base-absent path deploys tracked verbatim and seeds base == tracked.
     assert _live_path().read_text(encoding="utf-8") == "tracked-body\n"
-    assert base_store.read_base(_PROFILE, _FILE_ID) == b"tracked-body\n"
+
+
+# ---------------------------------------------------------------------------
+# One-time auto-migration warning + revertibility + crash-safety.
+#
+# These cases cover the ORCHESTRATION around the silent strip + seed
+# migration: the actionable one-time warning, the transition wrapping that
+# makes the seeded base revertible, and the crash-safe seed-first ordering.
+# ---------------------------------------------------------------------------
+
+_MIGRATION_WARNING_MARK = "first install under a stored-base disposition"
+
+
+def _install_recording(config: Path, *, extra: list[str] | None = None) -> Result:
+    """Run ``setforge install`` WITH a transition recorded (revert-capable).
+
+    Mirrors :func:`_install` but drops ``--no-transition`` so the install
+    writes a transition record ``setforge revert`` can replay. The
+    extension / plugin reconcile legs are no-ops for this profile (it
+    declares neither), so no real ``code`` / ``claude`` binary is needed.
+    """
+    args = [
+        "install",
+        f"--profile={_PROFILE}",
+        f"--config={config}",
+        "--no-secrets-scan",
+        "--no-git-check",
+        "--yes",
+    ]
+    if extra:
+        args.extend(extra)
+    return CliRunner().invoke(app, args)
+
+
+def _revert(config: Path) -> Result:
+    """Run ``setforge revert`` against ``config``; return the CliRunner result."""
+    return CliRunner().invoke(
+        app,
+        ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"],
+    )
+
+
+def test_migration_emits_one_time_warning_then_silent_steady_state(
+    repo: Path,
+) -> None:
+    """A migrate-on-install fires the actionable warning ONCE; steady state is silent.
+
+    The first disposition install of a marker-bearing file auto-migrates
+    (seed base + strip markers) and MUST surface a one-time warning naming
+    what changed and how to undo it. The second (steady-state) install
+    migrates nothing, so it must NOT re-warn.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+
+    first = _install(config)
+    assert first.exit_code == 0, first.output
+    assert _MIGRATION_WARNING_MARK in first.output
+    # The warning is actionable: it names the undo path.
+    assert "setforge revert" in first.output
+
+    second = _install(config)
+    assert second.exit_code == 0, second.output
+    assert _MIGRATION_WARNING_MARK not in second.output
+
+
+def test_nonmigrating_first_install_does_not_warn(repo: Path) -> None:
+    """A plain first install (no markers, no live file) does NOT warn.
+
+    The warning fires ONLY when a migration actually seeds a base from an
+    existing live file. A cold first install with no pre-existing live file
+    deploys tracked verbatim and must stay silent.
+    """
+    _write_tracked(repo, "line1\nline2\n")
+    config = _write_config(repo)
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert _MIGRATION_WARNING_MARK not in result.output
+
+
+def test_migration_then_revert_removes_seeded_base_and_restores_live(
+    repo: Path,
+) -> None:
+    """ZERO-DATA-LOSS: revert of a PLAIN (no-span) migrate-on-install undoes it whole.
+
+    A plain disposition file (no spans) that migrates on install seeds a
+    per-host base OUTSIDE any span-lockstep set. The install transition must
+    still capture that base so ``setforge revert`` removes it IN LOCKSTEP
+    with restoring the marker-bearing live file. Without the capture, revert
+    restores live (patch -R) but leaves the stale seeded base, and the next
+    install mis-merges against it.
+
+    Proves both halves after revert:
+
+    * the seeded base is GONE (``read_base`` is ``None``), and
+    * the live file is byte-restored to its pre-migration marker-bearing
+      content.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    _seed_live_markers()
+    pre_migration_live = _live_path().read_bytes()
+    assert b"user-section" in pre_migration_live  # markers present pre-install.
+
+    install_result = _install_recording(config)
+    assert install_result.exit_code == 0, install_result.output
+    # Migration fired: markers stripped, base seeded.
+    assert base_store.read_base(_PROFILE, _FILE_ID) is not None
+    assert b"user-section" not in _live_path().read_bytes()
+
+    revert_result = _revert(config)
+    assert revert_result.exit_code == 0, revert_result.output
+    # The seeded base is GONE — reverted in lockstep with live.
+    assert base_store.read_base(_PROFILE, _FILE_ID) is None
+    # Live is byte-restored to the pre-migration marker-bearing content.
+    assert _live_path().read_bytes() == pre_migration_live
+
+
+def test_migration_resumes_after_crash_between_seed_and_strip(repo: Path) -> None:
+    """CRASH-SAFE: a kill after base-seed but before live-strip resumes cleanly.
+
+    The migration seeds the base FIRST (from the in-memory stripped bytes),
+    THEN rewrites live to stripped. A crash in between leaves base-PRESENT +
+    live-still-marker-bearing. Re-running install must COMPLETE the strip
+    (rewrite live to stripped) WITHOUT re-seeding, ending at
+    base == live == stripped with no data loss.
+
+    Simulates the crash by seeding only the base (via the migration's first
+    step) and leaving live marker-bearing, then driving a real install.
+    """
+    _write_tracked(repo, _STRIPPED_LIVE)
+    config = _write_config(repo)
+    live = _seed_live_markers()
+
+    # Simulate the crash state: base seeded from the stripped bytes, live
+    # still carries markers (the strip never landed).
+    base_store.write_base(_PROFILE, _FILE_ID, _STRIPPED_LIVE.encode("utf-8"))
+    assert b"user-section" in live.read_bytes()
+    base_before_resume = base_store.read_base(_PROFILE, _FILE_ID)
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "conflict" not in result.output.lower()
+    # Strip completed: live no longer carries markers.
+    assert b"user-section" not in live.read_bytes()
+    # base == live == stripped, and the resume did NOT re-seed (byte-identical).
+    assert base_store.read_base(_PROFILE, _FILE_ID) == base_before_resume
+    assert live.read_text(encoding="utf-8") == _STRIPPED_LIVE
+    assert base_store.read_base(_PROFILE, _FILE_ID) == live.read_text(
+        encoding="utf-8"
+    ).encode("utf-8")

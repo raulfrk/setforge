@@ -194,13 +194,15 @@ def test_seed_base_equals_live_at_merge_read_level(repo: Path, suffix: str) -> N
     # left behind (this test calls the helper directly, outside `_install`).
     base_store.base_path(_PROFILE, _FILE_ID).unlink(missing_ok=True)
 
-    seeded = _read_or_migrate_disposition_base(_PROFILE, _FILE_ID, live)
-    assert seeded is not None
+    result = _read_or_migrate_disposition_base(_PROFILE, _FILE_ID, live)
+    assert result.base_text is not None
+    # A first-install seed from an existing live file IS an auto-migration.
+    assert result.migrated is True
     stored = base_store.read_base(_PROFILE, _FILE_ID)
     assert stored is not None
     # Returned seed, stored seed, and copy_atomic's ``ours`` read all agree.
     merge_ours = live.read_text(encoding="utf-8")
-    assert seeded == merge_ours
+    assert result.base_text == merge_ours
     assert stored.decode("utf-8") == merge_ours
 
 
