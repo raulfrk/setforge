@@ -33,6 +33,7 @@ from setforge.migrations import (
     ManifestType,
     Migration,
     MigrationRoots,
+    RestampMigration,
     VersionStampMigration,
     current_expected_schema_version,
     detect_current_schema,
@@ -46,17 +47,18 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_one_one() -> None:
-    """The build now expects schema 1.1 after the first expand migration."""
-    assert current_expected_schema_version == "1.1"
+def test_current_expected_schema_version_is_one_two() -> None:
+    """The build now expects schema 1.2 after the second expand migration."""
+    assert current_expected_schema_version == "1.2"
 
 
-def test_migrations_registry_has_the_first_migration() -> None:
-    """The registry now ships exactly the 1.0 → 1.1 version-stamp migration."""
-    assert len(MIGRATIONS) == 1
-    only = MIGRATIONS[0]
-    assert only.from_version == "1.0"
-    assert only.to_version == "1.1"
+def test_migrations_registry_has_the_version_stamp_chain() -> None:
+    """The registry ships the 1.0 → 1.1 → 1.2 version-stamp chain, in order."""
+    assert len(MIGRATIONS) == 2
+    assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
+    assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
+    # Appended in from_version order so the forward walk never has to sort.
+    assert isinstance(MIGRATIONS[1], RestampMigration)
 
 
 def test_find_migration_path_empty_registry_returns_empty(
@@ -210,6 +212,7 @@ def test_known_versions_covers_registry_and_expected() -> None:
     kv = known_versions()
     assert "1.0" in kv
     assert "1.1" in kv
+    assert "1.2" in kv
 
 
 def test_atomic_write_yaml_preserves_file_mode(tmp_path: Path) -> None:
@@ -505,8 +508,8 @@ def _seed_cfg(tmp_path: Path, body: str) -> Path:
 
 
 def test_version_stamp_migration_is_registered() -> None:
-    """The single registered migration is a VersionStampMigration 1.0 → 1.1."""
-    assert (VersionStampMigration(),) == MIGRATIONS
+    """The 1.0→1.1 step is the FIRST registered migration (a VersionStampMigration)."""
+    assert MIGRATIONS[0] == VersionStampMigration()
     assert isinstance(MIGRATIONS[0], Migration)
 
 
@@ -659,17 +662,22 @@ def test_find_migration_path_one_step_no_loop() -> None:
 def test_find_migration_path_future_sibling_does_not_perturb(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """B-M4: injecting a future 1.1 → 2.0 forward entry leaves 1.0 → 1.1 intact."""
+    """B-M4: appending a future 1.2 → 2.0 entry leaves 1.0 → 1.1 intact.
+
+    The sibling extends the END of the real 1.0 → 1.1 → 1.2 chain (its
+    from_version is 1.2, not 1.1 — appending from 1.1 would collide with
+    the registered 1.1 → 1.2 step and create an ambiguous branch).
+    """
     from setforge.migrations import MIGRATIONS as _real
 
-    extended = (*_real, _NoopMigration(from_version="1.1", to_version="2.0"))
+    extended = (*_real, _NoopMigration(from_version="1.2", to_version="2.0"))
     monkeypatch.setattr("setforge.migrations.MIGRATIONS", extended)
     found = find_migration_path(from_v="1.0", to_v="1.1")
     assert len(found) == 1
     assert found[0].to_version == "1.1"
     # And the longer chain still resolves end-to-end without looping.
     full = find_migration_path(from_v="1.0", to_v="2.0")
-    assert tuple(m.to_version for m in full) == ("1.1", "2.0")
+    assert tuple(m.to_version for m in full) == ("1.1", "1.2", "2.0")
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +724,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "1.1" in captured.err
+    assert "1.2" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -756,3 +764,185 @@ def test_detect_current_schema_non_mapping_root_raises_config_error(
     cfg = _seed_cfg(tmp_path, body)
     with pytest.raises(ConfigError):
         detect_current_schema(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Second real migration — restamp 1.1 → 1.2 (+ symmetric reverse). 14.13.
+#
+# RestampMigration differs from VersionStampMigration in the load-bearing
+# way: its reverse RESTAMPS the older version (overwrite-in-place) rather
+# than STRIPPING the key. The 1.0 endpoint is key-absent (so the 1.0↔1.1
+# reverse strips); 1.1 and 1.2 both carry the key (so the 1.1↔1.2 reverse
+# must restamp, never delete — else a downgrade silently reads as 1.0).
+# ---------------------------------------------------------------------------
+
+# A config that ALREADY carries schema_version, with keys BEFORE and AFTER
+# it. The mid-document position is what makes the byte-identity test a real
+# reorder proof: a del-then-reinsert would move the key to the document end.
+_CFG_BODY_AT_1_1: Final[str] = (
+    "# top comment\n"
+    "version: 1\n"
+    "schema_version: '1.1'\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md  # eol comment\n"
+    "    dst: foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+_RESTAMP_1_1_TO_1_2: Final = RestampMigration(from_version="1.1", to_version="1.2")
+
+
+def test_restamp_satisfies_migration_protocol() -> None:
+    assert isinstance(_RESTAMP_1_1_TO_1_2, Migration)
+
+
+def test_restamp_reverse_is_swapped_and_symmetric() -> None:
+    """The reverse swaps from/to and is itself a (symmetric) RestampMigration."""
+    rev = _RESTAMP_1_1_TO_1_2.reverse
+    assert isinstance(rev, RestampMigration)
+    assert (rev.from_version, rev.to_version) == ("1.2", "1.1")
+    # reverse-of-reverse is the original forward direction.
+    assert (rev.reverse.from_version, rev.reverse.to_version) == ("1.1", "1.2")
+
+
+def test_restamp_apply_stamps_in_place_preserving_order(tmp_path: Path) -> None:
+    """``apply`` overwrites schema_version in place — key position unchanged."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_1_1)
+    yaml = yaml_rt()
+    before_keys = list(yaml.load(_CFG_BODY_AT_1_1).keys())
+
+    _RESTAMP_1_1_TO_1_2.apply(roots=_roots_for(cfg))
+
+    assert detect_current_schema(cfg) == "1.2"
+    after = cfg.read_text(encoding="utf-8")
+    # Identity on every other key + comment.
+    assert "# top comment" in after
+    assert "# eol comment" in after
+    assert "- foo" in after
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    # The key kept its slot (version, schema_version, tracked_files, profiles)
+    # — a del + reinsert would have shoved schema_version to the end.
+    assert list(data.keys()) == before_keys
+    assert data["schema_version"] == "1.2"
+
+
+def test_restamp_reverse_restamps_older_version_not_strips(tmp_path: Path) -> None:
+    """The load-bearing assertion: a 1.2 → 1.1 reverse leaves '1.1', NOT absence.
+
+    Reusing VersionStampMigration here would DELETE the key, and
+    detect_current_schema would then misread the result as the 1.0
+    baseline — a silent two-version downgrade. The restamp must keep the
+    key present at the older value.
+    """
+    cfg = _seed_cfg(tmp_path, "schema_version: '1.2'\n" + _CFG_BODY_NO_VERSION)
+    _RESTAMP_1_1_TO_1_2.reverse.apply(roots=_roots_for(cfg))
+    yaml = yaml_rt()
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert "schema_version" in data  # NOT stripped
+    assert data["schema_version"] == "1.1"
+    assert detect_current_schema(cfg) == "1.1"  # NOT "1.0"
+
+
+def test_restamp_up_down_up_is_byte_identical(tmp_path: Path) -> None:
+    """up → down → up on a key-present config is byte-identical + reorder-safe.
+
+    The pitfall this guards (14.13): the existing VersionStampMigration
+    round-trip test only covers the down → up → down key-ABSENT cycle. A
+    config that already carries schema_version with keys after it can be
+    reordered by a del + reinsert. Overwrite-in-place must not.
+
+    Baseline is the post-first-up document (ruamel normalizes the
+    hand-written source on the first load → dump), mirroring
+    test_reverse_strips_stamp_restoring_absence_when_originally_absent.
+    """
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_1_1)
+    roots = _roots_for(cfg)
+    fwd = _RESTAMP_1_1_TO_1_2
+    rev = fwd.reverse
+
+    fwd.apply(roots=roots)  # 1.1 → 1.2 (normalizes + stamps)
+    after_first_up = cfg.read_bytes()
+
+    rev.apply(roots=roots)  # 1.2 → 1.1
+    fwd.apply(roots=roots)  # 1.1 → 1.2 again
+
+    assert cfg.read_bytes() == after_first_up
+    assert detect_current_schema(cfg) == "1.2"
+
+
+def test_restamp_apply_idempotent_on_replay(tmp_path: Path) -> None:
+    """Applying the restamp twice equals applying it once (overwrite-or-insert)."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_1_1)
+    roots = _roots_for(cfg)
+    _RESTAMP_1_1_TO_1_2.apply(roots=roots)
+    once = cfg.read_bytes()
+    _RESTAMP_1_1_TO_1_2.apply(roots=roots)
+    assert cfg.read_bytes() == once
+    assert detect_current_schema(cfg) == "1.2"
+
+
+def test_restamp_manifest_and_affected_paths(tmp_path: Path) -> None:
+    """manifest()/affected_paths() describe exactly the single-file in-place stamp."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_1_1)
+    roots = _roots_for(cfg)
+    assert _RESTAMP_1_1_TO_1_2.affected_paths(roots=roots) == (cfg,)
+    (entry,) = _RESTAMP_1_1_TO_1_2.manifest(roots=roots)
+    assert entry.type is ManifestType.EDIT
+    assert entry.affected_path == cfg
+    assert "schema_version" in entry.description
+
+
+def test_two_step_chain_applies_1_0_to_1_2_and_reverses_to_absent(
+    tmp_path: Path,
+) -> None:
+    """The REAL registry chain applies 1.0 → 1.2 forward, then 1.2 → 1.0 back.
+
+    Drives the production find_migration_path output (not a hand-built
+    chain): the forward walk stamps through both steps to 1.2; the reverse
+    walk restamps to 1.1 then strips to the key-absent 1.0 baseline.
+    """
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_NO_VERSION)  # key-absent 1.0
+    roots = _roots_for(cfg)
+
+    forward = find_migration_path(from_v="1.0", to_v="1.2")
+    assert tuple(m.to_version for m in forward) == ("1.1", "1.2")
+    for migration in forward:
+        migration.apply(roots=roots)
+    assert detect_current_schema(cfg) == "1.2"
+
+    backward = find_migration_path(from_v="1.2", to_v="1.0")
+    assert tuple(m.to_version for m in backward) == ("1.1", "1.0")
+    for migration in backward:
+        migration.apply(roots=roots)
+    # Back to the 1.0 baseline: the key is absent again.
+    yaml = yaml_rt()
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert "schema_version" not in data
+    assert detect_current_schema(cfg) == "1.0"
+
+
+@pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
+def test_restamp_apply_non_mapping_root_raises_config_error(
+    tmp_path: Path, body: str
+) -> None:
+    """``RestampMigration.apply`` on a non-mapping root raises ConfigError."""
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError):
+        _RESTAMP_1_1_TO_1_2.apply(roots=_roots_for(cfg))
+
+
+@pytest.mark.parametrize("body", _NON_MAPPING_ROOTS)
+def test_restamp_reverse_non_mapping_root_raises_config_error(
+    tmp_path: Path, body: str
+) -> None:
+    """The restamp reverse on a non-mapping root raises ConfigError, not TypeError."""
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError):
+        _RESTAMP_1_1_TO_1_2.reverse.apply(roots=_roots_for(cfg))

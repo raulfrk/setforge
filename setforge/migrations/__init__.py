@@ -17,9 +17,9 @@ Every Migration declares its full set of :meth:`Migration.affected_paths`
 so the ``migrate`` CLI's backup + multi-file diff preview + atomic
 rollback cover the whole footprint, not just ``setforge.yaml``.
 
-The registry :data:`MIGRATIONS` holds the first real migration
-(version-stamp 1.0 → 1.1, :class:`VersionStampMigration`). Future
-migrations are appended in ``from_version`` order so
+The registry :data:`MIGRATIONS` holds the version-stamp chain 1.0 → 1.1
+(:class:`VersionStampMigration`) → 1.2 (:class:`RestampMigration`).
+Future migrations are appended in ``from_version`` order so
 :func:`find_migration_path` can walk the chain forward.
 """
 
@@ -92,6 +92,7 @@ __all__ = [
     "ManifestType",
     "Migration",
     "MigrationRoots",
+    "RestampMigration",
     "VersionStampMigration",
     "current_expected_schema_version",
     "detect_current_schema",
@@ -101,7 +102,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "1.1"
+current_expected_schema_version: Final[str] = "1.2"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -109,6 +110,11 @@ version, ``setforge migrate --check`` lists the chain in
 :data:`MIGRATIONS` that bridges the gap. Bumped manually when a
 breaking schema change ships; the matching :class:`Migration` is
 appended to :data:`MIGRATIONS` in the same release.
+
+This constant and the matching :data:`MIGRATIONS` entry are a MATCHED
+PAIR: the migration-coverage gate (``scripts/check_schema_gates.py``)
+fails CI unless the registry's chain from the baseline reaches this
+version.
 """
 
 
@@ -374,14 +380,88 @@ class _VersionStampReverse:
         atomic_write_yaml(roots.cfg_path, data)
 
 
-MIGRATIONS: Final[tuple[Migration, ...]] = (VersionStampMigration(),)
+@dataclass(slots=True, frozen=True)
+class RestampMigration:
+    """Symmetric schema-version stamp for an ``X.Y`` ↔ ``X.Z`` bump.
+
+    Unlike :class:`VersionStampMigration` — whose ``from_version`` is the
+    key-ABSENT ``1.0`` baseline, so its reverse STRIPS the
+    ``schema_version`` key — a ``RestampMigration`` bridges two versions
+    that BOTH carry the key (e.g. 1.1 ↔ 1.2). ``apply`` overwrites the
+    key value in place, and :attr:`reverse` is another
+    ``RestampMigration`` with ``from``/``to`` swapped — it RESTAMPS the
+    older version, never deletes. Reusing ``VersionStampMigration`` for
+    such a bump would delete ``schema_version`` on downgrade, which
+    :func:`detect_current_schema` then misreads as the ``1.0`` baseline —
+    a silent two-version downgrade.
+
+    EXPAND step, identity-on-data: nothing in the document is reshaped.
+    Overwrite-IN-PLACE (assignment to an existing key, never
+    ``del``-then-reinsert) keeps the key at its original position, so a
+    ``up → down → up`` cycle is byte-identical and reorder-safe — the
+    ruamel ``CommentedMap`` would otherwise move a re-inserted key to the
+    document end. The single :func:`atomic_write_yaml` makes the stamp
+    crash-safe; the overwrite makes it idempotent on replay.
+    """
+
+    from_version: str
+    to_version: str
+
+    @property
+    def reverse(self) -> RestampMigration:
+        """The inverse ``to_version`` → ``from_version`` restamp.
+
+        Self-symmetric: the reverse of a restamp is a restamp with the
+        versions swapped, so ``reverse.reverse`` is the original forward
+        direction. The reverse RESTAMPS the older version (it does not
+        strip the key), which is what keeps a downgrade between two
+        key-present versions correct.
+        """
+        return RestampMigration(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        """Single-file in-place stamp: an EDIT of the ``schema_version`` value."""
+        return (
+            ManifestEntry(
+                type=ManifestType.EDIT,
+                description=(
+                    f"restamp schema_version: {self.from_version!r} → "
+                    f"{self.to_version!r}"
+                ),
+                affected_path=roots.cfg_path,
+            ),
+        )
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        """Only ``setforge.yaml`` is touched."""
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        """Overwrite ``schema_version`` in place via a single atomic write."""
+        yaml = yaml_rt()
+        with roots.cfg_path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+        data = _require_mapping_root(data, roots.cfg_path)
+        # Overwrite-in-place: assignment to an existing key preserves its
+        # position in the CommentedMap (a del + reinsert would move it to
+        # the end and reorder the document). Idempotent on replay.
+        data["schema_version"] = self.to_version
+        atomic_write_yaml(roots.cfg_path, data)
+
+
+MIGRATIONS: Final[tuple[Migration, ...]] = (
+    VersionStampMigration(),
+    RestampMigration(from_version="1.1", to_version="1.2"),
+)
 """Ordered registry of available FORWARD migrations.
 
-Holds the first real migration (version-stamp 1.0 → 1.1). Future
-migrations are appended in ``from_version`` order so
-:func:`find_migration_path` can walk the chain forward. Each
-migration's reverse is attached to its forward instance, never added
-here — that would make the forward walk cycle (see
+Holds the version-stamp chain 1.0 → 1.1 (:class:`VersionStampMigration`)
+→ 1.2 (:class:`RestampMigration`). Future migrations are appended in
+``from_version`` order so :func:`find_migration_path` can walk the chain
+forward. Each migration's reverse is attached to its forward instance,
+never added here — that would make the forward walk cycle (see
 :class:`VersionStampMigration`).
 """
 

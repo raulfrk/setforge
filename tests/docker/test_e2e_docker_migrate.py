@@ -1,12 +1,12 @@
-"""Docker e2e tests for ``setforge migrate`` — the first schema migration.
+"""Docker e2e tests for ``setforge migrate`` — the schema version-stamp chain.
 
-Exercises the 1.0 → 1.1 version-stamp migration end-to-end against a
+Exercises the 1.0 → 1.1 → 1.2 version-stamp chain end-to-end against a
 real Debian 12 container + the installed ``setforge`` binary:
 
-- ``migrate --check`` lists the 1.0 → 1.1 stamp on a frozen 1.0 config.
-- ``migrate --apply --yes`` stamps ``schema_version: '1.1'`` and writes a
-  ``.pre-1.1.bak`` backup sibling.
-- ``migrate --pin=1.0`` round-trips (pins back to the from_version).
+- ``migrate --check`` lists both stamps (1.0 → 1.1 → 1.2) on a frozen 1.0 config.
+- ``migrate --apply --yes`` stamps ``schema_version: '1.2'`` (the build's
+  current expected) and writes a ``.pre-1.2.bak`` backup sibling.
+- ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
 - a pre-bump frozen config (no ``schema_version`` key) still ``install``s.
 
 Each test seeds its own minimal ``setforge.yaml`` and drives ``migrate``
@@ -53,7 +53,7 @@ def _seed_frozen_config(c: ContainerHandle) -> None:
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the 1.0 → 1.1 version-stamp migration."""
+    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 version-stamp chain."""
     c = docker_container()
     _seed_frozen_config(c)
     result = c.exec(
@@ -62,15 +62,16 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "1 migration(s) available" in combined, combined
+    assert "2 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
+    assert "1.1 → 1.2" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '1.1'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '1.2'`` + writes a backup."""
     c = docker_container()
     _seed_frozen_config(c)
     result = c.exec(
@@ -88,9 +89,10 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
-    assert "1.1" in after, after
-    # The APPLY_WITH_BACKUP default writes a .pre-1.1.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-1.1.bak")
+    # A frozen-1.0 apply runs the full chain to the build's expected version.
+    assert "1.2" in after, after
+    # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
+    backup = c.read_text(f"{_CFG_PATH}.pre-1.2.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -120,7 +122,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "1.1" in c.read_text(_CFG_PATH)
+    assert "1.2" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -159,7 +161,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "1.1" in c.read_text(_CFG_PATH)
+    assert "1.2" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -169,7 +171,8 @@ def test_migrate_pin_round_trips_to_from_version(
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
     assert "1.0" in after, after
-    assert "1.1" not in after, after
+    # The pin overwrote the applied 1.2 stamp in place.
+    assert "1.2" not in after, after
 
 
 def test_frozen_pre_bump_config_still_installs(
@@ -225,7 +228,12 @@ def _seed_cfg(c: ContainerHandle, body: str) -> None:
 def test_migrate_to_downgrade_round_trip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """1.0 -> apply (1.1) -> migrate --to=1.0 strips the stamp back to 1.0."""
+    """1.0 -> apply (chain to 1.2) -> migrate --to=1.0 walks back to the 1.0 baseline.
+
+    The downgrade is a real two-step reverse walk: 1.2 -> 1.1 (RestampMigration
+    restamps the older version) then 1.1 -> 1.0 (VersionStampMigration's reverse
+    strips the key), leaving the key-absent 1.0 baseline.
+    """
     c = docker_container()
     _seed_frozen_config(c)
     up = c.exec(
@@ -241,7 +249,7 @@ def test_migrate_to_downgrade_round_trip(
         check=False,
     )
     assert up.returncode == 0, up.stdout + up.stderr
-    assert "schema_version: '1.1'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '1.2'" in c.read_text(_CFG_PATH)
     down = c.exec(
         [
             "uv",

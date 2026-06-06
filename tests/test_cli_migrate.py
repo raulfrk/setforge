@@ -460,7 +460,7 @@ def test_pin_rejects_unknown_version_real_registry(tmp_path: Path) -> None:
 
 
 def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
-    """B-M5: ``migrate --check`` lists the real 1.0 → 1.1 stamp on a 1.0 config."""
+    """B-M5: ``migrate --check`` lists the real 1.0→1.1→1.2 chain on a 1.0 config."""
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
@@ -468,8 +468,9 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
-    assert "1 migration(s) available" in result.output
+    assert "2 migration(s) available" in result.output
     assert "1.0 → 1.1" in result.output
+    assert "1.1 → 1.2" in result.output
 
 
 def test_pin_accepts_current_known_version(tmp_path: Path) -> None:
