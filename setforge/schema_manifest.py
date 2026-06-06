@@ -48,9 +48,26 @@ _MODELS: tuple[type[BaseModel], ...] = (
 )
 
 
+def _normalize_annotation(annotation: str) -> str:
+    """Collapse Python-version-dependent type reprs to a stable canonical form.
+
+    ``str(field.annotation)`` is not stable across CPython versions: when
+    ``pathlib`` was split into private submodules in 3.13, ``Path.__module__``
+    briefly became ``pathlib._local`` before later patches restored ``pathlib``
+    (3.12 never reported the private path at all). The two reprs name the
+    *identical* type, so a raw string compare would flag a schema retype that
+    never happened. Rewriting ``pathlib._local`` → ``pathlib`` makes the
+    fingerprint depend on the type, not the interpreter that computed it.
+    """
+    return annotation.replace("pathlib._local", "pathlib")
+
+
 def _field_fingerprint(model: type[BaseModel]) -> dict[str, str]:
     """Map each field name to a stable string of its declared annotation."""
-    return {name: str(field.annotation) for name, field in model.model_fields.items()}
+    return {
+        name: _normalize_annotation(str(field.annotation))
+        for name, field in model.model_fields.items()
+    }
 
 
 def live_field_manifest() -> dict[str, dict[str, str]]:
@@ -77,10 +94,10 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "extensions": "<class 'setforge.config.Extensions'>",
         "claude_plugins": "list[str]",
         "plugins_reconcile": "<enum 'ReconcilePolicy'>",
-        "bootstrap": "list[pathlib._local.Path]",
+        "bootstrap": "list[pathlib.Path]",
     },
     "TrackedFile": {
-        "src": "<class 'pathlib._local.Path'>",
+        "src": "<class 'pathlib.Path'>",
         "dst": "<class 'str'>",
         "template": "<class 'bool'>",
         "preserve_user_sections": "<class 'bool'>",
@@ -102,7 +119,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     "MarketplaceSource": {
         "source": "<enum 'MarketplaceSourceKind'>",
         "repo": "str | None",
-        "path": "pathlib._local.Path | None",
+        "path": "pathlib.Path | None",
     },
     "ClaudePluginRef": {"marketplace": "<class 'str'>"},
     "ResolvedProfile": {
@@ -111,7 +128,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "extensions": "<class 'setforge.config.Extensions'>",
         "claude_plugins": "list[str]",
         "plugins_reconcile": "<enum 'ReconcilePolicy'>",
-        "bootstrap": "list[pathlib._local.Path]",
+        "bootstrap": "list[pathlib.Path]",
     },
 }
 
