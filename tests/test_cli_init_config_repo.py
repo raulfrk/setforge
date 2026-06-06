@@ -135,6 +135,14 @@ def test_local_yaml_has_source_false_when_no_key(tmp_path: Path) -> None:
     assert local_yaml_has_source(yaml) is False
 
 
+def test_local_yaml_has_source_wraps_malformed_yaml(tmp_path: Path) -> None:
+    """A hand-corrupted local.yaml surfaces a clean error, not a parser traceback."""
+    yaml = tmp_path / "local.yaml"
+    yaml.write_text("source: [unterminated\n", encoding="utf-8")
+    with pytest.raises(ConfigRepoScaffoldError, match="not valid YAML"):
+        local_yaml_has_source(yaml)
+
+
 # ---------------------------------------------------------------------------
 # CLI flow — init --config-repo
 # ---------------------------------------------------------------------------
@@ -210,7 +218,7 @@ def test_init_config_repo_idempotent_second_run(home: Path) -> None:
 
 
 def test_init_config_repo_reuses_existing_local_yaml(home: Path) -> None:
-    """When local.yaml exists, the host-local bootstrap is reused, not redone."""
+    """When the host-local layer is already initialized, bootstrap is reused."""
     cfg = home / ".config" / "setforge"
     cfg.mkdir(parents=True)
     (cfg / "local.yaml").write_text(

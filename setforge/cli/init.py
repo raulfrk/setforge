@@ -468,7 +468,10 @@ def _handle_config_repo(*, no_prompt: bool, console: Console) -> int:
     otherwise), then the config-repo layer is scaffolded and
     ``local.yaml``'s ``source:`` block is wired at it (dedup-guarded). A
     scaffold failure surfaces as a clean ``error:`` line and exit 1 rather
-    than a traceback.
+    than a traceback. The exit-code contract covers scaffold failures only:
+    a non-interactive terminal without ``--no-prompt`` raises
+    :exc:`ConfirmRequiresInteractive` from the dir prompt before scaffolding,
+    which propagates to the top-level CLI handler.
 
     The gate is :func:`is_initialized`, NOT a bare ``local.yaml`` existence
     check: the Typer root callback writes the ``local.yaml`` stub on every

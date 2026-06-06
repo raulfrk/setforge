@@ -19,7 +19,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.errors import SetforgeError
@@ -82,11 +82,20 @@ def local_yaml_has_source(local_yaml: Path = LOCAL_CONFIG_PATH) -> bool:
     ``source`` key. Returns ``False`` when the file is absent, empty, or
     has no ``source`` key. This is the dedup guard for source wiring: a
     second ``init --config-repo`` run must not append a duplicate block.
+
+    Raises :exc:`ConfigRepoScaffoldError` when ``local.yaml`` exists but is
+    not valid YAML, so a hand-corrupted file surfaces a clean message rather
+    than an unwrapped parser traceback.
     """
     if not local_yaml.exists():
         return False
     yaml = YAML(typ="safe")
-    data = yaml.load(local_yaml.read_text(encoding="utf-8"))
+    try:
+        data = yaml.load(local_yaml.read_text(encoding="utf-8"))
+    except YAMLError as exc:
+        raise ConfigRepoScaffoldError(
+            f"{local_yaml} is not valid YAML — fix it by hand and rerun ({exc})."
+        ) from exc
     if not isinstance(data, dict):
         return False
     return "source" in data
@@ -152,10 +161,11 @@ def _validate_target_dir(target_dir: Path) -> None:
 
     A pre-existing *git repo* is fine (idempotent reinit). A pre-existing
     *non-empty, non-repo* dir is rejected — scaffolding over arbitrary user
-    files is unsafe. We create at most one missing level (the immediate
-    parent, e.g. ``~/projects`` for the default ``~/projects/<name>-config``);
-    a deeper-missing tree is a clear error rather than silently materializing
-    an arbitrary path.
+    files is unsafe. This validates only; the caller materializes the dir.
+    At most one missing level is permitted (the immediate parent, e.g.
+    ``~/projects`` for the default ``~/projects/<name>-config``, which the
+    caller then creates); a deeper-missing tree is a clear error rather than
+    silently materializing an arbitrary path.
     """
     parent = target_dir.parent
     if not parent.exists() and not parent.parent.exists():
