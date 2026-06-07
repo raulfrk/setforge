@@ -13,7 +13,7 @@ its anchor. Rather than a dead-end refuse, this wizard offers:
   the canonical body, overwriting the edit.
 * ``[s]`` skip — keep live untouched, ask again next sync.
 
-Non-interactive: ``--auto=keep-live`` maps to keep, ``--auto=use-tracked``
+Non-interactive: ``--auto=use-live`` maps to keep, ``--auto=keep-tracked``
 to discard; with no ``--auto`` and no TTY,
 :class:`~setforge.errors.CaptureRequiresInteractive` is raised.
 
@@ -190,9 +190,9 @@ def _locate_body_region_bounds(
 def resolve_auto(auto: object) -> OverlayEditChoice | None:
     """Map a ``CaptureAuto`` value to a wizard choice (or ``None`` for interactive).
 
-    ``use-live`` keeps the edited body (write to local.yaml); ``use-tracked``
-    /``keep-tracked`` discards it (re-impose canonical). ``None`` means run
-    the interactive prompt.
+    ``use-live`` keeps the edited body (write to local.yaml); ``keep-tracked``
+    discards it (re-impose canonical). ``None`` means run the interactive
+    prompt.
     """
     from setforge.capture import CaptureAuto
 
@@ -214,7 +214,7 @@ def require_interactive_or_auto(
         raise CaptureRequiresInteractive(
             f"a hand-edited host-local overlay body needs a decision for "
             f"{edit_count} span(s); run interactively or pass "
-            "--auto=keep-live / --auto=use-tracked."
+            "--auto=use-live / --auto=keep-tracked."
         )
     return None
 
