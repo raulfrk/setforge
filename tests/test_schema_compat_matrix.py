@@ -1,0 +1,402 @@
+"""Per-PR schema-compat matrix: the migration chain vs a FROZEN corpus.
+
+This suite proves the production migration chain
+(:data:`setforge.migrations.MIGRATIONS`) is bidirectionally safe against a
+frozen historical corpus of ``setforge.yaml`` configs — one directory per
+``schema_version`` under ``tests/fixtures/schema_corpus/<version>/``.
+
+Four arms:
+
+(i)   BACKWARD MIGRATE — every frozen fixture migrates forward to the
+      build's :data:`current_expected_schema_version` and the result both
+      carries the expected ``schema_version`` AND loads + round-trips.
+(ii)  FORWARD-SAFE — a major-newer synthetic config refuses cleanly; a
+      same-major newer-minor synthetic config loads with a warning.
+(iii) EXPAND ROUND-TRIP — the legacy ``preserve_user_*`` reconciliation
+      form and its ``disposition`` equivalent resolve to EQUAL canonical
+      :attr:`TrackedFile.preserve_user_keys_resolved`.
+(iv)  DOWNGRADE — a current (1.2) config down-migrates to 1.0 and is
+      byte-identical to an IN-RUN ruamel-normalized baseline.
+
+Plus a standalone GROWTH GUARD asserting the discovered corpus dirs equal
+:func:`setforge.migrations.known_versions` (set-equality both ways) and
+that at least three fixtures were discovered (kills the empty-glob
+false-green).
+
+Corpus provenance: the fixtures are NOT hand-authored. They are GENERATED
+by serializing a minimal-but-valid config through the production writer
+(:func:`setforge.migrations._yaml_ops.atomic_write_yaml`) and committed as
+frozen bytes — see :func:`_regenerate_corpus` and the corpus README. The
+same-writer provenance is load-bearing: arm (iv) asserts byte-identity,
+and the migration docstrings scope byte-identity to the
+post-ruamel-normalization document, not the original hand-typed bytes.
+
+NOTE: the current corpus has NO data-reshaping migration — every step in
+:data:`MIGRATIONS` is an identity-on-data version stamp. So arms (i) and
+(iv) deliberately assert a property a no-op stamp would FAIL (the
+``schema_version`` VALUE and a structural / byte-identity baseline), never
+a vacuous does-not-raise. When the first reshaping migration lands, add a
+fixture dir for its new version and the matrix exercises it automatically.
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from setforge.config import TrackedFile, load_config
+from setforge.errors import ConfigError
+from setforge.migrations import (
+    MigrationRoots,
+    current_expected_schema_version,
+    detect_current_schema,
+    find_migration_path,
+    known_versions,
+)
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+# Anchor on __file__, NEVER cwd — the glob must find the corpus regardless
+# of where pytest is invoked from.
+_CORPUS_ROOT: Path = Path(__file__).parent / "fixtures" / "schema_corpus"
+
+# A minimal-but-valid config body: the two REQUIRED top-level keys
+# (``tracked_files`` + ``profiles``) plus the default ``version: 1``. The
+# only per-version difference is the ``schema_version`` stamp (absent for
+# the 1.0 baseline). Kept tiny so the byte-identity arm has a small,
+# stable target.
+_MINIMAL_BODY: str = (
+    "version: 1\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md\n"
+    "    dst: ~/foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def _minimal_config_bytes(schema_version: str | None) -> bytes:
+    """Serialize the minimal config through the PRODUCTION writer.
+
+    ``schema_version=None`` produces the key-absent 1.0 baseline; a string
+    stamps ``schema_version: '<value>'`` at the top of the document. The
+    bytes come from :func:`atomic_write_yaml` (the same
+    ``yaml_rt().dump`` the engine uses on every migrate write), so the
+    fixtures are same-writer canonical form — the provenance arm (iv)'s
+    byte-identity assertion depends on.
+    """
+    yaml = yaml_rt()
+    data = yaml.load(_MINIMAL_BODY)
+    if schema_version is not None:
+        # Insert at the front so the stamped fixtures mirror a real
+        # ``setforge.yaml`` (schema_version near the top), and overwrite
+        # in place if a value somehow already exists.
+        data.insert(0, "schema_version", schema_version)
+    # atomic_write_yaml writes to a tmp path then os.replace; round-trip
+    # the result back off disk to return the exact committed bytes.
+    return _dump_via_writer(data)
+
+
+def _dump_via_writer(data: object) -> bytes:
+    """Dump ``data`` through ``atomic_write_yaml`` and return the bytes.
+
+    Routes through the production atomic writer (to a throwaway temp file)
+    rather than a bare ``yaml.dump`` so the corpus bytes are byte-for-byte
+    what a real migrate write would land on disk.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / "setforge.yaml"
+        atomic_write_yaml(target, data)
+        return target.read_bytes()
+
+
+# Maps a discovered/known schema_version to the stamp passed to the
+# generator: 1.0 is the key-ABSENT baseline (None); every later version
+# carries its own value.
+def _stamp_for(version: str) -> str | None:
+    """Return the ``schema_version`` stamp for a corpus version (None for 1.0)."""
+    return None if version == "1.0" else version
+
+
+def _regenerate_corpus() -> None:
+    """(Re)write the frozen corpus on disk — run ONCE, then commit the bytes.
+
+    Iterates :func:`known_versions` and writes
+    ``fixtures/schema_corpus/<version>/setforge.yaml`` for each via the
+    production writer. The test suite does NOT call this at test time
+    (except arm (iv)'s in-run normalized baseline, which re-derives bytes
+    independently); the committed files ARE the frozen corpus. Invoke
+    manually only when a NEW schema_version is registered::
+
+        uv run python -c "import tests.test_schema_compat_matrix as m; \
+m._regenerate_corpus()"
+
+    Per the corpus README: ADD a dir for a new version; NEVER edit a
+    frozen fixture's bytes.
+    """
+    for version in sorted(known_versions()):
+        target = _CORPUS_ROOT / version / "setforge.yaml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_minimal_config_bytes(_stamp_for(version)))
+
+
+def _discover_fixtures() -> list[Path]:
+    """Glob every frozen ``setforge.yaml`` under the corpus (anchored on __file__)."""
+    return sorted(_CORPUS_ROOT.glob("*/setforge.yaml"))
+
+
+def _discovered_versions() -> set[str]:
+    """The set of version dir-names that carry a frozen fixture."""
+    return {p.parent.name for p in _discover_fixtures()}
+
+
+def _roots_for(cfg_path: Path) -> MigrationRoots:
+    """Build a :class:`MigrationRoots` rooted at ``cfg_path``'s parent."""
+    parent = cfg_path.resolve().parent
+    return MigrationRoots(cfg_path=cfg_path, repo_root=parent, home=parent / "home")
+
+
+def _migrate(cfg_path: Path, *, to_v: str) -> None:
+    """Run the PRODUCTION migrate path on ``cfg_path`` up/down to ``to_v``.
+
+    Detects the current schema, resolves the chain via
+    :func:`find_migration_path` (forward OR reverse), and applies each
+    step against a :class:`MigrationRoots` rooted at the file's parent.
+    Mutates ``cfg_path`` in place — callers MUST pass a tmp_path copy,
+    never an on-disk fixture.
+    """
+    detected = detect_current_schema(cfg_path)
+    chain = find_migration_path(from_v=detected, to_v=to_v)
+    roots = _roots_for(cfg_path)
+    for migration in chain:
+        migration.apply(roots=roots)
+
+
+# ---------------------------------------------------------------------------
+# Arm (i) — BACKWARD MIGRATE: every frozen fixture forward-migrates to the
+# build's current_expected_schema_version and the result is structurally OK.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fixture", _discover_fixtures(), ids=lambda p: p.parent.name)
+def test_frozen_fixture_migrates_forward_to_current(
+    fixture: Path, tmp_path: Path
+) -> None:
+    """Each frozen corpus config migrates forward to current and round-trips.
+
+    NEVER migrates the on-disk fixture (apply writes in place and would
+    drift the corpus) — copies into ``tmp_path`` first. Asserts a property
+    a no-op stamp would FAIL: the migrated config carries
+    ``schema_version == current`` AND ``load_config`` succeeds and the
+    document round-trips byte-stably through ruamel (structural, not a
+    vacuous does-not-raise).
+    """
+    work = tmp_path / "setforge.yaml"
+    shutil.copy(fixture, work)
+
+    _migrate(work, to_v=current_expected_schema_version)
+
+    # (a) the stamped value reached current.
+    assert detect_current_schema(work) == current_expected_schema_version
+    # (b) structural property: the migrated config loads...
+    config = load_config(work)
+    assert config.schema_version == current_expected_schema_version
+    # ...and round-trips byte-stably (a second load→dump is a fixed point).
+    yaml = yaml_rt()
+    with work.open(encoding="utf-8") as fh:
+        reparsed = yaml.load(fh)
+    assert _dump_via_writer(reparsed) == work.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Arm (ii) — FORWARD-SAFE: a major-newer config refuses cleanly; a
+# same-major newer-minor config loads with a warning. Synthetic inline
+# configs (NOT frozen) — these are the EDGE shapes the corpus deliberately
+# does not freeze.
+# ---------------------------------------------------------------------------
+
+
+def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
+    """A 2.0 (major-newer) config raises ConfigError, no traceback leak."""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("schema_version: '2.0'\n" + _MINIMAL_BODY, encoding="utf-8")
+    with pytest.raises(
+        ConfigError, match=r"requires a newer setforge|upgrade setforge"
+    ):
+        load_config(cfg)
+
+
+def test_same_major_newer_minor_config_loads_with_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 1.99 (same-major, newer-minor) config RETURNS a Config + warns.
+
+    Asserts the RETURN + the emitted warning, NOT ``pytest.raises`` — a
+    same-major newer-minor config is forward-tolerated, not refused.
+    """
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text("schema_version: '1.99'\n" + _MINIMAL_BODY, encoding="utf-8")
+    config = load_config(cfg)  # must NOT raise
+    assert config.schema_version == "1.99"
+    captured = capsys.readouterr()
+    assert "warning:" in captured.err
+    assert "schema_version" in captured.err
+    assert current_expected_schema_version in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Arm (iii) — EXPAND ROUND-TRIP / REPRESENTATION EQUIVALENCE: the legacy
+# preserve_user_* reconciliation form and its disposition-form equivalent
+# both load and resolve to EQUAL canonical preserve_user_keys_resolved.
+#
+# disposition is mutually exclusive with preserve_user_* on one file (see
+# TrackedFile._disposition_excludes_legacy_preserve), so the two forms live
+# on separate tracked_files. The expand-window guarantee under test: both
+# reconciliation representations leave the CANONICAL key-resolution field
+# (preserve_user_keys_resolved) identical — the expand step reshapes no
+# data on that axis. Compared on the canonical field, NOT the
+# preserve_user_keys computed shim or model_dump() (which includes the shim).
+# ---------------------------------------------------------------------------
+
+_LEGACY_FORM_BODY: str = (
+    "version: 1\n"
+    "tracked_files:\n"
+    "  note:\n"
+    "    src: note.md\n"
+    "    dst: ~/note.md\n"
+    "    preserve_user_sections: true\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - note\n"
+)
+
+_DISPOSITION_FORM_BODY: str = (
+    "version: 1\n"
+    "tracked_files:\n"
+    "  note:\n"
+    "    src: note.md\n"
+    "    dst: ~/note.md\n"
+    "    disposition: shared\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - note\n"
+)
+
+
+def test_legacy_and_disposition_forms_resolve_to_equal_canonical_keys(
+    tmp_path: Path,
+) -> None:
+    """Legacy preserve_user_* and disposition forms resolve equal canonical keys.
+
+    Loads each form via ``load_config`` and compares on the CANONICAL
+    :attr:`TrackedFile.preserve_user_keys_resolved` — not the
+    ``preserve_user_keys`` computed shim nor ``model_dump()``. Neither
+    form declares preserve_user_keys, so both resolve to the empty
+    canonical list; the equivalence proves the expand window does not
+    reshape that field across the two reconciliation representations.
+    """
+    legacy_cfg = tmp_path / "legacy.yaml"
+    legacy_cfg.write_text(_LEGACY_FORM_BODY, encoding="utf-8")
+    disposition_cfg = tmp_path / "disposition.yaml"
+    disposition_cfg.write_text(_DISPOSITION_FORM_BODY, encoding="utf-8")
+
+    legacy = load_config(legacy_cfg)
+    disposition = load_config(disposition_cfg)
+
+    legacy_tf: TrackedFile = legacy.tracked_files["note"]
+    disposition_tf: TrackedFile = disposition.tracked_files["note"]
+
+    # Compared on the CANONICAL field (the spec's load-bearing axis).
+    assert (
+        legacy_tf.preserve_user_keys_resolved
+        == disposition_tf.preserve_user_keys_resolved
+    )
+    # Pin the value so the equality is not vacuously-true on garbage: both
+    # resolve to the empty canonical list (neither declares preserve_user_keys).
+    assert legacy_tf.preserve_user_keys_resolved == []
+    # Sanity: the two forms really ARE the two distinct representations.
+    assert legacy_tf.preserve_user_sections is True
+    assert disposition_tf.disposition is not None
+
+
+# ---------------------------------------------------------------------------
+# Arm (iv) — DOWNGRADE: a current (1.2) config down-migrates to 1.0 and the
+# resulting bytes are byte-identical to an IN-RUN ruamel-NORMALIZED baseline
+# (load→dump of the frozen 1.0 bytes via THIS interpreter's yaml_rt). The
+# frozen on-disk bytes are NOT the direct equality target — both sides are
+# produced by the same ruamel instance this run, immune to cross-interpreter
+# repr skew (the byte-identity-normalization fragility pitfall).
+# ---------------------------------------------------------------------------
+
+
+def test_current_config_downgrades_to_normalized_1_0_baseline(tmp_path: Path) -> None:
+    """1.2 → 1.0 down-migration is byte-identical to the in-run normalized 1.0.
+
+    Down-migrates a tmp_path copy of the frozen 1.2 fixture (never the
+    on-disk fixture). The equality target is computed THIS run by
+    re-dumping the frozen 1.0 bytes through ``yaml_rt`` — so both sides
+    pass through the same ruamel instance and the assertion is version-
+    stable. A no-op-stamp downgrade would FAIL this (it would leave the
+    schema_version key present, not the key-absent 1.0 baseline).
+    """
+    frozen_1_2 = _CORPUS_ROOT / "1.2" / "setforge.yaml"
+    frozen_1_0 = _CORPUS_ROOT / "1.0" / "setforge.yaml"
+    assert frozen_1_2.exists(), "frozen 1.2 fixture missing"
+    assert frozen_1_0.exists(), "frozen 1.0 fixture missing"
+
+    work = tmp_path / "setforge.yaml"
+    shutil.copy(frozen_1_2, work)
+
+    # Drive the production reverse chain 1.2 → 1.0.
+    chain = find_migration_path(from_v="1.2", to_v="1.0")
+    assert tuple(m.to_version for m in chain) == ("1.1", "1.0")
+    roots = _roots_for(work)
+    for migration in chain:
+        migration.apply(roots=roots)
+
+    # In-run normalized baseline: load→dump the frozen 1.0 bytes via THIS
+    # interpreter's ruamel instance (not the hand-/cross-version on-disk bytes).
+    yaml = yaml_rt()
+    baseline_data = yaml.load(frozen_1_0.read_bytes().decode("utf-8"))
+    baseline = _dump_via_writer(baseline_data)
+
+    assert work.read_bytes() == baseline
+    # And the key really is absent (the 1.0 baseline), not merely stamped '1.0'.
+    assert detect_current_schema(work) == "1.0"
+
+
+# ---------------------------------------------------------------------------
+# GROWTH GUARD — standalone (NOT parametrized). The discovered corpus dirs
+# must EXACTLY equal known_versions() (set-equality both directions): a
+# missing fixture (a registered version with no dir) AND an orphan dir (a
+# dir for an unknown version) both fail. The len >= 3 assert kills the
+# empty-glob false-green (an empty parametrize list skips silently, going
+# green without exercising a single arm).
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_covers_exactly_known_versions() -> None:
+    """Discovered corpus dirs == known_versions(); and at least three exist."""
+    discovered = _discovered_versions()
+    # len >= 3 FIRST: an empty/short glob would make arm (i)'s parametrize
+    # list empty and skip silently — assert the floor before set-equality.
+    assert len(discovered) >= 3, (
+        f"expected >= 3 corpus fixtures, found {len(discovered)}: {sorted(discovered)} "
+        f"(empty/short glob would silently skip the parametrized arms)"
+    )
+    # Set-equality BOTH ways: fails on a missing fixture (registered version
+    # with no dir) AND an orphan dir (dir for an unknown version). Uses
+    # known_versions() — NOT a hand-rolled set from MIGRATIONS endpoints.
+    assert discovered == set(known_versions()), (
+        f"corpus dirs {sorted(discovered)} != known_versions "
+        f"{sorted(known_versions())}: ADD a fixture dir for every new "
+        f"schema_version (never edit a frozen fixture)"
+    )
