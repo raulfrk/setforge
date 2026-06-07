@@ -19,8 +19,11 @@ to discard; with no ``--auto`` and no TTY,
 
 The detection (:func:`detect_overlay_body_edit`) uses the relocation ladder
 to find the edited region near the anchor; it returns ``None`` when the
-body is unchanged (the exact excise handles that) or unlocatable (the
-caller's loud refuse handles that).
+body is unchanged (the exact excise handles that) or unlocatable. The
+caller (:func:`setforge.capture._capture_overlay_bodies`) disambiguates the
+unlocatable ``None`` via the sidecar: a body that WAS deployed but cannot be
+located fails closed (raises :class:`~setforge.errors.OverlayBodyUnlocatable`)
+rather than leak; a no-deploy record is the clean first-deploy / absent case.
 """
 
 from __future__ import annotations
@@ -86,8 +89,9 @@ def detect_overlay_body_edit(
 
     Returns ``None`` when the canonical body is present verbatim (no edit —
     the exact excise handles it) or when no candidate region can be located
-    near the anchor (unlocatable — the caller refuses loudly). Otherwise
-    returns the :class:`OverlayBodyEdit` describing the edit.
+    near the anchor (unlocatable — the caller fails closed with
+    :class:`~setforge.errors.OverlayBodyUnlocatable` when a body was deployed
+    here). Otherwise returns the :class:`OverlayBodyEdit` describing the edit.
 
     Location strategy: bound the span at its heading-identity anchor; the
     region BELOW the heading (the injected body) is the candidate. When a
@@ -132,7 +136,9 @@ def excise_located_body(live_text: str, anchor: str, stored: SpanState | None) -
     Used by capture to keep the tracked write body-free even when the body
     was hand-edited (so the exact-bytes needle missed). Bounds the body
     region below the anchor heading and splices it out; a no-location is a
-    no-op (the caller's loud refuse covers the truly-unlocatable case).
+    no-op (the caller's :class:`~setforge.errors.OverlayBodyUnlocatable`
+    fail-closed gate covers the truly-unlocatable deployed-body case before
+    this is reached).
     """
     region = _locate_body_region_bounds(live_text, anchor, stored)
     if region is None:

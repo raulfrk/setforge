@@ -48,7 +48,7 @@ from setforge import (
 from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, Disposition, SectionMode, resolve_profile
-from setforge.errors import CaptureRequiresInteractive
+from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
 
@@ -362,6 +362,7 @@ def _capture_overlay_bodies(
     md_overlay: list[SpanEntry],
     span_states: dict[str, "spans_store.SpanState"],
     *,
+    sub_name: str,
     tracked_file_id: str,
     auto: "CaptureAuto | None",
     interactive: bool,
@@ -375,8 +376,16 @@ def _capture_overlay_bodies(
     :class:`~setforge.errors.CaptureRequiresInteractive`); KEEP writes the
     edit into ``local.yaml`` (never tracked) before excising the located
     body, DISCARD just excises it (canonical re-imposed next deploy). The
-    tracked write is body-free either way. An unlocatable miss leaves the
-    text unchanged (first-deploy / clean).
+    tracked write is body-free either way.
+
+    Fail-closed on an unlocatable miss: when the exact-bytes excise misses
+    AND no edit can be located near the anchor, the sidecar disambiguates.
+    If a body WAS deployed at this anchor (``stored.last_deployed_body`` is
+    non-empty) the hand-edited body cannot be proven excised — capturing
+    would leak it into tracked, so we raise
+    :class:`~setforge.errors.OverlayBodyUnlocatable` BEFORE any tracked
+    write. Only a genuine no-deploy record (``stored is None`` or no stored
+    body) is skipped as the clean first-deploy / absent case.
     """
     from setforge import overlay_body_wizard
 
@@ -391,8 +400,14 @@ def _capture_overlay_bodies(
             text, span, stored, tracked_file_id=tracked_file_id
         )
         if edit is None:
-            # No exact match AND no locatable edit: nothing to excise (the
-            # body was never deployed here, or genuinely absent).
+            # No exact match AND no locatable edit. Disambiguate via the
+            # sidecar: if a body WAS deployed here, the (hand-edited)
+            # host-local body is somewhere in `text` but unlocatable — we
+            # CANNOT prove the tracked write is body-free, so FAIL CLOSED
+            # before any tracked write rather than leak it. Only a genuine
+            # no-deploy record (first deploy / absent) is safe to skip.
+            if stored is not None and stored.last_deployed_body:
+                raise OverlayBodyUnlocatable(sub_name=sub_name, anchor=span.anchor)
             continue
         choice = overlay_body_wizard.require_interactive_or_auto(
             auto, interactive, edit_count=1
@@ -536,6 +551,7 @@ def _capture_disposition_file(
                     capture_text,
                     md_overlay,
                     span_states,
+                    sub_name=sub_name,
                     tracked_file_id=tracked_file_id,
                     auto=auto,
                     interactive=interactive,

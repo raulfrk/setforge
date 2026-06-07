@@ -196,6 +196,88 @@ def test_capture_hand_edited_body_no_auto_non_interactive_raises(
         )
 
 
+def _seed_unlocatable_state(body: str) -> None:
+    # A sidecar that records a deployed body but whose position hint makes
+    # the body region unlocatable (n_lines <= 0 → _locate_body_region_bounds
+    # returns None). detect_overlay_body_edit then returns None even though a
+    # body WAS deployed here.
+    st = SpanState(
+        anchor="## Notes",
+        fingerprint="a" * 64,
+        prefix=[],
+        suffix=[],
+        position_hint_start_line=3,
+        position_hint_n_lines=0,
+        heading_level=2,
+        last_deployed_body=canonical_body(body),
+    )
+    spans_store.set_states(_PROFILE, _SUB_NAME, {"## Notes": st})
+
+
+def test_capture_deployed_but_unlocatable_body_fails_closed(tmp_path: Path) -> None:
+    # LEAK GATE (fail-closed): a host-local body WAS deployed here
+    # (last_deployed_body set), but it is now neither present verbatim nor
+    # fuzzy-locatable. Capturing would leak the hand-edited body into tracked,
+    # so the gate REFUSES before any tracked write.
+    from setforge.errors import OverlayBodyUnlocatable
+
+    src = tmp_path / "src.md"
+    src.write_text(_TRACKED)
+    dst = tmp_path / "dst.md"
+    # Live carries a hand-edited body that no needle matches and the hint
+    # cannot bound. The edited body must remain in tracked-IF-it-leaked.
+    dst.write_text(
+        "# Title\n\n## Notes\n\nSECRET HOST EDIT\n\nshared body\n", encoding="utf-8"
+    )
+    _seed_unlocatable_state("ORIGINAL BODY")
+
+    with pytest.raises(OverlayBodyUnlocatable):
+        _capture_disposition_file(
+            _SUB_NAME,
+            src,
+            dst,
+            disposition=Disposition.SHARED,
+            profile=_PROFILE,
+            spans=[_overlay("ORIGINAL BODY")],
+            tracked_file_id="notes",
+            auto=None,
+            interactive=False,
+            local_config_path=tmp_path / "local.yaml",
+        )
+    # The refuse happens BEFORE any tracked / base write: tracked is untouched
+    # and the host-local edit never leaked.
+    assert src.read_text() == _TRACKED
+    assert "SECRET HOST EDIT" not in src.read_text()
+    assert base_store.read_base(_PROFILE, _SUB_NAME) is None
+
+
+def test_capture_first_deploy_absent_body_continues_cleanly(tmp_path: Path) -> None:
+    # The genuine first-deploy / never-deployed case: NO sidecar body exists
+    # (stored is None for this anchor). An unlocatable miss must NOT refuse —
+    # there is nothing to leak; capture proceeds and writes tracked normally.
+    src = tmp_path / "src.md"
+    src.write_text(_TRACKED)
+    dst = tmp_path / "dst.md"
+    # Live has no injected body at all (clean shared content only).
+    dst.write_text(_TRACKED, encoding="utf-8")
+    # No _seed_state call → span_states is empty → stored is None.
+
+    result = _capture_disposition_file(
+        _SUB_NAME,
+        src,
+        dst,
+        disposition=Disposition.SHARED,
+        profile=_PROFILE,
+        spans=[_overlay("ORIGINAL BODY")],
+        tracked_file_id="notes",
+        auto=None,
+        interactive=False,
+        local_config_path=tmp_path / "local.yaml",
+    )
+    assert result.action in (CaptureAction.UPDATED, CaptureAction.NOOP)
+    assert src.read_text() == _TRACKED
+
+
 def test_capture_ambiguous_body_refuses(tmp_path: Path) -> None:
     body = canonical_body("DUP")
     src = tmp_path / "src.md"
