@@ -78,6 +78,34 @@ class DeployResult:
     span_orphans: list[SpanOrphan] = field(default_factory=list)
 
 
+def _legacy_only_host_local(
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
+    spans: list[SpanEntry] | None,
+) -> dict[HostLocalSectionName, HostLocalSection] | None:
+    """Drop host-local entries whose name is a host-local OVERLAY span anchor.
+
+    The loader projects migrated OVERLAY spans back INTO the host-local map
+    (:func:`setforge.source._host_local_sections_for_overlay`) so capture /
+    compare / promote keep seeing the migrated bodies. On the deploy preserve
+    path those names are injected MARKERLESS via
+    :func:`setforge.overlay_deploy.inject_overlay_bodies`, so they must NOT also
+    reach :func:`setforge.host_local_inject.inject_all` (which injects WITH
+    markers — the double-injection trap). Returns the map unchanged when there
+    are no overlay spans, so legacy-only preserve files stay byte-for-byte
+    untouched.
+    """
+    if not host_local_sections or not spans:
+        return host_local_sections
+    overlay_names = {s.anchor for s in overlay_deploy.overlay_spans(spans)}
+    if not overlay_names:
+        return host_local_sections
+    return {
+        name: section
+        for name, section in host_local_sections.items()
+        if name not in overlay_names
+    }
+
+
 def copy_atomic(
     src: Path,
     dst: Path,
