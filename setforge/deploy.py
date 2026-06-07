@@ -31,6 +31,7 @@ from setforge import (
     disposition_merge,
     host_local_inject,
     jsonc,
+    overlay_deploy,
     scalar_overlay,
     sections,
     yaml_merge,
@@ -42,7 +43,7 @@ from setforge.scalar_merge import ABSENT
 from setforge.section_reconcile import maintain_marker_hashes
 from setforge.section_wizard import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import SpanEntry
+from setforge.spans import SpanEntry, SpanKind
 from setforge.spans_overlay import SpanOrphan, apply_spans
 from setforge.spans_store import SpanState
 from setforge.structural_merge import PathConflict
@@ -225,7 +226,21 @@ def copy_atomic(
         # markdown spans use the separate text-splice overlay below. Dispatch
         # by file type so each span flavor takes its own path.
         structural = disposition_merge.is_structural(real_dst)
-        structural_spans = spans if (spans and structural) else None
+        # OVERLAY (markerless host-local body) spans are split out: the body
+        # NEVER enters the merge. Excise it from live by its exact recorded
+        # bytes BEFORE resolve_file, then inject it AFTER the whole-file merge
+        # + pinned/forked re-overlay (leak gate — see setforge.overlay_deploy).
+        md_overlay_spans = (
+            overlay_deploy.overlay_spans(spans) if (spans and not structural) else []
+        )
+        merge_spans = (
+            [s for s in spans if s.kind is not SpanKind.OVERLAY] if spans else None
+        )
+        structural_spans = merge_spans if (merge_spans and structural) else None
+        if md_overlay_spans:
+            live, _ = overlay_deploy.excise_overlay_bodies(
+                live, md_overlay_spans, span_states or {}
+            )
         resolution = disposition_merge.resolve_file(
             disposition,
             real_dst,
@@ -256,14 +271,24 @@ def copy_atomic(
         # the bytes that actually land on disk (Invariant I1). Forked spans
         # get no override but still recompute their derived state for capture
         # exclusion. Skipped for structural files (handled above).
-        if spans and not structural:
-            overlay = apply_spans(content, live, spans, span_states or {})
+        if merge_spans and not structural:
+            overlay = apply_spans(content, live, merge_spans, span_states or {})
             content = overlay.text
             new_span_states = overlay.new_states
             span_orphans = overlay.orphans
             if new_base is not None:
                 # The base advances to what landed live, post-splice (I1).
                 new_base = content
+        # OVERLAY inject runs LAST, on the body-free merged + pinned/forked
+        # content. The base is re-baselined from the PRE-inject bytes
+        # (``new_base`` already set above), so the stored base stays
+        # body-free — the overlay body never reaches base or tracked.
+        if md_overlay_spans:
+            injected, overlay_states = overlay_deploy.inject_overlay_bodies(
+                content, md_overlay_spans, span_states or {}
+            )
+            content = injected
+            new_span_states = {**(new_span_states or {}), **overlay_states}
     else:
         content, new_scalar_bases, scalar_conflicts = _compute_content(
             src,
