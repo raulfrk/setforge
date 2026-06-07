@@ -232,6 +232,14 @@ tracked_files:
       - anchor: "## Forked Section"
         kind: forked
         semantics: shared
+  # A SHARED markdown tracked_file the host-local OVERLAY span attaches to.
+  # The overlay span itself (markerless host-local body) is declared in
+  # local.yaml at test time; the body must NEVER bake into the tracked src
+  # nor the stored base (the canonical leak gate).
+  spans_overlay_md:
+    src: spans/note.md
+    dst: ~/.setforge_e2e/spans/overlay.md
+    disposition: shared
   # ---- Structural (yaml dotted-path) span fixtures -----------------------
   # A yaml tracked_file whose span anchors are DOTTED PATHS (mapping leaves),
   # not headings. The pinned path is re-asserted to live post-merge; the
@@ -432,6 +440,9 @@ profiles:
   test-spans-structural:
     tracked_files:
       - spans_structural_yaml
+  test-spans-overlay:
+    tracked_files:
+      - spans_overlay_md
 
   # ---- override CLI journey ---------------------------------------------
   # A markdown + a yaml shared tracked_file, each with no declared spans, so
