@@ -30,6 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from ruamel.yaml import YAML
@@ -50,6 +51,9 @@ from setforge.config import Config, Disposition, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
+
+if TYPE_CHECKING:
+    from setforge.overlay_body_wizard import OverlayBodyEdit, OverlayEditChoice
 
 
 class CaptureAction(StrEnum):
@@ -232,6 +236,7 @@ def capture_profile(
     host_local_sections_map: (
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
+    local_config_path: Path | None = None,
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
 
@@ -277,6 +282,10 @@ def capture_profile(
     """
     if interactive is None:
         interactive = sys.stdin.isatty()
+    if local_config_path is None:
+        from setforge.source import LOCAL_CONFIG_PATH
+
+        local_config_path = LOCAL_CONFIG_PATH
 
     items = list(walk_capture_drift(config, profile_name, repo_root))
     if items:
@@ -325,6 +334,10 @@ def capture_profile(
                     disposition=tracked_file.disposition,
                     profile=profile_name,
                     spans=tracked_file.spans,
+                    tracked_file_id=name,
+                    auto=auto,
+                    interactive=interactive,
+                    local_config_path=local_config_path,
                 )
             else:
                 result = capture_tracked_file(
@@ -344,6 +357,107 @@ def capture_profile(
     return results
 
 
+def _capture_overlay_bodies(
+    live_text: str,
+    md_overlay: list[SpanEntry],
+    span_states: dict[str, "spans_store.SpanState"],
+    *,
+    tracked_file_id: str,
+    auto: "CaptureAuto | None",
+    interactive: bool,
+    local_config_path: Path | None,
+) -> str:
+    """Return ``live_text`` with every overlay body excised (always body-free).
+
+    Per overlay span: try the exact-bytes excise first. On a miss, detect a
+    hand-edit near the anchor. A located edit routes to the keep/discard
+    decision (``--auto`` map, else interactive prompt, else
+    :class:`~setforge.errors.CaptureRequiresInteractive`); KEEP writes the
+    edit into ``local.yaml`` (never tracked) before excising the located
+    body, DISCARD just excises it (canonical re-imposed next deploy). The
+    tracked write is body-free either way. An unlocatable miss leaves the
+    text unchanged (first-deploy / clean).
+    """
+    from setforge import overlay_body_wizard
+
+    text = live_text
+    for span in md_overlay:
+        stored = span_states.get(span.anchor)
+        excised, found = overlay_deploy.excise_overlay_bodies(text, [span], span_states)
+        if found:
+            text = excised
+            continue
+        edit = overlay_body_wizard.detect_overlay_body_edit(
+            text, span, stored, tracked_file_id=tracked_file_id
+        )
+        if edit is None:
+            # No exact match AND no locatable edit: nothing to excise (the
+            # body was never deployed here, or genuinely absent).
+            continue
+        choice = overlay_body_wizard.require_interactive_or_auto(
+            auto, interactive, edit_count=1
+        )
+        if choice is None:
+            choice = _prompt_overlay_edit(edit)
+        if choice is overlay_body_wizard.OverlayEditChoice.SKIP:
+            # Skip: leave the edited body in live AND in the tracked write?
+            # No — the tracked write must stay body-free regardless, so we
+            # still excise the located region; "skip" only defers the
+            # local.yaml writeback decision to a later sync.
+            text = overlay_body_wizard.excise_located_body(text, span.anchor, stored)
+            continue
+        if choice is overlay_body_wizard.OverlayEditChoice.KEEP:
+            if local_config_path is None:
+                raise CaptureRequiresInteractive(
+                    "cannot keep a hand-edited overlay body without a "
+                    "local.yaml path to write it into"
+                )
+            overlay_body_wizard.write_edited_body_to_local(
+                edit, local_config_path=local_config_path
+            )
+        # KEEP and DISCARD both excise the located body from the tracked
+        # write; KEEP additionally persisted the edit to local.yaml above.
+        text = overlay_body_wizard.excise_located_body(text, span.anchor, stored)
+    return text
+
+
+def _prompt_overlay_edit(
+    edit: "OverlayBodyEdit",
+) -> "OverlayEditChoice":
+    """Render the diff + read one keep/discard/skip choice for a hand-edited body."""
+    import difflib
+
+    from rich.syntax import Syntax
+
+    from setforge import overlay_body_wizard
+    from setforge.wizard import read_one_choice
+
+    console = Console()
+    diff = "".join(
+        difflib.unified_diff(
+            edit.canonical_body.splitlines(keepends=True),
+            edit.live_body.splitlines(keepends=True),
+            fromfile=f"local.yaml/{edit.tracked_file_id}{edit.anchor}",
+            tofile=f"live{edit.anchor}",
+        )
+    )
+    console.print(
+        f"host-local overlay body hand-edited at {edit.anchor!r} "
+        f"({edit.tracked_file_id}):"
+    )
+    if diff:
+        console.print(Syntax(diff, "diff"))
+    choice = read_one_choice(
+        "   [k]eep edit (write to local.yaml) / [d]iscard / [s]kip: ",
+        {"k", "d", "s"},
+    )
+    return {
+        "k": overlay_body_wizard.OverlayEditChoice.KEEP,
+        "d": overlay_body_wizard.OverlayEditChoice.DISCARD,
+        "s": overlay_body_wizard.OverlayEditChoice.SKIP,
+    }[choice]
+
+
 def _capture_disposition_file(
     sub_name: str,
     src: Path,
@@ -352,6 +466,10 @@ def _capture_disposition_file(
     disposition: Disposition,
     profile: str,
     spans: list[SpanEntry] | None = None,
+    tracked_file_id: str = "",
+    auto: "CaptureAuto | None" = None,
+    interactive: bool = False,
+    local_config_path: Path | None = None,
 ) -> CaptureResult:
     """Capture one disposition-bearing tracked (sub-)file under the 3-way model.
 
@@ -414,8 +532,14 @@ def _capture_disposition_file(
             # upstream; an ambiguous (>1) occurrence REFUSES the whole file.
             md_overlay = overlay_deploy.overlay_spans(spans)
             if md_overlay:
-                capture_text, _ = overlay_deploy.excise_overlay_bodies(
-                    capture_text, md_overlay, span_states
+                capture_text = _capture_overlay_bodies(
+                    capture_text,
+                    md_overlay,
+                    span_states,
+                    tracked_file_id=tracked_file_id,
+                    auto=auto,
+                    interactive=interactive,
+                    local_config_path=local_config_path,
                 )
             pinned_forked = [s for s in spans if s.kind is not SpanKind.OVERLAY]
             if pinned_forked:
