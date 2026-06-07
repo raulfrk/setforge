@@ -722,10 +722,15 @@ def _apply_removal_to_block(
     if reset:
         return _reset_block(block)
     assert target_kind is not None  # only reset passes None
-    kind_value = target_kind.value
     if anchor is None:
-        return _remove_disposition_in_block(block, kind_value)
-    return _remove_span_in_block(block, anchor, kind_value)
+        # File-level disposition stores the Disposition value; resolve through
+        # _DISPOSITION_OF_KIND like the write path rather than assuming SpanKind
+        # and Disposition share string values.
+        return _remove_disposition_in_block(
+            block, _DISPOSITION_OF_KIND[target_kind].value
+        )
+    # Spans store the SpanKind value verbatim.
+    return _remove_span_in_block(block, anchor, target_kind.value)
 
 
 def _remove_host_local(
@@ -764,9 +769,11 @@ def _remove_shared(
     """Apply a removal to ``setforge.yaml`` atomically; write only on a change.
 
     Navigates with ``.get`` (an absent ``tracked_files`` / ``<id>`` is a
-    no-op, never a ``KeyError`` traceback). The ``--shared`` write rides the
-    same discipline as :func:`_shared_apply`: the symlink + clean-tree
-    preflight runs only when a write will actually happen.
+    no-op, never a ``KeyError`` traceback). The write reuses
+    :func:`_shared_apply`'s atomic round-trip + symlink/clean-tree preflight,
+    but gates the preflight on an actual change — a no-op removal skips it,
+    whereas the pin/fork path runs the preflight unconditionally on every
+    ``--shared`` invocation.
     """
     data = _RT_YAML.load(cfg_path.read_text(encoding="utf-8"))
     tracked = data.get("tracked_files") if isinstance(data, dict) else None

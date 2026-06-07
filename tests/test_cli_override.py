@@ -710,3 +710,49 @@ def test_unpin_idempotent_reconverges(tmp_path: Path) -> None:
     result = _invoke(cfg, "override", "unpin", "doc")
     assert result.exit_code == 0, result.output
     assert source_mod.LOCAL_CONFIG_PATH.read_bytes() == before
+
+
+def test_reset_shared_clears_setforge_yaml(tmp_path: Path) -> None:
+    """reset <file> --shared clears disposition + spans from setforge.yaml."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc", "--shared").exit_code == 0
+    assert _invoke(cfg, "override", "pin", "doc", "## Mine", "--shared").exit_code == 0
+    result = _invoke(cfg, "override", "reset", "doc", "--shared")
+    assert result.exit_code == 0, result.output
+    entry = _YAML.load(cfg.read_text(encoding="utf-8"))["tracked_files"]["doc"]
+    assert "disposition" not in entry
+    assert "spans" not in entry
+    assert entry["src"] == "doc.md"  # non-override keys survive the reset
+
+
+def test_unfork_span_wrong_kind_leaves_pin_and_warns(tmp_path: Path) -> None:
+    """unfork on a PINNED span leaves it intact and warns (span-level)."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc", "## Mine").exit_code == 0
+    result = _invoke(cfg, "override", "unfork", "doc", "## Mine")
+    assert result.exit_code == 0, result.output
+    assert "pinned" in result.output.lower()
+    spans = list(_local_overlay("doc")["spans"])
+    assert len(spans) == 1  # the pinned span is untouched
+    assert spans[0]["kind"] == "pinned"
+
+
+def test_unpin_removes_all_duplicate_anchor_spans(tmp_path: Path) -> None:
+    """unpin filters EVERY span matching the anchor+kind, not just the first."""
+    cfg = _make_repo(tmp_path)
+    source_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    source_mod.LOCAL_CONFIG_PATH.write_text(
+        "tracked_files:\n"
+        "  doc:\n"
+        "    spans:\n"
+        '    - anchor: "## Mine"\n'
+        "      kind: pinned\n"
+        "      semantics: host-local\n"
+        '    - anchor: "## Mine"\n'
+        "      kind: pinned\n"
+        "      semantics: host-local\n",
+        encoding="utf-8",
+    )
+    result = _invoke(cfg, "override", "unpin", "doc", "## Mine")
+    assert result.exit_code == 0, result.output
+    assert "doc" not in _local_tf_ids()  # both spans gone -> block pruned
