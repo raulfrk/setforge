@@ -226,12 +226,21 @@ def _locate_injected_body(text: str, body: str, anchor_line: int) -> tuple[int, 
     rather than from the start of ``text``. A plain ``text.index(body)`` would
     record the WRONG region's prefix/suffix hints when the same body text also
     appears as shared content above the anchor; anchoring the search to the
-    injection point pins the correct occurrence. The body is present (just
-    spliced), so the search succeeds.
+    injection point pins the correct occurrence.
+
+    An ``at-end-of-file`` anchor is the exception: it re-resolves on the
+    POST-inject text to the line PAST the just-appended body, so the forward
+    search starts beyond the body and finds nothing. Fall back to the LAST
+    occurrence (``rindex``) in that case — for an end-of-file inject the
+    appended body is exactly that last occurrence. The body is present (just
+    spliced), so one of the two searches always succeeds.
     """
     lines = text.splitlines(keepends=True)
     search_from = len("".join(lines[:anchor_line]))
-    idx = text.index(body, search_from)
+    try:
+        idx = text.index(body, search_from)
+    except ValueError:
+        idx = text.rindex(body)
     start_line = text.count("\n", 0, idx)
     n_lines = body.count("\n")
     return start_line, start_line + n_lines

@@ -20,7 +20,7 @@ from setforge.overlay_inject import (
     canonical_body,
     inject_body_at_anchor,
 )
-from setforge.source import AnchorAfterHeading
+from setforge.source import AnchorAfterHeading, AnchorAtEndOfFile
 from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
 from setforge.spans_store import SpanState
 
@@ -31,6 +31,31 @@ def _overlay(anchor_id: str, value: str, body: str) -> SpanEntry:
         kind=SpanKind.OVERLAY,
         overlay=OverlaySpanPayload(anchor=AnchorAfterHeading(value=value), body=body),
     )
+
+
+def _overlay_eof(anchor_id: str, body: str) -> SpanEntry:
+    return SpanEntry(
+        anchor=anchor_id,
+        kind=SpanKind.OVERLAY,
+        overlay=OverlaySpanPayload(anchor=AnchorAtEndOfFile(), body=body),
+    )
+
+
+def test_inject_at_end_of_file_records_sidecar_state() -> None:
+    # Regression: an at-end-of-file overlay re-resolves its anchor PAST the
+    # just-appended body, so the post-inject state recompute must still locate
+    # the body (the appended occurrence) rather than crash on a forward search.
+    tracked = "# Title\n\nshared body\n"
+    spans = [_overlay_eof("## Python", "## Python\n\nuse uv\n")]
+    injected, new_states = inject_overlay_bodies(tracked, spans, {})
+    assert injected.endswith("## Python\n\nuse uv\n")
+    assert injected.count("## Python") == 1
+    state = new_states["## Python"]
+    assert state.last_deployed_body == canonical_body("## Python\n\nuse uv\n")
+    # Round-trips: excise by the recorded body removes exactly it.
+    body_free, found = excise_overlay_bodies(injected, spans, new_states)
+    assert found
+    assert "## Python" not in body_free
 
 
 _TRACKED = "# Title\n\n## Notes\n\nshared body\n"
