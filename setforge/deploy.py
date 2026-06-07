@@ -318,6 +318,13 @@ def copy_atomic(
             content = injected
             new_span_states = {**(new_span_states or {}), **overlay_states}
     else:
+        # Host-local OVERLAY spans on a preserve file (disposition=None): the
+        # body is carried markerless in local.yaml. The loader PROJECTS those
+        # spans into host_local_sections (for capture/compare/promote), so they
+        # must be excluded from inject_all here (which injects WITH markers) and
+        # injected markerless below instead — else each body lands twice.
+        md_overlay_spans = overlay_deploy.overlay_spans(spans) if spans else []
+        legacy_host_local = _legacy_only_host_local(host_local_sections, spans)
         content, new_scalar_bases, scalar_conflicts = _compute_content(
             src,
             real_dst,
@@ -327,11 +334,23 @@ def copy_atomic(
             preserve_user_keys_deep,
             section_bodies_override,
             precomputed_live_sections=precomputed_live_sections,
-            host_local_sections=host_local_sections,
+            host_local_sections=legacy_host_local,
             scalar_bases=scalar_bases,
             merge_auto=merge_auto,
             conflict_resolver=conflict_resolver,
         )
+        # De-marker + markerless inject (14.17): strip EVERY tracked-authored
+        # host-local marker pair (incl. the empty-dropped regions, which have no
+        # span) from the merged content, then splice each overlay body in once.
+        # The body never enters the merge (merge_sections splices only live
+        # marker-region bodies, never outside-content), so no excise is needed
+        # on this path. Runs only when host-local overlay spans are present, so
+        # legacy-only preserve files stay byte-for-byte unchanged.
+        if md_overlay_spans:
+            content = sections.strip_host_local_markers(content)
+            content, new_span_states = overlay_deploy.inject_overlay_bodies(
+                content, md_overlay_spans, span_states or {}
+            )
 
     return _write_resolved_content(
         content,
