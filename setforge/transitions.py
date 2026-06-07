@@ -28,7 +28,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, NewType
 
-from setforge import __version__
+from setforge import __version__, atomicio
 from setforge.binaries import resolve_binary
 from setforge.errors import InvalidTransitionRecord, RevertFailed, SetforgeError
 
@@ -290,6 +290,23 @@ def load_meta(transition_dir: TransitionDir) -> TransitionMeta:
         ) from exc
 
 
+def _write_text_durable(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` and fsync the file's own fd.
+
+    Power-loss durability requires the file's data — not just the
+    directory entry — to reach disk. ``Path.write_text`` closes the fd
+    before any fsync is possible, so this opens the file directly,
+    writes, ``flush``-es the userspace buffer (``os.fsync`` only syncs
+    kernel buffers, not Python's), then ``os.fsync``-s the fd. A failing
+    data fsync (e.g. ``ENOSPC``) propagates — a swallowed data-fsync
+    error would report durable when it isn't.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def write_meta(
     transition_dir: TransitionDir,
     meta: TransitionMeta,
@@ -301,14 +318,16 @@ def write_meta(
     ``paths`` field on the JSON payload so :func:`load_latest` can
     identify the touched files without re-parsing the diff and so
     ``revert`` can snapshot pre/post state directly. Creates
-    ``transition_dir`` (with parents) if needed.
+    ``transition_dir`` (with parents) if needed. The meta.json fd is
+    fsynced (via :func:`_write_text_durable`) so the commit marker's data
+    is power-loss durable.
     """
     transition_dir.mkdir(parents=True, exist_ok=True)
     body: dict[str, object] = dict(meta.to_dict())
     if paths is not None:
         body["paths"] = [str(p) for p in paths]
     payload = json.dumps(body, indent=2) + "\n"
-    (transition_dir / "meta.json").write_text(payload, encoding="utf-8")
+    _write_text_durable(transition_dir / "meta.json", payload)
 
 
 def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
@@ -757,7 +776,12 @@ def write_transition(
 
     Uses a two-phase write with atomic ``os.rename`` as the commit marker so
     a crash mid-write never leaves a half-formed transition visible to
-    :func:`load_latest`.
+    :func:`load_latest`. The sequence is power-loss durable: every staged
+    payload file fsyncs its own fd before the rename, three distinct
+    directory fsyncs (pending before rename, root after rename, target
+    after meta.json) make the dir entries durable, and meta.json — the
+    commit marker — is written and fsynced STRICTLY LAST, with nothing
+    payload-related written after it.
 
     Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
     (if delta non-empty), ``plugins.json`` (if delta non-empty), and
@@ -783,28 +807,36 @@ def write_transition(
     root.mkdir(parents=True, exist_ok=True)
     pending.mkdir(parents=True, exist_ok=False)
 
+    # Durable write sequence (power-loss safe), meta.json STRICTLY LAST:
+    # 1. write + fsync each staged payload file's own fd,
+    # 2. fsync the pending dir (staged child-creates durable),
+    # 3. rename pending -> target (atomic POSIX, same fs),
+    # 4. fsync the root dir (target's new dir entry durable),
+    # 5. write + fsync meta.json (the commit marker),
+    # 6. fsync the target dir (meta.json's dir entry durable) — last.
     patch = compute_patch(file_pre, file_post)
     if patch:
-        (pending / "changes.patch").write_text(patch, encoding="utf-8")
+        _write_text_durable(pending / "changes.patch", patch)
 
     ext_payload = _serialize_ext_payload(ext_delta)
     if ext_payload is not None:
-        (pending / "extensions.json").write_text(ext_payload, encoding="utf-8")
+        _write_text_durable(pending / "extensions.json", ext_payload)
 
     plugin_payload = _serialize_plugin_payload(plugin_delta)
     if plugin_payload is not None:
-        (pending / "plugins.json").write_text(plugin_payload, encoding="utf-8")
+        _write_text_durable(pending / "plugins.json", plugin_payload)
 
     outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
     if outcomes_payload is not None:
-        (pending / "reconcile_outcomes.json").write_text(
-            outcomes_payload, encoding="utf-8"
-        )
+        _write_text_durable(pending / "reconcile_outcomes.json", outcomes_payload)
 
+    atomicio.fsync_dir(pending)
     os.rename(pending, target)
+    atomicio.fsync_dir(root)
 
     touched = _touched_paths(file_pre, file_post)
     write_meta(target, meta, paths=touched)
+    atomicio.fsync_dir(target)
 
     return target
 

@@ -1,10 +1,14 @@
 """Tests for the transitions module."""
 
+import builtins
+import contextlib
 import json
 import os
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TextIO
 
 import pytest
 
@@ -1435,3 +1439,197 @@ def test_reconcile_outcomes_from_json_rejects_unknown_status() -> None:
                 ]
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# fsync durability — write_transition / write_meta
+# ---------------------------------------------------------------------------
+
+
+def _full_payload_inputs(
+    tmp_path: Path,
+) -> tuple[dict[Path, str | None], dict[Path, str | None], ExtensionDelta]:
+    """Inputs that exercise every staged payload file (patch + extensions)."""
+    target_file = tmp_path / "live.txt"
+    pre: dict[Path, str | None] = {target_file: "before\n"}
+    post: dict[Path, str | None] = {target_file: "after\n"}
+    delta = ExtensionDelta(added=["a.x"], removed=["b.y"])
+    return pre, post, delta
+
+
+def _make_recording_open(
+    open_fds: dict[int, str],
+) -> Callable[..., TextIO]:
+    """Return a ``builtins.open`` wrapper that records fd -> file basename.
+
+    Lets a recorded ``os.fsync`` be attributed to a specific payload file
+    by mapping the fd back to the name it was opened under.
+    """
+    real_open = builtins.open
+
+    def recording_open(file: str | Path, *args: object, **kwargs: object) -> TextIO:
+        fh = real_open(file, *args, **kwargs)  # type: ignore[call-overload]
+        with contextlib.suppress(OSError):
+            open_fds[fh.fileno()] = Path(str(file)).name
+        return fh
+
+    return recording_open
+
+
+def test_write_transition_durable_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The durable write sequence must: fsync each staged payload fd before
+    the rename; fsync_dir pending(before rename) / root(after rename) /
+    target(after meta.json); fsync the meta.json fd; and write meta.json
+    LAST (no payload data after it)."""
+    import setforge.transitions as transitions_mod
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+
+    events: list[tuple[str, str]] = []
+    real_fsync = os.fsync
+    real_rename = os.rename
+    open_fds: dict[int, str] = {}
+
+    def recording_rename(src: object, dst: object) -> None:
+        events.append(("rename", str(dst)))
+        real_rename(src, dst)  # type: ignore[arg-type]
+
+    def recording_fsync(fd: int) -> None:
+        events.append(("file_fsync", open_fds.get(fd, "?")))
+        real_fsync(fd)
+
+    def recording_fsync_dir(directory: Path) -> None:
+        events.append(("dir_fsync", str(directory)))
+
+    monkeypatch.setattr(transitions_mod.os, "rename", recording_rename)
+    monkeypatch.setattr(transitions_mod.os, "fsync", recording_fsync)
+    monkeypatch.setattr(transitions_mod.atomicio, "fsync_dir", recording_fsync_dir)
+
+    # _write_text_durable opens via builtins open(); wrap to capture the
+    # fd -> name mapping so file_fsync events carry the file name.
+    monkeypatch.setattr(builtins, "open", _make_recording_open(open_fds))
+
+    pre, post, delta = _full_payload_inputs(tmp_path)
+    out = write_transition(_make_meta(), pre, post, delta)
+
+    # End-to-end: the transition is loadable.
+    assert out.exists()
+    assert (out / "meta.json").exists()
+
+    kinds = [e for e in events]
+    rename_idx = next(i for i, (k, _) in enumerate(kinds) if k == "rename")
+
+    # Every staged payload file fd fsynced BEFORE the rename.
+    file_fsyncs_before = {
+        name
+        for i, (k, name) in enumerate(kinds)
+        if k == "file_fsync" and i < rename_idx
+    }
+    assert "changes.patch" in file_fsyncs_before
+    assert "extensions.json" in file_fsyncs_before
+
+    # Three distinct dir fsyncs: pending before rename, root after rename,
+    # target after meta.json.
+    dir_events = [(i, name) for i, (k, name) in enumerate(kinds) if k == "dir_fsync"]
+    pending_dir = str(tmp_path / "transitions" / f".pending-{out.name}")
+    root_dir = str(tmp_path / "transitions")
+    target_dir = str(out)
+
+    pending_idx = next(i for i, n in dir_events if n == pending_dir)
+    assert pending_idx < rename_idx
+
+    root_idx = next(i for i, n in dir_events if n == root_dir)
+    assert root_idx > rename_idx
+
+    target_idx = next(i for i, n in dir_events if n == target_dir)
+
+    # meta.json fd fsynced, and it is the LAST data write of the run.
+    meta_fsyncs = [
+        i
+        for i, (k, name) in enumerate(kinds)
+        if k == "file_fsync" and name == "meta.json"
+    ]
+    assert meta_fsyncs, "meta.json fd was never fsynced"
+    last_file_fsync = max(i for i, (k, _) in enumerate(kinds) if k == "file_fsync")
+    assert last_file_fsync == meta_fsyncs[-1], "a payload was written after meta.json"
+
+    # target dir fsync is strictly last and follows the meta.json fsync.
+    assert target_idx > meta_fsyncs[-1]
+    assert target_idx == max(i for i, _ in dir_events)
+
+
+def test_write_transition_loadable_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real durable write produces a transition that load_latest finds."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+    pre, post, delta = _full_payload_inputs(tmp_path)
+    out = write_transition(_make_meta(), pre, post, delta)
+    latest = load_latest("vmh")
+    assert latest == out
+
+
+def test_write_meta_fsyncs_meta_fd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """write_meta must fsync the meta.json fd, not just write it."""
+    import setforge.transitions as transitions_mod
+
+    synced_names: list[str] = []
+    real_fsync = os.fsync
+    open_fds: dict[int, str] = {}
+
+    def recording_fsync(fd: int) -> None:
+        synced_names.append(open_fds.get(fd, "?"))
+        real_fsync(fd)
+
+    monkeypatch.setattr(builtins, "open", _make_recording_open(open_fds))
+    monkeypatch.setattr(transitions_mod.os, "fsync", recording_fsync)
+
+    target = TransitionDir(tmp_path / "t")
+    write_meta(target, _make_meta())
+    assert "meta.json" in synced_names
+
+
+def test_write_transition_data_fsync_error_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A data-fsync OSError must abort the transition, never commit a
+    partially-synced record."""
+    import setforge.transitions as transitions_mod
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+
+    def boom(fd: int) -> None:
+        raise OSError("ENOSPC")
+
+    monkeypatch.setattr(transitions_mod.os, "fsync", boom)
+
+    pre, post, delta = _full_payload_inputs(tmp_path)
+    with pytest.raises(OSError, match="ENOSPC"):
+        write_transition(_make_meta(), pre, post, delta)
+
+
+def test_write_transition_dir_fsync_error_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory-fsync OSError is best-effort: the transition still
+    commits and loads."""
+    import contextlib
+
+    import setforge.transitions as transitions_mod
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
+
+    def swallowing_dir_fsync(directory: Path) -> None:
+        with contextlib.suppress(OSError):
+            raise OSError("EINVAL")
+
+    monkeypatch.setattr(transitions_mod.atomicio, "fsync_dir", swallowing_dir_fsync)
+
+    pre, post, delta = _full_payload_inputs(tmp_path)
+    out = write_transition(_make_meta(), pre, post, delta)
+    assert (out / "meta.json").exists()
+    assert load_latest("vmh") == out

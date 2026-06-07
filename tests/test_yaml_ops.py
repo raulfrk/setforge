@@ -15,10 +15,14 @@ The load-bearing invariants under test:
 from __future__ import annotations
 
 import io
+import os
+import stat
 from pathlib import Path
 
 import pytest
 
+from setforge import atomicio
+from setforge.migrations import _yaml_ops
 from setforge.migrations._yaml_ops import (
     atomic_write_yaml,
     rename_key,
@@ -154,3 +158,96 @@ def test_atomic_write_yaml_round_trips_comments(tmp_path: Path) -> None:
     assert "# header" in out
     assert "# above" in out
     assert "# eol" in out
+
+
+def test_atomic_write_yaml_fsyncs_tmp_fd_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tmp file's own fd must be fsynced before ``os.replace`` so the
+    payload data is durable, not merely the rename."""
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def recording_fsync(fd: int) -> None:
+        events.append("fsync")
+        real_fsync(fd)
+
+    def recording_replace(src: object, dst: object) -> None:
+        events.append("replace")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_yaml_ops.os, "fsync", recording_fsync)
+    monkeypatch.setattr(_yaml_ops.os, "replace", recording_replace)
+
+    target = tmp_path / "out.yaml"
+    atomic_write_yaml(target, yaml_rt().load("k: v\n"))
+
+    assert "fsync" in events
+    assert "replace" in events
+    assert events.index("fsync") < events.index("replace")
+
+
+def test_atomic_write_yaml_fsyncs_parent_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the replace, the destination's parent directory is fsynced so
+    the rename survives a power loss."""
+    synced: list[Path] = []
+    monkeypatch.setattr(_yaml_ops.atomicio, "fsync_dir", lambda d: synced.append(d))
+    target = tmp_path / "out.yaml"
+    atomic_write_yaml(target, yaml_rt().load("k: v\n"))
+    assert target.parent in synced
+
+
+def test_atomic_write_yaml_preserves_dest_mode(tmp_path: Path) -> None:
+    """Overwriting an existing 0644 file must keep its mode, not narrow to
+    the 0600 mkstemp default."""
+    target = tmp_path / "out.yaml"
+    target.write_text("stale: x\n", encoding="utf-8")
+    os.chmod(target, 0o644)
+    atomic_write_yaml(target, yaml_rt().load("fresh: y\n"))
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_atomic_write_yaml_data_fsync_error_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A data-fsync OSError must propagate — never be swallowed and report a
+    durable write that did not happen."""
+
+    def boom(fd: int) -> None:
+        raise OSError("ENOSPC")
+
+    monkeypatch.setattr(_yaml_ops.os, "fsync", boom)
+    target = tmp_path / "out.yaml"
+    with pytest.raises(OSError, match="ENOSPC"):
+        atomic_write_yaml(target, yaml_rt().load("k: v\n"))
+    # The tmp file must not leak on the error path.
+    assert list(tmp_path.glob(".out.yaml.*.tmp")) == []
+
+
+def test_atomic_write_yaml_dir_fsync_error_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory-fsync OSError is best-effort: the write still succeeds."""
+
+    def boom(directory: Path) -> None:
+        raise OSError("EINVAL")
+
+    monkeypatch.setattr(atomicio, "fsync_dir", _swallow_dir_fsync_oserror(boom))
+    target = tmp_path / "out.yaml"
+    atomic_write_yaml(target, yaml_rt().load("k: v\n"))
+    assert target.read_text(encoding="utf-8") == "k: v\n"
+
+
+def _swallow_dir_fsync_oserror(raiser: object) -> object:
+    """Wrap a raising fake so the suppress lives in fsync_dir, mirroring the
+    real best-effort contract."""
+    import contextlib
+
+    def wrapper(directory: Path) -> None:
+        with contextlib.suppress(OSError):
+            raiser(directory)  # type: ignore[operator]
+
+    return wrapper

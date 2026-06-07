@@ -26,6 +26,8 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from setforge import atomicio
+
 __all__ = ["atomic_write_yaml", "rename_key", "yaml_rt"]
 
 
@@ -91,7 +93,9 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
     directory (so ``os.replace`` is guaranteed to stay on a single
     filesystem), then renames it over the destination. Crashes between
     open and rename leave only the tmp file, never a half-written
-    target.
+    target. The tmp file's data is fsynced before the rename and the
+    destination directory is fsynced (best-effort) after, so the write
+    survives power loss, not just a process crash.
 
     ``data`` is the root of a ruamel round-trip document
     (``CommentedMap`` / ``CommentedSeq`` / scalars). Any object the
@@ -108,6 +112,14 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             yaml.dump(data, fh)
+            # Power-loss durability: flush the userspace buffer, then
+            # fsync the tmp file's data to disk BEFORE the rename. A data
+            # fsync failure (e.g. ENOSPC) propagates — a swallowed one
+            # would report durable when it isn't. The fsync is INLINE
+            # rather than routed through atomicio so the mode-preservation
+            # below is not lost.
+            fh.flush()
+            os.fsync(fh.fileno())
         # Preserve the destination's permission bits. ``mkstemp`` creates
         # the tmp file at 0600, so a plain ``os.replace`` would silently
         # narrow a group/other-readable config to owner-only on every
@@ -119,3 +131,5 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    # Best-effort: fsync the destination dir so the rename is durable.
+    atomicio.fsync_dir(yaml_path.parent)

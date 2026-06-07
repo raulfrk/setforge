@@ -52,7 +52,7 @@ def atomic_write_bytes(path: Path, data: bytes, *, fsync: bool = True) -> None:
         tmp_path.unlink(missing_ok=True)
         raise
     if fsync:
-        _fsync_dir(path.parent)
+        fsync_dir(path.parent)
 
 
 def atomic_write_text(
@@ -66,12 +66,15 @@ def atomic_write_text(
     atomic_write_bytes(path, text.encode(encoding), fsync=fsync)
 
 
-def _fsync_dir(directory: Path) -> None:
+def fsync_dir(directory: Path) -> None:
     """Best-effort fsync of ``directory`` so a rename is durable.
 
     Opens the directory ``O_RDONLY``, fsyncs it, and closes it. Any
-    ``OSError`` (e.g. a filesystem that rejects directory fsync) is
-    swallowed — this is a durability nicety, never a hard requirement.
+    ``OSError`` (e.g. a filesystem that rejects directory fsync with
+    ``EINVAL``) is swallowed — directory fsync is a durability nicety,
+    never a hard requirement; the rename is atomic regardless. Shared by
+    every temp-write + atomic-rename site so the dir-fsync recipe is not
+    re-implemented per caller.
     """
     with contextlib.suppress(OSError):
         dir_fd = os.open(str(directory), os.O_RDONLY)
