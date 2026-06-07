@@ -52,7 +52,7 @@ from setforge.errors import (
     NoSourceConfigured,
     SourceNotCloned,
 )
-from setforge.spans import SpanEntry
+from setforge.spans import SpanEntry, SpanKind
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -620,17 +620,61 @@ def validate_host_local_sections_file_type(
     )
 
 
+def _host_local_sections_for_overlay(
+    overlay: _LocalTrackedFileOverlay,
+) -> dict[HostLocalSectionName, HostLocalSection]:
+    """Project one overlay's host-local sections, legacy + migrated unified.
+
+    Returns the union of:
+
+    - the legacy ``host_local_sections`` block (pre-migration hosts), and
+    - every migrated OVERLAY ``spans`` entry (``kind=overlay``,
+      ``semantics=host-local``), reconstructed back into a
+      :class:`HostLocalSection` keyed by the span's identity ``anchor``
+      (the original section name).
+
+    The migration (:mod:`setforge.overlay_migration`) physically rewrites
+    ``host_local_sections`` into OVERLAY spans on the first install, so a
+    legacy reader that projected only the old block returned ``{}`` for an
+    already-migrated host — blinding the capture host-local strip, the
+    compare overlay mask, the promote wizard, and the install injection.
+    Projecting the migrated spans back here keeps every one of those
+    consumers seeing the host-local content after the migration, so the
+    leak / erase / drift gaps the half-wired migration opened stay closed.
+
+    A legacy block and a migrated span for the SAME name cannot coexist
+    (the migration deletes the legacy block as it appends the span);
+    should both ever appear, the legacy entry wins (it is inserted last)
+    — a no-op in practice since they carry identical bodies.
+    """
+    sections: dict[HostLocalSectionName, HostLocalSection] = {}
+    for span in overlay.spans:
+        if span.kind is not SpanKind.OVERLAY or span.overlay is None:
+            continue
+        payload = span.overlay
+        sections[HostLocalSectionName(span.anchor)] = HostLocalSection(
+            anchor=payload.anchor,
+            body=payload.body,
+            body_file=payload.body_file,
+        )
+    for name, section in overlay.host_local_sections.items():
+        sections[HostLocalSectionName(name)] = section
+    return sections
+
+
 def load_local_host_local_sections(
     path: Path = LOCAL_CONFIG_PATH,
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Return ``{tracked_file_id: {section_name: HostLocalSection}}``.
 
     Mirrors :func:`load_local_tracked_file_overlays` shape but projects
-    each :class:`_LocalTrackedFileOverlay` to its ``host_local_sections``
-    sub-mapping only. Empty dict when the file is absent or no
-    tracked_file declares any host-local section. Entries with an empty
-    ``host_local_sections`` mapping are dropped from the result so
-    callers can treat presence as "has at least one section".
+    each :class:`_LocalTrackedFileOverlay` to its host-local sections —
+    BOTH the legacy ``host_local_sections`` block AND the migrated OVERLAY
+    ``spans`` entries (see :func:`_host_local_sections_for_overlay` for the
+    unification rationale). Empty dict when the file is absent or no
+    tracked_file declares any host-local section. Entries that project to
+    an empty mapping are dropped from the result so callers can treat
+    presence as "has at least one section".
 
     Section-name keys are constructed as :data:`HostLocalSectionName`
     here at the parse boundary (the local.yaml load point); downstream
@@ -638,14 +682,11 @@ def load_local_host_local_sections(
     flags any attempt to pass a tracked-side shared-section name in.
     """
     overlays = _load_local_source_config(path).tracked_files
-    return {
-        tf_id: {
-            HostLocalSectionName(name): section
-            for name, section in overlay.host_local_sections.items()
-        }
+    projected = {
+        tf_id: _host_local_sections_for_overlay(overlay)
         for tf_id, overlay in overlays.items()
-        if overlay.host_local_sections
     }
+    return {tf_id: sections for tf_id, sections in projected.items() if sections}
 
 
 _cli_source: Path | None = None

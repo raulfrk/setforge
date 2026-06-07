@@ -56,6 +56,7 @@ def _write_config(repo: Path) -> Path:
         "  doc:\n"
         "    src: doc.md\n"
         "    dst: ~/.setforge_omig/doc.md\n"
+        "    preserve_user_sections: true\n"
         "profiles:\n"
         f"  {_PROFILE}:\n"
         "    tracked_files:\n"
@@ -63,6 +64,11 @@ def _write_config(repo: Path) -> Path:
         encoding="utf-8",
     )
     return config
+
+
+def _live_doc_path() -> Path:
+    """The deployed live doc path (under the monkeypatched HOME)."""
+    return Path("~/.setforge_omig/doc.md").expanduser()
 
 
 def _write_tracked(repo: Path) -> None:
@@ -99,6 +105,27 @@ def _install(config: Path, *, no_transition: bool = False) -> Result:
     if no_transition:
         args.append("--no-transition")
     return CliRunner().invoke(app, args)
+
+
+def _sync(config: Path) -> Result:
+    return CliRunner().invoke(
+        app,
+        [
+            "sync",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--auto=use-live",
+            "--no-transition",
+            "--yes",
+        ],
+    )
+
+
+def _compare_check(config: Path) -> Result:
+    return CliRunner().invoke(
+        app,
+        ["compare", f"--profile={_PROFILE}", f"--config={config}", "--check"],
+    )
 
 
 def test_install_rewrites_local_yaml_host_local_sections(
@@ -157,3 +184,66 @@ def test_revert_restores_local_yaml_bytes_and_mode(repo: Path, tmp_path: Path) -
     assert revert.exit_code == 0, revert.output
     assert local.read_bytes() == pre_bytes
     assert stat.S_IMODE(local.stat().st_mode) == pre_mode
+
+
+def test_no_disposition_migrated_overlay_survives_install_sync_cycle(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The migrated overlay body never leaks / erases on a no-disposition file.
+
+    Regression for the half-wired migration data-leak: ``doc`` is a
+    plain tracked_file with NO ``disposition``, so after the first
+    install rewrites local.yaml's ``host_local_sections`` into an
+    OVERLAY span, the disposition-gated deploy / capture / compare paths
+    used to skip the file entirely. That gap let a second install ERASE
+    the injected body, let ``sync``/capture LEAK the host-local body into
+    the shared tracked src AND the stored base, and let ``compare`` flag
+    the injected body as drift.
+
+    Asserts, after install → (migrate) → install#2 → sync:
+
+    - the host-local body is still present in the live file (no erase),
+    - the host-local body NEVER appears in the tracked src (no leak),
+    - ``compare --check`` reports no drift,
+    - the injected marker pair is not duplicated.
+    """
+    _write_tracked(repo)
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    local.write_text(_LOCAL_YAML, encoding="utf-8")
+    tracked_src = repo / "tracked" / "doc.md"
+
+    # The host-local loader's ``path`` default is bound to the real
+    # ~/.config path at function-def time, so the conftest constant
+    # monkeypatch never reaches it. Repoint the function's default to the
+    # isolated local.yaml so the REAL loader (and its post-migration
+    # spans-projection) reads the test fixture.
+    import setforge.source as _source
+
+    monkeypatch.setattr(
+        _source.load_local_host_local_sections, "__defaults__", (local,)
+    )
+
+    # Install #1: deploys the legacy body AND migrates local.yaml → spans.
+    first = _install(config, no_transition=True)
+    assert first.exit_code == 0, first.output
+    assert "host_local_sections:" not in local.read_text(encoding="utf-8")
+    live = _live_doc_path()
+    assert "host-local notes" in live.read_text(encoding="utf-8")
+
+    # Install #2: now reads the MIGRATED spans-only local.yaml. The body
+    # must be re-injected (not erased) and not duplicated.
+    second = _install(config, no_transition=True)
+    assert second.exit_code == 0, second.output
+    live_text = live.read_text(encoding="utf-8")
+    assert live_text.count("start host-local my-notes") == 1, live_text
+    assert "host-local notes" in live_text
+
+    # Sync/capture: the host-local body MUST NOT bake into the tracked src.
+    sync = _sync(config)
+    assert sync.exit_code == 0, sync.output
+    assert "host-local notes" not in tracked_src.read_text(encoding="utf-8")
+
+    # Compare: the injected host-local body must NOT register as drift.
+    cmp_result = _compare_check(config)
+    assert cmp_result.exit_code == 0, cmp_result.output
