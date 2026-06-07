@@ -547,3 +547,166 @@ def test_shared_preserves_comments_and_key_order(tmp_path: Path) -> None:
     assert (
         text.index("version:") < text.index("tracked_files:") < text.index("profiles:")
     )
+
+
+# ---------------------------------------------------------------------------
+# unpin / unfork / reset — override removal verbs
+# ---------------------------------------------------------------------------
+
+
+def _local_data() -> dict[str, Any]:
+    """Parse the whole redirected local.yaml (round-trip)."""
+    return dict(_YAML.load(source_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")))
+
+
+def _local_tf_ids() -> list[str]:
+    """tracked_files ids present in the redirected local.yaml (or [])."""
+    data = _local_data()
+    tracked = data.get("tracked_files")
+    return list(tracked) if isinstance(tracked, dict) else []
+
+
+def test_unpin_file_level_host_local_removes_disposition(tmp_path: Path) -> None:
+    """unpin <file> drops a host-local pinned file-level disposition."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc").exit_code == 0
+    result = _invoke(cfg, "override", "unpin", "doc")
+    assert result.exit_code == 0, result.output
+    # The only override is gone -> the whole tracked_files.doc block is pruned.
+    assert "doc" not in _local_tf_ids()
+
+
+def test_unfork_file_level_host_local_removes_disposition(tmp_path: Path) -> None:
+    """unfork <file> drops a host-local forked file-level disposition."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "fork", "doc").exit_code == 0
+    result = _invoke(cfg, "override", "unfork", "doc")
+    assert result.exit_code == 0, result.output
+    assert "doc" not in _local_tf_ids()
+
+
+def test_unpin_span_md_host_local_removes_span(tmp_path: Path) -> None:
+    """unpin <file> <anchor> removes the matching pinned span."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc", "## Mine").exit_code == 0
+    result = _invoke(cfg, "override", "unpin", "doc", "## Mine")
+    assert result.exit_code == 0, result.output
+    assert "doc" not in _local_tf_ids()
+
+
+def test_reset_clears_disposition_and_spans(tmp_path: Path) -> None:
+    """reset <file> clears both the file-level disposition and every span."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc").exit_code == 0
+    assert _invoke(cfg, "override", "pin", "doc", "## Mine").exit_code == 0
+    overlay = _local_overlay("doc")
+    assert overlay["disposition"] == "pinned"
+    assert len(list(overlay["spans"])) == 1
+    result = _invoke(cfg, "override", "reset", "doc")
+    assert result.exit_code == 0, result.output
+    assert "doc" not in _local_tf_ids()
+
+
+def test_unpin_wrong_kind_leaves_fork_and_warns(tmp_path: Path) -> None:
+    """unpin on a forked file leaves the fork intact and warns (exit 0)."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "fork", "doc").exit_code == 0
+    result = _invoke(cfg, "override", "unpin", "doc")
+    assert result.exit_code == 0, result.output
+    assert "forked" in result.output.lower()
+    assert _local_overlay("doc")["disposition"] == "forked"  # untouched
+
+
+def test_unpin_absent_target_is_byte_noop(tmp_path: Path) -> None:
+    """unpin on a file with no pin does not rewrite local.yaml."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc").exit_code == 0  # seed local.yaml
+    before = source_mod.LOCAL_CONFIG_PATH.read_bytes()
+    result = _invoke(cfg, "override", "unpin", "conf")  # conf has no override
+    assert result.exit_code == 0, result.output
+    assert source_mod.LOCAL_CONFIG_PATH.read_bytes() == before
+
+
+def test_coexistence_unfork_file_leaves_pinned_span(tmp_path: Path) -> None:
+    """A forked file holding a pinned span: unfork drops only the file fork."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "fork", "doc").exit_code == 0
+    assert _invoke(cfg, "override", "pin", "doc", "## Mine").exit_code == 0
+    result = _invoke(cfg, "override", "unfork", "doc")
+    assert result.exit_code == 0, result.output
+    overlay = _local_overlay("doc")
+    assert "disposition" not in overlay  # the file-level fork is gone
+    spans = list(overlay["spans"])
+    assert len(spans) == 1  # the pin survives
+    assert spans[0]["kind"] == "pinned"
+    # And unpin then clears the span, emptying (and pruning) the block.
+    assert _invoke(cfg, "override", "unpin", "doc", "## Mine").exit_code == 0
+    assert "doc" not in _local_tf_ids()
+
+
+def test_reset_leaves_host_local_sections_block(tmp_path: Path) -> None:
+    """reset clears override state only; host_local_sections survives."""
+    cfg = _make_repo(tmp_path)
+    # Seed a local.yaml carrying BOTH an override and a host_local_sections block.
+    source_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    source_mod.LOCAL_CONFIG_PATH.write_text(
+        "tracked_files:\n"
+        "  doc:\n"
+        "    disposition: pinned\n"
+        "    host_local_sections:\n"
+        "      mine:\n"
+        "        anchor: {kind: after-heading, value: Title}\n"
+        "        body: |\n"
+        "          kept\n",
+        encoding="utf-8",
+    )
+    result = _invoke(cfg, "override", "reset", "doc")
+    assert result.exit_code == 0, result.output
+    overlay = _local_overlay("doc")
+    assert "disposition" not in overlay  # override cleared
+    assert "host_local_sections" in overlay  # separate subsystem untouched
+
+
+def test_unpin_shared_removes_disposition(tmp_path: Path) -> None:
+    """unpin <file> --shared removes the setforge.yaml file-level disposition."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc", "--shared").exit_code == 0
+    data = _YAML.load(cfg.read_text(encoding="utf-8"))
+    assert data["tracked_files"]["doc"]["disposition"] == "pinned"
+    result = _invoke(cfg, "override", "unpin", "doc", "--shared")
+    assert result.exit_code == 0, result.output
+    data = _YAML.load(cfg.read_text(encoding="utf-8"))
+    assert "disposition" not in data["tracked_files"]["doc"]
+
+
+def test_removal_preserves_comments_host_local(tmp_path: Path) -> None:
+    """Removing one override preserves sibling overrides + local.yaml comments."""
+    cfg = _make_repo(tmp_path)
+    source_mod.LOCAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    source_mod.LOCAL_CONFIG_PATH.write_text(
+        "# my overrides\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    disposition: pinned  # keep this comment\n"
+        "  conf:\n"
+        "    disposition: forked\n",
+        encoding="utf-8",
+    )
+    result = _invoke(cfg, "override", "unfork", "conf")
+    assert result.exit_code == 0, result.output
+    text = source_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert "# my overrides" in text
+    assert "# keep this comment" in text
+    assert _local_overlay("doc")["disposition"] == "pinned"
+    assert "conf" not in _local_tf_ids()
+
+
+def test_unpin_idempotent_reconverges(tmp_path: Path) -> None:
+    """A second unpin on an already-cleared target is a byte-no-op (exit 0)."""
+    cfg = _make_repo(tmp_path)
+    assert _invoke(cfg, "override", "pin", "doc").exit_code == 0
+    assert _invoke(cfg, "override", "unpin", "doc").exit_code == 0
+    before = source_mod.LOCAL_CONFIG_PATH.read_bytes()
+    result = _invoke(cfg, "override", "unpin", "doc")
+    assert result.exit_code == 0, result.output
+    assert source_mod.LOCAL_CONFIG_PATH.read_bytes() == before

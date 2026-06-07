@@ -2,7 +2,7 @@
 
 The user-facing surface over the stored-base disposition model
 (:class:`setforge.config.Disposition`) and the sub-file span model
-(:class:`setforge.spans.SpanEntry`). Four verbs:
+(:class:`setforge.spans.SpanEntry`). Seven verbs:
 
 - ``fork`` / ``pin`` ``<file> [anchor] [--shared]`` — without an anchor,
   set the tracked_file's *file-level* disposition; with an anchor, append a
@@ -10,6 +10,16 @@ The user-facing surface over the stored-base disposition model
   default scope is host-local (``~/.config/setforge/local.yaml`` via a
   ruamel round-trip); ``--shared`` writes the resolved config-repo
   ``setforge.yaml`` atomically and prints the commit/push hint.
+- ``unpin`` / ``unfork`` ``<file> [anchor] [--shared]`` — the inverse of
+  ``pin`` / ``fork``: remove a file-level disposition or a span. Each is
+  *kind-specific* — ``unpin`` only removes a PINNED override, ``unfork`` only
+  a FORKED one, so a forked file holding a pinned span is never disturbed by
+  the wrong verb. A wrong-kind target is left intact with a warning; an absent
+  target is a byte-no-op (exit 0). ``reset <file> [--shared]`` clears ALL
+  override state (file-level disposition + every span) for a tracked_file,
+  leaving its ``host_local_sections`` / ``preserve_*`` blocks untouched. All
+  three are pure ``local.yaml`` / ``setforge.yaml`` edits (no stored-base or
+  sidecar mutation — the engine self-heals on the next install).
 - ``list`` — reuse :func:`setforge.compare.compare_profile` to render each
   tracked_file's disposition + span state (markdown AND structural).
 - ``show <file> [--spans]`` — a span summary table (with an ``ORPHANED``
@@ -32,6 +42,7 @@ silent link replacement).
 from __future__ import annotations
 
 import io
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -628,6 +639,290 @@ def override_pin(
 ) -> None:
     """Pin a tracked_file (or a span of it): live wins, never merged or captured."""
     _override_apply(SpanKind.PINNED, file_id, anchor, shared=shared, config=config)
+
+
+# ---------------------------------------------------------------------------
+# The unpin / unfork / reset verbs (override removal).
+# ---------------------------------------------------------------------------
+
+
+class _RemovalStatus(StrEnum):
+    """Outcome of a single removal attempt against one tracked_file block."""
+
+    REMOVED = "removed"
+    ABSENT = "absent"
+    WRONG_KIND = "wrong_kind"
+
+
+def _reset_block(block: dict[str, object]) -> _RemovalStatus:
+    """Drop ``disposition`` + ``spans`` outright (kind-agnostic, for reset)."""
+    changed = False
+    for key in ("disposition", "spans"):
+        if key in block:
+            del block[key]
+            changed = True
+    return _RemovalStatus.REMOVED if changed else _RemovalStatus.ABSENT
+
+
+def _remove_disposition_in_block(
+    block: dict[str, object], kind_value: str
+) -> _RemovalStatus:
+    """Drop the file-level ``disposition`` only when it matches ``kind_value``."""
+    current = block.get("disposition")
+    if current is None:
+        return _RemovalStatus.ABSENT
+    if str(current) != kind_value:
+        return _RemovalStatus.WRONG_KIND
+    del block["disposition"]
+    return _RemovalStatus.REMOVED
+
+
+def _remove_span_in_block(
+    block: dict[str, object], anchor: str, kind_value: str
+) -> _RemovalStatus:
+    """Filter out every span matching ``anchor`` AND ``kind_value``.
+
+    An anchor present only as the other kind is left + reported WRONG_KIND.
+    Spans are rebuilt-and-reassigned (never ``del``/``pop`` on the ruamel
+    seq, which orphans neighbour comments); an emptied ``spans`` key is
+    removed so no ``spans: []`` residue lingers.
+    """
+    raw = block.get("spans")
+    if not isinstance(raw, list):
+        return _RemovalStatus.ABSENT
+    matching = [s for s in raw if isinstance(s, dict) and s.get("anchor") == anchor]
+    if not matching:
+        return _RemovalStatus.ABSENT
+    if all(s.get("kind") != kind_value for s in matching):
+        return _RemovalStatus.WRONG_KIND
+    new_spans = [
+        s
+        for s in raw
+        if not (
+            isinstance(s, dict)
+            and s.get("anchor") == anchor
+            and s.get("kind") == kind_value
+        )
+    ]
+    if new_spans:
+        block["spans"] = new_spans
+    else:
+        del block["spans"]
+    return _RemovalStatus.REMOVED
+
+
+def _apply_removal_to_block(
+    block: dict[str, object],
+    *,
+    target_kind: SpanKind | None,
+    anchor: str | None,
+    reset: bool,
+) -> _RemovalStatus:
+    """Dispatch one removal against ``block`` (reset / file-level / span)."""
+    if reset:
+        return _reset_block(block)
+    assert target_kind is not None  # only reset passes None
+    kind_value = target_kind.value
+    if anchor is None:
+        return _remove_disposition_in_block(block, kind_value)
+    return _remove_span_in_block(block, anchor, kind_value)
+
+
+def _remove_host_local(
+    file_id: str, *, target_kind: SpanKind | None, anchor: str | None, reset: bool
+) -> _RemovalStatus:
+    """Apply a removal to ``local.yaml``; write only on a real change.
+
+    Navigates read-only (no auto-create — unlike :func:`_local_tf_block`, the
+    fork/pin write helper) so an absent target is a byte-no-op.
+    """
+    data = _load_local_data()
+    tracked = data.get("tracked_files")
+    if not isinstance(tracked, dict):
+        return _RemovalStatus.ABSENT
+    block = tracked.get(file_id)
+    if not isinstance(block, dict):
+        return _RemovalStatus.ABSENT
+    status = _apply_removal_to_block(
+        block, target_kind=target_kind, anchor=anchor, reset=reset
+    )
+    if status is _RemovalStatus.REMOVED:
+        if not block:
+            del tracked[file_id]
+        _dump_local_data(data)
+    return status
+
+
+def _remove_shared(
+    cfg_path: Path,
+    file_id: str,
+    *,
+    target_kind: SpanKind | None,
+    anchor: str | None,
+    reset: bool,
+) -> _RemovalStatus:
+    """Apply a removal to ``setforge.yaml`` atomically; write only on a change.
+
+    Navigates with ``.get`` (an absent ``tracked_files`` / ``<id>`` is a
+    no-op, never a ``KeyError`` traceback). The ``--shared`` write rides the
+    same discipline as :func:`_shared_apply`: the symlink + clean-tree
+    preflight runs only when a write will actually happen.
+    """
+    data = _RT_YAML.load(cfg_path.read_text(encoding="utf-8"))
+    tracked = data.get("tracked_files") if isinstance(data, dict) else None
+    if not isinstance(tracked, dict):
+        return _RemovalStatus.ABSENT
+    block = tracked.get(file_id)
+    if not isinstance(block, dict):
+        return _RemovalStatus.ABSENT
+    status = _apply_removal_to_block(
+        block, target_kind=target_kind, anchor=anchor, reset=reset
+    )
+    if status is _RemovalStatus.REMOVED:
+        _shared_write_preflight(cfg_path)
+        if not block:
+            del tracked[file_id]
+        buffer = io.StringIO()
+        _RT_YAML.dump(data, buffer)
+        atomic_write_text(cfg_path, buffer.getvalue())
+    return status
+
+
+def _report_removal(
+    status: _RemovalStatus,
+    *,
+    verb: str,
+    file_id: str,
+    anchor: str | None,
+    target_kind: SpanKind | None,
+    shared: bool,
+    reset: bool,
+    console: Console,
+) -> None:
+    """Print the outcome; a wrong-kind target warns (stderr) but exits 0."""
+    scope = "shared" if shared else "host-local"
+    target_desc = f"{file_id} {anchor!r}" if anchor is not None else file_id
+    if status is _RemovalStatus.REMOVED:
+        if reset:
+            console.print(f"reset {file_id}: cleared disposition + spans ({scope})")
+        else:
+            assert target_kind is not None
+            console.print(f"removed {target_kind.value} {target_desc} ({scope})")
+        return
+    if status is _RemovalStatus.WRONG_KIND:
+        assert target_kind is not None
+        other = "forked" if target_kind is SpanKind.PINNED else "pinned"
+        other_verb = "unfork" if target_kind is SpanKind.PINNED else "unpin"
+        typer.secho(
+            f"{target_desc} is {other}, not {target_kind.value}; left unchanged "
+            f"— use `{other_verb}` or `reset`.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        return
+    # ABSENT
+    console.print(f"nothing to {verb} on {target_desc}")
+
+
+def _override_remove(
+    target_kind: SpanKind | None,
+    file_id: str,
+    anchor: str | None,
+    *,
+    reset: bool,
+    shared: bool,
+    config: Path,
+) -> None:
+    """Shared body for ``unpin`` / ``unfork`` / ``reset``."""
+    console = Console()
+    cfg_path = _resolve_config_arg(config)
+    _tracked_file_or_fail(cfg_path, file_id)  # validate id (BadParameter on typo)
+    verb = (
+        "reset" if reset else ("unpin" if target_kind is SpanKind.PINNED else "unfork")
+    )
+
+    try:
+        if shared:
+            status = _remove_shared(
+                cfg_path, file_id, target_kind=target_kind, anchor=anchor, reset=reset
+            )
+        else:
+            status = _remove_host_local(
+                file_id, target_kind=target_kind, anchor=anchor, reset=reset
+            )
+    except SetforgeError as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    _report_removal(
+        status,
+        verb=verb,
+        file_id=file_id,
+        anchor=anchor,
+        target_kind=target_kind,
+        shared=shared,
+        reset=reset,
+        console=console,
+    )
+    if shared and status is _RemovalStatus.REMOVED:
+        _shared_post_write_hint(cfg_path)
+
+
+@override_app.command("unpin")
+def override_unpin(
+    file_id: str = typer.Argument(..., metavar="FILE", help="Tracked_file id."),
+    anchor: str | None = typer.Argument(
+        None,
+        help="Optional span anchor (markdown heading or structural dotted path).",
+    ),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    shared: bool = typer.Option(
+        False,
+        "--shared",
+        help="Write the shared setforge.yaml (default: host-local local.yaml).",
+    ),
+) -> None:
+    """Remove a PINNED override (file-level or a span); forks are left intact."""
+    _override_remove(
+        SpanKind.PINNED, file_id, anchor, reset=False, shared=shared, config=config
+    )
+
+
+@override_app.command("unfork")
+def override_unfork(
+    file_id: str = typer.Argument(..., metavar="FILE", help="Tracked_file id."),
+    anchor: str | None = typer.Argument(
+        None,
+        help="Optional span anchor (markdown heading or structural dotted path).",
+    ),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    shared: bool = typer.Option(
+        False,
+        "--shared",
+        help="Write the shared setforge.yaml (default: host-local local.yaml).",
+    ),
+) -> None:
+    """Remove a FORKED override (file-level or a span); pins are left intact."""
+    _override_remove(
+        SpanKind.FORKED, file_id, anchor, reset=False, shared=shared, config=config
+    )
+
+
+@override_app.command("reset")
+def override_reset(
+    file_id: str = typer.Argument(..., metavar="FILE", help="Tracked_file id."),
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    shared: bool = typer.Option(
+        False,
+        "--shared",
+        help="Write the shared setforge.yaml (default: host-local local.yaml).",
+    ),
+) -> None:
+    """Clear ALL override state (disposition + every span) for a tracked_file."""
+    _override_remove(None, file_id, None, reset=True, shared=shared, config=config)
 
 
 # ---------------------------------------------------------------------------
