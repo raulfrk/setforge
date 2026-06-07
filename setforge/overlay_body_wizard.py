@@ -50,6 +50,8 @@ __all__ = [
     "OverlayBodyEdit",
     "OverlayEditChoice",
     "detect_overlay_body_edit",
+    "excise_located_body",
+    "require_interactive_or_auto",
     "resolve_auto",
     "write_edited_body_to_local",
 ]
