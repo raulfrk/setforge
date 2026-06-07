@@ -32,11 +32,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from setforge.anchors import Anchor
 from setforge.errors import ConfigError
 
 __all__ = [
+    "OverlaySpanPayload",
     "SpanEntry",
     "SpanKind",
     "SpanSemantics",
@@ -82,10 +84,18 @@ class SpanKind(StrEnum):
     difference is the override; the capture exclusion is shared (mirrors
     the file-level :class:`setforge.config.Disposition` FORKED-vs-PINNED
     split).
+
+    ``overlay`` — a markerless host-local body that NEVER enters tracked
+    content, the span region, or the 3-way merge. The body lives in
+    ``local.yaml`` (the :attr:`SpanEntry.overlay` payload); deploy injects
+    it AFTER the merge and excises it BEFORE the merge, and capture excises
+    the exact body bytes before any tracked write (see
+    :mod:`setforge.overlay_inject`). Markdown-only.
     """
 
     PINNED = "pinned"
     FORKED = "forked"
+    OVERLAY = "overlay"
 
 
 class SpanSemantics(StrEnum):
@@ -102,6 +112,42 @@ class SpanSemantics(StrEnum):
     SHARED = "shared"
 
 
+class OverlaySpanPayload(BaseModel):
+    """The host-local body payload of an OVERLAY span.
+
+    Carries a structured :data:`~setforge.anchors.Anchor` (the splice point
+    the body is injected at, e.g. ``after-heading "Notes"``) and exactly one
+    of ``body`` (inline string) / ``body_file`` (path read at install time).
+    Lives only in ``local.yaml``; the body NEVER enters tracked content
+    (markerless OVERLAY). Both / neither body source is a configuration
+    error surfaced at :class:`pydantic.ValidationError` time.
+
+    The exactly-one-of + non-empty-inline checks mirror
+    :class:`setforge.source.HostLocalSection`; the FS-touching empty
+    ``body_file`` check is deferred to the read site (so schema parsing
+    stays decoupled from live FS state).
+    """
+
+    model_config = _STRICT
+
+    anchor: Anchor
+    body: str | None = None
+    body_file: Path | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_body_source(self) -> "OverlaySpanPayload":
+        """Enforce exactly-one-of ``body`` / ``body_file`` + non-empty inline."""
+        if (self.body is None) == (self.body_file is None):
+            shape = "both" if self.body is not None else "neither"
+            raise ValueError(
+                "OverlaySpanPayload requires exactly one of `body` (inline) "
+                f"or `body_file` (path); got {shape}"
+            )
+        if self.body is not None and not self.body.strip():
+            raise ValueError("OverlaySpanPayload `body` must be non-empty")
+        return self
+
+
 class SpanEntry(BaseModel):
     """One declarative span: an anchor plus its kind + semantics.
 
@@ -115,6 +161,13 @@ class SpanEntry(BaseModel):
     ``semantics`` to :data:`SpanSemantics.HOST_LOCAL` — the common case
     is a host-local pin; both fields are explicit in the schema so the
     forked / shared siblings are representable today.
+
+    ``overlay`` is the markerless host-local body payload, present iff
+    ``kind == overlay`` (the model validator enforces the biconditional).
+    For an OVERLAY span ``anchor`` is the span's stable IDENTITY (the
+    anchor-keyed sidecar key); ``overlay.anchor`` is the structured splice
+    point. The two coincide for an after-heading overlay but the identity
+    string is what keys ``last_deployed_body`` in the sidecar.
     """
 
     model_config = _STRICT
@@ -122,6 +175,7 @@ class SpanEntry(BaseModel):
     anchor: str
     kind: SpanKind = SpanKind.PINNED
     semantics: SpanSemantics = SpanSemantics.HOST_LOCAL
+    overlay: OverlaySpanPayload | None = None
 
     @field_validator("anchor")
     @classmethod
@@ -130,6 +184,20 @@ class SpanEntry(BaseModel):
         if not v.strip():
             raise ValueError("SpanEntry `anchor` must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _overlay_payload_iff_overlay_kind(self) -> "SpanEntry":
+        """Enforce the ``overlay`` payload is present iff ``kind == overlay``."""
+        if self.kind is SpanKind.OVERLAY and self.overlay is None:
+            raise ValueError(
+                "SpanEntry with kind=overlay requires an `overlay` body payload"
+            )
+        if self.kind is not SpanKind.OVERLAY and self.overlay is not None:
+            raise ValueError(
+                f"SpanEntry with kind={self.kind.value} must not carry an "
+                "`overlay` payload (the payload is for kind=overlay only)"
+            )
+        return self
 
 
 def validate_spans_file_type(

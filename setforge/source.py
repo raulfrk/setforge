@@ -36,6 +36,15 @@ from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge import git_ops
+from setforge.anchors import (
+    Anchor,
+    AnchorAfterHeading,
+    AnchorAfterSection,
+    AnchorAtEndOfFile,
+    AnchorAtStartOfFile,
+    AnchorBeforeHeading,
+    AnchorKind,
+)
 from setforge.config import Disposition, MarketplaceSourceKind
 from setforge.errors import (
     ConfigError,
@@ -141,24 +150,6 @@ class PreserveUserKeysOverlay(BaseModel):
     remove: list[str] = []
 
 
-class AnchorKind(StrEnum):
-    """Closed set of anchor-kind discriminator values.
-
-    Five anchor shapes for splicing a :class:`HostLocalSection` into a
-    markdown tracked file at install time. ``after-heading`` /
-    ``before-heading`` match exact heading text (byte-equal — no
-    case-fold, no slug-normalise). ``at-start-of-file`` / ``at-end-of-file``
-    splice at the document boundaries. ``after-section`` references an
-    existing user-section in the SAME tracked file by name.
-    """
-
-    AFTER_HEADING = "after-heading"
-    BEFORE_HEADING = "before-heading"
-    AT_START_OF_FILE = "at-start-of-file"
-    AT_END_OF_FILE = "at-end-of-file"
-    AFTER_SECTION = "after-section"
-
-
 HostLocalSectionName = NewType("HostLocalSectionName", str)
 """Provenance-marked name of a host-local user-section.
 
@@ -173,59 +164,6 @@ not). Mirrors the :data:`setforge.sections.LiveSections` /
 NewType wrapping ``str`` so call sites stay backwards-compatible at
 runtime while the static type carries the provenance constraint.
 """
-
-
-class AnchorAfterHeading(BaseModel):
-    """Anchor matching the line immediately following the heading ``value``."""
-
-    model_config = _STRICT
-
-    kind: Literal[AnchorKind.AFTER_HEADING] = AnchorKind.AFTER_HEADING
-    value: str
-
-
-class AnchorBeforeHeading(BaseModel):
-    """Anchor matching the line immediately preceding the heading ``value``."""
-
-    model_config = _STRICT
-
-    kind: Literal[AnchorKind.BEFORE_HEADING] = AnchorKind.BEFORE_HEADING
-    value: str
-
-
-class AnchorAtStartOfFile(BaseModel):
-    """Anchor matching the first line of the file (line offset 0)."""
-
-    model_config = _STRICT
-
-    kind: Literal[AnchorKind.AT_START_OF_FILE] = AnchorKind.AT_START_OF_FILE
-
-
-class AnchorAtEndOfFile(BaseModel):
-    """Anchor matching the line after the last line of the file."""
-
-    model_config = _STRICT
-
-    kind: Literal[AnchorKind.AT_END_OF_FILE] = AnchorKind.AT_END_OF_FILE
-
-
-class AnchorAfterSection(BaseModel):
-    """Anchor matching the line after the end marker of section ``name``."""
-
-    model_config = _STRICT
-
-    kind: Literal[AnchorKind.AFTER_SECTION] = AnchorKind.AFTER_SECTION
-    name: str
-
-
-Anchor = Annotated[
-    AnchorAfterHeading
-    | AnchorBeforeHeading
-    | AnchorAtStartOfFile
-    | AnchorAtEndOfFile
-    | AnchorAfterSection,
-    Field(discriminator="kind"),
-]
 
 
 class HostLocalSection(BaseModel):
