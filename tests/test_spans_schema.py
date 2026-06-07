@@ -106,3 +106,25 @@ def test_validate_spans_file_type_rejects_non_markdown() -> None:
 def test_validate_spans_file_type_noop_when_empty() -> None:
     # No spans declared: never raises, even on a non-markdown file.
     validate_spans_file_type("settings.json", [], Path("settings.json"))
+
+
+def test_validate_spans_file_type_overlay_identity_exempt_from_heading_shape() -> None:
+    # An OVERLAY span's top-level anchor is the sidecar IDENTITY, not the
+    # splice point (that is overlay.anchor). A non-heading-shaped identity
+    # (e.g. a retired host_local_sections.<name> key) is legal on markdown.
+    validate_spans_file_type(
+        "claude/CLAUDE.md",
+        [
+            SpanEntry.model_validate(
+                {
+                    "anchor": "my-notes",
+                    "kind": "overlay",
+                    "overlay": {
+                        "anchor": {"kind": "after-heading", "value": "Notes"},
+                        "body": "host-local body",
+                    },
+                }
+            )
+        ],
+        Path("claude/CLAUDE.md"),
+    )

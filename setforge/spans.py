@@ -245,8 +245,21 @@ def validate_spans_file_type(
 def _validate_anchors_for_markdown(
     tracked_file_id: str, spans: Sequence[SpanEntry], src: Path
 ) -> None:
-    """Reject any non-heading-shaped anchor on a markdown ``src``."""
+    """Reject any non-heading-shaped anchor on a markdown ``src``.
+
+    OVERLAY spans are EXEMPT from the heading-shape requirement: an
+    OVERLAY span's top-level ``anchor`` is the span's sidecar IDENTITY
+    (an anchor-keyed record key), NOT the splice point — the actual
+    splice point is the structured :attr:`OverlaySpanPayload.anchor`
+    (validated as a discriminated union at parse time). The identity may
+    therefore be any non-empty unique string (e.g. the retired
+    ``host_local_sections.<name>`` key the migration carries over). For
+    PINNED / FORKED spans the ``anchor`` IS the heading-text splice point,
+    so the heading-shape constraint still applies to them.
+    """
     for span in spans:
+        if span.kind is SpanKind.OVERLAY:
+            continue
         if not is_heading_anchor(span.anchor):
             raise ConfigError(
                 f"tracked_file {tracked_file_id!r} (src={src}) is markdown, so "
