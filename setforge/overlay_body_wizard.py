@@ -234,7 +234,9 @@ def write_edited_body_to_local(
     (ruamel round-trip — comments / order / mode preserved).
 
     Raises :class:`KeyError` when the tracked_file id or matching span is
-    absent from ``local.yaml`` (a structural contradiction the caller surfaces).
+    absent from ``local.yaml``, or when the tracked_file / overlay node is a
+    scalar rather than a mapping (a structural contradiction the caller
+    surfaces) — never an unwrapped ``AttributeError`` / ``TypeError``.
     """
     yaml = yaml_rt()
     with local_config_path.open("r", encoding="utf-8") as fh:
@@ -246,7 +248,13 @@ def write_edited_body_to_local(
             f"local.yaml has no tracked_file {edit.tracked_file_id!r} to "
             "write the edited overlay body into"
         )
-    spans = tracked_files[edit.tracked_file_id].get("spans")
+    tracked_file = tracked_files[edit.tracked_file_id]
+    if not isinstance(tracked_file, dict):
+        raise KeyError(
+            f"local.yaml tracked_file {edit.tracked_file_id!r} is not a mapping; "
+            "cannot write the edited overlay body into it"
+        )
+    spans = tracked_file.get("spans")
     target = None
     if isinstance(spans, list):
         for span_node in spans:
@@ -258,8 +266,14 @@ def write_edited_body_to_local(
             f"local.yaml tracked_file {edit.tracked_file_id!r} has no overlay "
             f"span with anchor {edit.anchor!r} to update"
         )
-    target["overlay"]["body"] = edit.live_body
+    overlay = target["overlay"]
+    if not isinstance(overlay, dict):
+        raise KeyError(
+            f"local.yaml tracked_file {edit.tracked_file_id!r} overlay span at "
+            f"{edit.anchor!r} is not a mapping; cannot write its body"
+        )
+    overlay["body"] = edit.live_body
     # The body_file form (if present) is superseded by an inline edit.
-    if "body_file" in target["overlay"]:
-        del target["overlay"]["body_file"]
+    if "body_file" in overlay:
+        del overlay["body_file"]
     atomic_write_yaml(local_config_path, doc)
