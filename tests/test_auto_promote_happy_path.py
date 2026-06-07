@@ -151,6 +151,48 @@ def test_execute_drops_local_yaml_host_local_entry(
         assert hls is None or "work-overrides" not in hls
 
 
+_LOCAL_YAML_MIGRATED = """\
+tracked_files:
+  demo_md:
+    spans:
+    - anchor: work-overrides
+      kind: overlay
+      semantics: host-local
+      overlay:
+        anchor:
+          kind: after-heading
+          value: Workflow
+        body: |
+          WORK OVERRIDES BODY
+"""
+
+
+def test_execute_drops_migrated_overlay_span_entry(
+    promote_scaffold: dict[str, Path],
+) -> None:
+    """Promote on an already-migrated host drops the OVERLAY ``spans`` entry.
+
+    Post-migration ``local.yaml`` carries the host-local body as a
+    ``spans`` OVERLAY entry (identity ``anchor`` = section name), NOT a
+    legacy ``host_local_sections`` block. ``execute_promote_to_shared``
+    must drop that representation; otherwise the promote would crash (no
+    legacy block to drop) and the section would be promoted-but-not-dropped.
+    """
+    promote_scaffold["local_yaml"].write_text(_LOCAL_YAML_MIGRATED, encoding="utf-8")
+    plan = _make_plan(promote_scaffold)
+    execute_promote_to_shared(
+        plan, tracked_file_id="demo_md", snapshot_base=promote_scaffold["snapshot_base"]
+    )
+    yaml = YAML(typ="safe")
+    doc = yaml.load(promote_scaffold["local_yaml"].read_text(encoding="utf-8"))
+    # The overlay span (and its now-empty parent) is gone; no overlay span
+    # named work-overrides survives.
+    if doc is not None and "tracked_files" in doc:
+        demo = doc["tracked_files"].get("demo_md", {})
+        spans = demo.get("spans") if isinstance(demo, dict) else None
+        assert spans is None or all(s.get("anchor") != "work-overrides" for s in spans)
+
+
 def test_rewrite_live_markers_preserves_body_bytes() -> None:
     """rewrite_live_markers_to_shared only changes the keyword on marker lines."""
     src = (

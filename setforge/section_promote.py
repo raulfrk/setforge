@@ -33,7 +33,7 @@ import io
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -328,24 +328,75 @@ def rewrite_live_markers_to_shared(text: str, name: HostLocalSectionName) -> str
 # ---------------------------------------------------------------------------
 
 
+def _drop_legacy_host_local_section(
+    tracked_file_node: MutableMapping[object, object],
+    section_name: HostLocalSectionName,
+) -> bool:
+    """Drop a legacy ``host_local_sections.<name>`` entry; return whether found.
+
+    Prunes the parent ``host_local_sections`` block when the drop empties
+    it. Returns ``False`` (no mutation) when the legacy block or the named
+    entry is absent — the caller falls through to the migrated-span path.
+    """
+    hl_node = tracked_file_node.get("host_local_sections")
+    if not isinstance(hl_node, MutableMapping) or section_name not in hl_node:
+        return False
+    del hl_node[section_name]
+    if len(hl_node) == 0:
+        del tracked_file_node["host_local_sections"]
+    return True
+
+
+def _drop_overlay_span(
+    tracked_file_node: MutableMapping[object, object],
+    section_name: HostLocalSectionName,
+) -> bool:
+    """Drop a migrated OVERLAY ``spans`` entry by identity; return whether found.
+
+    The migration (:mod:`setforge.overlay_migration`) retires each
+    ``host_local_sections.<name>`` into a ``spans`` entry whose top-level
+    ``anchor`` IS that section name with ``kind=overlay``. Promote on an
+    already-migrated host must drop THAT representation. Prunes the
+    ``spans`` sequence when the drop empties it. Returns ``False`` (no
+    mutation) when no matching overlay span exists.
+    """
+    spans_node = tracked_file_node.get("spans")
+    if not isinstance(spans_node, MutableSequence):
+        return False
+    for idx, span in enumerate(spans_node):
+        if (
+            isinstance(span, MutableMapping)
+            and span.get("kind") == "overlay"
+            and span.get("anchor") == section_name
+        ):
+            del spans_node[idx]
+            if len(spans_node) == 0:
+                del tracked_file_node["spans"]
+            return True
+    return False
+
+
 def _drop_host_local_section_entry(
     local_yaml_path: Path,
     *,
     tracked_file_id: str,
     section_name: HostLocalSectionName,
 ) -> None:
-    """Drop ``tracked_files.<id>.host_local_sections.<name>`` from ``local.yaml``.
+    """Drop a host-local section from ``local.yaml`` (legacy block OR overlay span).
 
     Uses ruamel.yaml round-trip mode so the rest of the file
-    (comments, key order, formatting) is preserved. When dropping the
-    last section leaves ``host_local_sections`` empty, the parent key is
-    dropped too; when the parent overlay block becomes empty, the
-    tracked_file entry is dropped. ``tracked_files`` itself stays
-    (other tracked_files in the file are independent).
+    (comments, key order, formatting) is preserved. The section may live
+    in either representation: the legacy ``host_local_sections.<name>``
+    block (pre-migration hosts) or the migrated ``spans`` OVERLAY entry
+    whose identity ``anchor`` is the section name (post-migration hosts,
+    see :mod:`setforge.overlay_migration`). Both are checked; dropping the
+    last child of either container prunes that container, and when the
+    parent overlay block becomes empty the tracked_file entry is dropped.
+    ``tracked_files`` itself stays (other tracked_files are independent).
 
-    Raises :class:`SetforgeError` if the expected entry is missing —
-    the caller's PromotePlan asserts presence; a missing entry means
-    drift since plan capture.
+    Raises :class:`SetforgeError` if neither representation carries the
+    entry — the caller's PromotePlan asserts presence; a missing entry
+    means drift since plan capture.
     """
     yaml = YAML(typ="rt")
     with local_yaml_path.open("r", encoding="utf-8") as fh:
@@ -367,15 +418,15 @@ def _drop_host_local_section_entry(
             f"local.yaml has no tracked_files.{tracked_file_id} block; cannot drop "
             f"host_local_sections.{section_name}"
         )
-    hl_node = tracked_file_node.get("host_local_sections")
-    if not isinstance(hl_node, MutableMapping) or section_name not in hl_node:
+    dropped = _drop_legacy_host_local_section(
+        tracked_file_node, section_name
+    ) or _drop_overlay_span(tracked_file_node, section_name)
+    if not dropped:
         raise SetforgeError(
-            f"local.yaml has no host_local_sections.{section_name} entry under "
+            f"local.yaml has no host_local_sections.{section_name} entry "
+            f"(legacy block or migrated overlay span) under "
             f"tracked_files.{tracked_file_id}; nothing to drop"
         )
-    del hl_node[section_name]
-    if len(hl_node) == 0:
-        del tracked_file_node["host_local_sections"]
     if len(tracked_file_node) == 0:
         del tracked_files_node[tracked_file_id]
     buf = io.StringIO()
