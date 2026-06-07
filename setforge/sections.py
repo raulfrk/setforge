@@ -685,6 +685,50 @@ def strip_host_local_sections(
     return "".join(out_lines)
 
 
+def strip_host_local_markers(text: str, *, allow_legacy: bool = True) -> str:
+    """Return ``text`` with EVERY host-local marker pair (markers + body) removed.
+
+    Unlike :func:`strip_host_local_sections` — which drops only the NAMED
+    pairs declared in local.yaml on the capture path — this drops every
+    host-local user-section pair regardless of name: the deploy-side
+    de-marker for the markerless host-local migration. Once a host-local
+    section's body is carried as a markerless overlay (injected after the
+    merge), the tracked-authored placeholder pair must not reach the
+    deployed file. Shared marker pairs always pass through untouched.
+
+    The whole file is parsed via :func:`_walk_markers` (which validates
+    pairing and raises :class:`MarkerError` on any malformed / unclosed /
+    nested / mismatched marker), so the function returns the complete
+    stripped string or raises — never a partial result. The kept lines are
+    exact-bytes: no normalization, no trailing-newline policy.
+
+    Idempotent: once the host-local pairs are gone, a second pass finds none
+    and returns its input unchanged.
+    """
+    out_lines: list[str] = []
+    drop = False
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
+        match event:
+            case _StartMarker(semantics=SectionSemantics.HOST_LOCAL):
+                drop = True
+                continue
+            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL):
+                drop = False
+                continue
+            case _BodyLine(line=line):
+                if not drop:
+                    out_lines.append(line)
+            case (
+                _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
+    return "".join(out_lines)
+
+
 def strip_shared_markers(text: str, *, allow_legacy: bool = True) -> str:
     """Return ``text`` with SHARED user-section marker LINES removed, bodies kept.
 

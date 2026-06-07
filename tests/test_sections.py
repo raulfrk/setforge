@@ -1162,6 +1162,108 @@ def test_strip_shared_markers_duplicate_names() -> None:
     assert out == "first\nmid\nsecond\n"
 
 
+def test_strip_host_local_markers_drops_pair_and_body() -> None:
+    """A host-local pair (markers + body) vanishes; outside text survives."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "before\n"
+        "<!-- setforge:user-section start host-local HL -->\n"
+        "host body\n"
+        "<!-- setforge:user-section end host-local HL -->\n"
+        "after\n"
+    )
+    assert strip_host_local_markers(text) == "before\nafter\n"
+
+
+def test_strip_host_local_markers_keeps_shared_intact() -> None:
+    """SHARED pairs pass through; only host-local pairs are removed."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "<!-- setforge:user-section start host-local HL -->\n"
+        "host body\n"
+        "<!-- setforge:user-section end host-local HL -->\n"
+        "<!-- setforge:user-section start shared SH -->\n"
+        "shared body\n"
+        "<!-- setforge:user-section end shared SH -->\n"
+    )
+    assert strip_host_local_markers(text) == (
+        "<!-- setforge:user-section start shared SH -->\n"
+        "shared body\n"
+        "<!-- setforge:user-section end shared SH -->\n"
+    )
+
+
+def test_strip_host_local_markers_removes_every_pair() -> None:
+    """Every host-local pair is removed regardless of name."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "<!-- setforge:user-section start host-local A -->\n"
+        "a\n"
+        "<!-- setforge:user-section end host-local A -->\n"
+        "mid\n"
+        "<!-- setforge:user-section start host-local B -->\n"
+        "b\n"
+        "<!-- setforge:user-section end host-local B -->\n"
+    )
+    assert strip_host_local_markers(text) == "mid\n"
+
+
+def test_strip_host_local_markers_empty_region_removed() -> None:
+    """An empty host-local placeholder (markers around a blank body) is gone."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "head\n"
+        "<!-- setforge:user-section start host-local EMPTY -->\n"
+        "\n"
+        "<!-- setforge:user-section end host-local EMPTY -->\n"
+        "tail\n"
+    )
+    assert strip_host_local_markers(text) == "head\ntail\n"
+
+
+def test_strip_host_local_markers_idempotent() -> None:
+    """A second pass over already-stripped text is a no-op."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "x\n"
+        "<!-- setforge:user-section start host-local HL -->\n"
+        "y\n"
+        "<!-- setforge:user-section end host-local HL -->\n"
+    )
+    once = strip_host_local_markers(text)
+    assert strip_host_local_markers(once) == once
+
+
+def test_strip_host_local_markers_crlf_outside_preserved() -> None:
+    """CRLF endings on kept outside lines survive byte-for-byte."""
+    from setforge.sections import strip_host_local_markers
+
+    text = (
+        "before\r\n"
+        "<!-- setforge:user-section start host-local HL -->\r\n"
+        "body\r\n"
+        "<!-- setforge:user-section end host-local HL -->\r\n"
+        "after\r\n"
+    )
+    assert strip_host_local_markers(text) == "before\r\nafter\r\n"
+
+
+def test_strip_host_local_markers_malformed_raises() -> None:
+    """An unclosed host-local start marker raises rather than partial-stripping."""
+    import pytest
+
+    from setforge.sections import MarkerError, strip_host_local_markers
+
+    text = "<!-- setforge:user-section start host-local HL -->\nbody\n"
+    with pytest.raises(MarkerError):
+        strip_host_local_markers(text)
+
+
 @pytest.mark.parametrize("fixture", _STRIP_FIXTURES)
 def test_strip_shared_markers_idempotent(fixture: str) -> None:
     """Data-loss invariant: strip(strip(x)) == strip(x) over every fixture."""
