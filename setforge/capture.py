@@ -38,6 +38,7 @@ from setforge import (
     base_store,
     disposition_merge,
     jsonc,
+    overlay_deploy,
     sections,
     spans_overlay,
     spans_store,
@@ -48,7 +49,7 @@ from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, Disposition, SectionMode, resolve_profile
 from setforge.errors import CaptureRequiresInteractive
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import SpanEntry
+from setforge.spans import SpanEntry, SpanKind
 
 
 class CaptureAction(StrEnum):
@@ -405,9 +406,22 @@ def _capture_disposition_file(
             )
         else:
             span_states = spans_store.get_states(profile, sub_name)
-            capture_text = spans_overlay.exclude_spans_for_capture(
-                live_text, tracked_text, spans, span_states
-            )
+            # OVERLAY (markerless host-local body) spans OWN their excise:
+            # strip the body by its exact recorded bytes BEFORE any tracked
+            # write, never via the leaky exclude_spans_for_capture
+            # tracked_loc-is-None pass-through. A body that was hand-edited
+            # (no exact needle hit) routes to the overlay-body wizard
+            # upstream; an ambiguous (>1) occurrence REFUSES the whole file.
+            md_overlay = overlay_deploy.overlay_spans(spans)
+            if md_overlay:
+                capture_text, _ = overlay_deploy.excise_overlay_bodies(
+                    capture_text, md_overlay, span_states
+                )
+            pinned_forked = [s for s in spans if s.kind is not SpanKind.OVERLAY]
+            if pinned_forked:
+                capture_text = spans_overlay.exclude_spans_for_capture(
+                    capture_text, tracked_text, pinned_forked, span_states
+                )
     result = _write_if_changed(src, capture_text)
     # Re-baseline AFTER the tracked write succeeded: write tracked first,
     # then base, so a base-write failure leaves base lagging (safe) rather

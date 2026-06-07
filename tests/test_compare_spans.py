@@ -23,7 +23,7 @@ Shared body original.
 """
 
 
-def _tracked_file(spans: list[dict[str, str]]) -> TrackedFile:
+def _tracked_file(spans: list[dict[str, object]]) -> TrackedFile:
     return TrackedFile.model_validate(
         {
             "src": "doc.md",
@@ -42,6 +42,34 @@ def test_span_only_drift_true_when_drift_inside_span(tmp_path: Path) -> None:
         _DOC.replace("Pinned body original.", "Pinned body LIVE."), encoding="utf-8"
     )
     tf = _tracked_file([{"anchor": "## Pinned", "kind": "pinned"}])
+    assert _span_only_drift(src, dst, tf) is True
+
+
+def test_span_only_drift_true_for_overlay_body(tmp_path: Path) -> None:
+    # A markerless OVERLAY body present in live but absent from tracked is
+    # expected span-confined drift, not spurious DRIFTED.
+    from setforge.overlay_inject import canonical_body, inject_body_at_anchor
+    from setforge.source import AnchorAfterHeading
+
+    src = tmp_path / "doc.md"
+    src.write_text(_DOC, encoding="utf-8")
+    dst = tmp_path / "live.md"
+    live = inject_body_at_anchor(
+        _DOC, AnchorAfterHeading(value="Shared"), canonical_body("HOST LOCAL ONLY")
+    )
+    dst.write_text(live, encoding="utf-8")
+    tf = _tracked_file(
+        [
+            {
+                "anchor": "## Shared",
+                "kind": "overlay",
+                "overlay": {
+                    "anchor": {"kind": "after-heading", "value": "Shared"},
+                    "body": "HOST LOCAL ONLY",
+                },
+            }
+        ]
+    )
     assert _span_only_drift(src, dst, tf) is True
 
 

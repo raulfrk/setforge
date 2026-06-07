@@ -779,7 +779,9 @@ def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
     False when the file declares no spans, is neither markdown nor structural,
     or has drift outside a span.
     """
-    from setforge import disposition_merge
+    from setforge import disposition_merge, overlay_deploy
+    from setforge.overlay_inject import OverlayAmbiguousError
+    from setforge.spans import SpanKind
 
     if not tracked_file.spans:
         return False
@@ -793,8 +795,26 @@ def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
             live_text, tracked_text, tracked_file.spans, jsonc.is_jsonc_file(src)
         )
     elif src.suffix.lower() in {".md", ".markdown"}:
+        # Excise the markerless OVERLAY bodies first (by their exact recorded
+        # bytes) so a host-local body present in live but absent from tracked
+        # is treated as expected span-confined drift, not spurious DRIFTED.
+        # The canonical body is the needle; no per-host state is consulted
+        # here (compare is offline / state-free), so a body that was
+        # hand-edited away from canonical falls through to non-span drift.
+        md_overlay = overlay_deploy.overlay_spans(tracked_file.spans)
+        body_free_live = live_text
+        if md_overlay:
+            try:
+                body_free_live, _ = overlay_deploy.excise_overlay_bodies(
+                    live_text, md_overlay, {}
+                )
+            except OverlayAmbiguousError:
+                return False
+        pinned_forked = [
+            s for s in tracked_file.spans if s.kind is not SpanKind.OVERLAY
+        ]
         excluded = spans_overlay.exclude_spans_for_capture(
-            live_text, tracked_text, tracked_file.spans, {}
+            body_free_live, tracked_text, pinned_forked, {}
         )
     else:
         return False

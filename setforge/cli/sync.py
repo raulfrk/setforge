@@ -61,7 +61,12 @@ from setforge.cli._install_helpers import (
     _load_validated_host_local_sections,
 )
 from setforge.compare import resolve_dst, resolve_src
-from setforge.config import Config, load_config, resolve_profile
+from setforge.config import (
+    Config,
+    apply_host_local_tracked_file_overrides,
+    load_config,
+    resolve_profile,
+)
 from setforge.errors import (
     CaptureRequiresInteractive,
     ConfigError,
@@ -144,6 +149,11 @@ def capture(
     auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
+    # Fold the local.yaml host-local overlay (mode/dst/spans/...) into the
+    # tracked_files so capture sees the host-local OVERLAY spans on
+    # ``tracked_file.spans`` and can excise their bodies before any tracked
+    # write — without this fold the overlay body leaks into the shared repo.
+    apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
     results = _run_capture(
         cfg, profile, repo_root, config, auto_enum, command="capture"
@@ -247,6 +257,10 @@ def sync(
     auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
+    # Fold the local.yaml host-local overlay (mode/dst/spans/...) so capture
+    # sees the host-local OVERLAY spans and excises their bodies before any
+    # tracked write (leak gate — see the capture command above).
+    apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
     ctx = ProfileContext(
