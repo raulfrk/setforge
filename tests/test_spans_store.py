@@ -57,6 +57,56 @@ def test_set_states_merges_untouched() -> None:
     assert set(loaded) == {"## A", "## B"}
 
 
+def test_last_deployed_body_round_trips() -> None:
+    st = SpanState(
+        anchor="## Tweaks",
+        fingerprint="b" * 64,
+        prefix=[],
+        suffix=[],
+        position_hint_start_line=3,
+        position_hint_n_lines=2,
+        heading_level=2,
+        last_deployed_body="HOST LOCAL\n",
+    )
+    spans_store.set_states(_PROFILE, _FILE_ID, {st.anchor: st})
+    loaded = spans_store.get_states(_PROFILE, _FILE_ID)
+    assert loaded["## Tweaks"].last_deployed_body == "HOST LOCAL\n"
+
+
+def test_last_deployed_body_omitted_when_absent() -> None:
+    # A pinned/forked record carries no body and must not gain the key.
+    st = _state()
+    spans_store.set_states(_PROFILE, _FILE_ID, {st.anchor: st})
+    raw = json.loads(
+        spans_store.manifest_path(_PROFILE, _FILE_ID).read_text(encoding="utf-8")
+    )
+    assert "last_deployed_body" not in raw["## Foo"]
+
+
+def test_legacy_manifest_without_body_decodes() -> None:
+    # A pre-OVERLAY manifest (no last_deployed_body key) reads cleanly.
+    path = spans_store.manifest_path(_PROFILE, _FILE_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "## Foo": {
+                    "anchor": "## Foo",
+                    "fingerprint": "c" * 64,
+                    "prefix": [],
+                    "suffix": [],
+                    "position_hint_start_line": 0,
+                    "position_hint_n_lines": 1,
+                    "heading_level": 2,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = spans_store.get_states(_PROFILE, _FILE_ID)
+    assert loaded["## Foo"].last_deployed_body is None
+
+
 def test_prune_drops_unlisted() -> None:
     a = _state("## A")
     b = _state("## B")

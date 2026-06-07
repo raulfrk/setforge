@@ -71,6 +71,13 @@ class SpanState:
     ``position_hint_n_lines`` are the advisory last-known offsets (a
     search-start hint only). ``heading_level`` is the markdown ATX level
     of the span's anchor heading (1-6).
+
+    ``last_deployed_body`` is the exact canonical body bytes an OVERLAY
+    span last injected into the live file (``None`` for pinned / forked
+    spans, which carry no body). It is the deploy / capture excise needle —
+    the body's identity is these recorded bytes, never a re-derived
+    anchor / offset. Anchor-keyed like every field on this record (a
+    name-keyed body would contradict the manifest's anchor-key invariant).
     """
 
     anchor: str
@@ -80,10 +87,11 @@ class SpanState:
     position_hint_start_line: int
     position_hint_n_lines: int
     heading_level: int
+    last_deployed_body: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-serializable record for this state."""
-        return {
+        record: dict[str, object] = {
             "anchor": self.anchor,
             "fingerprint": self.fingerprint,
             "prefix": list(self.prefix),
@@ -92,6 +100,11 @@ class SpanState:
             "position_hint_n_lines": self.position_hint_n_lines,
             "heading_level": self.heading_level,
         }
+        # Omit when absent so pinned/forked manifests stay byte-identical to
+        # their pre-OVERLAY shape (no spurious key churn on re-serialize).
+        if self.last_deployed_body is not None:
+            record["last_deployed_body"] = self.last_deployed_body
+        return record
 
 
 type _Manifest = dict[str, SpanState]
@@ -144,6 +157,8 @@ def _decode_state(anchor: str, record: object, profile: str, file_id: str) -> Sp
         suffix = record["suffix"]
         if not (isinstance(prefix, list) and isinstance(suffix, list)):
             raise TypeError("prefix/suffix must be lists")
+        raw_body = record.get("last_deployed_body")
+        last_deployed_body = None if raw_body is None else str(raw_body)
         return SpanState(
             anchor=str(record["anchor"]),
             fingerprint=str(record["fingerprint"]),
@@ -152,6 +167,7 @@ def _decode_state(anchor: str, record: object, profile: str, file_id: str) -> Sp
             position_hint_start_line=int(record["position_hint_start_line"]),
             position_hint_n_lines=int(record["position_hint_n_lines"]),
             heading_level=int(record["heading_level"]),
+            last_deployed_body=last_deployed_body,
         )
     except (KeyError, TypeError, ValueError) as err:
         raise BaseStoreError(
