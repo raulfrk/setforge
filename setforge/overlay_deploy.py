@@ -187,11 +187,15 @@ def inject_overlay_bodies(
         assert span.overlay is not None
         text = inject_body_at_anchor(text, span.overlay.anchor, bodies[span.anchor])
 
-    # Recompute each span's state from the FINAL injected text.
+    # Recompute each span's state from the FINAL injected text. Locate each
+    # body AT/AFTER its resolved anchor line on the final text so a body that
+    # also appears as shared content ABOVE the anchor does not mislocate the
+    # region (and its prefix/suffix hints).
     new_states: dict[str, SpanState] = {}
     for span in ov:
         body = bodies[span.anchor]
-        start, end = _locate_injected_body(text, body)
+        anchor_line = _resolve_anchor_line(text, span)
+        start, end = _locate_injected_body(text, body, anchor_line)
         new_states[span.anchor] = _state_from_injection(
             span.anchor, text, start, end, body
         )
@@ -206,13 +210,20 @@ def _resolve_anchor_line(text: str, span: SpanEntry) -> int:
     return _resolve_anchor_lf(_normalise_eol(text), span.overlay.anchor)
 
 
-def _locate_injected_body(text: str, body: str) -> tuple[int, int]:
-    """Return the ``[start_line, end_line)`` of the unique ``body`` in ``text``.
+def _locate_injected_body(text: str, body: str, anchor_line: int) -> tuple[int, int]:
+    """Return the ``[start_line, end_line)`` of ``body`` injected at ``anchor_line``.
 
-    The body was just spliced in by :func:`inject_body_at_anchor`, so it is
-    present; its char offset maps to the line range the sidecar records.
+    The body was just spliced in by :func:`inject_body_at_anchor` immediately
+    after ``anchor_line``, so search for it AT/AFTER that line's char offset
+    rather than from the start of ``text``. A plain ``text.index(body)`` would
+    record the WRONG region's prefix/suffix hints when the same body text also
+    appears as shared content above the anchor; anchoring the search to the
+    injection point pins the correct occurrence. The body is present (just
+    spliced), so the search succeeds.
     """
-    idx = text.index(body)
+    lines = text.splitlines(keepends=True)
+    search_from = len("".join(lines[:anchor_line]))
+    idx = text.index(body, search_from)
     start_line = text.count("\n", 0, idx)
     n_lines = body.count("\n")
     return start_line, start_line + n_lines
