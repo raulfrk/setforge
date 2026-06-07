@@ -36,6 +36,7 @@ from setforge.errors import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
     CaptureRequiresInteractive,
+    InvalidLocalConfigShape,
 )
 from setforge.markdown_spans import bound_span
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
@@ -233,10 +234,12 @@ def write_edited_body_to_local(
     the file via :func:`~setforge.migrations._yaml_ops.atomic_write_yaml`
     (ruamel round-trip — comments / order / mode preserved).
 
-    Raises :class:`KeyError` when the tracked_file id or matching span is
-    absent from ``local.yaml``, or when the tracked_file / overlay node is a
-    scalar rather than a mapping (a structural contradiction the caller
-    surfaces) — never an unwrapped ``AttributeError`` / ``TypeError``.
+    Raises :class:`~setforge.errors.InvalidLocalConfigShape` when the
+    tracked_file id or matching span is absent from ``local.yaml``, or when
+    the tracked_file / overlay node is a scalar rather than a mapping (a
+    hand-edited-config shape failure the global CLI handler surfaces as a
+    clean ``error: ...``) — never an unwrapped ``KeyError`` /
+    ``AttributeError`` / ``TypeError``.
     """
     yaml = yaml_rt()
     with local_config_path.open("r", encoding="utf-8") as fh:
@@ -244,15 +247,15 @@ def write_edited_body_to_local(
 
     tracked_files = doc.get("tracked_files") if isinstance(doc, dict) else None
     if not isinstance(tracked_files, dict) or edit.tracked_file_id not in tracked_files:
-        raise KeyError(
-            f"local.yaml has no tracked_file {edit.tracked_file_id!r} to "
-            "write the edited overlay body into"
+        raise InvalidLocalConfigShape(
+            f"{local_config_path} has no tracked_file {edit.tracked_file_id!r} "
+            "to write the edited overlay body into"
         )
     tracked_file = tracked_files[edit.tracked_file_id]
     if not isinstance(tracked_file, dict):
-        raise KeyError(
-            f"local.yaml tracked_file {edit.tracked_file_id!r} is not a mapping; "
-            "cannot write the edited overlay body into it"
+        raise InvalidLocalConfigShape(
+            f"{local_config_path}: tracked_file {edit.tracked_file_id!r} is not a "
+            "mapping; cannot write the edited overlay body into it"
         )
     spans = tracked_file.get("spans")
     target = None
@@ -262,15 +265,15 @@ def write_edited_body_to_local(
                 target = span_node
                 break
     if target is None or "overlay" not in target:
-        raise KeyError(
-            f"local.yaml tracked_file {edit.tracked_file_id!r} has no overlay "
-            f"span with anchor {edit.anchor!r} to update"
+        raise InvalidLocalConfigShape(
+            f"{local_config_path}: tracked_file {edit.tracked_file_id!r} has no "
+            f"overlay span with anchor {edit.anchor!r} to update"
         )
     overlay = target["overlay"]
     if not isinstance(overlay, dict):
-        raise KeyError(
-            f"local.yaml tracked_file {edit.tracked_file_id!r} overlay span at "
-            f"{edit.anchor!r} is not a mapping; cannot write its body"
+        raise InvalidLocalConfigShape(
+            f"{local_config_path}: tracked_file {edit.tracked_file_id!r} overlay "
+            f"span at {edit.anchor!r} is not a mapping; cannot write its body"
         )
     overlay["body"] = edit.live_body
     # The body_file form (if present) is superseded by an inline edit.

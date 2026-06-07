@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from setforge.errors import InvalidLocalConfigShape
 from setforge.overlay_body_wizard import (
     OverlayBodyEdit,
     OverlayEditChoice,
@@ -111,5 +112,5 @@ def test_write_edited_body_missing_span_raises(tmp_path: Path) -> None:
         canonical_body="x\n",
         live_body="y\n",
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(InvalidLocalConfigShape):
         write_edited_body_to_local(edit, local_config_path=local)

@@ -296,6 +296,22 @@ class InvalidTransitionRecord(SetforgeError):
     unpack mid-revert."""
 
 
+class InvalidLocalConfigShape(SetforgeError):
+    """Raised when hand-edited ``local.yaml`` has a wrong shape at an
+    overlay-body writeback target.
+
+    Surfaced by
+    :func:`setforge.overlay_body_wizard.write_edited_body_to_local` when the
+    keep-path tries to locate ``tracked_files.<id>.spans[*].overlay.body`` and
+    finds the ``tracked_file`` entry, the matching span, or its ``overlay``
+    node missing or a scalar rather than a mapping. ``local.yaml`` is
+    hand-editable, so this is a trust-boundary shape failure — same precedent
+    as :class:`InvalidTransitionRecord` for hand-edited JSON. Subclass of
+    :class:`SetforgeError` so the global handler renders it as
+    ``error: <message>`` naming the file + the missing/scalar key instead of
+    an opaque ``KeyError`` traceback."""
+
+
 class MarketplaceCacheMiss(SetforgeError):
     """Raised when local-clone install mode cannot resolve a marketplace
     to a local cache directory.
