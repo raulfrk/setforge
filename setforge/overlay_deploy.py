@@ -99,6 +99,11 @@ def excise_overlay_bodies(
     excise and ``found_any`` reflects whether ANY overlay body was removed.
 
     The result is the body-free text the 3-way merge consumes.
+
+    Transitively raises (via :func:`canonical_overlay_body` when a span's
+    body is a ``body_file``): :class:`ValueError` when the ``body_file`` is
+    empty, and :class:`OSError` / :class:`FileNotFoundError` when it cannot
+    be read.
     """
     text = live_text
     found_any = False
@@ -164,7 +169,10 @@ def inject_overlay_bodies(
 
     Raises the anchor resolution errors of
     :func:`~setforge.overlay_inject.inject_body_at_anchor` (anchor missing /
-    ambiguous) BEFORE returning.
+    ambiguous) BEFORE returning. Also transitively raises (via
+    :func:`canonical_overlay_body` when a span's body is a ``body_file``):
+    :class:`ValueError` when the ``body_file`` is empty, and
+    :class:`OSError` / :class:`FileNotFoundError` when it cannot be read.
     """
     del stored_states  # consulted by the caller for excise, not for inject
     ov = overlay_spans(spans)
