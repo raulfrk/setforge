@@ -49,6 +49,8 @@ from setforge.cli._install_helpers import (
     _run_predeploy_gates,
     _validate_span_file_types,
     _write_install_transition,
+    migrate_local_overlay_spans_on_install,
+    seed_overlay_migration_snapshot,
 )
 from setforge.cli._plugin_helpers import (
     _emit_reconcile_summary,
@@ -289,6 +291,14 @@ def install(
     with profile_lock(profile):
         if not no_transition:
             transitions.ensure_state_dir_writable()
+        # Transparent, idempotent local.yaml rewrite: retire any legacy
+        # host_local_sections block into unified `spans` OVERLAY entries so
+        # the on-disk representation matches the new model. Runs under the
+        # lock (after the state-dir probe) and BEFORE the deploy snapshot so
+        # the pre-migration text can seed the transition's file_pre for a
+        # byte-exact revert. This install still deploys from the already-loaded
+        # legacy host_local_sections_map (representation changed, not behavior).
+        overlay_migration = migrate_local_overlay_spans_on_install(profile)
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
 
@@ -351,6 +361,11 @@ def install(
         dst_paths.extend(_revert_lockstep_paths(ctx))
 
         file_pre = transitions.snapshot_paths(dst_paths)
+        # When the overlay-span rewrite moved a legacy block, record local.yaml
+        # in the transition (append to dst_paths so file_post captures its
+        # post-migration content; seed file_pre with the genuine pre-migration
+        # text) so revert restores it byte-exact in LOCKSTEP with live.
+        seed_overlay_migration_snapshot(overlay_migration, dst_paths, file_pre)
 
         # Interactive disposition conflict wizard: built ONLY when this install
         # is in interactive-reconcile mode AND stdout is a tty (the same gate

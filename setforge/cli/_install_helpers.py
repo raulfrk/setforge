@@ -93,6 +93,7 @@ from setforge.errors import (
     SharedSpanReconcileRequiresInteractive,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
+from setforge.overlay_migration import migrate_local_yaml_overlay_spans
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics, strip_shared_markers
@@ -185,6 +186,105 @@ def _revert_lockstep_paths(ctx: ProfileContext) -> list[Path]:
         if tracked_file.spans:
             paths.append(spans_store.manifest_path(ctx.profile, sub_name))
     return paths
+
+
+@dataclass(slots=True, frozen=True)
+class OverlaySpanMigration:
+    """Outcome of the transparent ``local.yaml`` overlay-span rewrite on install.
+
+    ``path`` is the ``local.yaml`` that was (or would be) rewritten;
+    ``pre_text`` is its content BEFORE the rewrite (``None`` when the file did
+    not exist), captured so the install transition can record the genuine
+    pre-migration ``file_pre`` for byte-exact ``revert``. ``migrated`` is
+    ``True`` only when at least one ``host_local_sections`` block was actually
+    moved — the one-time warning fires on that signal, and the steady-state /
+    already-migrated read stays silent.
+    """
+
+    path: Path
+    pre_text: str | None
+    migrated: bool
+
+
+def migrate_local_overlay_spans_on_install(
+    profile: str, *, local_config_path: Path | None = None
+) -> OverlaySpanMigration:
+    """Transparently retire ``local.yaml host_local_sections`` → OVERLAY spans.
+
+    Auto-on-install, idempotent rewrite mirroring the disposition-base
+    seed-on-install pattern (:func:`_read_or_migrate_disposition_base`): the
+    first install after a host adopts the OVERLAY model rewrites its
+    ``local.yaml`` in place (legacy ``host_local_sections`` blocks → unified
+    ``spans`` OVERLAY entries) via
+    :func:`setforge.overlay_migration.migrate_local_yaml_overlay_spans`
+    (ruamel round-trip — comments / order / quoting / file mode preserved).
+
+    The PRE-migration text is captured BEFORE the rewrite so the caller can seed
+    the install transition's ``file_pre`` with it (via
+    :func:`seed_overlay_migration_snapshot`); the rewritten file is then
+    snapshotted as ``file_post``, so ``revert`` restores the exact
+    pre-migration ``local.yaml`` (bytes; mode is preserved by the round-trip
+    write and untouched by ``patch -R``). The one-time, actionable warning
+    fires here only when a block was actually moved.
+
+    Idempotent: a steady-state / already-migrated / absent ``local.yaml`` is
+    left untouched and reports ``migrated=False`` (no warning, no transition
+    delta for the file).
+
+    ``local_config_path`` defaults to :data:`setforge.source.LOCAL_CONFIG_PATH`
+    resolved at CALL time (via the module, not a bound import) so the test
+    suite's ``conftest`` redirect of that constant — and any future
+    host-config relocation — flows through here instead of pinning the
+    dev-host real ``~/.config/setforge/local.yaml`` at import.
+    """
+    from setforge import source
+
+    path = (
+        local_config_path if local_config_path is not None else source.LOCAL_CONFIG_PATH
+    )
+    pre_text: str | None
+    try:
+        pre_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pre_text = None
+    result = migrate_local_yaml_overlay_spans(path)
+    if result.migrated:
+        # WHAT changed + HOW to undo it (matches `_warn_auto_migration`).
+        typer.secho(
+            f"{path}: retired legacy `host_local_sections` into "
+            "unified `spans` overlay entries (comments and file mode "
+            "preserved). To restore the pre-migration local.yaml, run "
+            f"`setforge revert --profile={profile}`.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+    return OverlaySpanMigration(
+        path=path,
+        pre_text=pre_text,
+        migrated=result.migrated,
+    )
+
+
+def seed_overlay_migration_snapshot(
+    migration: OverlaySpanMigration,
+    dst_paths: list[Path],
+    file_pre: dict[Path, str | None],
+) -> None:
+    """Record the overlay-span rewrite in the install transition (revert lockstep).
+
+    No-op when ``migration.migrated`` is ``False``. Otherwise appends the
+    rewritten ``local.yaml`` to ``dst_paths`` (so ``file_post`` captures its
+    post-migration content) and overwrites ``file_pre`` for that path with the
+    genuine PRE-migration text, so the recorded patch reverses the rewrite and
+    ``revert`` restores the exact pre-migration ``local.yaml`` byte-for-byte.
+
+    Mutates ``dst_paths`` and ``file_pre`` in place.
+    """
+    if not migration.migrated:
+        return
+    if migration.path not in dst_paths:
+        dst_paths.append(migration.path)
+    file_pre[migration.path] = migration.pre_text
 
 
 def _validate_span_file_types(
