@@ -798,6 +798,15 @@ def write_transition(
     legacy call shape stays backward-compatible.
 
     Returns the absolute path of the committed directory.
+
+    Raises:
+        OSError: A data fsync of a staged payload file or of ``meta.json``
+            (via :func:`_write_text_durable`) failed and propagates by
+            design — swallowing it would falsely report the transition
+            durable when its bytes never reached disk.
+        TypeError: ``plugin_delta`` carries a ``marketplaces_removed``
+            source dict with a non-str value (caller bypassed
+            ``MarketplaceSource.model_dump(mode="json")``).
     """
     root = transitions_root()
     dirname = transition_dirname(meta.timestamp, meta.command.value, meta.profile)

@@ -100,6 +100,12 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
     ``data`` is the root of a ruamel round-trip document
     (``CommentedMap`` / ``CommentedSeq`` / scalars). Any object the
     round-trip ``YAML.dump`` accepts is accepted here.
+
+    Raises:
+        OSError: The tmp-file data fsync (before ``os.replace``) failed
+            and propagates by design — swallowing it would report the
+            write durable when its bytes never reached disk. The
+            best-effort parent-dir fsync, by contrast, swallows ``OSError``.
     """
     yaml = yaml_rt()
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
