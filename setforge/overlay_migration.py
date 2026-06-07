@@ -18,7 +18,7 @@ the new model. The parse-time OVERLAY path stays the runtime contract; the
 existing ``host_local_sections`` loader remains a back-compat shim for hosts that
 have not yet been rewritten.
 
-Design points (see the bug list in the 10.2 spec):
+Design points (see the bug list in the overlay design spec):
 
 - **ruamel round-trip.** The rewrite goes through
   :func:`setforge.migrations._yaml_ops.atomic_write_yaml`, which preserves
