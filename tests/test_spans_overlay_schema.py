@@ -116,5 +116,5 @@ def test_validate_overlay_rejects_structural_file() -> None:
             },
         }
     )
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="OVERLAY"):
         validate_spans_file_type("settings.json", [overlay_span], Path("settings.json"))

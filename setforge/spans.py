@@ -259,8 +259,16 @@ def _validate_anchors_for_markdown(
 def _validate_anchors_for_structural(
     tracked_file_id: str, spans: Sequence[SpanEntry], src: Path
 ) -> None:
-    """Reject any heading-shaped anchor on a structural ``src``."""
+    """Reject any heading-shaped anchor + any OVERLAY span on a structural ``src``."""
     for span in spans:
+        if span.kind is SpanKind.OVERLAY:
+            raise ConfigError(
+                f"tracked_file {tracked_file_id!r} (src={src}) is structural "
+                f"(yaml/json/jsonc), but span anchor {span.anchor!r} declares "
+                "kind=overlay. Markerless OVERLAY (host-local body) spans are "
+                "markdown-only; structural files have no heading to splice a "
+                "naked body below."
+            )
         if is_heading_anchor(span.anchor):
             raise ConfigError(
                 f"tracked_file {tracked_file_id!r} (src={src}) is structural "
