@@ -248,6 +248,50 @@ def test_first_install_converts_live_host_local_marker_to_markerless(
     assert "my per-host notes" not in src.read_text(encoding="utf-8")
 
 
+def test_revert_restores_host_local_markers_and_local_yaml(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revert undoes the conversion: live markers + pre-migration local.yaml restored.
+
+    The transition snapshots the live file markered (pre-deploy) and seeds
+    local.yaml's pre-migration text, so `setforge revert` restores BOTH the
+    host-local markers in the live file and the pre-capture local.yaml
+    byte-for-byte (mode preserved).
+    """
+    src = repo / "tracked" / "doc.md"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(_TRACKED_HL, encoding="utf-8")
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    local.write_text("# host config\ntracked_files:\n  doc: {}\n", encoding="utf-8")
+    local.chmod(0o640)
+    live = _live_doc_path()
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(_LIVE_HL, encoding="utf-8")
+    pre_live = live.read_bytes()
+    pre_local = local.read_bytes()
+    pre_local_mode = stat.S_IMODE(local.stat().st_mode)
+
+    import setforge.source as _source
+
+    monkeypatch.setattr(
+        _source.load_local_host_local_sections, "__defaults__", (local,)
+    )
+
+    install = _install(config)  # WITH transition
+    assert install.exit_code == 0, install.output
+    assert "setforge:user-section" not in live.read_text(encoding="utf-8")  # converted
+    assert local.read_bytes() != pre_local  # overlay captured
+
+    revert = CliRunner().invoke(
+        app, ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+    assert live.read_bytes() == pre_live  # host-local markers restored
+    assert local.read_bytes() == pre_local  # pre-migration local.yaml restored
+    assert stat.S_IMODE(local.stat().st_mode) == pre_local_mode
+
+
 def test_no_disposition_migrated_overlay_survives_install_sync_cycle(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
