@@ -52,6 +52,7 @@ from setforge.errors import (
     NoSourceConfigured,
     SourceNotCloned,
 )
+from setforge.migrations import _local_yaml
 from setforge.spans import SpanEntry, SpanKind
 
 _STRICT = ConfigDict(extra="forbid")
@@ -550,6 +551,15 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     or carries no ``source:`` key. Raises :class:`ConfigError` on YAML
     parse failure or non-mapping top level. Pydantic validation errors
     propagate unchanged (with the field-level message).
+
+    Runs detect-before-validate: a cross-major-newer doc refuses cleanly
+    (:class:`ConfigError`), and a retired-key (``host_local_sections``)
+    doc is relocated to the unified span shape IN MEMORY BEFORE the
+    ``extra="forbid"`` model sees it (else it would trip an
+    ``extra_forbidden`` error on the legacy key). The in-memory relocation
+    deliberately does NOT touch disk: the on-disk rewrite is owned by the
+    install path's snapshot-aware migration step, which captures the
+    pre-migration bytes first so ``revert`` restores them byte-for-byte.
     """
     if not path.exists():
         return _LocalSourceConfig()
@@ -562,6 +572,12 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
         return _LocalSourceConfig()
     if not isinstance(data, Mapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
+    # detect→guard→relocate, BEFORE strict model_validate. The guard
+    # refuses a newer-major local.yaml cleanly; the in-memory relocation
+    # retires legacy keys (host_local_sections → spans) so the strict
+    # model accepts the document. No disk write — see the docstring.
+    _local_yaml.guard_local_yaml_schema(data, path)
+    _local_yaml.relocate_retired_keys(data)
     # Extract only the keys this loader owns; ignore other blocks
     # (binaries:, claude:, orphan_ignore:) which belong to other loaders.
     payload: dict[str, object] = {}

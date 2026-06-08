@@ -50,6 +50,7 @@ from setforge.errors import (
 from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
+from setforge.migrations._local_yaml import guard_local_yaml_schema
 from setforge.paths import template_context
 from setforge.preserved_keys import PreserveUserKeysOverlayError
 from setforge.source import (
@@ -612,6 +613,12 @@ def _check_local_yaml(
             )
         )
         return
+    # Detect-before-validate: refuse a cross-major-newer local.yaml
+    # cleanly (one-line "upgrade setforge" + nonzero exit, no traceback)
+    # BEFORE the extra="forbid" model would choke on its shape. A
+    # malformed schema_version surfaces as a ConfigError, not a Pydantic
+    # ValidationError. validate is read-only, so no migration runs here.
+    guard_local_yaml_schema(data, local_yaml_path)
     try:
         _LocalConfig.model_validate(dict(data))
     except ValidationError as exc:
