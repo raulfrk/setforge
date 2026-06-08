@@ -371,6 +371,26 @@ class BaseStoreIOError(BaseStoreError):
     """
 
 
+class BaseStoreSchemaError(BaseStoreError):
+    """Raised when a stored-base root carries an incompatible format version.
+
+    Each per-profile stored-base root (byte store
+    ``<state_root>/base/<profile>/``, scalar store
+    ``<state_root>/scalar-base/<profile>/``) carries a ``.format-version``
+    sidecar recording the on-disk format the writer used. A read refuses
+    with this error when the sidecar's recorded version does not match the
+    version this engine writes, or when the sidecar is present but
+    unparseable / unreadable — so a future-format root is refused rather
+    than silently mis-parsed.
+
+    The message names the offending root plus the expected-vs-found
+    versions, and points at the recovery: deleting that root re-grandfathers
+    it (the next merge degrades to a noisier full-content merge, never a
+    crash). A SIBLING of :class:`BaseStoreIOError` — a version mismatch is a
+    schema-contract failure, distinct from an OS-level read/write failure.
+    """
+
+
 class BinaryOverrideInvalid(SetforgeError):
     """Raised when a host-local binary override (CLI flag, env var, or
     ``~/.config/setforge/local.yaml``) points at a path that does not
