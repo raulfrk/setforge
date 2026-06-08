@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from setforge import deploy
+from setforge import capture, deploy
 from setforge.deploy import _legacy_only_host_local
 from setforge.source import AnchorAtEndOfFile, HostLocalSection, HostLocalSectionName
 from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
@@ -103,3 +103,66 @@ def test_copy_atomic_preserve_overlay_injects_once_markerless(tmp_path: Path) ->
     assert "use uv" in out
     assert result.new_span_states is not None
     assert "## Python" in result.new_span_states
+
+
+# --- Task 4: projection-fed double-injection regression guard ---------------
+
+
+def test_projection_fed_overlay_never_double_injects(tmp_path: Path) -> None:
+    """The loader's projection must NOT cause the body to inject twice.
+
+    ``source._host_local_sections_for_overlay`` projects the OVERLAY span back
+    INTO the ``host_local_sections`` map; if that name reached ``inject_all`` the
+    body would land WITH markers there AND markerless via ``inject_overlay_bodies``.
+    Named regression so a future projection / inject change re-trips it.
+    """
+    src = tmp_path / "CLAUDE.md"
+    src.write_text("# T\n\n" + _placeholder("python"))
+    dst = tmp_path / "live.md"
+    dst.write_text("# T\n")
+    body = "## Python\n\nbody\n"
+    deploy.copy_atomic(
+        src,
+        dst,
+        preserve_user_sections=True,
+        # The PROJECTION already contains the overlay name (post-migration shape).
+        host_local_sections={
+            HostLocalSectionName("## Python"): _projected_section(body)
+        },
+        spans=[_overlay_span("## Python", body)],
+        span_states={},
+    )
+    out = dst.read_text()
+    assert out.count("## Python") == 1  # exactly once, never doubled
+    assert out.count("body") == 1
+    assert "setforge:user-section" not in out
+
+
+# --- Capture symmetry: markerless overlay body must NOT leak into tracked ----
+
+
+def test_capture_tracked_file_excises_markerless_overlay_body(tmp_path: Path) -> None:
+    """Capture strips a markerless host-local overlay body — never leaks it to tracked.
+
+    Symmetric to the deploy inject: ``install`` writes the host-local body into
+    live WITHOUT markers, so the name-scoped marker strip can't see it. Capture
+    must excise it by its exact recorded bytes before the section merge, else
+    ``sync`` would bake the per-host body into the shared tracked source.
+    """
+    body = "## Python\n\nuse uv\n"
+    src = tmp_path / "CLAUDE.md"  # tracked (shared) — body must NEVER land here
+    src.write_text("# Title\n")
+    dst = tmp_path / "live.md"  # live — body present markerless (post-deploy)
+    dst.write_text("# Title\n" + body)
+
+    capture.capture_tracked_file(
+        src,
+        dst,
+        preserve_user_sections=True,
+        preserve_user_keys=[],
+        spans=[_overlay_span("## Python", body)],
+        span_states={},
+    )
+    out = src.read_text()
+    assert "use uv" not in out  # body excised, not leaked into tracked
+    assert "setforge:user-section" not in out
