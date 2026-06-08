@@ -91,7 +91,7 @@ def test_minimum_version_field_accepted(tmp_path: Path) -> None:
 
 
 def test_minimum_version_above_engine_same_major_refuses(tmp_path: Path) -> None:
-    """Floor 1.5 on a 1.2 engine refuses — inside 14.2's same-major window."""
+    """Floor 1.5 on a 1.2 engine refuses — inside the same-major-tolerant window."""
     cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.5"'))
     with pytest.raises(ConfigError, match="minimum_version") as exc:
         load_config(cfg)

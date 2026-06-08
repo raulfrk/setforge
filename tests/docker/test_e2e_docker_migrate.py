@@ -334,8 +334,8 @@ def test_sub_floor_engine_refuses_all_config_verbs(
     """A floor above this build's schema refuses every config-reading verb.
 
     minimum_version 1.9 puts this (schema-1.2) engine below the floor, so the
-    floor fires inside the same-major window that 14.2 would otherwise
-    tolerate. ``--version`` (no config read) stays usable.
+    floor fires inside the same-major window that forward-tolerance would
+    otherwise allow. ``--version`` (no config read) stays usable.
     """
     c = docker_container()
     _seed_cfg(c, _cfg_with_schema('schema_version: "1.2"\nminimum_version: "1.9"\n'))
