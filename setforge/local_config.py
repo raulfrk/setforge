@@ -37,6 +37,11 @@ class LocalConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # local.yaml carries its OWN schema_version, independent of
+    # setforge.yaml's (it has a separate baseline and migration chain —
+    # see :mod:`setforge.migrations._local_yaml`). Defaults to the local
+    # baseline so a pre-versioning local.yaml validates as 1.0.
+    schema_version: str = "1.0"
     source: Source | None = None
     binaries: dict[str, str] = Field(default_factory=dict)
     # ``claude:`` is currently a free-form mapping (install_mode field
