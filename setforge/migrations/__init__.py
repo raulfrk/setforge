@@ -105,6 +105,7 @@ def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
 
 __all__ = [
     "MIGRATIONS",
+    "Contract20Migration",
     "ManifestEntry",
     "ManifestType",
     "Migration",
@@ -121,7 +122,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "1.2"
+current_expected_schema_version: Final[str] = "2.0"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -513,14 +514,22 @@ class RestampMigration:
         atomic_write_yaml(roots.cfg_path, data)
 
 
+# Imported here (after every name it depends on is defined) to avoid a
+# circular import: _contract_2_0 imports ManifestEntry / MigrationRoots /
+# _meets_floor / parse_schema_version / preserve_contract_schema_version from
+# this package, all defined above this point.
+from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
+
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     VersionStampMigration(),
     RestampMigration(from_version="1.1", to_version="1.2"),
+    Contract20Migration(),
 )
 """Ordered registry of available FORWARD migrations.
 
 Holds the version-stamp chain 1.0 → 1.1 (:class:`VersionStampMigration`)
-→ 1.2 (:class:`RestampMigration`). Future migrations are appended in
+→ 1.2 (:class:`RestampMigration`) → 2.0 (:class:`Contract20Migration`, the
+breaking preserve_* contraction). Future migrations are appended in
 ``from_version`` order so :func:`find_migration_path` can walk the chain
 forward. Each migration's reverse is attached to its forward instance,
 never added here — that would make the forward walk cycle (see

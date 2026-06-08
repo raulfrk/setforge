@@ -227,7 +227,7 @@ def test_finalize_then_revert_restores_markers(tmp_path: Path) -> None:
 
 def test_migrate_check_refuses_below_floor(tmp_path: Path) -> None:
     """``migrate --check`` reads via detect_current_schema but still refuses."""
-    cfg = _make_repo(tmp_path, floor="1.9", files={"a.md": _NO_MARKERS})
+    cfg = _make_repo(tmp_path, floor="2.5", files={"a.md": _NO_MARKERS})
     result = CliRunner().invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code != 0, result.output
     assert isinstance(result.exception, ConfigError)
@@ -236,7 +236,7 @@ def test_migrate_check_refuses_below_floor(tmp_path: Path) -> None:
 
 def test_migrate_apply_refuses_below_floor_without_mutating(tmp_path: Path) -> None:
     """``migrate --apply`` refuses BEFORE mutating — no below-floor write."""
-    cfg = _make_repo(tmp_path, floor="1.9", files={"a.md": _NO_MARKERS})
+    cfg = _make_repo(tmp_path, floor="2.5", files={"a.md": _NO_MARKERS})
     before = cfg.read_bytes()
     result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
     assert result.exit_code != 0, result.output

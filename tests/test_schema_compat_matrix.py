@@ -181,6 +181,15 @@ def _migrate(cfg_path: Path, *, to_v: str) -> None:
         migration.apply(roots=roots)
 
 
+def _stamp_minimum_version(cfg_path: Path, floor: str) -> None:
+    """Stamp ``minimum_version: <floor>`` into ``cfg_path`` in place (ruamel)."""
+    yaml = yaml_rt()
+    with cfg_path.open(encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    data["minimum_version"] = floor
+    atomic_write_yaml(cfg_path, data)
+
+
 # ---------------------------------------------------------------------------
 # Arm (i) — BACKWARD MIGRATE: every frozen fixture forward-migrates to the
 # build's current_expected_schema_version and the result is structurally OK.
@@ -202,6 +211,12 @@ def test_frozen_fixture_migrates_forward_to_current(
     """
     work = tmp_path / "setforge.yaml"
     shutil.copy(fixture, work)
+
+    # The 1.x -> 2.0 contract step refuses to drop the legacy preserve_*
+    # fields unless the operator has floored minimum_version at the contract
+    # version. The frozen corpus is intentionally minimal (no floor), so stamp
+    # one in the tmp copy before migrating forward across the major boundary.
+    _stamp_minimum_version(work, current_expected_schema_version)
 
     _migrate(work, to_v=current_expected_schema_version)
 
@@ -228,9 +243,9 @@ def test_frozen_fixture_migrates_forward_to_current(
 
 
 def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
-    """A 2.0 (major-newer) config raises ConfigError, no traceback leak."""
+    """A 3.0 (major-newer) config raises ConfigError, no traceback leak."""
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text("schema_version: '2.0'\n" + _MINIMAL_BODY, encoding="utf-8")
+    cfg.write_text("schema_version: '3.0'\n" + _MINIMAL_BODY, encoding="utf-8")
     with pytest.raises(
         ConfigError, match=r"requires a newer setforge|upgrade setforge"
     ):
@@ -240,15 +255,15 @@ def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
 def test_same_major_newer_minor_config_loads_with_warning(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A 1.99 (same-major, newer-minor) config RETURNS a Config + warns.
+    """A 2.99 (same-major, newer-minor) config RETURNS a Config + warns.
 
     Asserts the RETURN + the emitted warning, NOT ``pytest.raises`` — a
     same-major newer-minor config is forward-tolerated, not refused.
     """
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text("schema_version: '1.99'\n" + _MINIMAL_BODY, encoding="utf-8")
+    cfg.write_text("schema_version: '2.99'\n" + _MINIMAL_BODY, encoding="utf-8")
     config = load_config(cfg)  # must NOT raise
-    assert config.schema_version == "1.99"
+    assert config.schema_version == "2.99"
     captured = capsys.readouterr()
     assert "warning:" in captured.err
     assert "schema_version" in captured.err

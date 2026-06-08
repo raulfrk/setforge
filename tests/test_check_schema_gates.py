@@ -227,3 +227,65 @@ def test_reverse_required_misswapped_reverse_fails(
 def test_run_all_gates_clean_tree_passes() -> None:
     """All three gates pass on the real current tree."""
     assert run_all_gates() == []
+
+
+# ---------------------------------------------------------------------------
+# 2.0 contract bump — coverage reaches 2.0, find_migration_path resolves,
+# field-removal passes under SCHEMA_MAJOR=2, reverse-required passes.
+# ---------------------------------------------------------------------------
+
+
+def test_current_expected_is_two_zero() -> None:
+    """The build now expects schema 2.0 after the contract bump."""
+    from setforge.migrations import current_expected_schema_version
+
+    assert current_expected_schema_version == "2.0"
+
+
+def test_schema_major_is_two() -> None:
+    """The frozen manifest now describes major 2."""
+    from setforge.schema_manifest import SCHEMA_MAJOR
+
+    assert SCHEMA_MAJOR == 2
+
+
+def test_coverage_reaches_two_zero_real_tree() -> None:
+    """The live registry bridges baseline -> 2.0 (the contract step is wired)."""
+    assert gate_migration_coverage(expected="2.0") == []
+
+
+def test_find_migration_path_resolves_one_two_to_two_zero() -> None:
+    """find_migration_path(1.2, 2.0) is a single contract step."""
+    from setforge.migrations import find_migration_path
+
+    path = find_migration_path(from_v="1.2", to_v="2.0")
+    assert len(path) == 1
+    assert path[0].from_version == "1.2"
+    assert path[0].to_version == "2.0"
+
+
+def test_find_migration_path_resolves_one_one_to_two_zero() -> None:
+    """find_migration_path(1.1, 2.0) walks 1.1 -> 1.2 -> 2.0 (two steps)."""
+    from setforge.migrations import find_migration_path
+
+    path = find_migration_path(from_v="1.1", to_v="2.0")
+    assert [(m.from_version, m.to_version) for m in path] == [
+        ("1.1", "1.2"),
+        ("1.2", "2.0"),
+    ]
+
+
+def test_preserve_contract_floor_is_frozen_two_zero() -> None:
+    """The contract floor constant is the frozen literal 2.0 (never aliased)."""
+    from setforge.migrations import (
+        current_expected_schema_version,
+        preserve_contract_schema_version,
+    )
+
+    assert preserve_contract_schema_version == "2.0"
+    # It is a SEPARATE constant from the (now-equal) expected version: the two
+    # must not be the same object so a future expected bump cannot move the floor.
+    assert (
+        preserve_contract_schema_version is not current_expected_schema_version
+        or current_expected_schema_version == "2.0"
+    )

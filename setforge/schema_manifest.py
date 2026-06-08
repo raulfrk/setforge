@@ -33,8 +33,9 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
 )
+from setforge.spans import SpanEntry
 
-SCHEMA_MAJOR: int = 1
+SCHEMA_MAJOR: int = 2
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
 
 _MODELS: tuple[type[BaseModel], ...] = (
@@ -45,6 +46,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     MarketplaceSource,
     ClaudePluginRef,
     ResolvedProfile,
+    SpanEntry,
 )
 
 
@@ -130,6 +132,14 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "claude_plugins": "list[str]",
         "plugins_reconcile": "<enum 'ReconcilePolicy'>",
         "bootstrap": "list[pathlib.Path]",
+    },
+    "SpanEntry": {
+        "anchor": "<class 'str'>",
+        "kind": "<enum 'SpanKind'>",
+        "semantics": "<enum 'SpanSemantics'>",
+        "overlay": "setforge.spans.OverlaySpanPayload | None",
+        "deep": "<class 'bool'>",
+        "capture_mode": "<enum 'SectionMode'>",
     },
 }
 
