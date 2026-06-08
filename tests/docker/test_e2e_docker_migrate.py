@@ -304,3 +304,140 @@ def test_install_forward_tolerant_warns_on_unknown_key(
     assert "future_field" in combined, combined
     assert "upgrade setforge" not in combined, combined
     assert c.read_text("/home/tester/.foo.md") == "hello\n"
+
+
+# ---------------------------------------------------------------------------
+# minimum_version floor + migrate --finalize tracked-marker strip
+# ---------------------------------------------------------------------------
+
+# A tracked markdown source carrying a host-local marker pair (the vestigial
+# inline form that --finalize strips).
+_HL_MD: str = (
+    "intro\n"
+    "<!-- setforge:user-section start host-local HL -->\n"
+    "host body\n"
+    "<!-- setforge:user-section end host-local HL -->\n"
+    "outro\n"
+)
+_HL_MD_STRIPPED: str = "intro\noutro\n"
+
+
+def _seed_cfg_with_md(c: ContainerHandle, body: str, md: str) -> None:
+    """Seed a config + a tracked ``foo.md`` carrying ``md`` content."""
+    _seed_cfg(c, body)
+    c.write_text(f"{_CFG_DIR}/tracked/foo.md", md)
+
+
+def test_sub_floor_engine_refuses_all_config_verbs(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A floor above this build's schema refuses every config-reading verb.
+
+    minimum_version 1.9 puts this (schema-1.2) engine below the floor, so the
+    floor fires inside the same-major window that 14.2 would otherwise
+    tolerate. ``--version`` (no config read) stays usable.
+    """
+    c = docker_container()
+    _seed_cfg(c, _cfg_with_schema('schema_version: "1.2"\nminimum_version: "1.9"\n'))
+    for verb in (
+        ["install", "--profile=base"],
+        ["compare", "--profile=base"],
+        ["validate", "--all"],
+        ["migrate", "--check", f"--config={_CFG_PATH}"],
+    ):
+        result = c.exec(["uv", "run", "setforge", *verb], check=False)
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, (verb, combined)
+        assert "minimum_version" in combined, (verb, combined)
+        assert "upgrade setforge" in combined, (verb, combined)
+        assert "Traceback (most recent call last)" not in combined, (verb, combined)
+    # A verb that never reads the config is unaffected by the floor.
+    ver = c.exec(["uv", "run", "setforge", "--version"], check=False)
+    assert ver.returncode == 0, ver.stdout + ver.stderr
+
+
+def test_finalize_blocked_below_floor(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``migrate --finalize`` refuses when the floor is below the conversion version."""
+    c = docker_container()
+    _seed_cfg_with_md(c, _cfg_with_schema('schema_version: "1.2"\n'), _HL_MD)
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--finalize",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined
+    assert "minimum_version" in combined, combined
+    # The tracked source is untouched.
+    assert c.read_text(f"{_CFG_DIR}/tracked/foo.md") == _HL_MD
+
+
+def test_finalize_permitted_above_floor_strips_markers(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """With minimum_version >= conversion version, --finalize strips host-local."""
+    c = docker_container()
+    _seed_cfg_with_md(
+        c, _cfg_with_schema('schema_version: "1.2"\nminimum_version: "1.2"\n'), _HL_MD
+    )
+    result = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--finalize",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert c.read_text(f"{_CFG_DIR}/tracked/foo.md") == _HL_MD_STRIPPED
+
+
+def test_finalize_round_trip_revert_restores_markers(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """``setforge revert --profile=migrate`` restores the stripped markers."""
+    c = docker_container()
+    _seed_cfg_with_md(
+        c, _cfg_with_schema('schema_version: "1.2"\nminimum_version: "1.2"\n'), _HL_MD
+    )
+    fin = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--finalize",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert fin.returncode == 0, fin.stdout + fin.stderr
+    assert c.read_text(f"{_CFG_DIR}/tracked/foo.md") == _HL_MD_STRIPPED
+    rev = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=migrate",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert rev.returncode == 0, rev.stdout + rev.stderr
+    assert c.read_text(f"{_CFG_DIR}/tracked/foo.md") == _HL_MD
