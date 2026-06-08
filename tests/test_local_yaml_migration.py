@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from setforge.errors import ConfigError
@@ -113,11 +114,16 @@ def test_detect_reads_declared_version(tmp_path: Path) -> None:
 def test_detect_reads_version_through_forbidden_shape(tmp_path: Path) -> None:
     """Detection works even when the doc would fail the forbid-model.
 
-    A ``schema_version: '2.0'`` doc must be readable for its version
-    BEFORE the strict model would reject the cross-major shape — proving
-    detection does not route through ``extra="forbid"``.
+    A doc carrying an UNKNOWN top-level key (which ``extra="forbid"``
+    rejects) must still be readable for its declared version — proving
+    detection does not route through the strict model.
     """
-    path = _write(tmp_path / "local.yaml", "schema_version: '2.0'\n")
+    doc = "schema_version: '2.0'\nfuture_only_key: present\n"
+    # The strict model rejects the unknown key outright...
+    with pytest.raises(ValidationError):
+        LocalConfig.model_validate({"future_only_key": "present"})
+    # ...yet raw detection still reads the declared version.
+    path = _write(tmp_path / "local.yaml", doc)
     assert detect_local_yaml_schema(path) == "2.0"
 
 
