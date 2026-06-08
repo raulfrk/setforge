@@ -117,6 +117,7 @@ __all__ = [
     "known_versions",
     "markerless_conversion_schema_version",
     "parse_schema_version",
+    "preserve_contract_schema_version",
 ]
 
 
@@ -133,6 +134,26 @@ This constant and the matching :data:`MIGRATIONS` entry are a MATCHED
 PAIR: the migration-coverage gate (``scripts/check_schema_gates.py``)
 fails CI unless the registry's chain from the baseline reaches this
 version.
+"""
+
+
+preserve_contract_schema_version: Final[str] = "2.0"
+"""Schema version the legacy ``preserve_*`` contraction lands at.
+
+The 1.x -> 2.0 CONTRACT migration drops the legacy file-preservation
+fields (``preserve_user_sections`` / ``preserve_user_keys`` /
+``preserve_user_keys_deep``). That drop is destructive and irreversible
+on hosts still reading the legacy shape, so it refuses unless the operator
+has attested an all-hosts floor of at least this version via
+``minimum_version`` (a FULL ``major.minor`` compare through
+:func:`_meets_floor`).
+
+This value is FROZEN: it records a historical fact (the version the
+contraction shipped at) and must NEVER be aliased to — or bumped
+alongside — :data:`current_expected_schema_version` (which keeps
+advancing). Tying the floor gate to the live expected version would
+silently move the gate on every future schema bump, exactly the footgun
+:data:`markerless_conversion_schema_version` guards against.
 """
 
 
