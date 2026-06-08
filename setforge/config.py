@@ -42,6 +42,7 @@ from setforge.migrations import (
     parse_schema_version,
 )
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
+from setforge.section_mode import SectionMode
 from setforge.spans import SpanEntry, SpanSemantics
 
 if TYPE_CHECKING:
@@ -117,23 +118,11 @@ class Disposition(StrEnum):
     PINNED = "pinned"
 
 
-class SectionMode(StrEnum):
-    """How capture treats marker bodies in tracked_files with
-    ``preserve_user_sections: true``.
-
-    ``keep_defaults`` (default, non-destructive): capture re-splices the
-    tracked file's existing marker bodies into the live content before
-    writing tracked, so global defaults baked into tracked survive every
-    sync. Falls back to ``strip`` semantics when there's no existing
-    tracked file (no defaults to preserve).
-
-    ``strip`` (opt-in, destructive): capture wipes marker bodies entirely.
-    Use only when markers are pure host-local placeholders that must
-    never persist into the tracked source.
-    """
-
-    KEEP_DEFAULTS = "keep_defaults"
-    STRIP = "strip"
+# SectionMode now lives in the leaf module setforge.section_mode so
+# setforge.spans (imported by config below) can carry it on
+# SpanEntry.capture_mode without a spans → config → spans import cycle.
+# Re-exported here for back-compat: ``from setforge.config import SectionMode``
+# stays valid for every existing call site.
 
 
 def _check_well_formed_preserve_paths(paths: list[object]) -> None:

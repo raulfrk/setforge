@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from setforge.anchors import Anchor
 from setforge.errors import ConfigError
+from setforge.section_mode import SectionMode
 
 __all__ = [
     "OverlaySpanPayload",
@@ -176,6 +177,27 @@ class SpanEntry(BaseModel):
     kind: SpanKind = SpanKind.PINNED
     semantics: SpanSemantics = SpanSemantics.HOST_LOCAL
     overlay: OverlaySpanPayload | None = None
+    deep: bool = False
+    """Deep-recursive re-assert for a PINNED structural span (schema 2.0).
+
+    ``False`` (default) → the PINNED re-assert whole-replaces the value at
+    the anchor with live's. ``True`` → the re-assert DEEP-merges live over
+    the merged value: tracked-only sub-keys survive, live-only sub-keys are
+    added, shared scalars take live's value (carries the legacy
+    ``preserve_user_keys_deep`` semantics). Legal only on a structural
+    (dotted-path) PINNED / FORKED span — the model validator rejects it on
+    an OVERLAY span or a markdown heading anchor, where deep-merge has no
+    meaning.
+    """
+    capture_mode: SectionMode = SectionMode.KEEP_DEFAULTS
+    """Section re-splice vs strip mode for a section span (schema 2.0).
+
+    Carries the legacy ``preserve_user_sections_mode``: ``KEEP_DEFAULTS``
+    re-splices the tracked marker body on capture, ``STRIP`` wipes it.
+    Meaningful only on a section / heading span; on a non-section span it is
+    degenerate and accept-and-ignored (no validation error), mirroring how
+    the legacy mode flag was degenerate without ``preserve_user_sections``.
+    """
 
     @field_validator("anchor")
     @classmethod
@@ -196,6 +218,31 @@ class SpanEntry(BaseModel):
             raise ValueError(
                 f"SpanEntry with kind={self.kind.value} must not carry an "
                 "`overlay` payload (the payload is for kind=overlay only)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _deep_only_on_structural_span(self) -> "SpanEntry":
+        """Reject ``deep=True`` on an OVERLAY span or a markdown heading anchor.
+
+        Deep-merge re-assert applies to a structural (dotted-path) subtree
+        only: an OVERLAY span has no merge re-assert at all, and a markdown
+        heading anchor addresses a line-based body, not a mapping. ``deep``
+        is therefore illegal on both. ``capture_mode`` carries no such
+        constraint — it is accept-and-ignored on non-section spans.
+        """
+        if not self.deep:
+            return self
+        if self.kind is SpanKind.OVERLAY:
+            raise ValueError(
+                "SpanEntry deep=True is invalid on kind=overlay (an OVERLAY "
+                "span has no merge re-assert to deep-merge)"
+            )
+        if is_heading_anchor(self.anchor):
+            raise ValueError(
+                f"SpanEntry deep=True is invalid on the markdown heading "
+                f"anchor {self.anchor!r}; deep-merge applies to structural "
+                "(dotted-path) span anchors only"
             )
         return self
 

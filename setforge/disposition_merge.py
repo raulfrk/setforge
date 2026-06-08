@@ -47,7 +47,7 @@ still merges as text rather than crashing the install.
 """
 
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -58,7 +58,7 @@ from json5.loader import ModelLoader
 from json5.loader import loads as _json5_loads
 from ruamel.yaml import YAML
 
-from setforge import jsonc
+from setforge import jsonc, yaml_merge
 from setforge.config import Disposition
 from setforge.errors import ConfigError, MergeTypeMismatch
 from setforge.markdown_merge import (
@@ -438,6 +438,11 @@ def _reassert_pinned_spans(
     ``MergeTypeMismatch`` (non-mapping parent) from
     :func:`~setforge.structural_merge.set_at_path` orphan-warns + skips, never
     an uncaught raise (B-S3).
+
+    A span with ``deep=True`` DEEP-merges its snapshot over the merged value
+    (tracked-only sub-keys survive) instead of whole-replacing — the schema
+    2.0 carrier for the legacy ``preserve_user_keys_deep`` semantics. The
+    same orphan postures apply on the deep path.
     """
     orphans: list[StructuralSpanOrphan] = []
     for span in pinned:
@@ -452,7 +457,10 @@ def _reassert_pinned_spans(
             )
             continue
         try:
-            set_at_path(model, span.anchor, snapshot)
+            if span.deep:
+                _deep_reassert_span(model, span.anchor, snapshot)
+            else:
+                set_at_path(model, span.anchor, snapshot)
         except (KeyError, ValueError):
             orphans.append(
                 StructuralSpanOrphan(
@@ -470,6 +478,39 @@ def _reassert_pinned_spans(
                 )
             )
     return orphans
+
+
+def _deep_reassert_span(model: object, anchor: str, snapshot: object) -> None:
+    """Deep-merge ``snapshot`` (live) over the merged value at ``anchor``.
+
+    The schema 2.0 carrier of the legacy ``preserve_user_keys_deep`` semantics:
+    rather than whole-replacing the merged subtree with live's value (the
+    shallow PINNED re-assert), deep-merge live OVER the merged value so a
+    tracked-only sub-key the 3-way merge kept survives, while live's edited
+    sub-keys win.
+
+    Both sides are unwrapped plain values — :func:`get_at_path` returns the
+    merged value already unwrapped, and ``snapshot`` is the unwrapped live
+    snapshot — so the deep merge runs on backend-agnostic python structures via
+    :func:`setforge.yaml_merge._apply_deep_overlay`; the result is written back
+    through :func:`~setforge.structural_merge.set_at_path` (the same comment-
+    preserving seam the shallow re-assert uses). When either side is not a
+    mapping the deep merge is degenerate, so live whole-replaces (set the
+    snapshot) — matching the legacy overlay's scalar/list terminal.
+
+    Raises the same ``KeyError`` / ``ValueError`` / ``MergeTypeMismatch`` the
+    shallow path raises on a missing / non-mapping parent, so the caller's
+    orphan postures cover the deep path too.
+    """
+    merged_value = get_at_path(model, anchor)
+    if isinstance(merged_value, MutableMapping) and isinstance(snapshot, Mapping):
+        # Deep-merge live's snapshot over the merged subtree in place, then
+        # write the merged result back at the anchor.
+        yaml_merge._deep_merge_dicts(merged_value, snapshot, anchor)
+        set_at_path(model, anchor, merged_value)
+        return
+    # Degenerate (scalar / list / absent terminal): live whole-replaces.
+    set_at_path(model, anchor, snapshot)
 
 
 def validate_structural_span_overlap(spans: list[SpanEntry]) -> None:
