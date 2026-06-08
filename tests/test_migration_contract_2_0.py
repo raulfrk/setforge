@@ -116,6 +116,98 @@ def test_translate_sections_enumerates_from_tracked_markers(tmp_path: Path) -> N
     assert span["capture_mode"] == "strip"
 
 
+def test_translate_shallow_keys_sets_forked_disposition(tmp_path: Path) -> None:
+    """preserve_user_keys -> disposition: forked (so the PINNED spans deploy)."""
+    _write(
+        tmp_path / "setforge.yaml",
+        _FLOOR + "schema_version: '1.2'\n"
+        "tracked_files:\n"
+        "  settings:\n"
+        "    src: settings.yaml\n"
+        "    dst: ~/settings.yaml\n"
+        "    preserve_user_keys:\n"
+        "      - editor.fontSize\n",
+    )
+    Contract20Migration().apply(roots=_roots(tmp_path))
+    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["settings"]
+    assert tf["disposition"] == "forked"
+
+
+def test_translate_shared_section_sets_shared_disposition(tmp_path: Path) -> None:
+    """A shared preserve_user_sections section -> disposition: shared."""
+    _write(
+        tmp_path / "doc.md",
+        "<!-- setforge:user-section start shared notes -->\n"
+        "body\n"
+        "<!-- setforge:user-section end shared notes -->\n",
+    )
+    _write(
+        tmp_path / "setforge.yaml",
+        _FLOOR + "schema_version: '1.2'\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    src: doc.md\n"
+        "    dst: ~/doc.md\n"
+        "    preserve_user_sections: true\n",
+    )
+    Contract20Migration().apply(roots=_roots(tmp_path))
+    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    assert tf["disposition"] == "shared"
+
+
+def test_translate_host_local_section_to_overlay_no_disposition(
+    tmp_path: Path,
+) -> None:
+    """A host-local section -> OVERLAY span from the marker body, no disposition."""
+    _write(
+        tmp_path / "doc.md",
+        "<!-- setforge:user-section start host-local tweaks -->\n"
+        "my host tweaks\n"
+        "<!-- setforge:user-section end host-local tweaks -->\n",
+    )
+    _write(
+        tmp_path / "setforge.yaml",
+        _FLOOR + "schema_version: '1.2'\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    src: doc.md\n"
+        "    dst: ~/doc.md\n"
+        "    preserve_user_sections: true\n",
+    )
+    Contract20Migration().apply(roots=_roots(tmp_path))
+    tf = _load(tmp_path / "setforge.yaml")["tracked_files"]["doc"]
+    # Host-local sections stay disposition-less (OVERLAY path is disposition=None).
+    assert "disposition" not in tf
+    span = tf["spans"][0]
+    assert span["anchor"] == "tweaks"
+    assert span["kind"] == "overlay"
+    assert span["semantics"] == "host-local"
+    assert "my host tweaks" in span["overlay"]["body"]
+
+
+def test_keys_plus_shared_section_conflict_refuses(tmp_path: Path) -> None:
+    """A file mixing preserve_user_keys + a SHARED section refuses (2 dispositions)."""
+    _write(
+        tmp_path / "doc.md",
+        "<!-- setforge:user-section start shared notes -->\n"
+        "body\n"
+        "<!-- setforge:user-section end shared notes -->\n",
+    )
+    _write(
+        tmp_path / "setforge.yaml",
+        _FLOOR + "schema_version: '1.2'\n"
+        "tracked_files:\n"
+        "  doc:\n"
+        "    src: doc.md\n"
+        "    dst: ~/doc.md\n"
+        "    preserve_user_keys:\n"
+        "      - a.b\n"
+        "    preserve_user_sections: true\n",
+    )
+    with pytest.raises(ConfigError, match="both dispositions"):
+        Contract20Migration().apply(roots=_roots(tmp_path))
+
+
 def test_sections_no_markers_drops_flag_emits_no_span(tmp_path: Path) -> None:
     """preserve_user_sections:true with no markers in src -> drop flag, no span."""
     _write(tmp_path / "doc.md", "plain content, no markers\n")

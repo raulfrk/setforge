@@ -51,7 +51,11 @@ from setforge.migrations import (
     preserve_contract_schema_version,
 )
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-from setforge.sections import extract_sections, section_semantics
+from setforge.sections import (
+    SectionSemantics,
+    extract_sections,
+    section_semantics,
+)
 
 __all__ = ["Contract20Migration"]
 
@@ -123,63 +127,157 @@ def _del_if_present(node: CommentedMap, key: str) -> None:
         del node[key]
 
 
-def _translate_shallow_keys(tracked_file: CommentedMap) -> None:
-    """Translate ``preserve_user_keys`` -> PINNED host-local spans; drop the key."""
+def _set_disposition(tracked_file: CommentedMap, value: str) -> None:
+    """Set ``disposition`` on ``tracked_file`` unless already present.
+
+    Approach A: the translated spans are inert at install unless a file-level
+    ``disposition`` is set (deploy consumes spans only on the disposition path
+    + the base auto-seeds from live on first install). A pre-existing
+    ``disposition`` (a natively-authored one) is left untouched so the migration
+    never re-points an explicit operator choice; the conflict guard upstream
+    rejects an incompatible legacy combination first.
+    """
+    if "disposition" not in tracked_file:
+        tracked_file["disposition"] = value
+
+
+def _translate_shallow_keys(tracked_file: CommentedMap) -> bool:
+    """Translate ``preserve_user_keys`` -> PINNED host-local spans; drop the key.
+
+    Returns ``True`` when at least one key was translated (the file must then
+    take ``disposition: forked`` so the PINNED spans are consumed at install).
+    """
     raw = tracked_file.get("preserve_user_keys")
-    if isinstance(raw, list):
+    translated = False
+    if isinstance(raw, list) and raw:
         spans = _spans_seq(tracked_file)
         for path in raw:
             _upsert_span(spans, _structural_span(str(path), deep=False))
+        translated = True
     _del_if_present(tracked_file, "preserve_user_keys")
+    return translated
 
 
-def _translate_deep_keys(tracked_file: CommentedMap) -> None:
-    """Translate ``preserve_user_keys_deep`` -> PINNED+deep spans; drop the key."""
+def _translate_deep_keys(tracked_file: CommentedMap) -> bool:
+    """Translate ``preserve_user_keys_deep`` -> PINNED+deep spans; drop the key.
+
+    Returns ``True`` when at least one deep key was translated (the file must
+    then take ``disposition: forked``).
+    """
     raw = tracked_file.get("preserve_user_keys_deep")
-    if isinstance(raw, list):
+    translated = False
+    if isinstance(raw, list) and raw:
         spans = _spans_seq(tracked_file)
         for path in raw:
             _upsert_span(spans, _structural_span(str(path), deep=True))
+        translated = True
     _del_if_present(tracked_file, "preserve_user_keys_deep")
+    return translated
 
 
-def _translate_sections(tracked_file: CommentedMap, roots: MigrationRoots) -> None:
-    """Translate ``preserve_user_sections`` -> section spans; drop the flags.
+def _translate_sections(tracked_file: CommentedMap, roots: MigrationRoots) -> bool:
+    """Translate ``preserve_user_sections`` -> spans by semantics; drop the flags.
 
     Section anchors are enumerated from the TRACKED src file's markers via
     :func:`setforge.sections.extract_sections` (``allow_legacy=True`` so a
     pre-hash tracked source still enumerates). No markers -> no span, still drop
-    the flag (a clean converge). The per-section ``capture_mode`` is the file's
-    ``preserve_user_sections_mode`` (default ``keep_defaults``); the per-section
-    ``semantics`` is the marker's own keyword.
+    the flag (a clean converge). Each marked section is split by its semantics:
+
+    * **shared** -> a section :class:`SpanEntry` (``kind: pinned``) carrying the
+      file's ``capture_mode``; the file takes ``disposition: shared`` so the
+      shared 3-way merge (with base auto-seed) is active at install.
+    * **host-local** -> a markerless host-local OVERLAY span sourced from the
+      TRACKED marker body (the shipped default), built via
+      :func:`setforge.host_local_marker_migration.build_overlay_span_node`
+      (``at-end-of-file`` anchor). OVERLAY spans are consumed on the
+      ``disposition=None`` deploy path, so a host-local-only file gets NO
+      disposition.
+
+    Returns ``True`` when at least one SHARED section span was emitted (the
+    signal that the file needs ``disposition: shared``). Host-local OVERLAY
+    spans never set a disposition.
     """
     flag = tracked_file.get("preserve_user_sections")
     mode_raw = tracked_file.get("preserve_user_sections_mode")
     capture_mode = str(mode_raw) if mode_raw is not None else "keep_defaults"
+    has_shared = False
     if flag is True:
         src_raw = tracked_file.get("src")
         if src_raw is not None:
             src = roots.repo_root / str(src_raw)
             if src.exists():
-                text = src.read_text(encoding="utf-8")
-                try:
-                    keys = list(extract_sections(text, allow_legacy=True))
-                    semantics = section_semantics(text, allow_legacy=True)
-                except MarkerError as exc:
-                    raise ConfigError(
-                        f"cannot enumerate user-sections in tracked src {src}: {exc}"
-                    ) from exc
-                if keys:
-                    spans = _spans_seq(tracked_file)
-                    for key in keys:
-                        anchor = f"## {key}"
-                        sem = semantics.get(key)
-                        sem_value = sem.value if sem is not None else "shared"
-                        _upsert_span(
-                            spans, _section_span(anchor, sem_value, capture_mode)
-                        )
+                has_shared = _translate_section_markers(tracked_file, src, capture_mode)
     _del_if_present(tracked_file, "preserve_user_sections")
     _del_if_present(tracked_file, "preserve_user_sections_mode")
+    return has_shared
+
+
+def _translate_section_markers(
+    tracked_file: CommentedMap, src: Path, capture_mode: str
+) -> bool:
+    """Emit one span per marked section in ``src``; return whether any was shared."""
+    text = src.read_text(encoding="utf-8")
+    try:
+        bodies = extract_sections(text, allow_legacy=True)
+        semantics = section_semantics(text, allow_legacy=True)
+    except MarkerError as exc:
+        raise ConfigError(
+            f"cannot enumerate user-sections in tracked src {src}: {exc}"
+        ) from exc
+    if not bodies:
+        return False
+    # Local import: build_overlay_span_node pulls the host-local inject stack
+    # (overlay_inject -> host_local_inject -> source -> config), which would
+    # form an import cycle if loaded at module scope (this module is imported
+    # at the tail of setforge.migrations, itself imported by setforge.config).
+    from setforge.host_local_marker_migration import build_overlay_span_node
+
+    spans = _spans_seq(tracked_file)
+    has_shared = False
+    for key, body in bodies.items():
+        sem = semantics.get(key, SectionSemantics.SHARED)
+        if sem is SectionSemantics.HOST_LOCAL:
+            _upsert_span(spans, build_overlay_span_node(key, body))
+        else:
+            _upsert_span(spans, _section_span(f"## {key}", sem.value, capture_mode))
+            has_shared = True
+    return has_shared
+
+
+def _migrate_tracked_file_node(
+    tracked_file: CommentedMap, roots: MigrationRoots
+) -> None:
+    """Translate one tracked_file's legacy preserve_* + set its disposition.
+
+    The mapping (Approach A):
+
+    * ``preserve_user_keys`` / ``preserve_user_keys_deep`` -> PINNED structural
+      spans + ``disposition: forked``.
+    * ``preserve_user_sections`` shared sections -> section spans +
+      ``disposition: shared``; host-local sections -> OVERLAY spans (no
+      disposition).
+
+    A file carrying ``preserve_user_keys``/_deep AND a SHARED ``preserve_user_sections``
+    section would need BOTH ``forked`` and ``shared`` on one file — an
+    unrepresentable conflict. The author's real config never mixes them, so the
+    migration REFUSES with a clear :class:`ConfigError` naming the file rather
+    than silently picking one disposition.
+    """
+    has_keys = _translate_shallow_keys(tracked_file)
+    has_keys = _translate_deep_keys(tracked_file) or has_keys
+    has_shared_sections = _translate_sections(tracked_file, roots)
+    if has_keys and has_shared_sections:
+        raise ConfigError(
+            "cannot migrate a tracked_file that combines preserve_user_keys / "
+            "preserve_user_keys_deep (-> disposition: forked) with a SHARED "
+            "preserve_user_sections section (-> disposition: shared): one file "
+            "cannot carry both dispositions. Split the keys and the shared "
+            "section across two tracked_files, then re-run the migration."
+        )
+    if has_keys:
+        _set_disposition(tracked_file, "forked")
+    elif has_shared_sections:
+        _set_disposition(tracked_file, "shared")
 
 
 def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
@@ -189,9 +287,7 @@ def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
         for tracked_file in tracked_files.values():
             if not isinstance(tracked_file, CommentedMap):
                 continue
-            _translate_shallow_keys(tracked_file)
-            _translate_deep_keys(tracked_file)
-            _translate_sections(tracked_file, roots)
+            _migrate_tracked_file_node(tracked_file, roots)
     # Overwrite-in-place so the key keeps its document position (idempotent).
     data["schema_version"] = _TO_VERSION
 
@@ -428,7 +524,29 @@ def _untranslate_tracked_file(tracked_file: CommentedMap) -> None:
     deep_paths, section_mode, kept = _partition_untranslatable_spans(spans)
     _readd_deep_keys(tracked_file, deep_paths)
     _readd_section_flags(tracked_file, section_mode)
+    # Drop the disposition the forward migration added in LOCKSTEP with the
+    # legacy field it carried: a deep span rode disposition=forked; a
+    # capture_mode section span rode disposition=shared. Re-adding the legacy
+    # field restores the 1.2 behavior, so the migration-added disposition must
+    # go (it has no representation at the legacy field's altitude). A disposition
+    # on a file with NO untranslated span is left alone — it is either native or
+    # rides a plain span that the reverse keeps (behavior-equivalent at 1.2).
+    if deep_paths:
+        _drop_disposition(tracked_file, "forked")
+    if section_mode is not None:
+        _drop_disposition(tracked_file, "shared")
     _replace_or_drop_spans(tracked_file, kept)
+
+
+def _drop_disposition(tracked_file: CommentedMap, expected: str) -> None:
+    """Remove ``disposition`` from ``tracked_file`` when it equals ``expected``.
+
+    Guards on the value so the reverse never strips a disposition that does NOT
+    match the one the forward migration would have set (a hand-authored
+    disposition on a span the reverse untranslated stays put).
+    """
+    if tracked_file.get("disposition") == expected:
+        del tracked_file["disposition"]
 
 
 def _partition_untranslatable_spans(
