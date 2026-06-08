@@ -15,11 +15,13 @@ from typing import cast
 
 import pytest
 
-from setforge import base_store
+from setforge import base_store, spans_store
 from setforge.cli import _install_helpers
 from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
 from setforge.compare import CompareReport, CompareStatus, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
+from setforge.source import AnchorAtEndOfFile, HostLocalSection, HostLocalSectionName
+from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
 
 _LIVE_WITH_MARKERS = (
     "intro\n"
@@ -29,6 +31,12 @@ _LIVE_WITH_MARKERS = (
     "outro\n"
 )
 _STRIPPED = "intro\nbody\noutro\n"
+
+_HL_HASH = "a" * 64  # any well-formed sha256-hex parses; rewritten before strip.
+_PLACEHOLDER_PY = (
+    "<!-- setforge:user-section start host-local python -->\n"
+    f"<!-- setforge:user-section end host-local python hash={_HL_HASH} -->\n"
+)
 
 
 def test_install_helpers_module_imports() -> None:
@@ -186,6 +194,69 @@ def test_resume_marker_strip_completes_without_reseeding(
     assert live.read_text(encoding="utf-8") == _STRIPPED
     assert stat.S_IMODE(live.stat().st_mode) == 0o600
     assert reseeded == []
+
+
+def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preserve file with host-local OVERLAY spans deploys markerless + sidecar.
+
+    Regression for the un-gated spans load: before the fix ``file_spans`` was
+    populated ONLY when ``disposition is not None``, so a ``preserve_user_sections``
+    file carrying host-local overlay spans (disposition=None) deployed WITH markers
+    and never advanced its spans sidecar. The gate now keys on ``tracked_file.spans``.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    repo_root = tmp_path / "repo"
+    tracked_root = repo_root / "tracked"
+    tracked_root.mkdir(parents=True)
+    body = "## Python\n\nuse uv\n"
+    (tracked_root / "CLAUDE.md").write_text(
+        "# Title\n\n" + _PLACEHOLDER_PY, encoding="utf-8"
+    )
+    dst = tmp_path / "live" / "CLAUDE.md"
+    dst.parent.mkdir()
+    dst.write_text("# Title\n", encoding="utf-8")  # markerless live (post-install)
+
+    span = SpanEntry(
+        anchor="## Python",
+        kind=SpanKind.OVERLAY,
+        overlay=OverlaySpanPayload(anchor=AnchorAtEndOfFile(), body=body),
+    )
+    tracked_file = TrackedFile(
+        src=Path("CLAUDE.md"),
+        dst=str(dst),
+        preserve_user_sections=True,
+        spans=[span],
+    )
+    cfg = Config(
+        tracked_files={"claude_md": tracked_file},
+        profiles={"p": Profile(tracked_files=["claude_md"])},
+    )
+    resolved = ResolvedProfile(tracked_files=["claude_md"])
+    ctx = ProfileContext(cfg=cfg, resolved=resolved, repo_root=repo_root, profile="p")
+
+    _install_helpers._deploy_all_tracked_files(
+        ctx,
+        section_decisions={},
+        live_sections_map={},
+        host_local_sections_map={
+            "claude_md": {
+                # The PROJECTION already carries the overlay name (eb070aa).
+                HostLocalSectionName("## Python"): HostLocalSection(
+                    anchor=AnchorAtEndOfFile(), body=body, body_file=None
+                )
+            }
+        },
+    )
+
+    out = dst.read_text(encoding="utf-8")
+    assert "setforge:user-section" not in out  # every host-local marker stripped
+    assert out.count("## Python") == 1  # injected exactly once, markerless
+    assert "use uv" in out
+    # The sidecar advanced even though disposition is None.
+    states = spans_store.get_states("p", "claude_md")
+    assert "## Python" in states
 
 
 def test_resume_marker_strip_steady_state_is_noop(

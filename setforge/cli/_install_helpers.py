@@ -612,11 +612,10 @@ def _deploy_all_tracked_files(
                 )
             # Span re-overlay path: READ the spans sidecar BEFORE the deploy
             # so the relocation ladder has its derived state. Spans ride the
-            # disposition path (the 3-way merge is where the re-overlay +
-            # re-baseline happen).
-            file_spans = (
-                tracked_file.spans if tracked_file.disposition is not None else []
-            )
+            # disposition 3-way path AND the preserve path (markerless
+            # host-local overlay inject — 14.17), so load them whenever the
+            # tracked_file declares any span, not only on the disposition path.
+            file_spans = tracked_file.spans or []
             span_states = (
                 spans_store.get_states(profile, sub_name) if file_spans else {}
             )

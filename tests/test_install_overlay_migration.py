@@ -205,7 +205,7 @@ def test_no_disposition_migrated_overlay_survives_install_sync_cycle(
     - the host-local body is still present in the live file (no erase),
     - the host-local body NEVER appears in the tracked src (no leak),
     - ``compare --check`` reports no drift,
-    - the injected marker pair is not duplicated.
+    - the injected body is MARKERLESS (14.17 de-marker) and not duplicated.
     """
     _write_tracked(repo)
     config = _write_config(repo)
@@ -232,12 +232,13 @@ def test_no_disposition_migrated_overlay_survives_install_sync_cycle(
     assert "host-local notes" in live.read_text(encoding="utf-8")
 
     # Install #2: now reads the MIGRATED spans-only local.yaml. The body
-    # must be re-injected (not erased) and not duplicated.
+    # must be re-injected MARKERLESS (14.17: host-local overlay spans deploy
+    # without user-section markers), present exactly once, and not duplicated.
     second = _install(config, no_transition=True)
     assert second.exit_code == 0, second.output
     live_text = live.read_text(encoding="utf-8")
-    assert live_text.count("start host-local my-notes") == 1, live_text
-    assert "host-local notes" in live_text
+    assert "setforge:user-section" not in live_text, live_text
+    assert live_text.count("host-local notes") == 1, live_text
 
     # Sync/capture: the host-local body MUST NOT bake into the tracked src.
     sync = _sync(config)

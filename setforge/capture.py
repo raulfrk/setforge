@@ -92,6 +92,13 @@ def capture_tracked_file(
     preserve_user_keys_deep: list[str] | None = None,
     preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS,
     host_local_section_names: frozenset[str] = frozenset(),
+    spans: list[SpanEntry] | None = None,
+    span_states: dict[str, "spans_store.SpanState"] | None = None,
+    sub_name: str = "",
+    tracked_file_id: str = "",
+    auto: "CaptureAuto | None" = None,
+    interactive: bool = False,
+    local_config_path: Path | None = None,
 ) -> CaptureResult:
     """Write a stripped version of ``dst`` (live) back to ``src`` (tracked).
 
@@ -125,6 +132,28 @@ def capture_tracked_file(
         # does not fire for these tracked_files). Read live, optionally
         # strip shallow keys, merge tracked sections.
         content = _read_with_shallow_strip(dst, preserve_user_keys)
+        # MARKERLESS host-local OVERLAY bodies (14.17) own their excise:
+        # `install` injects them without markers, so the name-scoped marker
+        # strip below cannot see them — they would round-trip into the shared
+        # tracked source on the next `sync` (a host-state leak). Strip each
+        # overlay body by its exact recorded bytes BEFORE merging tracked
+        # sections, mirroring the disposition path's `_capture_overlay_bodies`
+        # (a hand-edited body routes to the keep/discard wizard; an
+        # unlocatable deployed body fails closed). Runs only when overlay
+        # spans exist, so legacy-only preserve files are byte-for-byte
+        # untouched.
+        md_overlay = overlay_deploy.overlay_spans(spans) if spans else []
+        if md_overlay:
+            content = _capture_overlay_bodies(
+                content,
+                md_overlay,
+                span_states or {},
+                sub_name=sub_name,
+                tracked_file_id=tracked_file_id,
+                auto=auto,
+                interactive=interactive,
+                local_config_path=local_config_path,
+            )
         # drop host-local marker pairs + bodies that were
         # injected by `setforge install` (via local.yaml
         # host_local_sections) from the captured live text BEFORE
@@ -340,6 +369,16 @@ def capture_profile(
                     local_config_path=local_config_path,
                 )
             else:
+                # No-disposition preserve files can still carry host-local
+                # OVERLAY spans (14.17 markerless deploy). Load the sidecar so
+                # capture can excise each markerless body by its exact recorded
+                # bytes before the tracked writeback — symmetric to the deploy
+                # inject and to the disposition path's overlay excise.
+                span_states = (
+                    spans_store.get_states(profile_name, sub_name)
+                    if tracked_file.spans
+                    else {}
+                )
                 result = capture_tracked_file(
                     sub_src,
                     sub_dst,
@@ -350,6 +389,13 @@ def capture_profile(
                         tracked_file.preserve_user_sections_mode
                     ),
                     host_local_section_names=host_local_names,
+                    spans=tracked_file.spans,
+                    span_states=span_states,
+                    sub_name=sub_name,
+                    tracked_file_id=name,
+                    auto=auto,
+                    interactive=interactive,
+                    local_config_path=local_config_path,
                 )
             results.append(
                 CaptureResult(name=sub_name, action=result.action, reason=result.reason)
