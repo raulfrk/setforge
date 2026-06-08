@@ -53,7 +53,7 @@ primitive only.
 import json
 from pathlib import Path
 
-from setforge import atomicio
+from setforge import atomicio, base_store_format
 from setforge.errors import BaseStoreError, BaseStoreIOError
 from setforge.scalar_merge import ABSENT
 from setforge.transitions import state_root
@@ -105,6 +105,7 @@ def _read_manifest(profile: str, file_id: str) -> _Manifest:
     :data:`_Manifest` shape this returns is a true contract, not a lie at
     the trust boundary.
     """
+    base_store_format.check_format_version(_profile_root(profile))
     target = _resolve_target(profile, file_id)
     try:
         raw = target.read_text(encoding="utf-8")
@@ -197,6 +198,7 @@ def set_bases(profile: str, file_id: str, values: dict[str, object]) -> None:
     for path, value in values.items():
         manifest[path] = _record(value)
     _write_manifest(profile, file_id, manifest)
+    base_store_format.stamp_format_version(_profile_root(profile))
 
 
 def set_base(profile: str, file_id: str, path: str, value: object) -> None:
