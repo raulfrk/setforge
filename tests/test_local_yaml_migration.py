@@ -18,7 +18,8 @@ load path (:func:`setforge.source._load_local_source_config`) and the
   one-line "upgrade setforge" message + nonzero CLI exit, no traceback);
   a malformed version → ``ConfigError``.
 - set-delta overlays (plugins / extensions / marketplaces) survive a
-  baseline 1.0 load unchanged (p5qc.13: versioned in place).
+  baseline 1.0 load unchanged (the set-delta home design decision:
+  these stay in local.yaml and are versioned in place).
 """
 
 from __future__ import annotations
@@ -53,8 +54,8 @@ tracked_files:
           host-only body
 """
 
-# A local.yaml carrying only set-delta overlays (p5qc.13: these stay in
-# local.yaml and are versioned in place — NOT on the retired-key list).
+# A local.yaml carrying only set-delta overlays (set-delta overlays stay
+# in local.yaml and are versioned in place — NOT on the retired-key list).
 _SET_DELTA_LOCAL = """\
 plugins:
   add:
