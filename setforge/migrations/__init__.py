@@ -68,6 +68,23 @@ def parse_schema_version(raw: str) -> tuple[int, int]:
     return (int(major), int(minor))
 
 
+def _meets_floor(supported: str, floor: str) -> bool:
+    """Return whether an engine supporting ``supported`` schema satisfies ``floor``.
+
+    A FULL ``(major, minor)`` tuple compare (never a major-only slice), so a
+    same-major-but-lower ``supported`` (e.g. engine ``1.2`` vs floor ``1.5``)
+    correctly fails — this is what reaches into the same-major forward-tolerance
+    window. The boundary is ``>=``: an engine exactly AT the floor satisfies it.
+
+    Both operands route through :func:`parse_schema_version`, so a malformed
+    value raises a clean :class:`ConfigError`, never a ``ValueError`` /
+    ``IndexError``. This is the SINGLE comparator shared by the config
+    load-gate and the ``migrate --finalize`` gate — keep it that way so the
+    two cannot diverge.
+    """
+    return parse_schema_version(supported) >= parse_schema_version(floor)
+
+
 def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
     """Return ``data`` as a mapping or raise :class:`ConfigError`.
 
@@ -98,6 +115,7 @@ __all__ = [
     "detect_current_schema",
     "find_migration_path",
     "known_versions",
+    "markerless_conversion_schema_version",
     "parse_schema_version",
 ]
 
@@ -115,6 +133,23 @@ This constant and the matching :data:`MIGRATIONS` entry are a MATCHED
 PAIR: the migration-coverage gate (``scripts/check_schema_gates.py``)
 fails CI unless the registry's chain from the baseline reaches this
 version.
+"""
+
+
+markerless_conversion_schema_version: Final[str] = "1.2"
+"""Schema version at which the markerless host-local representation landed.
+
+The host-local de-marker conversion shipped with the ``1.1 -> 1.2``
+:class:`RestampMigration`. An engine supporting schema ``>= 1.2`` understands
+the markerless ``local.yaml`` overlay representation; an older one would
+corrupt a marker-stripped tracked file on writeback.
+
+This value is FROZEN: it records a historical fact and must NEVER be aliased
+to — or bumped alongside — :data:`current_expected_schema_version` (which keeps
+advancing). The ``migrate --finalize`` gate permits the irreversible
+tracked-marker strip only when the operator-declared ``minimum_version`` is at
+or above this constant; tying it to the live expected version would silently
+move that gate on every future schema bump.
 """
 
 

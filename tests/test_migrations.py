@@ -103,6 +103,62 @@ def test_parse_schema_version_rejects_malformed_cleanly(bad: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# minimum_version floor — frozen conversion constant + shared comparator
+# ---------------------------------------------------------------------------
+
+
+def test_markerless_conversion_schema_version_is_frozen_one_two() -> None:
+    """The markerless representation landed at the 1.1->1.2 RestampMigration.
+
+    This constant is FROZEN — it records a historical fact and must never
+    track / be aliased to ``current_expected_schema_version`` (which keeps
+    advancing), or the finalizer gate would silently move.
+    """
+    from setforge.migrations import markerless_conversion_schema_version
+
+    assert markerless_conversion_schema_version == "1.2"
+
+
+def test_meets_floor_exact_equality_passes() -> None:
+    """An engine AT the floor satisfies it (boundary: >=, not >)."""
+    from setforge.migrations import _meets_floor
+
+    assert _meets_floor("1.2", "1.2") is True
+
+
+def test_meets_floor_supported_above_floor_passes() -> None:
+    from setforge.migrations import _meets_floor
+
+    assert _meets_floor("1.3", "1.2") is True
+    assert _meets_floor("2.0", "1.5") is True
+
+
+def test_meets_floor_supported_below_floor_fails() -> None:
+    from setforge.migrations import _meets_floor
+
+    assert _meets_floor("1.1", "1.2") is False
+    assert _meets_floor("1.9", "2.0") is False
+
+
+def test_meets_floor_is_semantic_not_lexical() -> None:
+    """1.10 meets a 1.9 floor — the lexical compare ("1.10" < "1.9") is wrong."""
+    from setforge.migrations import _meets_floor
+
+    assert _meets_floor("1.10", "1.9") is True
+
+
+@pytest.mark.parametrize("bad", ["1", "1.2.3", "", "v2"])
+def test_meets_floor_rejects_malformed_cleanly(bad: str) -> None:
+    """Malformed operands raise ConfigError via parse_schema_version, not ValueError."""
+    from setforge.migrations import _meets_floor
+
+    with pytest.raises(ConfigError, match="malformed schema_version"):
+        _meets_floor(bad, "1.2")
+    with pytest.raises(ConfigError, match="malformed schema_version"):
+        _meets_floor("1.2", bad)
+
+
+# ---------------------------------------------------------------------------
 # reverse + registry guard
 # ---------------------------------------------------------------------------
 
