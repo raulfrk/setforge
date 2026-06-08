@@ -83,6 +83,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     "Config": {
         "version": "<class 'int'>",
         "schema_version": "<class 'str'>",
+        "minimum_version": "str | None",
         "tracked_files": "dict[str, setforge.config.TrackedFile]",
         "marketplaces": "dict[str, setforge.config.MarketplaceSource]",
         "claude_plugins": "dict[str, setforge.config.ClaudePluginRef]",

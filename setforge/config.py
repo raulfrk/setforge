@@ -36,7 +36,11 @@ from setforge.local_overlay import (
     resolve_marketplace_overlay,
     resolve_plugin_overlay,
 )
-from setforge.migrations import current_expected_schema_version, parse_schema_version
+from setforge.migrations import (
+    _meets_floor,
+    current_expected_schema_version,
+    parse_schema_version,
+)
 from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
 from setforge.spans import SpanEntry, SpanSemantics
 
@@ -551,6 +555,22 @@ class Config(BaseModel):
     ``"2.0"``) rather than the integer ``version`` field, which
     enumerates the YAML file format itself and is owned by the engine.
     """
+    minimum_version: str | None = None
+    """Optional operator-declared ``MAJOR.MINOR`` schema floor.
+
+    When set, an engine whose
+    :data:`setforge.migrations.current_expected_schema_version` is BELOW this
+    value hard-refuses every config-reading command (see
+    :func:`_guard_schema_version`) — overriding the same-major forward-tolerance
+    that :func:`load_config` otherwise grants. It is the operator's attestation
+    that all hosts are upgraded, making a same-major schema contraction (e.g.
+    the ``migrate --finalize`` tracked-marker strip) safe. ``None`` ⇒ no floor.
+
+    The gate reads this value from the raw YAML mapping in
+    :func:`_guard_schema_version`, BEFORE model validation, so a floor that an
+    older engine would strip as an unknown key still fires on engines that know
+    the field.
+    """
     tracked_files: dict[str, TrackedFile]
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
@@ -835,9 +855,19 @@ def _guard_schema_version(data: object, path: Path) -> None:
       :func:`_warn_unknown_keys`) makes same-major forward reads safe;
       :func:`_warn_on_schema_mismatch` nags on older.
 
+    It then enforces an optional operator-declared ``minimum_version`` floor:
+    when present and the build's
+    :data:`current_expected_schema_version` is BELOW it (a FULL major.minor
+    compare via :func:`~setforge.migrations._meets_floor`), refuse cleanly —
+    even in the same-major window the cross-major check above tolerates. The
+    floor is read from the RAW mapping here, before model validation, so it
+    fires even though :func:`_validate_tolerant` would strip the field as
+    unknown on engines that predate it.
+
     Running BEFORE ``model_validate`` is what keeps a malformed or
     future-major config from leaking a raw Pydantic traceback. A malformed
-    ``schema_version`` raises a clean :class:`ConfigError` via
+    ``schema_version`` (or ``minimum_version``) raises a clean
+    :class:`ConfigError` via
     :func:`~setforge.migrations.parse_schema_version`.
     """
     raw = data.get("schema_version") if isinstance(data, Mapping) else None
@@ -851,6 +881,17 @@ def _guard_schema_version(data: object, path: Path) -> None:
             f"{current_expected_schema_version!r}); upgrade setforge to "
             f">= {detected_major}.0 to read this config"
         )
+    raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
+    if raw_floor is not None:
+        floor = str(raw_floor)
+        if not _meets_floor(current_expected_schema_version, floor):
+            raise ConfigError(
+                f"{path}: minimum_version {floor!r} requires a newer setforge "
+                f"(this build supports schema "
+                f"{current_expected_schema_version!r}); upgrade setforge to a "
+                f"build supporting schema >= {floor} to operate on this config "
+                f"(or lower minimum_version in {path})"
+            )
 
 
 def _warn_unknown_keys(unknown: list[str]) -> None:

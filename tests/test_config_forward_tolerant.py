@@ -71,3 +71,66 @@ def test_nested_unknown_key_warned(
     cfg = _write(tmp_path, body)
     load_config(cfg)
     assert "tracked_files.a.tipo" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# minimum_version floor — hard-refuse below the operator-declared schema floor
+# ---------------------------------------------------------------------------
+
+_WITH_FLOOR = (
+    "version: 1\nschema_version: {ver}\nminimum_version: {floor}\n"
+    "tracked_files: {{}}\nprofiles:\n  default: {{}}\n"
+)
+
+
+def test_minimum_version_field_accepted(tmp_path: Path) -> None:
+    """The optional field is part of the schema (not flagged as unknown)."""
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.2"'))
+    config = load_config(cfg)
+    assert config.minimum_version == "1.2"
+
+
+def test_minimum_version_above_engine_same_major_refuses(tmp_path: Path) -> None:
+    """Floor 1.5 on a 1.2 engine refuses — inside 14.2's same-major window."""
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.5"'))
+    with pytest.raises(ConfigError, match="minimum_version") as exc:
+        load_config(cfg)
+    assert "upgrade setforge" in str(exc.value)
+
+
+def test_minimum_version_equal_engine_loads(tmp_path: Path) -> None:
+    """Engine exactly AT the floor proceeds (boundary: strict below refuses)."""
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.2"'))
+    assert load_config(cfg).minimum_version == "1.2"
+
+
+def test_minimum_version_below_engine_loads(tmp_path: Path) -> None:
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.1"'))
+    assert load_config(cfg).minimum_version == "1.1"
+
+
+def test_minimum_version_absent_loads(tmp_path: Path) -> None:
+    """No floor declared ⇒ None ⇒ permit (no parse of None)."""
+    cfg = _write(tmp_path, _AT.format(ver='"1.2"'))
+    assert load_config(cfg).minimum_version is None
+
+
+def test_minimum_version_malformed_clean_error(tmp_path: Path) -> None:
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"1.2"', floor='"1.2.3"'))
+    with pytest.raises(ConfigError, match="malformed schema_version"):
+        load_config(cfg)
+
+
+def test_minimum_version_refuses_before_unknown_key_validation(tmp_path: Path) -> None:
+    """Floor read from RAW data refuses even when a stray unknown key is present.
+
+    Proves the gate runs pre-validation off the raw mapping — not off a
+    validated Config attribute that the forward-tolerant strip would eat.
+    """
+    body = (
+        'version: 1\nschema_version: "1.2"\nminimum_version: "1.5"\n'
+        "tracked_files: {}\nprofiles:\n  default: {}\nstray_typo: 1\n"
+    )
+    cfg = _write(tmp_path, body)
+    with pytest.raises(ConfigError, match="minimum_version"):
+        load_config(cfg)
