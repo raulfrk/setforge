@@ -186,6 +186,68 @@ def test_revert_restores_local_yaml_bytes_and_mode(repo: Path, tmp_path: Path) -
     assert stat.S_IMODE(local.stat().st_mode) == pre_mode
 
 
+_H64 = "b" * 64
+_TRACKED_HL = (
+    "# Title\n\n"
+    "<!-- setforge:user-section start host-local notes -->\n"
+    "default\n"
+    f"<!-- setforge:user-section end host-local notes hash={_H64} -->\n"
+)
+_LIVE_HL = (
+    "# Title\n\n"
+    "<!-- setforge:user-section start host-local notes -->\n"
+    "my per-host notes\n"
+    f"<!-- setforge:user-section end host-local notes hash={_H64} -->\n"
+)
+
+
+def test_first_install_converts_live_host_local_marker_to_markerless(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Increment 3: a live host-local marker body is captured + rendered markerless.
+
+    Pre-state mirrors a pre-14.17 host: tracked CLAUDE.md ships a host-local
+    marker placeholder; the deployed live file carries the per-host body inside
+    that marker region (preserved historically by preserve_user_sections); the
+    body is NOT yet in local.yaml. After ONE install the body must be captured to
+    a local.yaml overlay span, the deployed file markerless, the body present
+    once, re-install a no-op, and the body must never leak into tracked on sync.
+    """
+    src = repo / "tracked" / "doc.md"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(_TRACKED_HL, encoding="utf-8")
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    local.write_text("# host config\ntracked_files:\n  doc: {}\n", encoding="utf-8")
+    live = _live_doc_path()
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(_LIVE_HL, encoding="utf-8")  # pre-deployed markered per-host body
+
+    import setforge.source as _source
+
+    monkeypatch.setattr(
+        _source.load_local_host_local_sections, "__defaults__", (local,)
+    )
+
+    # Install #1: capture live body → local.yaml overlay; deploy renders markerless.
+    first = _install(config, no_transition=True)
+    assert first.exit_code == 0, first.output
+    live_text = live.read_text(encoding="utf-8")
+    assert "setforge:user-section" not in live_text  # zero markers after one install
+    assert live_text.count("my per-host notes") == 1  # body injected once, markerless
+    assert "kind: overlay" in local.read_text(encoding="utf-8")  # captured to overlay
+
+    # Install #2: live is markerless now → migration no-op, deploy stable.
+    second = _install(config, no_transition=True)
+    assert second.exit_code == 0, second.output
+    assert live.read_text(encoding="utf-8") == live_text
+
+    # Leak gate: the per-host body must never bake into the tracked source.
+    sync = _sync(config)
+    assert sync.exit_code == 0, sync.output
+    assert "my per-host notes" not in src.read_text(encoding="utf-8")
+
+
 def test_no_disposition_migrated_overlay_survives_install_sync_cycle(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
