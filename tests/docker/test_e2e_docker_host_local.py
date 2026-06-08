@@ -332,7 +332,7 @@ def test_validate_accepts_host_local_sections_on_md_tracked_file(
 def test_install_idempotent_re_run_no_duplication(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Re-running install with the same overlay does not duplicate markers."""
+    """Re-running install does not duplicate the (now markerless) host-local body."""
     c = docker_container()
     _write_local_yaml(
         c,
@@ -347,7 +347,10 @@ def test_install_idempotent_re_run_no_duplication(
     _install_host_local(c, check=True)
     _install_host_local(c, check=True)
     live = c.exec(["cat", _HOST_LIVE]).stdout
-    assert live.count("start host-local s1") == 1
+    # 14.17: the local.yaml host_local_sections block is migrated to a markerless
+    # overlay, so the deployed file carries the body once, without markers.
+    assert "start host-local s1" not in live
+    assert live.count("idempotent body") == 1
 
 
 def test_install_symlink_deployed_tracked_file(
