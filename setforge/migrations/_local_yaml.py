@@ -77,7 +77,8 @@ def detect_local_yaml_schema(path: Path) -> str:
     ``schema_version`` key all resolve to
     :data:`LOCAL_YAML_BASELINE_VERSION`. Raises
     :class:`~setforge.errors.ConfigError` (via :func:`_require_mapping_root`)
-    when the root is a non-mapping.
+    when the root is a non-mapping, and may propagate a ruamel
+    ``YAMLError`` if the file is not well-formed YAML.
     """
     if not path.exists():
         return LOCAL_YAML_BASELINE_VERSION
