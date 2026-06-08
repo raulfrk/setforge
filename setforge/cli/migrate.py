@@ -40,7 +40,7 @@ from setforge._redact import redact_argv
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import MIGRATE_EXAMPLES
 from setforge.compare import resolve_src
-from setforge.config import load_config
+from setforge.config import guard_minimum_version, load_config
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.migrations import (
     MIGRATIONS,
@@ -146,6 +146,10 @@ def migrate(
             "--finalize cannot be combined with --check/--apply/--pin/--to"
         )
     cfg_path = _resolve_config_arg(config)
+    # The floor gates migrate too: --check/--apply/--pin read the schema via
+    # detect_current_schema (not load_config), so enforce it here BEFORE any
+    # read/mutation — a below-floor engine must not inspect or migrate the repo.
+    guard_minimum_version(cfg_path)
     if pin is not None:
         _dispatch_pin(cfg_path=cfg_path, pin=pin)
         return

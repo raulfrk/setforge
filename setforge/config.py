@@ -882,16 +882,52 @@ def _guard_schema_version(data: object, path: Path) -> None:
             f">= {detected_major}.0 to read this config"
         )
     raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
-    if raw_floor is not None:
-        floor = str(raw_floor)
-        if not _meets_floor(current_expected_schema_version, floor):
-            raise ConfigError(
-                f"{path}: minimum_version {floor!r} requires a newer setforge "
-                f"(this build supports schema "
-                f"{current_expected_schema_version!r}); upgrade setforge to a "
-                f"build supporting schema >= {floor} to operate on this config "
-                f"(or lower minimum_version in {path})"
-            )
+    _refuse_below_floor(raw_floor, path)
+
+
+def _refuse_below_floor(raw_floor: object, path: Path) -> None:
+    """Raise :class:`ConfigError` when the build is below ``raw_floor``.
+
+    ``raw_floor`` is the raw ``minimum_version`` value (``None`` ⇒ no floor ⇒
+    no-op). When present, compare the build's
+    :data:`current_expected_schema_version` against it with a FULL major.minor
+    tuple compare (:func:`~setforge.migrations._meets_floor`, ``>=`` boundary)
+    and refuse below it. Shared by :func:`_guard_schema_version` (the
+    ``load_config`` path) and :func:`guard_minimum_version` (the raw-read path
+    used by ``migrate``), so the two enforce an identical floor.
+    """
+    if raw_floor is None:
+        return
+    floor = str(raw_floor)
+    if not _meets_floor(current_expected_schema_version, floor):
+        raise ConfigError(
+            f"{path}: minimum_version {floor!r} requires a newer setforge "
+            f"(this build supports schema "
+            f"{current_expected_schema_version!r}); upgrade setforge to a "
+            f"build supporting schema >= {floor} to operate on this config "
+            f"(or lower minimum_version in {path})"
+        )
+
+
+def guard_minimum_version(cfg_path: Path) -> None:
+    """Enforce the ``minimum_version`` floor from a config file path.
+
+    Verbs that inspect the schema via
+    :func:`~setforge.migrations.detect_current_schema` rather than
+    :func:`load_config` (notably ``migrate --check`` / ``--apply`` / ``--pin``)
+    bypass the floor baked into :func:`_guard_schema_version`. Call this on
+    those paths so a below-floor engine refuses there too — and, for
+    ``--apply``, BEFORE any mutation. No-op when the file is absent / empty or
+    declares no floor; a malformed ``minimum_version`` raises a clean
+    :class:`ConfigError`.
+    """
+    if not cfg_path.exists():
+        return
+    yaml = YAML(typ="rt")
+    with cfg_path.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    raw_floor = data.get("minimum_version") if isinstance(data, Mapping) else None
+    _refuse_below_floor(raw_floor, cfg_path)
 
 
 def _warn_unknown_keys(unknown: list[str]) -> None:

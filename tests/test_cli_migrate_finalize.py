@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from setforge import transitions
 from setforge.cli import app
+from setforge.errors import ConfigError
 
 _HL = (
     "intro\n"
@@ -217,3 +218,28 @@ def test_finalize_then_revert_restores_markers(tmp_path: Path) -> None:
     )
     assert rev.exit_code == 0, rev.output
     assert src.read_bytes() == original
+
+
+# ---------------------------------------------------------------------------
+# the floor also gates migrate's own read paths (detect_current_schema bypass)
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_check_refuses_below_floor(tmp_path: Path) -> None:
+    """``migrate --check`` reads via detect_current_schema but still refuses."""
+    cfg = _make_repo(tmp_path, floor="1.9", files={"a.md": _NO_MARKERS})
+    result = CliRunner().invoke(app, ["migrate", "--check", f"--config={cfg}"])
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, ConfigError)
+    assert "minimum_version" in str(result.exception)
+
+
+def test_migrate_apply_refuses_below_floor_without_mutating(tmp_path: Path) -> None:
+    """``migrate --apply`` refuses BEFORE mutating — no below-floor write."""
+    cfg = _make_repo(tmp_path, floor="1.9", files={"a.md": _NO_MARKERS})
+    before = cfg.read_bytes()
+    result = CliRunner().invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
+    assert result.exit_code != 0, result.output
+    assert isinstance(result.exception, ConfigError)
+    assert "minimum_version" in str(result.exception)
+    assert cfg.read_bytes() == before
