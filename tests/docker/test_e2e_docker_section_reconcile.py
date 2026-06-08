@@ -277,7 +277,7 @@ def test_install_auto_keep_live_silences_warning(
 def test_install_host_local_drift_silently_kept_hash_maintained(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """5: host-local section drift kept silently, hash rewritten."""
+    """5: host-local drift kept silently; the marker converts to markerless."""
     c = docker_container()
     _install(c, "test-text-sections")
     new_body = "host-edited body line\n"
@@ -286,8 +286,11 @@ def test_install_host_local_drift_silently_kept_hash_maintained(
     combined = result.stdout + result.stderr
     assert "shared section" not in combined
     live = c.read_text(_LIVE_HOST_LOCAL)
+    # 14.17: the tracked-authored host-local marker is converted to a markerless
+    # local.yaml overlay on the re-install — the per-host edit is preserved, but
+    # markerless (so there is no end-marker hash to maintain).
     assert "host-edited body line" in live
-    assert f"hash={_sha256(new_body)}" in live
+    assert "setforge:user-section" not in live
 
 
 def test_install_reconcile_use_tracked_then_revert_restores_live(
