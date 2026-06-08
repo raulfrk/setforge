@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from setforge.errors import MarkerError
 from setforge.host_local_marker_migration import (
     append_overlay_spans,
     build_overlay_span_node,
@@ -64,7 +65,8 @@ def test_multi_section_preserves_top_to_bottom_order() -> None:
 
 def test_duplicate_host_local_name_refuses() -> None:
     text = _pair("dup", "a\n") + _pair("dup", "b\n")
-    with pytest.raises(ValueError, match="duplicate host-local"):
+    # MarkerError (a SetforgeError) so the CLI exits clean, not a raw traceback.
+    with pytest.raises(MarkerError, match="duplicate host-local"):
         extract_host_local_marker_bodies(text)
 
 

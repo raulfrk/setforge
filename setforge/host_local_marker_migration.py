@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from setforge.errors import MarkerError
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.overlay_inject import canonical_body
 from setforge.sections import (
@@ -37,9 +38,13 @@ def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
     to but not including the end-marker line), matching
     :func:`setforge.sections.extract_sections`. Shared regions are ignored.
 
-    Raises :class:`ValueError` on a duplicate host-local name — silently
-    dropping one (the dict last-wins behavior of ``extract_sections``) would
-    lose a per-host body before it could be captured.
+    Raises :class:`~setforge.errors.MarkerError` on a duplicate host-local name
+    (silently dropping one — the dict last-wins of ``extract_sections`` — would
+    lose a per-host body before it could be captured) AND, via
+    :func:`setforge.sections._walk_markers`, on any malformed / unclosed /
+    nested / name-mismatched marker in ``text``. ``MarkerError`` is a
+    :class:`~setforge.errors.SetforgeError`, so the CLI surfaces it as a clean
+    ``error: ...`` exit rather than a traceback.
     """
     bodies: dict[str, str] = {}
     current: str | None = None
@@ -51,7 +56,7 @@ def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
                 lines = []
             case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, key=key):
                 if key in bodies:
-                    raise ValueError(f"duplicate host-local section name {key!r}")
+                    raise MarkerError(f"duplicate host-local section name {key!r}")
                 bodies[key] = "".join(lines)
                 current = None
             case _BodyLine(line=line) if current is not None:

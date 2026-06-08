@@ -329,6 +329,12 @@ def migrate_host_local_markers_on_install(
     pre-migration text for the transition seed. Does NOT mutate ``cfg`` or touch
     the live file — the caller re-resolves the overlay from the rewritten
     ``local.yaml`` (single-install convergence) and deploy strips live.
+
+    Propagates :class:`~setforge.errors.MarkerError` from
+    :func:`setforge.host_local_marker_migration.extract_host_local_marker_bodies`
+    when a live file carries a duplicate-named or malformed host-local marker —
+    a :class:`~setforge.errors.SetforgeError`, so install aborts cleanly BEFORE
+    any ``local.yaml`` write or deploy (no partial capture, no data loss).
     """
     from setforge import host_local_marker_migration as hlm
     from setforge import source
