@@ -287,6 +287,119 @@ def seed_overlay_migration_snapshot(
     file_pre[migration.path] = migration.pre_text
 
 
+@dataclass(slots=True, frozen=True)
+class HostLocalMarkerMigration:
+    """Outcome of the on-install host-local marker → overlay capture (14.17).
+
+    ``local_path`` is the ``local.yaml`` that was (or would be) rewritten;
+    ``pre_text`` is its content BEFORE the capture write (``None`` when absent),
+    so the install transition can seed the genuine pre-migration ``file_pre``.
+    ``migrated`` is ``True`` only when at least one populated host-local body was
+    captured into a NEW overlay span (an idempotent / crash-resume re-run that
+    finds every name already present reports ``False`` — no write occurred).
+    ``names_by_file`` records the captured section names per tracked_file id for
+    the one-time warning.
+    """
+
+    local_path: Path
+    pre_text: str | None
+    migrated: bool
+    names_by_file: dict[str, list[str]]
+
+
+def migrate_host_local_markers_on_install(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    *,
+    local_config_path: Path | None = None,
+) -> HostLocalMarkerMigration:
+    """Capture live host-local marker bodies → at-EOF OVERLAY spans in local.yaml.
+
+    For every markdown ``preserve_user_sections`` tracked_file in the resolved
+    profile whose live dst exists, read its host-local marker bodies; capture
+    each POPULATED body (``body.strip()`` truthy) into a host-local OVERLAY span
+    in ``local.yaml`` BEFORE the deploy that follows blanket-strips (and would
+    otherwise delete) it. EMPTY bodies are dropped (deploy strips the empty
+    markers, no overlay). Idempotent via
+    :func:`setforge.host_local_marker_migration.append_overlay_spans`'
+    presence-check (a name already an overlay span is skipped — crash-resume).
+
+    Disk + record only: writes ``local.yaml`` (atomic) and returns the
+    pre-migration text for the transition seed. Does NOT mutate ``cfg`` or touch
+    the live file — the caller re-resolves the overlay from the rewritten
+    ``local.yaml`` (single-install convergence) and deploy strips live.
+    """
+    from setforge import host_local_marker_migration as hlm
+    from setforge import source
+
+    local_path = (
+        local_config_path if local_config_path is not None else source.LOCAL_CONFIG_PATH
+    )
+    additions: dict[str, list[tuple[str, str]]] = {}
+    names_by_file: dict[str, list[str]] = {}
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[tf_id]
+        if not tracked_file.preserve_user_sections:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        if src.suffix.lower() not in {".md", ".markdown"}:
+            continue
+        dst = resolve_dst(tracked_file)
+        if not dst.exists():
+            continue
+        bodies = hlm.extract_host_local_marker_bodies(dst.read_text(encoding="utf-8"))
+        populated = [(name, body) for name, body in bodies.items() if body.strip()]
+        if populated:
+            additions[tf_id] = populated
+            names_by_file[tf_id] = [name for name, _ in populated]
+    if not additions:
+        return HostLocalMarkerMigration(local_path, None, False, {})
+    try:
+        pre_text: str | None = local_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pre_text = None
+    written = hlm.append_overlay_spans(local_path, additions)
+    if written == 0:
+        # Every candidate name was already an overlay span (crash-resume):
+        # nothing new on disk, so there is no transition delta to record.
+        return HostLocalMarkerMigration(local_path, pre_text, False, {})
+    captured = sorted(name for names in names_by_file.values() for name in names)
+    typer.secho(
+        f"{local_path}: captured host-local section(s) {captured} into markerless "
+        "local.yaml overlay spans (per-host bodies preserved). To restore the "
+        "pre-migration state, run `setforge revert`.",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
+    return HostLocalMarkerMigration(local_path, pre_text, True, names_by_file)
+
+
+def seed_host_local_marker_snapshot(
+    migration: HostLocalMarkerMigration,
+    overlay_migration: OverlaySpanMigration,
+    dst_paths: list[Path],
+    file_pre: dict[Path, str | None],
+) -> None:
+    """Record the host-local capture in the install transition (revert lockstep).
+
+    No-op when nothing was captured. Otherwise appends ``local.yaml`` to
+    ``dst_paths`` (so ``file_post`` captures the new spans) and seeds
+    ``file_pre`` with the genuine PRE-migration text. EARLIEST-WINS: when the
+    10.2 :func:`seed_overlay_migration_snapshot` already seeded
+    ``file_pre[local.yaml]`` (``overlay_migration.migrated``), that value is the
+    pre-everything text and is KEPT; otherwise this migration's ``pre_text`` is
+    the pre-everything text and is used. Mutates ``dst_paths`` / ``file_pre`` in
+    place.
+    """
+    if not migration.migrated:
+        return
+    if migration.local_path not in dst_paths:
+        dst_paths.append(migration.local_path)
+    if not overlay_migration.migrated or migration.local_path not in file_pre:
+        file_pre[migration.local_path] = migration.pre_text
+
+
 def _validate_span_file_types(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> None:
