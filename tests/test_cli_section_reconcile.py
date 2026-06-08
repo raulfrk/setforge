@@ -300,14 +300,23 @@ def test_install_bare_no_warn_when_host_local_drift_only(
     assert "shared section" not in result.output
 
 
-def test_install_hash_maintained_on_host_local(fixture: dict[str, Path]) -> None:
-    """Even for host-local sections, install rewrites the end-marker hash."""
+def test_install_converts_host_local_marker_to_markerless(
+    fixture: dict[str, Path],
+) -> None:
+    """A tracked-authored host-local marker converts to a markerless overlay (14.17).
+
+    Supersedes the old host-local end-marker hash-maintenance behavior: install
+    captures the per-host live body into a local.yaml overlay span and renders
+    the deployed file WITHOUT host-local markers (so there is no host-local
+    end-marker hash to maintain). Shared markers still hash-maintain — covered
+    by the sibling shared-section tests.
+    """
     body = "host body\n"
     # Post-strict-hash: tracked must ship with a stamped end-marker hash.
     fixture["src"].write_text(
         _make_section_text("notes", "host-local", body, _sha256(body))
     )
-    # Live with stale embedded hash.
+    # Live carries a per-host edit inside the marker region.
     fixture["dst"].write_text(
         _make_section_text(
             "notes",
@@ -323,10 +332,10 @@ def test_install_hash_maintained_on_host_local(fixture: dict[str, Path]) -> None
     )
     assert result.exit_code == 0, result.output
     live_post = fixture["dst"].read_text()
-    # Body preserved.
+    # Per-host body preserved, but markerless (captured to a local.yaml overlay).
     assert "live-edited body\n" in live_post
-    # Hash now matches the live body.
-    assert extract_marker_hashes(live_post) == {"notes": _sha256("live-edited body\n")}
+    assert "setforge:user-section" not in live_post
+    assert extract_marker_hashes(live_post) == {}
 
 
 def test_install_first_run_no_warning_when_no_live(fixture: dict[str, Path]) -> None:
