@@ -265,6 +265,21 @@ def test_read_io_error_wrapped(
         scalar_base_store.get_base("vm", "f", "x")
 
 
+def test_set_bases_stamp_io_error_wrapped(
+    state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An OSError from the format-version stamp surfaces as BaseStoreIOError,
+    # the same as the manifest write, rather than propagating raw.
+    def boom(
+        root: Path, *, version: str = base_store_format.BASE_STORE_FORMAT_VERSION
+    ) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(base_store_format, "stamp_format_version", boom)
+    with pytest.raises(BaseStoreIOError):
+        scalar_base_store.set_bases("vm", "f", {"a": 1})
+
+
 # --- format-version sidecar wiring ---------------------------------------
 
 

@@ -198,7 +198,12 @@ def set_bases(profile: str, file_id: str, values: dict[str, object]) -> None:
     for path, value in values.items():
         manifest[path] = _record(value)
     _write_manifest(profile, file_id, manifest)
-    base_store_format.stamp_format_version(_profile_root(profile))
+    try:
+        base_store_format.stamp_format_version(_profile_root(profile))
+    except OSError as err:
+        raise BaseStoreIOError(
+            f"failed to stamp scalar-base format version for {profile}: {err}"
+        ) from err
 
 
 def set_base(profile: str, file_id: str, path: str, value: object) -> None:

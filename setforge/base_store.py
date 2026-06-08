@@ -121,7 +121,12 @@ def write_base(profile: str, file_id: str, data: bytes) -> None:
         raise BaseStoreIOError(
             f"failed to write base for {profile}/{file_id}: {err}"
         ) from err
-    base_store_format.stamp_format_version(_profile_root(profile))
+    try:
+        base_store_format.stamp_format_version(_profile_root(profile))
+    except OSError as err:
+        raise BaseStoreIOError(
+            f"failed to stamp base-store format version for {profile}: {err}"
+        ) from err
 
 
 def prune(profile: str, live_file_ids: set[str]) -> None:

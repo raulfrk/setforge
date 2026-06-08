@@ -383,8 +383,10 @@ class BaseStoreSchemaError(BaseStoreError):
     unparseable / unreadable — so a future-format root is refused rather
     than silently mis-parsed.
 
-    The message names the offending root plus the expected-vs-found
-    versions, and points at the recovery: deleting that root re-grandfathers
+    The message names the offending store root and, on a version
+    mismatch, the expected-vs-found pair (the unparseable-sidecar and
+    OSError-while-reading sites carry no such pair), and points at the
+    recovery: deleting that root re-grandfathers
     it (the next merge degrades to a noisier full-content merge, never a
     crash). A SIBLING of :class:`BaseStoreIOError` — a version mismatch is a
     schema-contract failure, distinct from an OS-level read/write failure.

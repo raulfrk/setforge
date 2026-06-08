@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from setforge import base_store, base_store_format
-from setforge.errors import BaseStoreError, BaseStoreSchemaError
+from setforge.errors import BaseStoreError, BaseStoreIOError, BaseStoreSchemaError
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +138,21 @@ def test_prune_preserves_format_version_sidecar(state_dir: Path) -> None:
     assert base_store.read_base("vm", "a") is None
     assert base_store.read_base("vm", "b") is None
     assert _sidecar(state_dir, "vm").exists()
+
+
+def test_write_base_stamp_io_error_wrapped(
+    state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An OSError from the format-version stamp surfaces as BaseStoreIOError,
+    # the same as the payload write, rather than propagating raw.
+    def boom(
+        root: Path, *, version: str = base_store_format.BASE_STORE_FORMAT_VERSION
+    ) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(base_store_format, "stamp_format_version", boom)
+    with pytest.raises(BaseStoreIOError):
+        base_store.write_base("vm", "claude/CLAUDE.md", b"x")
 
 
 def test_grandfather_then_stamp_on_next_write(state_dir: Path) -> None:
