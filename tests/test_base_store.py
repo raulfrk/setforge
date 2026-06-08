@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from setforge import base_store
-from setforge.errors import BaseStoreError
+from setforge import base_store, base_store_format
+from setforge.errors import BaseStoreError, BaseStoreSchemaError
 
 
 @pytest.fixture(autouse=True)
@@ -95,3 +95,59 @@ def test_prune_keeps_only_live_ids(state_dir: Path) -> None:
 
 def test_prune_missing_profile_is_noop() -> None:
     base_store.prune("never-written", {"a"})
+
+
+# --- format-version sidecar wiring ---------------------------------------
+
+
+def _sidecar(state_dir: Path, profile: str) -> Path:
+    return state_dir / "base" / profile / base_store_format.SIDECAR_NAME
+
+
+def test_write_base_stamps_format_version(state_dir: Path) -> None:
+    # First-run and legacy-data both stamp v1 lazily on write.
+    base_store.write_base("vm", "claude/CLAUDE.md", b"x")
+    sidecar = _sidecar(state_dir, "vm")
+    assert (
+        sidecar.read_text(encoding="utf-8").strip()
+        == base_store_format.BASE_STORE_FORMAT_VERSION
+    )
+
+
+def test_read_base_refuses_future_format_before_read(state_dir: Path) -> None:
+    base_store.write_base("vm", "claude/CLAUDE.md", b"payload")
+    _sidecar(state_dir, "vm").write_text("2.0\n", encoding="utf-8")
+    with pytest.raises(BaseStoreSchemaError):
+        base_store.read_base("vm", "claude/CLAUDE.md")
+
+
+def test_read_base_grandfathers_legacy_root(state_dir: Path) -> None:
+    # A pre-versioning root: payload present, no sidecar -> read succeeds.
+    target = state_dir / "base" / "vm" / "claude" / "CLAUDE.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"legacy")
+    assert not _sidecar(state_dir, "vm").exists()
+    assert base_store.read_base("vm", "claude/CLAUDE.md") == b"legacy"
+
+
+def test_prune_preserves_format_version_sidecar(state_dir: Path) -> None:
+    base_store.write_base("vm", "a", b"1")
+    base_store.write_base("vm", "b", b"2")
+    # Prune away every live id; the sidecar is metadata, not a base.
+    base_store.prune("vm", set())
+    assert base_store.read_base("vm", "a") is None
+    assert base_store.read_base("vm", "b") is None
+    assert _sidecar(state_dir, "vm").exists()
+
+
+def test_grandfather_then_stamp_on_next_write(state_dir: Path) -> None:
+    target = state_dir / "base" / "vm" / "claude" / "CLAUDE.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"legacy")
+    # Read grandfathers (no sidecar yet); the next write stamps it.
+    assert base_store.read_base("vm", "claude/CLAUDE.md") == b"legacy"
+    base_store.write_base("vm", "claude/CLAUDE.md", b"updated")
+    assert (
+        _sidecar(state_dir, "vm").read_text(encoding="utf-8").strip()
+        == base_store_format.BASE_STORE_FORMAT_VERSION
+    )

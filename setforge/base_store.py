@@ -39,7 +39,7 @@ in this file.
 
 from pathlib import Path
 
-from setforge import atomicio
+from setforge import atomicio, base_store_format
 from setforge.errors import BaseStoreError, BaseStoreIOError
 from setforge.transitions import state_root
 
@@ -94,6 +94,7 @@ def read_base(profile: str, file_id: str) -> bytes | None:
     distinguished from emptiness via the filesystem, never truthiness or
     byte-length.
     """
+    base_store_format.check_format_version(_profile_root(profile))
     target = _resolve_target(profile, file_id)
     try:
         return target.read_bytes()
@@ -120,6 +121,7 @@ def write_base(profile: str, file_id: str, data: bytes) -> None:
         raise BaseStoreIOError(
             f"failed to write base for {profile}/{file_id}: {err}"
         ) from err
+    base_store_format.stamp_format_version(_profile_root(profile))
 
 
 def prune(profile: str, live_file_ids: set[str]) -> None:
@@ -140,6 +142,10 @@ def prune(profile: str, live_file_ids: set[str]) -> None:
             if not path.is_file():
                 continue
             file_id = path.relative_to(profile_root).as_posix()
+            # The format-version sidecar lives at the profile root and is
+            # store metadata, never a tracked-file base — never prune it.
+            if file_id == base_store_format.SIDECAR_NAME:
+                continue
             if file_id not in live_file_ids:
                 path.unlink()
     except OSError as err:
