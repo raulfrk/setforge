@@ -140,10 +140,11 @@ def migrate_local_yaml(path: Path) -> OverlayMigrationResult:
     Returns the delegate's :class:`OverlayMigrationResult` so the caller
     can tell whether the file was rewritten and reload accordingly.
     """
-    # Detect the baseline version up front; today only the baseline-major
-    # span rewrite is registered, but routing through detection keeps the
-    # version gate explicit for future in-major migrations.
-    detect_local_yaml_schema(path)
+    # Today the only registered transform is the baseline-major span
+    # rewrite, which is itself a presence-check (idempotent, byte-exact on
+    # a clean file), so no explicit version gate is needed yet. A future
+    # in-major migration would branch here on
+    # ``detect_local_yaml_schema(path)`` before delegating.
     return migrate_local_yaml_overlay_spans(path)
 
 
