@@ -96,6 +96,33 @@ def _existing_overlay_anchors(tracked_file: CommentedMap) -> set[str]:
     }
 
 
+def _load_or_init_local_doc(local_path: Path) -> CommentedMap:
+    """Load ``local.yaml`` as a ruamel doc, or a fresh map when absent/malformed."""
+    if not local_path.exists():
+        return CommentedMap()
+    with local_path.open("r", encoding="utf-8") as fh:
+        data = yaml_rt().load(fh)
+    return data if isinstance(data, CommentedMap) else CommentedMap()
+
+
+def _tracked_files_block(data: CommentedMap) -> CommentedMap:
+    """Return ``data['tracked_files']`` as a CommentedMap, creating it if absent."""
+    tracked_files = data.get("tracked_files")
+    if not isinstance(tracked_files, CommentedMap):
+        tracked_files = CommentedMap()
+        data["tracked_files"] = tracked_files
+    return tracked_files
+
+
+def _spans_seq(tracked_file: CommentedMap) -> CommentedSeq:
+    """Return ``tracked_file['spans']`` as a CommentedSeq, creating it if absent."""
+    spans = tracked_file.get("spans")
+    if not isinstance(spans, CommentedSeq):
+        spans = CommentedSeq()
+        tracked_file["spans"] = spans
+    return spans
+
+
 def append_overlay_spans(
     local_path: Path, additions: dict[str, list[tuple[str, str]]]
 ) -> int:
@@ -110,18 +137,14 @@ def append_overlay_spans(
 
     The write is a single ruamel round-trip via
     :func:`setforge.migrations._yaml_ops.atomic_write_yaml` (fsync + file-mode
-    preserving, comments / key order intact).
+    preserving, comments / key order intact). When ``local.yaml`` is absent it
+    is CREATED — never silently no-op while there are bodies to capture, which
+    would let the following deploy delete them.
     """
-    if not additions or not local_path.exists():
+    if not additions:
         return 0
-    yaml = yaml_rt()
-    with local_path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
-    if not isinstance(data, CommentedMap):
-        return 0
-    tracked_files = data.get("tracked_files")
-    if not isinstance(tracked_files, CommentedMap):
-        return 0
+    data = _load_or_init_local_doc(local_path)
+    tracked_files = _tracked_files_block(data)
     written = 0
     for file_id, entries in additions.items():
         tracked_file = tracked_files.get(file_id)
@@ -129,10 +152,7 @@ def append_overlay_spans(
             tracked_file = CommentedMap()
             tracked_files[file_id] = tracked_file
         existing = _existing_overlay_anchors(tracked_file)
-        spans = tracked_file.get("spans")
-        if not isinstance(spans, CommentedSeq):
-            spans = CommentedSeq()
-            tracked_file["spans"] = spans
+        spans = _spans_seq(tracked_file)
         for name, body in entries:
             if name in existing:
                 continue

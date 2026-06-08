@@ -122,6 +122,16 @@ def test_append_creates_overlay_block_when_absent(tmp_path: Path) -> None:
     assert overlay.spans[0].anchor == "notes"
 
 
+def test_append_creates_local_yaml_when_absent(tmp_path: Path) -> None:
+    """Absent local.yaml is created — never silently lose bodies to a no-op."""
+    local = tmp_path / "local.yaml"
+    assert not local.exists()
+    assert append_overlay_spans(local, {"doc": [("notes", "b\n")]}) == 1
+    assert local.exists()
+    overlay = load_local_tracked_file_overlays(local)["doc"]
+    assert overlay.spans[0].anchor == "notes"
+
+
 def test_build_node_shape() -> None:
     node = build_overlay_span_node("notes", "body\n")
     assert node["anchor"] == "notes"
