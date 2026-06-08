@@ -35,21 +35,25 @@ from typing import Any, Final
 
 import typer
 
-from setforge import transitions
+from setforge import atomicio, sections, transitions
 from setforge._redact import redact_argv
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import MIGRATE_EXAMPLES
+from setforge.compare import resolve_src
+from setforge.config import load_config
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.migrations import (
     MIGRATIONS,
     Migration,
     MigrationRoots,
     _fs_ops,
+    _meets_floor,
     _yaml_ops,
     current_expected_schema_version,
     detect_current_schema,
     find_migration_path,
     known_versions,
+    markerless_conversion_schema_version,
     parse_schema_version,
 )
 
@@ -107,6 +111,12 @@ def migrate(
         help="Target schema version (up OR down). Default: the version "
         "this setforge expects. Mutually exclusive with --pin.",
     ),
+    finalize: bool = typer.Option(
+        False,
+        "--finalize",
+        help="Strip vestigial host-local markers from tracked sources "
+        "(requires minimum_version >= the markerless conversion version).",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -131,9 +141,16 @@ def migrate(
         raise typer.BadParameter("--check and --apply are mutually exclusive")
     if pin is not None and to is not None:
         raise typer.BadParameter("--pin and --to are mutually exclusive")
+    if finalize and (check or apply_flag or pin is not None or to is not None):
+        raise typer.BadParameter(
+            "--finalize cannot be combined with --check/--apply/--pin/--to"
+        )
     cfg_path = _resolve_config_arg(config)
     if pin is not None:
         _dispatch_pin(cfg_path=cfg_path, pin=pin)
+        return
+    if finalize:
+        _dispatch_finalize(cfg_path=cfg_path, yes=yes)
         return
 
     current = detect_current_schema(cfg_path)
@@ -293,6 +310,108 @@ def _write_migrate_transition(
         file_pre,
         file_post,
         None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# --finalize: strip vestigial host-local markers from tracked sources
+# ---------------------------------------------------------------------------
+
+_MARKDOWN_SUFFIXES: Final = frozenset({".md", ".markdown"})
+
+
+def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
+    """Strip vestigial HOST_LOCAL markers from tracked markdown sources.
+
+    Gated on the operator-declared ``minimum_version`` floor being at or
+    above :data:`markerless_conversion_schema_version`: only then is every
+    engine that can read the repo guaranteed to understand the markerless
+    representation, so the (old-engine-breaking) strip is safe. The strip is
+    computed for ALL targets in memory before any write — a malformed marker
+    raises :class:`~setforge.errors.MarkerError` and aborts the whole batch
+    untouched. A single revertible transition is recorded (``setforge revert
+    --profile=migrate`` round-trips it byte-for-byte); a run that finds
+    nothing to strip records NO transition, so a later revert is never
+    shadowed by an empty record.
+    """
+    cfg = load_config(cfg_path)
+    floor = cfg.minimum_version
+    if floor is None or not _meets_floor(floor, markerless_conversion_schema_version):
+        typer.secho(
+            f"cannot strip tracked markers: set minimum_version >= "
+            f"{markerless_conversion_schema_version} in {cfg_path} first "
+            f"(this locks out engines that cannot read the markerless "
+            f"representation)",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    repo_root = cfg_path.resolve().parent
+    # Compute every strip in memory first (all-or-nothing): a MarkerError on
+    # any source aborts before a single file is written.
+    plans: list[tuple[Path, str, str]] = []
+    seen: set[Path] = set()
+    for tracked_file in cfg.tracked_files.values():
+        src = resolve_src(tracked_file, repo_root)
+        if src in seen or src.suffix.lower() not in _MARKDOWN_SUFFIXES:
+            continue
+        seen.add(src)
+        if not src.exists():
+            continue
+        before = src.read_text(encoding="utf-8")
+        after = sections.strip_host_local_markers(before)
+        if before != after:
+            plans.append((src, before, after))
+
+    if not plans:
+        typer.echo("no host-local markers to strip.")
+        return
+
+    _preview_finalize(plans)
+    if not _confirm_finalize(yes=yes):
+        typer.echo("aborted: no markers stripped.")
+        return
+
+    paths = [src for src, _, _ in plans]
+    file_pre = transitions.snapshot_paths(paths)
+    for src, _, after in plans:
+        atomicio.atomic_write_text(src, after)
+    file_post = transitions.snapshot_paths(paths)
+    _write_migrate_transition(file_pre=file_pre, file_post=file_post)
+    typer.echo(f"stripped host-local markers from {len(plans)} tracked file(s).")
+    typer.echo("to undo: setforge revert --profile=migrate")
+
+
+def _preview_finalize(plans: Sequence[tuple[Path, str, str]]) -> None:
+    """Show a per-file diff of the markers to be stripped + the breakage warning."""
+    typer.echo("=== preview: strip host-local markers from tracked sources ===")
+    for src, before, after in plans:
+        typer.echo(f"--- {src}")
+        typer.echo(f"+++ {src}")
+        for line in difflib.unified_diff(
+            before.splitlines(keepends=True), after.splitlines(keepends=True), n=3
+        ):
+            typer.echo(line.rstrip("\n"))
+    typer.secho(
+        "warning: stripping these markers makes the affected files unreadable "
+        "by setforge engines below the declared minimum_version — intentional "
+        "and one-way (revertible only via setforge revert).",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
+
+
+def _confirm_finalize(*, yes: bool) -> bool:
+    """Return whether to proceed. ``yes`` skips the prompt; non-TTY requires it."""
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        raise ConfirmRequiresInteractive(
+            "setforge migrate --finalize requires --yes when stdin is not a TTY"
+        )
+    return typer.confirm(
+        "strip these host-local markers from tracked sources?", default=False
     )
 
 
