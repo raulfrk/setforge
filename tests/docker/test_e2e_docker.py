@@ -23,7 +23,7 @@ Each test takes the form:
   3. Read the resulting live file(s) and assert parsed/structured equality.
 
 See ``tests/docker/conftest.py`` for the ``docker_image``,
-``docker_container``, ``docker_pty_session`` fixtures.
+``docker_container`` fixtures.
 """
 
 from __future__ import annotations
@@ -34,8 +34,6 @@ import subprocess
 import textwrap
 from collections.abc import Callable
 
-# pexpect ships no stubs; types-pexpect not added as a dev dep (per qzq scope).
-import pexpect  # type: ignore[import-untyped]
 import pytest
 
 # ``ContainerHandle`` is exported by the sibling conftest. Pytest loads
@@ -113,75 +111,6 @@ def _read_live(container: ContainerHandle, path: str) -> str:
     return container.read_text(f"/home/tester/{path}")
 
 
-# --- PTY sync wizard helper -----------------------------------------------
-#
-# Variants P/Q/R/S/S1 share the same scaffold: install YAML deep, write
-# a drift body into the live file, drive ``sync`` via PTY through one
-# (or two) wizard prompts, then return pre/post snapshots of the target.
-
-_YAML_DEEP_LIVE = "/home/tester/.setforge_e2e/yaml/deep.yaml"
-_YAML_DEEP_TRACKED = "/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml"
-
-
-def _drive_pty_sync(
-    container: ContainerHandle,
-    docker_pty_session: Callable[..., pexpect.spawn],
-    *,
-    drift_body: str,
-    prompts: list[tuple[str, str]],
-    snapshot_path: str = _YAML_DEEP_TRACKED,
-) -> tuple[str, str]:
-    """Install YAML deep, seed live drift, drive ``sync`` through PTY prompts.
-
-    ``prompts`` is a list of ``(expected_prompt_regex, keypress)`` —
-    the helper asserts each prompt fires (``idx == 0`` against
-    ``[regex, EOF, TIMEOUT]``) and sends the keypress. After draining
-    EOF, returns ``(pre, post)`` content of ``snapshot_path``.
-
-    Asserting ``idx == 0`` is load-bearing: a bare three-alternative
-    ``expect()`` would accept ``EOF`` / ``TIMEOUT`` as a match, masking
-    cases where the wizard hung before prompting (e.g. test passes
-    vacuously because the keypress went into the void and tracked
-    legitimately didn't change).
-    """
-    _install(container, "test-yaml-deep")
-    pre = container.read_text(snapshot_path)
-    container.write_text(_YAML_DEEP_LIVE, drift_body)
-    session = docker_pty_session(
-        container,
-        [
-            "uv",
-            "run",
-            "setforge",
-            "sync",
-            "--profile=test-yaml-deep",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-        timeout=120,
-    )
-    for regex, key in prompts:
-        idx = session.expect([regex, pexpect.EOF, pexpect.TIMEOUT], timeout=30)
-        assert idx == 0, (
-            f"wizard prompt {regex!r} never appeared; saw: {session.before!r}"
-        )
-        session.send(key)
-    session.expect(pexpect.EOF)
-    post = container.read_text(snapshot_path)
-    return pre, post
-
-
-def _drift_body(user_sub: str) -> str:
-    """Render the canonical drift YAML body with the given userSub value."""
-    return textwrap.dedent(
-        f"""\
-        trackedKey: tracked-value
-        settings:
-          trackedSub: tracked-sub-value
-          userSub: {user_sub}
-        """
-    )
-
-
 # ===========================================================================
 # Section: Install mechanism variants (B-L)
 # ===========================================================================
@@ -209,7 +138,7 @@ def test_install_minimal_floor(
 def test_install_text_sections_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """C: preserve_user_sections=true, no live content → dst equals tracked.
+    """C: disposition: shared markdown, no live content → dst equals tracked.
 
     install rewrites end markers with an embedded ``hash=<sha256>``
     segment (post-hashed-marker: tracked is also stamped). The body is the
@@ -225,39 +154,6 @@ def test_install_text_sections_no_live(
         r"<!-- setforge:user-section end host-local notes( hash=[0-9a-f]{64})? -->",
         live,
     )
-
-
-# --- Variant D ------------------------------------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_install_text_sections_preserve_user_content(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """D: pre-seed marker-bracketed live content; survives the next install."""
-    c = docker_container()
-    # First install to produce baseline (so the live file exists for editing).
-    _install(c, "test-text-sections")
-    # Mutate the live file's marker body — user-local edit.
-    pre_seeded = textwrap.dedent(
-        """\
-        # local title overrides tracked title
-
-        <!-- setforge:user-section start host-local notes -->
-        host-local marker body content
-        <!-- setforge:user-section end host-local notes -->
-
-        Trailing live content (not preserved on next install).
-        """
-    )
-    c.write_text("/home/tester/.setforge_e2e/sections/marked.md", pre_seeded)
-
-    _install(c, "test-text-sections")
-    live = _read_live(c, ".setforge_e2e/sections/marked.md")
-    # Marker body preserved (inside-markers user content survives).
-    assert "host-local marker body content" in live
-    # Outside-markers content reverted to tracked.
-    assert "Trailing tracked content." in live
 
 
 # --- Variant E ------------------------------------------------------------
@@ -285,7 +181,7 @@ def test_install_json_byte_copy(
 def test_install_jsonc_shallow_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """F: JSONC byte copy + comments preserved when no preserve overlay applies."""
+    """F: JSONC deploy + comments preserved on first install (no live yet)."""
     c = docker_container()
     _install(c, "test-jsonc-shallow")
     live = _read_live(c, ".setforge_e2e/jsonc/shallow.json")
@@ -301,12 +197,12 @@ def test_install_jsonc_shallow_no_live(
 def test_install_jsonc_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """G: pre-seed preserve keys only; live values overlaid into tracked.
+    """G: forked JSONC 3-way merge keeps live edits to the keys.
 
-    Mutating non-preserve top-level keys would trigger the install
-    drift-gate (CompareStatus.DRIFTED with unexpected_drift_keys); the
-    variant under test is the overlay PATH, not the drift-gate path,
-    so the pre-seed only mutates preserve_user_keys entries.
+    ``jsonc_shallow`` is ``disposition: forked``: install 3-way-merges
+    {base, live, tracked}. A live-only edit to a key survives while
+    tracked-only keys keep their tracked value (no conflict). The base
+    is seeded from live on the first post-seed install.
     """
     c = docker_container()
     # First install to produce baseline.
@@ -343,11 +239,11 @@ def test_install_jsonc_shallow_preserve_overlay(
 def test_install_jsonc_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H: pre-seed live drift inside the deep preserve subtree only.
+    """H: forked JSONC deep 3-way merge keeps live sub-key edits.
 
-    `settings` is in preserve_user_keys_deep so ANY sub-key drift
-    beneath it is expected; mutating top-level non-preserve keys
-    would trigger the drift-gate. Pre-seed only inside `settings`.
+    ``jsonc_deep`` is ``disposition: forked``: the structural 3-way merge
+    keeps a live edit to a nested sub-key while tracked-only sub-keys keep
+    their tracked value (parent-first union, live wins on overlap).
     """
     c = docker_container()
     _install(c, "test-jsonc-deep")
@@ -373,7 +269,7 @@ def test_install_jsonc_deep_preserve_overlay(
     # overlap, tracked keeps tracked-only keys).
     assert "live-user-value" in live
     assert "tracked-sub-value" in live
-    # Top-level non-preserve: trackedKey is the tracked value.
+    # Top-level: trackedKey is the tracked value (live left it unchanged).
     assert "tracked-value" in live
 
 
@@ -384,10 +280,10 @@ def test_install_jsonc_deep_preserve_overlay(
 def test_install_yaml_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H1: shallow preserve for YAML — yaml_merge.py parity with jsonc.py.
+    """H1: forked YAML 3-way merge — yaml_merge.py parity with jsonc.py.
 
-    Pre-seed only the preserve keys (mutating non-preserve top-level
-    keys would trigger the install drift-gate).
+    ``yaml_shallow`` is ``disposition: forked``: a live-only edit to a key
+    survives the merge while tracked-only keys keep their tracked value.
     """
     c = docker_container()
     _install(c, "test-yaml-shallow")
@@ -416,10 +312,10 @@ def test_install_yaml_shallow_preserve_overlay(
 def test_install_yaml_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H2: deep preserve for YAML — yaml_merge.py deep-merge parity.
+    """H2: forked YAML deep 3-way merge — yaml_merge.py deep-merge parity.
 
-    Pre-seed drift inside the `settings` deep preserve subtree only;
-    keep top-level non-preserve keys at their tracked values.
+    ``yaml_deep`` is ``disposition: forked``: a live edit to a nested
+    sub-key survives while tracked-only sub-keys keep their tracked value.
     """
     c = docker_container()
     _install(c, "test-yaml-deep")
@@ -631,42 +527,6 @@ def test_sync_auto_use_live_silent_absorb(
     assert "live-only-content" in tracked
 
 
-# --- Variant O ------------------------------------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_auto_keep_tracked_refuse_absorb(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """O: pre-seed drift on YAML deep; --auto=keep-tracked leaves tracked unchanged.
-
-    Uses YAML deep (not JSONC deep) because capture-time wizard
-    deep-merge walking is intentionally skipped for JSONC per
-    setforge/capture_wizard.py:175 (deep_paths_to_walk = []
-    for JSONC). YAML deep is where the capture wizard's auto-accept
-    plumbing actually fires today.
-    """
-    c = docker_container()
-    _install(c, "test-yaml-deep")
-    pre = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")
-    # Pre-seed live drift inside the preserve_user_keys_deep `settings` subtree.
-    c.write_text(
-        "/home/tester/.setforge_e2e/yaml/deep.yaml",
-        textwrap.dedent(
-            """\
-            trackedKey: tracked-value
-            settings:
-              trackedSub: tracked-sub-value
-              userSub: live-drift-value
-            """
-        ),
-    )
-    _sync(c, "test-yaml-deep", extra=["--auto=keep-tracked"], check=False)
-    # keep-tracked refuses absorb — tracked content unchanged.
-    post = c.read_text("/workspace/tests/fixtures/e2e/tracked/yaml/deep.yaml")
-    assert pre == post
-
-
 # --- Variant O2 (markdown frontmatter: no crash) ----------------------------
 
 
@@ -685,139 +545,6 @@ def test_sync_markdown_frontmatter_no_crash(
     _sync(c, "test-prose-reviewers", extra=["--auto=keep-tracked", "--yes"])
     post = c.read_text(skill_path)
     assert pre == post
-
-
-# --- Variant P (interactive: pty + 'k') -----------------------------------
-#
-# Wizard surface note (verified against setforge/capture_wizard.py:175):
-# the capture-time wizard's deep-merge walker SKIPS JSONC files
-# (deep_paths_to_walk = preserve_user_keys_deep if fmt != "jsonc"
-# else []). JSONC deep-merge per-sub-key drift is handled by deploy's
-# overlay, not the capture-time wizard. So PTY variants P/Q/R/S
-# target YAML deep (where the walker actually fires), not JSONC.
-# This is the empirical resolution of open question 8.
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_interactive_keep_via_pty(
-    docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
-) -> None:
-    """P: docker exec -it + pexpect; send 'k' on YAML deep drift; tracked unchanged."""
-    c = docker_container()
-    pre, post = _drive_pty_sync(
-        c,
-        docker_pty_session,
-        drift_body=_drift_body("live-drift-value"),
-        prompts=[("Choice", "k")],
-    )
-    # k = keep tracked → tracked is unchanged after the sync.
-    assert pre == post
-
-
-# --- Variant Q (interactive: pty + 'u') -----------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_interactive_use_via_pty(
-    docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
-) -> None:
-    """Q: pexpect; send 'u' on YAML deep drift; tracked absorbs live."""
-    c = docker_container()
-    _, post = _drive_pty_sync(
-        c,
-        docker_pty_session,
-        drift_body=_drift_body("live-absorbed-value"),
-        prompts=[("Choice", "u")],
-    )
-    assert "live-absorbed-value" in post
-
-
-# --- Variant R (interactive: pty + 's') -----------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_interactive_skip_via_pty(
-    docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
-) -> None:
-    """R: pexpect; send 's' (save-as-preserved); setforge.yaml gets the key added.
-
-    Per ``setforge/wizard.py`` _action_save_as_preserved (verified
-    against wizard source per open question 8): ``s`` appends
-    ``item.key_path`` to the tracked_file's ``preserve_user_keys`` list in
-    setforge.yaml. The tracked file is unchanged; only the YAML
-    config gets the new preserve entry.
-    """
-    c = docker_container()
-    # Snapshot the YAML config (the file that ``s`` mutates) rather than
-    # the tracked-deep yaml file (which ``s`` leaves alone).
-    pre_yaml, post_yaml = _drive_pty_sync(
-        c,
-        docker_pty_session,
-        drift_body=_drift_body("live-value-for-s"),
-        prompts=[("Choice", "s")],
-        snapshot_path=f"/workspace/{CONFIG_FIXTURE}",
-    )
-    # The action appends `settings.userSub` (the diverged key path) to
-    # the tracked_file's preserve_user_keys list in the YAML config. Diff
-    # pre vs post and assert the new preserve entry is in the diff —
-    # ``"userSub" in pre_yaml`` is already true (the fixture mentions
-    # it elsewhere), so a bare ``in post_yaml`` check is vacuous.
-    assert pre_yaml != post_yaml
-    diff_lines = set(post_yaml.splitlines()) - set(pre_yaml.splitlines())
-    diff = "\n".join(diff_lines)
-    assert "settings.userSub" in diff or "userSub" in diff, (
-        f"preserve entry not in diff between pre/post YAML config:\n{diff}"
-    )
-
-
-# --- Variant S (interactive: pty + 'm') -----------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_interactive_merge_via_pty(
-    docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
-) -> None:
-    """S: pexpect; send 'm' (manual edit) then 'n' (decline editor) → pending state.
-
-    Per ``setforge/wizard.py`` _action_manual_edit (verified against
-    wizard source per open question 8): ``m`` prompts ``y/n``; ``y``
-    launches ``$EDITOR``, ``n`` returns MANUAL_PENDING which halts the
-    wizard at this drift item. The pending state means tracked is
-    unchanged for this item — perfect for asserting in an automated
-    test without a real interactive editor.
-    """
-    c = docker_container()
-    pre, post = _drive_pty_sync(
-        c,
-        docker_pty_session,
-        drift_body=_drift_body("live-value-for-m"),
-        prompts=[("Choice", "m"), ("y/n", "n")],
-    )
-    # Manual edit declined → tracked unchanged (MANUAL_PENDING halts).
-    assert pre == post
-
-
-# --- Variant S1 (YAML deep wizard parity) ---------------------------------
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_yaml_deep_interactive_use_via_pty(
-    docker_container: Callable[..., ContainerHandle],
-    docker_pty_session: Callable[..., pexpect.spawn],
-) -> None:
-    """S1: same shape as Q but on a YAML deep tracked_file — yaml_merge round-trip."""
-    c = docker_container()
-    _, post = _drive_pty_sync(
-        c,
-        docker_pty_session,
-        drift_body=_drift_body("live-yaml-absorbed"),
-        prompts=[("Choice", "u")],
-    )
-    assert "live-yaml-absorbed" in post
 
 
 # ===========================================================================

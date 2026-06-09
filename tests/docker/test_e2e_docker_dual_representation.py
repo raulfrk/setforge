@@ -1,11 +1,10 @@
-"""Docker e2e: legacy preserve_user_sections and disposition coexist in one config.
+"""Docker e2e: two ``disposition: shared`` markdown files coexist in one config.
 
-Proves the expand-window guarantee end-to-end — a single profile carrying BOTH
-reconciliation models (a legacy ``preserve_user_sections`` markdown file AND a
-``disposition: shared`` markdown file) installs in one run with each file's
-behavior intact and no cross-file interference: the run-global keep-set prune
-retains the disposition base, and the distinct ``dst`` paths keep the per-host
-bases from ever crossing.
+Proves end-to-end that a single profile carrying two shared-disposition
+markdown files — one with host-local user-section markers, one plain —
+installs in one run with each file's behavior intact and no cross-file
+interference: the run-global keep-set prune retains each disposition base,
+and the distinct ``dst`` paths keep the per-host bases from ever crossing.
 """
 
 from __future__ import annotations

@@ -93,11 +93,14 @@ def _run_install(
 def test_install_writes_new_meta_fields(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """E2E #1: install records end_timestamp + command_line +
-    preserve_user_keys_applied.
+    """E2E #1: install records end_timestamp + command_line.
 
-    Uses ``test-jsonc-shallow`` (declares ``preserve_user_keys``) so
-    ``preserve_user_keys_applied`` lands as ``True``.
+    Uses ``test-jsonc-shallow`` (now ``disposition: forked`` after the
+    schema-2.0 contract migration). The legacy
+    ``preserve_user_keys_applied`` overlay flag is no longer produced by
+    the install path — it stays absent (omit-when-None). The field
+    remains in the meta schema only for backward-compat deserialization
+    of pre-2.0 records (see ``test_pre_bump_meta_revert_works``).
     """
     c = docker_container()
     _run_install(c, "test-jsonc-shallow")
@@ -107,17 +110,29 @@ def test_install_writes_new_meta_fields(
     command_line = meta.get("command_line")
     assert isinstance(command_line, list), meta
     assert any("install" in str(arg) for arg in command_line)
-    assert meta.get("preserve_user_keys_applied") is True
+    assert "preserve_user_keys_applied" not in meta, meta
 
 
 def test_sync_writes_new_meta_fields(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """E2E #2: sync records end_timestamp + command_line; the
-    preserve_user_keys_applied bool reflects the profile's overlay.
+    """E2E #2: sync records end_timestamp + command_line.
+
+    Uses ``test-disposition-shared`` (``disposition: shared``) so a live
+    edit is captured back into tracked on sync — that mutation is what
+    causes ``sync`` to write a transition record at all. The sync path no
+    longer produces the legacy ``preserve_user_keys_applied`` flag (the
+    preserve overlay engine was retired at schema 2.0) — it stays absent
+    (omit-when-None).
     """
     c = docker_container()
-    _run_install(c, "test-jsonc-shallow")
+    _run_install(c, "test-disposition-shared")
+    # Edit live so the shared-disposition sync has a change to capture
+    # back into tracked (a no-drift sync writes no transition).
+    c.write_text(
+        "/home/tester/.setforge_e2e/disposition/shared.md",
+        "# Disposition fixture\n\nintro line\nmiddle-CAPTURED\nfooter line\n",
+    )
     # Trigger a tracked-side sync.
     sync = c.exec(
         [
@@ -125,7 +140,7 @@ def test_sync_writes_new_meta_fields(
             "run",
             "setforge",
             "sync",
-            "--profile=test-jsonc-shallow",
+            "--profile=test-disposition-shared",
             f"--config={CONFIG_FIXTURE}",
         ],
         check=False,
@@ -137,7 +152,7 @@ def test_sync_writes_new_meta_fields(
     command_line = meta.get("command_line")
     assert isinstance(command_line, list), meta
     assert any("sync" in str(arg) for arg in command_line)
-    assert meta.get("preserve_user_keys_applied") is True
+    assert "preserve_user_keys_applied" not in meta, meta
 
 
 def test_revert_writes_new_meta_fields(
@@ -174,17 +189,17 @@ def test_wizard_writes_new_meta_fields(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """E2E #4: a non-interactive ``sync --auto=use-live`` exercises the
-    capture-flow transition writer and records the 3 new fields.
+    capture-flow transition writer and records the new meta fields.
 
-    This is the wizard-adjacent path: ``sync`` triggers
-    ``capture_profile``, which when drift is present and
-    ``--auto=use-live`` is passed performs the absorb without prompting.
-    The transition writer is the same ``transitions.make_meta`` chain
-    the wizard hits via ``run_wizard_loop`` — same fields land.
+    ``sync`` triggers ``capture_profile``, which when drift is present
+    and ``--auto=use-live`` is passed performs the absorb without
+    prompting. The capture transition writer records ``end_timestamp`` +
+    ``command_line``; it does NOT set the legacy
+    ``preserve_user_keys_applied`` flag (retired at schema 2.0).
     """
     c = docker_container()
     _run_install(c, "test-yaml-deep")
-    # Seed drift into the live YAML deep preserve_user_keys subtree.
+    # Seed drift into the live YAML deep (forked) subtree.
     c.write_text(
         "/home/tester/.setforge_e2e/yaml/deep.yaml",
         textwrap.dedent(
@@ -213,8 +228,8 @@ def test_wizard_writes_new_meta_fields(
     meta = _read_meta(c, _latest_transition_dirname(c))
     assert "end_timestamp" in meta
     assert isinstance(meta.get("command_line"), list)
-    # test-yaml-deep declares preserve_user_keys_deep → applied is True.
-    assert meta.get("preserve_user_keys_applied") is True
+    # The legacy preserve overlay flag is no longer produced at 2.0.
+    assert "preserve_user_keys_applied" not in meta, meta
 
 
 def test_pre_bump_meta_revert_works(

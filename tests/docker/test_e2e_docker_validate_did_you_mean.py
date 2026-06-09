@@ -202,39 +202,17 @@ def test_validate_local_yaml_tracked_files_nested_typo_suggests(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """A typo'd sub-key inside ``tracked_files.<id>`` (not
-    preserve_user_keys / host_local_sections) triggers a "Did you mean"
-    against :class:`_LocalTrackedFileOverlay.model_fields`."""
+    host_local_sections) triggers a "Did you mean" against
+    :class:`_LocalTrackedFileOverlay.model_fields`."""
     c = docker_container()
-    # ``preserve_user_key`` (missing trailing 's') is distance 1 from
-    # ``preserve_user_keys`` — the _LocalTrackedFileOverlay field name.
+    # ``dispositon`` (dropped 'i') is distance 1 from ``disposition`` —
+    # a live _LocalTrackedFileOverlay field name.
     c.write_text(
         _HOME_LOCAL_YAML,
-        "tracked_files:\n  d:\n    preserve_user_key:\n      add: [foo]\n",
+        "tracked_files:\n  d:\n    dispositon: forked\n",
     )
     rc, out = _run_validate(c)
     assert rc == 1, out
     assert "✗ SCHEMA VALIDATION ERROR" in out
-    assert "Did you mean 'preserve_user_keys'" in out
-    assert "Fix:" in out
-
-
-def test_validate_local_yaml_preserve_user_keys_nested_typo_suggests(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """A typo'd sub-key inside ``tracked_files.<id>.preserve_user_keys``
-    triggers a "Did you mean" against
-    :class:`PreserveUserKeysOverlay.model_fields` (``add`` / ``remove``).
-    """
-    c = docker_container()
-    # ``adde`` is distance 1 from ``add`` — the PreserveUserKeysOverlay
-    # candidate list dispatched by ``_candidate_list_for`` when
-    # ``loc[2] == 'preserve_user_keys'``.
-    c.write_text(
-        _HOME_LOCAL_YAML,
-        "tracked_files:\n  d:\n    preserve_user_keys:\n      adde: [foo]\n",
-    )
-    rc, out = _run_validate(c)
-    assert rc == 1, out
-    assert "✗ SCHEMA VALIDATION ERROR" in out
-    assert "Did you mean 'add'" in out
+    assert "Did you mean 'disposition'" in out
     assert "Fix:" in out

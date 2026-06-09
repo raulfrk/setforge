@@ -260,7 +260,8 @@ def test_install_auto_accept_tracked_with_yes(
 ) -> None:
     """--auto-accept-tracked --yes: applies, exit 0."""
     c = docker_container()
-    # Use jsonc-shallow profile which has preserve_user_keys → unexpected drift.
+    # Use jsonc-shallow (disposition: forked); replacing the whole live file
+    # with an unrelated key produces unexpected drift the gate must surface.
     _install(c, "test-jsonc-shallow")
     # Mutate live to introduce unexpected drift.
     live_path = c.exec(
