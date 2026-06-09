@@ -11,6 +11,7 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
+schema_version: '2.0'
 version: 1
 
 # ----------------------------------------------------------------------
@@ -24,11 +25,13 @@ tracked_files:
     src: minimal/text.txt
     dst: ~/.setforge_e2e/minimal/text.txt
 
-  # Text tracked file with HTML-comment user-section markers (sections.py).
+  # Text tracked file with a tracked-authored HOST-LOCAL user-section marker.
+  # Host-local-only sections take the markerless OVERLAY conversion path
+  # (14.17): NO file-level disposition — the marker body is captured into a
+  # local.yaml overlay span and the deployed file is rendered markerless.
   sections_md:
     src: sections/marked.md
     dst: ~/.setforge_e2e/sections/marked.md
-    disposition: shared
 
   # Shared-semantics user-section markers — exercises the three-way
   # reconcile wizard.
@@ -182,20 +185,6 @@ tracked_files:
     src: disposition/config.yaml
     dst: ~/.setforge_e2e/override/config.yaml
     disposition: shared
-
-  # ---- Forked structural fixtures (disposition: forked merge) ----------
-  # Each format gets its own dst (and thus file_id) so the per-host stored
-  # base under ``state_root()`` stays independent. The JSONC src exercises
-  # the json5 read/write seam; the YAML src exercises the ruamel round-trip
-  # seam.
-  forked_scalar_jsonc:
-    src: forked-scalar/settings.json
-    dst: ~/.setforge_e2e/forked-scalar/settings.json
-    disposition: forked
-  forked_scalar_yaml:
-    src: forked-scalar/config.yaml
-    dst: ~/.setforge_e2e/forked-scalar/config.yaml
-    disposition: forked
 
   # ---- Sub-file span fixtures (pinned / forked markdown spans) ----------
   # Spans require a disposition (the span engine rides the stored-base
@@ -393,26 +382,17 @@ profiles:
     tracked_files:
       - disposition_forked_yaml
 
-  # ---- Dual representation (expand window) ------------------------------
-  # One profile carrying BOTH reconciliation models: a legacy
-  # preserve_user_sections file AND a disposition: shared file. Exercises
-  # that the two coexist in a single install run without interference
-  # (distinct dst => distinct file_id => per-host base never crosses; the
-  # run-global keep-set prune retains the disposition base).
+  # ---- Dual representation ----------------------------------------------
+  # One profile carrying BOTH 2.0 reconciliation models: a host-local
+  # OVERLAY-injection file (host_local_md, driven by local.yaml
+  # host_local_sections) AND a disposition: shared file. Exercises that the
+  # two coexist in a single install run without interference (distinct dst
+  # => distinct file_id => per-host base never crosses; the run-global
+  # keep-set prune retains the disposition base).
   test-dual-representation:
     tracked_files:
-      - sections_md
+      - host_local_md
       - disposition_shared_md
-
-  # ---- Forked-scalar (3-way preserve_user_keys scalar merge) ------------
-  # One profile per format so each test installs/compares a single file in
-  # isolation and the stored scalar base lifecycle never crosses formats.
-  test-forked-scalar-jsonc:
-    tracked_files:
-      - forked_scalar_jsonc
-  test-forked-scalar-yaml:
-    tracked_files:
-      - forked_scalar_yaml
 
   # ---- Sub-file spans (pinned / forked markdown spans) ------------------
   # One profile per span scenario so each test installs / syncs / compares /
