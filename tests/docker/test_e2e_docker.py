@@ -725,138 +725,6 @@ def test_validate_clean_yaml_exit_zero(
 
 
 # ===========================================================================
-# Section: Legacy (pre-hashed-marker) marker migration
-# ===========================================================================
-#
-# These variants exercise the install / compare flow against a live
-# file whose user-section markers are in the pre-hashed-marker shape: no
-# host-local|shared semantics keyword on the start marker, and no
-# ``hash=<sha256>`` segment on the end marker. The strict parser rejects
-# these; install opts into ``allow_legacy=True`` to migrate the file in
-# place; compare / sync / merge refuse with an actionable error pointing
-# the user at install.
-
-
-_LEGACY_BODY = "host-local body content that must survive migration\n"
-_LEGACY_LIVE_TEXT = (
-    "# local title overrides tracked title\n"
-    "\n"
-    "<!-- setforge:user-section start notes -->\n"
-    f"{_LEGACY_BODY}"
-    "<!-- setforge:user-section end notes -->\n"
-    "\n"
-    "Trailing live content.\n"
-)
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_compare_legacy_live_refuses_with_pointer_to_install(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """compare refuses legacy live markers with actionable SetforgeError.
-
-    Seeds a pre-hashed-marker-shaped live ``marked.md`` (untagged markers, no
-    hash segment) and runs ``setforge compare``; asserts non-zero
-    exit AND that the combined stdout+stderr names ``setforge
-    install`` as the next step. Without the refusal guard, the
-    strict parser would leak an opaque ``MarkerError: line N: missing
-    required keyword`` instead.
-    """
-    c = docker_container()
-    c.write_text(
-        "/home/tester/.setforge_e2e/sections/marked.md",
-        _LEGACY_LIVE_TEXT,
-    )
-    proc = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "compare",
-            "--profile=test-text-sections",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-        check=False,
-    )
-    assert proc.returncode != 0, (
-        f"compare should refuse legacy live; "
-        f"got returncode={proc.returncode}\nstdout:{proc.stdout}\nstderr:{proc.stderr}"
-    )
-    combined = (proc.stdout + proc.stderr).lower()
-    assert "legacy" in combined, f"expected 'legacy' in output: {combined!r}"
-    assert "setforge install" in proc.stdout + proc.stderr, (
-        f"expected 'setforge install' in output: "
-        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    )
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_install_legacy_live_markers_preserves_body_and_retags(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """install migrates legacy live markers in place: body bytes preserved,
-    end markers re-tagged with the ``host-local`` semantics keyword and a
-    ``hash=<64-hex>`` segment that matches the migrated body."""
-    c = docker_container()
-    live_path = "/home/tester/.setforge_e2e/sections/marked.md"
-    c.write_text(live_path, _LEGACY_LIVE_TEXT)
-
-    _install(c, "test-text-sections")
-
-    live_post = c.read_text(live_path)
-    # Body bytes byte-preserved from the seed (the legacy body wins because
-    # it was inside the markers — sections.merge_sections preserves it).
-    assert _LEGACY_BODY in live_post, (
-        f"legacy body should survive migration: {live_post!r}"
-    )
-    # Every end marker carries the new tagged shape: semantics + hash=64hex.
-    match = re.search(
-        r"<!-- setforge:user-section end host-local notes hash=([0-9a-f]{64}) -->",
-        live_post,
-    )
-    assert match is not None, (
-        f"expected end marker with semantics + hash=64hex; got: {live_post!r}"
-    )
-    # No legacy untagged markers remain.
-    assert "<!-- setforge:user-section start notes -->" not in live_post
-    assert "<!-- setforge:user-section end notes -->" not in live_post
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_compare_after_legacy_install_is_clean(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """After install migrates the legacy live file, compare exits 0:
-    the migrated live is strict-clean and the reconciler sees no
-    unexpected drift."""
-    c = docker_container()
-    live_path = "/home/tester/.setforge_e2e/sections/marked.md"
-    c.write_text(live_path, _LEGACY_LIVE_TEXT)
-
-    # First migrate via install.
-    _install(c, "test-text-sections")
-
-    # Then compare must succeed (no longer legacy; reconciler sees the
-    # host-local body as expected drift, which compare without --check
-    # exits 0 on).
-    proc = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "compare",
-            "--profile=test-text-sections",
-            f"--config={CONFIG_FIXTURE}",
-        ],
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"compare after legacy migration should exit 0; "
-        f"got returncode={proc.returncode}\nstdout:{proc.stdout}\nstderr:{proc.stderr}"
-    )
-
-
-# ===========================================================================
 # Section: Prose-reviewer artifacts
 # ===========================================================================
 #
@@ -1062,99 +930,6 @@ def test_revert_after_install_removes_workflows_file(
     assert revert.returncode == 0, revert.stderr
     assert c.exec(["test", "-f", _WORKFLOW_LIVE], check=False).returncode != 0, (
         "post-revert: example-impl.js should be absent"
-    )
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_merge_legacy_live_refuses_with_pointer_to_install(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """merge on a pre-hashed-marker live file refuses with the actionable error.
-
-    Pairs with the unit-level
-    ``test_merge_refuses_legacy_live_with_actionable_error`` in
-    ``tests/test_cli_section_reconcile.py``. Seeds a pre-hashed-marker-shaped live
-    ``~/.claude/CLAUDE.md`` (no ``host-local``/``shared`` semantics keyword
-    on the start marker, no ``hash=<sha256>`` segment on the end marker) and
-    runs ``setforge merge --profile=vm-headless``; asserts non-zero exit
-    AND that combined stdout+stderr names ``setforge install`` as the next
-    step. Without the refusal guard, ``merge`` would proceed silently into
-    ``compare_profile`` instead of surfacing the actionable error.
-    """
-    c = docker_container()
-    c.write_text(
-        "/home/tester/.setforge_e2e/sections/marked.md",
-        "intro\n"
-        "<!-- setforge:user-section start workflow -->\n"
-        "- body line\n"
-        "<!-- setforge:user-section end workflow -->\n"
-        "outro\n",
-    )
-    result = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "merge",
-            "--profile=test-text-sections",
-            "--config=tests/fixtures/e2e/setforge.test.yaml",
-        ],
-        check=False,
-    )
-    assert result.returncode != 0, (
-        f"merge should refuse legacy live; "
-        f"got returncode={result.returncode}\n"
-        f"stdout:{result.stdout}\nstderr:{result.stderr}"
-    )
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "Run 'uv run setforge install" in combined, (
-        f"expected 'Run 'uv run setforge install' in output: "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
-
-
-@pytest.mark.xdist_group("docker_daemon")
-def test_sync_legacy_live_refuses_with_pointer_to_install(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """sync on a pre-hashed-marker live file refuses with the actionable error.
-
-    Pairs with the unit-level
-    ``test_sync_refuses_legacy_live_with_actionable_error`` in
-    ``tests/test_cli_section_reconcile.py``. Seeds a pre-hashed-marker-shaped live
-    ``~/.claude/CLAUDE.md`` and runs ``setforge sync --profile=vm-headless``;
-    asserts non-zero exit AND that combined stdout+stderr names
-    ``setforge install`` as the next step.
-    """
-    c = docker_container()
-    c.write_text(
-        "/home/tester/.setforge_e2e/sections/marked.md",
-        "intro\n"
-        "<!-- setforge:user-section start workflow -->\n"
-        "- body line\n"
-        "<!-- setforge:user-section end workflow -->\n"
-        "outro\n",
-    )
-    result = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "sync",
-            "--profile=test-text-sections",
-            "--config=tests/fixtures/e2e/setforge.test.yaml",
-        ],
-        check=False,
-    )
-    assert result.returncode != 0, (
-        f"sync should refuse legacy live; "
-        f"got returncode={result.returncode}\n"
-        f"stdout:{result.stdout}\nstderr:{result.stderr}"
-    )
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "Run 'uv run setforge install" in combined, (
-        f"expected 'Run 'uv run setforge install' in output: "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
 
 
@@ -1964,16 +1739,16 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (1.2)
+    A config already pinned to the build's current expected schema (2.0)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
-    surface the 1.0 → 1.1 → 1.2 chain) is covered in
+    surface the 1.0 → 1.1 → 1.2 → 2.0 chain) is covered in
     ``test_e2e_docker_migrate.py``.
     """
     c = docker_container()
     c.write_text(
         "/tmp/at-current/setforge.yaml",
-        "schema_version: '1.2'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+        "schema_version: '2.0'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
     )
     result = c.exec(
         [
