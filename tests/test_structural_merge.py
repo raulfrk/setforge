@@ -171,6 +171,35 @@ def test_delete_ours_edit_theirs_conflicts() -> None:
     assert result.conflicts == [PathConflict(path="k", base=1, ours=ABSENT, theirs=2)]
 
 
+def test_ours_wholesale_replaced_keys_does_not_crash_dict() -> None:
+    """Live dropped every base/theirs key and added an unrelated one.
+
+    theirs == base, so each dropped key resolves to a DELETE that ours already
+    satisfies. Deleting an already-absent key must be a no-op, not a crash, and
+    the 3-way result keeps live's wholesale replacement.
+    """
+    base = {"a": 1, "b": 2}
+    ours = {"z": 9}  # wholesale-replaced: dropped a/b, added z
+    theirs = {"a": 1, "b": 2}  # unchanged from base
+    result = merge_structural(base, ours, theirs)
+    assert result.clean
+    assert result.merged_model == {"z": 9}
+
+
+def test_ours_wholesale_replaced_keys_does_not_crash_jsonc() -> None:
+    """JSONC (comment-backend) variant of the wholesale-replace no-op delete.
+
+    Exercises the json-five ``JSONObject`` backend whose ``delete`` previously
+    asserted the key was present; an absent key must now be a no-op.
+    """
+    base = _jload('{"a": 1, "b": 2}')
+    ours = _jload('{"z": 9}')
+    theirs = _jload('{"a": 1, "b": 2}')
+    result = merge_structural(base, ours, theirs)
+    assert result.clean
+    assert _jdump(result.merged_model) == '{"z": 9}'
+
+
 # --------------------------------------------------------------------------
 # Type-aware, wrapper-free equality in the divergence test.
 # --------------------------------------------------------------------------

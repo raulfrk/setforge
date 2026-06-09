@@ -269,7 +269,10 @@ class _RuamelBackend:
         self._copy_comment(key, side)
 
     def delete(self, key: str) -> None:
-        del self._ours[key]
+        # A DELETE outcome means "the key must be absent in the result"; when
+        # ours already lacks it (e.g. live wholesale-replaced its keys), the
+        # deletion is already satisfied, so an absent key is a no-op.
+        self._ours.pop(key, None)
 
     def _copy_comment(self, key: str, side: str = "theirs") -> None:
         """Move ``side``'s attached comment token onto ours at ``key``.
@@ -364,7 +367,12 @@ class _Json5Backend:
 
     def delete(self, key: str) -> None:
         idx = self._index(self._ours, key)
-        assert idx is not None
+        if idx is None:
+            # A DELETE outcome means "the key must be absent in the result".
+            # When live (ours) wholesale-replaced its keys, the key base/theirs
+            # carried is already gone from ours, so the deletion is satisfied:
+            # treat an absent key as a no-op rather than crashing the merge.
+            return
         # Keep keys / values consistent; key_value_pairs is derived so it
         # follows automatically on next access.
         del self._ours.keys[idx]
