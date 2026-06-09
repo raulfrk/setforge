@@ -64,22 +64,6 @@ def _assert_resolved(stdout: str, stderr: str, returncode: int) -> None:
     assert "config file not found" not in combined.lower(), combined
 
 
-def test_merge_resolves_source_layer_from_wrong_cwd(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """``setforge merge`` resolves a path source from a non-config CWD."""
-    c = docker_container()
-    _bootstrap_source_repo(c)
-    res = c.exec(
-        ["uv", "run", "setforge", "merge", "--profile=base"],
-        check=False,
-    )
-    # Exit 0 with no config-not-found error proves merge resolved the path
-    # source instead of failing on a bare relative "setforge.yaml" (the
-    # pre-fix behavior). The exact stdout message is incidental.
-    _assert_resolved(res.stdout, res.stderr, res.returncode)
-
-
 def test_ext_list_resolves_source_layer_from_wrong_cwd(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

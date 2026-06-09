@@ -301,7 +301,6 @@ def install(
         _run_predeploy_gates(
             drift_report=drift_report,
             ctx=ctx,
-            config=config,
             auto_accept_tracked=auto_accept_tracked,
             auto_accept_live=auto_accept_live,
             section_auto=section_auto,

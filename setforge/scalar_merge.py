@@ -71,8 +71,8 @@ class ScalarConflict:
     scalars (or the :data:`ABSENT` sentinel for a side where the key is
     missing), so the record is comparable and printable. The interactive
     conflict wizard (:mod:`setforge.conflict_wizard`) renders these three sides
-    and the scalar overlay (:mod:`setforge.scalar_overlay`) hands one to the
-    injected resolver per conflicting path when ``--auto`` is not set.
+    and hands one to the injected resolver per conflicting path when
+    ``--auto`` is not set.
     """
 
     path: str

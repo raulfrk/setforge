@@ -82,14 +82,6 @@ Examples:
   setforge capture --profile=<profile> --auto=keep-tracked
 """
 
-MERGE_EXAMPLES: str = """\
-Examples:
-
-\b
-  # Most common: run the merge wizard over every drifted tracked_file
-  setforge merge --profile=<profile>
-"""
-
 SYNC_EXAMPLES: str = """\
 Examples:
 

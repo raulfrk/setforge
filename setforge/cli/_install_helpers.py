@@ -2,7 +2,7 @@
 
 Helpers extracted from ``install()`` body:
 
-- :func:`_check_unexpected_drift`: drift gate + wizard hand-off + :class:`typer.Exit`
+- :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
   on no-resolve.
 - :func:`_deploy_all_tracked_files`: per-tracked-file
   :func:`setforge.deploy.copy_atomic` loop + tracked-baseline stamp.
@@ -51,9 +51,6 @@ from setforge import (
     compare as compare_mod,
 )
 from setforge import config as config_mod
-from setforge import (
-    merge as merge_mod,
-)
 from setforge import (
     vscode_extensions as vscode_extensions_mod,
 )
@@ -396,23 +393,17 @@ def _prompt_shared_span_collisions(
 def _check_unexpected_drift(
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
-    config: Path,
     *,
     auto_accept_tracked: bool,
     auto_accept_live: bool,
 ) -> None:
-    """Resolve any unexpected drift before deploy, or raise :class:`typer.Exit`.
+    """Reject unexpected drift on a bare install, or return when a flag resolves it.
 
-    Branches:
-
-    - ``auto_accept_tracked``: run the merge wizard with ``auto_accept='k'``
-      (overwrite live with tracked).
-    - ``auto_accept_live``: run the merge wizard with ``auto_accept='u'``
-      (update tracked from live).
-    - neither: print an actionable error pointing at ``setforge merge`` and
-      raise ``typer.Exit(1)``.
-
-    No-op when no ``DRIFTED`` entry carries unexpected-drift keys.
+    When a ``DRIFTED`` entry carries unexpected drift and neither
+    ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set, print an
+    actionable error and raise ``typer.Exit(1)``. With a flag set, the
+    confirm gate in :func:`_confirm_legacy_drift_or_exit` has already run,
+    so this is a no-op. No-op when no entry carries unexpected drift.
     """
     has_real_unexpected = any(
         e.status == CompareStatus.DRIFTED and (e.unexpected_drift_keys or e.mode_drift)
@@ -429,25 +420,13 @@ def _check_unexpected_drift(
     )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
-            f"unexpected drift in {unexpected_count} file(s): "
-            f"run 'setforge merge --profile={ctx.profile}' to resolve, "
-            f"or pass --auto-accept-tracked or --auto-accept-live",
+            f"unexpected drift in {unexpected_count} file(s) "
+            f"(profile '{ctx.profile}'): "
+            f"pass --auto-accept-tracked or --auto-accept-live to resolve",
             err=True,
             fg=typer.colors.RED,
         )
         raise typer.Exit(1)
-    # Both wizard branches share their entire call shape except for the
-    # ``auto_accept`` sentinel ('k' keeps tracked, 'u' adopts live);
-    # collapse the if/elif arms to a single dispatch on the flag.
-    auto_accept = "k" if auto_accept_tracked else "u"
-    merge_mod.run_wizard(
-        drift_report,
-        ctx.cfg,
-        ctx.repo_root,
-        setforge_yaml_path=config.resolve(),
-        profile=ctx.profile,
-        auto_accept=auto_accept,
-    )
 
 
 def _build_conflict_resolver(
@@ -1213,7 +1192,6 @@ def _run_predeploy_gates(
     *,
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
-    config: Path,
     auto_accept_tracked: bool,
     auto_accept_live: bool,
     section_auto: ReconcileAuto | None,
@@ -1240,7 +1218,6 @@ def _run_predeploy_gates(
     _check_unexpected_drift(
         drift_report,
         ctx,
-        config,
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
     )

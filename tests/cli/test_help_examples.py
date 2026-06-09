@@ -33,7 +33,6 @@ LEAF_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("compare",),
     ("cleanup-orphans",),
     ("capture",),
-    ("merge",),
     ("sync",),
     ("revert",),
     ("transitions", "list"),

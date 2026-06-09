@@ -59,7 +59,6 @@ def test_check_unexpected_drift_no_entries_is_noop() -> None:
     _install_helpers._check_unexpected_drift(
         empty,
         cast(ProfileContext, None),
-        Path("/tmp/setforge.yaml"),
         auto_accept_tracked=False,
         auto_accept_live=False,
     )

@@ -38,8 +38,8 @@ neither, exits 2). `install` and `status` require `--profile`.
 `sync` is `capture`'s transition-recording sibling: "I tweaked something live,
 now save it and record a transition I can revert later." Both write captured
 content into your config repo's `tracked/`; `git diff` + commit + push from
-inside the config repo to lock it in. `capture` and the standalone `merge`
-wizard are the lower-level pieces `sync` composes.
+inside the config repo to lock it in. `capture` is the lower-level piece
+`sync` composes (the capture pipeline without the transition record).
 
 ## Subcommand groups
 
@@ -92,9 +92,8 @@ the body's sha256 hash on write so the pair passes strict parsing immediately.
 
 ## Mutating `--auto=*` confirmation
 
-When tracked declares `preserve_user_keys_deep` or carries top-level
-non-preserve drift, `sync` fires the merge wizard interactively (symmetric with
-`install`'s drift gate). For non-interactive contexts:
+When a tracked_file carries drift, `sync` resolves it; pass `--auto=` for
+non-interactive contexts:
 
 - `--auto=use-live` — absorb every drift item into tracked (today's
   silent-absorb behavior).

@@ -261,7 +261,7 @@ def test_install_unexpected_drift_exits_1_with_message(
     assert result.exit_code == 1
     combined = (result.stdout or "") + (result.stderr or "")
     assert "unexpected drift" in combined
-    assert "merge" in combined
+    assert "--auto-accept-tracked" in combined
 
 
 def test_install_auto_accept_tracked_resolves_drift(

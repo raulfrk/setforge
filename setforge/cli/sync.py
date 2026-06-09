@@ -1,14 +1,9 @@
-"""capture / merge / sync subcommands — live → tracked capture flow.
+"""capture / sync subcommands — live → tracked capture flow.
 
 - ``capture`` and ``sync`` drive the ``capture_mod.capture_profile``
-  pipeline; the merge wizard fires interactively on drift, with
-  ``--auto={use-live,keep-tracked}`` as the non-interactive escape.
-  ``capture`` is the pipeline alone; ``sync`` also records a transition
-  so ``revert`` can replay it.
-- ``merge`` runs the merge wizard standalone via
-  ``merge_mod.run_wizard`` — no profile capture, no transition. It has
-  its own ``--tracked_file`` filter; no ``--auto`` option (the wizard
-  is always interactive for the merge subcommand).
+  pipeline, with ``--auto={use-live,keep-tracked}`` as the
+  non-interactive escape. ``capture`` is the pipeline alone; ``sync``
+  also records a transition so ``revert`` can replay it.
 """
 
 import sys
@@ -22,9 +17,6 @@ from setforge import (
 )
 from setforge import (
     compare as compare_mod,
-)
-from setforge import (
-    merge as merge_mod,
 )
 from setforge import (
     section_wizard,
@@ -46,7 +38,6 @@ from setforge.cli._confirm import (
 )
 from setforge.cli._help_examples import (
     CAPTURE_EXAMPLES,
-    MERGE_EXAMPLES,
     SYNC_EXAMPLES,
 )
 from setforge.cli._helpers import (
@@ -158,63 +149,6 @@ def capture(
     )
     for result in results:
         typer.echo(f"{result.action.value:>8}  {result.name}")
-
-
-@app.command(epilog=MERGE_EXAMPLES)
-def merge(
-    profile: str = _PROFILE_OPTION,
-    config: Path = _CONFIG_OPTION,
-    tracked_file: str | None = typer.Option(
-        None,
-        "--tracked_file",
-        help="Narrow the walk to one tracked_file entry key.",
-    ),
-) -> None:
-    """Interactively resolve unexpected drift for every tracked_file in the profile.
-
-    Exits 0 with a "no unexpected drift; nothing to do." message when
-    ``compare`` reports no unexpected drift — the wizard runs only when
-    there's work to do.
-    """
-    config = _resolve_config_arg(config)
-    cfg = load_config(config)
-    repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-    _refuse_legacy_live_markers(ctx, command="merge")
-    # Round-2: thread the local.yaml host_local_sections
-    # overlay so the merge wizard's drift display does NOT surface
-    # already-injected host-local sections as DRIFTED (false-positive
-    # against the live file that just received them via install).
-    host_local_sections_map = _load_validated_host_local_sections(
-        cfg, resolved, repo_root
-    )
-    report = compare_mod.compare_profile(
-        cfg, profile, repo_root, host_local_sections=host_local_sections_map
-    )
-
-    if not report.has_unexpected_drift:
-        typer.echo("no unexpected drift; nothing to do.")
-        raise typer.Exit(0)
-
-    try:
-        merge_mod.run_wizard(
-            report,
-            cfg,
-            repo_root,
-            setforge_yaml_path=config.resolve(),
-            profile=profile,
-            tracked_file_filter=tracked_file,
-        )
-    except KeyboardInterrupt:
-        typer.secho(
-            "merge cancelled (Ctrl-C); files restored from snapshot",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        raise typer.Exit(130) from None
 
 
 @app.command(epilog=SYNC_EXAMPLES)

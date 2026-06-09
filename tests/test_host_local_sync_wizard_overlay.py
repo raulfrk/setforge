@@ -1,17 +1,16 @@
 """Sync-wizard overlay regression tests (round-2).
 
-Regression coverage for the Round-2 IMPORTANT finding that
-``setforge merge`` (the standalone wizard) and ``setforge sync
---auto=use-live`` (the non-interactive confirm panel) historically
+Regression coverage for the Round-2 IMPORTANT finding that ``setforge
+sync --auto=use-live`` (the non-interactive confirm panel) historically
 called :func:`setforge.compare.compare_profile` WITHOUT threading the
 local.yaml ``host_local_sections`` overlay, so already-injected
-host-local sections surfaced as DRIFT in the wizard's display and
-confirm-panel counts — a false positive even though the
-``f1ba8c0`` capture filter prevented the write-side leak.
+host-local sections surfaced as DRIFT in the confirm-panel counts — a
+false positive even though the ``f1ba8c0`` capture filter prevented the
+write-side leak.
 
-These tests assert the post-fix shape: both sync.py call sites pass
-``host_local_sections=`` to ``compare_profile`` and the wizard's drift
-display excludes injected host-local sections.
+This test asserts the post-fix shape: the sync.py call site passes
+``host_local_sections=`` to ``compare_profile`` so the drift display
+excludes injected host-local sections.
 """
 
 from __future__ import annotations
@@ -19,10 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from setforge import compare as compare_mod
-from setforge.cli import app
 from setforge.config import load_config, resolve_profile
 from setforge.deploy import copy_atomic
 from setforge.source import AnchorAfterHeading, HostLocalSection, HostLocalSectionName
@@ -123,26 +120,3 @@ def test_sync_wizard_excludes_injected_host_local_from_drift_display(
     drifted = [e for e in report_without.entries if e.diff]
     assert drifted, "pre-fix path should still surface drift without overlay"
     assert any("work-overrides" in e.diff for e in drifted)
-
-
-def test_merge_command_reports_no_unexpected_drift_when_overlay_threaded(
-    overlay_fixture: dict[str, Path],
-) -> None:
-    """End-to-end via the CLI: ``setforge merge`` exits 0 with the no-drift message.
-
-    Pre-fix (without the overlay threaded at sync.py:161): merge would
-    surface the injected host-local section as unexpected drift and
-    enter the wizard. Post-fix: merge exits 0 with "no unexpected
-    drift; nothing to do."
-    """
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "merge",
-            "--profile=p",
-            f"--config={overlay_fixture['cfg']}",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "no unexpected drift" in result.output

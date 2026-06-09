@@ -127,9 +127,7 @@ class ConflictResolution:
 # A per-conflict resolver mapping one conflict to a verdict. Injected by an
 # interactive caller (a wizard); the I/O lives in the caller, keeping this
 # module pure. The conflict is a line-based ``LineConflict`` (line path), a
-# structural ``PathConflict`` (structural path), or a scalar ``ScalarConflict``
-# (the SHALLOW ``preserve_user_keys`` overlay, dispatched by
-# :mod:`setforge.scalar_overlay`).
+# structural ``PathConflict`` (structural path), or a scalar ``ScalarConflict``.
 type ConflictResolver = Callable[
     [LineConflict | PathConflict | ScalarConflict], ConflictResolution
 ]

@@ -1,9 +1,8 @@
-"""Generic wizard utilities shared by install-time merge and capture-time deep-merge.
+"""Generic wizard utilities for the drift-resolution loop.
 
-These primitives originally lived in :mod:`setforge.merge`. They were
-factored out so that the install-time wizard (`setforge.merge.run_wizard`)
-and the capture-time wizard (capture-wizard's upcoming
-`setforge.capture.run_capture_wizard`) can share a single implementation.
+These primitives (``run_wizard_loop`` plus the shared :class:`Snapshot`,
+:class:`DriftItem`, and ``read_one_choice`` helpers) are consumed by the
+section / conflict / capture wizards and the install-time confirm flow.
 
 What lives here:
 
@@ -497,7 +496,7 @@ def run_wizard_loop(  # noqa: C901 — empty-drift short-circuit adds one branch
         ``None`` enables interactive prompts and signal handlers.
     transition_command:
         Which :class:`TransitionCommand` variant to record on success
-        (e.g. ``MERGE`` for install, ``CAPTURE``-flavored for capture-wizard).
+        (e.g. ``MERGE`` / ``SYNC`` for the install / sync transitions).
     profile:
         Profile name (used in the transition meta).
     pending_message:
@@ -507,7 +506,7 @@ def run_wizard_loop(  # noqa: C901 — empty-drift short-circuit adds one branch
         offending file path. Example::
 
             "[yellow]pending manual edit in {src_path}; "
-            "resume with: setforge merge --profile=p[/yellow]"
+            "resume with: setforge sync --profile=p[/yellow]"
 
     Returns
     -------

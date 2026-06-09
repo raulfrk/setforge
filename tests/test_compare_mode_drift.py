@@ -146,7 +146,6 @@ def test_install_gate_catches_mode_drift_only() -> None:
         _install_helpers._check_unexpected_drift(
             report,
             ctx_stub,  # type: ignore[arg-type]
-            Path("/tmp/setforge.yaml"),
             auto_accept_tracked=False,
             auto_accept_live=False,
         )

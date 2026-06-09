@@ -355,10 +355,9 @@ def preserved_positions_for_top(
     names contribute nothing; the caller handles those via the fast
     whole-key-expected branch.
 
-    Public within the package: shared between
-    :func:`classify_jsonc_drift` and :mod:`setforge.capture_wizard`'s
-    deep-walk phase. Path-preserve coverage is inherently a JSONC-domain
-    concept, so the implementation lives here and consumers import it.
+    Public within the package: used by :func:`classify_jsonc_drift`.
+    Path-preserve coverage is inherently a JSONC-domain concept, so the
+    implementation lives here and consumers import it.
     """
     positions: set[tuple[str, ...]] = set()
     for name in key_names:
