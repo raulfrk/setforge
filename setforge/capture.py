@@ -10,12 +10,11 @@ The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
 - legacy ``host_local_sections`` marker pairs that ``install`` injected are
   name-scoped stripped (markers and body both removed).
 
-Capture is no longer a silent absorb. When a tracked_file carries
-top-level drift between tracked and live, the capture-time merge wizard
-fires (interactive by default; non-interactive via
-``--auto={use-live, keep-tracked}``). The wizard mutates tracked
-in-place at every drifted key path — capture's per-tracked_file writeback
-then reads the post-wizard tracked and applies the host-state strip above.
+Capture is no longer a silent absorb. When a tracked_file carries drift
+between tracked and live, capture resolves it via
+``--auto={use-live, keep-tracked}`` (``use-live`` absorbs the drift into
+tracked, ``keep-tracked`` refuses it) or an interactive confirm; the
+per-tracked_file writeback then applies the host-state strip above.
 
 The ``CaptureRequiresInteractive`` exception is raised when capture
 would prompt but stdin is not a TTY and ``--auto`` wasn't supplied —

@@ -83,7 +83,7 @@ class ActionResult(StrEnum):
 
 
 class FileFormat(StrEnum):
-    """Closed set of file formats handled by the merge wizard's overlay seam."""
+    """Closed set of file formats handled by the drift-resolution overlay seam."""
 
     YAML = "yaml"
     JSONC = "jsonc"
@@ -104,9 +104,8 @@ class DriftMode(StrEnum):
 class DriftItem:
     """One diverged key path between tracked and live for a drift item.
 
-    Produced by trigger-specific walkers (:func:`setforge.merge.walk_unexpected_drift`
-    for install, :func:`walk_capture_drift` for capture in capture-wizard); consumed by
-    the merge wizard.
+    A trigger-specific walker produces these and :func:`run_wizard_loop`
+    consumes them, dispatching the chosen action per item.
     """
 
     tracked_file_name: str

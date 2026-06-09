@@ -909,7 +909,7 @@ def _advance_disposition_base(
         typer.secho(
             f"warning: {sub_dst}: merge conflict kept live, base not advanced "
             f"— conflict re-surfaces next install (re-run with "
-            f"--auto=use-tracked or the merge wizard)",
+            f"--auto=use-tracked to resolve)",
             err=True,
             fg=typer.colors.YELLOW,
         )
@@ -1222,7 +1222,7 @@ def _run_predeploy_gates(
     """Run the three pre-deploy confirm/reject gates in their fixed order.
 
     Bundles the unexpected-drift confirm (``--auto-accept-{tracked,live}``)
-    + the legacy unexpected-drift wizard hand-off + the section-reconcile
+    + the bare-install unexpected-drift reject + the section-reconcile
     confirm (``--auto=use-tracked``) into one orchestrator so
     :func:`install` reads as a high-level pipeline rather than 50+ LoC
     of three nearly-identical confirm shells. Each gate is independent

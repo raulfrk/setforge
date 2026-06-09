@@ -129,10 +129,9 @@ def capture(
 ) -> None:
     """Capture live → tracked for every tracked_file in the profile.
 
-    When tracked declares ``preserve_user_keys_deep`` or carries
-    non-preserve top-level drift, the merge wizard fires interactively;
-    pass ``--auto={use-live, keep-tracked}`` for non-interactive
-    contexts.
+    When a tracked_file carries drift, capture resolves it: pass
+    ``--auto={use-live, keep-tracked}`` for non-interactive contexts, or
+    confirm interactively otherwise.
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)
@@ -180,10 +179,9 @@ def sync(
 ) -> None:
     """Capture live → tracked for tracked_files and extensions.
 
-    Symmetric with ``setforge install``'s drift gate: the merge wizard
-    fires interactively for ``preserve_user_keys_deep`` and non-preserve
-    top-level drift. Pass ``--auto=use-live`` (pre-`capture-wizard` silent
-    absorb) or ``--auto=keep-tracked`` (refuse) for scripted runs.
+    Symmetric with ``setforge install``'s drift gate: drift is resolved
+    interactively, or pass ``--auto=use-live`` (absorb every drift item)
+    or ``--auto=keep-tracked`` (refuse) for scripted runs.
     """
     config = _resolve_config_arg(config)
     auto_enum = _parse_capture_auto(auto)

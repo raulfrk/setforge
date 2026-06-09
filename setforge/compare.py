@@ -5,7 +5,7 @@ Two-axis classification:
 - ``preserve_user_keys`` paths in YAML files mark drift that we *expect*
   (live overlays tracked on the next deploy, by design).
 - Everything else is *unexpected* drift — what ``compare --check`` flags
-  for CI and what Pillar 4's ``merge`` wizard exists to resolve.
+  for CI and what the install drift gate (``--auto-accept-*``) resolves.
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously
