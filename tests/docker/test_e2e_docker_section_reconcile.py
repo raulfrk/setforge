@@ -18,7 +18,6 @@ Routing matrix exercised end-to-end against a fresh Debian 12 container:
 - ``--reconcile-user-sections`` + tty: per-collision radiolist confirm
   (driven via the pyte PTY harness); Yes adopts shared, No keeps host-local.
 - ``--reconcile-user-sections`` + ``--auto``: mutually exclusive, exit 2.
-- ``compare --reconcile-user-sections``: read-only dry run, no prompt.
 
 The collision fixture rides ``spans_pinned_md`` (a shared span on
 ``## Pinned Section``); the host-local shadow is declared at test time in
@@ -285,37 +284,3 @@ def test_install_reconcile_interactive_keep_host_local(
     session.send_keys("\r")
     session.expect_in_display("aborted", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
-
-
-# ---------------------------------------------------------------------------
-# compare --reconcile-user-sections — read-only dry run
-# ---------------------------------------------------------------------------
-
-
-def test_compare_reconcile_dry_run_no_prompt(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """compare --reconcile-user-sections is read-only and never prompts.
-
-    Timeout guard: a compare that wrongly tried to prompt would block and the
-    timeout would kill it (non-zero exit).
-    """
-    c = docker_container()
-    _seed_baseline(c)
-    result = c.exec(
-        [
-            "timeout",
-            "30",
-            "uv",
-            "run",
-            "setforge",
-            "compare",
-            f"--profile={_PROFILE}",
-            f"--config={CONFIG_FIXTURE}",
-            "--reconcile-user-sections",
-        ],
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"compare blocked or errored: stdout={result.stdout!r} stderr={result.stderr!r}"
-    )

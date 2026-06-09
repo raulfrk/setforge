@@ -118,8 +118,7 @@ def _iter_section_tracked_files(
     Encapsulates the resolve_src / resolve_dst / expand_tracked_file /
     ``preserve_user_sections`` filter chain that
     :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
-    :func:`_extract_live_sections_map`, and
-    :func:`_print_section_reconcile_dry_run` all duplicate today.
+    and :func:`_extract_live_sections_map` all duplicate today.
     ``expand_tracked_file`` runs ``Path.rglob`` for directory-shaped
     tracked entries (a per-call filesystem walk); for plain-file entries
     the helper is allocation-only. Callers that need the live or tracked

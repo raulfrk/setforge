@@ -1,9 +1,4 @@
-"""compare subcommand — read-only drift report (live vs tracked) for a profile.
-
-Includes two compare-private helpers (``_print_section_reconcile_dry_run``,
-``_render_drift_file``) that surface section-marker dry-run output and
-per-file rich diff bodies.
-"""
+"""compare subcommand — read-only drift report (live vs tracked) for a profile."""
 
 from pathlib import Path
 from typing import Any
@@ -13,7 +8,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from setforge import compare as compare_mod
-from setforge import section_reconcile, section_wizard, transitions
+from setforge import transitions
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -23,7 +18,6 @@ from setforge.cli import (
 from setforge.cli._help_examples import COMPARE_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
-    _iter_section_tracked_files,
     _refuse_legacy_live_markers,
 )
 from setforge.cli._install_helpers import _load_validated_host_local_sections
@@ -38,8 +32,7 @@ from setforge.config import (
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.locking import profile_lock
-from setforge.section_reconcile import SectionDriftState
-from setforge.sections import SectionSemantics, extract_sections
+from setforge.sections import extract_sections
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 
@@ -61,14 +54,6 @@ def compare(
         False,
         "--strict",
         help="With --check: exit 1 on any drift (expected or unexpected).",
-    ),
-    reconcile_user_sections: bool = typer.Option(
-        False,
-        "--reconcile-user-sections",
-        help=(
-            "Dry-run: print what 'install --reconcile-user-sections' "
-            "would prompt about. Read-only — no live mutation, no prompts."
-        ),
     ),
 ) -> None:
     """Report drift between tracked and live for every tracked_file in the profile."""
@@ -137,8 +122,6 @@ def compare(
         # summary so the diff body and per-status counts stay grouped,
         # mirroring the mockup's ordering ("✓ no drift ... + <tag> X").
         _render_host_local_preview(host_local_sections_map, cfg, console)
-        if reconcile_user_sections:
-            _print_section_reconcile_dry_run(profile_ctx, console)
 
     render(ctx.obj, "compare", _compare_json_data(report), human_fn=_human)
 
@@ -278,49 +261,3 @@ def _render_host_local_preview(
                 f"  {sigil} {HOST_LOCAL_PROVENANCE_TAG} {section_name}     ← {suffix}",
                 markup=False,
             )
-
-
-def _print_section_reconcile_dry_run(ctx: ProfileContext, console: Console) -> None:
-    """Render the ``compare --reconcile-user-sections`` dry-run output.
-
-    For every tracked_file with ``preserve_user_sections=True`` that exists
-    on both sides, walks the section classifier and prints one line per
-    drifted shared section with its three-way state label, plus a
-    one-line aggregate per file. No prompts, no live mutation.
-
-    The output is structured for grep-based assertions in the Docker
-    e2e suite (variant 18) — each drifted-section line includes the
-    file path, section name, and state label.
-    """
-    any_emitted = False
-    for sub_src, sub_dst in _iter_section_tracked_files(ctx):
-        if not sub_dst.exists() or not sub_src.exists():
-            continue
-        if _render_drift_file(sub_src, sub_dst, console):
-            any_emitted = True
-    if not any_emitted:
-        console.print("\nno shared user-section drift to reconcile.")
-
-
-def _render_drift_file(sub_src: Path, sub_dst: Path, console: Console) -> bool:
-    """Render the dry-run drift block for one (tracked, live) file pair.
-
-    Returns ``True`` when at least one drifted-section line was printed
-    for this file (i.e. the file contributed to the overall
-    ``any_emitted`` flag in :func:`_print_section_reconcile_dry_run`).
-    """
-    tracked_text = sub_src.read_text(encoding="utf-8")
-    live_text = sub_dst.read_text(encoding="utf-8")
-    drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-    summary = section_wizard.format_drift_summary(drifts.values())
-    if not summary:
-        return False
-    console.print(f"\n[bold]{sub_dst}[/bold]: {summary}")
-    for sec_name, drift in drifts.items():
-        if drift.semantics is not SectionSemantics.SHARED:
-            continue
-        if drift.state is SectionDriftState.NO_DRIFT:
-            continue
-        label = section_wizard.state_label(drift.state)
-        console.print(f"  three-way {label} [cyan]{sec_name}[/cyan]")
-    return True
