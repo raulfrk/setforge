@@ -190,13 +190,16 @@ class SpanEntry(BaseModel):
     meaning.
     """
     capture_mode: SectionMode = SectionMode.KEEP_DEFAULTS
-    """Section re-splice vs strip mode for a section span (schema 2.0).
+    """Provenance-only carrier for the legacy ``preserve_user_sections_mode``.
 
-    Carries the legacy ``preserve_user_sections_mode``: ``KEEP_DEFAULTS``
-    re-splices the tracked marker body on capture, ``STRIP`` wipes it.
-    Meaningful only on a section / heading span; on a non-section span it is
-    degenerate and accept-and-ignored (no validation error), mirroring how
-    the legacy mode flag was degenerate without ``preserve_user_sections``.
+    INERT AT SCHEMA 2.0 — it has no runtime consumer. The shared-section
+    capture path excludes the whole span region wholesale regardless of
+    mode, so ``KEEP_DEFAULTS`` and ``STRIP`` capture identically; the field
+    exists solely to round-trip the legacy ``preserve_user_sections_mode``
+    flag through the 1.2 ↔ 2.0 migration (it is frozen in
+    ``FROZEN_FIELD_MANIFEST`` and restored by the reverse migration). It is
+    accept-and-ignored on every span kind (no validation error). If section
+    capture ever grows a per-mode behavior, this is the field to wire.
     """
 
     @field_validator("anchor")
