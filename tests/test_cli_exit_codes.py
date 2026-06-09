@@ -260,7 +260,7 @@ def test_install_unexpected_drift_exits_1_with_message(
     result = runner.invoke(app, ["install", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "unexpected drift" in combined
+    assert "permission-mode drift" in combined
     assert "--auto-accept-tracked" in combined
 
 

@@ -92,12 +92,18 @@ def install(
     auto_accept_tracked: bool = typer.Option(
         False,
         "--auto-accept-tracked",
-        help="Non-interactively resolve unexpected drift by keeping tracked values.",
+        help=(
+            "Resolve permission-mode drift non-interactively by reapplying "
+            "the tracked mode."
+        ),
     ),
     auto_accept_live: bool = typer.Option(
         False,
         "--auto-accept-live",
-        help="Non-interactively resolve unexpected drift by adopting live values.",
+        help=(
+            "Proceed past permission-mode drift non-interactively; install "
+            "still reapplies the tracked mode (live permission bits are not kept)."
+        ),
     ),
     reconcile_user_sections: bool = typer.Option(
         False,

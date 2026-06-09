@@ -94,6 +94,19 @@ class FileCompare:
     permission bits (via :func:`stat.S_IMODE`) differ. Always False when
     ``mode:`` is unset — the drift axis is opt-in per tracked_file.
     """
+    live_mode: int | None = None
+    """The live file's permission bits when ``mode:`` is declared, else ``None``.
+
+    Populated alongside :attr:`mode_drift` so the install confirm plan can
+    render the ``live → tracked`` mode transition. ``None`` when ``mode:``
+    is unset (no mode axis to report).
+    """
+    tracked_mode: int | None = None
+    """The tracked_file's declared ``mode:`` value, else ``None``.
+
+    The mode the live file is reset to on deploy; paired with
+    :attr:`live_mode` for the confirm-plan transition line.
+    """
     disposition: Disposition | None = None
     """The :class:`~setforge.config.Disposition` of the source tracked_file,
     or ``None`` for files without a disposition (legacy preserve-* model).
@@ -535,11 +548,14 @@ def _compare_one(
     unexpected_keys: list[str] = []
 
     mode_drift = False
+    live_mode: int | None = None
+    tracked_mode: int | None = None
     if tracked_file.mode is not None:
         # lstat (not stat) for symlink-posture parity with snapshots.py:
         # a symlink dst reports drift on the LINK's own mode, never the
         # target's — setforge never deploys through a live symlink.
         live_mode = stat.S_IMODE(dst.lstat().st_mode)
+        tracked_mode = tracked_file.mode
         mode_drift = live_mode != tracked_file.mode
 
     is_drifted = (
@@ -556,6 +572,8 @@ def _compare_one(
         expected_drift_keys=expected_keys,
         unexpected_drift_keys=unexpected_keys,
         mode_drift=mode_drift,
+        live_mode=live_mode,
+        tracked_mode=tracked_mode,
         disposition=disposition,
         span_only_drift=span_only_drift,
     )

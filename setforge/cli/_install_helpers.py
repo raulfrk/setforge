@@ -399,11 +399,14 @@ def _check_unexpected_drift(
 ) -> None:
     """Reject unexpected drift on a bare install, or return when a flag resolves it.
 
-    When a ``DRIFTED`` entry carries unexpected drift and neither
-    ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set, print an
-    actionable error and raise ``typer.Exit(1)``. With a flag set, the
-    confirm gate in :func:`_confirm_legacy_drift_or_exit` has already run,
-    so this is a no-op. No-op when no entry carries unexpected drift.
+    The only live unexpected-drift axis at schema 2.0 is ``mode_drift``
+    (permission bits); the legacy ``unexpected_drift_keys`` axis is
+    retired and always empty. When a ``DRIFTED`` entry carries either and
+    neither ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set,
+    print an actionable error and raise ``typer.Exit(1)``. With a flag
+    set, the confirm gate in :func:`_confirm_legacy_drift_or_exit` has
+    already run, so this is a no-op. No-op when nothing carries unexpected
+    drift.
     """
     has_real_unexpected = any(
         e.status == CompareStatus.DRIFTED and (e.unexpected_drift_keys or e.mode_drift)
@@ -420,7 +423,7 @@ def _check_unexpected_drift(
     )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
-            f"unexpected drift in {unexpected_count} file(s) "
+            f"permission-mode drift in {unexpected_count} file(s) "
             f"(profile '{ctx.profile}'): "
             f"pass --auto-accept-tracked or --auto-accept-live to resolve",
             err=True,
@@ -1026,52 +1029,71 @@ def _build_unexpected_drift_plan(
     ctx: ProfileContext,
     direction: AutoDirection,
 ) -> AutoPlan:
-    """Build an AutoPlan from a drift report for legacy --auto-accept-* paths.
+    """Build an AutoPlan from a drift report for the --auto-accept-* paths.
 
     Delegates name → (sub_src, sub_dst) resolution to the shared
-    ``_resolve_drift_paths`` helper, then filters to entries with
-    ``unexpected_drift_keys`` (install's legacy gate ignores
-    diff-only entries). ``changed`` is the number of unexpected keys.
+    ``_resolve_drift_paths`` helper, then surfaces two drift axes:
+    ``unexpected_drift_keys`` (content keys → ``file_changes``) and
+    ``mode_drift`` (permission bits → a per-file risk line). A mode-only
+    drift therefore yields a non-empty plan (a risk line) so the confirm
+    gate actually fires instead of silently auto-proceeding on an empty
+    plan while deploy reapplies the tracked mode.
     """
     file_changes: list[FileChange] = []
+    mode_risks: list[str] = []
     for entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
-        # install's legacy --auto-accept-* gate ONLY surfaces entries
-        # with unexpected-drift keys; entries that drift only via diff
-        # body fall through to the bare-install warning path.
-        if not entry.unexpected_drift_keys:
+        # Surface entries that carry unexpected-drift keys OR permission-mode
+        # drift; diff-only entries fall through to the bare-install path.
+        if not (entry.unexpected_drift_keys or entry.mode_drift):
             continue
-        match direction:
-            case AutoDirection.TRACKED_TO_LIVE:
-                source, dest = sub_src, sub_dst
-            case AutoDirection.LIVE_TO_TRACKED:
-                source, dest = sub_dst, sub_src
-            case _ as never:
-                assert_never(never)
-        file_changes.append(
-            FileChange(
-                source=source,
-                dest=dest,
-                changed=len(entry.unexpected_drift_keys),
-            ),
-        )
-    if not file_changes:
+        if entry.unexpected_drift_keys:
+            match direction:
+                case AutoDirection.TRACKED_TO_LIVE:
+                    source, dest = sub_src, sub_dst
+                case AutoDirection.LIVE_TO_TRACKED:
+                    source, dest = sub_dst, sub_src
+                case _ as never:
+                    assert_never(never)
+            file_changes.append(
+                FileChange(
+                    source=source,
+                    dest=dest,
+                    changed=len(entry.unexpected_drift_keys),
+                ),
+            )
+        if (
+            entry.mode_drift
+            and entry.live_mode is not None
+            and entry.tracked_mode is not None
+        ):
+            # install always reapplies the tracked mode on deploy (it cannot
+            # write the live mode back into setforge.yaml), so the transition
+            # is live → tracked regardless of --auto-accept direction.
+            mode_risks.append(
+                f"{sub_dst}: permission mode "
+                f"{entry.live_mode:#o} → {entry.tracked_mode:#o} "
+                f"(reset to tracked on deploy)"
+            )
+    if not file_changes and not mode_risks:
         return AutoPlan(
             direction=direction,
             file_changes=(),
             risks=(),
             revert_command=f"setforge revert --profile={ctx.profile}",
         )
-    risk_target = "live" if direction is AutoDirection.TRACKED_TO_LIVE else "tracked"
+    risks: list[str] = []
+    if file_changes:
+        risk_target = (
+            "live" if direction is AutoDirection.TRACKED_TO_LIVE else "tracked"
+        )
+        risks.append(
+            f"{risk_target} values on {len(file_changes)} file(s) will be overwritten"
+        )
+    risks.extend(mode_risks)
     return AutoPlan(
         direction=direction,
         file_changes=tuple(file_changes),
-        risks=(
-            f"{risk_target} values on {len(file_changes)} file(s) will be overwritten",
-            # The gate fires AFTER the unexpected-drift filter, which
-            # already excludes preserve_user_keys overlays — surface
-            # that reassurance to the user.
-            "host-local keys covered by preserve_user_keys are not affected",
-        ),
+        risks=tuple(risks),
         revert_command=f"setforge revert --profile={ctx.profile}",
     )
 
