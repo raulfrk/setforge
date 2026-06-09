@@ -103,12 +103,6 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "src": "<class 'pathlib.Path'>",
         "dst": "<class 'str'>",
         "template": "<class 'bool'>",
-        "preserve_user_sections": "<class 'bool'>",
-        "preserve_user_sections_mode": "<enum 'SectionMode'>",
-        "preserve_user_keys_resolved": (
-            "list[setforge.preserved_keys.ResolvedPreservedKey]"
-        ),
-        "preserve_user_keys_deep": "list[str]",
         "mode": "int | None",
         "symlink": "str | None",
         "disposition": "setforge.config.Disposition | None",
