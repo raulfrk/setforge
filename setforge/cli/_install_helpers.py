@@ -671,13 +671,18 @@ def _read_or_migrate_disposition_base(
     * **Base present, live has NO legacy markers** — steady state. The stored
       base is returned verbatim (``migrated=False``).
     * **Base present, live STILL carries legacy markers** (markdown / line-based
-      files only — structured files have no inline markers) — the crash-resume
-      state (a kill landed AFTER the seed-first base write but BEFORE the live
-      strip). The strip is COMPLETED (live rewritten to the stripped form,
-      which re-strips the unchanged marker-bearing live → byte-matches the
-      already-seeded base) WITHOUT re-seeding; the seeded base is returned
-      (``migrated=False`` — the seed ran on a prior install, so no warning
-      fires this run).
+      files only — structured files have no inline markers) — routed by
+      :func:`_resume_marker_strip`. When the base is still the markerless SEED
+      (``strip_shared_markers(live) == base``) this is the crash-resume state (a
+      kill landed AFTER the seed-first base write but BEFORE the live strip): the
+      strip is COMPLETED (live rewritten to the stripped form) WITHOUT
+      re-seeding. When the base has been ADVANCED past the seed (a
+      ``disposition: shared`` file whose tracked content legitimately carries an
+      in-content shared marker — re-installs always re-deploy that marker into
+      live and the advance re-baselines to the marker-bearing form), the resume
+      stands down: it is steady state, not an interrupted migration. Either way
+      the seeded/advanced base is returned (``migrated=False`` — the seed ran on
+      a prior install, so no warning fires this run).
     * **Base ABSENT** — a file entering the disposition world for the first
       time, routed by format:
 
@@ -694,9 +699,8 @@ def _read_or_migrate_disposition_base(
     SHARED markers to strip).
 
     Raises :class:`~setforge.errors.MarkerError` on a malformed marker file
-    (via the strip) and :class:`~setforge.errors.SetforgeError` when a
-    crash-resume re-strip does not reproduce the already-seeded base (both
-    propagate from the leaf helpers rather than being swallowed here).
+    (via the strip), propagated from the leaf helpers rather than swallowed
+    here.
     """
     raw = base_store.read_base(profile, file_id)
     if raw is not None:
@@ -821,21 +825,37 @@ def _migrate_shared_markers_for_base(
 
 
 def _resume_marker_strip(sub_dst: Path, base_text: str) -> None:
-    """Complete an interrupted SHARED-marker strip when the base is already seeded.
+    """Complete an interrupted SHARED-marker strip when the base is still the seed.
 
     Reached on the crash-resume state: the seed-first base write landed but the
     kill hit BEFORE the live strip, so the stored base is PRESENT yet live still
-    carries legacy SHARED markers. Re-stripping the UNCHANGED marker-bearing
-    live reproduces the already-seeded base byte-for-byte (live is unchanged
-    since the seed), so this rewrites live to the stripped form to reach
-    base == live == stripped WITHOUT touching the base (no re-seed; the seeded
-    base is the truth). A no-op on the steady-state path: a live file with NO
-    SHARED markers leaves ``stripped == live_text`` and nothing is rewritten.
+    carries legacy SHARED markers. In that window the base is the SEED — i.e.
+    ``base_text == strip_shared_markers(live)`` — because live is byte-unchanged
+    since the seed. Re-stripping the unchanged marker-bearing live therefore
+    reproduces the seeded base byte-for-byte, so this rewrites live to the
+    stripped form to reach base == live == stripped WITHOUT touching the base (no
+    re-seed; the seeded base is the truth).
 
-    Mode is preserved on the rewrite (0600 stays 0600) via the same
-    fchmod-before-replace pattern the seed path uses. ``base_text`` is accepted
-    so the invariant (re-strip == already-seeded base) is asserted, catching a
-    base/live divergence before it can silently corrupt the merge.
+    Two states leave this a no-op:
+
+    * **Steady state, no markers** — a live file with NO SHARED markers leaves
+      ``stripped == live_text``; nothing to resume.
+    * **Steady state, base advanced PAST the seed** — a ``disposition: shared``
+      file whose TRACKED content legitimately carries an in-content shared
+      marker deploys that marker into live on every install, and the post-deploy
+      advance re-baselines the stored base to the merged, marker-BEARING form.
+      On the next install live still carries the marker, but the base is no
+      longer the markerless seed, so ``strip_shared_markers(live) != base_text``.
+      This is NOT an interrupted migration — the strip already ran and was
+      advanced over — so there is nothing to resume; the live byte-base is the
+      merge ancestor :func:`deploy.copy_atomic`'s 3-way driver owns from here.
+      Re-stripping live would diverge from the advanced base, so the resume must
+      stand down rather than rewrite live (which WOULD corrupt the ancestor).
+
+    The resume thus fires ONLY in its genuine window (``stripped == base_text``);
+    any other ``(base present, live marker-bearing)`` shape is steady state and
+    untouched. Mode is preserved on the rewrite (0600 stays 0600) via the same
+    fchmod-before-replace pattern the seed path uses.
     """
     try:
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -846,11 +866,11 @@ def _resume_marker_strip(sub_dst: Path, base_text: str) -> None:
         # Steady state: no markers left to strip, nothing to resume.
         return
     if stripped != base_text:
-        raise SetforgeError(
-            f"{sub_dst}: cannot resume marker strip — re-stripping the live "
-            "file does not reproduce the seeded base; refusing to rewrite live "
-            "to avoid corrupting the merge ancestor"
-        )
+        # Base advanced past the markerless seed (steady-state re-install of a
+        # disposition:shared file whose tracked content retains its shared
+        # marker): not an interrupted migration. Leave live and the advanced
+        # base alone — the 3-way merge driver is the ancestor's owner now.
+        return
     existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
     _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
 

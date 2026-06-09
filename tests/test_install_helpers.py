@@ -270,3 +270,78 @@ def test_resume_marker_strip_steady_state_is_noop(
     _install_helpers._resume_marker_strip(live, _STRIPPED)
 
     assert live.read_bytes() == before
+
+
+def test_resume_marker_strip_advanced_base_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Base advanced past the seed (marker-bearing) → resume stands down.
+
+    A ``disposition: shared`` file whose tracked content legitimately carries an
+    in-content shared marker re-deploys that marker into live on every install,
+    and the post-deploy advance re-baselines the stored base to the SAME
+    marker-bearing form. On the next install live still carries the marker but
+    the base is no longer the markerless seed, so
+    ``strip_shared_markers(live) != base``. That is steady state, NOT an
+    interrupted migration: the resume must leave live AND the advanced base
+    untouched (re-stripping live would diverge from the advanced base and
+    corrupt the merge ancestor). Regression for the second-install crash.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "note.md"
+    live.write_text(_LIVE_WITH_MARKERS, encoding="utf-8")
+    live.chmod(0o600)
+    live_before = live.read_bytes()
+
+    rewrites: list[bytes] = []
+    real_rewrite = _install_helpers._atomic_rewrite_preserving_mode
+
+    def _record_rewrite(path: Path, content: str, mode: int) -> None:
+        rewrites.append(content.encode("utf-8"))
+        real_rewrite(path, content, mode)
+
+    monkeypatch.setattr(
+        _install_helpers, "_atomic_rewrite_preserving_mode", _record_rewrite
+    )
+
+    # Base == the marker-BEARING live (advanced), NOT the markerless seed.
+    _install_helpers._resume_marker_strip(live, _LIVE_WITH_MARKERS)
+
+    # No rewrite: live and the advanced base are both untouched, no crash.
+    assert rewrites == []
+    assert live.read_bytes() == live_before
+
+
+def test_disposition_base_reinstall_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disposition:shared markdown with a shared marker re-installs idempotently.
+
+    Drives :func:`_read_or_migrate_disposition_base` through the realistic
+    lifecycle: first install seeds the markerless base, then the deploy advances
+    it to the marker-bearing form. A clean (no-drift) re-install must return the
+    advanced base verbatim, leave live unchanged, and NOT raise. Regression for
+    the second-install ``cannot resume marker strip`` crash.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    live = tmp_path / "shared.md"
+    live.write_text(_LIVE_WITH_MARKERS, encoding="utf-8")
+
+    # First install: base absent → seed the markerless base from live + strip.
+    first = _install_helpers._read_or_migrate_disposition_base("p", "f", live)
+    assert first.migrated is True
+    assert first.base_text == _STRIPPED
+    assert base_store.read_base("p", "f") == _STRIPPED.encode("utf-8")
+
+    # Simulate the post-deploy advance: live + base re-baselined to the
+    # marker-bearing tracked form (tracked legitimately keeps the shared marker).
+    live.write_text(_LIVE_WITH_MARKERS, encoding="utf-8")
+    base_store.write_base("p", "f", _LIVE_WITH_MARKERS.encode("utf-8"))
+    live_before = live.read_bytes()
+
+    # Second install (no drift): returns the advanced base, no rewrite, no raise.
+    second = _install_helpers._read_or_migrate_disposition_base("p", "f", live)
+    assert second.migrated is False
+    assert second.base_text == _LIVE_WITH_MARKERS
+    assert live.read_bytes() == live_before
+    assert base_store.read_base("p", "f") == _LIVE_WITH_MARKERS.encode("utf-8")
