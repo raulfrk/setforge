@@ -1,11 +1,14 @@
 """Docker e2e tests for ``setforge migrate`` — the schema version-stamp chain.
 
-Exercises the 1.0 → 1.1 → 1.2 version-stamp chain end-to-end against a
+Exercises the 1.0 → 1.1 → 1.2 → 2.0 migration chain end-to-end against a
 real Debian 12 container + the installed ``setforge`` binary:
 
-- ``migrate --check`` lists both stamps (1.0 → 1.1 → 1.2) on a frozen 1.0 config.
-- ``migrate --apply --yes`` stamps ``schema_version: '1.2'`` (the build's
-  current expected) and writes a ``.pre-1.2.bak`` backup sibling.
+- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 chain on a frozen
+  1.0 config (the listing never gates, so it shows all three steps).
+- ``migrate --apply --yes`` walks the chain to ``schema_version: '2.0'`` (the
+  build's current expected) and writes a ``.pre-2.0.bak`` backup sibling. The
+  destructive 1.2 → 2.0 contract step is gated on an operator-declared
+  ``minimum_version >= 2.0``, so the apply-family configs carry that floor.
 - ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
 - a pre-bump frozen config (no ``schema_version`` key) still ``install``s.
 
@@ -50,10 +53,44 @@ def _seed_frozen_config(c: ContainerHandle) -> None:
     c.write_text(f"{_CFG_DIR}/tracked/foo.md", "hello\n")
 
 
+# A frozen pre-versioning config that ALSO declares the 2.0 contract floor.
+# The 1.2 → 2.0 step drops the legacy preserve_* fields irreversibly, so it
+# refuses unless minimum_version attests every host is on >= 2.0. The
+# apply-family tests need the full chain to run, so they seed this variant;
+# the config still detects as the 1.0 baseline (no schema_version key).
+_FROZEN_1_0_FLOORED_YAML: str = (
+    "version: 1\n"
+    'minimum_version: "2.0"\n'
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md\n"
+    "    dst: ~/.foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def _seed_floored_config(c: ContainerHandle) -> None:
+    """Write a frozen 1.0 config carrying ``minimum_version: "2.0"``.
+
+    The floor lets the destructive 1.2 → 2.0 contract step run, so the
+    apply-family tests can walk the full chain to the build's expected 2.0.
+    """
+    c.exec(["mkdir", "-p", f"{_CFG_DIR}/tracked"])
+    c.write_text(_CFG_PATH, _FROZEN_1_0_FLOORED_YAML)
+    c.write_text(f"{_CFG_DIR}/tracked/foo.md", "hello\n")
+
+
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 version-stamp chain."""
+    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 chain.
+
+    The listing never gates on the contract floor, so a floorless frozen 1.0
+    config still shows all three steps (including the 1.2 → 2.0 contract).
+    """
     c = docker_container()
     _seed_frozen_config(c)
     result = c.exec(
@@ -62,18 +99,19 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "2 migration(s) available" in combined, combined
+    assert "3 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
     assert "1.1 → 1.2" in combined, combined
+    assert "1.2 → 2.0" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '1.2'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '2.0'`` + writes a backup."""
     c = docker_container()
-    _seed_frozen_config(c)
+    _seed_floored_config(c)
     result = c.exec(
         [
             "uv",
@@ -90,9 +128,9 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
     # A frozen-1.0 apply runs the full chain to the build's expected version.
-    assert "1.2" in after, after
+    assert "2.0" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-1.2.bak")
+    backup = c.read_text(f"{_CFG_PATH}.pre-2.0.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -101,12 +139,12 @@ def test_migrate_apply_is_revertible(
 ) -> None:
     """A migrate --apply is revertible: revert restores the pre-migration config.
 
-    The frozen 1.0 config (no schema_version) is stamped to 1.1, then
-    ``setforge revert --profile=migrate`` reverses the recorded transition,
-    restoring the byte-exact pre-migration setforge.yaml (schema_version gone).
+    The frozen 1.0 config (no schema_version) is stamped through the chain to
+    2.0, then ``setforge revert --profile=migrate`` reverses the recorded
+    transition, restoring the byte-exact pre-migration setforge.yaml.
     """
     c = docker_container()
-    _seed_frozen_config(c)
+    _seed_floored_config(c)
     before = c.read_text(_CFG_PATH)
 
     apply_res = c.exec(
@@ -122,7 +160,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "1.2" in c.read_text(_CFG_PATH)
+    assert "2.0" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -146,8 +184,8 @@ def test_migrate_pin_round_trips_to_from_version(
 ) -> None:
     """``migrate --pin=1.0`` writes the from_version back into setforge.yaml."""
     c = docker_container()
-    _seed_frozen_config(c)
-    # First stamp it to 1.1, then pin back to 1.0.
+    _seed_floored_config(c)
+    # First stamp it through the chain to 2.0, then pin back to 1.0.
     apply_res = c.exec(
         [
             "uv",
@@ -161,7 +199,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "1.2" in c.read_text(_CFG_PATH)
+    assert "schema_version: '2.0'" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -171,8 +209,8 @@ def test_migrate_pin_round_trips_to_from_version(
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
     assert "1.0" in after, after
-    # The pin overwrote the applied 1.2 stamp in place.
-    assert "1.2" not in after, after
+    # The pin overwrote the applied 2.0 stamp in place.
+    assert "schema_version: '2.0'" not in after, after
 
 
 def test_frozen_pre_bump_config_still_installs(
@@ -228,14 +266,15 @@ def _seed_cfg(c: ContainerHandle, body: str) -> None:
 def test_migrate_to_downgrade_round_trip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """1.0 -> apply (chain to 1.2) -> migrate --to=1.0 walks back to the 1.0 baseline.
+    """1.0 -> apply (chain to 2.0) -> migrate --to=1.0 walks back to the 1.0 baseline.
 
-    The downgrade is a real two-step reverse walk: 1.2 -> 1.1 (RestampMigration
-    restamps the older version) then 1.1 -> 1.0 (VersionStampMigration's reverse
-    strips the key), leaving the key-absent 1.0 baseline.
+    The downgrade is a real reverse walk: 2.0 -> 1.2 (the contract reverse)
+    then 1.2 -> 1.1 (RestampMigration restamps the older version) then
+    1.1 -> 1.0 (VersionStampMigration's reverse strips the key), leaving the
+    key-absent 1.0 baseline.
     """
     c = docker_container()
-    _seed_frozen_config(c)
+    _seed_floored_config(c)
     up = c.exec(
         [
             "uv",
@@ -249,7 +288,7 @@ def test_migrate_to_downgrade_round_trip(
         check=False,
     )
     assert up.returncode == 0, up.stdout + up.stderr
-    assert "schema_version: '1.2'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '2.0'" in c.read_text(_CFG_PATH)
     down = c.exec(
         [
             "uv",
@@ -276,9 +315,9 @@ def test_migrate_to_downgrade_round_trip(
 def test_install_cross_major_config_refuses_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A 2.0 config on this (1.x) engine refuses cleanly — no traceback."""
+    """A 3.0 config on this (2.x) engine refuses cleanly — no traceback."""
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "3.0"\n'))
     result = c.exec(
         ["uv", "run", "setforge", "install", "--profile=base"],
         check=False,
@@ -333,12 +372,12 @@ def test_sub_floor_engine_refuses_all_config_verbs(
 ) -> None:
     """A floor above this build's schema refuses every config-reading verb.
 
-    minimum_version 1.9 puts this (schema-1.2) engine below the floor, so the
-    floor fires inside the same-major window that forward-tolerance would
-    otherwise allow. ``--version`` (no config read) stays usable.
+    minimum_version 3.0 puts this (schema-2.0) engine below the floor, so the
+    floor fires and refuses every config-reading verb. ``--version`` (no config
+    read) stays usable.
     """
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "1.2"\nminimum_version: "1.9"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "3.0"\n'))
     for verb in (
         ["install", "--profile=base"],
         ["compare", "--profile=base"],
