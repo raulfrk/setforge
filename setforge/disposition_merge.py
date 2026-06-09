@@ -492,7 +492,7 @@ def _deep_reassert_span(model: object, anchor: str, snapshot: object) -> None:
     Both sides are unwrapped plain values — :func:`get_at_path` returns the
     merged value already unwrapped, and ``snapshot`` is the unwrapped live
     snapshot — so the deep merge runs on backend-agnostic python structures via
-    :func:`setforge.yaml_merge._apply_deep_overlay`; the result is written back
+    :func:`setforge.yaml_merge._deep_merge_dicts`; the result is written back
     through :func:`~setforge.structural_merge.set_at_path` (the same comment-
     preserving seam the shallow re-assert uses). When either side is not a
     mapping the deep merge is degenerate, so live whole-replaces (set the

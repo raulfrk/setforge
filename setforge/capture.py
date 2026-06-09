@@ -1,22 +1,21 @@
 """Capture: live → tracked.
 
 The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
-``dst`` (the live copy) and writes a stripped version back to ``src``
-(the tracked copy):
+``dst`` (the live copy) and writes a host-state-stripped version back to
+``src`` (the tracked copy):
 
-- ``preserve_user_sections`` files have the content between markers
-  emptied (markers themselves remain, ready for a future deploy).
-- ``preserve_user_keys`` files have those YAML keys removed (so live
-  values stay host-local and never bake into the repo).
+- markerless host-local OVERLAY bodies (carried in local.yaml) are excised
+  by their exact recorded bytes, so live host-local content never bakes
+  into the shared tracked source.
+- legacy ``host_local_sections`` marker pairs that ``install`` injected are
+  name-scoped stripped (markers and body both removed).
 
-Capture is no longer a silent absorb. When a
-tracked_file declares ``preserve_user_keys_deep`` or carries non-preserve
-top-level drift between tracked and live, the capture-time merge
-wizard fires (interactive by default; non-interactive via
+Capture is no longer a silent absorb. When a tracked_file carries
+top-level drift between tracked and live, the capture-time merge wizard
+fires (interactive by default; non-interactive via
 ``--auto={use-live, keep-tracked}``). The wizard mutates tracked
 in-place at every drifted key path — capture's per-tracked_file writeback
-then reads the post-wizard tracked, defensively strips shallow-preserve
-content, and applies ``preserve_user_sections`` handling.
+then reads the post-wizard tracked and applies the host-state strip above.
 
 The ``CaptureRequiresInteractive`` exception is raised when capture
 would prompt but stdin is not a TTY and ``--auto`` wasn't supplied —
@@ -246,7 +245,7 @@ def capture_profile(
                 )
             else:
                 # No-disposition preserve files can still carry host-local
-                # OVERLAY spans (14.17 markerless deploy). Load the sidecar so
+                # OVERLAY spans (markerless deploy). Load the sidecar so
                 # capture can excise each markerless body by its exact recorded
                 # bytes before the tracked writeback — symmetric to the deploy
                 # inject and to the disposition path's overlay excise.

@@ -82,7 +82,7 @@ def _legacy_only_host_local(
     :func:`setforge.overlay_deploy.inject_overlay_bodies`, so they must NOT also
     reach :func:`setforge.host_local_inject.inject_all` (which injects WITH
     markers — the double-injection trap). Returns the map unchanged when there
-    are no overlay spans, so legacy-only preserve files stay byte-for-byte
+    are no overlay spans, so files with no overlay spans stay byte-for-byte
     untouched.
     """
     if not host_local_sections or not spans:
@@ -336,7 +336,7 @@ def _verbatim_with_overlay(
     if legacy_host_local:
         content = host_local_inject.inject_all(content, legacy_host_local)
         content = maintain_marker_hashes(content)
-    # De-marker + markerless inject (14.17): strip EVERY tracked-authored
+    # De-marker + markerless inject: strip EVERY tracked-authored
     # host-local marker pair from the content, then splice each overlay body in
     # once. Runs only when host-local overlay spans are present, so files with
     # no host-local overlay stay byte-for-byte the tracked source.

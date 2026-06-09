@@ -892,11 +892,9 @@ def apply_host_local_tracked_file_overrides(
       dst pointing at the raw user string (cross-host portability
       invariant preserved).
     - ``disposition`` (:class:`Disposition`) overrides
-      :attr:`TrackedFile.disposition`. Attempting to add a disposition
-      to a file that carries a legacy ``preserve_*`` field raises
-      :class:`pydantic.ValidationError` because the dump-and-revalidate
-      path re-runs :func:`TrackedFile._disposition_excludes_legacy_preserve`
-      against the merged shape.
+      :attr:`TrackedFile.disposition`. The merged shape is re-validated
+      via the dump-and-revalidate path, so every ``TrackedFile``
+      invariant re-runs against the overridden disposition.
     - ``spans`` (list of :class:`~setforge.spans.SpanEntry`) are folded
       over :attr:`TrackedFile.spans` per anchor by
       :func:`_fold_overlay_spans`. Host-local spans win each shared anchor
@@ -979,9 +977,7 @@ def apply_host_local_tracked_file_overrides(
         # model validators, which would let a hostile overlay set
         # symlink == dst (the _symlink_no_self_loop check would never
         # re-fire) or push a mode value past TrackedFile's stricter
-        # field-level rules, or add a disposition to a file that carries
-        # legacy preserve_* fields (_disposition_excludes_legacy_preserve
-        # would never re-fire). The dump-and-revalidate path re-runs
+        # field-level rules. The dump-and-revalidate path re-runs
         # every TrackedFile invariant against the merged shape so the
         # overlay-fields override layer cannot weaken the contract.
         merged = {**tracked_file.model_dump(), **updates}

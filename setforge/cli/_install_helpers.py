@@ -515,23 +515,6 @@ def _deploy_all_tracked_files(
     for files that left the profile (or dropped their disposition) are
     cleaned up. The symlink branch never touches the base store.
 
-    A SEPARATE, mutually-exclusive lifecycle covers the SHALLOW
-    ``preserve_user_keys`` scalar overlay (:mod:`setforge.scalar_base_store`)
-    for every regular-file sub-entry whose ``disposition is None`` and whose
-    ``preserve_user_keys`` is non-empty. It mirrors the byte-base ordering:
-    READ each shallow path's stored scalar base BEFORE the deploy (the
-    ancestor :func:`deploy.copy_atomic`'s scalar driver resolves against),
-    then — and ONLY after the live write returns cleanly — ADVANCE the bases
-    the driver signalled via ``result.new_scalar_bases`` in ONE batched
-    :func:`scalar_base_store.set_bases` call (deferred bare conflicts are
-    already omitted from that map). A deferred scalar conflict
-    (``result.scalar_conflicts`` non-empty with the path absent from
-    ``new_scalar_bases``) keeps live and warns. After the per-file deploy,
-    :func:`scalar_base_store.prune` drops any stored path no longer in the
-    file's live shallow set. The two lifecycles never overlap on one file:
-    ``disposition`` and ``preserve_user_keys`` are mutually exclusive in
-    config.
-
     ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
     (``name`` for plain files, ``name/relpath`` for directory entries) —
     the same stable per-profile identifier the prune keep-set and
@@ -1033,9 +1016,9 @@ def _write_install_transition(
     ``plugins.json`` so ``install --retry-failed`` can rebuild the
     skipped-ids set on the next invocation).
 
-    ``preserve_user_keys_applied`` is the schema-bump
-    kwarg; computed by :func:`_compute_preserve_user_keys_applied` at
-    the install call site. ``command_line`` is captured from
+    ``preserve_user_keys_applied`` is retained on the transition record for
+    back-compat with pre-2.0 records; the install path no longer computes it
+    and always passes ``None``. ``command_line`` is captured from
     ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
     callers don't have to thread it through, and ``end_timestamp`` is
     stamped at the moment of write — both align with the spec's

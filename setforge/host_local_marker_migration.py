@@ -1,4 +1,4 @@
-"""Capture live host-local marker bodies → ``local.yaml`` OVERLAY spans (14.17).
+"""Capture live host-local marker bodies → ``local.yaml`` OVERLAY spans.
 
 Increment-3 of the host-local de-marker conversion. On the first install after a
 host adopts the markerless model, each host-local section's per-host body lives

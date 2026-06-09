@@ -1,4 +1,4 @@
-"""Deploy compose: markerless host-local OVERLAY on the preserve branch (14.17).
+"""Deploy compose: markerless host-local OVERLAY on the preserve branch.
 
 A ``preserve_user_sections`` markdown file (claude_md) whose host-local
 sections have been migrated to markerless OVERLAY spans must deploy with EVERY

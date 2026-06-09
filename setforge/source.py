@@ -315,10 +315,8 @@ class _LocalTrackedFileOverlay(BaseModel):
     Accepts exactly the StrEnum member values ``"shared"``, ``"forked"``,
     ``"pinned"``; any other casing or value is rejected at parse time
     (:class:`pydantic.ValidationError`). The merged result is re-validated
-    by :func:`setforge.config.TrackedFile.model_validate` — so a
-    disposition override on a file that already declares a legacy
-    ``preserve_*`` field raises :class:`pydantic.ValidationError` via
-    :func:`~setforge.config.TrackedFile._disposition_excludes_legacy_preserve`.
+    by :func:`setforge.config.TrackedFile.model_validate`, so every
+    ``TrackedFile`` invariant re-runs against the overridden disposition.
     """
 
     @field_validator("mode", mode="before")

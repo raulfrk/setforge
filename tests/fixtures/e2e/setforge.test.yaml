@@ -26,8 +26,8 @@ tracked_files:
     dst: ~/.setforge_e2e/minimal/text.txt
 
   # Text tracked file with a tracked-authored HOST-LOCAL user-section marker.
-  # Host-local-only sections take the markerless OVERLAY conversion path
-  # (14.17): NO file-level disposition — the marker body is captured into a
+  # Host-local-only sections take the markerless OVERLAY conversion path:
+  # NO file-level disposition — the marker body is captured into a
   # local.yaml overlay span and the deployed file is rendered markerless.
   sections_md:
     src: sections/marked.md
