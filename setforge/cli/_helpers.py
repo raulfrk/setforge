@@ -128,14 +128,14 @@ def _iter_section_tracked_files(
 
     Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
     """
-    for name in ctx.resolved.tracked_files:
-        tracked_file = ctx.cfg.tracked_files[name]
-        if not tracked_file.preserve_user_sections:
-            continue
-        src = resolve_src(tracked_file, ctx.repo_root)
-        dst = resolve_dst(tracked_file)
-        for _, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            yield sub_src, sub_dst
+    # The legacy preserve_user_sections section-reconcile model was retired at
+    # schema 2.0 (shared sections now ride disposition: shared + section spans).
+    # No tracked_file carries the legacy flag any more, so this iterator yields
+    # nothing — the section-reconcile callers become inert. The bare ``yield``
+    # after ``return`` keeps the function a generator (so callers can iterate it)
+    # while emitting no items.
+    return
+    yield  # type: ignore[unreachable]
 
 
 def _iter_all_tracked_files(

@@ -133,29 +133,6 @@ def _tracked_file_or_fail(cfg_path: Path, file_id: str) -> tuple[TrackedFile, Pa
     return tracked_file, src
 
 
-def _refuse_legacy_preserve(tracked_file: TrackedFile, file_id: str) -> None:
-    """Refuse pin/fork on a legacy ``preserve_*`` file (early BadParameter).
-
-    Disposition / spans are mutually exclusive with the legacy preserve
-    model. This surfaces that same mutual-exclusion the config model enforces,
-    but at parse time on the CLI rather than as a deferred install-time
-    :class:`pydantic.ValidationError`.
-    """
-    offenders: list[str] = []
-    if tracked_file.preserve_user_sections:
-        offenders.append("preserve_user_sections")
-    if tracked_file.preserve_user_keys:
-        offenders.append("preserve_user_keys")
-    if tracked_file.preserve_user_keys_deep:
-        offenders.append("preserve_user_keys_deep")
-    if offenders:
-        raise typer.BadParameter(
-            f"tracked_file {file_id!r} uses the legacy preserve model "
-            f"({sorted(offenders)}); disposition / spans are mutually "
-            "exclusive with preserve_*. Drop the preserve_* field first."
-        )
-
-
 def _validate_anchor_for_file(anchor: str, src: Path, file_id: str) -> None:
     """Reject an anchor whose grammar is wrong for ``src``'s file type.
 
@@ -488,8 +465,7 @@ def _override_apply(
     """Shared body for ``fork`` / ``pin`` — file-level or span, host / shared."""
     console = Console()
     cfg_path = _resolve_config_arg(config)
-    tracked_file, src = _tracked_file_or_fail(cfg_path, file_id)
-    _refuse_legacy_preserve(tracked_file, file_id)
+    _tracked_file, src = _tracked_file_or_fail(cfg_path, file_id)
     semantics = SpanSemantics.SHARED if shared else SpanSemantics.HOST_LOCAL
 
     # SetforgeError covers the --shared write-discipline refusals

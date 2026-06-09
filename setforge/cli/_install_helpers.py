@@ -40,7 +40,6 @@ from setforge import (
     base_store,
     deploy,
     disposition_merge,
-    scalar_base_store,
     section_reconcile,
     spans_store,
     transitions,
@@ -81,10 +80,8 @@ from setforge.compare import (
 )
 from setforge.config import (
     Config,
-    Disposition,
     ResolvedProfile,
     SharedSpanCollision,
-    TrackedFile,
 )
 from setforge.errors import (
     ExtensionToolMissing,
@@ -104,30 +101,6 @@ from setforge.source import (
     validate_host_local_sections_file_type,
 )
 from setforge.spans import SpanEntry, SpanKind, validate_spans_file_type
-
-
-def _compute_preserve_user_keys_applied(ctx: ProfileContext) -> bool | None:
-    """Return whether any tracked_file declares a preserve_user_keys overlay.
-
-    Approximates the SPEC 3 "applied" semantics at the granularity available
-    without instrumenting :func:`setforge.deploy.copy_atomic`:
-
-    - ``None`` — profile has no tracked_files; the concept doesn't apply.
-    - ``True`` — at least one tracked_file declares ``preserve_user_keys``
-      or ``preserve_user_keys_deep``; deploy.copy_atomic will exercise
-      its overlay path for that file (matched or not, the overlay logic
-      ran). Widening to "matched a live key" is a separate bd (per SPEC 3
-      anti-pattern check 7).
-    - ``False`` — tracked_files exist but none declare an overlay.
-    """
-    saw_tracked_file = False
-    for tracked_file, _sub_name, _src, _dst in _iter_all_tracked_files(ctx):
-        saw_tracked_file = True
-        if tracked_file.preserve_user_keys or tracked_file.preserve_user_keys_deep:
-            return True
-    if not saw_tracked_file:
-        return None
-    return False
 
 
 def _load_validated_host_local_sections(
@@ -285,125 +258,6 @@ def seed_overlay_migration_snapshot(
     if migration.path not in dst_paths:
         dst_paths.append(migration.path)
     file_pre[migration.path] = migration.pre_text
-
-
-@dataclass(slots=True, frozen=True)
-class HostLocalMarkerMigration:
-    """Outcome of the on-install host-local marker → overlay capture (14.17).
-
-    ``local_path`` is the ``local.yaml`` that was (or would be) rewritten;
-    ``pre_text`` is its content BEFORE the capture write (``None`` when absent),
-    so the install transition can seed the genuine pre-migration ``file_pre``.
-    ``migrated`` is ``True`` only when at least one populated host-local body was
-    captured into a NEW overlay span (an idempotent / crash-resume re-run that
-    finds every name already present reports ``False`` — no write occurred).
-    ``names_by_file`` records the captured section names per tracked_file id for
-    the one-time warning.
-    """
-
-    local_path: Path
-    pre_text: str | None
-    migrated: bool
-    names_by_file: dict[str, list[str]]
-
-
-def migrate_host_local_markers_on_install(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    *,
-    local_config_path: Path | None = None,
-) -> HostLocalMarkerMigration:
-    """Capture live host-local marker bodies → at-EOF OVERLAY spans in local.yaml.
-
-    For every markdown ``preserve_user_sections`` tracked_file in the resolved
-    profile whose live dst exists, read its host-local marker bodies; capture
-    each POPULATED body (``body.strip()`` truthy) into a host-local OVERLAY span
-    in ``local.yaml`` BEFORE the deploy that follows blanket-strips (and would
-    otherwise delete) it. EMPTY bodies are dropped (deploy strips the empty
-    markers, no overlay). Idempotent via
-    :func:`setforge.host_local_marker_migration.append_overlay_spans`'
-    presence-check (a name already an overlay span is skipped — crash-resume).
-
-    Disk + record only: writes ``local.yaml`` (atomic) and returns the
-    pre-migration text for the transition seed. Does NOT mutate ``cfg`` or touch
-    the live file — the caller re-resolves the overlay from the rewritten
-    ``local.yaml`` (single-install convergence) and deploy strips live.
-
-    Propagates :class:`~setforge.errors.MarkerError` from
-    :func:`setforge.host_local_marker_migration.extract_host_local_marker_bodies`
-    when a live file carries a duplicate-named or malformed host-local marker —
-    a :class:`~setforge.errors.SetforgeError`, so install aborts cleanly BEFORE
-    any ``local.yaml`` write or deploy (no partial capture, no data loss).
-    """
-    from setforge import host_local_marker_migration as hlm
-    from setforge import source
-
-    local_path = (
-        local_config_path if local_config_path is not None else source.LOCAL_CONFIG_PATH
-    )
-    additions: dict[str, list[tuple[str, str]]] = {}
-    names_by_file: dict[str, list[str]] = {}
-    for tf_id in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[tf_id]
-        if not tracked_file.preserve_user_sections:
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        if src.suffix.lower() not in {".md", ".markdown"}:
-            continue
-        dst = resolve_dst(tracked_file)
-        if not dst.exists():
-            continue
-        bodies = hlm.extract_host_local_marker_bodies(dst.read_text(encoding="utf-8"))
-        populated = [(name, body) for name, body in bodies.items() if body.strip()]
-        if populated:
-            additions[tf_id] = populated
-            names_by_file[tf_id] = [name for name, _ in populated]
-    if not additions:
-        return HostLocalMarkerMigration(local_path, None, False, {})
-    try:
-        pre_text: str | None = local_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        pre_text = None
-    written = hlm.append_overlay_spans(local_path, additions)
-    if written == 0:
-        # Every candidate name was already an overlay span (crash-resume):
-        # nothing new on disk, so there is no transition delta to record.
-        return HostLocalMarkerMigration(local_path, pre_text, False, {})
-    captured = sorted(name for names in names_by_file.values() for name in names)
-    typer.secho(
-        f"{local_path}: captured host-local section(s) {captured} into markerless "
-        "local.yaml overlay spans (per-host bodies preserved). To restore the "
-        "pre-migration state, run `setforge revert`.",
-        err=True,
-        fg=typer.colors.YELLOW,
-    )
-    return HostLocalMarkerMigration(local_path, pre_text, True, names_by_file)
-
-
-def seed_host_local_marker_snapshot(
-    migration: HostLocalMarkerMigration,
-    overlay_migration: OverlaySpanMigration,
-    dst_paths: list[Path],
-    file_pre: dict[Path, str | None],
-) -> None:
-    """Record the host-local capture in the install transition (revert lockstep).
-
-    No-op when nothing was captured. Otherwise appends ``local.yaml`` to
-    ``dst_paths`` (so ``file_post`` captures the new spans) and seeds
-    ``file_pre`` with the genuine PRE-migration text. EARLIEST-WINS: when the
-    10.2 :func:`seed_overlay_migration_snapshot` already seeded
-    ``file_pre[local.yaml]`` (``overlay_migration.migrated``), that value is the
-    pre-everything text and is KEPT; otherwise this migration's ``pre_text`` is
-    the pre-everything text and is used. Mutates ``dst_paths`` / ``file_pre`` in
-    place.
-    """
-    if not migration.migrated:
-        return
-    if migration.local_path not in dst_paths:
-        dst_paths.append(migration.local_path)
-    if not overlay_migration.migrated or migration.local_path not in file_pre:
-        file_pre[migration.local_path] = migration.pre_text
 
 
 def _validate_span_file_types(
@@ -700,12 +554,9 @@ def _deploy_all_tracked_files(
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if tracked_file.symlink is not None:
-                # Symlink-deployed: the link lands at ``sub_dst`` and
-                # the tracked content lands at
-                # ``Path(tracked_file.symlink).expanduser()``.
-                # preserve_user_{sections,keys} still composes;
-                # deploy.deploy_symlinked_file routes through the same
-                # _compute_content path as copy_atomic. The stored base
+                # Symlink-deployed: the link lands at ``sub_dst`` and the tracked
+                # content lands at ``Path(tracked_file.symlink).expanduser()``.
+                # The host-local overlay still composes; the stored base
                 # lifecycle is regular-file-only — never wired here.
                 result = deploy.deploy_symlinked_file(
                     sub_src, sub_dst, tracked_file, host_local_sections=host_local
@@ -713,13 +564,8 @@ def _deploy_all_tracked_files(
                 typer.echo(
                     f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}"
                 )
-                _echo_preserve_user_keys_provenance(tracked_file)
                 _echo_host_local_sections_provenance(host_local)
-                if tracked_file.preserve_user_sections:
-                    section_reconcile.stamp_tracked_baseline(sub_src)
                 continue
-            override = section_decisions.get(sub_dst)
-            precomputed = live_sections_map.get(sub_dst)
             # Stored-base 3-way path is gated on a declared disposition.
             # READ the base BEFORE the deploy: it is the merge ancestor
             # copy_atomic's driver diffs live/tracked against.
@@ -729,44 +575,29 @@ def _deploy_all_tracked_files(
                 base_text = _resolve_disposition_base_with_warning(
                     profile, sub_name, sub_dst
                 )
-            # Span re-overlay path: READ the spans sidecar BEFORE the deploy
-            # so the relocation ladder has its derived state. Spans ride the
-            # disposition 3-way path AND the preserve path (markerless
-            # host-local overlay inject — 14.17), so load them whenever the
-            # tracked_file declares any span, not only on the disposition path.
+            # Span re-overlay path: READ the spans sidecar BEFORE the deploy so
+            # the relocation ladder has its derived state. Spans ride the
+            # disposition 3-way path AND the disposition=None markerless
+            # host-local overlay inject, so load them whenever the tracked_file
+            # declares any span, not only on the disposition path.
             file_spans = tracked_file.spans or []
             span_states = (
                 spans_store.get_states(profile, sub_name) if file_spans else {}
             )
-            # Scalar-base path (mutually exclusive with disposition): READ the
-            # stored base for every shallow preserve path BEFORE the deploy.
-            shallow_preserve_paths = tracked_file.preserve_user_keys
-            scalar_bases = _read_scalar_bases(
-                profile, sub_name, tracked_file.disposition, shallow_preserve_paths
-            )
             result = deploy.copy_atomic(
                 sub_src,
                 sub_dst,
-                preserve_user_sections=tracked_file.preserve_user_sections,
-                preserve_user_keys=tracked_file.preserve_user_keys or None,
-                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
-                section_bodies_override=override,
-                precomputed_live_sections=precomputed,
                 host_local_sections=host_local,
                 mode=tracked_file.mode,
                 disposition=tracked_file.disposition,
                 base_text=base_text,
                 merge_auto=section_auto,
-                scalar_bases=scalar_bases,
                 conflict_resolver=conflict_resolver,
                 spans=file_spans or None,
                 span_states=span_states or None,
             )
             typer.echo(f"{result.action.value:>8}  {sub_dst}")
-            _echo_preserve_user_keys_provenance(tracked_file)
             _echo_host_local_sections_provenance(host_local)
-            if tracked_file.preserve_user_sections:
-                section_reconcile.stamp_tracked_baseline(sub_src)
             # ADVANCE the disposition base only AFTER the live write.
             if tracked_file.disposition is not None:
                 _advance_disposition_base(profile, sub_name, sub_dst, result)
@@ -780,12 +611,6 @@ def _deploy_all_tracked_files(
                     result,
                     file_spans,
                     strict_spans=strict_spans,
-                )
-            # SCALAR-base lifecycle (mutually exclusive with disposition):
-            # advance / prune / warn, ordered AFTER the live write.
-            if scalar_bases is not None:
-                _advance_scalar_bases(
-                    profile, sub_name, sub_dst, result, shallow_preserve_paths
                 )
     # PRUNE after the whole loop: bases whose file_id is not in this run's
     # disposition keep-set (file left the profile, or lost its disposition)
@@ -1144,65 +969,6 @@ def _advance_span_states(
         )
 
 
-def _read_scalar_bases(
-    profile: str,
-    file_id: str,
-    disposition: Disposition | None,
-    shallow_preserve_paths: list[str],
-) -> dict[str, object] | None:
-    """Read the stored scalar base for every shallow preserve path, or None.
-
-    Returns ``None`` (the scalar overlay is off for this file) when a
-    ``disposition`` is declared — the two models are mutually exclusive — or
-    when the file declares no shallow ``preserve_user_keys``. Otherwise maps
-    each shallow path to its stored base (a typed scalar, ``None`` for a
-    stored ``null``, or :data:`setforge.scalar_merge.ABSENT` for no base).
-    The whole shallow list is passed to the driver, which skips any
-    non-scalar path; reading the base for all of them is harmless.
-    """
-    if disposition is not None or not shallow_preserve_paths:
-        return None
-    return {
-        path: scalar_base_store.get_base(profile, file_id, path)
-        for path in shallow_preserve_paths
-    }
-
-
-def _advance_scalar_bases(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-    result: deploy.DeployResult,
-    shallow_preserve_paths: list[str],
-) -> None:
-    """Advance / prune / warn the scalar bases AFTER a clean live write.
-
-    ADVANCE every path the driver signalled (``result.new_scalar_bases``,
-    deferred bare conflicts already omitted) in ONE batched
-    :func:`scalar_base_store.set_bases`; a failure PROPAGATES (base lagging
-    live is the safe failure direction). PRUNE any stored path no longer in
-    the file's live shallow set. WARN on each deferred scalar conflict (a
-    path in ``scalar_conflicts`` but absent from ``new_scalar_bases``) so the
-    user knows the divergence re-surfaces next install.
-    """
-    if result.new_scalar_bases:
-        scalar_base_store.set_bases(profile, file_id, result.new_scalar_bases)
-    advanced_paths = result.new_scalar_bases or {}
-    deferred_scalar = [
-        path for path in result.scalar_conflicts if path not in advanced_paths
-    ]
-    if deferred_scalar:
-        joined = ", ".join(deferred_scalar)
-        typer.secho(
-            f"warning: {sub_dst}: scalar conflict kept live for {joined}, "
-            f"base not advanced — conflict re-surfaces next install "
-            f"(re-run with --auto=use-tracked or the merge wizard)",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-    scalar_base_store.prune(profile, file_id, set(shallow_preserve_paths))
-
-
 def _echo_host_local_sections_provenance(
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
 ) -> None:
@@ -1222,34 +988,6 @@ def _echo_host_local_sections_provenance(
         f"    injected {len(host_local_sections)} host-local section{plural} "
         f"{HOST_LOCAL_PROVENANCE_TAG}: {names}"
     )
-
-
-def _echo_preserve_user_keys_provenance(tracked_file: TrackedFile) -> None:
-    """Emit mockup-B install-output provenance lines for a tracked_file.
-
-    Suppressed when no resolved key originated in local.yaml (i.e.
-    today's setforge.yaml-only behavior). Otherwise prints one
-    ``preserved keys (N effective):`` header + one ``• key  [tag]``
-    line per FROM_PROFILE / FROM_LOCAL_YAML entry, plus a ``✗ key
-    [removed via local.yaml — overwritten with tracked value]`` line
-    for each REMOVED_VIA_LOCAL entry (the auditable
-    would-have-been-preserved row mockup B requires).
-    """
-    from setforge.preserved_keys import KeyOrigin, display_tag, has_local_yaml_overlay
-
-    resolved_list = tracked_file.preserve_user_keys_resolved
-    if not has_local_yaml_overlay(resolved_list):
-        return
-    effective = [k for k in resolved_list if k.origin != KeyOrigin.REMOVED_VIA_LOCAL]
-    typer.echo(f"    preserved keys ({len(effective)} effective):")
-    for key in resolved_list:
-        if key.origin == KeyOrigin.REMOVED_VIA_LOCAL:
-            typer.echo(
-                f"      ✗ {key.key}  "
-                f"[removed via local.yaml — overwritten with tracked value]"
-            )
-        else:
-            typer.echo(f"      • {key.key}  {display_tag(key)}")
 
 
 def _write_install_transition(

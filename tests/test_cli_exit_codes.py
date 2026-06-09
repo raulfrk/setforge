@@ -228,25 +228,25 @@ def test_install_unexpected_drift_exits_1_with_message(
 ) -> None:
     """install exits 1 with the canonical message when unexpected drift exists.
 
-    Uses a YAML tracked_file with a non-preserved key that diverges between
-    tracked and live — this produces a non-empty unexpected_drift_keys list
-    which is what the install gate checks.
+    Uses a tracked_file declaring ``mode:`` whose live permission bits
+    diverge — this produces ``mode_drift`` which the install pre-deploy
+    gate classifies as unexpected drift (the schema-2.0 unexpected-drift
+    axis after the legacy preserve_user_keys classification was retired).
     """
-    # Set up a YAML tracked_file: tracked has a=1,b=2, live has a=99,b=88.
-    # preserve_user_keys=[a] → b is unexpected drift.
     dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text("a: 99\nb: 88\n", encoding="utf-8")
+    dst.write_text("same content\n", encoding="utf-8")
+    dst.chmod(0o600)
 
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
+        f"    mode: 0o644\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
     (tmp_path / "tracked").mkdir(exist_ok=True)
     (tmp_path / "tracked" / "tracked_file.txt").write_text(
-        "a: 1\nb: 2\n", encoding="utf-8"
+        "same content\n", encoding="utf-8"
     )
 
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
@@ -269,19 +269,18 @@ def test_install_auto_accept_tracked_resolves_drift(
 ) -> None:
     """--auto-accept-tracked proceeds non-interactively; transition recorded; exit 0."""
     cfg = _setup_install_fixture(
-        tmp_path, monkeypatch, src_text="a: 1\nb: 2\n", dst_text="a: 1\nb: 99\n"
+        tmp_path, monkeypatch, src_text="same\n", dst_text="same\n"
     )
-    # Make it a YAML tracked_file with preserve_user_keys so it creates unexpected drift
-    # We need to update the config to use yaml and set preserve_user_keys
+    # A ``mode:`` mismatch creates unexpected drift (the schema-2.0 axis);
+    # --auto-accept-tracked resolves it non-interactively.
     dst = tmp_path / "live" / "tracked_file.txt"
+    dst.chmod(0o600)
     cfg.write_text(
         f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
+        f"    mode: 0o644\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
-    (tmp_path / "tracked" / "tracked_file.txt").write_text(
-        "a: 1\nb: 2\n", encoding="utf-8"
-    )
+    (tmp_path / "tracked" / "tracked_file.txt").write_text("same\n", encoding="utf-8")
 
     transition_calls: list[Any] = []
 
@@ -308,17 +307,16 @@ def test_install_auto_accept_live_resolves_drift(
     """--auto-accept-live proceeds non-interactively; exit 0."""
     dst = tmp_path / "live" / "tracked_file.txt"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text("a: 1\nb: 99\n", encoding="utf-8")
+    dst.write_text("same\n", encoding="utf-8")
+    dst.chmod(0o600)
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         f"version: 1\ntracked_files:\n  d:\n    src: tracked_file.txt\n    dst: {dst}\n"
-        f"    preserve_user_keys: [a]\nprofiles:\n  p:\n    tracked_files: [d]\n",
+        f"    mode: 0o644\nprofiles:\n  p:\n    tracked_files: [d]\n",
         encoding="utf-8",
     )
     (tmp_path / "tracked").mkdir(exist_ok=True)
-    (tmp_path / "tracked" / "tracked_file.txt").write_text(
-        "a: 1\nb: 2\n", encoding="utf-8"
-    )
+    (tmp_path / "tracked" / "tracked_file.txt").write_text("same\n", encoding="utf-8")
 
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
     monkeypatch.setattr("setforge.transitions.ensure_state_dir_writable", lambda: None)

@@ -28,13 +28,12 @@ def test_compare_no_drift_after_host_local_install(tmp_path: Path) -> None:
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK OVERRIDES"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
     # With host_local_sections passed to diff_file, rendered src ==
     # post-install live, so no diff body.
     diff = diff_file(
         src,
         dst,
-        preserve_user_sections=True,
         host_local_sections=host_local,
     )
     assert diff == ""
@@ -54,8 +53,8 @@ def test_compare_without_host_local_arg_shows_drift_for_injected_marker(
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK OVERRIDES"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
-    diff_no_arg = diff_file(src, dst, preserve_user_sections=True)
+    copy_atomic(src, dst, host_local_sections=host_local)
+    diff_no_arg = diff_file(src, dst)
     assert diff_no_arg != ""
     assert "work-overrides" in diff_no_arg
 
@@ -72,13 +71,11 @@ def test_compare_with_extra_tracked_drift_still_reports(tmp_path: Path) -> None:
             anchor=AnchorAfterHeading(value="Workflow"), body="WORK"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
     # Modify the live file's NON-injected content to introduce real drift.
     text = dst.read_text(encoding="utf-8")
     drift_text = text.replace("body\n", "MUTATED BODY\n")
     dst.write_text(drift_text, encoding="utf-8")
-    diff = diff_file(
-        src, dst, preserve_user_sections=True, host_local_sections=host_local
-    )
+    diff = diff_file(src, dst, host_local_sections=host_local)
     assert diff != ""
     assert "MUTATED" in diff

@@ -136,21 +136,6 @@ class GitSource(BaseModel):
 Source = Annotated[PathSource | GitSource, Field(discriminator="kind")]
 
 
-class PreserveUserKeysOverlay(BaseModel):
-    """One tracked_file's ``preserve_user_keys`` add/remove overlay block.
-
-    Carried under ``local.yaml`` `tracked_files.<id>.preserve_user_keys`
-    per mockup B (SPEC 8). Both lists default to empty so a partial
-    overlay (only ``add`` or only ``remove``) is a valid shape — the
-    resolver merges them with the profile chain at load time.
-    """
-
-    model_config = _STRICT
-
-    add: list[str] = []
-    remove: list[str] = []
-
-
 HostLocalSectionName = NewType("HostLocalSectionName", str)
 """Provenance-marked name of a host-local user-section.
 
@@ -215,17 +200,15 @@ class HostLocalSection(BaseModel):
 class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
-    Carries a nested ``preserve_user_keys`` overlay (SPEC 8), a
-    ``host_local_sections`` mapping keyed by section
-    name, and three host-local install-time overrides:
-    ``mode`` (chmod), ``dst`` (retarget install
-    path), and ``symlink_target`` (deploy as a symlink). See each
-    field's docstring for the use case and validation semantics.
+    Carries a ``host_local_sections`` mapping keyed by section name, a
+    ``spans`` list (host-local sub-file span intents), and three host-local
+    install-time overrides: ``mode`` (chmod), ``dst`` (retarget install
+    path), and ``symlink_target`` (deploy as a symlink). See each field's
+    docstring for the use case and validation semantics.
     """
 
     model_config = _STRICT
 
-    preserve_user_keys: PreserveUserKeysOverlay | None = None
     host_local_sections: dict[str, HostLocalSection] = {}
     mode: int | None = None
     """POSIX file-mode bits (chmod) for the live dst on this host.
@@ -958,7 +941,6 @@ __all__ = [
     "MarketplaceOverlay",
     "PathSource",
     "PluginOverlay",
-    "PreserveUserKeysOverlay",
     "Source",
     "SourceKind",
     "check_source_clean",

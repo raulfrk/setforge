@@ -199,12 +199,12 @@ def test_resume_marker_strip_completes_without_reseeding(
 def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A preserve file with host-local OVERLAY spans deploys markerless + sidecar.
+    """A disposition=None file with host-local OVERLAY spans: markerless + sidecar.
 
     Regression for the un-gated spans load: before the fix ``file_spans`` was
-    populated ONLY when ``disposition is not None``, so a ``preserve_user_sections``
-    file carrying host-local overlay spans (disposition=None) deployed WITH markers
-    and never advanced its spans sidecar. The gate now keys on ``tracked_file.spans``.
+    populated ONLY when ``disposition is not None``, so a disposition=None file
+    carrying host-local overlay spans deployed WITH markers and never advanced its
+    spans sidecar. The gate now keys on ``tracked_file.spans``.
     """
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     repo_root = tmp_path / "repo"
@@ -226,7 +226,6 @@ def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
     tracked_file = TrackedFile(
         src=Path("CLAUDE.md"),
         dst=str(dst),
-        preserve_user_sections=True,
         spans=[span],
     )
     cfg = Config(
@@ -257,134 +256,6 @@ def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
     # The sidecar advanced even though disposition is None.
     states = spans_store.get_states("p", "claude_md")
     assert "## Python" in states
-
-
-def _hl_region(name: str, body: str) -> str:
-    return (
-        f"<!-- setforge:user-section start host-local {name} -->\n"
-        f"{body}"
-        f"<!-- setforge:user-section end host-local {name} hash={_HL_HASH} -->\n"
-    )
-
-
-def _claude_md_ctx(repo_root: Path, dst: Path) -> ProfileContext:
-    tracked_root = repo_root / "tracked"
-    tracked_root.mkdir(parents=True, exist_ok=True)
-    (tracked_root / "CLAUDE.md").write_text("# Title\n", encoding="utf-8")
-    tracked_file = TrackedFile(
-        src=Path("CLAUDE.md"), dst=str(dst), preserve_user_sections=True
-    )
-    cfg = Config(
-        tracked_files={"claude_md": tracked_file},
-        profiles={"p": Profile(tracked_files=["claude_md"])},
-    )
-    resolved = ResolvedProfile(tracked_files=["claude_md"])
-    return ProfileContext(cfg=cfg, resolved=resolved, repo_root=repo_root, profile="p")
-
-
-def test_migrate_host_local_markers_captures_and_drops_empty(tmp_path: Path) -> None:
-    """Populated host-local bodies are captured; empty regions produce no overlay."""
-    from setforge.source import load_local_tracked_file_overlays
-
-    dst = tmp_path / "live" / "CLAUDE.md"
-    dst.parent.mkdir()
-    dst.write_text(
-        "# Title\n\n"
-        + _hl_region("notes", "my per-host notes\n")
-        + "\n"
-        + _hl_region("blank", ""),
-        encoding="utf-8",
-    )
-    ctx = _claude_md_ctx(tmp_path / "repo", dst)
-    local = tmp_path / "local.yaml"
-    local.write_text("tracked_files:\n  claude_md: {}\n", encoding="utf-8")
-
-    migration = _install_helpers.migrate_host_local_markers_on_install(
-        ctx.cfg, ctx.resolved, ctx.repo_root, local_config_path=local
-    )
-
-    assert migration.migrated is True
-    assert migration.pre_text == "tracked_files:\n  claude_md: {}\n"
-    assert migration.names_by_file == {"claude_md": ["notes"]}  # blank dropped
-    overlay = load_local_tracked_file_overlays(local)["claude_md"]
-    assert [s.anchor for s in overlay.spans] == ["notes"]
-    assert overlay.spans[0].overlay is not None
-    assert overlay.spans[0].overlay.body == "my per-host notes\n"
-
-
-def test_migrate_host_local_markers_noop_when_no_markers(tmp_path: Path) -> None:
-    dst = tmp_path / "live" / "CLAUDE.md"
-    dst.parent.mkdir()
-    dst.write_text("# Title\n\nplain content\n", encoding="utf-8")
-    ctx = _claude_md_ctx(tmp_path / "repo", dst)
-    local = tmp_path / "local.yaml"
-    local.write_text("tracked_files:\n  claude_md: {}\n", encoding="utf-8")
-    before = local.read_bytes()
-
-    migration = _install_helpers.migrate_host_local_markers_on_install(
-        ctx.cfg, ctx.resolved, ctx.repo_root, local_config_path=local
-    )
-
-    assert migration.migrated is False
-    assert local.read_bytes() == before  # no write
-
-
-def test_migrate_host_local_markers_crash_resume_no_double_write(
-    tmp_path: Path,
-) -> None:
-    """Overlay present + live still markered → no second span, migrated=False."""
-    dst = tmp_path / "live" / "CLAUDE.md"
-    dst.parent.mkdir()
-    dst.write_text(
-        "# Title\n\n" + _hl_region("notes", "my per-host notes\n"), encoding="utf-8"
-    )
-    ctx = _claude_md_ctx(tmp_path / "repo", dst)
-    local = tmp_path / "local.yaml"
-    local.write_text("tracked_files:\n  claude_md: {}\n", encoding="utf-8")
-
-    first = _install_helpers.migrate_host_local_markers_on_install(
-        ctx.cfg, ctx.resolved, ctx.repo_root, local_config_path=local
-    )
-    assert first.migrated is True
-    after_first = local.read_bytes()
-
-    # Re-run with the SAME live markers still present (deploy never ran).
-    second = _install_helpers.migrate_host_local_markers_on_install(
-        ctx.cfg, ctx.resolved, ctx.repo_root, local_config_path=local
-    )
-    assert second.migrated is False  # presence-check skipped the existing span
-    assert local.read_bytes() == after_first  # no duplicate span, no write
-
-
-def test_seed_host_local_marker_snapshot_earliest_wins(tmp_path: Path) -> None:
-    local = tmp_path / "local.yaml"
-    mig = _install_helpers.HostLocalMarkerMigration(
-        local_path=local, pre_text="MINE", migrated=True, names_by_file={"d": ["n"]}
-    )
-
-    # 10.2 already migrated + seeded file_pre → keep the 10.2 (pre-everything) text.
-    ten_two_migrated = _install_helpers.OverlaySpanMigration(
-        path=local, pre_text="TEN_TWO", migrated=True
-    )
-    dst_paths: list[Path] = []
-    file_pre: dict[Path, str | None] = {local: "TEN_TWO"}
-    _install_helpers.seed_host_local_marker_snapshot(
-        mig, ten_two_migrated, dst_paths, file_pre
-    )
-    assert file_pre[local] == "TEN_TWO"
-    assert local in dst_paths
-
-    # 10.2 did NOT migrate → our pre_text is the pre-everything text.
-    ten_two_noop = _install_helpers.OverlaySpanMigration(
-        path=local, pre_text=None, migrated=False
-    )
-    dst_paths2: list[Path] = []
-    file_pre2: dict[Path, str | None] = {}
-    _install_helpers.seed_host_local_marker_snapshot(
-        mig, ten_two_noop, dst_paths2, file_pre2
-    )
-    assert file_pre2[local] == "MINE"
-    assert local in dst_paths2
 
 
 def test_resume_marker_strip_steady_state_is_noop(

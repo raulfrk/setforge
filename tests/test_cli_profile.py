@@ -33,9 +33,7 @@ tracked_files:
   has_preserve:
     src: settings.json
     dst: ~/.settings.json
-    preserve_user_keys:
-      - allowDangerouslySkipPermissions
-      - some.nested > key
+    disposition: forked
 marketplaces:
   shared-market:
     source: github
@@ -121,7 +119,6 @@ def test_profile_show_includes_all_sections(tmp_path: Path) -> None:
         "host_local_sections",
         "bootstrap",
         "extensions.include",
-        "preserve_user_keys",
     )
     for section in expected_sections:
         assert section in result.output, f"missing section {section!r}: {result.output}"
@@ -182,25 +179,6 @@ def test_profile_show_unknown_name_exits_nonzero(tmp_path: Path) -> None:
     message = str(result.exception)
     assert "nonexistent" in message
     assert "not defined" in message
-
-
-def test_profile_show_preserve_user_keys_lists_keys_no_overlay_diff_yet(
-    tmp_path: Path,
-) -> None:
-    """preserve_user_keys section lists per-file keys and a pending-overlay note.
-
-    The overlay +N/-M diff is out of scope for this bead (per Q10);
-    the section is expected to print the pending-overlay note line, NOT
-    a ``TODO`` comment.
-    """
-    cfg = _write_config(tmp_path, _MULTI_PROFILE_YAML)
-    result = CliRunner().invoke(app, ["profile", "show", "derived", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output
-    assert "has_preserve" in result.output
-    assert "allowDangerouslySkipPermissions" in result.output
-    # pending-overlay note visible; no TODO scaffolding leak.
-    assert "overlay surface not yet implemented" in result.output
-    assert "TODO" not in result.output
 
 
 def test_profile_show_marketplaces_lists_global_entries(tmp_path: Path) -> None:

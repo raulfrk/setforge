@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from setforge.config import (
     ClaudePluginRef,
     Config,
+    Disposition,
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
@@ -27,11 +28,8 @@ def test_load_sample_config() -> None:
     cfg = load_config(FIXTURES / "sample_config.yaml")
     assert cfg.version == 1
     assert set(cfg.tracked_files) == {"claude_md", "vscode_settings"}
-    assert cfg.tracked_files["claude_md"].preserve_user_sections is True
-    assert cfg.tracked_files["vscode_settings"].preserve_user_keys == [
-        "editor.fontSize",
-        "workbench.colorTheme",
-    ]
+    assert cfg.tracked_files["claude_md"].disposition is Disposition.SHARED
+    assert cfg.tracked_files["vscode_settings"].disposition is Disposition.FORKED
     assert cfg.tracked_files["vscode_settings"].template is True
     assert set(cfg.profiles) == {"base", "child"}
     assert cfg.profiles["child"].extends == "base"
@@ -149,8 +147,8 @@ profiles:
 def test_tracked_file_defaults() -> None:
     df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
-    assert df.preserve_user_sections is False
-    assert df.preserve_user_keys == []
+    assert df.disposition is None
+    assert df.spans == []
 
 
 def test_tracked_file_rejects_tab_in_src() -> None:
@@ -377,63 +375,8 @@ def test_config_rejects_unknown_field_in_nested_tracked_file() -> None:
 
 
 # ---------------------------------------------------------------------------
-# preserve_user_keys_deep validators
+# local.yaml tracked_files overlay schema
 # ---------------------------------------------------------------------------
-
-
-def test_tracked_file_rejects_path_in_both_preserve_lists() -> None:
-    with pytest.raises(ValidationError, match="declared in both"):
-        # ``preserve_user_keys`` is now a ``@computed_field`` so it is not
-        # a constructor kwarg; route through ``model_validate`` so the
-        # ``mode="before"`` seed validator picks the list up.
-        TrackedFile.model_validate(
-            {
-                "src": Path("a"),
-                "dst": "b",
-                "preserve_user_keys": ["a.b"],
-                "preserve_user_keys_deep": ["a.b"],
-            }
-        )
-
-
-@pytest.mark.parametrize("path", ["a[*]", "a[]"])
-def test_tracked_file_rejects_list_suffix_in_preserve_user_keys_deep(path: str) -> None:
-    with pytest.raises(ValidationError, match="does not support"):
-        TrackedFile(
-            src=Path("a"),
-            dst="b",
-            preserve_user_keys_deep=[path],
-        )
-
-
-# ---------------------------------------------------------------------------
-# local.yaml tracked_files overlay schema (SPEC 8)
-# ---------------------------------------------------------------------------
-
-
-def test_local_tracked_files_overlay_accepts_add_and_remove() -> None:
-    """The local.yaml tracked_files.<id>.preserve_user_keys.{add,remove} block
-    must validate cleanly via :class:`_LocalSourceConfig`."""
-    from setforge.source import _LocalSourceConfig
-
-    cfg = _LocalSourceConfig.model_validate(
-        {
-            "tracked_files": {
-                "vscode_serv_settings": {
-                    "preserve_user_keys": {
-                        "add": ["workOnly.featureFlag"],
-                        "remove": ["claudeCode.allowDangerouslySkipPermissions"],
-                    }
-                }
-            }
-        }
-    )
-    overlay = cfg.tracked_files["vscode_serv_settings"]
-    assert overlay.preserve_user_keys is not None
-    assert overlay.preserve_user_keys.add == ["workOnly.featureFlag"]
-    assert overlay.preserve_user_keys.remove == [
-        "claudeCode.allowDangerouslySkipPermissions"
-    ]
 
 
 def test_local_tracked_files_overlay_defaults_to_empty_dict() -> None:
@@ -455,73 +398,21 @@ def test_local_tracked_files_overlay_rejects_unknown_field() -> None:
             {
                 "tracked_files": {
                     "vscode_serv_settings": {
-                        "preserve_user_keys": {
-                            "add": ["a"],
-                            "unknown_field": ["b"],
-                        }
+                        "disposition": "shared",
+                        "unknown_field": ["b"],
                     }
                 }
             }
         )
 
 
-def test_local_tracked_files_overlay_partial_add_only() -> None:
-    """Only ``add:`` is valid (no ``remove:``); defaults to empty list."""
+def test_local_tracked_files_overlay_accepts_disposition() -> None:
+    """A host-local ``disposition`` override validates cleanly via
+    :class:`_LocalSourceConfig`."""
     from setforge.source import _LocalSourceConfig
 
     cfg = _LocalSourceConfig.model_validate(
-        {"tracked_files": {"vscode": {"preserve_user_keys": {"add": ["x"]}}}}
+        {"tracked_files": {"vscode": {"disposition": "forked"}}}
     )
-    overlay = cfg.tracked_files["vscode"].preserve_user_keys
-    assert overlay is not None
-    assert overlay.add == ["x"]
-    assert overlay.remove == []
-
-
-def test_tracked_file_preserve_user_keys_resolved_default_empty() -> None:
-    """New field must default to empty list so pre-overlay callers
-    (every existing one) see today's behavior."""
-    tf = TrackedFile(src=Path("a"), dst="b")
-    assert tf.preserve_user_keys_resolved == []
-    # Computed field stays a derived view over the resolved list.
-    assert tf.preserve_user_keys == []
-
-
-def test_tracked_file_preserve_user_keys_computed_from_resolved() -> None:
-    """preserve_user_keys becomes a computed_field derived from the
-    resolved list, excluding REMOVED_VIA_LOCAL entries."""
-    from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey
-
-    tf = TrackedFile(
-        src=Path("a"),
-        dst="b",
-        preserve_user_keys_resolved=[
-            ResolvedPreservedKey("kept", KeyOrigin.FROM_PROFILE, "p"),
-            ResolvedPreservedKey("dropped", KeyOrigin.REMOVED_VIA_LOCAL, "p"),
-            ResolvedPreservedKey("added", KeyOrigin.FROM_LOCAL_YAML, None),
-        ],
-    )
-    assert tf.preserve_user_keys == ["kept", "added"]
-
-
-def test_tracked_file_preserve_user_keys_explicit_yaml_seeds_resolved() -> None:
-    """A setforge.yaml ``preserve_user_keys: [...]`` entry seeds the
-    resolved list as FROM_PROFILE entries when no overlay is applied —
-    this is the back-compat path for every existing TrackedFile."""
-    from setforge.preserved_keys import KeyOrigin
-
-    # ``preserve_user_keys`` is now a ``@computed_field``; pass it via
-    # ``model_validate`` so the seed-validator routes the list through
-    # ``preserve_user_keys_resolved``.
-    tf = TrackedFile.model_validate(
-        {"src": Path("a"), "dst": "b", "preserve_user_keys": ["x", "y"]}
-    )
-    # The list-shaped declaration seeds the resolved field with
-    # provenance=None (no profile context yet — overlay applier fills
-    # that in at profile-resolution time).
-    assert [k.key for k in tf.preserve_user_keys_resolved] == ["x", "y"]
-    assert all(
-        k.origin == KeyOrigin.FROM_PROFILE for k in tf.preserve_user_keys_resolved
-    )
-    # And the computed field still reads back the same list shape.
-    assert tf.preserve_user_keys == ["x", "y"]
+    overlay = cfg.tracked_files["vscode"]
+    assert overlay.disposition is Disposition.FORKED

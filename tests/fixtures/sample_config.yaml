@@ -4,14 +4,12 @@ tracked_files:
   claude_md:
     src: claude/CLAUDE.md
     dst: ~/.claude/CLAUDE.md
-    preserve_user_sections: true
+    disposition: shared
   vscode_settings:
     src: vscode/settings.json
     dst: "{{ vscode_user_dir }}/settings.json"
     template: true
-    preserve_user_keys:
-      - "editor.fontSize"
-      - "workbench.colorTheme"
+    disposition: forked
 
 marketplaces:
   official:

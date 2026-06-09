@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from setforge.anchors import AnchorAfterHeading
 from setforge.disposition_merge import resolve_file
 from setforge.section_mode import SectionMode
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
+from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
 
 # ---------------------------------------------------------------------------
 # SectionMode leaf-module + back-compat re-export (cycle resolution).
@@ -149,77 +149,3 @@ def test_deep_false_pinned_span_whole_replaces_with_live() -> None:
     assert "fontSize: 14" in result.text
     # Whole-replace: tracked's theme is NOT preserved (live wins wholesale).
     assert "theme" not in result.text
-
-
-# ---------------------------------------------------------------------------
-# Task 3: capture_mode KEEP_DEFAULTS re-splice in the section path.
-# ---------------------------------------------------------------------------
-
-
-def test_capture_mode_keep_defaults_resplices_tracked_section_body(
-    tmp_path: Path,
-) -> None:
-    """A section span with KEEP_DEFAULTS re-splices tracked marker bodies on capture."""
-    from setforge.capture import capture_tracked_file
-
-    marker_start = "<!-- setforge:user-section start shared notes -->\n"
-    marker_end = (
-        "<!-- setforge:user-section end shared notes hash=" + "0" * 64 + " -->\n"
-    )
-    tracked_body = "TRACKED DEFAULT\n"
-    live_body = "LIVE EDIT\n"
-    src = tmp_path / "doc.md"
-    dst = tmp_path / "live.md"
-    src.write_text(marker_start + tracked_body + marker_end, encoding="utf-8")
-    dst.write_text(marker_start + live_body + marker_end, encoding="utf-8")
-
-    span = SpanEntry(
-        anchor="## notes",
-        kind=SpanKind.PINNED,
-        semantics=SpanSemantics.SHARED,
-        capture_mode=SectionMode.KEEP_DEFAULTS,
-    )
-    capture_tracked_file(
-        src=src,
-        dst=dst,
-        preserve_user_sections=True,
-        preserve_user_keys=[],
-        preserve_user_sections_mode=span.capture_mode,
-    )
-    captured = src.read_text(encoding="utf-8")
-    # KEEP_DEFAULTS re-splices the tracked default body back into the captured
-    # tracked content, so the tracked default survives the sync.
-    assert "TRACKED DEFAULT" in captured
-
-
-def test_capture_mode_strip_on_span_wipes_section_body(tmp_path: Path) -> None:
-    """A section span with STRIP wipes the tracked marker body on capture."""
-    from setforge.capture import capture_tracked_file
-
-    marker_start = "<!-- setforge:user-section start shared notes -->\n"
-    marker_end = (
-        "<!-- setforge:user-section end shared notes hash=" + "0" * 64 + " -->\n"
-    )
-    src = tmp_path / "doc.md"
-    dst = tmp_path / "live.md"
-    src.write_text(marker_start + "TRACKED DEFAULT\n" + marker_end, encoding="utf-8")
-    dst.write_text(marker_start + "LIVE EDIT\n" + marker_end, encoding="utf-8")
-
-    span = SpanEntry(
-        anchor="## notes",
-        kind=SpanKind.PINNED,
-        semantics=SpanSemantics.SHARED,
-        capture_mode=SectionMode.STRIP,
-    )
-    capture_tracked_file(
-        src=src,
-        dst=dst,
-        preserve_user_sections=True,
-        preserve_user_keys=[],
-        preserve_user_sections_mode=span.capture_mode,
-    )
-    captured = src.read_text(encoding="utf-8")
-    # STRIP wipes the body; markers remain.
-    assert "LIVE EDIT" not in captured
-    assert "TRACKED DEFAULT" not in captured
-    assert "start shared notes" in captured

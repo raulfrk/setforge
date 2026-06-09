@@ -89,7 +89,11 @@ def walk_unexpected_drift(
             tracked_parsed = y.load(src.read_text(encoding="utf-8"))
             live_parsed = y.load(dst.read_text(encoding="utf-8"))
 
-        deep_paths = set(tracked_file.preserve_user_keys_deep)
+        # The legacy preserve_user_keys_deep model was retired at schema 2.0;
+        # compare no longer populates unexpected_drift_keys, so this loop body
+        # is unreachable. Keep an empty deep set so the (dead) DEEP/SHALLOW
+        # classification below never touches a removed model field.
+        deep_paths: set[str] = set()
         for key_path in entry.unexpected_drift_keys:
             tracked_val = _get_value(tracked_parsed, key_path, fmt)
             live_val = _get_value(live_parsed, key_path, fmt)

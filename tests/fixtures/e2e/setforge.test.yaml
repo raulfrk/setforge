@@ -28,51 +28,45 @@ tracked_files:
   sections_md:
     src: sections/marked.md
     dst: ~/.setforge_e2e/sections/marked.md
-    preserve_user_sections: true
+    disposition: shared
 
   # Shared-semantics user-section markers — exercises the three-way
   # reconcile wizard.
   sections_shared_md:
     src: sections/shared.md
     dst: ~/.setforge_e2e/sections/shared.md
-    preserve_user_sections: true
+    disposition: shared
 
   # JSON tracked file — byte copy, no preserve mechanism.
   json_settings:
     src: json/settings.json
     dst: ~/.setforge_e2e/json/settings.json
 
-  # JSONC with shallow preserve_user_keys (dotted-name leaves).
+  # Forked JSONC (host divergence kept on merge).
   # NOTE: extension is `.json` because setforge/jsonc.py:is_jsonc_file
   # treats every `.json` as JSONC-capable (matches VSCode semantics).
   jsonc_shallow:
     src: jsonc/shallow.json
     dst: ~/.setforge_e2e/jsonc/shallow.json
-    preserve_user_keys:
-      - userKeyA
-      - userKeyB
+    disposition: forked
 
-  # JSONC with deep preserve_user_keys_deep — drives JSONC wizard variants.
+  # Forked JSONC — drives the disposition merge wizard variants.
   jsonc_deep:
     src: jsonc/deep.json
     dst: ~/.setforge_e2e/jsonc/deep.json
-    preserve_user_keys_deep:
-      - settings
+    disposition: forked
 
   # YAML shallow — proves yaml_merge.py shallow parity with jsonc.py.
   yaml_shallow:
     src: yaml/shallow.yaml
     dst: ~/.setforge_e2e/yaml/shallow.yaml
-    preserve_user_keys:
-      - userKeyA
-      - userKeyB
+    disposition: forked
 
   # YAML deep — proves yaml_merge.py deep parity; drives YAML wizard variant.
   yaml_deep:
     src: yaml/deep.yaml
     dst: ~/.setforge_e2e/yaml/deep.yaml
-    preserve_user_keys_deep:
-      - settings
+    disposition: forked
 
   # Directory tree — recursive copy.
   directory_tree:
@@ -107,8 +101,7 @@ tracked_files:
   comprehensive_jsonc:
     src: comprehensive/preserve-settings.json
     dst: ~/.setforge_e2e/comprehensive/preserve-settings.json
-    preserve_user_keys:
-      - userKey
+    disposition: forked
   comprehensive_yaml:
     src: comprehensive/config.yaml
     dst: ~/.setforge_e2e/comprehensive/config.yaml
@@ -144,12 +137,12 @@ tracked_files:
   host_local_md:
     src: host-local/host.md
     dst: ~/.setforge_e2e/host-local/host.md
-    preserve_user_sections: true
+    disposition: shared
   host_local_md_symlink:
     src: host-local/host.md
     dst: ~/.setforge_e2e/host-local/host_link.md
     symlink: ~/.setforge_e2e/host-local/host_link_target.md
-    preserve_user_sections: true
+    disposition: shared
   # Non-markdown tracked_file used to test host-local's file-type rejection.
   host_local_json_reject:
     src: host-local/settings.json
@@ -190,25 +183,19 @@ tracked_files:
     dst: ~/.setforge_e2e/override/config.yaml
     disposition: shared
 
-  # ---- Forked-scalar fixtures (3-way preserve_user_keys scalar merge) ----
-  # Shallow ``preserve_user_keys`` with NO disposition routes through the
-  # stored-base 3-way SCALAR overlay (setforge.scalar_overlay). Each format
-  # gets its own dst (and thus file_id) so the per-host scalar base under
-  # ``state_root()/scalar-base/<profile>/<file_id>.json`` stays independent.
-  # The JSONC src exercises the json5 read/write seam; the YAML src exercises
-  # the ruamel round-trip seam.
+  # ---- Forked structural fixtures (disposition: forked merge) ----------
+  # Each format gets its own dst (and thus file_id) so the per-host stored
+  # base under ``state_root()`` stays independent. The JSONC src exercises
+  # the json5 read/write seam; the YAML src exercises the ruamel round-trip
+  # seam.
   forked_scalar_jsonc:
     src: forked-scalar/settings.json
     dst: ~/.setforge_e2e/forked-scalar/settings.json
-    preserve_user_keys:
-      - userKeyA
-      - userKeyB
+    disposition: forked
   forked_scalar_yaml:
     src: forked-scalar/config.yaml
     dst: ~/.setforge_e2e/forked-scalar/config.yaml
-    preserve_user_keys:
-      - userKeyA
-      - userKeyB
+    disposition: forked
 
   # ---- Sub-file span fixtures (pinned / forked markdown spans) ----------
   # Spans require a disposition (the span engine rides the stored-base

@@ -133,19 +133,16 @@ def test_disposition_clean_merge_equal_to_live_noop_but_advances(
     assert result.merge_conflicts == []
 
 
-def test_no_disposition_preserve_keys_unchanged_no_base(tmp_path: Path) -> None:
-    # Mirrors test_yaml_user_keys_preserved: legacy preserve path, no
-    # disposition. Output byte-identical; new_base/merge_conflicts inert.
+def test_no_disposition_plain_deploy_no_base(tmp_path: Path) -> None:
+    # A disposition=None file deploys tracked verbatim; new_base /
+    # merge_conflicts stay inert (the merge driver never runs).
     src = tmp_path / "src.yaml"
     src.write_text("a: 1\nb: 2\nc: 3\n")
     dst = tmp_path / "dst.yaml"
     dst.write_text("a: 10\nb: 20\nc: 30\n")
 
-    result = copy_atomic(src, dst, preserve_user_keys=["a", "c"])
+    result = copy_atomic(src, dst)
 
-    text = dst.read_text()
-    assert "a: 10" in text
-    assert "b: 2" in text
-    assert "c: 30" in text
+    assert dst.read_text() == "a: 1\nb: 2\nc: 3\n"
     assert result.new_base is None
     assert result.merge_conflicts == []

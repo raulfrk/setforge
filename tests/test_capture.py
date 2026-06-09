@@ -7,7 +7,7 @@ from setforge.capture import (
     capture_profile,
     capture_tracked_file,
 )
-from setforge.config import Config, Profile, SectionMode, TrackedFile
+from setforge.config import Config, Profile, TrackedFile
 
 
 def _write(path: Path, content: str) -> None:
@@ -19,9 +19,7 @@ def test_capture_plain_copy(tmp_path: Path) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     _write(dst, "live content\n")
-    result = capture_tracked_file(
-        src, dst, preserve_user_sections=False, preserve_user_keys=[]
-    )
+    result = capture_tracked_file(src, dst)
     assert result.action is CaptureAction.UPDATED
     assert src.read_text() == "live content\n"
 
@@ -31,175 +29,14 @@ def test_capture_noop_when_unchanged(tmp_path: Path) -> None:
     dst = tmp_path / "dst"
     _write(src, "same\n")
     _write(dst, "same\n")
-    result = capture_tracked_file(
-        src, dst, preserve_user_sections=False, preserve_user_keys=[]
-    )
+    result = capture_tracked_file(src, dst)
     assert result.action is CaptureAction.NOOP
-
-
-def test_capture_strips_user_sections_when_no_tracked_exists(
-    tmp_path: Path,
-) -> None:
-    """First-time capture with no existing tracked file → strip semantics
-    apply regardless of mode (no defaults to preserve)."""
-    src = tmp_path / "src.md"
-    dst = tmp_path / "dst.md"
-    _write(
-        dst,
-        "header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "host-specific stuff\n"
-        "<!-- setforge:user-section end host-local -->\n"
-        "footer\n",
-    )
-    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
-    text = src.read_text()
-    assert "host-specific stuff" not in text
-    assert "<!-- setforge:user-section start host-local -->" in text
-    assert "<!-- setforge:user-section end host-local -->" in text
-    assert "header\n" in text
-    assert "footer\n" in text
-
-
-def test_capture_keep_defaults_preserves_tracked_marker_bodies(
-    tmp_path: Path,
-) -> None:
-    """Default mode: tracked has bullet defaults inside markers, live has
-    drifted marker content; capture leaves tracked's marker bodies
-    untouched."""
-    src = tmp_path / "src.md"
-    dst = tmp_path / "dst.md"
-    _write(
-        src,
-        "header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "tracked default bullet\n"
-        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
-        "footer\n",
-    )
-    _write(
-        dst,
-        "header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "live host-only edit\n"
-        f"<!-- setforge:user-section end host-local hash={'b' * 64} -->\n"
-        "footer\n",
-    )
-    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
-    text = src.read_text()
-    assert "tracked default bullet" in text
-    assert "live host-only edit" not in text
-
-
-def test_capture_keep_defaults_propagates_non_marker_edits(
-    tmp_path: Path,
-) -> None:
-    """Edits to tracked content OUTSIDE marker regions still flow live →
-    tracked. Only marker bodies are protected under keep_defaults."""
-    src = tmp_path / "src.md"
-    dst = tmp_path / "dst.md"
-    _write(
-        src,
-        "old header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "tracked default\n"
-        f"<!-- setforge:user-section end host-local hash={'a' * 64} -->\n"
-        "old footer\n",
-    )
-    _write(
-        dst,
-        "new header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "live host edit\n"
-        f"<!-- setforge:user-section end host-local hash={'b' * 64} -->\n"
-        "new footer\n",
-    )
-    capture_tracked_file(src, dst, preserve_user_sections=True, preserve_user_keys=[])
-    text = src.read_text()
-    assert "new header" in text
-    assert "new footer" in text
-    assert "tracked default" in text
-    assert "live host edit" not in text
-
-
-def test_capture_strip_mode_explicit_opt_in(tmp_path: Path) -> None:
-    """Explicit STRIP mode wipes marker bodies even when tracked exists.
-    This is the legitimate use case for markers as host-local placeholders."""
-    src = tmp_path / "src.md"
-    dst = tmp_path / "dst.md"
-    _write(
-        src,
-        "header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "tracked content\n"
-        "<!-- setforge:user-section end host-local -->\n"
-        "footer\n",
-    )
-    _write(
-        dst,
-        "header\n"
-        "<!-- setforge:user-section start host-local -->\n"
-        "live content\n"
-        "<!-- setforge:user-section end host-local -->\n"
-        "footer\n",
-    )
-    capture_tracked_file(
-        src,
-        dst,
-        preserve_user_sections=True,
-        preserve_user_keys=[],
-        preserve_user_sections_mode=SectionMode.STRIP,
-    )
-    text = src.read_text()
-    assert "tracked content" not in text
-    assert "live content" not in text
-    assert "<!-- setforge:user-section start host-local -->" in text
-
-
-def test_tracked_file_default_section_mode_is_keep_defaults() -> None:
-    """Schema default protects users from accidental destruction. If this
-    flips, every existing yaml with `preserve_user_sections: true` would
-    silently start stripping global defaults on sync."""
-    assert TrackedFile(src=Path("x"), dst="y").preserve_user_sections_mode is (
-        SectionMode.KEEP_DEFAULTS
-    )
-
-
-def test_capture_strips_yaml_keys(tmp_path: Path) -> None:
-    src = tmp_path / "src.yaml"
-    dst = tmp_path / "dst.yaml"
-    _write(dst, "a: 1\nb: 2\nc: 3\n")
-    capture_tracked_file(
-        src, dst, preserve_user_sections=False, preserve_user_keys=["a", "c"]
-    )
-    text = src.read_text()
-    assert "a:" not in text
-    assert "c:" not in text
-    assert "b: 2" in text
-
-
-def test_capture_yaml_preserves_comments(tmp_path: Path) -> None:
-    src = tmp_path / "src.yaml"
-    dst = tmp_path / "dst.yaml"
-    _write(
-        dst,
-        "# leading comment\na: 1  # inline a\nb: 2  # inline b\n# trailing comment\n",
-    )
-    capture_tracked_file(
-        src, dst, preserve_user_sections=False, preserve_user_keys=["a"]
-    )
-    text = src.read_text()
-    assert "# leading comment" in text
-    assert "# inline b" in text
-    assert "b: 2" in text
 
 
 def test_capture_skips_missing_dst(tmp_path: Path) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "missing"
-    result = capture_tracked_file(
-        src, dst, preserve_user_sections=False, preserve_user_keys=[]
-    )
+    result = capture_tracked_file(src, dst)
     assert result.action is CaptureAction.SKIPPED
     assert not src.exists()
 

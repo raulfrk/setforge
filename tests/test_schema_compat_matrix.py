@@ -5,18 +5,13 @@ This suite proves the production migration chain
 frozen historical corpus of ``setforge.yaml`` configs — one directory per
 ``schema_version`` under ``tests/fixtures/schema_corpus/<version>/``.
 
-Four arms:
+Three arms:
 
 (i)   BACKWARD MIGRATE — every frozen fixture migrates forward to the
       build's :data:`current_expected_schema_version` and the result both
       carries the expected ``schema_version`` AND loads + round-trips.
 (ii)  FORWARD-SAFE — a major-newer synthetic config refuses cleanly; a
       same-major newer-minor synthetic config loads with a warning.
-(iii) EXPAND-WINDOW DUAL-REPRESENTATION COEXISTENCE — the current model
-      accepts BOTH the legacy ``preserve_user_*`` and the new
-      ``disposition`` reconciliation representations; each resolves to its
-      OWN correct internal state (the two are DISTINCT models, not
-      equivalent encodings), and the two coexist in a single config.
 (iv)  DOWNGRADE — a current (1.2) config down-migrates to 1.0 and is
       byte-identical to an IN-RUN ruamel-normalized baseline.
 
@@ -52,7 +47,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.config import Disposition, TrackedFile, load_config
+from setforge.config import load_config
 from setforge.errors import ConfigError
 from setforge.migrations import (
     MigrationRoots,
@@ -62,7 +57,6 @@ from setforge.migrations import (
     known_versions,
 )
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-from setforge.preserved_keys import KeyOrigin
 
 # Anchor on __file__, NEVER cwd — the glob must find the corpus regardless
 # of where pytest is invoked from.
@@ -268,132 +262,6 @@ def test_same_major_newer_minor_config_loads_with_warning(
     assert "warning:" in captured.err
     assert "schema_version" in captured.err
     assert current_expected_schema_version in captured.err
-
-
-# ---------------------------------------------------------------------------
-# Arm (iii) — EXPAND-WINDOW DUAL-REPRESENTATION COEXISTENCE: the current
-# model accepts BOTH the legacy preserve_user_* and the new disposition
-# reconciliation representations; each resolves to its OWN correct internal
-# state (the two are DISTINCT models, not equivalent encodings of one thing).
-#
-# disposition is mutually exclusive with preserve_user_* on ONE file (see
-# TrackedFile._disposition_excludes_legacy_preserve), so the two reps live on
-# separate tracked_files. The expand-window guarantee under test is NOT
-# equivalence (an earlier framing was VACUOUS: preserve_user_keys_resolved is
-# seeded only from a YAML preserve_user_keys: list — orthogonal to BOTH
-# preserve_user_sections and disposition — so both forms collapsed to [] no
-# matter what, exercising nothing). The real guarantee: the legacy rep
-# resolves NON-VACUOUSLY into the canonical preserve_user_keys_resolved
-# field, the disposition rep sets its enum, and a single config carrying one
-# file in each rep loads cleanly under the current model (neither rejects the
-# other). Assertions hit the CANONICAL fields (preserve_user_keys_resolved,
-# disposition), never the preserve_user_keys computed shim or model_dump().
-# ---------------------------------------------------------------------------
-
-# Legacy rep: declares preserve_user_keys: [alpha] so the resolved field is
-# genuinely non-empty (proves the legacy representation actually resolves).
-_LEGACY_FORM_BODY: str = (
-    "version: 1\n"
-    "tracked_files:\n"
-    "  note:\n"
-    "    src: note.md\n"
-    "    dst: ~/note.md\n"
-    "    preserve_user_keys:\n"
-    "      - alpha\n"
-    "profiles:\n"
-    "  base:\n"
-    "    tracked_files:\n"
-    "      - note\n"
-)
-
-# New rep: a single disposition directive, mutually exclusive with the
-# legacy preserve_* family on this same file.
-_DISPOSITION_FORM_BODY: str = (
-    "version: 1\n"
-    "tracked_files:\n"
-    "  note:\n"
-    "    src: note.md\n"
-    "    dst: ~/note.md\n"
-    "    disposition: pinned\n"
-    "profiles:\n"
-    "  base:\n"
-    "    tracked_files:\n"
-    "      - note\n"
-)
-
-# Coexistence: ONE config carrying the legacy rep on `note` AND the
-# disposition rep on a DIFFERENT file `cfg` — the actual expand-window
-# dual-representation guarantee (neither rep rejects the other).
-_COEXISTENCE_BODY: str = (
-    "version: 1\n"
-    "tracked_files:\n"
-    "  note:\n"
-    "    src: note.md\n"
-    "    dst: ~/note.md\n"
-    "    preserve_user_keys:\n"
-    "      - alpha\n"
-    "  cfg:\n"
-    "    src: cfg.json\n"
-    "    dst: ~/cfg.json\n"
-    "    disposition: shared\n"
-    "profiles:\n"
-    "  base:\n"
-    "    tracked_files:\n"
-    "      - note\n"
-    "      - cfg\n"
-)
-
-
-def test_legacy_and_disposition_reps_each_resolve_to_own_state(
-    tmp_path: Path,
-) -> None:
-    """Both reconciliation reps load; each resolves to its own correct state.
-
-    Asserts the expand-window dual-representation COEXISTENCE guarantee on
-    the CANONICAL fields (preserve_user_keys_resolved, disposition) — never
-    the preserve_user_keys computed shim nor model_dump(). The two reps are
-    DISTINCT models, not equivalent encodings:
-
-    1. Legacy rep (NON-VACUOUS): preserve_user_keys: [alpha] resolves into
-       preserve_user_keys_resolved as a FROM_PROFILE entry whose key is
-       'alpha' (the old "both == []" framing exercised nothing).
-    2. New rep: disposition: pinned sets disposition to Disposition.PINNED.
-    3. Coexistence: a single config with one file in each rep loads cleanly.
-    """
-    legacy_cfg = tmp_path / "legacy.yaml"
-    legacy_cfg.write_text(_LEGACY_FORM_BODY, encoding="utf-8")
-    disposition_cfg = tmp_path / "disposition.yaml"
-    disposition_cfg.write_text(_DISPOSITION_FORM_BODY, encoding="utf-8")
-    coexistence_cfg = tmp_path / "coexistence.yaml"
-    coexistence_cfg.write_text(_COEXISTENCE_BODY, encoding="utf-8")
-
-    legacy = load_config(legacy_cfg)
-    disposition = load_config(disposition_cfg)
-    coexistence = load_config(coexistence_cfg)
-
-    # (1) NON-VACUOUS legacy-rep: the canonical resolved field genuinely
-    # CONTAINS 'alpha' (key + origin), not the old vacuous `== []`.
-    legacy_tf: TrackedFile = legacy.tracked_files["note"]
-    resolved = legacy_tf.preserve_user_keys_resolved
-    assert [k.key for k in resolved] == ["alpha"]
-    assert resolved[0].origin == KeyOrigin.FROM_PROFILE
-    # The disposition axis is untouched by the legacy rep.
-    assert legacy_tf.disposition is None
-
-    # (2) NEW-rep: disposition resolves to the expected enum value; the
-    # legacy resolved field stays empty (the two axes are orthogonal).
-    disposition_tf: TrackedFile = disposition.tracked_files["note"]
-    assert disposition_tf.disposition is Disposition.PINNED
-    assert disposition_tf.preserve_user_keys_resolved == []
-
-    # (3) COEXISTENCE: a single config holding both reps loads cleanly and
-    # each file keeps its own internal state — neither rep rejects the other.
-    note_tf: TrackedFile = coexistence.tracked_files["note"]
-    cfg_tf: TrackedFile = coexistence.tracked_files["cfg"]
-    assert [k.key for k in note_tf.preserve_user_keys_resolved] == ["alpha"]
-    assert note_tf.disposition is None
-    assert cfg_tf.disposition is Disposition.SHARED
-    assert cfg_tf.preserve_user_keys_resolved == []
 
 
 # ---------------------------------------------------------------------------

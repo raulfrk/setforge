@@ -15,7 +15,6 @@ subcommand re-computes orphans under ``--apply`` and removes them.
 """
 
 import difflib
-import io
 import json
 import os
 import stat
@@ -33,9 +32,7 @@ from setforge import (
     host_local_inject,
     jsonc,
     section_reconcile,
-    sections,
     spans_overlay,
-    yaml_merge,
 )
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import (
@@ -361,60 +358,24 @@ def diff_file(
     src: Path,
     dst: Path,
     *,
-    preserve_user_sections: bool = False,
-    preserve_user_keys: list[str] | None = None,
-    preserve_user_keys_deep: list[str] | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> str:
-    """Return the unified diff between ``src`` and ``dst``.
+    """Return the unified diff between ``src`` (tracked) and ``dst`` (live).
 
-    When preservation is enabled the comparison renders the post-merge
-    content (same merge sequence as :func:`setforge.deploy.copy_atomic`)
-    so preserved drift never shows in the diff body.
-
-    When ``host_local_sections`` is non-empty, the rendered ``src`` is
-    augmented with the same host-local injection deploy would perform,
-    so a live file that already received its host-local sections does
-    NOT show up as drift (compare overlay-aware path).
-
-    Fast path: with ``preserve_user_sections=True`` AND no host-local
-    sections to inject, if every section's sha256 matches between src
-    and dst AND the non-section content is byte-identical, the rendered
-    merge would equal live — skip the splice + diff and return ``""``
-    early. When host_local_sections is non-empty the fast path is
-    skipped because the rendered src would carry MORE markers than the
-    raw src.
+    For a ``disposition=None`` tracked_file the deployed content is ``src``
+    verbatim, so the comparison is a plain unified diff. When
+    ``host_local_sections`` is non-empty the rendered ``src`` is augmented with
+    the same legacy host-local marker injection deploy performs, so a live file
+    that already received its host-local sections does NOT show as drift.
     """
     if not dst.exists():
         return ""
 
     dst_text = dst.read_text(encoding="utf-8")
-    if preserve_user_sections and not host_local_sections:
-        src_text = src.read_text(encoding="utf-8")
-        # Live side is parsed with allow_legacy=True so install's
-        # pre-deploy compare step survives a pre-hash user file. The
-        # compare CLI command surfaces a user-actionable error via
-        # ``cli._refuse_legacy_live_markers`` BEFORE reaching here when
-        # invoked directly; this branch is reached only from install's
-        # drift gate, where lenience is correct.
-        bodies_match = sections.hash_sections(src_text) == sections.hash_sections(
-            dst_text, allow_legacy=True
-        )
-        template_matches = sections.strip_section_content(
-            src_text, allow_legacy=True
-        ) == sections.strip_section_content(dst_text, allow_legacy=True)
-        if bodies_match and template_matches:
-            return ""
-
-    rendered_src = _render_with_merges(
-        src,
-        dst,
-        preserve_user_sections,
-        preserve_user_keys,
-        preserve_user_keys_deep,
-        dst_text=dst_text,
-        host_local_sections=host_local_sections,
-    )
+    rendered_src = src.read_text(encoding="utf-8")
+    if host_local_sections:
+        rendered_src = host_local_inject.inject_all(rendered_src, host_local_sections)
+        rendered_src = section_reconcile.maintain_marker_hashes(rendered_src)
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),
@@ -422,147 +383,6 @@ def diff_file(
         tofile=str(src),
     )
     return "".join(diff_lines)
-
-
-def _render_with_merges(
-    src: Path,
-    dst: Path,
-    preserve_user_sections: bool,
-    preserve_user_keys: list[str] | None,
-    preserve_user_keys_deep: list[str] | None = None,
-    *,
-    dst_text: str,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
-) -> str:
-    """Render the post-merge tracked content that ``diff_file`` compares
-    against the live ``dst_text``.
-
-    Cache shape: takes ``dst_text`` as raw text (not pre-extracted
-    sections) because ``diff_file`` upstream needs the raw text for
-    its strip-template comparison (``strip_section_content(src) ==
-    strip_section_content(dst_text)``) and for the ``difflib.unified_diff``
-    input — so any parsed-shape cache would force ``diff_file`` to keep
-    raw bytes around anyway. The symmetric deploy-side helper
-    (:func:`setforge.deploy._compute_content`) caches the pre-extracted
-    ``LiveSections`` instead because deploy has no strip-template need.
-    See also: that function's docstring for the symmetric rationale.
-    """
-    shallow = preserve_user_keys or []
-    deep = preserve_user_keys_deep or []
-    if (shallow or deep) and jsonc.is_jsonc_file(src):
-        tracked_text = src.read_text(encoding="utf-8")
-        live_text = dst_text
-        content = jsonc.overlay_user_keys(
-            tracked_text, live_text, shallow, deep_key_names=deep
-        )
-    elif shallow or deep:
-        yaml = YAML(typ="rt")
-        with src.open("r", encoding="utf-8") as fh:
-            src_doc = yaml.load(fh)
-        with dst.open("r", encoding="utf-8") as fh:
-            live_doc = yaml.load(fh)
-        merged = yaml_merge.overlay(src_doc, live_doc, shallow, deep_key_paths=deep)
-        buf = io.StringIO()
-        yaml.dump(merged, buf)
-        content = buf.getvalue()
-    else:
-        content = src.read_text(encoding="utf-8")
-
-    if preserve_user_sections:
-        # See ``diff_file`` above for the ``allow_legacy=True`` rationale.
-        live_sections = sections.extract_sections(dst_text, allow_legacy=True)
-        content = sections.merge_sections(content, live_sections)
-        if host_local_sections:
-            content = host_local_inject.inject_all(content, host_local_sections)
-            content = section_reconcile.maintain_marker_hashes(content)
-    return content
-
-
-def classify_yaml_drift(
-    src: Path,
-    dst: Path,
-    preserve_user_keys: list[str],
-    preserve_user_keys_deep: list[str] | None = None,
-) -> tuple[list[str], list[str]]:
-    """Return ``(expected, unexpected)`` JSONPath-lite paths where ``src``
-    and ``dst`` diverge.
-
-    A diverged path is *expected* iff covered by some entry in
-    ``preserve_user_keys`` (shallow whole-leaf overlay, exact match or
-    a parent path with ``[*]``/``[]``) OR by some entry in
-    ``preserve_user_keys_deep`` (deep-merge overlay; any sub-path
-    beneath a deep entry classifies as expected because deploy
-    reconciles them at deep-merge time). Everything else is *unexpected*.
-    """
-    yaml = YAML(typ="rt")
-    with src.open("r", encoding="utf-8") as fh:
-        src_doc = yaml.load(fh)
-    with dst.open("r", encoding="utf-8") as fh:
-        live_doc = yaml.load(fh)
-
-    diverged_paths = _diff_paths(src_doc, live_doc)
-    preserve_prefixes = [_to_prefix(p) for p in preserve_user_keys]
-    preserve_prefixes.extend(_to_prefix(p) for p in preserve_user_keys_deep or [])
-
-    expected: list[str] = []
-    unexpected: list[str] = []
-    for path in diverged_paths:
-        formatted = _format_path(path)
-        if any(_is_prefix(prefix, path) for prefix in preserve_prefixes):
-            expected.append(formatted)
-        else:
-            unexpected.append(formatted)
-    return expected, unexpected
-
-
-def _to_prefix(preserve_path: str) -> tuple[str, ...]:
-    tokens = yaml_merge._parse_path(preserve_path)
-    return tuple(name for _, name in tokens)
-
-
-def _is_prefix(prefix: tuple[str, ...], path: tuple) -> bool:
-    if len(path) < len(prefix):
-        return False
-    for prefix_step, path_step in zip(prefix, path, strict=False):
-        if isinstance(path_step, int):
-            return False
-        if path_step != prefix_step:
-            return False
-    return True
-
-
-def _diff_paths(src: object, live: object, prefix: tuple = ()) -> list[tuple]:
-    if isinstance(src, Mapping) and isinstance(live, Mapping):
-        diffs: list[tuple] = []
-        for key in set(src) | set(live):
-            if key not in src or key not in live:
-                diffs.append((*prefix, key))
-                continue
-            diffs.extend(_diff_paths(src[key], live[key], (*prefix, key)))
-        return diffs
-    if isinstance(src, list) and isinstance(live, list):
-        diffs = []
-        for i in range(max(len(src), len(live))):
-            if i >= len(src) or i >= len(live):
-                diffs.append((*prefix, i))
-                continue
-            diffs.extend(_diff_paths(src[i], live[i], (*prefix, i)))
-        return diffs
-    if src != live:
-        return [prefix]
-    return []
-
-
-def _format_path(path: tuple) -> str:
-    out: list[str] = []
-    for i, step in enumerate(path):
-        if isinstance(step, int):
-            out.append(f"[{step}]")
-        elif i == 0:
-            out.append(str(step))
-        else:
-            out.append(f".{step}")
-    return "".join(out) or "<root>"
 
 
 def expand_tracked_file(
@@ -708,29 +528,11 @@ def _compare_one(
     diff = diff_file(
         src,
         dst,
-        preserve_user_sections=tracked_file.preserve_user_sections,
-        preserve_user_keys=tracked_file.preserve_user_keys or None,
-        preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
         host_local_sections=host_local_sections,
     )
 
     expected_keys: list[str] = []
     unexpected_keys: list[str] = []
-    if tracked_file.preserve_user_keys or tracked_file.preserve_user_keys_deep:
-        if jsonc.is_jsonc_file(src):
-            expected_keys, unexpected_keys = jsonc.classify_jsonc_drift(
-                src.read_text(encoding="utf-8"),
-                dst.read_text(encoding="utf-8"),
-                tracked_file.preserve_user_keys,
-                deep_key_names=tracked_file.preserve_user_keys_deep,
-            )
-        else:
-            expected_keys, unexpected_keys = classify_yaml_drift(
-                src,
-                dst,
-                tracked_file.preserve_user_keys,
-                preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
-            )
 
     mode_drift = False
     if tracked_file.mode is not None:
@@ -905,9 +707,6 @@ def _compare_symlinked(
     target_diff = diff_file(
         src,
         target_path,
-        preserve_user_sections=tracked_file.preserve_user_sections,
-        preserve_user_keys=tracked_file.preserve_user_keys or None,
-        preserve_user_keys_deep=tracked_file.preserve_user_keys_deep or None,
         host_local_sections=host_local_sections,
     )
     if target_diff:
@@ -932,58 +731,6 @@ def _compare_symlinked(
         ),
         False,
     )
-
-
-def render_preserve_user_keys_overlay_block(
-    config: Config, resolved: ResolvedProfile
-) -> list[str]:
-    """Build mockup-B compare-output lines for the preserve_user_keys overlay.
-
-    Returns an empty list when no tracked_file in the resolved profile
-    carries any FROM_LOCAL_YAML or REMOVED_VIA_LOCAL entry — the
-    overlay block is suppressed when local.yaml introduces no change.
-    Otherwise returns the verbatim lines mockup B specifies (SPEC 8
-    spec lines 109-118): a top-level ``=== applying host overlay`` header,
-    a count line, then one indented block per affected tracked_file
-    with one provenance-tagged row per key.
-
-    Pure function — the caller (compare/install CLI) prints each line
-    so test fixtures can assert on string content directly.
-    """
-    from setforge.preserved_keys import (
-        KeyOrigin,
-        display_tag,
-        has_local_yaml_overlay,
-    )
-
-    affected: list[tuple[str, TrackedFile]] = []
-    for name in resolved.tracked_files:
-        tf = config.tracked_files[name]
-        if has_local_yaml_overlay(tf.preserve_user_keys_resolved):
-            affected.append((name, tf))
-    if not affected:
-        return []
-
-    lines: list[str] = []
-    lines.append("=== applying host overlay (~/.config/setforge/local.yaml) ===")
-    plural = "s" if len(affected) != 1 else ""
-    lines.append(f"tracked_files overlays: {len(affected)} file{plural} affected")
-    for name, tf in affected:
-        lines.append(f"  {name}:")
-        lines.append("    preserve_user_keys effective set:")
-        for key in tf.preserve_user_keys_resolved:
-            match key.origin:
-                case KeyOrigin.FROM_LOCAL_YAML:
-                    marker = "+"
-                case KeyOrigin.REMOVED_VIA_LOCAL:
-                    # Unicode minus sign (mockup B uses U+2212), keeps
-                    # the column-width parity with the + and = markers
-                    # for the multi-line rendering.
-                    marker = "−"  # noqa: RUF001 — U+2212 MINUS SIGN per mockup B.
-                case KeyOrigin.FROM_PROFILE:
-                    marker = "="
-            lines.append(f"      {marker} {key.key}  {display_tag(key)}")
-    return lines
 
 
 def render_host_local_tracked_file_overrides_block(

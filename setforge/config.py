@@ -16,9 +16,7 @@ from typing import TYPE_CHECKING, Final, Self
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Field,
     ValidationError,
-    computed_field,
     field_validator,
     model_validator,
 )
@@ -41,8 +39,7 @@ from setforge.migrations import (
     current_expected_schema_version,
     parse_schema_version,
 )
-from setforge.preserved_keys import KeyOrigin, ResolvedPreservedKey, resolve_overlay
-from setforge.section_mode import SectionMode
+from setforge.section_mode import SectionMode as SectionMode
 from setforge.spans import SpanEntry, SpanSemantics
 
 if TYPE_CHECKING:
@@ -66,13 +63,6 @@ Cross-major refusal is handled by :func:`_guard_schema_version`.
 """
 
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
-
-_PRESERVE_PATH_SEPARATOR: str = " > "
-"""Segment separator for nested-path entries in ``TrackedFile.preserve_user_keys``.
-
-Mirrors :data:`setforge.jsonc.PATH_SEPARATOR` — re-declared here so the
-config schema does not depend on the JSONC module at import time.
-"""
 
 
 class ReconcilePolicy(StrEnum):
@@ -125,71 +115,12 @@ class Disposition(StrEnum):
 # stays valid for every existing call site.
 
 
-def _check_well_formed_preserve_paths(paths: list[object]) -> None:
-    """Reject empty strings and malformed nested paths in preserve_user_keys.
-
-    Mirrors the historical ``@field_validator`` checks that lived on
-    the ``preserve_user_keys`` field before it became a computed_field.
-    Single-segment names are accepted as-is; multi-segment paths split
-    on ``" > "`` and every segment must be non-empty and not
-    whitespace-only.
-    """
-    for path in paths:
-        if path == "":
-            raise ValueError("preserve_user_keys entry cannot be empty string")
-        if not isinstance(path, str):
-            continue
-        if _PRESERVE_PATH_SEPARATOR not in path:
-            continue
-        for seg in path.split(_PRESERVE_PATH_SEPARATOR):
-            if seg == "" or seg.strip() == "":
-                raise ValueError(
-                    f"preserve_user_keys path {path!r} has an empty or "
-                    f"whitespace-only segment (no leading/trailing "
-                    f"{_PRESERVE_PATH_SEPARATOR!r}, no consecutive "
-                    f"separators)"
-                )
-
-
 class TrackedFile(BaseModel):
     model_config = _STRICT
 
     src: Path
     dst: str
     template: bool = False
-    preserve_user_sections: bool = False
-    preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS
-    preserve_user_keys_resolved: list[ResolvedPreservedKey] = Field(
-        default_factory=list
-    )
-    """Resolved preserve_user_keys list with per-key provenance tags.
-
-    Seeded from the YAML ``preserve_user_keys:`` list at load time
-    (each entry tagged :attr:`KeyOrigin.FROM_PROFILE` with
-    ``source_profile=None`` — the profile context is filled in at
-    profile-resolution time by
-    :func:`setforge.config.apply_preserve_user_keys_overlay`). May be
-    overwritten in-bulk (NOT in-place — Pydantic v2 frozen-on-copy
-    semantics) by the loader once the local.yaml overlay is known.
-
-    Mockup B's compare/install formatters read this list to emit
-    per-key provenance lines. The legacy :attr:`preserve_user_keys`
-    surface remains available as a :func:`computed_field` derived
-    view for every existing consumer (yaml_merge / jsonc / merge /
-    sync / revert / etc.) — back-compat is automatic.
-    """
-    preserve_user_keys_deep: list[str] = []
-    """Paths whose live → tracked overlay does a *deep* merge instead of
-    the shallow whole-leaf replace of ``preserve_user_keys``. Tracked
-    sub-keys absent on the live side survive. Live-only sub-keys are
-    added. List values at sub-paths are whole-replaced (live wins). Type
-    mismatches at deep terminals raise ``MergeTypeMismatch``.
-
-    Mutually exclusive with ``preserve_user_keys`` per-path: a path may
-    appear in at most one of the two lists. ``[*]`` / ``[]`` list
-    suffixes are not supported on this list — use the shallow list for
-    list-targeted paths.
-    """
     mode: int | None = None
     """POSIX file-mode bits (chmod) for the live dst.
 
@@ -218,12 +149,11 @@ class TrackedFile(BaseModel):
     disposition: Disposition | None = None
     """File-level reconciliation policy (opt-in).
 
-    ``None`` ⇒ the legacy 2-way preserve path, byte-for-byte unchanged.
-    When set, the file is reconciled by the stored-base 3-way merge per
-    :class:`Disposition`. Mutually exclusive with the legacy
-    ``preserve_*`` family (see
-    :meth:`_disposition_excludes_legacy_preserve`) — a file uses one
-    model or the other, never both.
+    ``None`` ⇒ the file is deployed from tracked verbatim (no stored-base
+    merge). When set, the file is reconciled by the stored-base 3-way
+    merge per :class:`Disposition`. Sub-file preservation is expressed via
+    :attr:`spans` (the schema-2.0 unified span model that superseded the
+    legacy ``preserve_*`` family).
     """
     spans: list[SpanEntry] = []
     """Shared (tracked-side) sub-file span intents (pinned / forked regions).
@@ -236,80 +166,6 @@ class TrackedFile(BaseModel):
     kind + semantics). Resolved offsets and baseline bytes are derived
     state in the spans sidecar, never duplicated here (Invariant I12).
     """
-
-    @model_validator(mode="before")
-    @classmethod
-    def _seed_preserve_user_keys_resolved(cls, data: object) -> object:
-        """Convert YAML ``preserve_user_keys: [...]`` input into seeded
-        ``preserve_user_keys_resolved`` entries.
-
-        Each entry from the input list becomes a
-        :class:`ResolvedPreservedKey` tagged
-        :attr:`KeyOrigin.FROM_PROFILE` with ``source_profile=None``.
-        The profile context (which profile in the chain declared the
-        key) is filled in at profile-resolution time by
-        :func:`apply_preserve_user_keys_overlay`, which rebuilds the
-        list with the leaf-profile name + applies any local.yaml
-        overlay.
-
-        Refuses the malformed shape where BOTH
-        ``preserve_user_keys`` and ``preserve_user_keys_resolved``
-        appear in the input mapping — the YAML surface is single-shape
-        only (``preserve_user_keys``); ``preserve_user_keys_resolved``
-        is the loader-populated derived shape.
-        """
-        if not isinstance(data, dict):
-            return data
-        has_input = "preserve_user_keys" in data
-        has_resolved = "preserve_user_keys_resolved" in data
-        if has_resolved:
-            # Resolved wins — drop any computed-field round-trip
-            # artifact under the same name (model_dump() includes the
-            # computed field; re-validating that dump must round-trip
-            # cleanly without rejecting the seed-from-input path).
-            if has_input:
-                new_data = dict(data)
-                new_data.pop("preserve_user_keys")
-                return new_data
-            return data
-        if not has_input:
-            return data
-        raw_list = data["preserve_user_keys"]
-        if not isinstance(raw_list, list):
-            # Let Pydantic surface the standard "Input should be a valid
-            # list" message rather than pre-empting it here.
-            return data
-        _check_well_formed_preserve_paths(raw_list)
-        seeded = [
-            ResolvedPreservedKey(str(item), KeyOrigin.FROM_PROFILE, None)
-            for item in raw_list
-        ]
-        # Replace the input key with the seeded resolved list; the
-        # original `preserve_user_keys` no longer maps onto a real
-        # model field (it is a computed_field below).
-        new_data = dict(data)
-        new_data.pop("preserve_user_keys")
-        new_data["preserve_user_keys_resolved"] = seeded
-        return new_data
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def preserve_user_keys(self) -> list[str]:
-        """Effective preserve_user_keys list (back-compat derived view).
-
-        Returns ``[k.key for k in preserve_user_keys_resolved if k.origin
-        != REMOVED_VIA_LOCAL]`` — the set of keys whose live values
-        deploy/install should overlay onto tracked. Every pre-overlay
-        consumer (yaml_merge / jsonc / merge / sync / revert / etc.)
-        reads this property; the underlying provenance lives on
-        :attr:`preserve_user_keys_resolved` for mockup-B-aware
-        formatters in compare/deploy.
-        """
-        return [
-            k.key
-            for k in self.preserve_user_keys_resolved
-            if k.origin != KeyOrigin.REMOVED_VIA_LOCAL
-        ]
 
     @model_validator(mode="after")
     def _symlink_no_self_loop(self) -> Self:
@@ -332,68 +188,6 @@ class TrackedFile(BaseModel):
                 f"after expansion — refusing self-loop."
             )
         return self
-
-    @model_validator(mode="after")
-    def _no_preserve_path_overlap(self) -> Self:
-        overlap = set(self.preserve_user_keys) & set(self.preserve_user_keys_deep)
-        if overlap:
-            raise ValueError(
-                f"path(s) declared in both preserve_user_keys and "
-                f"preserve_user_keys_deep: {sorted(overlap)}"
-            )
-        deep_heads = set(self.preserve_user_keys_deep)
-        for path in self.preserve_user_keys:
-            if _PRESERVE_PATH_SEPARATOR not in path:
-                continue
-            head = path.split(_PRESERVE_PATH_SEPARATOR, 1)[0]
-            if head in deep_heads:
-                raise ValueError(
-                    f"preserve_user_keys path {path!r} starts with "
-                    f"{head!r}, which is declared whole-subtree in "
-                    f"preserve_user_keys_deep; the two semantics conflict. "
-                    f"Drop one or rename the head."
-                )
-        return self
-
-    @model_validator(mode="after")
-    def _disposition_excludes_legacy_preserve(self) -> Self:
-        """A file uses EITHER the disposition model OR legacy ``preserve_*``.
-
-        The two are distinct reconciliation models — whole-file stored-base
-        3-way (disposition) versus per-key / per-section live-preserve
-        (``preserve_*``). Allowing both on one tracked_file would make the
-        deploy path ambiguous, so the combination is refused at load time.
-        """
-        if self.disposition is None:
-            return self
-        offenders: list[str] = []
-        if self.preserve_user_sections:
-            offenders.append("preserve_user_sections")
-        if self.preserve_user_keys:  # computed view; excludes REMOVED_VIA_LOCAL
-            offenders.append("preserve_user_keys")
-        if self.preserve_user_keys_deep:
-            offenders.append("preserve_user_keys_deep")
-        if self.preserve_user_sections_mode is not SectionMode.KEEP_DEFAULTS:
-            offenders.append("preserve_user_sections_mode")
-        if offenders:
-            raise ValueError(
-                f"disposition: {self.disposition.value!r} is mutually exclusive "
-                f"with legacy preserve field(s): {sorted(offenders)}. A file uses "
-                f"either the disposition model or preserve_*, not both."
-            )
-        return self
-
-    @field_validator("preserve_user_keys_deep")
-    @classmethod
-    def _no_list_suffix_on_deep(cls, v: list[str]) -> list[str]:
-        for path in v:
-            if path.endswith("[*]") or path.endswith("[]"):
-                raise ValueError(
-                    f"preserve_user_keys_deep does not support [*] / [] "
-                    f"list suffixes (got {path!r}); use preserve_user_keys "
-                    f"for list-targeted paths."
-                )
-        return v
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -685,24 +479,17 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
 
 _RECONCILIATION_DIRECTIVE_KEYS: Final[tuple[str, ...]] = (
     "disposition",
-    "preserve_user_sections",
-    "preserve_user_keys",
-    "preserve_user_keys_deep",
+    "spans",
 )
-# preserve_user_sections_mode is intentionally excluded: degenerate without
-# preserve_user_sections (which is already a directive key), so it never
-# signals reconciliation intent on its own.
 
 
 def _has_reconciliation_directive(mapping: Mapping[str, object]) -> bool:
     """Return whether a raw tracked-file mapping declares a reconciliation directive.
 
-    True when any of disposition / preserve_user_sections / preserve_user_keys /
-    preserve_user_keys_deep is present with a truthy value — the same per-field
-    truthiness rule the XOR validator applies, so a falsy
-    ``preserve_user_sections: false`` or an empty list does not count. This is
-    not the XOR validator's offender set: it adds ``disposition`` and omits
-    ``preserve_user_sections_mode`` (degenerate alone, see above).
+    True when ``disposition`` or ``spans`` is present with a truthy value, so a
+    falsy / empty value does not count. Dropping an unknown field BESIDE such a
+    directive is the riskier case (it may carry merge semantics this engine does
+    not implement), so the forward-tolerant strip surfaces a louder warning.
     """
     return any(bool(mapping.get(key)) for key in _RECONCILIATION_DIRECTIVE_KEYS)
 
@@ -765,7 +552,7 @@ def _warn_reconciliation_adjacent_strip(fields: list[str]) -> None:
         sys.stderr.write(
             f"{prefix} dropping unrecognized key {field_path!r} from a tracked "
             f"file that declares a reconciliation directive "
-            f"(disposition/preserve_*); it may carry merge semantics this "
+            f"(disposition/spans); it may carry merge semantics this "
             f"setforge does not implement, so this file's reconciliation may be "
             f"INCOMPLETE on this engine — upgrade setforge to act on it\n"
         )
@@ -776,8 +563,8 @@ def _validate_tolerant(data: object) -> Config:
 
     Lets Pydantic decide what is genuinely extra — running ``model_validate``
     once and inspecting the error set. This correctly accounts for keys an
-    alias or a ``mode="before"`` validator legitimately consumes (e.g.
-    ``preserve_user_keys``), which a raw key-vs-``model_fields`` diff cannot
+    alias or a ``mode="before"`` validator legitimately consumes, which a raw
+    key-vs-``model_fields`` diff cannot
     see. If EVERY error is ``extra_forbidden`` (a newer-version field or a
     typo), strip exactly those locations, warn, and retry. Any non-extra
     error means a real validation failure and propagates unchanged.
@@ -958,75 +745,6 @@ def _warn_on_schema_mismatch(config: Config) -> None:
         f"but this setforge expects {current_expected_schema_version!r}; "
         f"run `setforge migrate --check` for details\n"
     )
-
-
-def apply_preserve_user_keys_overlay(
-    config: Config,
-    profile_name: str,
-    *,
-    local_config_path: Path | None = None,
-) -> None:
-    """Apply the local.yaml ``preserve_user_keys`` overlay (mockup B).
-
-    For every tracked_file in ``config.tracked_files``, rebuild
-    :attr:`TrackedFile.preserve_user_keys_resolved` against the
-    resolved chain's leaf ``profile_name`` and any matching entry in
-    the local.yaml ``tracked_files.<id>.preserve_user_keys`` overlay.
-    When ``local.yaml`` is absent, or the overlay block is empty for a
-    given tracked_file, the resolved list collapses to identity:
-    every YAML-declared key tagged :attr:`KeyOrigin.FROM_PROFILE`
-    against ``profile_name`` (anti-smell: must NOT special-case the
-    empty-overlay path).
-
-    The :mod:`setforge.source` import is lazy at the call boundary so
-    a circular import (config <-> source <-> config) cannot arise at
-    module-load time per the SPEC 8 discipline. Raises
-    :class:`PreserveUserKeysOverlayError` (a :class:`ConfigError`
-    subclass) when the overlay is contradictory or references an
-    unknown key — surface the violation immediately rather than
-    silently producing a wrong resolved list.
-    """
-    # Lazy-import to avoid a config <-> source cycle and to keep this
-    # path off the import-time graph for every command (compare /
-    # install / sync etc. each import setforge.config at boot).
-    from setforge.source import (
-        LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH,
-    )
-    from setforge.source import (
-        load_local_tracked_file_overlays,
-    )
-
-    path = local_config_path if local_config_path is not None else _LOCAL_CONFIG_PATH
-    overlays = load_local_tracked_file_overlays(path)
-    for tf_id, tracked_file in config.tracked_files.items():
-        # Today's resolved list (seeded from YAML input by the pre-validator)
-        # carries source_profile=None; the overlay applier re-stamps every
-        # FROM_PROFILE entry with the real profile_name and overlays the
-        # local.yaml add/remove block.
-        profile_keys = [
-            k.key
-            for k in tracked_file.preserve_user_keys_resolved
-            if k.origin == KeyOrigin.FROM_PROFILE
-        ]
-        overlay = overlays.get(tf_id)
-        overlay_add: list[str] = []
-        overlay_remove: list[str] = []
-        if overlay is not None and overlay.preserve_user_keys is not None:
-            overlay_add = list(overlay.preserve_user_keys.add)
-            overlay_remove = list(overlay.preserve_user_keys.remove)
-        resolved = resolve_overlay(
-            profile_keys=profile_keys,
-            profile_name=profile_name,
-            overlay_add=overlay_add,
-            overlay_remove=overlay_remove,
-        )
-        # Anti-smell: do NOT mutate Pydantic models in-place. Pydantic v2
-        # makes field assignment validating-by-default; build a fresh
-        # model and rebind in-place on the Config's mapping so existing
-        # ``config.tracked_files[id]`` callers see the new resolved list.
-        config.tracked_files[tf_id] = tracked_file.model_copy(
-            update={"preserve_user_keys_resolved": resolved}
-        )
 
 
 @dataclass(frozen=True, slots=True)

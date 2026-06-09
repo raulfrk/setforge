@@ -89,7 +89,6 @@ def test_copy_atomic_preserve_overlay_injects_once_markerless(tmp_path: Path) ->
     result = deploy.copy_atomic(
         src,
         dst,
-        preserve_user_sections=True,
         # host_local_sections is the PROJECTION — already contains the overlay name.
         host_local_sections={
             HostLocalSectionName("## Python"): _projected_section(body)
@@ -124,7 +123,6 @@ def test_projection_fed_overlay_never_double_injects(tmp_path: Path) -> None:
     deploy.copy_atomic(
         src,
         dst,
-        preserve_user_sections=True,
         # The PROJECTION already contains the overlay name (post-migration shape).
         host_local_sections={
             HostLocalSectionName("## Python"): _projected_section(body)
@@ -158,8 +156,6 @@ def test_capture_tracked_file_excises_markerless_overlay_body(tmp_path: Path) ->
     capture.capture_tracked_file(
         src,
         dst,
-        preserve_user_sections=True,
-        preserve_user_keys=[],
         spans=[_overlay_span("## Python", body)],
         span_states={},
     )

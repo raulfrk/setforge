@@ -49,8 +49,7 @@ from rich.console import Console
 from ruamel.yaml import YAML, YAMLError
 
 from setforge import jsonc, wizard
-from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, resolve_profile
+from setforge.config import Config
 from setforge.errors import CaptureRequiresInteractive
 from setforge.jsonc import PATH_SEPARATOR, preserved_positions_for_top
 from setforge.transitions import TransitionCommand
@@ -115,34 +114,15 @@ def walk_capture_drift(
         If set, only walk drift for the named tracked_file (top-level key in
         ``config.tracked_files``).
     """
-    resolved = resolve_profile(config, profile_name)
-    for name in resolved.tracked_files:
-        if tracked_file_filter is not None and name != tracked_file_filter:
-            continue
-        tracked_file = config.tracked_files[name]
-        if tracked_file.disposition is not None:
-            # Disposition-bearing tracked_files use the stored-base 3-way
-            # model, not the legacy 2-way merge wizard — capture gates
-            # them by disposition in ``capture_profile`` (shared captures
-            # verbatim + re-baselines; forked/pinned skip). Never prompt
-            # the legacy drift wizard for them.
-            continue
-        if tracked_file.preserve_user_sections:
-            # Markdown / section tracked_files — capture's section handling
-            # stays as today; not part of the wizard's contract.
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        dst = resolve_dst(tracked_file)
-        for _sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            if not sub_src.exists() or not sub_dst.exists():
-                continue
-            yield from _walk_one_file(
-                tracked_file_name=name,
-                src=sub_src,
-                dst=sub_dst,
-                preserve_user_keys=list(tracked_file.preserve_user_keys),
-                preserve_user_keys_deep=list(tracked_file.preserve_user_keys_deep),
-            )
+    # The legacy 2-way preserve_user_keys / preserve_user_keys_deep capture
+    # wizard was retired at schema 2.0: sub-file preservation now rides the
+    # disposition stored-base 3-way model + spans (whose capture handling lives
+    # in capture._capture_disposition_file). No tracked_file carries the legacy
+    # preserve fields any more, so there is never any legacy 2-way drift to
+    # walk — this generator yields nothing.
+    _ = (config, profile_name, repo_root, tracked_file_filter)
+    return
+    yield  # type: ignore[unreachable]
 
 
 def _walk_one_file(

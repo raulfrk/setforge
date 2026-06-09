@@ -219,34 +219,6 @@ def test_json_null_disposition_for_non_disposition_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_regression_no_disposition_drifted(tmp_path: Path) -> None:
-    """REGRESSION: plain drifted file (no disposition) still works as before.
-
-    has_unexpected_drift stays True, expected/unexpected_drift_keys intact,
-    disposition is None, drift_is_expected is False.
-    """
-    repo = tmp_path / "repo"
-    src = repo / "tracked" / "x.yaml"
-    _write(src, "a: 1\nb: 2\n")
-    dst = tmp_path / "live" / "x.yaml"
-    _write(dst, "a: 99\nb: 2\n")
-
-    config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x.yaml", "dst": str(dst), "preserve_user_keys": ["a"]}
-        )
-    )
-    report = compare_profile(config, "p", repo)
-    entry = report.entries[0]
-
-    assert entry.disposition is None
-    assert entry.status is CompareStatus.DRIFTED
-    assert entry.expected_drift_keys == ["a"]
-    assert entry.unexpected_drift_keys == []
-    assert entry.drift_is_expected is False
-    assert report.has_unexpected_drift is False
-
-
 def test_regression_no_disposition_unexpected_drift(tmp_path: Path) -> None:
     """REGRESSION: None-disposition file with unexpected drift unchanged."""
     repo = tmp_path / "repo"
@@ -265,17 +237,15 @@ def test_regression_no_disposition_unexpected_drift(tmp_path: Path) -> None:
     assert report.has_unexpected_drift is True
 
 
-def test_regression_json_fields_intact_for_preserve_file(tmp_path: Path) -> None:
-    """REGRESSION: JSON output for a preserve_user_keys file has all original fields."""
+def test_regression_json_fields_intact_for_plain_file(tmp_path: Path) -> None:
+    """REGRESSION: JSON output for a plain drifted file has all original fields."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x.yaml", "a: 1\nb: 2\n")
     dst = tmp_path / "live" / "x.yaml"
     _write(dst, "a: 99\nb: 88\n")
 
     config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x.yaml", "dst": str(dst), "preserve_user_keys": ["a"]}
-        )
+        TrackedFile.model_validate({"src": "x.yaml", "dst": str(dst)})
     )
     report = compare_profile(config, "p", repo)
     data = _compare_json_data(report)

@@ -135,7 +135,6 @@ def _run_profile_show(
         _render_host_local_sections(profile_ctx, console)
         _render_bootstrap(profile_ctx, console)
         _render_extensions(profile_ctx, console)
-        _render_preserve_user_keys(profile_ctx, console)
 
     render(
         ctx_obj, "profile show", _profile_show_json_data(profile_ctx), human_fn=_human
@@ -153,16 +152,10 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
     that needs provenance should parse ``setforge.yaml`` directly.
     """
     resolved = profile_ctx.resolved
+    # The legacy preserve_user_keys model was retired at schema 2.0 (sub-file
+    # preservation now rides disposition + spans). The JSON envelope keeps the
+    # key for back-compat but it is always empty.
     preserve_keys: dict[str, list[str]] = {}
-    for tf_name in resolved.tracked_files:
-        tracked_file = profile_ctx.cfg.tracked_files.get(tf_name)
-        if tracked_file is None:
-            continue
-        keys = list(tracked_file.preserve_user_keys) + list(
-            tracked_file.preserve_user_keys_deep
-        )
-        if keys:
-            preserve_keys[tf_name] = keys
     marketplaces_payload: list[dict[str, str]] = []
     for mp_name, src in profile_ctx.cfg.marketplaces.items():
         target = src.repo if src.repo is not None else str(src.path)
@@ -461,28 +454,3 @@ def _extensions_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str
             )
         )
     return out
-
-
-def _render_preserve_user_keys(ctx: ProfileContext, console: Console) -> None:
-    """Render preserve_user_keys per tracked file in the resolved profile.
-
-    Collects every tracked_file referenced by the resolved profile that
-    declares a non-empty ``preserve_user_keys`` (or
-    ``preserve_user_keys_deep``) list, and prints one block per file
-    with the key paths inline. The ``local.yaml`` overlay diff for these
-    keys is out of scope here; the pending-overlay note
-    communicates that to the reader.
-    """
-    rows: list[tuple[str, list[str]]] = []
-    for tf_name in ctx.resolved.tracked_files:
-        tf = ctx.cfg.tracked_files.get(tf_name)
-        if tf is None:
-            continue
-        keys = list(tf.preserve_user_keys) + list(tf.preserve_user_keys_deep)
-        if keys:
-            rows.append((tf_name, keys))
-    console.print(f"preserve_user_keys: {len(rows)} files")
-    for tf_name, keys in rows:
-        joined = ", ".join(keys)
-        console.print(f"  {tf_name}: {len(keys)} keys ({joined})")
-    console.print(f"  {_OVERLAY_PENDING_NOTE}")

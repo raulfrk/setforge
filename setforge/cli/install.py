@@ -40,7 +40,6 @@ from setforge.cli._helpers import (
 )
 from setforge.cli._install_helpers import (
     _build_conflict_resolver,
-    _compute_preserve_user_keys_applied,
     _deploy_all_tracked_files,
     _dry_run_pipeline,
     _load_validated_host_local_sections,
@@ -49,9 +48,7 @@ from setforge.cli._install_helpers import (
     _run_predeploy_gates,
     _validate_span_file_types,
     _write_install_transition,
-    migrate_host_local_markers_on_install,
     migrate_local_overlay_spans_on_install,
-    seed_host_local_marker_snapshot,
     seed_overlay_migration_snapshot,
 )
 from setforge.cli._plugin_helpers import (
@@ -70,7 +67,6 @@ from setforge.cli._welcome import (
 from setforge.config import (
     apply_host_local_tracked_file_overrides,
     apply_local_overlay,
-    apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
 )
@@ -188,14 +184,6 @@ def install(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    # Apply local.yaml preserve_user_keys overlay (mockup B / SPEC 8)
-    # AFTER profile resolution: the overlay needs the profile chain's
-    # leaf name to stamp FROM_PROFILE entries; the resolved profile is
-    # the canonical source of that name. Every TrackedFile is rebuilt
-    # with a fresh preserve_user_keys_resolved list; the @computed_field
-    # preserve_user_keys derived view stays back-compat for callers
-    # that don't read provenance.
-    apply_preserve_user_keys_overlay(cfg, profile)
     # Resolve host-local↔shared span intent collisions BEFORE the overlay
     # fold so the chosen winner per collided anchor flows into the fold.
     # Bare install stays silent host-local-wins; --auto routes the
@@ -345,24 +333,6 @@ def install(
         # See `precomputed_live_sections` on copy_atomic.
         live_sections_map = _extract_live_sections_map(ctx)
 
-        # 14.17: capture each live host-local marker body into a local.yaml
-        # OVERLAY span BEFORE deploy's blanket strip would delete it. Runs AFTER
-        # the drift gate (so compare saw the consistent pre-migration state) and
-        # BEFORE the transition snapshot + deploy. On a real capture, re-resolve
-        # the host-local overlay from the rewritten local.yaml so THIS install's
-        # deploy renders the bodies markerless (single-install convergence); the
-        # anchor-keyed span fold makes the re-resolution idempotent.
-        marker_migration = migrate_host_local_markers_on_install(
-            cfg, resolved, repo_root
-        )
-        if marker_migration.migrated:
-            apply_host_local_tracked_file_overrides(
-                cfg, prefer_shared_anchors=prefer_shared_anchors
-            )
-            host_local_sections_map = _load_validated_host_local_sections(
-                cfg, resolved, repo_root
-            )
-
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
         # path itself: GNU patch refuses to patch a symlink as a regular
@@ -386,12 +356,6 @@ def install(
         # post-migration content; seed file_pre with the genuine pre-migration
         # text) so revert restores it byte-exact in LOCKSTEP with live.
         seed_overlay_migration_snapshot(overlay_migration, dst_paths, file_pre)
-        # 14.17: record the host-local marker capture in the transition with
-        # earliest-wins file_pre coordination vs the 10.2 seed above, so revert
-        # restores the pre-migration local.yaml byte-for-byte.
-        seed_host_local_marker_snapshot(
-            marker_migration, overlay_migration, dst_paths, file_pre
-        )
 
         # Interactive disposition conflict wizard: built ONLY when this install
         # is in interactive-reconcile mode AND stdout is a tty (the same gate
@@ -435,7 +399,6 @@ def install(
                 plugin_delta,
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
-                preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")

@@ -57,10 +57,8 @@ from setforge.cli._helpers import (
     _resolve_drift_paths,
 )
 from setforge.cli._install_helpers import (
-    _compute_preserve_user_keys_applied,
     _load_validated_host_local_sections,
 )
-from setforge.compare import resolve_dst, resolve_src
 from setforge.config import (
     Config,
     apply_host_local_tracked_file_overrides,
@@ -364,7 +362,6 @@ def _write_sync_transition(
             ctx.profile,
             end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
             command_line=redact_argv(sys.argv[1:]),
-            preserve_user_keys_applied=_compute_preserve_user_keys_applied(ctx),
         ),
         file_pre,
         file_post,
@@ -485,15 +482,10 @@ def _iter_promotable_tracked_files(
     tracked_files use the symlink path as ``live_path`` — the wizard's
     promote dispatch reads/writes through it identically.
     """
-    out: list[tuple[str, Path, Path]] = []
-    for name in ctx.resolved.tracked_files:
-        tracked_file = ctx.cfg.tracked_files[name]
-        if not tracked_file.preserve_user_sections:
-            continue
-        src = resolve_src(tracked_file, ctx.repo_root)
-        dst = resolve_dst(tracked_file)
-        out.append((name, src, dst))
-    return out
+    # The legacy preserve_user_sections section-reconcile model was retired at
+    # schema 2.0, so no tracked_file is "section-bearing" any more — this list
+    # is always empty (the section-promote wizard is inert).
+    return []
 
 
 def _capture_extensions(config: Path, profile: str) -> None:

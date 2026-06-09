@@ -40,23 +40,6 @@ def test_disposition_rejects_bad_value(bad: str) -> None:
         _tf(disposition=bad)
 
 
-@pytest.mark.parametrize(
-    "legacy",
-    [
-        {"preserve_user_sections": True},
-        {"preserve_user_keys": ["a"]},
-        {"preserve_user_keys_deep": ["a"]},
-    ],
-)
-def test_disposition_mutually_exclusive_with_legacy(legacy: dict[str, object]) -> None:
-    with pytest.raises(ValidationError, match="disposition"):
-        _tf(disposition="shared", **legacy)
-
-
-def test_no_disposition_allows_legacy() -> None:
-    assert _tf(preserve_user_keys=["a"]).disposition is None
-
-
 # ---------------------------------------------------------------------------
 # local.yaml per-host disposition override tests
 # ---------------------------------------------------------------------------
@@ -67,20 +50,6 @@ _BASE_YAML = (
     "  hook:\n"
     "    src: hook.sh\n"
     "    dst: ~/.tracked-host/hook.sh\n"
-    "profiles:\n"
-    "  p:\n"
-    "    tracked_files:\n"
-    "      - hook\n"
-)
-
-_BASE_YAML_WITH_PRESERVE = (
-    "version: 1\n"
-    "tracked_files:\n"
-    "  hook:\n"
-    "    src: hook.sh\n"
-    "    dst: ~/.tracked-host/hook.sh\n"
-    "    preserve_user_keys:\n"
-    "      - some_key\n"
     "profiles:\n"
     "  p:\n"
     "    tracked_files:\n"
@@ -119,24 +88,6 @@ def test_disposition_override_forked_propagates(tmp_path: Path) -> None:
     assert applied["hook"].symlink_target is None
     # TrackedFile reflects the override after resolution.
     assert cfg.tracked_files["hook"].disposition is Disposition.FORKED
-
-
-def test_disposition_override_conflicts_with_legacy_preserve_raises(
-    tmp_path: Path,
-) -> None:
-    """disposition override + existing preserve_user_keys triggers ValidationError.
-
-    The dump-and-revalidate path re-runs _disposition_excludes_legacy_preserve
-    against the merged shape, so a local.yaml that tries to add disposition to
-    a file that already carries a legacy preserve field is correctly rejected.
-    """
-    (tmp_path / "local.yaml").write_text(
-        "tracked_files:\n  hook:\n    disposition: shared\n",
-        encoding="utf-8",
-    )
-    cfg = _load(tmp_path, _BASE_YAML_WITH_PRESERVE)
-    with pytest.raises(ValidationError, match="disposition"):
-        apply_host_local_tracked_file_overrides(cfg)
 
 
 @pytest.mark.parametrize("bad", ["Shared", "bogus", "FORKED", "fork "])

@@ -59,15 +59,11 @@ def test_empty_overlay_returns_no_applied_entries(tmp_path: Path) -> None:
     assert cfg.tracked_files["hook"].symlink is None
 
 
-def test_overlay_with_only_preserve_user_keys_is_no_op(tmp_path: Path) -> None:
-    """An overlay that only declares preserve_user_keys / host_local_sections
-    does not trigger the overlay-fields applied-entry surface."""
+def test_overlay_with_no_overlay_fields_is_no_op(tmp_path: Path) -> None:
+    """An overlay entry that declares no overlay-fields (mode / dst /
+    symlink / disposition) does not trigger the applied-entry surface."""
     (tmp_path / "local.yaml").write_text(
-        "tracked_files:\n"
-        "  hook:\n"
-        "    preserve_user_keys:\n"
-        "      add: []\n"
-        "      remove: []\n",
+        "tracked_files:\n  hook: {}\n",
         encoding="utf-8",
     )
     cfg = _load(tmp_path)

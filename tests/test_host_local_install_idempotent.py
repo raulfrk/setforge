@@ -38,9 +38,7 @@ def test_install_after_heading_invariant_holds(tmp_path: Path) -> None:
             body="WORK OVERRIDES CONTENT",
         )
     }
-    result = copy_atomic(
-        src, dst, preserve_user_sections=True, host_local_sections=host_local
-    )
+    result = copy_atomic(src, dst, host_local_sections=host_local)
     assert result.action is DeployAction.CREATED
     text = dst.read_text(encoding="utf-8")
     assert "WORK OVERRIDES CONTENT" in text
@@ -55,8 +53,8 @@ def test_install_idempotent_re_run_no_duplication(tmp_path: Path) -> None:
             anchor=AnchorAfterHeading(value="Workflow"), body="initial body"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
     text = dst.read_text(encoding="utf-8")
     assert text.count("start host-local section-a") == 1
     assert extract_marker_hashes(text) == hash_sections(text)
@@ -70,13 +68,13 @@ def test_install_idempotent_body_update_replaces_in_place(tmp_path: Path) -> Non
             anchor=AnchorAfterHeading(value="Workflow"), body="version-1"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=initial)
+    copy_atomic(src, dst, host_local_sections=initial)
     updated = {
         HostLocalSectionName("s"): HostLocalSection(
             anchor=AnchorAfterHeading(value="Workflow"), body="version-2"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=updated)
+    copy_atomic(src, dst, host_local_sections=updated)
     text = dst.read_text(encoding="utf-8")
     assert "version-2" in text
     assert "version-1" not in text
@@ -92,9 +90,7 @@ def test_install_anchor_not_found_raises_no_file_modified(tmp_path: Path) -> Non
         )
     }
     with pytest.raises(AnchorNotFoundError):
-        copy_atomic(
-            src, dst, preserve_user_sections=True, host_local_sections=host_local
-        )
+        copy_atomic(src, dst, host_local_sections=host_local)
     # Hard-fail contract: no live file written on the failed install.
     assert not dst.exists()
 
@@ -107,7 +103,7 @@ def test_install_at_end_of_file_appends_marker_pair(tmp_path: Path) -> None:
             anchor=AnchorAtEndOfFile(), body="tail body"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
     text = dst.read_text(encoding="utf-8")
     assert "tail body" in text
     assert extract_marker_hashes(text) == hash_sections(text)
@@ -121,7 +117,7 @@ def test_install_section_keyed_in_extract_sections(tmp_path: Path) -> None:
             anchor=AnchorAfterHeading(value="Workflow"), body="body content\n"
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
     text = dst.read_text(encoding="utf-8")
     sections = extract_sections(text)
     assert "named-section" in sections

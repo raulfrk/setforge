@@ -271,7 +271,13 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
         if entry.status is not CompareStatus.DRIFTED:
             continue
         tracked_file = ctx.cfg.tracked_files.get(entry.name.split("/", 1)[0])
-        section_bearing = bool(tracked_file and tracked_file.preserve_user_sections)
+        # A file under the unified reconcile model (a disposition or any span)
+        # has managed sub-file drift — the closest analog to the retired
+        # preserve_user_sections "section-bearing" categorization.
+        section_bearing = bool(
+            tracked_file
+            and (tracked_file.disposition is not None or tracked_file.spans)
+        )
         if entry.unexpected_drift_keys:
             unexpected += 1
         elif entry.diff and section_bearing:

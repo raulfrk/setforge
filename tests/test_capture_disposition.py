@@ -173,50 +173,6 @@ def test_pinned_skips_capture_and_leaves_base(repo: Path) -> None:
     assert base_store.read_base(_PROFILE, _FILE_ID) == base_before
 
 
-def test_none_disposition_regression_preserve_user_keys(
-    repo: Path,
-) -> None:
-    """None disposition + preserve_user_keys: legacy capture path unchanged.
-
-    The host-local key is stripped from the captured tracked source and
-    the non-preserve key is absorbed — exactly the pre-disposition
-    behavior.
-    """
-    config = repo / "setforge.yaml"
-    config.write_text(
-        "version: 1\n"
-        "tracked_files:\n"
-        "  settings:\n"
-        "    src: yaml/settings.yaml\n"
-        "    dst: ~/.setforge_disp/settings.yaml\n"
-        "    preserve_user_keys:\n"
-        "      - host_key\n"
-        "profiles:\n"
-        f"  {_PROFILE}:\n"
-        "    tracked_files:\n"
-        "      - settings\n",
-        encoding="utf-8",
-    )
-    src = repo / "tracked" / "yaml" / "settings.yaml"
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text("shared_key: tracked\n", encoding="utf-8")
-
-    assert _install(config).exit_code == 0
-    live = Path.home() / ".setforge_disp" / "settings.yaml"
-    # Live now carries the tracked shared_key; user adds a host-local key
-    # and edits the shared one.
-    live.write_text("shared_key: live\nhost_key: secret\n", encoding="utf-8")
-
-    result = _sync(config)
-    assert result.exit_code == 0, result.output
-    captured = src.read_text(encoding="utf-8")
-    # Shared key absorbed; host-local preserve key stripped from tracked.
-    assert "shared_key: live" in captured
-    assert "host_key" not in captured
-    # A None-disposition file never gets a stored base.
-    assert base_store.read_base(_PROFILE, "settings") is None
-
-
 def test_shared_structural_span_excluded_from_drift_absorption(repo: Path) -> None:
     """B-S5: a structural span path is excluded from ``sync`` drift absorption.
 

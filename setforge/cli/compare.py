@@ -33,7 +33,6 @@ from setforge.config import (
     Config,
     apply_host_local_tracked_file_overrides,
     apply_local_overlay,
-    apply_preserve_user_keys_overlay,
     load_config,
     resolve_profile,
 )
@@ -45,7 +44,7 @@ from setforge.source import HostLocalSection, HostLocalSectionName
 
 
 @app.command(epilog=COMPARE_EXAMPLES)
-def compare(  # noqa: C901 — option-combo guard adds one branch over the threshold; splitting the CLI entrypoint would obscure the option model
+def compare(
     ctx: typer.Context,
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
@@ -79,11 +78,6 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    # Apply local.yaml preserve_user_keys overlay (mockup B / SPEC 8).
-    # See setforge/cli/install.py for the rationale; both commands must
-    # apply the overlay so the renderer can read preserve_user_keys_resolved
-    # for the mockup-B provenance display.
-    apply_preserve_user_keys_overlay(cfg, profile)
     # Apply local.yaml host-local mode/dst/symlink_target overlay.
     # Captures the per-tracked_file override mapping
     # so the renderer can emit ``[host-local mode=...]`` /
@@ -121,15 +115,6 @@ def compare(  # noqa: C901 — option-combo guard adds one branch over the thres
     console = Console()
 
     def _human() -> None:
-        # Mockup B / SPEC 8 — emit the host-overlay block BEFORE the
-        # drift summary so its provenance display sits adjacent to the
-        # configured-keys-on-this-host context, not buried below the
-        # per-file diff bodies.
-        for line in compare_mod.render_preserve_user_keys_overlay_block(cfg, resolved):
-            # markup=False — mockup-B provenance tags use square brackets
-            # (e.g. ``[from local.yaml]``) which Rich would otherwise
-            # interpret as markup spans and silently strip.
-            console.print(line, markup=False)
         # Render host-local mode/dst/symlink_target
         # override provenance tags. Same markup=False discipline as
         # the preserve_user_keys block — the tags carry square brackets.

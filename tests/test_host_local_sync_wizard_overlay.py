@@ -48,7 +48,6 @@ def overlay_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "  host_local_md:\n"
         "    src: section.md\n"
         f"    dst: {dst}\n"
-        "    preserve_user_sections: true\n"
         "profiles:\n"
         "  p:\n"
         "    tracked_files: [host_local_md]\n",
@@ -62,7 +61,7 @@ def overlay_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
             body="WORK OVERRIDES",
         )
     }
-    copy_atomic(src, dst, preserve_user_sections=True, host_local_sections=host_local)
+    copy_atomic(src, dst, host_local_sections=host_local)
 
     # Stub load_local_host_local_sections to return our test overlay so the
     # CLI's _load_validated_host_local_sections (which calls this loader

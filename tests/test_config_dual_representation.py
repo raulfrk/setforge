@@ -1,7 +1,9 @@
-"""Proof that legacy preserve_* and disposition reconciliation models coexist.
+"""Proof for the disposition reconciliation model's loader behavior.
 
 Drives the production loader (setforge.config.load_config / Config.model_validate /
-_validate_tolerant) — never a frozen pre-disposition model fixture.
+_validate_tolerant) — never a frozen pre-disposition model fixture. The legacy
+preserve_* reconciliation model was retired at schema 2.0; a disposition file is
+now the sole reconciliation directive the loader escalates unknown keys beside.
 """
 
 from __future__ import annotations
@@ -42,28 +44,21 @@ def _cfg(*tracked_blocks: str) -> str:
     )
 
 
-_LEGACY = (
-    "  legacy:\n"
-    "    src: legacy.md\n"
-    "    dst: ~/legacy.md\n"
-    "    preserve_user_sections: true\n"
-)
 _MANAGED = (
     "  managed:\n    src: managed.md\n    dst: ~/managed.md\n    disposition: shared\n"
 )
 _PLAIN = "  plain:\n    src: plain.md\n    dst: ~/plain.md\n"
 
 
-# --- Proof 1: mixed config validates both modes, no warning ---
+# --- Proof 1: disposition config validates with no spurious warning ---
 
 
-def test_mixed_config_loads_both_modes_no_warnings(
+def test_disposition_config_loads_no_warnings(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cfg_path = _write(tmp_path, _cfg(_LEGACY, _MANAGED))
+    cfg_path = _write(tmp_path, _cfg(_MANAGED))
     for tolerate in (True, False):
         cfg = load_config(cfg_path, tolerate_unknown=tolerate)
-        assert cfg.tracked_files["legacy"].preserve_user_sections is True
         assert cfg.tracked_files["managed"].disposition is Disposition.SHARED
     err = capsys.readouterr().err
     assert _GENERIC not in err
@@ -104,23 +99,6 @@ def test_unknown_key_on_plain_file_is_generic_only(
     assert err.count(_GENERIC) == 1
 
 
-# --- Proof 3a: both-fields file is rejected by the new engine in both loader modes ---
-
-
-def test_both_fields_rejected_both_modes(tmp_path: Path) -> None:
-    both = (
-        "  both:\n"
-        "    src: both.md\n"
-        "    dst: ~/both.md\n"
-        "    disposition: shared\n"
-        "    preserve_user_sections: true\n"
-    )
-    cfg_path = _write(tmp_path, _cfg(both))
-    for tolerate in (True, False):
-        with pytest.raises(ValidationError, match="disposition"):
-            load_config(cfg_path, tolerate_unknown=tolerate)
-
-
 # --- Proof 3b: predicate + partition logic (disposition-strip case) ---
 
 
@@ -128,9 +106,7 @@ def test_both_fields_rejected_both_modes(tmp_path: Path) -> None:
     "mapping",
     [
         {"disposition": "shared"},
-        {"preserve_user_sections": True},
-        {"preserve_user_keys": ["a"]},
-        {"preserve_user_keys_deep": ["a"]},
+        {"spans": [{"anchor": "## a", "kind": "pinned", "semantics": "shared"}]},
     ],
 )
 def test_has_reconciliation_directive_true(mapping: dict[str, object]) -> None:
@@ -142,9 +118,8 @@ def test_has_reconciliation_directive_true(mapping: dict[str, object]) -> None:
     [
         {},
         {"src": "a.md", "dst": "~/a.md"},
-        {"preserve_user_sections": False},
-        {"preserve_user_keys": []},
-        {"preserve_user_sections_mode": "keep_defaults"},
+        {"disposition": None},
+        {"spans": []},
     ],
 )
 def test_has_reconciliation_directive_false(mapping: dict[str, object]) -> None:

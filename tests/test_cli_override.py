@@ -262,27 +262,6 @@ def test_show_spans_orphaned_column_marks_missing_anchor(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_guard_legacy_preserve_refused(tmp_path: Path) -> None:
-    """pin on a legacy preserve_* file is refused with a clear error (I14)."""
-    cfg = _make_repo(tmp_path)
-    body = (
-        "version: 1\n"
-        "tracked_files:\n"
-        "  doc:\n"
-        "    src: doc.md\n"
-        "    dst: ~/.x/doc.md\n"
-        "    preserve_user_sections: true\n"
-        "profiles:\n"
-        "  p:\n"
-        "    tracked_files:\n"
-        "      - doc\n"
-    )
-    cfg.write_text(body, encoding="utf-8")
-    result = _invoke(cfg, "override", "pin", "doc")
-    assert result.exit_code != 0
-    assert "preserve" in result.output.lower()
-
-
 def test_guard_wrong_file_type_heading_on_yaml(tmp_path: Path) -> None:
     """A heading anchor on a structural file is refused at parse time."""
     cfg = _make_repo(tmp_path)

@@ -24,7 +24,6 @@ the CLI layer renders this as a non-zero exit with a clear migration
 hint.
 """
 
-import io
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -33,7 +32,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
-from ruamel.yaml import YAML
 
 from setforge import (
     base_store,
@@ -43,11 +41,9 @@ from setforge import (
     sections,
     spans_overlay,
     spans_store,
-    yaml_merge,
 )
-from setforge.capture_wizard import run_capture_wizard, walk_capture_drift
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, Disposition, SectionMode, resolve_profile
+from setforge.config import Config, Disposition, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
@@ -87,10 +83,6 @@ def capture_tracked_file(
     src: Path,
     dst: Path,
     *,
-    preserve_user_sections: bool,
-    preserve_user_keys: list[str],
-    preserve_user_keys_deep: list[str] | None = None,
-    preserve_user_sections_mode: SectionMode = SectionMode.KEEP_DEFAULTS,
     host_local_section_names: frozenset[str] = frozenset(),
     spans: list[SpanEntry] | None = None,
     span_states: dict[str, "spans_store.SpanState"] | None = None,
@@ -100,147 +92,53 @@ def capture_tracked_file(
     interactive: bool = False,
     local_config_path: Path | None = None,
 ) -> CaptureResult:
-    """Write a stripped version of ``dst`` (live) back to ``src`` (tracked).
+    """Write ``dst`` (live) back to ``src`` (tracked) for a disposition=None file.
 
-    Empty ``preserve_user_keys`` and ``preserve_user_sections`` mean a
-    direct copy. Returns :class:`CaptureResult.NOOP` if the resulting
-    tracked content is byte-identical to the existing tracked file.
+    A ``disposition=None`` tracked_file deploys tracked verbatim, so capture is
+    a wholesale live → tracked writeback — EXCEPT host-local content, which must
+    never leak into the shared tracked source:
 
-    ``preserve_user_sections_mode`` decides whether marker bodies in
-    tracked are preserved (``KEEP_DEFAULTS``, default) or wiped
-    (``STRIP``). KEEP_DEFAULTS falls back to STRIP semantics when src
-    doesn't yet exist — no defaults to preserve.
+    - markerless host-local OVERLAY bodies (carried in local.yaml) are excised
+      by their exact recorded bytes via :func:`_capture_overlay_bodies` (a
+      hand-edited body routes to the keep/discard wizard);
+    - legacy ``host_local_sections`` marker pairs injected by ``install`` are
+      name-scoped stripped via :func:`sections.strip_host_local_sections`.
 
-    ``preserve_user_keys_deep`` signals that
-    tracked-only sub-keys at those paths must survive the live → tracked
-    overlay. The capture-time wizard (fired by :func:`capture_profile`
-    upstream) mutates tracked in place at the per-sub-key level before
-    this function runs. When tracked already exists this function reads
-    post-wizard tracked content and avoids clobbering tracked-only
-    top-level keys; the resulting writeback is a defensive
-    shallow-preserve strip + section handling on the post-wizard
-    tracked, NOT a wholesale live-stripped overwrite.
+    Returns :class:`CaptureResult.NOOP` when the resulting tracked content is
+    byte-identical to the existing tracked file, or SKIPPED when live is absent.
     """
     if not dst.exists():
         return CaptureResult(
             name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
         )
 
-    if preserve_user_sections:
-        # Markdown / preserve_user_sections path: capture's section
-        # handling is unchanged from pre-`capture-wizard` (the capture-time wizard
-        # does not fire for these tracked_files). Read live, optionally
-        # strip shallow keys, merge tracked sections.
-        content = _read_with_shallow_strip(dst, preserve_user_keys)
-        # MARKERLESS host-local OVERLAY bodies (14.17) own their excise:
-        # `install` injects them without markers, so the name-scoped marker
-        # strip below cannot see them — they would round-trip into the shared
-        # tracked source on the next `sync` (a host-state leak). Strip each
-        # overlay body by its exact recorded bytes BEFORE merging tracked
-        # sections, mirroring the disposition path's `_capture_overlay_bodies`
-        # (a hand-edited body routes to the keep/discard wizard; an
-        # unlocatable deployed body fails closed). Runs only when overlay
-        # spans exist, so legacy-only preserve files are byte-for-byte
-        # untouched.
-        md_overlay = overlay_deploy.overlay_spans(spans) if spans else []
-        if md_overlay:
-            content = _capture_overlay_bodies(
-                content,
-                md_overlay,
-                span_states or {},
-                sub_name=sub_name,
-                tracked_file_id=tracked_file_id,
-                auto=auto,
-                interactive=interactive,
-                local_config_path=local_config_path,
-            )
-        # drop host-local marker pairs + bodies that were
-        # injected by `setforge install` (via local.yaml
-        # host_local_sections) from the captured live text BEFORE
-        # merging tracked sections. Without this strip the host-local
-        # markers round-trip into the tracked source on the next
-        # `setforge sync` — a leak of host state into shared tracked
-        # content. The strip is name-scoped to ``host_local_section_names``
-        # (loaded by ``setforge.cli.sync`` at the boundary): any
-        # host-local marker pair the user authored directly in tracked
-        # is NOT in that set and passes through unchanged.
+    content = dst.read_text(encoding="utf-8")
+    # MARKERLESS host-local OVERLAY bodies own their excise: install injects
+    # them without markers, so the name-scoped marker strip below cannot see
+    # them — they would round-trip into the shared tracked source (a host-state
+    # leak). Runs only when overlay spans exist, so files without host-local
+    # overlays are byte-for-byte the live content.
+    md_overlay = overlay_deploy.overlay_spans(spans) if spans else []
+    if md_overlay:
+        content = _capture_overlay_bodies(
+            content,
+            md_overlay,
+            span_states or {},
+            sub_name=sub_name,
+            tracked_file_id=tracked_file_id,
+            auto=auto,
+            interactive=interactive,
+            local_config_path=local_config_path,
+        )
+    # Drop legacy host-local marker pairs + bodies injected by install (via
+    # local.yaml host_local_sections) before the writeback. Name-scoped to
+    # ``host_local_section_names`` so a host-local marker the user authored
+    # directly in tracked passes through unchanged.
+    if host_local_section_names:
         content = sections.strip_host_local_sections(
             content, names=host_local_section_names, allow_legacy=True
         )
-        if preserve_user_sections_mode is SectionMode.KEEP_DEFAULTS and src.exists():
-            tracked_text = src.read_text(encoding="utf-8")
-            tracked_sections = sections.extract_sections(tracked_text)
-            content = sections.merge_sections(content, tracked_sections)
-        else:
-            content = sections.strip_section_content(content, allow_legacy=True)
-        return _write_if_changed(src, content)
-
-    if not src.exists():
-        # Fresh capture (no tracked) — today's behavior: strip shallow
-        # preserves from live, write to tracked. Deep paths can't apply
-        # here because there's nothing to preserve on the tracked side.
-        content = _read_with_shallow_strip(dst, preserve_user_keys)
-        src.parent.mkdir(parents=True, exist_ok=True)
-        src.write_text(content, encoding="utf-8")
-        return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
-
-    # Tracked exists, no section handling.
-    has_structured_preserve = bool(preserve_user_keys) or bool(preserve_user_keys_deep)
-
-    if not has_structured_preserve:
-        # No preserve declarations on this tracked_file — capture's
-        # contract for unstructured files (plain text, markdown
-        # without sections, list-only YAML) is unchanged from
-        # pre-`capture-wizard`: wholesale live → tracked. The capture-time
-        # wizard didn't fire here (the walker silently skips files
-        # whose parsed root isn't a dict), so live's content is
-        # the desired tracked content.
-        return _write_if_changed(src, dst.read_text(encoding="utf-8"))
-
-    # Structured file with at least one preserve declaration. The
-    # capture-time wizard (upstream) has already absorbed every drift
-    # item into tracked at the per-key level (deep sub-keys via deep
-    # overlay; non-preserve top-level via shallow overlay).
-    # Tracked-only top-level keys and tracked-only deep sub-keys
-    # survive untouched.
-    #
-    # Defensively strip any shallow-preserve content from tracked — it
-    # shouldn't be there post-wizard but the strip is the canonical
-    # enforcement of the shallow-preserve contract. When only
-    # preserve_user_keys_deep is set, tracked is already in the desired
-    # state and we just round-trip the file.
-    content = _read_with_shallow_strip(src, preserve_user_keys)
     return _write_if_changed(src, content)
-
-
-def _read_with_shallow_strip(path: Path, preserve_user_keys: list[str]) -> str:
-    """Return ``path`` contents with any ``preserve_user_keys`` stripped.
-
-    Dispatches to JSONC or YAML strip per the file's extension; falls
-    back to a plain read when no shallow keys are declared.
-    """
-    if not preserve_user_keys:
-        return path.read_text(encoding="utf-8")
-    if jsonc.is_jsonc_file(path):
-        return _strip_shallow_keys_jsonc(path, preserve_user_keys)
-    return _strip_shallow_keys_yaml(path, preserve_user_keys)
-
-
-def _strip_shallow_keys_jsonc(path: Path, preserve_user_keys: list[str]) -> str:
-    """Read JSONC ``path`` and drop every top-level key in ``preserve_user_keys``."""
-    text = path.read_text(encoding="utf-8")
-    return jsonc.strip_user_keys(text, preserve_user_keys)
-
-
-def _strip_shallow_keys_yaml(path: Path, preserve_user_keys: list[str]) -> str:
-    """Read YAML ``path``, drop ``preserve_user_keys``, return round-tripped text."""
-    yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        doc = yaml.load(fh)
-    yaml_merge.delete_keys(doc, preserve_user_keys)
-    buf = io.StringIO()
-    yaml.dump(doc, buf)
-    return buf.getvalue()
 
 
 def _write_if_changed(src: Path, content: str) -> CaptureResult:
@@ -316,31 +214,9 @@ def capture_profile(
 
         local_config_path = LOCAL_CONFIG_PATH
 
-    items = list(walk_capture_drift(config, profile_name, repo_root))
-    if items:
-        if not interactive and auto is None:
-            raise CaptureRequiresInteractive(
-                f"capture would prompt for {len(items)} drift item(s); "
-                f"run interactively or pass --auto=use-live / "
-                f"--auto=keep-tracked."
-            )
-        auto_accept_map: dict[CaptureAuto | None, str | None] = {
-            CaptureAuto.USE_LIVE: "u",
-            CaptureAuto.KEEP_TRACKED: "k",
-            None: None,
-        }
-        run_capture_wizard(
-            config,
-            profile_name,
-            repo_root,
-            setforge_yaml_path=setforge_yaml_path,
-            snapshot_base=snapshot_base,
-            console=console,
-            auto_accept=auto_accept_map[auto],
-        )
-
-    # Post-wizard writeback: per-tracked_file, against the tracked content
-    # the wizard left behind (or unchanged tracked if no drift).
+    # The disposition path runs its own per-conflict capture handling
+    # (_capture_disposition_file); disposition=None files capture live verbatim
+    # minus host-local overlays. Per-tracked_file writeback below.
     overlay = host_local_sections_map or {}
     results: list[CaptureResult] = []
     resolved = resolve_profile(config, profile_name)
@@ -382,12 +258,6 @@ def capture_profile(
                 result = capture_tracked_file(
                     sub_src,
                     sub_dst,
-                    preserve_user_sections=tracked_file.preserve_user_sections,
-                    preserve_user_keys=tracked_file.preserve_user_keys,
-                    preserve_user_keys_deep=tracked_file.preserve_user_keys_deep,
-                    preserve_user_sections_mode=(
-                        tracked_file.preserve_user_sections_mode
-                    ),
                     host_local_section_names=host_local_names,
                     spans=tracked_file.spans,
                     span_states=span_states,
