@@ -83,7 +83,12 @@ def test_install_host_local_after_heading_anchor(
     assert "[host-local via local.yaml]" in stdout, stdout
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert "WORK OVERRIDES CONTENT" in live
-    assert "start host-local work-overrides" in live
+    # The 2.0 OVERLAY model injects the body MARKERLESS — the legacy
+    # host_local_sections block is migrated into a markerless overlay span,
+    # so no user-section marker wraps the injected body.
+    assert "setforge:user-section start host-local" not in live, live
+    # Anchored below the matched heading.
+    assert live.index("## Workflow") < live.index("WORK OVERRIDES CONTENT")
 
 
 def test_install_host_local_before_heading_anchor(
@@ -172,9 +177,11 @@ def test_install_host_local_after_section_anchor(
     assert rc == 0, stderr
     live = c.exec(["cat", _HOST_LIVE]).stdout
     assert "AFTER-NOTES BODY" in live
+    # The 2.0 OVERLAY model injects the body MARKERLESS, spliced after the
+    # named existing section's end marker (no host-local marker wraps it).
+    assert "setforge:user-section start host-local" not in live, live
     end_marker_idx = live.index("end shared notes")
-    start_marker_idx = live.index("start host-local after-notes")
-    assert end_marker_idx < start_marker_idx
+    assert end_marker_idx < live.index("AFTER-NOTES BODY")
 
 
 # ---------------------------------------------------------------------------

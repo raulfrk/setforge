@@ -1,10 +1,15 @@
 """Docker e2e: two ``disposition: shared`` markdown files coexist in one config.
 
 Proves end-to-end that a single profile carrying two shared-disposition
-markdown files — one with host-local user-section markers, one plain —
-installs in one run with each file's behavior intact and no cross-file
-interference: the run-global keep-set prune retains each disposition base,
-and the distinct ``dst`` paths keep the per-host bases from ever crossing.
+markdown files — one whose tracked src carries a shared user-section, one
+plain — installs in one run with each file's behavior intact and no
+cross-file interference: the run-global keep-set prune retains each
+disposition base, and the distinct ``dst`` paths keep the per-host bases from
+ever crossing. Under the 2.0 contract both files reconcile through the same
+shared 3-way merge (there is no longer a separate file-preservation model),
+so a live edit to one file's shared section and a live edit to the other's
+footer must both survive a re-install — the proof the two bases ran
+independently.
 """
 
 from __future__ import annotations
@@ -19,13 +24,11 @@ from tests.docker.conftest import CONFIG_FIXTURE, ContainerHandle
 pytestmark = pytest.mark.e2e_docker
 
 _PROFILE = "test-dual-representation"
-_LIVE_SECTIONS = "/home/tester/.setforge_e2e/sections/marked.md"
+_LIVE_HOST_LOCAL = "/home/tester/.setforge_e2e/host-local/host.md"
 _LIVE_DISPOSITION = "/home/tester/.setforge_e2e/disposition/shared.md"
-_DISPOSITION_BASE = (
-    "/home/tester/.local/state/setforge/base/"
-    "test-dual-representation/disposition_shared_md"
-)
-_TRACKED_MD_BODY = "# Disposition fixture\n\nintro line\nmiddle line\nfooter line\n"
+_BASE_DIR = "/home/tester/.local/state/setforge/base/test-dual-representation"
+_DISPOSITION_BASE = f"{_BASE_DIR}/disposition_shared_md"
+_HOST_LOCAL_BASE = f"{_BASE_DIR}/host_local_md"
 
 
 def _setforge(
@@ -47,33 +50,32 @@ def _install(c: ContainerHandle) -> tuple[int, str, str]:
 def test_dual_representation_single_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Both reconciliation models install in one run; bases stay independent.
+    """Both shared files install in one run; their bases stay independent.
 
-    First install: the disposition file seeds its stored base from tracked and
-    the preserve file lands with its markers. Then edit the live host-local
-    section (always preserved) AND the live disposition footer (disjoint hunk →
-    clean 3-way) and re-install: the host edit survives (preserve model intact)
-    and the footer edit survives (disposition model intact) — proving the two
-    models ran independently in the same install. The disposition base existing
-    after the first run proves the run-global keep-set prune did not drop it.
+    First install: each file seeds its own stored base from tracked and lands
+    its content. Then edit the live shared user-section in one file AND the
+    live footer in the other (disjoint hunks → clean 3-way each) and
+    re-install: the shared-section edit survives and the footer edit survives —
+    proving the two files reconciled through independent per-host bases in the
+    same install. Both bases existing after the first run proves the run-global
+    keep-set prune did not drop either.
     """
     c = docker_container()
 
     rc, _out, err = _install(c)
     assert rc == 0, err
-    assert c.read_text(_LIVE_DISPOSITION) == _TRACKED_MD_BODY
-    # Independence guard: the run-global keep-set prune retained the disposition
-    # base even though the profile also carries a non-disposition (preserve) file.
-    assert c.read_text(_DISPOSITION_BASE) == _TRACKED_MD_BODY
-    # The preserve file deployed with its user-section markers intact.
-    sections_live = c.read_text(_LIVE_SECTIONS)
-    assert "setforge:user-section start" in sections_live, sections_live
+    # Independence guard: the run-global keep-set prune retained BOTH bases.
+    assert c.read_text(_DISPOSITION_BASE), "disposition base missing"
+    assert c.read_text(_HOST_LOCAL_BASE), "host-local base missing"
+    # The shared-section file deployed with its user-section markers intact.
+    host_live = c.read_text(_LIVE_HOST_LOCAL)
+    assert "setforge:user-section start shared notes" in host_live, host_live
 
-    # Edit the live host-local section (always preserved) and the live
-    # disposition footer (disjoint hunk), then re-install.
-    edited = sections_live.replace("default notes (tracked side)", "MY HOST EDIT")
-    assert edited != sections_live, sections_live
-    c.write_text(_LIVE_SECTIONS, edited)
+    # Edit the live shared user-section body in one file and the live
+    # disposition footer in the other (disjoint hunks), then re-install.
+    edited = host_live.replace("default notes (tracked side)", "MY HOST EDIT")
+    assert edited != host_live, host_live
+    c.write_text(_LIVE_HOST_LOCAL, edited)
     c.write_text(
         _LIVE_DISPOSITION,
         "# Disposition fixture\n\nintro line\nmiddle line\nfooter-LIVE\n",
@@ -81,12 +83,12 @@ def test_dual_representation_single_install(
     rc2, _out2, err2 = _install(c)
     assert rc2 == 0, err2
 
-    # Preserve model intact: the host edit survived.
-    assert "MY HOST EDIT" in c.read_text(_LIVE_SECTIONS)
-    # Disposition model intact: the live footer survived the 3-way merge.
+    # First file's shared 3-way merge kept the live section edit.
+    assert "MY HOST EDIT" in c.read_text(_LIVE_HOST_LOCAL)
+    # Second file's shared 3-way merge kept the live footer.
     assert "footer-LIVE" in c.read_text(_LIVE_DISPOSITION)
 
-    # compare sees BOTH models in one profile without error.
+    # compare sees BOTH files in one profile without error.
     rc3, stdout, err3 = _setforge(
         c,
         [
@@ -99,4 +101,4 @@ def test_dual_representation_single_install(
     )
     assert rc3 == 0, err3
     entries = {e["name"] for e in json.loads(stdout)["data"]["entries"]}
-    assert {"sections_md", "disposition_shared_md"} <= entries, entries
+    assert {"host_local_md", "disposition_shared_md"} <= entries, entries
