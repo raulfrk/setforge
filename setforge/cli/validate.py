@@ -374,9 +374,11 @@ def _check_spans_path_existence(
     :func:`setforge.structural_merge.resolve_path_prefix` (the diagnostics
     sibling of :func:`~setforge.structural_merge.get_at_path`).
 
-    A FORKED span that resolves to a mapping fails with a distinct row:
-    forked spans take a scalar path (a forked subtree has no scalar
-    three-way merge). PINNED subtrees stay legal (whole-replace re-assert).
+    A FORKED span that resolves to a non-scalar (mapping or list) fails
+    with a distinct row: forked spans take a scalar path (the scalar
+    three-way merge refuses every non-scalar operand, so a forked subtree
+    or list would silently degrade to whole-replace at merge time).
+    PINNED subtrees stay legal (whole-replace re-assert).
 
     Scope and suppression rules:
 
@@ -430,7 +432,7 @@ def _check_span_path(
     """Resolve one PINNED / FORKED span's dotted path against ``model``.
 
     Appends at most one failure row: path-not-found (with the first missing
-    prefix) or forked-span-on-a-mapping. See
+    prefix) or forked-span-on-a-non-scalar. See
     :func:`_check_spans_path_existence` for the full contract.
     """
     try:
@@ -446,12 +448,14 @@ def _check_span_path(
             f"add the key to the tracked src or remove the span"
         )
         return
-    if span.kind is SpanKind.FORKED and isinstance(
-        get_at_path(model, span.anchor), Mapping
-    ):
+    if span.kind is not SpanKind.FORKED:
+        return
+    value = get_at_path(model, span.anchor)
+    if isinstance(value, Mapping | list):
+        shape = "mapping" if isinstance(value, Mapping) else "list"
         failures.append(
             f"{ctx}: tracked_file {tf_id!r}: forked span "
-            f"{span.anchor!r}: path resolves to a mapping; "
+            f"{span.anchor!r}: path resolves to a {shape}; "
             f"forked spans take a scalar path"
         )
 

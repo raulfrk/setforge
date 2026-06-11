@@ -843,6 +843,39 @@ profiles:
     assert "'editor'" in result.output, result.output
 
 
+def test_validate_forked_span_list_exits_1(tmp_path: Path) -> None:
+    """A forked span resolving to a LIST fails the same scalar-only contract.
+
+    The scalar three-way merge refuses every non-scalar operand
+    (``MergeTypeMismatch``), and a forked list would silently degrade to
+    whole-replace at merge time — the exact leak class this check exists
+    to surface offline.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor.rulers
+        kind: forked
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"rulers": [80, 100]}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "forked spans take a scalar path" in result.output, result.output
+    assert "'editor.rulers'" in result.output, result.output
+
+
 def test_validate_pinned_span_subtree_exits_0(tmp_path: Path) -> None:
     """A pinned span on a whole SUBTREE stays legal (whole-replace re-assert)."""
     span_yaml = """\
