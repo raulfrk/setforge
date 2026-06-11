@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from setforge import jsonc
 from setforge import source as source_mod
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
@@ -38,7 +39,11 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
-from setforge.disposition_merge import is_structural, validate_structural_spans
+from setforge.disposition_merge import (
+    _load_structural,
+    is_structural,
+    validate_structural_spans,
+)
 from setforge.errors import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
@@ -60,7 +65,13 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
-from setforge.spans import validate_spans_file_type
+from setforge.spans import (
+    SpanEntry,
+    SpanKind,
+    is_heading_anchor,
+    validate_spans_file_type,
+)
+from setforge.structural_merge import get_at_path, resolve_path_prefix
 
 
 def _local_yaml_top_keys() -> list[str]:
@@ -91,6 +102,8 @@ def _check_profile(
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
     _check_spans_file_types(cfg, resolved, repo_root, ctx, failures)
+
+    _check_spans_path_existence(cfg, resolved, repo_root, ctx, failures)
 
     # Check 1c: apply the local.yaml plugin / extension
     # / marketplace overlay so its collision / unknown-remove and
@@ -341,6 +354,106 @@ def _check_spans_file_types(
                 validate_structural_spans(list(tracked_file.spans))
         except ConfigError as exc:
             failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
+
+
+def _check_spans_path_existence(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Check: every structural span's dotted path exists in its tracked src.
+
+    A PINNED or FORKED span whose dotted path no longer resolves in the
+    tracked source is a silent value leak: ``sync`` would absorb host
+    values into the config repo and ``install`` would lose them, with no
+    error on either path. This offline gate names every dead span path —
+    kind-agnostic (the leak is identical for pinned and forked) — with the
+    FIRST MISSING PREFIX segment so the fix is obvious, via
+    :func:`setforge.structural_merge.resolve_path_prefix` (the diagnostics
+    sibling of :func:`~setforge.structural_merge.get_at_path`).
+
+    A FORKED span that resolves to a mapping fails with a distinct row:
+    forked spans take a scalar path (a forked subtree has no scalar
+    three-way merge). PINNED subtrees stay legal (whole-replace re-assert).
+
+    Scope and suppression rules:
+
+    * Reads ONLY the tracked src — never the base store, spans sidecar, or
+      any live file. ``validate`` stays a stateless offline gate.
+    * Missing src → silent skip (:func:`_check_tracked_srcs` reports it;
+      same double-report suppression as :func:`_check_host_local_sections`).
+    * Non-structural (markdown) srcs and heading-shaped anchors → skip;
+      markdown anchor resolution is a separate concern. OVERLAY spans
+      carry an identity, not a path → skip.
+    * Unparseable structural src → exactly ONE failure row for the file,
+      then continue with the remaining tracked_files (report-all contract).
+    * List-suffix anchors (``[*]`` / ``[]``) → skip;
+      :func:`~setforge.disposition_merge.validate_structural_spans` already
+      rejects them (Invariant I10) in :func:`_check_spans_file_types`.
+    """
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[tf_id]
+        if not tracked_file.spans:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        if not src.exists():
+            # _check_tracked_srcs surfaces the missing-src error
+            # elsewhere; do not double-report here.
+            continue
+        if not is_structural(src):
+            continue
+        try:
+            model = _load_structural(
+                src.read_text(encoding="utf-8"), jsonc.is_jsonc_file(src)
+            )
+        except Exception as exc:
+            # Broad on purpose: parser errors are library-specific
+            # (json-five / ruamel raise disjoint hierarchies); any failure
+            # to load means the same thing here — an unparseable src.
+            failures.append(f"{ctx}: tracked_file {tf_id!r}: unparseable src: {exc}")
+            continue
+        for span in tracked_file.spans:
+            if span.kind is SpanKind.OVERLAY or is_heading_anchor(span.anchor):
+                continue
+            _check_span_path(span, model, tf_id, ctx, failures)
+
+
+def _check_span_path(
+    span: SpanEntry,
+    model: object,
+    tf_id: str,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Resolve one PINNED / FORKED span's dotted path against ``model``.
+
+    Appends at most one failure row: path-not-found (with the first missing
+    prefix) or forked-span-on-a-mapping. See
+    :func:`_check_spans_path_existence` for the full contract.
+    """
+    try:
+        _resolved_prefix, missing = resolve_path_prefix(model, span.anchor)
+    except ValueError:
+        # List-suffix anchor: validate_structural_spans already
+        # reported it (I10); do not double-report here.
+        return
+    if missing is not None:
+        failures.append(
+            f"{ctx}: tracked_file {tf_id!r}: {span.kind.value} span "
+            f"{span.anchor!r}: path not found (missing at {missing!r}); "
+            f"add the key to the tracked src or remove the span"
+        )
+        return
+    if span.kind is SpanKind.FORKED and isinstance(
+        get_at_path(model, span.anchor), Mapping
+    ):
+        failures.append(
+            f"{ctx}: tracked_file {tf_id!r}: forked span "
+            f"{span.anchor!r}: path resolves to a mapping; "
+            f"forked spans take a scalar path"
+        )
 
 
 def _check_extension_includes(

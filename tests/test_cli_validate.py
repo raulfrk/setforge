@@ -17,6 +17,7 @@ Covers each of the six failure modes plus a clean-run baseline:
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
@@ -546,7 +547,9 @@ profiles:
     tracked_files: [d]
 """
     cfg = _write_config(tmp_path, span_yaml, create_src=False)
-    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
 
@@ -577,7 +580,9 @@ profiles:
     tracked_files: [d]
 """
     cfg = _write_config(tmp_path, span_yaml, create_src=False)
-    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
     assert "overlapping" in result.output, result.output
@@ -636,3 +641,268 @@ profiles:
     )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# Structural span path-existence check (kind-agnostic, stateless).
+# A pinned/forked span whose dotted path no longer exists in the tracked src
+# silently leaks values at sync / loses them at install; validate must name
+# every dead path (report-all) with the first missing prefix segment.
+# ---------------------------------------------------------------------------
+
+
+def test_validate_absent_forked_span_path_exits_1(tmp_path: Path) -> None:
+    """A forked span pointing at an absent path → exit 1, row names the anchor.
+
+    Root-level miss: the first missing prefix is the first segment itself.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: telemetry.level
+        kind: forked
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "forked span 'telemetry.level'" in result.output, result.output
+    assert "path not found (missing at 'telemetry')" in result.output, result.output
+    assert "add the key to the tracked src or remove the span" in result.output
+
+
+def test_validate_absent_pinned_span_path_mid_walk_names_first_missing_prefix(
+    tmp_path: Path,
+) -> None:
+    """A pinned span missing at the LEAF carries the deepest missing prefix.
+
+    ``editor`` exists but ``editor.fontSize`` does not — the row must point
+    at ``editor.fontSize`` (where the walk stopped), not the root.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"tabSize": 4}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "pinned span 'editor.fontSize'" in result.output, result.output
+    assert "missing at 'editor.fontSize'" in result.output, result.output
+
+
+def test_validate_absent_span_paths_report_all_across_files(tmp_path: Path) -> None:
+    """Every absent span across ALL tracked files lands a row — no fail-fast."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  a:
+    src: a.json
+    dst: ~/.a
+    disposition: shared
+    spans:
+      - anchor: alpha.one
+        kind: pinned
+        semantics: shared
+      - anchor: alpha.two
+        kind: forked
+        semantics: shared
+  b:
+    src: b.yaml
+    dst: ~/.b
+    disposition: shared
+    spans:
+      - anchor: beta.three
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [a, b]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "a.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "tracked" / "b.yaml").write_text("other: 1\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "pinned span 'alpha.one'" in result.output, result.output
+    assert "forked span 'alpha.two'" in result.output, result.output
+    assert "pinned span 'beta.three'" in result.output, result.output
+
+
+def test_validate_unparseable_structural_src_single_row_continues(
+    tmp_path: Path,
+) -> None:
+    """An unparseable src yields exactly ONE row; other files still checked."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  bad:
+    src: bad.yaml
+    dst: ~/.bad
+    disposition: shared
+    spans:
+      - anchor: one.a
+        kind: pinned
+        semantics: shared
+      - anchor: two.b
+        kind: forked
+        semantics: shared
+  good:
+    src: good.json
+    dst: ~/.good
+    disposition: shared
+    spans:
+      - anchor: gamma.leaf
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [bad, good]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "bad.yaml").write_text("key: [unclosed\n", encoding="utf-8")
+    (tmp_path / "tracked" / "good.json").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert result.output.count("unparseable src") == 1, result.output
+    assert "pinned span 'gamma.leaf'" in result.output, result.output
+
+
+def test_validate_missing_src_skips_path_check_no_double_report(
+    tmp_path: Path,
+) -> None:
+    """A missing src is Check 4's failure; the path check stays silent."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: gone.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "src gone.json does not exist" in result.output, result.output
+    assert "path not found" not in result.output, result.output
+
+
+def test_validate_forked_span_subtree_exits_1(tmp_path: Path) -> None:
+    """A forked span resolving to a MAPPING fails: forked paths are scalar."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor
+        kind: forked
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "forked spans take a scalar path" in result.output, result.output
+    assert "'editor'" in result.output, result.output
+
+
+def test_validate_pinned_span_subtree_exits_0(tmp_path: Path) -> None:
+    """A pinned span on a whole SUBTREE stays legal (whole-replace re-assert)."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+
+
+def test_validate_span_paths_present_exits_0_without_base_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The path check is STATELESS: green with NO base-store dir anywhere.
+
+    Guard test for the contract that validate reads only the tracked src —
+    no scalar-base manifests, no spans sidecar, no live files. The state
+    root is pointed at a directory that does not exist; validate must exit
+    0 and never create it.
+    """
+    state_dir = tmp_path / "state-never-created"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state_dir))
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.yaml
+    dst: ~/.some-tracked_file
+    disposition: shared
+    spans:
+      - anchor: editor.fontSize
+        kind: pinned
+        semantics: shared
+      - anchor: telemetry.level
+        kind: forked
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.yaml").write_text(
+        "editor:\n  fontSize: 12\ntelemetry:\n  level: all\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert not state_dir.exists()
