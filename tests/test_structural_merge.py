@@ -23,6 +23,7 @@ from setforge.structural_merge import (
     StructuralMergeResult,
     get_at_path,
     merge_structural,
+    resolve_path_prefix,
     set_at_path,
 )
 
@@ -486,6 +487,58 @@ def test_get_at_path_then_merge_does_not_clobber_snapshot_jsonc() -> None:
     merge_structural(base, ours, theirs)
     assert get_at_path(ours, "a") == 2  # merge took theirs
     assert snap == 1  # snapshot untouched
+
+
+# --------------------------------------------------------------------------
+# resolve_path_prefix: deepest-resolvable-prefix navigation beside get_at_path.
+# --------------------------------------------------------------------------
+
+
+def test_resolve_path_prefix_present_path() -> None:
+    assert resolve_path_prefix({"a": {"b": {"c": 1}}}, "a.b.c") == ("a.b.c", None)
+
+
+def test_resolve_path_prefix_leaf_missing() -> None:
+    assert resolve_path_prefix({"a": {"b": 1}}, "a.z") == ("a", "a.z")
+
+
+def test_resolve_path_prefix_mid_path_missing() -> None:
+    assert resolve_path_prefix({"a": {"b": 1}}, "a.x.y") == ("a", "a.x")
+
+
+def test_resolve_path_prefix_root_segment_missing() -> None:
+    # A root-level miss: nothing resolves, the missing prefix IS the first
+    # segment itself.
+    assert resolve_path_prefix({"a": 1}, "x.y.z") == ("", "x")
+
+
+def test_resolve_path_prefix_intermediate_not_a_mapping() -> None:
+    # "a.b" resolves (to a scalar) but cannot be descended into, so the
+    # missing prefix is the next segment's prefix.
+    assert resolve_path_prefix({"a": {"b": 5}}, "a.b.c") == ("a.b", "a.b.c")
+
+
+def test_resolve_path_prefix_rejects_list_suffix() -> None:
+    with pytest.raises(ValueError, match="list suffix"):
+        resolve_path_prefix({"a": [1, 2]}, "a[*]")
+    with pytest.raises(ValueError, match="list suffix"):
+        resolve_path_prefix({"a": [1, 2]}, "a[]")
+
+
+def test_resolve_path_prefix_yaml_model() -> None:
+    model = _yload("a:\n  b: 1  # comment\n")
+    assert resolve_path_prefix(model, "a.b") == ("a.b", None)
+    assert resolve_path_prefix(model, "a.z") == ("a", "a.z")
+    assert resolve_path_prefix(model, "q.r") == ("", "q")
+    assert resolve_path_prefix(model, "a.b.c") == ("a.b", "a.b.c")
+
+
+def test_resolve_path_prefix_jsonc_model() -> None:
+    model = _jload('{\n  "a": {\n    "b": 1 // comment\n  }\n}')
+    assert resolve_path_prefix(model, "a.b") == ("a.b", None)
+    assert resolve_path_prefix(model, "a.z") == ("a", "a.z")
+    assert resolve_path_prefix(model, "q.r") == ("", "q")
+    assert resolve_path_prefix(model, "a.b.c") == ("a.b", "a.b.c")
 
 
 def test_set_at_path_rejects_list_suffix() -> None:

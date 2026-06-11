@@ -57,6 +57,7 @@ __all__ = [
     "StructuralMergeResult",
     "get_at_path",
     "merge_structural",
+    "resolve_path_prefix",
     "set_at_path",
 ]
 
@@ -728,6 +729,42 @@ def get_at_path(model: object, path: str) -> object:
             return ABSENT
         node = child
     return _to_plain(node)
+
+
+def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
+    """Resolve dotted ``path`` and report how deep navigation got.
+
+    The diagnostics sibling of :func:`get_at_path`: where that seam collapses
+    every miss to the bare :data:`~setforge.scalar_merge.ABSENT` sentinel, this
+    one tells the caller WHERE the walk stopped, so a failure message can name
+    the first missing prefix segment. ``path`` is the same DOTTED grammar
+    (``a.b.c``); a list-suffix segment (``[*]`` / ``[]``) is rejected with
+    :class:`ValueError`, matching its siblings.
+
+    Returns ``(resolved_prefix, missing_prefix)``:
+
+    * full path resolves → ``(path, None)``;
+    * a segment is absent, or an intermediate resolves to a non-mapping →
+      ``resolved_prefix`` is the deepest dotted prefix that DID resolve (``""``
+      when even the first segment misses) and ``missing_prefix`` is the first
+      prefix that did not — for a root-level miss that is the first segment
+      itself.
+
+    Pure navigation: never unwraps or copies values, never raises on a missing
+    key, and never mutates ``model``.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for resolve-path-prefix: {path!r}")
+    segments = path.split(".")
+    node = _json5_inner(model)
+    for depth, seg in enumerate(segments):
+        child = _child_node(node, seg) if _is_mapping_node(node) else ABSENT
+        if child is ABSENT:
+            resolved = ".".join(segments[:depth])
+            missing = ".".join(segments[: depth + 1])
+            return (resolved, missing)
+        node = child
+    return (path, None)
 
 
 def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
