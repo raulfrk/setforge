@@ -19,6 +19,7 @@ from typing import Final
 
 import platformdirs
 
+from setforge import marketplace_cache_wizard
 from setforge.binaries import stderr_of
 from setforge.config import (
     ClaudeInstallMode,
@@ -28,6 +29,7 @@ from setforge.config import (
     ResolvedProfile,
 )
 from setforge.errors import ConfigError, MarketplaceCacheMiss
+from setforge.marketplace_cache_wizard import CollisionAction
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -344,13 +346,10 @@ def _resolve_cache_collision(
     :class:`CollisionAction`; each action maps to its own
     ``_collision_*`` helper below. ``ABORT`` raises
     :class:`typer.Abort` inside the wizard and never reaches here.
+    The wizard call stays module-qualified so tests can monkeypatch
+    ``setforge.marketplace_cache_wizard.resolve_collision``.
     """
-    from setforge.marketplace_cache_wizard import (
-        CollisionAction,
-        resolve_collision,
-    )
-
-    resolution = resolve_collision(
+    resolution = marketplace_cache_wizard.resolve_collision(
         mp_name=mp_name,
         cache_dir=cache_dir,
         cache_root=cache_root,

@@ -8,6 +8,8 @@ the new module's ``subprocess`` / ``shutil`` namespace so
 monkeypatch paths track the split.
 """
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -409,3 +411,45 @@ def test_sync_marketplace_cache_clone_failure_raises_cache_miss(
     profile = _make_resolved(claude_plugins=["a"])
     with pytest.raises(MarketplaceCacheMiss, match="sync-cache"):
         sync_marketplace_cache(cfg, profile)
+
+
+# ---------------------------------------------------------------------------
+# wizard import shape (module-level, no cycle)
+# ---------------------------------------------------------------------------
+
+
+def _run_fresh_interpreter(code: str) -> None:
+    """Run ``code`` in a fresh interpreter so sys.modules starts clean."""
+    subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+
+def test_wizard_import_is_module_level() -> None:
+    """The cache module imports the wizard eagerly, not function-locally.
+
+    The historical lazy import guarded against a feared wizard <-> cache
+    circular dependency that never existed (the wizard only imports from
+    :mod:`setforge.errors`). Guards against the lazy import creeping back.
+    """
+    _run_fresh_interpreter(
+        "import sys\n"
+        "import setforge.claude_marketplace_cache\n"
+        "assert 'setforge.marketplace_cache_wizard' in sys.modules"
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("setforge.claude_marketplace_cache", "setforge.marketplace_cache_wizard"),
+        ("setforge.marketplace_cache_wizard", "setforge.claude_marketplace_cache"),
+    ],
+)
+def test_cache_and_wizard_import_in_either_order(first: str, second: str) -> None:
+    """Both import orders resolve cleanly — no circular dependency."""
+    _run_fresh_interpreter(f"import {first}\nimport {second}")
