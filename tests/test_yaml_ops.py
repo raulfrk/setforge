@@ -177,8 +177,10 @@ def test_atomic_write_yaml_fsyncs_tmp_fd_before_replace(
         events.append("replace")
         real_replace(src, dst)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(_yaml_ops.os, "fsync", recording_fsync)
-    monkeypatch.setattr(_yaml_ops.os, "replace", recording_replace)
+    # The tmp+replace dance lives in atomicio now; patch the os module
+    # it dispatches through (same module object as the top-level import).
+    monkeypatch.setattr(atomicio.os, "fsync", recording_fsync)
+    monkeypatch.setattr(atomicio.os, "replace", recording_replace)
 
     target = tmp_path / "out.yaml"
     atomic_write_yaml(target, yaml_rt().load("k: v\n"))
@@ -219,7 +221,7 @@ def test_atomic_write_yaml_data_fsync_error_propagates(
     def boom(fd: int) -> None:
         raise OSError("ENOSPC")
 
-    monkeypatch.setattr(_yaml_ops.os, "fsync", boom)
+    monkeypatch.setattr(atomicio.os, "fsync", boom)
     target = tmp_path / "out.yaml"
     with pytest.raises(OSError, match="ENOSPC"):
         atomic_write_yaml(target, yaml_rt().load("k: v\n"))

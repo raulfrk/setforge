@@ -10,16 +10,16 @@ the ``ca.items`` comment-association entries from the old key to the
 new one — without this step, the comments attached to the renamed key
 are silently dropped by ruamel.
 
-Writes go through :func:`atomic_write_yaml`: serialize to a sibling
-tmp file, then ``os.replace`` onto the destination, so a crash mid-
-write never leaves a half-rendered YAML document on disk.
+Writes go through :func:`atomic_write_yaml`: serialize to a string
+buffer, then finalize via :func:`setforge.atomicio.atomic_write_text`
+(sibling tmp + ``os.replace``), so a crash mid-write never leaves a
+half-rendered YAML document on disk.
 """
 
 from __future__ import annotations
 
-import os
+import io
 import stat
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -89,13 +89,19 @@ def rename_key(node: CommentedMap, old: str, new: str) -> None:
 def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — ruamel round-trip data is untyped
     """Serialize ``data`` to ``yaml_path`` atomically.
 
-    Writes to a sibling ``<name>.<random>.tmp`` file in the same
-    directory (so ``os.replace`` is guaranteed to stay on a single
-    filesystem), then renames it over the destination. Crashes between
+    Serializes through the round-trip YAML config into a string buffer,
+    then finalizes via :func:`setforge.atomicio.atomic_write_text`,
+    which owns the sibling-tmp + ``os.replace`` dance: crashes between
     open and rename leave only the tmp file, never a half-written
     target. The tmp file's data is fsynced before the rename and the
     destination directory is fsynced (best-effort) after, so the write
     survives power loss, not just a process crash.
+
+    The DESTINATION's permission bits are preserved (``mode=`` computed
+    from the existing file): ``mkstemp`` creates the tmp at 0600, so a
+    plain replace would silently narrow a group/other-readable config
+    to owner-only on every migrate/pin write. New files keep the 0600
+    default (``mode=None``).
 
     ``data`` is the root of a ruamel round-trip document
     (``CommentedMap`` / ``CommentedSeq`` / scalars). Any object the
@@ -107,35 +113,7 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
             write durable when its bytes never reached disk. The
             best-effort parent-dir fsync, by contrast, swallows ``OSError``.
     """
-    yaml = yaml_rt()
-    yaml_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_str = tempfile.mkstemp(
-        prefix=f".{yaml_path.name}.",
-        suffix=".tmp",
-        dir=str(yaml_path.parent),
-    )
-    tmp = Path(tmp_str)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            yaml.dump(data, fh)
-            # Power-loss durability: flush the userspace buffer, then
-            # fsync the tmp file's data to disk BEFORE the rename. A data
-            # fsync failure (e.g. ENOSPC) propagates — a swallowed one
-            # would report durable when it isn't. The fsync is INLINE
-            # rather than routed through atomicio so the mode-preservation
-            # below is not lost.
-            fh.flush()
-            os.fsync(fh.fileno())
-        # Preserve the destination's permission bits. ``mkstemp`` creates
-        # the tmp file at 0600, so a plain ``os.replace`` would silently
-        # narrow a group/other-readable config to owner-only on every
-        # migrate/pin write. Copy the existing file's mode onto the tmp
-        # before the rename (new files keep the 0600 default).
-        if yaml_path.exists():
-            os.chmod(tmp, stat.S_IMODE(yaml_path.stat().st_mode))
-        os.replace(tmp, yaml_path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    # Best-effort: fsync the destination dir so the rename is durable.
-    atomicio.fsync_dir(yaml_path.parent)
+    buf = io.StringIO()
+    yaml_rt().dump(data, buf)
+    dst_mode = stat.S_IMODE(yaml_path.stat().st_mode) if yaml_path.exists() else None
+    atomicio.atomic_write_text(yaml_path, buf.getvalue(), mode=dst_mode)
