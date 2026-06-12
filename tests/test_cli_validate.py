@@ -1000,3 +1000,87 @@ def test_validate_markdown_span_anchor_present_passes(tmp_path: Path) -> None:
     )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# local.yaml overlay span fold: host-local span declarations are part of the
+# checked view (on a local copy — validate --all must never double-apply).
+# ---------------------------------------------------------------------------
+
+_NO_SPAN_JSON_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.config.json
+    disposition: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+_OVERLAY_SPAN_LOCAL_YAML = """\
+tracked_files:
+  d:
+    spans:
+      - anchor: missing.key
+        kind: forked
+        semantics: host-local
+"""
+
+
+def test_validate_overlay_span_dead_path_exits_1(tmp_path: Path) -> None:
+    """A local.yaml overlay span (no tracked-side spans at all) is checked too."""
+    cfg = _write_config(tmp_path, _NO_SPAN_JSON_YAML, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
+    (tmp_path / "local.yaml").write_text(_OVERLAY_SPAN_LOCAL_YAML, encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "forked span 'missing.key'" in result.output, result.output
+
+
+def test_validate_overlay_fold_applied_once_under_all(tmp_path: Path) -> None:
+    """--all over two profiles sharing the file: one row per profile, no
+    accumulation — the fold must run on a copy, never mutate cfg."""
+    two_profiles = _NO_SPAN_JSON_YAML.replace(
+        "profiles:\n  p:\n    tracked_files: [d]\n",
+        "profiles:\n  p1:\n    tracked_files: [d]\n  p2:\n    tracked_files: [d]\n",
+    )
+    cfg = _write_config(tmp_path, two_profiles, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
+    (tmp_path / "local.yaml").write_text(_OVERLAY_SPAN_LOCAL_YAML, encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert result.output.count("forked span 'missing.key'") == 2, result.output
+
+
+def test_validate_overlay_kind_span_dead_anchor_not_checked(tmp_path: Path) -> None:
+    """OVERLAY spans carry a local.yaml body, not tracked content — never row.
+
+    The payload anchor resolves (so the host-local-sections gate stays
+    green); only the span-level anchor is dead, which this check must skip.
+    """
+    overlay_yaml = """\
+tracked_files:
+  d:
+    spans:
+      - anchor: "## Nowhere"
+        kind: overlay
+        overlay:
+          anchor:
+            kind: after-heading
+            value: Title
+          body: "extra\\n"
+"""
+    md_yaml = _NO_SPAN_JSON_YAML.replace("config.json", "note.md").replace(
+        "~/.config.json", "~/.note.md"
+    )
+    cfg = _write_config(tmp_path, md_yaml, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text("# Title\nbody\n", encoding="utf-8")
+    (tmp_path / "local.yaml").write_text(overlay_yaml, encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output

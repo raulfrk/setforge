@@ -35,6 +35,7 @@ from setforge.config import (
     Profile,
     ResolvedProfile,
     TrackedFile,
+    _fold_overlay_spans,
     apply_local_overlay,
     load_config,
     resolve_profile,
@@ -383,7 +384,12 @@ def _check_spans_path_existence(
 
     Scope and suppression rules:
 
-    * Reads ONLY the tracked src — never the base store, spans sidecar, or
+    * The checked span list is the local.yaml-overlay-FOLDED view
+      (:func:`_overlay_folded_spans`) — host-local span declarations are
+      validated exactly like tracked-side ones, on a local copy so
+      ``--all`` never double-applies the fold.
+    * Reads ONLY the tracked src (plus the local.yaml overlay block, which
+      is config, not host state) — never the base store, spans sidecar, or
       any live file. ``validate`` stays a stateless offline gate.
     * Missing src → silent skip (:func:`_check_tracked_srcs` reports it;
       same double-report suppression as :func:`_check_host_local_sections`).
@@ -397,9 +403,18 @@ def _check_spans_path_existence(
       :func:`~setforge.disposition_merge.validate_structural_spans` already
       rejects them (Invariant I10) in :func:`_check_spans_file_types`.
     """
+    try:
+        overlays = source_mod.load_local_tracked_file_overlays(
+            source_mod.LOCAL_CONFIG_PATH
+        )
+    except (ConfigError, ValidationError, OSError):
+        # A malformed local.yaml is reported by Check 7 (_check_local_yaml);
+        # fold nothing here rather than double-report.
+        overlays = {}
     for tf_id in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tf_id]
-        if not tracked_file.spans:
+        spans = _overlay_folded_spans(tf_id, tracked_file, overlays)
+        if not spans:
             continue
         src = resolve_src(tracked_file, repo_root)
         if not src.exists():
@@ -407,7 +422,7 @@ def _check_spans_path_existence(
             # elsewhere; do not double-report here.
             continue
         if not is_structural(src):
-            _check_markdown_span_anchors(tracked_file.spans, src, tf_id, ctx, failures)
+            _check_markdown_span_anchors(spans, src, tf_id, ctx, failures)
             continue
         try:
             model = _load_structural(
@@ -419,10 +434,38 @@ def _check_spans_path_existence(
             # to load means the same thing here — an unparseable src.
             failures.append(f"{ctx}: tracked_file {tf_id!r}: unparseable src: {exc}")
             continue
-        for span in tracked_file.spans:
+        for span in spans:
             if span.kind is SpanKind.OVERLAY or is_heading_anchor(span.anchor):
                 continue
             _check_span_path(span, model, tf_id, ctx, failures)
+
+
+def _overlay_folded_spans(
+    tf_id: str,
+    tracked_file: TrackedFile,
+    overlays: dict[str, _LocalTrackedFileOverlay],
+) -> list[SpanEntry]:
+    """Return ``tracked_file.spans`` with the local.yaml overlay folded.
+
+    The fold lands on a LOCAL list, never mutating ``cfg`` —
+    ``validate --all`` iterates profiles over ONE loaded :class:`Config`,
+    so the in-place fold :func:`setforge.config.apply_host_local_tracked_file_overrides`
+    performs at install time would double-apply on the second profile.
+    Reuses :func:`setforge.config._fold_overlay_spans` (host-local wins
+    each anchor) and re-validates every merged dict through
+    :class:`~setforge.spans.SpanEntry`, exactly as the install-time fold's
+    dump-and-revalidate path does.
+    """
+    overlay = overlays.get(tf_id)
+    if overlay is None or not overlay.spans:
+        return list(tracked_file.spans)
+    merged = _fold_overlay_spans(
+        tf_id=tf_id,
+        tracked_spans=tracked_file.spans,
+        overlay_spans=overlay.spans,
+        prefer_shared_anchors=frozenset(),
+    )
+    return [SpanEntry.model_validate(d) for d in merged]
 
 
 def _check_markdown_span_anchors(
