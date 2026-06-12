@@ -111,7 +111,9 @@ def atomic_write_yaml(yaml_path: Path, data: Any) -> None:  # noqa: ANN401 — r
         OSError: The tmp-file data fsync (before ``os.replace``) failed
             and propagates by design — swallowing it would report the
             write durable when its bytes never reached disk. The
-            best-effort parent-dir fsync, by contrast, swallows ``OSError``.
+            perm-preserving ``fchmod`` (whenever the destination already
+            exists) propagates the same way. The best-effort parent-dir
+            fsync, by contrast, swallows ``OSError``.
     """
     buf = io.StringIO()
     yaml_rt().dump(data, buf)
