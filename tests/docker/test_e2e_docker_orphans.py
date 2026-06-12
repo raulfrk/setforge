@@ -155,8 +155,8 @@ def test_orphan_e2e_dry_run_default_no_mutation(
         ],
     )
     assert result.returncode == 0, result.stderr
-    assert "WOULD delete" in result.stdout
-    assert "DRY-RUN" in result.stdout
+    assert "WOULD delete" in result.stderr
+    assert "DRY-RUN" in result.stderr
     # Live file untouched.
     assert c.exec(["test", "-f", _LIVE_MINIMAL], check=False).returncode == 0
 
@@ -337,7 +337,7 @@ def test_orphan_e2e_tracked_source_never_listed(
     )
     assert result.returncode == 0, result.stderr
     # Collapse Rich's 80-col line wrapping before substring asserts.
-    out = " ".join(result.stdout.split())
+    out = " ".join(result.stderr.split())
     # No orphan surfaced — the source was filtered, not listed.
     assert "no orphans" in out
     assert "tracked source" in out
@@ -374,7 +374,7 @@ def test_orphan_e2e_already_absent_path_not_listed(
     )
     assert result.returncode == 0, result.stderr
     # Collapse Rich's 80-col line wrapping before substring asserts.
-    out = " ".join(result.stdout.split())
+    out = " ".join(result.stderr.split())
     # The absent path is filtered, not listed.
     assert "no orphans" in out
     assert "no longer on disk" in out
