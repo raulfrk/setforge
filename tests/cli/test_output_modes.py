@@ -571,13 +571,14 @@ def test_compare_json_stdout_is_pure_json(
 ) -> None:
     """compare --format=json stdout is one parseable JSON doc, no Rich artifacts.
 
-    Pins the command-output console pattern: human-facing Rich output
-    (panels, summaries, next-steps) is constructed with
-    ``Console(stderr=True)`` so any JSON mode keeps stdout
-    machine-readable. ANSI escapes vanish on non-tty captures, so the
-    ANSI check alone cannot catch intermingling — also assert no Rich
-    panel box-drawing characters land on stdout and that the whole
-    stream parses (any intermingled prose breaks the parse).
+    For ``compare`` the purity comes from ``render()`` short-circuiting
+    in JSON mode before the human renderer runs (``cli/_output.py``);
+    this test locks that stdout invariant so neither the renderer nor a
+    stray stdout-bound ``Console`` can intermingle with the envelope.
+    ANSI escapes vanish on non-tty captures, so the ANSI check alone
+    cannot catch intermingling — also assert no Rich panel box-drawing
+    characters land on stdout and that the whole stream parses (any
+    intermingled prose breaks the parse).
     """
     result = runner.invoke(
         app,
