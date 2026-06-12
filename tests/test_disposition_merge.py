@@ -795,6 +795,116 @@ def test_orphan_absent_in_live_skips_with_warn() -> None:
     ]
 
 
+# ---- upstream rename/delete classifier ----
+
+
+def test_orphan_upstream_rename_classified_with_tracked_siblings() -> None:
+    # The pinned path is gone from live AND the stored base HAD a value at P
+    # while tracked no longer does -> the orphan classifies as
+    # UPSTREAM_RENAMED_OR_DELETED (not the user-deleted ABSENT_IN_LIVE) and
+    # carries the tracked-side sibling keys at P's parent so the warning can
+    # render a did-you-mean naming the closest sibling ("themes").
+    base = "editor:\n  theme: dark\n  font: mono\n"
+    live = "editor:\n  font: mono\n"  # live lost `theme` too
+    tracked = "editor:\n  themes: dark\n  font: mono\n"  # renamed upstream
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("editor.theme")],
+    )
+    assert res.structural_span_orphans == [
+        StructuralSpanOrphan(
+            anchor="editor.theme",
+            kind=SpanKind.PINNED,
+            reason=StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED,
+            tracked_siblings=("themes", "font"),
+        )
+    ]
+
+
+def test_orphan_upstream_delete_classified_no_close_sibling() -> None:
+    # Same base-had / tracked-lacks condition but upstream DELETED the key
+    # outright (no close sibling among the remaining keys): the orphan still
+    # classifies as UPSTREAM_RENAMED_OR_DELETED, carrying the (unhelpful)
+    # siblings — the render site finds no close match and appends no
+    # did-you-mean.
+    base = "editor:\n  theme: dark\n  font: mono\n"
+    live = "editor:\n  font: mono\n"
+    tracked = "editor:\n  font: mono\n"  # deleted upstream
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("editor.theme")],
+    )
+    assert res.structural_span_orphans == [
+        StructuralSpanOrphan(
+            anchor="editor.theme",
+            kind=SpanKind.PINNED,
+            reason=StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED,
+            tracked_siblings=("font",),
+        )
+    ]
+
+
+def test_orphan_top_level_upstream_rename_uses_root_siblings() -> None:
+    # A TOP-LEVEL pinned path ("theme", no dot) classifies the same way; the
+    # sibling candidates are the tracked ROOT keys.
+    base = "theme: dark\nfont: mono\n"
+    live = "font: mono\n"
+    tracked = "themes: dark\nfont: mono\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("theme")],
+    )
+    assert res.structural_span_orphans == [
+        StructuralSpanOrphan(
+            anchor="theme",
+            kind=SpanKind.PINNED,
+            reason=StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED,
+            tracked_siblings=("themes", "font"),
+        )
+    ]
+
+
+def test_orphan_stays_absent_in_live_when_base_lacked_path() -> None:
+    # The stored base NEVER had a value at P: the absence cannot be an
+    # upstream rename/delete (there was nothing upstream to drop), so the
+    # orphan keeps the user-deleted ABSENT_IN_LIVE reason even though
+    # tracked also lacks P.
+    base = "editor:\n  font: mono\n"
+    live = "editor:\n  font: mono\n"
+    tracked = "editor:\n  font: mono\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("editor.theme")],
+    )
+    assert res.structural_span_orphans == [
+        StructuralSpanOrphan(
+            anchor="editor.theme",
+            kind=SpanKind.PINNED,
+            reason=StructuralSpanOrphanReason.ABSENT_IN_LIVE,
+        )
+    ]
+
+
 # ---- I10: list-index pin rejected at pin time ----
 
 

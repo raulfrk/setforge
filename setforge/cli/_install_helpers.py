@@ -71,6 +71,7 @@ from setforge.cli._helpers import (
     _resolve_drift_paths,
     _resolve_section_decisions,
 )
+from setforge.cli._validate_errors import suggest_close_match
 from setforge.compare import (
     CompareStatus,
     DriftClass,
@@ -102,6 +103,7 @@ from setforge.source import (
     validate_host_local_sections_file_type,
 )
 from setforge.spans import SpanEntry, SpanKind, validate_spans_file_type
+from setforge.spans_overlay import SpanOrphan
 
 
 def _load_validated_host_local_sections(
@@ -650,6 +652,38 @@ class _PendingDeploy:
     base_plan: DispositionBasePlan | None
 
 
+def _span_orphan_warning(sub_dst: Path, orphan: SpanOrphan) -> str:
+    """Render the one-line warning for a span orphan.
+
+    The single wording seam shared by the pass-1 ``--strict-spans`` gate
+    (:func:`_refuse_on_pinned_orphans`) and the pass-2 warn
+    (:func:`_advance_span_states`). An
+    upstream-renamed-or-deleted structural orphan gets the upstream
+    attribution plus a did-you-mean over the tracked sibling keys the
+    orphan carries (:func:`~setforge.cli._validate_errors.suggest_close_match`
+    on the anchor's leaf segment — suggestion rendering lives HERE because
+    the merge driver must not import from ``cli``); every other orphan
+    keeps the generic could-not-be-relocated wording.
+    """
+    upstream_reason = (
+        disposition_merge.StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED
+    )
+    if orphan.reason != upstream_reason:
+        return (
+            f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
+            f"could not be relocated upstream — region preserved, not dropped"
+        )
+    message = (
+        f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
+        f"was renamed or deleted upstream — region preserved, not dropped"
+    )
+    leaf = orphan.anchor.rpartition(".")[2]
+    suggestion = suggest_close_match(leaf, list(orphan.tracked_siblings))
+    if suggestion is not None:
+        message += f" (did you mean {suggestion!r}?)"
+    return message
+
+
 def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
     """Refuse the whole install when any pass-1 record carries a PINNED orphan.
 
@@ -677,9 +711,7 @@ def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
         pinned: list[str] = []
         for orphan in record.resolved.span_orphans:
             typer.secho(
-                f"warning: {record.sub_dst}: span {orphan.anchor!r} "
-                f"({orphan.kind.value}) could not be relocated upstream — "
-                f"region preserved, not dropped",
+                _span_orphan_warning(record.sub_dst, orphan),
                 err=True,
                 fg=typer.colors.YELLOW,
             )
@@ -1095,8 +1127,7 @@ def _advance_span_states(
     spans_store.prune(profile, file_id, {span.anchor for span in file_spans})
     for orphan in result.span_orphans:
         typer.secho(
-            f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
-            f"could not be relocated upstream — region preserved, not dropped",
+            _span_orphan_warning(sub_dst, orphan),
             err=True,
             fg=typer.colors.YELLOW,
         )

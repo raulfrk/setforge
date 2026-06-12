@@ -406,9 +406,16 @@ def _resolve_disposition_content(
     if resolution.structural_span_orphans:
         # Structural pins re-asserted inside the merge; the re-baseline already
         # used the post-reassert dump (B-S6). Surface any orphan through the
-        # same warn machinery as markdown (anchor + kind).
+        # same warn machinery as markdown (anchor + kind), carrying the
+        # structural-only classification so the warning can attribute an
+        # upstream rename/delete and render a did-you-mean.
         span_orphans = [
-            SpanOrphan(anchor=o.anchor, kind=o.kind)
+            SpanOrphan(
+                anchor=o.anchor,
+                kind=o.kind,
+                reason=o.reason,
+                tracked_siblings=o.tracked_siblings,
+            )
             for o in resolution.structural_span_orphans
         ]
     # Markdown span re-overlay (NEVER threaded into merge internals): splice

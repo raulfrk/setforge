@@ -48,10 +48,20 @@ class SpanOrphan:
     ``anchor`` identifies the span; ``kind`` distinguishes a pinned orphan
     (which ``--strict-spans`` may escalate) from a forked one. Both are
     preserved + warned, never dropped (Invariant I7).
+
+    ``reason`` and ``tracked_siblings`` ride along ONLY for STRUCTURAL
+    orphans (the deploy seam copies them from
+    ``setforge.disposition_merge.StructuralSpanOrphan`` — ``reason`` holds
+    that enum's value as a plain string so this markdown-side module never
+    imports the merge driver). The warning render site uses them to
+    attribute an upstream rename/delete and offer a did-you-mean over the
+    tracked sibling keys. Markdown orphans leave both at their defaults.
     """
 
     anchor: str
     kind: SpanKind
+    reason: str | None = None
+    tracked_siblings: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)

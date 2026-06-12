@@ -209,6 +209,99 @@ def test_strict_spans_refuses_on_pinned_orphan(repo: Path) -> None:
     assert result.exit_code != 0
 
 
+# ---- structural span: upstream rename/delete classifier ----
+
+_YAML_DOC = "editor:\n  theme: dark\n  font: mono\n"
+
+
+def _write_yaml_config(repo: Path) -> Path:
+    """A structural (yaml) tracked file with a pinned span on editor.theme."""
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  cfg:\n"
+        "    src: cfg.yaml\n"
+        "    dst: ~/.setforge_spans/cfg.yaml\n"
+        "    disposition: shared\n"
+        "    spans:\n"
+        "      - anchor: editor.theme\n"
+        "        kind: pinned\n"
+        "        semantics: shared\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - cfg\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def _write_tracked_yaml(repo: Path, body: str) -> None:
+    src = repo / "tracked" / "cfg.yaml"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(body, encoding="utf-8")
+
+
+def _yaml_live_path() -> Path:
+    return Path.home() / ".setforge_spans" / "cfg.yaml"
+
+
+def test_upstream_renamed_span_path_warns_with_did_you_mean(repo: Path) -> None:
+    # Upstream RENAMED the pinned dotted path's leaf key while live no longer
+    # carries it: the install warning must attribute the loss to upstream
+    # (distinct wording, not the generic could-not-be-relocated) and append a
+    # did-you-mean naming the closest tracked sibling.
+    _write_tracked_yaml(repo, _YAML_DOC)
+    config = _write_yaml_config(repo)
+    assert _install(config).exit_code == 0
+
+    _write_tracked_yaml(repo, "editor:\n  themes: dark\n  font: mono\n")
+    _yaml_live_path().write_text("editor:\n  font: mono\n", encoding="utf-8")
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "renamed or deleted upstream" in result.output
+    assert "did you mean 'themes'?" in result.output
+
+
+def test_upstream_deleted_span_path_warns_without_suggestion(repo: Path) -> None:
+    # Upstream DELETED the pinned path outright (no close sibling remains):
+    # the upstream attribution still fires but NO did-you-mean is appended.
+    _write_tracked_yaml(repo, _YAML_DOC)
+    config = _write_yaml_config(repo)
+    assert _install(config).exit_code == 0
+
+    _write_tracked_yaml(repo, "editor:\n  font: mono\n")
+    _yaml_live_path().write_text("editor:\n  font: mono\n", encoding="utf-8")
+
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "renamed or deleted upstream" in result.output
+    assert "did you mean" not in result.output
+
+
+def test_strict_spans_refuses_on_upstream_renamed_orphan(repo: Path) -> None:
+    # --strict-spans escalates the new reason exactly like every other pinned
+    # orphan: the pass-1 gate refuses the whole install (non-zero exit) and
+    # the live file stays byte-untouched.
+    _write_tracked_yaml(repo, _YAML_DOC)
+    config = _write_yaml_config(repo)
+    assert _install(config).exit_code == 0
+
+    _write_tracked_yaml(repo, "editor:\n  themes: dark\n  font: mono\n")
+    live = _yaml_live_path()
+    live.write_text("editor:\n  font: mono\n", encoding="utf-8")
+    before = live.read_bytes()
+
+    result = _install(config, extra=["--strict-spans"])
+    assert result.exit_code != 0
+    # The pass-1 gate renders the same upstream-attributed warning before
+    # refusing (the SetforgeError itself is raised past the CliRunner).
+    assert "renamed or deleted upstream" in result.output
+    assert live.read_bytes() == before
+
+
 def _install_with_transition(config: Path) -> Result:
     args = [
         "install",

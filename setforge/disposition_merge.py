@@ -74,6 +74,7 @@ from setforge.structural_merge import (
     PathConflict,
     delete_at_path,
     get_at_path,
+    list_keys_at_path,
     merge_structural,
     set_at_path,
 )
@@ -144,12 +145,21 @@ class StructuralSpanOrphanReason(StrEnum):
     / ``ValueError``); the seam the I9 key-identity orphan posture surfaces
     (B-S3). ``PARENT_NOT_MAPPING`` — the resolved parent is a scalar/list, not a
     mapping (``set_at_path`` raised ``MergeTypeMismatch``), so the leaf cannot be
-    addressed by key (B-S3).
+    addressed by key (B-S3). ``UPSTREAM_RENAMED_OR_DELETED`` — refines
+    ``ABSENT_IN_LIVE``: the path is gone from live AND the stored base HAD a
+    value at ``P`` while tracked no longer does, so the loss is attributed to an
+    upstream rename/delete rather than a local edit; the orphan carries the
+    tracked-side sibling keys at ``P``'s parent so the warning can render a
+    did-you-mean. The two ``set_at_path`` failure reasons are NOT refined —
+    they name a more specific parent-level seam and their fixtures stay
+    distinguishable (a parent-level upstream removal still reports WHERE the
+    re-assert failed).
     """
 
     ABSENT_IN_LIVE = "absent-in-live"
     MISSING_PARENT = "missing-parent"
     PARENT_NOT_MAPPING = "parent-not-mapping"
+    UPSTREAM_RENAMED_OR_DELETED = "upstream-renamed-or-deleted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,11 +173,18 @@ class StructuralSpanOrphan:
     failed. An orphan is
     PRESERVED (the merged value is left intact at ``P``) and warned, never
     dropped and never an uncaught raise (B-S3 / B-S4).
+
+    ``tracked_siblings`` is populated ONLY for
+    :data:`StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED`: the child
+    key names at ``P``'s parent in the TRACKED model, in document order — the
+    did-you-mean candidates the warning render site feeds to its close-match
+    suggester. Empty for every other reason.
     """
 
     anchor: str
     kind: SpanKind
     reason: StructuralSpanOrphanReason
+    tracked_siblings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +350,15 @@ def _resolve_structural(
     live_snapshots: dict[str, object] = {
         span.anchor: get_at_path(live_model, span.anchor) for span in pinned
     }
+    # CLASSIFY upstream-gone paths BEFORE the merge too (the base / tracked
+    # models are parsed exactly once, above): when the stored base HAD a value
+    # at P and tracked no longer does, a live-absent P is an upstream
+    # rename/delete, and the tracked siblings at P's parent are the
+    # did-you-mean candidates.
+    upstream_gone: dict[str, tuple[str, ...] | None] = {
+        span.anchor: _upstream_gone_siblings(base_model, tracked_model, span.anchor)
+        for span in pinned
+    }
 
     result = merge_structural(base_model, live_model, tracked_model)
     conflicts: list[LineConflict | PathConflict] = list(result.conflicts)
@@ -354,7 +380,9 @@ def _resolve_structural(
     # RE-ASSERT pinned spans AFTER the merge / conflict resolution, so the live
     # value wins over an upstream auto-resolved-toward-theirs ``P`` (the whole
     # point of a pin). Orphans are preserved + reported, never raised.
-    orphans = _reassert_pinned_spans(result.merged_model, pinned, live_snapshots)
+    orphans = _reassert_pinned_spans(
+        result.merged_model, pinned, live_snapshots, upstream_gone
+    )
 
     # SUPPRESS pinned-path conflicts (B-S6 / I1): a pin is deterministic
     # live-wins, so a ``PathConflict`` whose path is a pinned span is NOT a real
@@ -439,15 +467,42 @@ def _reject_list_index_anchors(spans: list[SpanEntry]) -> None:
             )
 
 
+def _upstream_gone_siblings(
+    base_model: object, tracked_model: object, anchor: str
+) -> tuple[str, ...] | None:
+    """Classify ``anchor`` as upstream-gone and return its sibling candidates.
+
+    Returns ``None`` when the path was NOT dropped upstream — the stored base
+    never had a value at ``anchor`` (nothing upstream to lose) or tracked
+    still has one. Otherwise returns the child key names at ``anchor``'s
+    parent in the TRACKED model (document order; the root keys for a
+    top-level anchor) — the did-you-mean candidates carried on the orphan.
+    The tuple may be empty (the parent is itself gone or empty upstream); an
+    empty candidate set still classifies as upstream-gone, it just yields no
+    suggestion.
+    """
+    if get_at_path(base_model, anchor) is ABSENT:
+        return None
+    if get_at_path(tracked_model, anchor) is not ABSENT:
+        return None
+    parent, _, _leaf = anchor.rpartition(".")
+    return tuple(list_keys_at_path(tracked_model, parent))
+
+
 def _reassert_pinned_spans(
     model: object,
     pinned: list[SpanEntry],
     live_snapshots: dict[str, object],
+    upstream_gone: dict[str, tuple[str, ...] | None],
 ) -> list[StructuralSpanOrphan]:
     """Re-impose each pinned span's snapshotted live value onto ``model``.
 
     Returns the orphan list (paths that could not be re-asserted). An ABSENT
-    snapshot (the user deleted ``P`` locally) skips-with-warn (B-S4); a
+    snapshot (the user deleted ``P`` locally) skips-with-warn (B-S4) — unless
+    ``upstream_gone`` marks the path as dropped upstream (base had a value,
+    tracked no longer does), in which case the orphan classifies as
+    :data:`StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED` carrying
+    the tracked sibling candidates. A
     ``KeyError`` / ``ValueError`` (missing parent) or a
     ``MergeTypeMismatch`` (non-mapping parent) from
     :func:`~setforge.structural_merge.set_at_path` orphan-warns + skips, never
@@ -462,13 +517,24 @@ def _reassert_pinned_spans(
     for span in pinned:
         snapshot = live_snapshots[span.anchor]
         if snapshot is ABSENT:
-            orphans.append(
-                StructuralSpanOrphan(
-                    anchor=span.anchor,
-                    kind=span.kind,
-                    reason=StructuralSpanOrphanReason.ABSENT_IN_LIVE,
+            siblings = upstream_gone[span.anchor]
+            if siblings is not None:
+                orphans.append(
+                    StructuralSpanOrphan(
+                        anchor=span.anchor,
+                        kind=span.kind,
+                        reason=(StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED),
+                        tracked_siblings=siblings,
+                    )
                 )
-            )
+            else:
+                orphans.append(
+                    StructuralSpanOrphan(
+                        anchor=span.anchor,
+                        kind=span.kind,
+                        reason=StructuralSpanOrphanReason.ABSENT_IN_LIVE,
+                    )
+                )
             continue
         try:
             if span.deep:
