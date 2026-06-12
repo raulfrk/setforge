@@ -1478,7 +1478,7 @@ def test_e2e_docker_init_fresh(
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
     c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
     result = _init(c, extra=["--no-prompt"])
-    assert "init complete" in result.stdout, result.stdout
+    assert "init complete" in result.stderr, result.stderr
     cfg_check = c.exec(
         ["test", "-f", "/home/tester/.config/setforge/local.yaml"], check=False
     )
@@ -1509,7 +1509,7 @@ def test_e2e_docker_init_reinit_idempotent(
         "# setforge host-local config\nuser_marker: preserved\n",
     )
     result = _init(c, extra=["--no-prompt"])
-    assert "nothing to create" in result.stdout, result.stdout
+    assert "nothing to create" in result.stderr, result.stderr
     after = c.read_text("/home/tester/.config/setforge/local.yaml")
     assert "user_marker: preserved" in after, (
         "reinit overwrote user customization (must be idempotent)"
@@ -1536,7 +1536,7 @@ def test_e2e_docker_init_force_with_backup(
         "# setforge host-local config\nuser_marker: backup-me\n",
     )
     result = _init(c, extra=["--force", "--no-prompt"])
-    assert "init complete" in result.stdout, result.stdout
+    assert "init complete" in result.stderr, result.stderr
     ls = c.exec(
         ["bash", "-lc", "ls /home/tester/.config/setforge/local.yaml.bak.* 2>&1"],
         check=False,
@@ -1581,7 +1581,7 @@ def test_e2e_docker_init_config_repo_scaffolds_and_validates(
     c.exec(["rm", "-rf", "/home/tester/projects"], check=False)
 
     result = _init(c, extra=["--config-repo", "--no-prompt"])
-    assert "init --config-repo complete" in result.stdout, result.stdout
+    assert "init --config-repo complete" in result.stderr, result.stderr
 
     # The default target is ~/projects/<host>-config; resolve it.
     repo = c.exec(
@@ -1633,9 +1633,9 @@ def test_e2e_docker_init_check_readonly(
     c.exec(["rm", "-rf", "/home/tester/.config/setforge"], check=False)
     c.exec(["rm", "-rf", "/home/tester/.local/share/setforge"], check=False)
     result = _init(c, extra=["--check"])
-    assert "checking environment" in result.stdout, result.stdout
-    assert "checking config directories" in result.stdout, result.stdout
-    assert "check complete" in result.stdout, result.stdout
+    assert "checking environment" in result.stderr, result.stderr
+    assert "checking config directories" in result.stderr, result.stderr
+    assert "check complete" in result.stderr, result.stderr
     host_local_check = c.exec(
         ["test", "-d", "/home/tester/.local/share/setforge/host-local"], check=False
     )
