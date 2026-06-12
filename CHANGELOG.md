@@ -10,14 +10,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`compare` now classifies every drifted file** with a per-file drift
   class — `expected`, `stale` (live still equals the stored base while
   tracked advanced; the next install fast-forwards it), `unexpected`, or
-  `conflicted` (reserved) — fixing the report that listed a genuinely
+  `conflicted` (a forked-scalar conflict: the stored base differs from
+  both live and tracked at the same scalar path, so the next interactive
+  install would prompt) — fixing the report that listed a genuinely
   drifted file with zero drift counts. The summary table's dead
   `expected drift` / `unexpected drift` count columns are replaced by
-  `File | Disposition | Class | Why`, and `compare --check` now passes
-  on stale-only drift (`--check --strict` still fails on any drift).
-  The `--json` entry schema gains `drift_class`, `reason`,
-  `span_only_drift`, and `forked_scalar_conflicts` (always empty for
-  now) and drops the always-empty `expected_drift_keys` /
+  `File | Disposition | Class | Why`; conflicted rows render each
+  conflict as `path: base → tracked | live` (tracked = upstream, live =
+  yours) in the Why column. `compare --check` now passes on stale-only
+  drift but fails on conflicted drift (`--check --strict` still fails on
+  any drift). The `--json` entry schema gains `drift_class`, `reason`,
+  `span_only_drift`, and `forked_scalar_conflicts` (the same pre-rendered
+  conflict lines) and drops the always-empty `expected_drift_keys` /
   `unexpected_drift_keys` arrays. Engine output schema only — the
   config schema is untouched.
 - **Capture no longer bakes host-local span values into the repo** — a
