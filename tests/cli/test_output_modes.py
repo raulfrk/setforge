@@ -561,3 +561,40 @@ def test_json_no_ansi_on_stdout(runner: CliRunner, minimal_config: Path) -> None
         )
         # Parse: also proves we never mixed human text + JSON on stdout.
         json.loads(result.stdout)
+
+
+_RICH_BOX_CHARS = "─│╭╮╰╯┌┐└┘═║"
+
+
+def test_compare_json_stdout_is_pure_json(
+    runner: CliRunner, minimal_config: Path
+) -> None:
+    """compare --format=json stdout is one parseable JSON doc, no Rich artifacts.
+
+    Pins the command-output console pattern: human-facing Rich output
+    (panels, summaries, next-steps) is constructed with
+    ``Console(stderr=True)`` so any JSON mode keeps stdout
+    machine-readable. ANSI escapes vanish on non-tty captures, so the
+    ANSI check alone cannot catch intermingling — also assert no Rich
+    panel box-drawing characters land on stdout and that the whole
+    stream parses (any intermingled prose breaks the parse).
+    """
+    result = runner.invoke(
+        app,
+        [
+            "--format=json",
+            "compare",
+            "--config",
+            str(minimal_config),
+            "--profile",
+            "vm-headless",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _ANSI_RE.search(result.stdout) is None, (
+        f"ANSI escape in JSON stdout: {result.stdout!r}"
+    )
+    leaked = set(_RICH_BOX_CHARS) & set(result.stdout)
+    assert not leaked, f"Rich box-drawing characters in JSON stdout: {leaked}"
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "compare"
