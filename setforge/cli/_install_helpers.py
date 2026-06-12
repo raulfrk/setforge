@@ -183,7 +183,7 @@ def migrate_local_overlay_spans_on_install(
     """Transparently retire ``local.yaml host_local_sections`` → OVERLAY spans.
 
     Auto-on-install, idempotent rewrite mirroring the disposition-base
-    seed-on-install pattern (:func:`_read_or_migrate_disposition_base`): the
+    seed-on-install pattern (:func:`_plan_disposition_base`): the
     first install after a host adopts the OVERLAY model rewrites its
     ``local.yaml`` in place (legacy ``host_local_sections`` blocks → unified
     ``spans`` OVERLAY entries) via
@@ -529,14 +529,15 @@ def _deploy_all_tracked_files(
                 _echo_host_local_sections_provenance(host_local)
                 continue
             # Stored-base 3-way path is gated on a declared disposition.
-            # READ the base BEFORE the deploy: it is the merge ancestor
-            # copy_atomic's driver diffs live/tracked against.
+            # PLAN the base BEFORE the deploy (a pure read): it is the merge
+            # ancestor copy_atomic's driver diffs live/tracked against. Any
+            # deferred migration writes are applied just before the deploy.
             base_text: str | None = None
             if tracked_file.disposition is not None:
                 disposition_file_ids.add(sub_name)
-                base_text = _resolve_disposition_base_with_warning(
-                    profile, sub_name, sub_dst
-                )
+                base_plan = _plan_disposition_base(profile, sub_name, sub_dst)
+                _apply_deferred_base_migration(profile, sub_name, sub_dst, base_plan)
+                base_text = base_plan.base_text
             # Span re-overlay path: READ the spans sidecar BEFORE the deploy so
             # the relocation ladder has its derived state. Spans ride the
             # disposition 3-way path AND the disposition=None markerless
@@ -581,79 +582,82 @@ def _deploy_all_tracked_files(
     base_store.prune(profile, disposition_file_ids)
 
 
-def _resolve_disposition_base_with_warning(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-) -> str | None:
-    """Resolve the disposition base text, warning ONCE on an auto-migration.
-
-    Thin wrapper over :func:`_read_or_migrate_disposition_base` that fires the
-    one-time, actionable :func:`_warn_auto_migration` ONLY when this install
-    actually performed an auto-on-install migration (``migrated`` True) —
-    never on a steady-state read or a crash-resume completion. Returns the
-    ``base_text`` the caller threads into :func:`deploy.copy_atomic`.
-    """
-    result = _read_or_migrate_disposition_base(profile, file_id, sub_dst)
-    if result.migrated:
-        _warn_auto_migration(sub_dst, profile)
-    return result.base_text
-
-
 @dataclass(slots=True, frozen=True)
-class DispositionBaseResult:
-    """Outcome of resolving a disposition file's merge-ancestor base.
+class DispositionBasePlan:
+    """Read-only plan for a disposition file's merge-ancestor base.
+
+    Produced by :func:`_plan_disposition_base` WITHOUT touching the
+    filesystem; the deferred writes are applied later by
+    :func:`_apply_deferred_base_migration` (immediately before the file's
+    deploy write), so a refusal between planning and writing leaves zero
+    footprint.
 
     ``base_text`` is the text the caller threads into
-    :func:`deploy.copy_atomic` as ``base_text`` (``None`` keeps the ordinary
-    base-absent, deploy-tracked-verbatim path). ``migrated`` is ``True`` ONLY
-    when this install actually performed an auto-migration (seeded a per-host
-    base from the live file, stripping legacy shared-section markers where
-    present) — the
-    one-time install warning fires on that signal. A steady-state read (base
-    already present, no markers) and a crash-resume completion (base present,
-    live re-stripped without re-seeding) both report ``migrated=False`` so the
-    warning fires exactly once across the whole migration, never on a resumed
-    or already-migrated install.
+    :func:`deploy.resolve_deploy` as ``base_text`` (``None`` keeps the
+    ordinary base-absent, deploy-tracked-verbatim path). ``migrated`` is
+    ``True`` ONLY when this install plans an auto-migration (seeding a
+    per-host base from the live file, stripping legacy shared-section markers
+    where present) — the one-time install warning fires on that signal at
+    apply time. A steady-state read (base already present, no markers) and a
+    crash-resume completion (base present, live re-stripped without
+    re-seeding) both report ``migrated=False`` so the warning fires exactly
+    once across the whole migration, never on a resumed or already-migrated
+    install.
+
+    ``deferred_seed`` is the byte payload :func:`base_store.write_base` must
+    receive (``None`` when no seed is pending); ``deferred_live_strip`` is
+    the stripped text the LIVE file must be rewritten to (``None`` when no
+    strip is pending). When a strip is pending, disk live ≠ the live the
+    merge must see, so the caller threads ``deferred_live_strip`` into
+    :func:`deploy.resolve_deploy` as the ``live_text`` override.
     """
 
     base_text: str | None
     migrated: bool
+    deferred_seed: bytes | None = None
+    deferred_live_strip: str | None = None
 
 
-def _read_or_migrate_disposition_base(
+def _plan_disposition_base(
     profile: str,
     file_id: str,
     sub_dst: Path,
-) -> DispositionBaseResult:
-    """Return the disposition merge-ancestor base, migrating / resuming if needed.
+) -> DispositionBasePlan:
+    """Plan the disposition merge-ancestor base WITHOUT writing anything.
 
     Reads the stored base for ``file_id`` under ``profile`` and routes:
 
     * **Base present, live has NO legacy markers** — steady state. The stored
-      base is returned verbatim (``migrated=False``).
-    * **Base present, live STILL carries legacy markers** (markdown / line-based
-      files only — structured files have no inline markers) — routed by
-      :func:`_resume_marker_strip`. When the base is still the markerless SEED
-      (``strip_shared_markers(live) == base``) this is the crash-resume state (a
-      kill landed AFTER the seed-first base write but BEFORE the live strip): the
-      strip is COMPLETED (live rewritten to the stripped form) WITHOUT
-      re-seeding. When the base has been ADVANCED past the seed (a
-      ``disposition: shared`` file whose tracked content legitimately carries an
-      in-content shared marker — re-installs always re-deploy that marker into
-      live and the advance re-baselines to the marker-bearing form), the resume
-      stands down: it is steady state, not an interrupted migration. Either way
-      the seeded/advanced base is returned (``migrated=False`` — the seed ran on
-      a prior install, so no warning fires this run).
+      base is returned verbatim (``migrated=False``, nothing deferred).
+    * **Base present, live STILL carries legacy markers** (markdown /
+      line-based files only — structured files have no inline markers) —
+      routed by :func:`_plan_resume_marker_strip`. When the base is still the
+      markerless SEED (``strip_shared_markers(live) == base``) this is the
+      crash-resume state (a kill landed AFTER the seed-first base write but
+      BEFORE the live strip): the strip is planned as ``deferred_live_strip``
+      WITHOUT re-seeding. When the base has been ADVANCED past the seed (a
+      ``disposition: shared`` file whose tracked content legitimately carries
+      an in-content shared marker — re-installs always re-deploy that marker
+      into live and the advance re-baselines to the marker-bearing form), the
+      resume stands down: it is steady state, not an interrupted migration.
+      Either way the seeded/advanced base is returned (``migrated=False`` —
+      the seed ran on a prior install, so no warning fires this run).
     * **Base ABSENT** — a file entering the disposition world for the first
       time, routed by format:
 
       - **Structured (JSON / JSONC / YAML)** files have no inline markers, so
-        :func:`_seed_nonmd_base_from_live` seeds the base from the current
-        LIVE bytes (``migrated=True`` when a live file existed to seed from).
-      - **Markdown / line-based** files run the seed-first SHARED-marker strip
-        via :func:`_migrate_shared_markers_for_base` (``migrated=True`` when a
-        marker-bearing live file was migrated).
+        the plan seeds the base from the current LIVE text as read by
+        :meth:`~pathlib.Path.read_text` (universal-newline) — the EXACT view
+        :func:`deploy.resolve_deploy` reads as ``ours``, so base == live ==
+        ours at the level the merge parses (CRLF / CR collapse to LF on both
+        sides). ``migrated=True`` when a live file existed to seed from; the
+        live file itself is never rewritten (no markers to strip).
+      - **Markdown / line-based** files plan the SHARED-marker strip via
+        :func:`_plan_shared_marker_migration` (``migrated=True`` when a
+        marker-bearing live file is to be migrated): ``deferred_seed`` and
+        ``deferred_live_strip`` both carry the stripped text, so after apply
+        base == stripped == live and the first 3-way merge has zero spurious
+        delta (the data-loss invariant).
 
     The base-absent format paths fall through to ``base_text=None`` /
     ``migrated=False`` — the ordinary base-absent (deploy-tracked-verbatim)
@@ -662,105 +666,64 @@ def _read_or_migrate_disposition_base(
 
     Raises :class:`~setforge.errors.MarkerError` on a malformed marker file
     (via the strip), propagated from the leaf helpers rather than swallowed
-    here.
+    here — BEFORE any write, so a malformed file aborts a still-clean
+    install.
     """
     raw = base_store.read_base(profile, file_id)
     if raw is not None:
         base_text = raw.decode("utf-8")
+        deferred_live_strip: str | None = None
         if not disposition_merge.is_structural(sub_dst):
-            # Base present: complete an interrupted strip if live still carries
-            # legacy markers (crash-resume). No re-seed — the base is the truth.
-            _resume_marker_strip(sub_dst, base_text)
-        return DispositionBaseResult(base_text=base_text, migrated=False)
+            # Base present: plan the completion of an interrupted strip if
+            # live still carries legacy markers (crash-resume). No re-seed —
+            # the base is the truth.
+            deferred_live_strip = _plan_resume_marker_strip(sub_dst, base_text)
+        return DispositionBasePlan(
+            base_text=base_text,
+            migrated=False,
+            deferred_live_strip=deferred_live_strip,
+        )
     if disposition_merge.is_structural(sub_dst):
-        seeded = _seed_nonmd_base_from_live(profile, file_id, sub_dst)
-        return DispositionBaseResult(base_text=seeded, migrated=seeded is not None)
-    seeded = _migrate_shared_markers_for_base(profile, file_id, sub_dst)
-    return DispositionBaseResult(base_text=seeded, migrated=seeded is not None)
+        try:
+            live_text = sub_dst.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return DispositionBasePlan(base_text=None, migrated=False)
+        return DispositionBasePlan(
+            base_text=live_text,
+            migrated=True,
+            deferred_seed=live_text.encode("utf-8"),
+        )
+    stripped = _plan_shared_marker_migration(sub_dst)
+    if stripped is None:
+        return DispositionBasePlan(base_text=None, migrated=False)
+    return DispositionBasePlan(
+        base_text=stripped,
+        migrated=True,
+        deferred_seed=stripped.encode("utf-8"),
+        deferred_live_strip=stripped,
+    )
 
 
-def _seed_nonmd_base_from_live(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-) -> str | None:
-    """Seed the stored base from the live bytes of a non-md disposition file.
+def _plan_shared_marker_migration(sub_dst: Path) -> str | None:
+    """Compute the SHARED-marker strip for a base-absent markdown file (no writes).
 
-    Called only when ``sub_dst``'s stored base is ABSENT and ``sub_dst`` routes
-    through the structural (JSON / JSONC / YAML) merge engine. A structured file
-    has NO inline markers, so the seed is simply the current live bytes: this
-    retires the legacy ``preserve_user_keys`` two-way semantics in favor of the
-    structural three-way merge without losing the user's live keys on the first
-    install.
+    The EXPAND half of the section→disposition migration, called only when
+    ``sub_dst``'s stored base is ABSENT (a file entering the disposition
+    world for the first time). Computes the stripped-live text IN MEMORY via
+    :func:`setforge.sections.strip_shared_markers` (which parses the WHOLE
+    file via the marker state machine first, so a malformed file raises
+    :class:`~setforge.errors.MarkerError` before the install writes anything
+    — no partial output, no half-migrated file).
 
-    The seed is taken from :meth:`~pathlib.Path.read_text` (universal-newline)
-    — the EXACT view :func:`setforge.deploy.copy_atomic` re-reads as ``ours`` —
-    so base == ours at the level the merge parses, not merely at ``read_bytes``
-    (CRLF / CR live bytes are collapsed to LF on both sides). The seeded base is
-    written back byte-for-byte from that LF-normalized text.
-
-    Returns the seeded text so the caller threads it as ``base_text`` into the
-    merge (base == live == ours → zero spurious delta). Returns ``None`` —
-    leaving the caller on the ordinary base-absent (deploy-tracked-verbatim)
-    path — when the live file is ABSENT (nothing to seed from). The live file is
-    NOT rewritten here (no markers to strip); only the stored base is seeded, so
-    the live file's mode is untouched. The post-deploy advance re-seeds the
-    durable base; this write is the merge ancestor plus a crash mitigation so a
-    kill before the advance still finds a seeded base, not base-absent.
-    """
-    try:
-        live_text = sub_dst.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    base_store.write_base(profile, file_id, live_text.encode("utf-8"))
-    return live_text
-
-
-def _migrate_shared_markers_for_base(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-) -> str | None:
-    """Strip live SHARED markers in place + seed base; return the seeded base text.
-
-    The EXPAND half of the section→disposition migration, called
-    only when ``sub_dst``'s stored base is ABSENT (a file entering the
-    disposition world for the first time). When the live file exists AND
-    still carries legacy ``shared`` user-section markers, this:
-
-    1. Computes the stripped-live bytes IN MEMORY via
-       :func:`setforge.sections.strip_shared_markers` (which parses the WHOLE
-       file via the marker state machine first, so a malformed file raises
-       :class:`~setforge.errors.MarkerError` BEFORE any write — no partial
-       output, no half-migrated file).
-    2. Rewrites the live file to those exact stripped bytes, preserving the
-       file's EXISTING mode (0600 stays 0600) via the
-       fchmod-before-replace pattern (no symlink-follow, no mode widening).
-    3. Seeds the stored base to the SAME in-memory stripped bytes.
-
-    Returns the stripped text so the caller threads it as ``base_text`` into
-    :func:`deploy.copy_atomic`: base == stripped-live == what now sits live,
-    so the first 3-way merge has zero spurious delta (the data-loss
-    invariant). Returns ``None`` — leaving the caller's ``base_text`` at
-    ``None`` for the ordinary base-absent (deploy-tracked-verbatim) path —
-    when the live file is absent OR carries no SHARED markers. Host-local
-    markers and tracked-side markers are NOT touched here.
-
-    The gate is strict on the ``(base absent, shared markers present)`` pair
-    (base-absence is the caller's precondition; shared-marker presence is
-    ``stripped != live_text``), so a second install — where the base now
-    exists OR the markers are already stripped — never re-seeds or
-    double-strips.
-
-    **Crash-safe ordering (never base-absent-after-strip).** The base is
-    seeded FIRST (from the in-memory stripped bytes), THEN live is rewritten to
-    the stripped form. So a kill between the two leaves base-PRESENT +
-    live-still-marker-bearing — a state the caller's resume path
-    (:func:`_resume_marker_strip`) completes WITHOUT re-seeding. The inverted
-    order (strip first) would, on a kill, leave base-absent-after-strip: a
-    re-run would see ``stripped == live_text`` (already stripped), fall through
-    to the base-absent verbatim-deploy path, and skip the clean migration —
-    the loss this ordering prevents.
+    Returns the stripped text when the live file exists AND still carries
+    legacy ``shared`` user-section markers; returns ``None`` — leaving the
+    caller on the ordinary base-absent (deploy-tracked-verbatim) path — when
+    the live file is absent OR carries no SHARED markers. Host-local markers
+    and tracked-side markers are NOT touched. The gate is strict on the
+    ``(base absent, shared markers present)`` pair (base-absence is the
+    caller's precondition; shared-marker presence is ``stripped !=
+    live_text``), so a second install — where the base now exists OR the
+    markers are already stripped — never re-plans the migration.
     """
     try:
         live_text = sub_dst.read_text(encoding="utf-8")
@@ -771,70 +734,95 @@ def _migrate_shared_markers_for_base(
         # No SHARED markers to strip: fall through to the ordinary
         # base-absent path (deploy tracked verbatim, seed base == tracked).
         return None
-    # Seed base from the in-memory stripped text FIRST — which equals what
-    # copy_atomic re-reads as `ours`: live_text came from read_text
-    # (universal-newline, so CRLF/CR are already collapsed to LF), so `stripped`
-    # is LF-normalized and round-trips byte-identically through the rewrite.
-    # base == stripped == what live WILL hold once the rewrite lands == ours,
-    # so the first 3-way merge sees no spurious delta. Seeding before the live
-    # rewrite is the crash-safety invariant: a kill here leaves base-present +
-    # live-marker-bearing (resumable), never base-absent-after-strip.
-    base_store.write_base(profile, file_id, stripped.encode("utf-8"))
-    # THEN rewrite live to the stripped bytes, preserving the EXISTING live mode.
-    existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
-    _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
     return stripped
 
 
-def _resume_marker_strip(sub_dst: Path, base_text: str) -> None:
-    """Complete an interrupted SHARED-marker strip when the base is still the seed.
+def _plan_resume_marker_strip(sub_dst: Path, base_text: str) -> str | None:
+    """Plan the completion of an interrupted SHARED-marker strip (no writes).
 
-    Reached on the crash-resume state: the seed-first base write landed but the
-    kill hit BEFORE the live strip, so the stored base is PRESENT yet live still
-    carries legacy SHARED markers. In that window the base is the SEED — i.e.
-    ``base_text == strip_shared_markers(live)`` — because live is byte-unchanged
-    since the seed. Re-stripping the unchanged marker-bearing live therefore
-    reproduces the seeded base byte-for-byte, so this rewrites live to the
-    stripped form to reach base == live == stripped WITHOUT touching the base (no
-    re-seed; the seeded base is the truth).
+    Targets the crash-resume state: the seed-first base write landed but a
+    kill hit BEFORE the live strip, so the stored base is PRESENT yet live
+    still carries legacy SHARED markers. In that window the base is the SEED
+    — i.e. ``base_text == strip_shared_markers(live)`` — because live is
+    byte-unchanged since the seed. Re-stripping the unchanged marker-bearing
+    live therefore reproduces the seeded base byte-for-byte, so the plan
+    rewrites live to the stripped form to reach base == live == stripped
+    WITHOUT touching the base (no re-seed; the seeded base is the truth).
 
-    Two states leave this a no-op:
+    Two states return ``None`` (nothing to resume):
 
-    * **Steady state, no markers** — a live file with NO SHARED markers leaves
-      ``stripped == live_text``; nothing to resume.
-    * **Steady state, base advanced PAST the seed** — a ``disposition: shared``
-      file whose TRACKED content legitimately carries an in-content shared
-      marker deploys that marker into live on every install, and the post-deploy
-      advance re-baselines the stored base to the merged, marker-BEARING form.
-      On the next install live still carries the marker, but the base is no
-      longer the markerless seed, so ``strip_shared_markers(live) != base_text``.
-      This is NOT an interrupted migration — the strip already ran and was
-      advanced over — so there is nothing to resume; the live byte-base is the
-      merge ancestor :func:`deploy.copy_atomic`'s 3-way driver owns from here.
-      Re-stripping live would diverge from the advanced base, so the resume must
-      stand down rather than rewrite live (which WOULD corrupt the ancestor).
+    * **Steady state, no markers** — a live file with NO SHARED markers
+      leaves ``stripped == live_text``.
+    * **Steady state, base advanced PAST the seed** — a ``disposition:
+      shared`` file whose TRACKED content legitimately carries an in-content
+      shared marker deploys that marker into live on every install, and the
+      post-deploy advance re-baselines the stored base to the merged,
+      marker-BEARING form. On the next install live still carries the marker,
+      but the base is no longer the markerless seed, so
+      ``strip_shared_markers(live) != base_text``. This is NOT an interrupted
+      migration — the strip already ran and was advanced over — so there is
+      nothing to resume; the stored byte-base is the merge ancestor
+      :func:`deploy.resolve_deploy`'s 3-way driver owns from here.
+      Re-stripping live would diverge from the advanced base and corrupt the
+      ancestor, so the resume must stand down.
 
-    The resume thus fires ONLY in its genuine window (``stripped == base_text``);
-    any other ``(base present, live marker-bearing)`` shape is steady state and
-    untouched. Mode is preserved on the rewrite (0600 stays 0600) via the same
-    fchmod-before-replace pattern the seed path uses.
+    The resume thus fires ONLY in its genuine window
+    (``stripped == base_text``); any other ``(base present, live
+    marker-bearing)`` shape is steady state and untouched.
     """
     try:
         live_text = sub_dst.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return
+        return None
     stripped = strip_shared_markers(live_text)
     if stripped == live_text:
         # Steady state: no markers left to strip, nothing to resume.
-        return
+        return None
     if stripped != base_text:
         # Base advanced past the markerless seed (steady-state re-install of a
         # disposition:shared file whose tracked content retains its shared
         # marker): not an interrupted migration. Leave live and the advanced
         # base alone — the 3-way merge driver is the ancestor's owner now.
-        return
-    existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
-    _atomic_rewrite_preserving_mode(sub_dst, stripped, existing_mode)
+        return None
+    return stripped
+
+
+def _apply_deferred_base_migration(
+    profile: str,
+    file_id: str,
+    sub_dst: Path,
+    plan: DispositionBasePlan,
+) -> None:
+    """Apply a plan's deferred base-migration writes in the crash-safe order.
+
+    No-op for a steady-state plan (nothing deferred). Otherwise:
+
+    1. Seed the stored base from ``deferred_seed`` FIRST.
+    2. THEN rewrite live to ``deferred_live_strip``, preserving the file's
+       EXISTING mode (0600 stays 0600) via the fchmod-before-replace pattern
+       (no symlink-follow, no mode widening).
+    3. Fire the one-time :func:`_warn_auto_migration` when the plan is a
+       genuine auto-migration (``migrated`` True) — never on a crash-resume
+       completion or a steady-state read.
+
+    **Crash-safe ordering (never base-absent-after-strip).** Seeding the base
+    before the live strip means a kill between the two leaves base-PRESENT +
+    live-still-marker-bearing — a state the next install's
+    :func:`_plan_resume_marker_strip` completes WITHOUT re-seeding. The
+    inverted order (strip first) would, on a kill, leave
+    base-absent-after-strip: a re-run would see the markers already stripped,
+    fall through to the base-absent verbatim-deploy path, and skip the clean
+    migration — the loss this ordering prevents.
+    """
+    if plan.deferred_seed is not None:
+        base_store.write_base(profile, file_id, plan.deferred_seed)
+    if plan.deferred_live_strip is not None:
+        existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
+        _atomic_rewrite_preserving_mode(
+            sub_dst, plan.deferred_live_strip, existing_mode
+        )
+    if plan.migrated:
+        _warn_auto_migration(sub_dst, profile)
 
 
 def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None:
@@ -868,7 +856,7 @@ def _warn_auto_migration(sub_dst: Path, profile: str) -> None:
     """Emit the one-time actionable warning for an auto-on-install migration.
 
     Fired only when an auto-migration actually ran this install
-    (``DispositionBaseResult.migrated`` True) — never on a steady-state or
+    (``DispositionBasePlan.migrated`` True) — never on a steady-state or
     crash-resumed install. States WHAT changed (a per-host base was seeded from
     the current live file; any legacy SHARED-section markers were stripped —
     host-local markers are left in place, and structured files have none) and

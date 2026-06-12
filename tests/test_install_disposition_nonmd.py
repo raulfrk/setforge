@@ -30,7 +30,10 @@ from typer.testing import CliRunner
 
 from setforge import base_store
 from setforge.cli import app
-from setforge.cli._install_helpers import _read_or_migrate_disposition_base
+from setforge.cli._install_helpers import (
+    _apply_deferred_base_migration,
+    _plan_disposition_base,
+)
 
 _PROFILE = "test-disposition-nonmd"
 _FILE_ID = "structured"
@@ -176,15 +179,16 @@ def test_first_install_seeds_base_equals_live(
 def test_seed_base_equals_live_at_merge_read_level(repo: Path, suffix: str) -> None:
     """Seed invariant: the seeded base == what copy_atomic re-reads as ``ours``.
 
-    Probes the seed helper directly (before the post-deploy advance overwrites
+    Probes the plan helper directly (before the post-deploy advance overwrites
     the base with the merge result): the seeded merge-ancestor must equal the
     live file as read via ``read_text`` (universal-newline) — the exact view
     the structural merge parses as ``ours`` — not merely ``read_bytes``. A CRLF
     live file is collapsed to LF on both the seed side and the merge-read side,
-    so the two stay byte-equal.
+    so the two stay byte-equal. The plan itself writes nothing; the stored base
+    appears only once the deferred seed is applied.
 
     ``repo`` is required (not used directly) so its sandboxed
-    ``$SETFORGE_STATE_DIR`` / ``$HOME`` are active when the seed helper writes
+    ``$SETFORGE_STATE_DIR`` / ``$HOME`` are active when the apply helper writes
     the base.
     """
     live_body = _JSON_LIVE if suffix == ".json" else _YAML_LIVE
@@ -194,15 +198,18 @@ def test_seed_base_equals_live_at_merge_read_level(repo: Path, suffix: str) -> N
     # left behind (this test calls the helper directly, outside `_install`).
     base_store.base_path(_PROFILE, _FILE_ID).unlink(missing_ok=True)
 
-    result = _read_or_migrate_disposition_base(_PROFILE, _FILE_ID, live)
-    assert result.base_text is not None
+    plan = _plan_disposition_base(_PROFILE, _FILE_ID, live)
+    assert plan.base_text is not None
     # A first-install seed from an existing live file IS an auto-migration.
-    assert result.migrated is True
+    assert plan.migrated is True
+    # The plan is a pure read: the base store stays empty until the apply.
+    assert base_store.read_base(_PROFILE, _FILE_ID) is None
+    _apply_deferred_base_migration(_PROFILE, _FILE_ID, live, plan)
     stored = base_store.read_base(_PROFILE, _FILE_ID)
     assert stored is not None
     # Returned seed, stored seed, and copy_atomic's ``ours`` read all agree.
     merge_ours = live.read_text(encoding="utf-8")
-    assert result.base_text == merge_ours
+    assert plan.base_text == merge_ours
     assert stored.decode("utf-8") == merge_ours
 
 
