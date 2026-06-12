@@ -1372,12 +1372,16 @@ def _dry_run_emit_drift_gate(
 
     The drift gate is a READ in the real pipeline too (it computes
     unexpected drift over the existing live tree) — counts stay
-    unprefixed. When unexpected drift IS present, surface the count so
-    users can see what the real install would gate on, but do NOT
-    invoke the auto-confirm confirm wizard (the dry-run path is the preview;
-    short-circuiting before the confirm is a hard requirement per spec).
-    ``live_sections_map`` is the read-only output of
-    :func:`_extract_live_sections_map`; the count is informational.
+    unprefixed. The count reports files whose drift is CLASSIFIED
+    unexpected or conflicted (the compare-level
+    :class:`~setforge.compare.DriftClass`); the live install gate
+    (:func:`_check_unexpected_drift`) trips only on permission-mode
+    drift (``mode_drift``), so this count can include diff-only drift
+    that a real install does not reject. The dry-run path
+    never invokes the auto-confirm wizard (short-circuiting before the
+    confirm is a hard requirement per spec). ``live_sections_map`` is
+    the read-only output of :func:`_extract_live_sections_map`; the
+    count is informational.
     """
     typer.echo("=== would-be drift gate ===")
     unexpected = sum(

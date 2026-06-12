@@ -18,7 +18,7 @@ import pytest
 from setforge import base_store, spans_store
 from setforge.cli import _install_helpers
 from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
-from setforge.compare import CompareReport, CompareStatus, FileCompare
+from setforge.compare import CompareReport, CompareStatus, DriftClass, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
 from setforge.source import AnchorAtEndOfFile, HostLocalSection, HostLocalSectionName
 from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
@@ -62,6 +62,35 @@ def test_check_unexpected_drift_no_entries_is_noop() -> None:
         auto_accept_tracked=False,
         auto_accept_live=False,
     )
+
+
+def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A diff-only ``UNEXPECTED`` entry counts toward the dry-run gate line.
+
+    The dry-run count keys off the compare-level classification
+    (``drift_class``), not ``mode_drift`` — so a DRIFTED entry with
+    ``mode_drift=False`` still renders ``unexpected drift in 1 file(s)``
+    even though the live install gate (:func:`_check_unexpected_drift`)
+    would not reject it. Pins the wider-than-the-live-gate semantics the
+    helper's docstring documents.
+    """
+    report = CompareReport(
+        entries=[
+            FileCompare(
+                name="claude/CLAUDE.md",
+                status=CompareStatus.DRIFTED,
+                diff="--- a\n+++ b\n",
+                mode_drift=False,
+                drift_class=DriftClass.UNEXPECTED,
+            ),
+        ],
+        has_unexpected_drift=True,
+    )
+    _install_helpers._dry_run_emit_drift_gate(report, live_sections_map={})
+    out = capsys.readouterr().out
+    assert "unexpected drift in 1 file(s)" in out
 
 
 def test_resolve_drift_paths_directory_subfiles_do_not_collide(
