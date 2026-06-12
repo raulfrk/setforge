@@ -53,6 +53,41 @@ def test_pinned_returns_live_verbatim() -> None:
     )
 
 
+def test_pinned_live_absent_first_install_deploys_tracked() -> None:
+    """Fresh host: no live file → PINNED deploys tracked once, no base advance.
+
+    The caller passes live="" as a placeholder when the destination does
+    not exist; without the live_absent flag the pin would deploy an EMPTY
+    file. Every later run sees a live file and returns it untouched.
+    """
+    res = resolve_file(
+        Disposition.PINNED,
+        Path("settings.json"),
+        base=None,
+        live="",
+        tracked='{"a": 1}\n',
+        auto=None,
+        live_absent=True,
+    )
+    assert res == FileResolution(
+        text='{"a": 1}\n', conflicts=[], advance_base=False, base_absent=False
+    )
+
+
+def test_pinned_live_present_unchanged_by_live_absent_default() -> None:
+    """The shipped pinned behavior is untouched when a live file exists."""
+    res = resolve_file(
+        Disposition.PINNED,
+        Path("settings.json"),
+        base=None,
+        live="live\n",
+        tracked="tracked\n",
+        auto=None,
+    )
+    assert res.text == "live\n"
+    assert res.advance_base is False
+
+
 def test_pinned_ignores_yaml_and_jsonc() -> None:
     live = "a: 1\n"
     res = resolve_file(

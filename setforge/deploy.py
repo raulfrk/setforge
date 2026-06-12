@@ -274,6 +274,7 @@ def _resolve_disposition_content(
         merge_auto,
         conflict_resolver,
         structural_spans=structural_spans,
+        live_absent=not dst_existed,
     )
     content = resolution.text
     # new_base rides the resolution's advance decision, NOT the write action:

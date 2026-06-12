@@ -207,6 +207,8 @@ def resolve_file(
     auto: ReconcileAuto | None,
     resolver: ConflictResolver | None = None,
     structural_spans: list[SpanEntry] | None = None,
+    *,
+    live_absent: bool = False,
 ) -> FileResolution:
     """Resolve one file to deployed text + a re-baseline decision.
 
@@ -231,8 +233,21 @@ def resolve_file(
     not silently taken toward tracked); the re-baseline dump is taken AFTER the
     re-assert (B-S6). FORKED spans are not re-asserted (capture exclusion only).
     Spans are ignored on the PINNED / base-absent / line-based paths.
+
+    ``live_absent`` is True when the destination file did not exist — the
+    caller passes ``live=""`` as a placeholder in that case. Consumed ONLY
+    by the PINNED branch (the first install deploys tracked instead of the
+    empty placeholder); every other path already handles first-run state
+    via ``base is None``.
     """
     if disposition is Disposition.PINNED:
+        if live_absent:
+            # Fresh host: there is no live file for "never overwrite live"
+            # to keep, so the FIRST install deploys the tracked bytes;
+            # every later run sees a live file and returns it untouched.
+            return FileResolution(
+                text=tracked, conflicts=[], advance_base=False, base_absent=False
+            )
         return FileResolution(
             text=live, conflicts=[], advance_base=False, base_absent=False
         )
