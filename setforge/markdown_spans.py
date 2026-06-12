@@ -170,9 +170,7 @@ def _segment_str(level: int, text: str) -> str:
     return f"{'#' * level} {text}"
 
 
-def _breadcrumb_suggestions(
-    text: str, matches: list[int], level: int, heading_text: str
-) -> list[str]:
+def _breadcrumb_suggestions(text: str, matches: list[int]) -> list[str]:
     """Return one disambiguating breadcrumb per duplicate occurrence.
 
     For each occurrence of the ambiguous simple anchor, ancestors are
@@ -310,7 +308,7 @@ def bound_span(text: str, anchor: str) -> MarkdownSpan:
         raise AnchorNotFoundError(f"no heading matched span anchor {anchor!r}")
     if len(matches) > 1:
         lines_1 = ", ".join(str(m + 1) for m in matches)
-        suggestions = _breadcrumb_suggestions(text, matches, level, heading_text)
+        suggestions = _breadcrumb_suggestions(text, matches)
         hint = (
             "; disambiguate with a breadcrumb anchor: "
             + "; ".join(repr(s) for s in suggestions)
