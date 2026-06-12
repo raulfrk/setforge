@@ -23,6 +23,7 @@ from setforge.disposition_merge import (
 )
 from setforge.errors import ConfigError
 from setforge.markdown_merge import LineConflict
+from setforge.scalar_merge import ABSENT
 from setforge.section_wizard import ReconcileAuto
 from setforge.spans import SpanEntry, SpanKind
 from setforge.structural_merge import PathConflict, get_at_path
@@ -851,38 +852,80 @@ def test_capture_excludes_pinned_path_yaml() -> None:
     # written back), while the rest of live captures.
     live = "editor:\n  fontSize: 22\nshared: live-edit\n"
     tracked = "editor:\n  fontSize: 12\nshared: old\n"
-    out = exclude_structural_spans_for_capture(
+    out, warnings = exclude_structural_spans_for_capture(
         live, tracked, [_pin("editor.fontSize")], is_jsonc=False
     )
     assert _yaml_value_at(out, "editor.fontSize") == 12  # tracked kept at P
     assert _yaml_value_at(out, "shared") == "live-edit"  # rest captured
+    assert warnings == []
 
 
 def test_capture_excludes_forked_path_too() -> None:
     # B-S5: forked paths are ALSO excluded from capture (I2 totality).
     live = "a:\n  b: 99\nrest: live\n"
     tracked = "a:\n  b: 1\nrest: old\n"
-    out = exclude_structural_spans_for_capture(
+    out, warnings = exclude_structural_spans_for_capture(
         live, tracked, [_fork("a.b")], is_jsonc=False
     )
     assert _yaml_value_at(out, "a.b") == 1  # tracked kept at forked P
     assert _yaml_value_at(out, "rest") == "live"
+    assert warnings == []
 
 
 def test_capture_exclusion_jsonc() -> None:
     live = '{\n  "a": {\n    "b": 99\n  }\n}\n'
     tracked = '{\n  "a": {\n    "b": 1\n  }\n}\n'
-    out = exclude_structural_spans_for_capture(
+    out, warnings = exclude_structural_spans_for_capture(
         live, tracked, [_pin("a.b")], is_jsonc=True
     )
     assert _json5_loads(out)["a"]["b"] == 1
+    assert warnings == []
 
 
-def test_capture_exclusion_path_absent_in_tracked_left_as_live() -> None:
-    # Tracked has no value at P -> nothing to restore; live flows through.
-    live = "a:\n  b: 5\n"
+def test_capture_drops_span_path_absent_in_tracked() -> None:
+    # Tracked has no value at P -> the host value at P must NOT bake into
+    # tracked: the path is DELETED from the capture text and a warning
+    # surfaces the uncaptured host value.
+    live = "a:\n  b: 5\n  keep: live\n"
     tracked = "a:\n  c: 1\n"
-    out = exclude_structural_spans_for_capture(
+    out, warnings = exclude_structural_spans_for_capture(
         live, tracked, [_pin("a.b")], is_jsonc=False
     )
-    assert _yaml_value_at(out, "a.b") == 5
+    assert _yaml_value_at(out, "a.b") is ABSENT  # host value dropped
+    assert _yaml_value_at(out, "a.keep") == "live"  # rest captured
+    assert warnings == ["span path a.b absent in tracked — host value not captured"]
+
+
+def test_capture_drops_span_path_absent_in_tracked_jsonc() -> None:
+    live = '{\n  "a": {\n    "b": 99,\n    "keep": "live"\n  }\n}\n'
+    tracked = '{\n  "a": {\n    "keep": "old"\n  }\n}\n'
+    out, warnings = exclude_structural_spans_for_capture(
+        live, tracked, [_pin("a.b")], is_jsonc=True
+    )
+    assert _json5_loads(out)["a"] == {"keep": "live"}
+    assert warnings == ["span path a.b absent in tracked — host value not captured"]
+
+
+def test_capture_keeps_span_path_present_in_tracked() -> None:
+    # The present-in-tracked sibling of the drop case: tracked HAS a value
+    # at P, so capture restores it (never deletes) and emits no warning.
+    live = "a:\n  b: 5\nrest: live\n"
+    tracked = "a:\n  b: 1\nrest: old\n"
+    out, warnings = exclude_structural_spans_for_capture(
+        live, tracked, [_pin("a.b")], is_jsonc=False
+    )
+    assert _yaml_value_at(out, "a.b") == 1
+    assert _yaml_value_at(out, "rest") == "live"
+    assert warnings == []
+
+
+def test_capture_absent_in_both_sides_is_silent_noop() -> None:
+    # Tracked lacks P and live lacks it too: nothing to drop, so no
+    # warning — a converged orphan must not warn on every sync forever.
+    live = "a:\n  c: 2\n"
+    tracked = "a:\n  c: 1\n"
+    out, warnings = exclude_structural_spans_for_capture(
+        live, tracked, [_pin("a.b")], is_jsonc=False
+    )
+    assert _yaml_value_at(out, "a.c") == 2
+    assert warnings == []

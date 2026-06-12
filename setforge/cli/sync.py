@@ -146,8 +146,7 @@ def capture(
     results = _run_capture(
         cfg, profile, repo_root, config, auto_enum, command="capture"
     )
-    for result in results:
-        typer.echo(f"{result.action.value:>8}  {result.name}")
+    _render_capture_results(results)
 
 
 @app.command(epilog=SYNC_EXAMPLES)
@@ -216,8 +215,7 @@ def sync(
         results = _run_capture(
             cfg, profile, repo_root, config, auto_enum, command="sync"
         )
-        for result in results:
-            typer.echo(f"{result.action.value:>8}  {result.name}")
+        _render_capture_results(results)
 
         _capture_extensions(config, profile)
 
@@ -432,6 +430,20 @@ def _capture_extensions(config: Path, profile: str) -> None:
         )
         return
     typer.echo(f"extensions: include {'updated' if changed else 'unchanged'}")
+
+
+def _render_capture_results(results: list[capture_mod.CaptureResult]) -> None:
+    """Render the per-file action lines (stdout) + capture warnings (stderr).
+
+    Shared between :func:`capture` and :func:`sync`. A warning marks content
+    the writeback deliberately did NOT capture (e.g. a host value at a span
+    path absent in tracked), so it goes to stderr where scripted callers
+    keep it apart from the action listing.
+    """
+    for result in results:
+        typer.echo(f"{result.action.value:>8}  {result.name}")
+        for warning in result.warnings:
+            typer.secho(f"warning: {warning}", err=True, fg=typer.colors.YELLOW)
 
 
 def _run_capture(

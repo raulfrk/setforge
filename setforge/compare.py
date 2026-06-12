@@ -611,7 +611,9 @@ def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
     except OSError:
         return False
     if disposition_merge.is_structural(src):
-        excluded = disposition_merge.exclude_structural_spans_for_capture(
+        # Warnings are a capture-surface concern; compare only needs the
+        # excluded text for the equality probe.
+        excluded, _ = disposition_merge.exclude_structural_spans_for_capture(
             live_text, tracked_text, tracked_file.spans, jsonc.is_jsonc_file(src)
         )
     elif src.suffix.lower() in {".md", ".markdown"}:

@@ -138,6 +138,26 @@ def test_span_only_drift_false_when_structural_drift_outside_span(
     assert _span_only_drift(src, dst, tf) is False
 
 
+def test_compare_span_only_true_when_live_adds_key_tracked_lacks(
+    tmp_path: Path,
+) -> None:
+    # Live HAS a value at the span path; tracked LACKS it. Capture now DROPS
+    # the path (host value never bakes into tracked), so excluded == tracked
+    # and the drift classifies as span-only — expected host divergence, not
+    # unsynced shared drift. Pins the intentional classification flip from
+    # the old leave-live-as-is behavior (which reported False here).
+    tracked = "editor:\n  tabSize: 4\nshared:\n  theme: dark\n"
+    src = tmp_path / "doc.yaml"
+    src.write_text(tracked, encoding="utf-8")
+    dst = tmp_path / "live.yaml"
+    dst.write_text(
+        "editor:\n  fontSize: 20\n  tabSize: 4\nshared:\n  theme: dark\n",
+        encoding="utf-8",
+    )
+    tf = _tracked_yaml([{"anchor": "editor.fontSize", "kind": "pinned"}])
+    assert _span_only_drift(src, dst, tf) is True
+
+
 def test_file_compare_span_drift_is_expected() -> None:
     entry = FileCompare(
         name="doc",

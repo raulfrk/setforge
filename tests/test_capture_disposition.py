@@ -224,6 +224,50 @@ def test_shared_structural_span_excluded_from_drift_absorption(repo: Path) -> No
     assert "shared_key: L-shared" in captured
 
 
+def test_sync_surfaces_absent_span_warning_on_stderr(repo: Path) -> None:
+    """A span path absent in tracked drops from capture and warns on stderr.
+
+    After ``install`` seeds live==tracked, UPSTREAM removes the pinned span
+    path from tracked. Live still holds the value. ``sync`` must NOT bake the
+    host value back into tracked (the path stays absent) and must surface the
+    not-captured warning on stderr.
+    """
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  settings:\n"
+        "    src: yaml/settings.yaml\n"
+        "    dst: ~/.setforge_disp/settings.yaml\n"
+        "    disposition: shared\n"
+        "    spans:\n"
+        "      - anchor: pinned_key\n"
+        "        kind: pinned\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - settings\n",
+        encoding="utf-8",
+    )
+    src = repo / "tracked" / "yaml" / "settings.yaml"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("pinned_key: T-pin\nshared_key: T-shared\n", encoding="utf-8")
+
+    assert _install(config).exit_code == 0
+    # Upstream removes the span path from tracked; live still carries it.
+    upstream_body = "shared_key: T-shared\n"
+    src.write_text(upstream_body, encoding="utf-8")
+
+    result = _sync(config)
+    assert result.exit_code == 0, result.output
+    # The host value did NOT bake into tracked — the path stays absent.
+    assert src.read_text(encoding="utf-8") == upstream_body
+    assert (
+        "span path pinned_key absent in tracked — host value not captured"
+        in result.stderr
+    )
+
+
 def test_shared_capture_then_install_is_noop(repo: Path) -> None:
     """After a shared capture, a re-install is a clean no-op (zero drift)."""
     src = _write_tracked(repo, "a\nb\n")

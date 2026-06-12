@@ -50,11 +50,12 @@ from setforge.scalar_merge import (
     _scalar_eq,
     resolve_scalar,
 )
-from setforge.scalar_path import _set_jsonc_leaf
+from setforge.scalar_path import _delete_jsonc_leaf, _set_jsonc_leaf
 
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
+    "delete_at_path",
     "get_at_path",
     "list_keys_at_path",
     "merge_structural",
@@ -701,6 +702,41 @@ def set_at_path(model: object, path: str, value: object) -> None:
     parent = _descend_set_parent(_json5_inner(model), segments, path)
     leaf = segments[-1]
     _set_leaf(parent, leaf, value, path)
+
+
+def delete_at_path(model: object, path: str) -> None:
+    """Delete the leaf at dotted ``path`` from ``model`` in place.
+
+    The removal sibling of :func:`set_at_path` — the seam capture exclusion
+    uses to DROP a span path whose value tracked does not carry, so a
+    host-local value never bakes into the shared repo on a live→tracked
+    writeback. ``path`` is the same DOTTED grammar (``a.b.c``); a list-suffix
+    segment (``[*]`` / ``[]``) is rejected with :class:`ValueError`.
+
+    Absence anywhere on the path (missing intermediate parent, non-mapping
+    parent, or missing leaf) is a silent NO-OP — "the key must be absent in
+    the result" is already satisfied, matching the backend ``delete``
+    semantics. Comment handling per backend: ruamel round-trip keeps sibling
+    comments on a plain ``pop``; the json-five model goes through
+    :func:`setforge.scalar_path._delete_jsonc_leaf` (keys/values spliced in
+    lockstep, the predecessor's trailing comment re-homed); a plain ``dict``
+    carries no comments.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for delete-at-path: {path!r}")
+    segments = path.split(".")
+    node = _json5_inner(model)
+    for seg in segments[:-1]:
+        if not _is_mapping_node(node):
+            return
+        node = _child_node(node, seg)
+        if node is ABSENT:
+            return
+    leaf = segments[-1]
+    if isinstance(node, JSONObject):
+        _delete_jsonc_leaf(node, leaf)
+    elif isinstance(node, MutableMapping):
+        node.pop(leaf, None)
 
 
 def get_at_path(model: object, path: str) -> object:

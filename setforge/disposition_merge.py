@@ -72,6 +72,7 @@ from setforge.section_wizard import ReconcileAuto
 from setforge.spans import SpanEntry, SpanKind
 from setforge.structural_merge import (
     PathConflict,
+    delete_at_path,
     get_at_path,
     merge_structural,
     set_at_path,
@@ -569,8 +570,8 @@ def exclude_structural_spans_for_capture(
     tracked_text: str,
     spans: list[SpanEntry],
     is_jsonc: bool,
-) -> str:
-    """Return capture text: live with every span path kept as TRACKED's value.
+) -> tuple[str, list[str]]:
+    """Return capture text + warnings: live with every span path kept tracked.
 
     The structural sibling of
     :func:`setforge.spans_overlay.exclude_spans_for_capture`. Capture exclusion
@@ -579,18 +580,31 @@ def exclude_structural_spans_for_capture(
     never bakes into the shared config repo (B-S5). The rest of the live file
     captures normally.
 
-    A span whose path is absent in tracked is left as live (nothing to restore);
-    a path whose parent is missing in live is silently skipped — capture never
-    aborts (the orphan is surfaced loudly by the install path, not here).
+    A span whose path is absent in tracked has nothing to restore — the live
+    value at P is DELETED from the capture text (it is host-local by span
+    intent and must not bake into the repo) and a warning is returned so the
+    sync surface can report the uncaptured host value. When live ALSO lacks P
+    the span is a converged no-op: nothing dropped, no warning. A path whose
+    parent is missing / non-mapping in live is silently skipped — capture
+    never aborts (the orphan is surfaced loudly by the install path, not
+    here).
     """
     if not spans:
-        return live_text
+        return live_text, []
     live_model = _load_structural(live_text, is_jsonc)
     tracked_model = _load_structural(tracked_text, is_jsonc)
+    warnings: list[str] = []
     for span in spans:
         tracked_value = get_at_path(tracked_model, span.anchor)
         if tracked_value is ABSENT:
-            # Tracked has no value at P — leave live as-is (nothing to restore).
+            # Tracked has no value at P — drop live's host value (if any)
+            # from the writeback rather than baking it into the repo.
+            if get_at_path(live_model, span.anchor) is ABSENT:
+                continue
+            delete_at_path(live_model, span.anchor)
+            warnings.append(
+                f"span path {span.anchor} absent in tracked — host value not captured"
+            )
             continue
         try:
             set_at_path(live_model, span.anchor, tracked_value)
@@ -598,7 +612,7 @@ def exclude_structural_spans_for_capture(
             # P's parent missing / non-mapping in live: skip silently; the
             # install path reports the orphan loudly.
             continue
-    return _dump_structural(live_model, is_jsonc)
+    return _dump_structural(live_model, is_jsonc), warnings
 
 
 def _apply_structural_resolver(

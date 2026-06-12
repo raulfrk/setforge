@@ -24,7 +24,7 @@ hint.
 
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -75,6 +75,7 @@ class CaptureResult:
     name: str
     action: CaptureAction
     reason: str = ""
+    warnings: tuple[str, ...] = ()
 
 
 def capture_tracked_file(
@@ -266,7 +267,12 @@ def capture_profile(
                     local_config_path=local_config_path,
                 )
             results.append(
-                CaptureResult(name=sub_name, action=result.action, reason=result.reason)
+                CaptureResult(
+                    name=sub_name,
+                    action=result.action,
+                    reason=result.reason,
+                    warnings=result.warnings,
+                )
             )
     return results
 
@@ -439,6 +445,7 @@ def _capture_disposition_file(
         )
     live_text = dst.read_text(encoding="utf-8")
     capture_text = live_text
+    span_warnings: list[str] = []
     if spans:
         # Capture exclusion is TOTAL: keep tracked over live inside every
         # span region (Invariant I2). The existing tracked content is the
@@ -448,8 +455,10 @@ def _capture_disposition_file(
         # takes its own exclusion path (B-S5).
         tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
         if disposition_merge.is_structural(dst):
-            capture_text = disposition_merge.exclude_structural_spans_for_capture(
-                live_text, tracked_text, spans, jsonc.is_jsonc_file(dst)
+            capture_text, span_warnings = (
+                disposition_merge.exclude_structural_spans_for_capture(
+                    live_text, tracked_text, spans, jsonc.is_jsonc_file(dst)
+                )
             )
         else:
             span_states = spans_store.get_states(profile, sub_name)
@@ -481,4 +490,6 @@ def _capture_disposition_file(
     # then base, so a base-write failure leaves base lagging (safe) rather
     # than ahead of tracked (corruption). Failure propagates.
     base_store.write_base(profile, sub_name, capture_text.encode("utf-8"))
+    if span_warnings:
+        return replace(result, warnings=tuple(span_warnings))
     return result
