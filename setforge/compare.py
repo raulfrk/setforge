@@ -658,17 +658,20 @@ def _classify_drifted(
     # Slot 1 — CONFLICTED: a forked-scalar span where base ≠ live AND
     # base ≠ tracked. Detection not wired yet; a follow-up populates
     # ``forked_scalar_conflicts`` and short-circuits here.
-    # Slot 2 — UNEXPECTED (clobber): span-only drift with no stored byte
-    # base. The base-absent install path deploys tracked verbatim
-    # (disposition_merge's first-run branch) and does not honor every
-    # span override, so the live span edits are at clobber risk until a
-    # sync stores a base. A PINNED disposition is exempt — install never
-    # overwrites its live file.
+    # Slot 2 — UNEXPECTED (clobber): SHARED span-only drift with no
+    # stored byte base. The base-absent install path deploys tracked
+    # verbatim (disposition_merge's first-run branch) and does not honor
+    # every span override, so the live span edits are at clobber risk
+    # until a sync stores a base. Only SHARED dispositions are at risk:
+    # FORKED/PINNED install never overwrites the live file (slot 4
+    # classifies them EXPECTED), and a None disposition (legacy
+    # preserve-* / host-local-overlay file) never takes the
+    # disposition-merge deploy-tracked-verbatim path at all.
     if (
         probe_stale
         and profile is not None
         and entry.span_only_drift
-        and entry.disposition is not Disposition.PINNED
+        and entry.disposition is Disposition.SHARED
         and _base_absent(profile, entry.name)
     ):
         return DriftClass.UNEXPECTED, _CLOBBER_REASON

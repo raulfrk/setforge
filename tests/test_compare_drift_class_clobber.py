@@ -6,10 +6,13 @@ base-absent deploy-tracked-verbatim path, which does NOT honor every span
 override (forked spans get no post-merge re-assert), so the live span
 edits are at clobber risk. Covers:
 
-- span-only drift + base absent + disposition != PINNED → UNEXPECTED
+- span-only drift + base absent + disposition == SHARED → UNEXPECTED
   with the run-sync-first reason
 - the same drift WITH a stored base stays EXPECTED
 - a PINNED disposition is excluded (install never overwrites live)
+- a ``None`` disposition (host-local-overlay / legacy preserve-* file)
+  is excluded — it never takes the base-absent deploy-tracked-verbatim
+  path, so there is no clobber risk
 - ``compare --check`` exits 1 on the clobber class
 - a torn base-store read degrades deterministically (no crash)
 """
@@ -53,24 +56,26 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _span_file(tmp_path: Path, *, disposition: str = "shared") -> tuple[Config, Path]:
+def _span_file(
+    tmp_path: Path, *, disposition: str | None = "shared"
+) -> tuple[Config, Path]:
     """One markdown tracked_file with a pinned span; live drifts ONLY
-    inside the span region. Returns (config, repo_root)."""
+    inside the span region. ``disposition=None`` omits the key (the
+    host-local-overlay / legacy preserve-* shape). Returns
+    (config, repo_root)."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "doc.md", _DOC)
     dst = tmp_path / "live" / "doc.md"
     _write(dst, _DOC_SPAN_EDITED)
+    raw: dict[str, object] = {
+        "src": "doc.md",
+        "dst": str(dst),
+        "spans": [{"anchor": "## Pinned", "kind": "pinned"}],
+    }
+    if disposition is not None:
+        raw["disposition"] = disposition
     config = Config(
-        tracked_files={
-            "doc": TrackedFile.model_validate(
-                {
-                    "src": "doc.md",
-                    "dst": str(dst),
-                    "disposition": disposition,
-                    "spans": [{"anchor": "## Pinned", "kind": "pinned"}],
-                }
-            )
-        },
+        tracked_files={"doc": TrackedFile.model_validate(raw)},
         profiles={"p": Profile(tracked_files=["doc"])},
     )
     return config, repo
@@ -119,6 +124,23 @@ def test_pinned_disposition_excluded_from_clobber(tmp_path: Path) -> None:
     assert report.has_unexpected_drift is False
 
 
+def test_none_disposition_excluded_from_clobber(tmp_path: Path) -> None:
+    """A disposition=None file (host-local-overlay / legacy preserve-*)
+    never takes the base-absent deploy-tracked-verbatim path, so its
+    base-absent span-only drift classifies EXPECTED via slot 4."""
+    config, repo = _span_file(tmp_path, disposition=None)
+
+    report = compare_profile(config, "p", repo)
+    entry = report.entries[0]
+
+    assert entry.status is CompareStatus.DRIFTED
+    assert entry.span_only_drift is True
+    assert entry.disposition is None
+    assert entry.drift_class is DriftClass.EXPECTED
+    assert entry.reason is None
+    assert report.has_unexpected_drift is False
+
+
 def test_torn_base_read_degrades_without_crash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -140,20 +162,24 @@ def test_torn_base_read_degrades_without_crash(
     assert entry.drift_class is DriftClass.EXPECTED
 
 
-def _write_cli_config(tmp_path: Path) -> Path:
-    """Write the span-file scenario as a real setforge.yaml; returns its path."""
+def _write_cli_config(tmp_path: Path, *, disposition: str | None = "shared") -> Path:
+    """Write the span-file scenario as a real setforge.yaml; returns its
+    path. ``disposition=None`` omits the key entirely."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "doc.md", _DOC)
     dst = tmp_path / "live" / "doc.md"
     _write(dst, _DOC_SPAN_EDITED)
     cfg_path = repo / "setforge.yaml"
+    disposition_line = (
+        f"    disposition: {disposition}\n" if disposition is not None else ""
+    )
     cfg_path.write_text(
         "version: 1\n"
         "tracked_files:\n"
         "  doc:\n"
         "    src: doc.md\n"
         f"    dst: {dst}\n"
-        "    disposition: shared\n"
+        f"{disposition_line}"
         "    spans:\n"
         '      - anchor: "## Pinned"\n'
         "        kind: pinned\n"
@@ -174,6 +200,17 @@ def test_check_exits_1_on_clobber(tmp_path: Path) -> None:
         app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
     )
     assert result.exit_code == 1, result.output
+
+
+def test_check_exits_0_on_none_disposition(tmp_path: Path) -> None:
+    """compare --check stays green for a disposition=None span file with
+    no stored base — slot 2 must not sweep it in."""
+    cfg_path = _write_cli_config(tmp_path, disposition=None)
+
+    result = CliRunner().invoke(
+        app, ["compare", "--profile=p", f"--config={cfg_path}", "--check"]
+    )
+    assert result.exit_code == 0, result.output
 
 
 def test_check_exits_0_once_base_stored(tmp_path: Path) -> None:
