@@ -142,7 +142,9 @@ def _compare_json_data(report: compare_mod.CompareReport) -> dict[str, Any]:
     value), ``disposition`` (string or null), ``drift_class`` (string or
     null — null unless DRIFTED), ``reason`` (string or null),
     ``span_only_drift`` (bool), ``forked_scalar_conflicts`` (list of
-    strings, empty today), ``drift_is_expected`` (bool, derived). No
+    pre-rendered ``path: base → tracked | live`` strings, non-empty iff
+    ``drift_class`` is ``conflicted``), ``drift_is_expected`` (bool,
+    derived). No
     diff bodies in JSON mode — they belong to the human view;
     ``compare --full-diff`` is a human-oriented surface.
     """

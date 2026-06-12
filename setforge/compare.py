@@ -11,8 +11,10 @@ Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
   resolves. Also covers the clobber shape — span-only drift with NO
   stored byte base, where a first install would deploy tracked verbatim
   over the live span edits (run ``sync`` first).
-- ``conflicted`` — reserved for forked-scalar span conflicts (the
-  detection is not wired yet; see :func:`_classify_drifted` slot 1).
+- ``conflicted`` — a forked-scalar conflict: the stored base differs
+  from BOTH live and tracked at the same scalar path, so the next
+  interactive install would prompt (see :func:`_forked_scalar_conflicts`).
+  Flagged by ``compare --check`` alongside ``unexpected``.
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously
@@ -34,6 +36,7 @@ from typing import TYPE_CHECKING
 from jinja2 import Template
 from rich.table import Table
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from setforge import (
     base_store,
@@ -50,7 +53,7 @@ from setforge.config import (
     TrackedFile,
     resolve_profile,
 )
-from setforge.errors import BaseStoreError
+from setforge.errors import BaseStoreError, ConfigError, MergeTypeMismatch
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -152,8 +155,14 @@ class FileCompare:
     """
     forked_scalar_conflicts: list[str] = field(default_factory=list)
     """Forked-scalar span conflicts (``base ≠ live AND base ≠ tracked``).
-    Always empty today — the CONFLICTED detection is not wired yet; the
-    field reserves the ``--json`` schema slot.
+
+    Each element is a PRE-RENDERED ``path: base → tracked | live`` line
+    (tracked = upstream, live = yours) — plain strings rather than a
+    structured record, because every consumer (the summary table's Why
+    column, the ``--json`` payload) renders the same one-line form and
+    nothing downstream needs the operands separately. Non-empty iff
+    :attr:`drift_class` is ``CONFLICTED``; see
+    :func:`_forked_scalar_conflicts` for the detection.
     """
 
     @property
@@ -612,7 +621,9 @@ def _compare_one(
         disposition=disposition,
         span_only_drift=span_only_drift,
     )
-    return _classify_entry(entry, profile=profile, src=src, dst=dst)
+    return _classify_entry(
+        entry, profile=profile, src=src, dst=dst, tracked_file=tracked_file
+    )
 
 
 def _classify_entry(
@@ -621,6 +632,7 @@ def _classify_entry(
     profile: str | None,
     src: Path,
     dst: Path,
+    tracked_file: TrackedFile | None = None,
     probe_stale: bool = True,
 ) -> tuple[FileCompare, bool]:
     """Attach the drift class to a ``DRIFTED`` entry and derive its
@@ -629,13 +641,23 @@ def _classify_entry(
     Non-``DRIFTED`` entries pass through with ``drift_class=None`` and an
     unexpected flag of ``False`` (a MISSING entry never reaches here — its
     caller returns the existing ``True`` contract directly).
+    ``tracked_file`` feeds the forked-scalar conflict probe (slot 1);
+    ``None`` skips it — symlink-deployed files never carry a stored base
+    (the base lifecycle is regular-file-only), so their callers omit it.
     """
     if entry.status is not CompareStatus.DRIFTED:
         return entry, False
-    drift_class, reason = _classify_drifted(
-        entry, profile=profile, src=src, dst=dst, probe_stale=probe_stale
+    drift_class, reason, conflicts = _classify_drifted(
+        entry,
+        profile=profile,
+        src=src,
+        dst=dst,
+        tracked_file=tracked_file,
+        probe_stale=probe_stale,
     )
-    entry = replace(entry, drift_class=drift_class, reason=reason)
+    entry = replace(
+        entry, drift_class=drift_class, reason=reason, forked_scalar_conflicts=conflicts
+    )
     is_unexpected = drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
     return entry, is_unexpected
 
@@ -646,18 +668,29 @@ def _classify_drifted(
     profile: str | None,
     src: Path,
     dst: Path,
+    tracked_file: TrackedFile | None = None,
     probe_stale: bool = True,
-) -> tuple[DriftClass, str | None]:
+) -> tuple[DriftClass, str | None, list[str]]:
     """Classify a ``DRIFTED`` entry; first matching slot wins.
 
-    ``probe_stale=False`` skips the base-store reads (slots 2 + 3) for
+    Returns ``(drift_class, reason, forked_scalar_conflicts)`` — the
+    conflicts list is non-empty only for the CONFLICTED slot, whose reason
+    is the same lines newline-joined (the summary table's Why column).
+
+    ``probe_stale=False`` skips the base-store reads (slots 1-3) for
     entries whose ``src``/``dst`` byte comparison is meaningless (symlink
     metadata drift). ``profile=None`` (direct unit-scope calls) also
     skips them — the stored base is keyed by profile.
     """
-    # Slot 1 — CONFLICTED: a forked-scalar span where base ≠ live AND
-    # base ≠ tracked. Detection not wired yet; a follow-up populates
-    # ``forked_scalar_conflicts`` and short-circuits here.
+    # Slot 1 — CONFLICTED: a forked-scalar path where base ≠ live AND
+    # base ≠ tracked (the shape the next interactive install would
+    # prompt on). See _forked_scalar_conflicts for the merge mirror.
+    if probe_stale and profile is not None and tracked_file is not None:
+        conflicts = _forked_scalar_conflicts(
+            profile, entry.name, src, dst, tracked_file
+        )
+        if conflicts:
+            return DriftClass.CONFLICTED, "\n".join(conflicts), conflicts
     # Slot 2 — UNEXPECTED (clobber): SHARED span-only drift with no
     # stored byte base. The base-absent install path deploys tracked
     # verbatim (disposition_merge's first-run branch) and does not honor
@@ -674,17 +707,110 @@ def _classify_drifted(
         and entry.disposition is Disposition.SHARED
         and _base_absent(profile, entry.name)
     ):
-        return DriftClass.UNEXPECTED, _CLOBBER_REASON
+        return DriftClass.UNEXPECTED, _CLOBBER_REASON, []
     # Slot 3 — STALE: live still equals the stored base while tracked
     # advanced; the next install fast-forwards live.
     if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
-        return DriftClass.STALE, _STALE_REASON
+        return DriftClass.STALE, _STALE_REASON, []
     # Slot 4 — EXPECTED: intentional host divergence (forked/pinned
     # disposition, or drift confined to pinned/forked spans).
     if entry.drift_is_expected:
-        return DriftClass.EXPECTED, None
+        return DriftClass.EXPECTED, None, []
     # Slot 5 — UNEXPECTED: drift nothing above explains.
-    return DriftClass.UNEXPECTED, None
+    return DriftClass.UNEXPECTED, None, []
+
+
+def _forked_scalar_conflicts(
+    profile: str,
+    file_id: str,
+    src: Path,
+    dst: Path,
+    tracked_file: TrackedFile,
+) -> list[str]:
+    """Pre-rendered ``path: base → tracked | live`` lines for the entry's
+    forked-scalar conflicts (tracked = upstream, live = yours).
+
+    Mirrors the install merge: parse the stored byte base + live + tracked
+    and run the same 3-way driver install runs
+    (:func:`setforge.disposition_merge.resolve_file`, bare ``auto`` — the
+    conflicts list is computed before any auto policy applies), then keep
+    the :class:`~setforge.structural_merge.PathConflict`\\ s on the FORKED
+    scalar surface: every path of a ``disposition: forked`` file, or
+    exactly the FORKED span anchors of any other disposition. A surviving
+    conflict is precisely ``base ≠ live AND base ≠ tracked`` at one path —
+    the shape the next interactive install would prompt on; rows where
+    base equals one side auto-resolve inside the merge and never surface.
+    Pinned-span conflicts are already suppressed by the driver
+    (deterministic live-wins), and a shape-clashed structural file falls
+    back to line-based :class:`~setforge.markdown_merge.LineConflict`\\ s,
+    which are not a scalar surface — both degrade to no-conflict here.
+
+    State-aware but crash-free, mirroring :func:`_is_stale`: a torn or
+    unreadable base store and an unparsable live/tracked side all degrade
+    to ``[]`` so the entry classifies deterministically via the later
+    slots instead of crashing the read-only compare.
+    """
+    from setforge import disposition_merge
+    from setforge.spans import SpanKind
+    from setforge.structural_merge import PathConflict
+
+    disposition = tracked_file.disposition
+    if disposition is None or disposition is Disposition.PINNED:
+        # PINNED never merges (live verbatim); None-disposition files
+        # never take the stored-base 3-way path at all.
+        return []
+    if not disposition_merge.is_structural(dst):
+        return []
+    spans = tracked_file.spans or []
+    forked_anchors = {s.anchor for s in spans if s.kind is SpanKind.FORKED}
+    if disposition is not Disposition.FORKED and not forked_anchors:
+        # No forked scalar surface on this entry.
+        return []
+    try:
+        base = base_store.read_base(profile, file_id)
+        if base is None:
+            return []
+        merge_spans = [s for s in spans if s.kind is not SpanKind.OVERLAY]
+        resolution = disposition_merge.resolve_file(
+            disposition,
+            dst,
+            base.decode("utf-8"),
+            dst.read_text(encoding="utf-8"),
+            src.read_text(encoding="utf-8"),
+            None,
+            structural_spans=merge_spans or None,
+        )
+    except (BaseStoreError, OSError, ConfigError, MergeTypeMismatch, ValueError):
+        # ValueError covers UnicodeDecodeError plus the json-five parse
+        # errors; ruamel's YAMLError is caught explicitly below it.
+        return []
+    except YAMLError:
+        return []
+    return [
+        f"{c.path}: {_format_conflict_operand(c.base)} → "
+        f"{_format_conflict_operand(c.theirs)} | {_format_conflict_operand(c.ours)}"
+        for c in resolution.conflicts
+        if isinstance(c, PathConflict)
+        and (disposition is Disposition.FORKED or c.path in forked_anchors)
+    ]
+
+
+def _format_conflict_operand(value: object) -> str:
+    """Render one conflict operand for the ``path: base → tracked | live`` line.
+
+    The ABSENT sentinel renders ``(absent)``; strings render bare (the
+    common scalar, quoting would only add noise to the Why column); every
+    other plain value renders as its JSON token (``1`` / ``true`` /
+    ``null`` / compact containers) — total via ``default=str``, so a
+    formatting surprise can never crash the probe.
+    """
+    from setforge.scalar_merge import ABSENT
+
+    if value is ABSENT:
+        return "(absent)"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, default=str)
 
 
 def _base_absent(profile: str, file_id: str) -> bool:
