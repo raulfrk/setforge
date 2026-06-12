@@ -351,7 +351,15 @@ def test_orphaned_pinned_span_warns_and_install_succeeds(
 def test_orphaned_pinned_span_strict_exits_nonzero(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """orphan + --strict-spans: a pinned orphan escalates to refuse-install."""
+    """orphan + --strict-spans: a pinned orphan refuses BEFORE any write.
+
+    Beyond the non-zero exit, the refusal must leave the live file
+    byte-untouched: the two-pass install gates between the read-only resolve
+    pass and the write pass, so a refused install deploys NOTHING (no
+    partial install to revert). The fractional mtime probe
+    (``stat -c '%Y.%9N'``) catches even a same-content rewrite. A rerun
+    without the flag then downgrades the orphan to a warning and proceeds.
+    """
     c = docker_container()
     rc, _stdout, stderr = _install(c, "test-spans-pinned")
     assert rc == 0, stderr
@@ -362,9 +370,22 @@ def test_orphaned_pinned_span_strict_exits_nonzero(
         _TRACKED_MD,
         _TRACKED_MD_BODY.replace("## Pinned Section", "## Renamed Section"),
     )
+    stamp_before = c.exec(
+        ["stat", "-c", "%Y.%9N", _LIVE_PINNED], check=True
+    ).stdout.strip()
     rc, stdout, stderr = _install(c, "test-spans-pinned", extra=["--strict-spans"])
     assert rc != 0, stdout + stderr
     assert "strict-spans" in (stdout + stderr).lower(), stdout + stderr
+    stamp_after = c.exec(
+        ["stat", "-c", "%Y.%9N", _LIVE_PINNED], check=True
+    ).stdout.strip()
+    assert stamp_after == stamp_before, (
+        f"strict-spans refusal touched the live file: {stamp_before} -> {stamp_after}"
+    )
+
+    # Rerun WITHOUT the flag: the orphan warns and the install completes.
+    rc, stdout, stderr = _install(c, "test-spans-pinned")
+    assert rc == 0, stdout + stderr
 
 
 # ---------------------------------------------------------------------------
