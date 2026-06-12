@@ -20,9 +20,12 @@ YAML / json-five JSONC):
   stored base, so a second interactive install neither re-prompts nor
   rewrites the live file (fractional-mtime no-write probe).
 - **compare** — a forked file's live divergence reports ``disposition`` +
-  ``status`` through the stable ``-o json`` payload fields. Drift-class and
-  table-rendering asserts are intentionally OUT of scope here — that compare
-  surface changes in a sibling branch and is asserted there.
+  ``status`` through the stable ``-o json`` payload fields.
+- **conflicted drift class** — a genuine scalar conflict surfaces through
+  ``compare -o json`` as ``drift_class == "conflicted"`` with the
+  pre-rendered ``path: base → tracked | live`` line in
+  ``forked_scalar_conflicts``, fails ``compare --check``, and clears once
+  the wizard resolves it.
 
 Wizard harness: the conflict prompt reads one raw-mode keypress and renders
 through a Rich console whose styled prompt line can land split across
@@ -385,3 +388,74 @@ def test_compare_reports_forked_disposition_and_status(
     # Required-keys subset of the STABLE JSON surface only.
     assert entry["disposition"] == "forked", entry
     assert entry["status"] == "drifted", entry
+
+
+# ---------------------------------------------------------------------------
+# 6: conflicted drift class — a genuine scalar conflict surfaces through
+#    compare (class + rendered conflict line + --check exit 1) and clears
+#    once the wizard resolves it.
+# ---------------------------------------------------------------------------
+
+
+def _compare_json_entry(c: ContainerHandle, fmt: _Fmt) -> dict[str, object]:
+    """Run ``compare -o json`` for ``fmt``'s profile; return its entry."""
+    rc, stdout, stderr = _setforge(
+        c,
+        [
+            "-o",
+            "json",
+            "compare",
+            f"--profile={fmt.profile}",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    assert rc == 0, stderr
+    entries = {e["name"]: e for e in json.loads(stdout)["data"]["entries"]}
+    assert fmt.file_id in entries, stdout
+    return entries[fmt.file_id]
+
+
+@pytest.mark.xdist_group("docker_daemon")
+@pytest.mark.parametrize("fmt", _FORMATS)
+def test_compare_conflicted_class_until_wizard_resolves(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., PyteSession],
+    fmt: _Fmt,
+) -> None:
+    """A genuine scalar conflict is drift_class=="conflicted" until resolved.
+
+    Seed base≠live AND base≠tracked at ``userKeyA``: compare reports the
+    conflicted class with the exact ``path: base → tracked | live`` line,
+    and ``--check`` exits 1. Resolving via the wizard ('t' takes tracked)
+    re-baselines, after which compare shows the file unchanged with the
+    conflict list empty.
+    """
+    c = docker_container()
+    _seed_scalar_conflict(c, fmt)
+
+    entry = _compare_json_entry(c, fmt)
+    assert entry["drift_class"] == "conflicted", entry
+    assert entry["forked_scalar_conflicts"] == [
+        "userKeyA: tracked-placeholder-A → tracked-edit | live-edit"
+    ], entry
+
+    rc, stdout, stderr = _setforge(
+        c,
+        [
+            "compare",
+            f"--profile={fmt.profile}",
+            f"--config={CONFIG_FIXTURE}",
+            "--check",
+        ],
+    )
+    assert rc == 1, stdout + stderr
+
+    session = _interactive_install(pyte_pty_session, c, fmt)
+    session.expect_in_display("Choice", timeout=60.0)
+    session.send_keys("t")
+    session.wait_for_exit(timeout=60, expected_code=0)
+
+    entry = _compare_json_entry(c, fmt)
+    assert entry["status"] == "unchanged", entry
+    assert entry["drift_class"] is None, entry
+    assert entry["forked_scalar_conflicts"] == [], entry
