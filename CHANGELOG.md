@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Capture no longer bakes host-local span values into the repo** — a
+  structural span path with no value in tracked is now dropped from the
+  `sync`/`capture` writeback (previously the live value flowed through
+  into the shared config repo), with a per-path warning on stderr:
+  `span path P absent in tracked — host value not captured`.
+- **Compare classifies live-added span keys as expected** — when live
+  adds a key inside a span that tracked lacks, the drift now counts as
+  span-only (expected host divergence) instead of unexpected shared
+  drift. Intentional flip following the capture-side drop above: with
+  the path excluded from capture, the divergence is exactly the kind a
+  span pin declares host-local.
+
 ## [0.2.2] - 2026-06-02
 
 Patch release: Docker e2e test-suite hardening. No user-facing behavior
