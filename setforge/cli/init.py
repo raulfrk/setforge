@@ -695,7 +695,7 @@ def init(
     ``~/.claude/projects/-home-raul-setforge/specs/2026-05-18-release-blocker-workflows.md``
     for the four scenarios (fresh init / reinit / --force / --check).
     """
-    console = Console()
+    console = Console(stderr=True)
     console.print("=== setforge init ===")
     if check:
         _handle_check_mode(console=console)

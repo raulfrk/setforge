@@ -342,7 +342,9 @@ def _apply_section_add(inputs: SectionAddInputs, *, body: str) -> None:
         body=body,
     )
     target.write_text(updated, encoding="utf-8")
-    _print_next_steps(console=Console(), target=target, profile=inputs.profile)
+    _print_next_steps(
+        console=Console(stderr=True), target=target, profile=inputs.profile
+    )
 
 
 def _section_add_scripted(inputs: SectionAddInputs) -> None:

@@ -537,7 +537,7 @@ def completion_install(
     then optionally appends a sentinel-bracketed wiring block to the
     user's shell rc file behind an arrow-key confirm.
     """
-    console = Console()
+    console = Console(stderr=True)
     script_path = _script_path(shell)
     rc = rc_file.expanduser() if rc_file is not None else _rc_path(shell)
     content = _render_completion_script(shell)

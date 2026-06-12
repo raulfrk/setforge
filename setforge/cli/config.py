@@ -614,7 +614,7 @@ def _preview_and_write(
     """
     after_text = _dump_to_str(doc)
     diff_text = _render_diff(before_text, after_text, yaml_path)
-    console = Console()
+    console = Console(stderr=True)
     if not _prompt_confirm(
         yaml_path=yaml_path, diff_text=diff_text, console=console, yes=yes
     ):

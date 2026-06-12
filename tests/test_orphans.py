@@ -359,9 +359,10 @@ def test_apply_default_is_dry_run(
     result = runner.invoke(
         app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output
     assert live_orphan.exists()  # CRITICAL: not deleted under dry-run.
-    plain = _strip_ansi_and_newlines(result.stdout)
+    # Human command output rides stderr (stdout stays machine-readable).
+    plain = _strip_ansi_and_newlines(result.stderr)
     assert "WOULD delete" in plain
     assert live_orphan.name in plain
 
@@ -385,8 +386,8 @@ def test_dry_run_prints_skip_note(
     result = runner.invoke(
         app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
     )
-    assert result.exit_code == 0, result.stdout
-    plain = _strip_ansi_and_newlines(result.stdout)
+    assert result.exit_code == 0, result.output
+    plain = _strip_ansi_and_newlines(result.stderr)
     assert "WOULD delete" in plain
     assert "skipped 1 previously-touched path(s)" in plain
     assert "1 no longer on disk" in plain
@@ -410,8 +411,8 @@ def test_dry_run_no_skip_note_when_clean(
     result = runner.invoke(
         app, ["cleanup-orphans", "--profile", "p", "--config", str(cfg)]
     )
-    assert result.exit_code == 0, result.stdout
-    plain = _strip_ansi_and_newlines(result.stdout)
+    assert result.exit_code == 0, result.output
+    plain = _strip_ansi_and_newlines(result.stderr)
     assert "WOULD delete" in plain
     assert "skipped" not in plain
 
@@ -537,7 +538,7 @@ def test_ignore_writes_local_yaml_not_tracked(
             "some_old_id",
         ],
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output
     # Tracked setforge.yaml: untouched, byte-for-byte.
     assert cfg.read_bytes() == cfg_bytes_before
     # Host-local local.yaml (redirected by conftest's autouse fixture
@@ -563,7 +564,7 @@ def test_ignore_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
                 "id_a",
             ],
         )
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 0, result.output
     yaml = YAML(typ="safe")
     payload = yaml.load(compare_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8"))
     # ruamel rt-loaded list is a CommentedSeq under the hood; compare contents.

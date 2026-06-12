@@ -431,7 +431,7 @@ def cleanup_orphans(
     without scanning the transitions dir.
     """
     resolved_config = _resolve_config_arg(config)
-    console = Console()
+    console = Console(stderr=True)
 
     if ignore is not None:
         _append_ignored_orphan(ignore)
