@@ -1,10 +1,9 @@
 """Docker E2E tests for the host-local ``mode`` / ``dst`` /
 ``symlink_target`` overlay on ``_LocalTrackedFileOverlay``.
 
-Eight named scenarios per the user's per-CLI-flag-row coverage
-preference (``feedback_docker_e2e_coverage_preference`` memory): one
-per behavior surface introduced by the bead — plus two follow-up
-scenarios (9, 10) lifting the sync no-capture and revert contracts
+Eight named scenarios, one per overlay behavior surface — plus two
+follow-up scenarios (9, 10) lifting the sync no-capture and revert
+contracts
 from implied (no-diff on sync/revert) to explicitly asserted.
 
 Setup pattern mirrors :mod:`tests.docker.test_e2e_docker_file_mode`:

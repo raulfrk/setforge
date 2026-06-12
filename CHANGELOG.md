@@ -34,7 +34,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   span-only (expected host divergence) instead of unexpected shared
   drift. Intentional flip following the capture-side drop above: with
   the path excluded from capture, the divergence is exactly the kind a
-  span pin declares host-local.
+  span pin declares host-local. (Exception: on a SHARED file with no
+  stored base yet, compare classifies the same drift `unexpected` with
+  a clobber warning — the first install would overwrite it.)
 
 ## [0.2.2] - 2026-06-02
 

@@ -581,8 +581,9 @@ def _resolve_one_pending(
     # span, not only on the disposition path.
     file_spans = tracked_file.spans or []
     span_states = spans_store.get_states(profile, sub_name) if file_spans else {}
-    # NOTE: a later change adds an upstream rename/delete classifier
-    # here, refining each collected orphan with a reason.
+    # resolve_deploy returns structural-span orphans already classified
+    # with a reason (including upstream renames/deletes detected against
+    # the stored base) and any tracked-sibling did-you-mean candidates.
     resolved = deploy.resolve_deploy(
         sub_src,
         sub_dst,

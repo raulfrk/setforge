@@ -4,7 +4,9 @@ Renders five sections per the mockup (section O):
 
 1. config-repo — HEAD short-sha, commits since last install, commits vs ``origin/main``.
 2. last install — age and transition id of the most recent install transition.
-3. drift — counts of unexpected, user-section, and expected drift.
+3. drift — counts of unexpected and user-section drift (the
+   ``expected`` bucket is retired with the preserve-overlay model;
+   it renders as a stable 0).
 4. overlay — counts of overlay entries declared in ``~/.config/setforge/local.yaml``.
 5. capabilities — three rows from :func:`setforge.cli._init_helpers.probe_environment`.
 
