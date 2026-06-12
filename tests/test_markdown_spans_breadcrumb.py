@@ -111,6 +111,33 @@ second
         bound_span(doc, "## Parent > ### Leaf")
 
 
+def test_simple_anchor_identical_chains_says_no_breadcrumb_helps() -> None:
+    # Both "### Leaf" occurrences sit under an IDENTICAL "## Parent"
+    # chain, so no breadcrumb suffix can single one out; the ambiguity
+    # error must say so instead of listing suggestions.
+    doc = """\
+## Parent
+
+### Leaf
+
+first
+
+## Parent
+
+### Leaf
+
+second
+"""
+    with pytest.raises(AnchorAmbiguousError) as excinfo:
+        bound_span(doc, "### Leaf")
+    message = str(excinfo.value)
+    assert (
+        "the occurrences share identical heading chains, so no "
+        "breadcrumb anchor can disambiguate them" in message
+    )
+    assert "disambiguate with a breadcrumb anchor" not in message
+
+
 def test_breadcrumb_not_found_raises() -> None:
     with pytest.raises(AnchorNotFoundError):
         bound_span(_DUP_DOC, "## Nowhere > ### Failure handling")
