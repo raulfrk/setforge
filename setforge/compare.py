@@ -8,7 +8,9 @@ Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
   the next install fast-forwards live. Not flagged by ``compare --check``.
 - ``unexpected`` — drift nothing above explains: what ``compare --check``
   flags for CI and what the install drift gate (``--auto-accept-*``)
-  resolves.
+  resolves. Also covers the clobber shape — span-only drift with NO
+  stored byte base, where a first install would deploy tracked verbatim
+  over the live span edits (run ``sync`` first).
 - ``conflicted`` — reserved for forked-scalar span conflicts (the
   detection is not wired yet; see :func:`_classify_drifted` slot 1).
 
@@ -89,6 +91,11 @@ class DriftClass(StrEnum):
 
 
 _STALE_REASON = "tracked advanced since last install — install will update"
+
+_CLOBBER_REASON = (
+    "span edits present but no stored base — first install would "
+    "overwrite; run sync first"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -643,17 +650,28 @@ def _classify_drifted(
 ) -> tuple[DriftClass, str | None]:
     """Classify a ``DRIFTED`` entry; first matching slot wins.
 
-    ``probe_stale=False`` skips the base-store read for entries whose
-    ``src``/``dst`` byte comparison is meaningless (symlink metadata
-    drift). ``profile=None`` (direct unit-scope calls) also skips it —
-    the stored base is keyed by profile.
+    ``probe_stale=False`` skips the base-store reads (slots 2 + 3) for
+    entries whose ``src``/``dst`` byte comparison is meaningless (symlink
+    metadata drift). ``profile=None`` (direct unit-scope calls) also
+    skips them — the stored base is keyed by profile.
     """
     # Slot 1 — CONFLICTED: a forked-scalar span where base ≠ live AND
     # base ≠ tracked. Detection not wired yet; a follow-up populates
     # ``forked_scalar_conflicts`` and short-circuits here.
     # Slot 2 — UNEXPECTED (clobber): span-only drift with no stored byte
-    # base — a first install would overwrite the live span edits. Probe
-    # not wired yet; a follow-up adds it here with its own reason.
+    # base. The base-absent install path deploys tracked verbatim
+    # (disposition_merge's first-run branch) and does not honor every
+    # span override, so the live span edits are at clobber risk until a
+    # sync stores a base. A PINNED disposition is exempt — install never
+    # overwrites its live file.
+    if (
+        probe_stale
+        and profile is not None
+        and entry.span_only_drift
+        and entry.disposition is not Disposition.PINNED
+        and _base_absent(profile, entry.name)
+    ):
+        return DriftClass.UNEXPECTED, _CLOBBER_REASON
     # Slot 3 — STALE: live still equals the stored base while tracked
     # advanced; the next install fast-forwards live.
     if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
@@ -664,6 +682,20 @@ def _classify_drifted(
         return DriftClass.EXPECTED, None
     # Slot 5 — UNEXPECTED: drift nothing above explains.
     return DriftClass.UNEXPECTED, None
+
+
+def _base_absent(profile: str, file_id: str) -> bool:
+    """True when NO byte base is stored for ``(profile, file_id)``.
+
+    State-aware but crash-free, mirroring :func:`_is_stale`: a torn or
+    failing base-store read is NOT absence — it degrades to ``False`` so
+    the entry classifies deterministically via the later slots instead of
+    over-reporting clobber risk on a transient read error.
+    """
+    try:
+        return base_store.read_base(profile, file_id) is None
+    except (BaseStoreError, OSError):
+        return False
 
 
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
