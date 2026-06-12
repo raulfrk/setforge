@@ -416,3 +416,59 @@ def test_compare_reports_forked_drift_as_expected(
         ],
     )
     assert rc == 0, stderr
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_compare_classifies_stale_after_tracked_advance(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """compare: tracked advancing after an install classifies the file stale.
+
+    Install the shared file (base seeded == tracked == live), then change
+    only the TRACKED source — live still equals the stored base. Compare's
+    JSON payload reports ``drift_class: "stale"`` with a reason, the drift
+    is not unexpected, and ``compare --check`` exits 0 (a stale deploy is
+    install's job to fix, not a CI failure).
+    """
+    c = docker_container()
+    rc, _stdout, stderr = _install(c, "test-disposition-shared")
+    assert rc == 0, stderr
+    assert c.read_text(_LIVE_SHARED) == _TRACKED_MD_BODY
+
+    # Advance TRACKED only; live keeps the last-deployed bytes (== base).
+    c.write_text(
+        _TRACKED_MD,
+        "# Disposition fixture\n\nintro-TRACKED-v2\nmiddle line\nfooter line\n",
+    )
+    rc, stdout, stderr = _setforge(
+        c,
+        [
+            "-o",
+            "json",
+            "compare",
+            "--profile=test-disposition-shared",
+            f"--config={CONFIG_FIXTURE}",
+        ],
+    )
+    assert rc == 0, stderr
+    payload = json.loads(stdout)["data"]
+    entries = {e["name"]: e for e in payload["entries"]}
+    assert "disposition_shared_md" in entries, payload
+    entry = entries["disposition_shared_md"]
+    assert entry["status"] == "drifted", entry
+    assert entry["drift_class"] == "stale", entry
+    assert "install will update" in entry["reason"], entry
+    # Stale drift is not unexpected drift.
+    assert payload["has_unexpected_drift"] is False, payload
+
+    # compare --check exits 0 because stale-only drift passes the gate.
+    rc, _stdout, stderr = _setforge(
+        c,
+        [
+            "compare",
+            "--profile=test-disposition-shared",
+            f"--config={CONFIG_FIXTURE}",
+            "--check",
+        ],
+    )
+    assert rc == 0, stderr
