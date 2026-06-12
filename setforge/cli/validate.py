@@ -456,9 +456,11 @@ def _overlay_folded_spans(
     so the in-place fold :func:`setforge.config.apply_host_local_tracked_file_overrides`
     performs at install time would double-apply on the second profile.
     Reuses :func:`setforge.config._fold_overlay_spans` (host-local wins
-    each anchor) and re-validates every merged dict through
-    :class:`~setforge.spans.SpanEntry`, exactly as the install-time fold's
-    dump-and-revalidate path does.
+    each anchor) and re-validates the merged dicts through
+    :class:`~setforge.spans.SpanEntry`, like the install-time fold (which
+    revalidates at the whole-:class:`TrackedFile` level instead). Each
+    merged dict is the dump of an already-validated span, so the
+    revalidation is a guard, not an expected failure path.
     """
     overlay = overlays.get(tf_id)
     if overlay is None or not overlay.spans:

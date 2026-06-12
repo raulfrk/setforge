@@ -342,17 +342,24 @@ def test_pinned_fresh_host_first_install_deploys_tracked(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """pinned fresh host (no base, no live): first install deploys the tracked
-    bytes (NOT an empty file); the second install is a byte-level no-op."""
+    bytes (NOT an empty file); the second install never rewrites the file.
+
+    The no-write probe is sub-second mtime equality (``stat %.Y``): deploy's
+    NOOP detection skips the write entirely when content matches, so any
+    rewrite — even of identical bytes — would advance the fractional mtime.
+    """
     c = docker_container()
     rc, _stdout, stderr = _install(c, "test-disposition-pinned")
     assert rc == 0, stderr
     assert c.read_text(_LIVE_PINNED) == _TRACKED_MD_BODY, c.read_text(_LIVE_PINNED)
-    mtime_first = c.exec(["stat", "-c", "%Y", _LIVE_PINNED], check=True).stdout.strip()
+    mtime_first = c.exec(["stat", "-c", "%.Y", _LIVE_PINNED], check=True).stdout.strip()
     rc2, _stdout2, stderr2 = _install(c, "test-disposition-pinned")
     assert rc2 == 0, stderr2
     assert c.read_text(_LIVE_PINNED) == _TRACKED_MD_BODY
-    mtime_second = c.exec(["stat", "-c", "%Y", _LIVE_PINNED], check=True).stdout.strip()
-    assert mtime_second == mtime_first, "second install must be a NOOP write"
+    mtime_second = c.exec(
+        ["stat", "-c", "%.Y", _LIVE_PINNED], check=True
+    ).stdout.strip()
+    assert mtime_second == mtime_first, "second install must not rewrite the file"
 
 
 # ---------------------------------------------------------------------------
