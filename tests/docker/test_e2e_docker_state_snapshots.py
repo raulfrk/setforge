@@ -47,7 +47,17 @@ _TRACKED_MD_BODY = (
     "## Forked Section\n"
     "forked body line 1\n"
     "forked body mid\n"
-    "forked body line 3\n"
+    "forked body line 3\n\n"
+    "## Final checks\n"
+    "final intro line\n\n"
+    "### Failure handling\n"
+    "final failure line 1\n"
+    "final failure line 2\n\n"
+    "## Deployment\n"
+    "deploy intro line\n\n"
+    "### Failure handling\n"
+    "deploy failure line 1\n"
+    "deploy failure line 2\n"
 )
 
 # The live body with host edits confined to the forked span region —
