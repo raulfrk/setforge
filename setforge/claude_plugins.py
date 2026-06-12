@@ -467,7 +467,8 @@ def reconcile(
     The plugin-state diff (``to_install`` / ``to_enable`` /
     ``to_disable``) is computed by :func:`_plugin_state_diff`; bare
     profile names resolve to ``"<name>@<marketplace>"`` form via
-    :func:`_declared_plugin_ids` before any subprocess work.
+    :func:`_declared_plugin_ids` before any subprocess work. Raises
+    :class:`ConfigError` when a profile name is absent from the registry.
 
     Marketplaces (always-on, regardless of policy): each declared
     marketplace not in ``list_marketplaces()`` gets ``marketplace_add``
