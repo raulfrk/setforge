@@ -383,7 +383,11 @@ def test_json_conflicted_entry_schema(tmp_path: Path) -> None:
 
 
 def test_summary_table_renders_conflict_line(tmp_path: Path) -> None:
-    """The Why column carries the ``path: base → tracked | live`` line."""
+    """The rendered table carries the conflict tokens (render smoke-test).
+
+    Asserts the class tag and the operands appear in the output — not
+    the full ordered line or its column placement.
+    """
     config, repo = _structural_file(
         tmp_path, tracked=_TRACKED_CONFLICT, live=_LIVE_CONFLICT
     )

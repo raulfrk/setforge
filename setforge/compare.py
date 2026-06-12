@@ -737,7 +737,8 @@ def _forked_scalar_conflicts(
     the :class:`~setforge.structural_merge.PathConflict`\\ s on the FORKED
     scalar surface: every path of a ``disposition: forked`` file, or
     exactly the FORKED span anchors of any other disposition. A surviving
-    conflict is precisely ``base ≠ live AND base ≠ tracked`` at one path —
+    conflict is ``base ≠ live AND base ≠ tracked`` (with the two sides
+    also disagreeing) at one path —
     the shape the next interactive install would prompt on; rows where
     base equals one side auto-resolve inside the merge and never surface.
     Pinned-span conflicts are already suppressed by the driver
