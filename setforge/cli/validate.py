@@ -54,6 +54,7 @@ from setforge.errors import (
 from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
+from setforge.markdown_spans import bound_span
 from setforge.migrations._local_yaml import guard_local_yaml_schema
 from setforge.paths import template_context
 from setforge.source import (
@@ -386,8 +387,9 @@ def _check_spans_path_existence(
       any live file. ``validate`` stays a stateless offline gate.
     * Missing src → silent skip (:func:`_check_tracked_srcs` reports it;
       same double-report suppression as :func:`_check_host_local_sections`).
-    * Non-structural (markdown) srcs and heading-shaped anchors → skip;
-      markdown anchor resolution is a separate concern. OVERLAY spans
+    * Non-structural (markdown) srcs route to
+      :func:`_check_markdown_span_anchors` (exact heading resolution);
+      heading-shaped anchors on structural srcs → skip. OVERLAY spans
       carry an identity, not a path → skip.
     * Unparseable structural src → exactly ONE failure row for the file,
       then continue with the remaining tracked_files (report-all contract).
@@ -405,6 +407,7 @@ def _check_spans_path_existence(
             # elsewhere; do not double-report here.
             continue
         if not is_structural(src):
+            _check_markdown_span_anchors(tracked_file.spans, src, tf_id, ctx, failures)
             continue
         try:
             model = _load_structural(
@@ -420,6 +423,48 @@ def _check_spans_path_existence(
             if span.kind is SpanKind.OVERLAY or is_heading_anchor(span.anchor):
                 continue
             _check_span_path(span, model, tf_id, ctx, failures)
+
+
+def _check_markdown_span_anchors(
+    spans: list[SpanEntry],
+    src: Path,
+    tf_id: str,
+    ctx: str,
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Resolve PINNED / FORKED markdown span headings against the tracked src.
+
+    The markdown counterpart of the structural dotted-path walk: each
+    heading anchor must resolve EXACTLY ONCE in the tracked source, offline
+    (mirroring :func:`_check_host_local_sections`'s anchor-resolution gate).
+    ABSENT and AMBIGUOUS surface as distinct rows —
+    :func:`setforge.markdown_spans.bound_span`'s two error types carry
+    distinct messages. No fuzzy relocation here; that is install's job.
+    OVERLAY spans are skipped (their body lives in local.yaml; the
+    dead-anchor leak this check guards against does not apply). An
+    unreadable src yields exactly ONE row, mirroring the structural
+    unparseable-src contract.
+    """
+    md_spans = [
+        s
+        for s in spans
+        if s.kind is not SpanKind.OVERLAY and is_heading_anchor(s.anchor)
+    ]
+    if not md_spans:
+        return
+    try:
+        text = src.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        failures.append(f"{ctx}: tracked_file {tf_id!r}: unreadable src: {exc}")
+        return
+    for span in md_spans:
+        try:
+            bound_span(text, span.anchor)
+        except (AnchorNotFoundError, AnchorAmbiguousError) as exc:
+            failures.append(
+                f"{ctx}: tracked_file {tf_id!r}: {span.kind.value} span "
+                f"{span.anchor!r}: {exc}"
+            )
 
 
 def _check_span_path(

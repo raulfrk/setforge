@@ -939,3 +939,64 @@ profiles:
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert not state_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Markdown span anchor resolution (offline, exact — no fuzzy relocation).
+# A pinned/forked markdown span whose heading is absent or duplicated would
+# orphan at install time; validate must surface both cases as distinct rows.
+# ---------------------------------------------------------------------------
+
+_MD_SPAN_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.note.md
+    disposition: shared
+    spans:
+      - anchor: "## Missing"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+def test_validate_markdown_span_anchor_absent_exits_1(tmp_path: Path) -> None:
+    """A pinned markdown span whose heading is absent → exit 1, distinct row."""
+    cfg = _write_config(tmp_path, _MD_SPAN_YAML, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "# Title\n\n## Present\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "pinned span '## Missing'" in result.output, result.output
+    assert "no heading matched" in result.output, result.output
+    # Did-you-mean suggestions are a structural-path-only feature.
+    assert "did you mean" not in result.output, result.output
+
+
+def test_validate_markdown_span_anchor_ambiguous_exits_1(tmp_path: Path) -> None:
+    """A duplicate heading → exit 1 with the AMBIGUOUS row, not not-found."""
+    yaml_text = _MD_SPAN_YAML.replace('"## Missing"', '"## Dup"')
+    cfg = _write_config(tmp_path, yaml_text, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## Dup\na\n\n## Dup\nb\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "matches multiple headings" in result.output, result.output
+    assert "no heading matched" not in result.output, result.output
+
+
+def test_validate_markdown_span_anchor_present_passes(tmp_path: Path) -> None:
+    """A heading that resolves exactly once keeps validate green."""
+    yaml_text = _MD_SPAN_YAML.replace('"## Missing"', '"## Present"')
+    cfg = _write_config(tmp_path, yaml_text, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "# Title\n\n## Present\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
