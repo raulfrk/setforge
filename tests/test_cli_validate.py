@@ -619,6 +619,57 @@ profiles:
     assert "'d'" in result.output, result.output
 
 
+def test_validate_surfaces_breadcrumb_not_found(tmp_path: Path) -> None:
+    """A breadcrumb span anchor whose chain is absent → exit 1, row names it."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.some-tracked_file
+    spans:
+      - anchor: "## Nowhere > ### Failure handling"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## Final checks\n\n### Failure handling\n\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "## Nowhere > ### Failure handling" in result.output, result.output
+
+
+def test_validate_surfaces_breadcrumb_still_ambiguous(tmp_path: Path) -> None:
+    """A breadcrumb that matches two identical chains → exit 1, row names it."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.some-tracked_file
+    spans:
+      - anchor: "## Parent > ### Leaf"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## Parent\n\n### Leaf\n\nfirst\n\n## Parent\n\n### Leaf\n\nsecond\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "## Parent > ### Leaf" in result.output, result.output
+
+
 def test_validate_span_on_markdown_file_exits_0(tmp_path: Path) -> None:
     """A span anchor on a markdown tracked_file passes the file-type gate."""
     span_yaml = """\

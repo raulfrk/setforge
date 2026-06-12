@@ -170,6 +170,58 @@ def test_pin_span_md_shared(tmp_path: Path) -> None:
     assert spans[0]["semantics"] == "shared"
 
 
+def test_pin_span_breadcrumb_host_local_round_trips(tmp_path: Path) -> None:
+    """pin <md> with a BREADCRUMB anchor writes local.yaml and round-trips.
+
+    The tracked doc carries a duplicate leaf heading under two parents, so
+    only the breadcrumb form pins unambiguously. The written anchor must be
+    a QUOTED YAML scalar (it starts with ``#``) and the overlay loader must
+    read back the identical string.
+    """
+    from setforge.source import load_local_tracked_file_overlays
+
+    cfg = _make_repo(tmp_path)
+    (tmp_path / "tracked" / "doc.md").write_text(
+        "## Final checks\n\n### Failure handling\n\nfinal body\n\n"
+        "## Deployment\n\n### Failure handling\n\ndeploy body\n",
+        encoding="utf-8",
+    )
+    anchor = "## Final checks > ### Failure handling"
+    result = _invoke(cfg, "override", "pin", "doc", anchor)
+    assert result.exit_code == 0, result.output
+
+    overlay = _local_overlay("doc")
+    spans = list(overlay["spans"])
+    assert len(spans) == 1
+    assert spans[0]["anchor"] == anchor
+    assert spans[0]["kind"] == "pinned"
+
+    # write -> load identity through the overlay loader.
+    overlays = load_local_tracked_file_overlays(source_mod.LOCAL_CONFIG_PATH)
+    assert overlays["doc"].spans[0].anchor == anchor
+
+    # The raw local.yaml carries the anchor as a QUOTED scalar — an
+    # unquoted leading '#' would parse back as a comment.
+    raw = source_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert f"'{anchor}'" in raw or f'"{anchor}"' in raw, raw
+
+
+def test_pin_span_breadcrumb_ambiguous_simple_anchor_suggests_forms(
+    tmp_path: Path,
+) -> None:
+    """pin with the bare duplicate leaf fails and names the breadcrumb forms."""
+    cfg = _make_repo(tmp_path)
+    (tmp_path / "tracked" / "doc.md").write_text(
+        "## Final checks\n\n### Failure handling\n\nfinal body\n\n"
+        "## Deployment\n\n### Failure handling\n\ndeploy body\n",
+        encoding="utf-8",
+    )
+    result = _invoke(cfg, "override", "pin", "doc", "### Failure handling")
+    assert result.exit_code != 0, result.output
+    assert "## Final checks > ### Failure handling" in result.output
+    assert "## Deployment > ### Failure handling" in result.output
+
+
 def test_pin_span_structural_host_local(tmp_path: Path) -> None:
     """pin <yaml> editor.fontSize appends a host-local structural SpanEntry."""
     cfg = _make_repo(tmp_path)
