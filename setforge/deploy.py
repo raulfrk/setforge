@@ -69,6 +69,32 @@ class DeployResult:
     span_orphans: list[SpanOrphan] = field(default_factory=list)
 
 
+@dataclass(slots=True, frozen=True)
+class ResolvedDeploy:
+    """The fully-computed, not-yet-written outcome of a deploy resolution.
+
+    Produced by :func:`resolve_deploy` (pure read) and consumed by
+    :func:`write_resolved_deploy` (the only writer). Carries everything the
+    write step needs: the post-merge / post-overlay ``content``, the
+    symlink-resolved ``real_dst`` plus its ``dst_existed`` probe, the
+    ``effective_mode`` to apply, and the state-advance payload
+    (``new_base`` / ``merge_conflicts`` / ``new_span_states`` /
+    ``span_orphans``) that :class:`DeployResult` threads back to the caller.
+    Holding these records in memory lets an orchestrator resolve EVERY file
+    first and only then start writing (refuse-before-write).
+    """
+
+    src: Path
+    real_dst: Path
+    dst_existed: bool
+    effective_mode: int | None
+    content: str
+    new_base: str | None
+    merge_conflicts: list[LineConflict | PathConflict]
+    new_span_states: dict[str, SpanState] | None
+    span_orphans: list[SpanOrphan]
+
+
 def _legacy_only_host_local(
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
     spans: list[SpanEntry] | None,
@@ -113,12 +139,61 @@ def copy_atomic(
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst``.
 
+    Composes :func:`resolve_deploy` (the pure read: merge + span overlay
+    computed in memory) with :func:`write_resolved_deploy` (the only write
+    step). See :func:`resolve_deploy` for the full parameter contract; the
+    two-step seam exists so an orchestrator can resolve every file before
+    writing any.
+
     When ``dst`` is a symlink the operation resolves to its target so the
     symlink itself is preserved (matches the legacy Makefile's behavior
     with ``link_tracked_file_default: nolink``).
 
     When the resulting content is byte-identical to the existing ``dst``,
     no write or backup is performed (action == :attr:`DeployAction.NOOP`).
+    """
+    resolved = resolve_deploy(
+        src,
+        dst,
+        host_local_sections=host_local_sections,
+        mode=mode,
+        disposition=disposition,
+        base_text=base_text,
+        merge_auto=merge_auto,
+        conflict_resolver=conflict_resolver,
+        spans=spans,
+        span_states=span_states,
+    )
+    return write_resolved_deploy(resolved, backup=backup)
+
+
+def resolve_deploy(
+    src: Path,
+    dst: Path,
+    *,
+    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
+    mode: int | None = None,
+    disposition: Disposition | None = None,
+    base_text: str | None = None,
+    merge_auto: ReconcileAuto | None = None,
+    conflict_resolver: disposition_merge.ConflictResolver | None = None,
+    spans: list[SpanEntry] | None = None,
+    span_states: dict[str, SpanState] | None = None,
+    live_text: str | None = None,
+) -> ResolvedDeploy:
+    """Compute a deploy's content + state advances WITHOUT writing anything.
+
+    The read half of :func:`copy_atomic`: resolves ``dst`` through any
+    pre-existing symlink, probes existence and effective mode, and runs the
+    merge / span machinery entirely in memory. No directory is created and
+    no file is touched — the returned :class:`ResolvedDeploy` is handed to
+    :func:`write_resolved_deploy` when (and if) the caller decides to write.
+
+    ``live_text``, when not ``None``, OVERRIDES the on-disk live content as
+    the merge input. The caller uses this when a deferred live rewrite is
+    pending (e.g. the disposition-base migration's SHARED-marker strip is
+    computed in a read-only pass and applied later), so disk live ≠ the
+    live the merge must see. ``dst_existed`` still reflects the disk probe.
 
     When ``disposition`` is not None the file is resolved via the
     stored-base 3-way merge driver
@@ -126,14 +201,15 @@ def copy_atomic(
     current bytes, ``""`` when absent), tracked (``src``'s bytes) and the
     stored ``base_text`` (the previously deployed base, ``None`` on first
     run) are merged under ``disposition`` + ``merge_auto`` (the install
-    ``--auto``, threaded to the driver). The merged text flows through the
-    NOOP/CREATED/UPDATED detection + :func:`_atomic_write`. The returned
-    :class:`DeployResult` carries ``new_base`` (the bytes the caller should
+    ``--auto``, threaded to the driver). The merged text becomes the
+    resolution's ``content`` (the write step applies the NOOP/CREATED/UPDATED
+    detection + :func:`_atomic_write` to it). The returned
+    :class:`ResolvedDeploy` carries ``new_base`` (the bytes the caller should
     write to the stored base, or ``None`` to defer re-baselining) and
     ``merge_conflicts`` (every conflicting hunk/path, for the caller to
     warn — non-empty even when ``merge_auto`` resolved them). ``new_base``
-    is computed from the driver resolution INDEPENDENTLY of the write
-    action: a clean merge whose result equals live is a NOOP write but
+    is computed from the driver resolution INDEPENDENTLY of the eventual
+    write action: a clean merge whose result equals live is a NOOP write but
     still re-baselines (``new_base`` set). When ``disposition`` is None the
     file is deployed from ``src`` verbatim and ``new_base`` /
     ``merge_conflicts`` stay inert (``None`` / ``[]``). Symlinked
@@ -178,7 +254,6 @@ def copy_atomic(
         raise MissingTrackedFile(f"tracked source not found: {src}")
 
     real_dst = _resolve_for_copy(dst)
-    real_dst.parent.mkdir(parents=True, exist_ok=True)
     dst_existed = real_dst.exists()
 
     # Effective write mode. ``mode`` (config ``mode:``) wins when set. On the
@@ -201,6 +276,7 @@ def copy_atomic(
                 conflict_resolver,
                 spans,
                 span_states,
+                live_text=live_text,
             )
         )
     else:
@@ -211,17 +287,50 @@ def copy_atomic(
         merge_conflicts = []
         span_orphans = []
 
-    return _write_resolved_content(
-        content,
-        src,
-        real_dst,
-        dst_existed,
-        backup,
-        effective_mode,
+    return ResolvedDeploy(
+        src=src,
+        real_dst=real_dst,
+        dst_existed=dst_existed,
+        effective_mode=effective_mode,
+        content=content,
         new_base=new_base,
         merge_conflicts=merge_conflicts,
         new_span_states=new_span_states,
         span_orphans=span_orphans,
+    )
+
+
+def write_resolved_deploy(
+    resolved: ResolvedDeploy, *, backup: bool = True
+) -> DeployResult:
+    """Write a :class:`ResolvedDeploy` to disk: the write half of :func:`copy_atomic`.
+
+    Creates the destination's parent directories, then routes the resolved
+    content through the shared NOOP/CREATED/UPDATED detection +
+    :func:`_atomic_write` (see :func:`_write_resolved_content`). The
+    resolution's state-advance payload rides through onto the returned
+    :class:`DeployResult` unchanged.
+
+    **Inter-resolve/write staleness assumption.** ``resolved`` snapshots the
+    live file at :func:`resolve_deploy` time; an external edit to the live
+    file between the resolve and this write is silently overwritten by the
+    resolved content. setforge is a single-process CLI whose deploys are
+    serialized under the profile lock, so the window is accepted and NOT
+    re-checked here — the same single-setforge-process model documented for
+    the symlink ordering window on :func:`deploy_symlinked_file`.
+    """
+    resolved.real_dst.parent.mkdir(parents=True, exist_ok=True)
+    return _write_resolved_content(
+        resolved.content,
+        resolved.src,
+        resolved.real_dst,
+        resolved.dst_existed,
+        backup,
+        resolved.effective_mode,
+        new_base=resolved.new_base,
+        merge_conflicts=resolved.merge_conflicts,
+        new_span_states=resolved.new_span_states,
+        span_orphans=resolved.span_orphans,
     )
 
 
@@ -235,6 +344,8 @@ def _resolve_disposition_content(
     conflict_resolver: disposition_merge.ConflictResolver | None,
     spans: list[SpanEntry] | None,
     span_states: dict[str, SpanState] | None,
+    *,
+    live_text: str | None = None,
 ) -> tuple[
     str,
     str | None,
@@ -250,8 +361,16 @@ def _resolve_disposition_content(
     the in-place merge); markdown PINNED/FORKED spans use the text-splice
     re-overlay; markerless host-local OVERLAY spans are excised BEFORE the merge
     and injected AFTER it (the body never enters base or tracked — leak gate).
+
+    ``live_text`` overrides the on-disk live read when not ``None`` (see
+    :func:`resolve_deploy`); every consumer of live content below — the merge
+    driver, the OVERLAY excise, and the pinned-span re-overlay — sees the
+    override.
     """
-    live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
+    if live_text is not None:
+        live = live_text
+    else:
+        live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
     tracked = src.read_text(encoding="utf-8")
     structural = disposition_merge.is_structural(real_dst)
     md_overlay_spans = (
@@ -538,7 +657,10 @@ def deploy_symlinked_file(
     knowing if a setforge install races with another tool reading the
     same tracked symlinks. Same-host single-setforge-process model
     serializes deploys, so this is theoretical for the canonical
-    install/sync/revert flow.
+    install/sync/revert flow. The same model covers the resolve→write
+    staleness window on :func:`write_resolved_deploy` (an external live
+    edit between the read-only resolve pass and the write pass is
+    accepted, not re-checked).
     """
     if tracked_file.symlink is None:
         raise AssertionError(

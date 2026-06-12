@@ -173,10 +173,12 @@ def test_atomic_write_source_orders_fchmod_before_replace() -> None:
     re-open the TOCTOU symlink-swap window.
     """
     tree = ast.parse(Path(deploy_mod.__file__).read_text(encoding="utf-8"))
+    # Match the exact function under test: a substring probe ("atomic" in
+    # the name) would land on copy_atomic first and grade its docstring.
     fn = next(
         n
         for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and "atomic" in n.name
+        if isinstance(n, ast.FunctionDef) and n.name == "_atomic_write"
     )
     src = ast.unparse(fn)
     fchmod_idx = src.find("os.fchmod")
