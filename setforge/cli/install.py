@@ -44,7 +44,6 @@ from setforge.cli._install_helpers import (
     _dry_run_pipeline,
     _load_validated_host_local_sections,
     _reconcile_shared_spans,
-    _revert_lockstep_paths,
     _run_predeploy_gates,
     _validate_span_file_types,
     _write_install_transition,
@@ -350,14 +349,11 @@ def install(
             for tf, _, _, sub_dst in _iter_all_tracked_files(ctx)
         ]
         dst_paths.extend(Path(str(p)).expanduser() for p in resolved.bootstrap)
-        # Roll every disposition file's stored byte base (and, for span-bearing
-        # files, its spans sidecar) in LOCKSTEP with live on revert (Invariant
-        # I5): snapshot them into the transition so the patch -R mechanism
-        # reverts live + base (+ sidecar) together. Capturing the base for
-        # PLAIN disposition files too is the data-loss fix — a first-install
-        # seeded base must be deleted on revert, not stranded.
-        dst_paths.extend(_revert_lockstep_paths(ctx))
-
+        # Store files (byte bases, spans sidecars, scalar-base manifests) do
+        # NOT ride this patch snapshot: their pre-install state is captured
+        # at the pass-2 barrier (state_snapshots below) and revert restores
+        # them through that mechanism — recording them here too would
+        # double-restore (Invariant I5 now lives in the snapshot path).
         file_pre = transitions.snapshot_paths(dst_paths)
         # When the overlay-span rewrite moved a legacy block, record local.yaml
         # in the transition (append to dst_paths so file_post captures its

@@ -138,32 +138,6 @@ def _load_validated_host_local_sections(
     return result
 
 
-def _revert_lockstep_paths(ctx: ProfileContext) -> list[Path]:
-    """Return the byte-base + spans-sidecar paths to snapshot for revert.
-
-    For EVERY disposition tracked (sub-)file in the resolved profile, returns
-    its stored byte-base path; for span-bearing ones additionally its spans
-    sidecar manifest path. Snapshotting the base for every disposition file —
-    not just span-bearing ones — closes a data-loss gap: a PLAIN disposition
-    file's first install can SEED a per-host base (the auto-on-install
-    migration), and unless that base is in the transition, ``setforge revert``
-    restores the live file (``patch -R``) but LEAVES the stale seeded base, so
-    the next install mis-merges against it. Capturing the base path records
-    base_pre=None (absent first install) / base_post=seeded, so revert's
-    ``patch -R`` deletes the seeded base in LOCKSTEP with restoring live
-    (Invariant I5). The base path is emitted at most ONCE per file even for
-    span-bearing files (no duplicate snapshot entry).
-    """
-    paths: list[Path] = []
-    for tracked_file, sub_name, _, _ in _iter_all_tracked_files(ctx):
-        if tracked_file.disposition is None:
-            continue
-        paths.append(base_store.base_path(ctx.profile, sub_name))
-        if tracked_file.spans:
-            paths.append(spans_store.manifest_path(ctx.profile, sub_name))
-    return paths
-
-
 @dataclass(slots=True, frozen=True)
 class OverlaySpanMigration:
     """Outcome of the transparent ``local.yaml`` overlay-span rewrite on install.

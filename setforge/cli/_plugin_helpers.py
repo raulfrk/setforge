@@ -1055,8 +1055,16 @@ def _write_reverse_transition(
     profile: str,
     touched_paths: Sequence[Path],
     file_pre: Mapping[Path, str | None],
+    *,
+    state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
 ) -> Path:
-    """Reverse plugin/extension deltas from ``transition`` and write the redo record."""
+    """Reverse plugin/extension deltas from ``transition`` and write the redo record.
+
+    ``state_snapshots`` carries the PRE-revert store state recaptured by
+    the caller so a second revert (redo) can restore it — the
+    store-state mirror of ``file_pre``. Defaults empty for callers that
+    revert snapshot-less transitions.
+    """
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
     reverse_removed: list[str] = []
@@ -1094,4 +1102,5 @@ def _write_reverse_transition(
         file_post,
         reverse_delta,
         plugin_delta=reverse_plugin_delta,
+        state_snapshots=state_snapshots,
     )

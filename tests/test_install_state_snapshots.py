@@ -138,3 +138,26 @@ def test_second_install_snapshots_pre_install_store_state(repo: Path) -> None:
     # still captured (absent) so a future writer is covered by the same
     # barrier without a schema change.
     assert by_store[SnapshotStore.SCALAR_BASE].payload is None
+
+
+def test_store_paths_absent_from_changes_patch(repo: Path) -> None:
+    """Store files leave the patch mechanism: their pre/post states ride
+    state_snapshots/ exclusively, so revert never double-restores them."""
+    _write_tracked(repo, _DOC)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+    # A second install with an upstream edit advances base + sidecar —
+    # exactly the delta the old mechanism recorded into changes.patch.
+    _write_tracked(repo, _DOC.replace("Shared body original.", "Shared body V2."))
+    assert _install(config).exit_code == 0
+
+    latest = transitions.load_latest(_PROFILE)
+    assert latest is not None
+    patch_file = latest / "changes.patch"
+    assert patch_file.exists()
+    patch_text = patch_file.read_text(encoding="utf-8")
+
+    base_rel = str(base_store.base_path(_PROFILE, _FILE_ID)).lstrip("/")
+    sidecar_rel = str(spans_store.manifest_path(_PROFILE, _FILE_ID)).lstrip("/")
+    assert base_rel not in patch_text
+    assert sidecar_rel not in patch_text

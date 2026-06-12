@@ -329,6 +329,19 @@ def _apply_revert(
     the symlink-revert side of the symlink-compare contract; the helper refuses
     cleanly on user-mutated links (target retargeted or replaced with
     a regular file) so user data is never deleted.
+
+    Store-state restore (Invariant I5): when the transition carries
+    ``state_snapshots/``, the byte bases / spans sidecars / scalar-base
+    manifests it captured are restored after the patch reverse —
+    was-absent entries deleted, present entries rewritten byte-exact.
+    The CURRENT store state for the same (store, key) set is recaptured
+    first and recorded on the reverse transition, so a second revert
+    (redo) round-trips the stores too. A pre-snapshot transition (no
+    ``state_snapshots/`` dir) skips store work entirely — its store
+    deltas, if any, still ride its own ``changes.patch`` from the era
+    when store files were patch-recorded. The reverse transition is
+    written LAST (meta.json is its commit marker), so an interrupted
+    revert is re-runnable: the idempotent restore simply re-applies.
     """
     transitions.ensure_state_dir_writable()
     typer.echo(f"reverting: {transition}")
@@ -337,10 +350,28 @@ def _apply_revert(
     touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
     file_pre = transitions.snapshot_paths(touched_paths)
 
+    pre_store_state = transitions.load_state_snapshots(transition)
+    reverse_store_state: tuple[transitions.StateSnapshotEntry, ...] = ()
+    if pre_store_state is not None:
+        # Recapture the SAME (store, key) set as it stands now — before
+        # any mutation — so the reverse transition can redo this revert.
+        reverse_store_state = tuple(
+            transitions.snapshot_store_state(e.store, e.profile, e.key)
+            for e in pre_store_state
+        )
+
     transitions.apply_patch_reverse(transition)
     _revert_symlink_deployments(config=config, profile=profile)
+    if pre_store_state is not None:
+        transitions.restore_state_snapshots(pre_store_state)
 
-    target = _write_reverse_transition(transition, profile, touched_paths, file_pre)
+    target = _write_reverse_transition(
+        transition,
+        profile,
+        touched_paths,
+        file_pre,
+        state_snapshots=reverse_store_state,
+    )
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
 
