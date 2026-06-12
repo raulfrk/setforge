@@ -1084,3 +1084,60 @@ tracked_files:
     (tmp_path / "local.yaml").write_text(overlay_yaml, encoding="utf-8")
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# Did-you-mean suggestions on missing structural span paths.
+# ---------------------------------------------------------------------------
+
+
+def test_validate_missing_path_suggests_close_match(tmp_path: Path) -> None:
+    """A near-miss leaf (editor.fontsize vs fontSize) carries a did-you-mean."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.config.json
+    disposition: shared
+    spans:
+      - anchor: editor.fontsize
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12, "tabSize": 4}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "did you mean 'fontSize'?" in result.output, result.output
+
+
+def test_validate_missing_path_no_close_match_no_suggestion(tmp_path: Path) -> None:
+    """A leaf nothing like any sibling stays suggestion-free (no false positive)."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: config.json
+    dst: ~/.config.json
+    disposition: shared
+    spans:
+      - anchor: editor.zzzzqqqq
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "config.json").write_text(
+        '{"editor": {"fontSize": 12}}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "did you mean" not in result.output, result.output

@@ -22,6 +22,7 @@ from setforge.structural_merge import (
     PathConflict,
     StructuralMergeResult,
     get_at_path,
+    list_keys_at_path,
     merge_structural,
     resolve_path_prefix,
     set_at_path,
@@ -576,3 +577,34 @@ def test_ours_deletes_container_theirs_unchanged_yaml() -> None:
     result = merge_structural(base, ours, theirs)
     assert result.clean
     assert result.merged_model == {"keep": "yes"}
+
+
+# ---------------------------------------------------------------------------
+# list_keys_at_path — sibling-key enumeration for did-you-mean diagnostics.
+# ---------------------------------------------------------------------------
+
+
+def test_list_keys_at_path_root_yaml() -> None:
+    model = _yload("alpha: 1\nbeta: 2\n")
+    assert list_keys_at_path(model, "") == ["alpha", "beta"]
+
+
+def test_list_keys_at_path_nested_jsonc() -> None:
+    model = _jload('{"editor": {"fontSize": 12, "tabSize": 4}}')
+    assert list_keys_at_path(model, "editor") == ["fontSize", "tabSize"]
+
+
+def test_list_keys_at_path_plain_dict() -> None:
+    assert list_keys_at_path({"a": {"b": 1, "c": 2}}, "a") == ["b", "c"]
+
+
+def test_list_keys_at_path_absent_or_scalar_returns_empty() -> None:
+    model = _yload("alpha: 1\n")
+    assert list_keys_at_path(model, "missing") == []
+    assert list_keys_at_path(model, "alpha") == []
+
+
+def test_list_keys_at_path_list_suffix_raises() -> None:
+    model = _yload("alpha: [1]\n")
+    with pytest.raises(ValueError, match="list suffix"):
+        list_keys_at_path(model, "alpha.[*]")

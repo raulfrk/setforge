@@ -73,7 +73,11 @@ from setforge.spans import (
     is_heading_anchor,
     validate_spans_file_type,
 )
-from setforge.structural_merge import get_at_path, resolve_path_prefix
+from setforge.structural_merge import (
+    get_at_path,
+    list_keys_at_path,
+    resolve_path_prefix,
+)
 
 
 def _local_yaml_top_keys() -> list[str]:
@@ -520,21 +524,28 @@ def _check_span_path(
     """Resolve one PINNED / FORKED span's dotted path against ``model``.
 
     Appends at most one failure row: path-not-found (with the first missing
-    prefix) or forked-span-on-a-non-scalar. See
-    :func:`_check_spans_path_existence` for the full contract.
+    prefix, plus a did-you-mean built from the sibling keys at the deepest
+    resolvable prefix when one is close enough) or
+    forked-span-on-a-non-scalar. See :func:`_check_spans_path_existence`
+    for the full contract.
     """
     try:
-        _resolved_prefix, missing = resolve_path_prefix(model, span.anchor)
+        resolved_prefix, missing = resolve_path_prefix(model, span.anchor)
     except ValueError:
         # List-suffix anchor: validate_structural_spans already
         # reported it (I10); do not double-report here.
         return
     if missing is not None:
-        failures.append(
+        row = (
             f"{ctx}: tracked_file {tf_id!r}: {span.kind.value} span "
             f"{span.anchor!r}: path not found (missing at {missing!r}); "
             f"add the key to the tracked src or remove the span"
         )
+        leaf = missing.rsplit(".", 1)[-1]
+        match = suggest_close_match(leaf, list_keys_at_path(model, resolved_prefix))
+        if match is not None:
+            row += f" (did you mean {match!r}?)"
+        failures.append(row)
         return
     if span.kind is not SpanKind.FORKED:
         return

@@ -43,7 +43,7 @@ from json5.model import (
 from ruamel.yaml.comments import CommentedMap
 
 from setforge.errors import MergeTypeMismatch
-from setforge.jsonc import _find_key_index
+from setforge.jsonc import _find_key_index, _key_text
 from setforge.scalar_merge import (
     ABSENT,
     ScalarOutcome,
@@ -56,6 +56,7 @@ __all__ = [
     "PathConflict",
     "StructuralMergeResult",
     "get_at_path",
+    "list_keys_at_path",
     "merge_structural",
     "resolve_path_prefix",
     "set_at_path",
@@ -765,6 +766,35 @@ def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
             return (resolved, missing)
         node = child
     return (path, None)
+
+
+def list_keys_at_path(model: object, path: str) -> list[str]:
+    """Return the child key names of the mapping at dotted ``path``.
+
+    The second diagnostics companion of :func:`get_at_path`: a caller that
+    just learned from :func:`resolve_path_prefix` WHERE a walk stopped
+    feeds the RESOLVED prefix here to enumerate the sibling candidates for
+    a did-you-mean suggestion. ``path`` ``""`` addresses the root mapping.
+    Returns ``[]`` when the node is absent or not a mapping — absence is
+    never an error on this seam. A list-suffix segment (``[*]`` / ``[]``)
+    is rejected with :class:`ValueError`, matching its siblings. Pure
+    navigation: never unwraps values, copies, or mutates ``model``.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for list-keys-at-path: {path!r}")
+    node = _json5_inner(model)
+    if path:
+        for seg in path.split("."):
+            if not _is_mapping_node(node):
+                return []
+            node = _child_node(node, seg)
+            if node is ABSENT:
+                return []
+    if isinstance(node, JSONObject):
+        return [_key_text(k) for k in node.keys]
+    if isinstance(node, Mapping):
+        return [str(k) for k in node]
+    return []
 
 
 def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
