@@ -528,78 +528,103 @@ def _deploy_all_tracked_files(
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            if tracked_file.symlink is not None:
-                # Symlink-deployed: deferred wholesale to pass 2
-                # (resolved=None). The link lands at ``sub_dst`` and the
-                # tracked content lands at
-                # ``Path(tracked_file.symlink).expanduser()``. The host-local
-                # overlay still composes; the stored base lifecycle is
-                # regular-file-only — never wired here.
-                pending.append(
-                    _PendingDeploy(
-                        sub_name=sub_name,
-                        sub_src=sub_src,
-                        sub_dst=sub_dst,
-                        tracked_file=tracked_file,
-                        host_local=host_local,
-                        file_spans=[],
-                        resolved=None,
-                        base_plan=None,
-                    )
-                )
-                continue
-            # Stored-base 3-way path is gated on a declared disposition.
-            # PLAN the base (a pure read): it is the merge ancestor the
-            # driver diffs live/tracked against. Deferred migration writes
-            # (base seed / live marker strip) are applied in pass 2; when a
-            # live strip is pending, the stripped text overrides the on-disk
-            # live as the merge input (``live_text``).
-            base_plan: DispositionBasePlan | None = None
-            base_text: str | None = None
-            live_override: str | None = None
-            if tracked_file.disposition is not None:
-                base_plan = _plan_disposition_base(profile, sub_name, sub_dst)
-                base_text = base_plan.base_text
-                live_override = base_plan.deferred_live_strip
-            # Span re-overlay path: READ the spans sidecar so the relocation
-            # ladder has its derived state. Spans ride the disposition 3-way
-            # path AND the disposition=None markerless host-local overlay
-            # inject, so load them whenever the tracked_file declares any
-            # span, not only on the disposition path.
-            file_spans = tracked_file.spans or []
-            span_states = (
-                spans_store.get_states(profile, sub_name) if file_spans else {}
-            )
-            # NOTE: a later change adds an upstream rename/delete classifier
-            # here, refining each collected orphan with a reason.
-            resolved = deploy.resolve_deploy(
-                sub_src,
-                sub_dst,
-                host_local_sections=host_local,
-                mode=tracked_file.mode,
-                disposition=tracked_file.disposition,
-                base_text=base_text,
-                merge_auto=section_auto,
-                conflict_resolver=conflict_resolver,
-                spans=file_spans or None,
-                span_states=span_states or None,
-                live_text=live_override,
-            )
             pending.append(
-                _PendingDeploy(
-                    sub_name=sub_name,
-                    sub_src=sub_src,
-                    sub_dst=sub_dst,
-                    tracked_file=tracked_file,
+                _resolve_one_pending(
+                    profile,
+                    sub_name,
+                    sub_src,
+                    sub_dst,
+                    tracked_file,
                     host_local=host_local,
-                    file_spans=file_spans,
-                    resolved=resolved,
-                    base_plan=base_plan,
+                    section_auto=section_auto,
+                    conflict_resolver=conflict_resolver,
                 )
             )
     if strict_spans:
         _refuse_on_pinned_orphans(pending)
-    _execute_pending_deploys(profile, pending, strict_spans=strict_spans)
+    _execute_pending_deploys(profile, pending)
+
+
+def _resolve_one_pending(
+    profile: str,
+    sub_name: str,
+    sub_src: Path,
+    sub_dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    host_local: dict[HostLocalSectionName, HostLocalSection] | None,
+    section_auto: ReconcileAuto | None,
+    conflict_resolver: disposition_merge.ConflictResolver | None,
+) -> _PendingDeploy:
+    """Resolve one sub-entry's pass-1 record (read-only; no writes).
+
+    The per-``sub_name`` body of :func:`_deploy_all_tracked_files`'s pass-1
+    loop: defer a symlink-declared tracked_file wholesale, otherwise plan
+    the disposition base, read the spans sidecar, and compute the merge +
+    span overlay in memory via :func:`deploy.resolve_deploy`.
+    """
+    if tracked_file.symlink is not None:
+        # Symlink-deployed: deferred wholesale to pass 2
+        # (resolved=None). The link lands at ``sub_dst`` and the
+        # tracked content lands at
+        # ``Path(tracked_file.symlink).expanduser()``. The host-local
+        # overlay still composes; the stored base lifecycle is
+        # regular-file-only — never wired here.
+        return _PendingDeploy(
+            sub_name=sub_name,
+            sub_src=sub_src,
+            sub_dst=sub_dst,
+            tracked_file=tracked_file,
+            host_local=host_local,
+            file_spans=[],
+            resolved=None,
+            base_plan=None,
+        )
+    # Stored-base 3-way path is gated on a declared disposition.
+    # PLAN the base (a pure read): it is the merge ancestor the
+    # driver diffs live/tracked against. Deferred migration writes
+    # (base seed / live marker strip) are applied in pass 2; when a
+    # live strip is pending, the stripped text overrides the on-disk
+    # live as the merge input (``live_text``).
+    base_plan: DispositionBasePlan | None = None
+    base_text: str | None = None
+    live_override: str | None = None
+    if tracked_file.disposition is not None:
+        base_plan = _plan_disposition_base(profile, sub_name, sub_dst)
+        base_text = base_plan.base_text
+        live_override = base_plan.deferred_live_strip
+    # Span re-overlay path: READ the spans sidecar so the relocation
+    # ladder has its derived state. Spans ride the disposition 3-way
+    # path AND the disposition=None markerless host-local overlay
+    # inject, so load them whenever the tracked_file declares any
+    # span, not only on the disposition path.
+    file_spans = tracked_file.spans or []
+    span_states = spans_store.get_states(profile, sub_name) if file_spans else {}
+    # NOTE: a later change adds an upstream rename/delete classifier
+    # here, refining each collected orphan with a reason.
+    resolved = deploy.resolve_deploy(
+        sub_src,
+        sub_dst,
+        host_local_sections=host_local,
+        mode=tracked_file.mode,
+        disposition=tracked_file.disposition,
+        base_text=base_text,
+        merge_auto=section_auto,
+        conflict_resolver=conflict_resolver,
+        spans=file_spans or None,
+        span_states=span_states or None,
+        live_text=live_override,
+    )
+    return _PendingDeploy(
+        sub_name=sub_name,
+        sub_src=sub_src,
+        sub_dst=sub_dst,
+        tracked_file=tracked_file,
+        host_local=host_local,
+        file_spans=file_spans,
+        resolved=resolved,
+        base_plan=base_plan,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -671,8 +696,6 @@ def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
 def _execute_pending_deploys(
     profile: str,
     pending: list[_PendingDeploy],
-    *,
-    strict_spans: bool,
 ) -> None:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
@@ -684,10 +707,6 @@ def _execute_pending_deploys(
     in lockstep per file. After the loop, prune bases keyed on the executed
     disposition set — so a gate refusal (which never reaches this function)
     prunes nothing.
-
-    ``strict_spans`` is accepted for parity with the gate's decision context;
-    the refusal itself fires BEFORE this function (pinned orphans never reach
-    pass 2 under strict mode), so no write here consults it today.
     """
     # NOTE: a later change snapshots the pre-install store state here — ONE
     # barrier before any write — so revert can restore bases/sidecars.
