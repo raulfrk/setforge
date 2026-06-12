@@ -214,3 +214,38 @@ def test_orphaned_pinned_structural_path_warns_and_succeeds(
     rc, out, err = _install(c)
     assert rc == 0, out + err
     assert "span" in (out + err).lower(), out + err
+
+
+# ---------------------------------------------------------------------------
+# sync — a span path absent in tracked drops from capture and warns, so a
+# host-local value never bakes into the shared config repo.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_sync_drops_span_path_absent_in_tracked_and_warns(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """sync: a host value at a span path absent in tracked never captures.
+
+    Install once (live == tracked, pinned ``editor.fontSize`` present). Then
+    UPSTREAM removes the ``fontSize`` leaf from tracked while live still
+    carries it. ``sync`` must keep tracked unchanged at that path (the host
+    value is dropped from the writeback, not baked into the repo) and surface
+    the not-captured warning on stderr.
+    """
+    c = docker_container()
+    rc, _out, err = _install(c)
+    assert rc == 0, err
+
+    # Upstream removes only the pinned leaf; the `editor` parent stays.
+    upstream = _TRACKED_BODY.replace("  fontSize: 12\n", "")
+    c.write_text(_TRACKED, upstream)
+
+    rc, _out, err = _sync(c)
+    assert rc == 0, err
+    tracked = c.read_text(_TRACKED)
+    # The host value did NOT bake into tracked — the path stays absent.
+    assert "fontSize" not in tracked, tracked
+    # The dropped host value surfaced as a warning on stderr.
+    assert "absent in tracked" in err, err
