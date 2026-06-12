@@ -780,11 +780,16 @@ def _forked_scalar_conflicts(
             None,
             structural_spans=merge_spans or None,
         )
-    except (BaseStoreError, OSError, ConfigError, MergeTypeMismatch, ValueError):
+    except (
+        BaseStoreError,
+        OSError,
+        ConfigError,
+        MergeTypeMismatch,
+        ValueError,
+        YAMLError,
+    ):
         # ValueError covers UnicodeDecodeError plus the json-five parse
-        # errors; ruamel's YAMLError is caught explicitly below it.
-        return []
-    except YAMLError:
+        # errors; YAMLError covers an unparsable ruamel side.
         return []
     return [
         f"{c.path}: {_format_conflict_operand(c.base)} → "
