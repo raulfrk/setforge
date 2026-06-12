@@ -12,12 +12,13 @@ The contract:
 - fchmod failure is contractual — propagates rather than being
   silently swallowed (the pre-mode-on-update ``contextlib.suppress(OSError)``
   wrapper is gone).
-- AST guarantee: the source of ``_atomic_write`` has ``os.fchmod``
-  appearing strictly before ``os.replace`` (the source-text-ordering
-  proxy for the runtime guarantee).
+- Delegation guarantee: ``_atomic_write`` routes through
+  :func:`setforge.atomicio.atomic_write_text` — the
+  fchmod-before-replace ordering invariant is AST-pinned in the
+  atomicio tests, where the implementation now lives.
 """
 
-import ast
+import inspect
 import os
 import stat
 from pathlib import Path
@@ -164,29 +165,17 @@ def test_identical_content_and_mode_stays_noop(tmp_path: Path) -> None:
     assert result.action is deploy_mod.DeployAction.NOOP
 
 
-def test_atomic_write_source_orders_fchmod_before_replace() -> None:
-    """The source of :func:`_atomic_write` has ``os.fchmod`` strictly before
-    ``os.replace`` — the AST-level proxy for the runtime guarantee that
-    perms are applied to the temp inode before it's swapped into place.
-
-    This guards against an accidental reordering refactor that would
-    re-open the TOCTOU symlink-swap window.
+def test_atomic_write_delegates_to_atomicio() -> None:
+    """:func:`_atomic_write` is a thin wrapper over
+    :func:`setforge.atomicio.atomic_write_text` — the
+    fchmod-before-replace ordering invariant now lives in (and is
+    AST-pinned by) the atomicio tests, so the deploy side only has to
+    prove it routes through the shared primitive rather than carrying
+    a hand-rolled tempfile + ``os.replace`` dance of its own.
     """
-    tree = ast.parse(Path(deploy_mod.__file__).read_text(encoding="utf-8"))
-    # Match the exact function under test: a substring probe ("atomic" in
-    # the name) would land on copy_atomic first and grade its docstring.
-    fn = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "_atomic_write"
-    )
-    src = ast.unparse(fn)
-    fchmod_idx = src.find("os.fchmod")
-    replace_idx = src.find("os.replace")
-    assert 0 <= fchmod_idx < replace_idx, (
-        "os.fchmod must come before os.replace in _atomic_write source "
-        f"(fchmod_idx={fchmod_idx}, replace_idx={replace_idx})"
-    )
+    src = inspect.getsource(deploy_mod._atomic_write)
+    assert "atomicio.atomic_write_text" in src
+    assert "mkstemp" not in src
 
 
 def test_no_shutil_copystat_in_atomic_write() -> None:

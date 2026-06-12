@@ -18,14 +18,13 @@ retired at schema 2.0 in favor of the above (see the contract migration
 import contextlib
 import logging
 import os
-import shutil
 import stat
-import tempfile
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 from setforge import (
+    atomicio,
     disposition_merge,
     host_local_inject,
     overlay_deploy,
@@ -579,46 +578,25 @@ def _atomic_write(
 ) -> Path | None:
     """Atomically write ``content`` to ``dst`` with explicit mode bits.
 
-    ``os.fchmod`` runs on the temp fd BEFORE ``os.replace`` so the
-    final mode is applied in the same FS object, closing the TOCTOU
-    symlink-swap window that a post-replace path-based chmod call
-    would expose. When ``mode`` is None, the temp file gets the
-    source's mode (via :func:`stat.S_IMODE`) — today's behavior.
-    fchmod failure is contractual: it propagates (no
-    :func:`contextlib.suppress` wrapper).
+    Thin wrapper over :func:`setforge.atomicio.atomic_write_text`,
+    which owns the tempfile + fchmod-on-fd + ``.bak``-rotation +
+    ``os.replace`` dance (and pins fchmod-before-replace so the TOCTOU
+    symlink-swap window stays closed). Deploy-specific semantics live
+    here: ``mode=None`` falls back to the SOURCE file's perm bits (via
+    :func:`stat.S_IMODE`) — today's behavior — and the backup is gated
+    on ``dst_existed`` so a fresh deploy never tries to snapshot an
+    absent destination. ``fsync=False`` is load-bearing: deploy has
+    never fsynced its writes (only flushed), and byte-identical
+    behavior means not adding durability silently.
     """
     effective_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
-    tmp_fd, tmp_name = tempfile.mkstemp(
-        dir=str(dst.parent), prefix=f".{dst.name}.", suffix=".tmp"
+    return atomicio.atomic_write_text(
+        dst,
+        content,
+        fsync=False,
+        mode=effective_mode,
+        backup=backup and dst_existed,
     )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-            fh.flush()
-            os.fchmod(fh.fileno(), effective_mode)
-
-        backup_path: Path | None = None
-        if backup and dst_existed:
-            backup_path = Path(str(dst) + ".bak")
-            # Unlink any pre-existing .bak first: shutil.copy2 FOLLOWS a
-            # symlink at the destination and would write dst's content
-            # THROUGH it (clobbering the link target). The prior
-            # rename-based backup replaced the link instead, so unlink to
-            # preserve that "replace, never follow" semantics.
-            with contextlib.suppress(FileNotFoundError):
-                backup_path.unlink()
-            # Copy (not rename) so dst stays in place until os.replace
-            # atomically swaps the new content in — no window where dst is
-            # absent. copy2 works across filesystems; tmp_path is always
-            # in dst.parent, so os.replace below never hits EXDEV.
-            shutil.copy2(dst, backup_path)
-
-        os.replace(tmp_path, dst)
-        return backup_path
-    finally:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink(missing_ok=True)
 
 
 def deploy_symlinked_file(
