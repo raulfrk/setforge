@@ -81,7 +81,7 @@ def base_path(profile: str, file_id: str) -> Path:
     Public so the transition state-snapshot integration can capture and
     restore the stored base alongside the spans sidecar and scalar-base
     manifests (Invariant I5: live + base + sidecar roll back
-    atomically). Applies the same traversal guard as the read/write
+    in lockstep). Applies the same traversal guard as the read/write
     entry points.
     """
     return _resolve_target(profile, file_id)
