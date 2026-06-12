@@ -33,7 +33,6 @@ from typing import Annotated, Final, Literal, NewType
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
-from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge import git_ops
 from setforge.anchors import (
@@ -45,7 +44,11 @@ from setforge.anchors import (
     AnchorBeforeHeading,
     AnchorKind,
 )
-from setforge.config import Disposition, MarketplaceSourceKind
+from setforge.config import (
+    Disposition,
+    MarketplaceSourceKind,
+    _check_yaml_octal_mode,
+)
 from setforge.errors import (
     ConfigError,
     DirtySourceCheckout,
@@ -324,40 +327,16 @@ class _LocalTrackedFileOverlay(BaseModel):
     def _validate_mode_octal_only(cls, v: object) -> int | None:
         """Reject every shape EXCEPT YAML-1.2 octal (``0o755``) or a plain int.
 
-        Mirrors :func:`setforge.config.TrackedFile._validate_mode` so a
-        host that writes ``mode: 0755`` in ``local.yaml`` gets the same
+        Dispatches to :func:`setforge.config._check_yaml_octal_mode` —
+        the cascade shared with
+        :func:`setforge.config.TrackedFile._validate_mode` — so a host
+        that writes ``mode: 0755`` in ``local.yaml`` gets the same
         clear "use 0o755" error as a tracked-side ``mode: 0755``
         misconfig — anti-smell #6 (YAML 1.1 leading-zero footgun).
-
-        Accepts :class:`OctalInt` (the canonical YAML-1.2 form) and the
-        exact ``int`` type. Rejects :class:`ScalarInt` subclasses that
-        are NOT :class:`OctalInt` (the YAML-1.1 ``0755`` shape parses
-        as ``ScalarInt(755)`` under ruamel.yaml + YAML 1.2), bools
-        (``isinstance(True, int)`` is True; ``mode: true`` would
-        silently mean ``0o1``), and any other type.
+        Range and setuid/setgid bounds are enforced separately in
+        :func:`_validate_host_local_overrides`.
         """
-        if v is None:
-            return None
-        if isinstance(v, bool):
-            raise ValueError(
-                f"_LocalTrackedFileOverlay: `mode` must be YAML-1.2 octal "
-                f"int literal (e.g. 0o755), not bool. Got: {v!r}"
-            )
-        if isinstance(v, ScalarInt) and not isinstance(v, OctalInt):
-            raise ValueError(
-                f"_LocalTrackedFileOverlay: `mode` {int(v)} appears to use "
-                f"YAML-1.1-style leading-zero octal (e.g. 0755) which YAML 1.2 "
-                f"silently parses as decimal. If you meant the permission bits "
-                f"commonly written as 'octal 755', use the YAML-1.2 literal 0o755. "
-                f"If you literally meant the integer {int(v)}, use 0o{int(v):o}."
-            )
-        if type(v) is not int and not isinstance(v, OctalInt):
-            raise ValueError(
-                f"_LocalTrackedFileOverlay: `mode` must be a YAML-1.2 octal "
-                f"int literal (e.g. 0o755); strings, floats, and other types "
-                f"are rejected. Got: {v!r}"
-            )
-        return int(v)
+        return _check_yaml_octal_mode(v, "_LocalTrackedFileOverlay: `mode`")
 
     @model_validator(mode="after")
     def _validate_host_local_overrides(self) -> "_LocalTrackedFileOverlay":

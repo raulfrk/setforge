@@ -115,6 +115,65 @@ class Disposition(StrEnum):
 # stays valid for every existing call site.
 
 
+def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
+    """Validate a ``mode`` value's TYPE shape; return plain ``int`` or ``None``.
+
+    The bool/ScalarInt/OctalInt cascade shared by
+    :func:`TrackedFile._validate_mode` and
+    :func:`setforge.source._LocalTrackedFileOverlay._validate_mode_octal_only`.
+    ``source_label`` prefixes every reject message so each consumer keeps
+    its pre-extraction error text (``"mode"`` for :class:`TrackedFile`;
+    the class-qualified backticked label for the overlay).
+
+    ruamel.yaml round-trip semantics for the value before Pydantic
+    sees it:
+
+    - ``mode: 0o755`` -> :class:`OctalInt(493)` (the intended form).
+    - ``mode: 0755``  -> :class:`ScalarInt(755)` (NOT 0o755! The
+      leading zero is silently stripped under YAML 1.2 — a
+      well-known footgun for users migrating from YAML 1.1).
+    - ``mode: "0755"`` -> ``str("0755")``.
+    - ``mode: 755`` -> plain ``int(755)`` (decimal — almost
+      certainly a typo; 755 = 0o1363, not 0o755).
+
+    Accepts :class:`OctalInt` (the canonical form) and the exact
+    ``int`` type (a Pydantic-caller passing the Python literal
+    ``0o755`` == 493 — same value, different provenance). Every other
+    shape — including :class:`ScalarInt` subclasses that are NOT
+    :class:`OctalInt`, ``str``, ``bool`` — is rejected with a message
+    pointing at ``0o755``. ``bool`` deserves special mention: Python's
+    ``isinstance(True, int)`` is True, so without an explicit check
+    ``mode: true`` would silently mean ``0o1``.
+
+    Range and setuid/setgid policy are NOT enforced here — each
+    consumer applies its own bounds with its own message
+    (:func:`TrackedFile._validate_mode` inline; the overlay in its
+    ``model_validator``).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{source_label} must be YAML-1.2 octal int literal (e.g. 0o755), "
+            f"not bool. Got: {value!r}"
+        )
+    if isinstance(value, ScalarInt) and not isinstance(value, OctalInt):
+        raise ValueError(
+            f"{source_label} {int(value)} appears to use YAML-1.1-style "
+            f"leading-zero octal (e.g. 0755) which YAML 1.2 silently parses "
+            f"as decimal. If you meant the permission bits commonly written "
+            f"as 'octal 755', use the YAML-1.2 literal 0o755. If you "
+            f"literally meant the integer {int(value)}, use 0o{int(value):o}."
+        )
+    if type(value) is not int and not isinstance(value, OctalInt):
+        raise ValueError(
+            f"{source_label} must be a YAML-1.2 octal int literal "
+            f"(e.g. 0o755); strings, floats, and other types are rejected. "
+            f"Got: {value!r}"
+        )
+    return int(value)
+
+
 class TrackedFile(BaseModel):
     model_config = _STRICT
 
@@ -194,55 +253,23 @@ class TrackedFile(BaseModel):
     def _validate_mode(cls, v: object) -> int | None:
         """Reject every shape EXCEPT YAML-1.2 octal (``0o755``) or a plain int.
 
-        ruamel.yaml round-trip semantics for the value before Pydantic
-        sees it:
-
-        - ``mode: 0o755`` -> :class:`OctalInt(493)` (the intended form).
-        - ``mode: 0755``  -> :class:`ScalarInt(755)` (NOT 0o755! The
-          leading zero is silently stripped under YAML 1.2 — a
-          well-known footgun for users migrating from YAML 1.1).
-        - ``mode: "0755"`` -> ``str("0755")``.
-        - ``mode: 755`` -> plain ``int(755)`` (decimal — almost
-          certainly a typo; 755 = 0o1363, not 0o755).
-
-        The validator accepts :class:`OctalInt` (the canonical form)
-        and the exact ``int`` type (a Pydantic-caller passing the
-        Python literal ``0o755`` == 493 — same value, different
-        provenance). Every other shape — including :class:`ScalarInt`
-        subclasses that are NOT :class:`OctalInt`, ``str``, ``bool`` —
-        is rejected with a message pointing at ``0o755``.
-        ``bool`` deserves special mention: Python's
-        ``isinstance(True, int)`` is True, so without an explicit
-        check ``mode: true`` would silently mean ``0o1``.
+        The type cascade (bool / ScalarInt / OctalInt — see
+        :func:`_check_yaml_octal_mode` for the ruamel.yaml round-trip
+        semantics it guards) is shared with
+        :class:`setforge.source._LocalTrackedFileOverlay`; the range and
+        setuid/setgid policy below stays here because the overlay
+        enforces its own bounds in its ``model_validator``.
         """
-        if v is None:
+        mode = _check_yaml_octal_mode(v, "mode")
+        if mode is None:
             return None
-        if isinstance(v, bool):
+        if not (0o0 <= mode <= 0o7777):
+            raise ValueError(f"mode {oct(mode)} out of range 0o0..0o7777")
+        if mode & 0o6000:
             raise ValueError(
-                f"mode must be YAML-1.2 octal int literal (e.g. 0o755), "
-                f"not bool. Got: {v!r}"
+                f"mode {oct(mode)} sets setuid/setgid bit — refusing for security."
             )
-        if isinstance(v, ScalarInt) and not isinstance(v, OctalInt):
-            raise ValueError(
-                f"mode {int(v)} appears to use YAML-1.1-style leading-zero "
-                f"octal (e.g. 0755) which YAML 1.2 silently parses as "
-                f"decimal. If you meant the permission bits commonly "
-                f"written as 'octal 755', use the YAML-1.2 literal 0o755. "
-                f"If you literally meant the integer {int(v)}, use "
-                f"0o{int(v):o}."
-            )
-        if type(v) is not int and not isinstance(v, OctalInt):
-            raise ValueError(
-                f"mode must be a YAML-1.2 octal int literal (e.g. 0o755); "
-                f"strings, floats, and other types are rejected. Got: {v!r}"
-            )
-        if not (0o0 <= v <= 0o7777):
-            raise ValueError(f"mode {oct(v)} out of range 0o0..0o7777")
-        if v & 0o6000:
-            raise ValueError(
-                f"mode {oct(v)} sets setuid/setgid bit — refusing for security."
-            )
-        return int(v)
+        return mode
 
     @field_validator("src", "dst", mode="before")
     @classmethod
