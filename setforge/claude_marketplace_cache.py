@@ -325,17 +325,9 @@ def _resolve_cache_collision(
 
     Pulled out of :func:`resolve_marketplace_source` so the swap-site
     keeps its single-screen shape. The wizard returns a closed-set
-    :class:`CollisionAction`; this function maps each action to its
-    side effects:
-
-    - ``KEEP`` — return the existing cache_dir as-is and emit a clear
-      info log noting the new ``source.repo`` was NOT applied.
-    - ``UPDATE`` — rmtree the existing cache and re-clone (today's
-      pre-wizard behavior, now opt-in).
-    - ``BOTH`` — clone the new source into the wizard-supplied
-      ``new_cache_dir``; leave the existing cache_dir untouched.
-    - ``ABORT`` — the wizard raises :class:`typer.Abort` directly;
-      never reached here.
+    :class:`CollisionAction`; each action maps to its own
+    ``_collision_*`` helper below. ``ABORT`` raises
+    :class:`typer.Abort` inside the wizard and never reaches here.
     """
     from setforge.marketplace_cache_wizard import (
         CollisionAction,
@@ -353,31 +345,58 @@ def _resolve_cache_collision(
         auto=auto,
     )
     if resolution.action is CollisionAction.KEEP:
-        LOGGER.info(
-            "cache-collision: using existing cache %r for marketplace %r; "
-            "new source.repo %r NOT applied",
-            cache_dir,
-            mp_name,
-            source.repo,
-        )
-        return MarketplaceSource(
-            source=MarketplaceSourceKind.PATH,
-            path=cache_dir,
-        )
+        return _collision_keep(source, cache_dir, mp_name)
     if resolution.action is CollisionAction.UPDATE:
-        LOGGER.info(
-            "cache-collision: re-cloning %r over existing %r",
-            source.repo,
-            cache_dir,
-        )
-        shutil.rmtree(cache_dir)
-        _clone_marketplace(source, cache_dir)
-        return MarketplaceSource(
-            source=MarketplaceSourceKind.PATH,
-            path=cache_dir,
-        )
-    # action is BOTH
-    new_dir = resolution.new_cache_dir
+        return _collision_update(source, cache_dir)
+    return _collision_both(source, cache_dir, resolution.new_cache_dir)
+
+
+def _collision_keep(
+    source: MarketplaceSource, cache_dir: Path, mp_name: str
+) -> MarketplaceSource:
+    """``KEEP``: return the existing cache_dir as-is.
+
+    Emits a clear info log noting the new ``source.repo`` was NOT
+    applied.
+    """
+    LOGGER.info(
+        "cache-collision: using existing cache %r for marketplace %r; "
+        "new source.repo %r NOT applied",
+        cache_dir,
+        mp_name,
+        source.repo,
+    )
+    return MarketplaceSource(
+        source=MarketplaceSourceKind.PATH,
+        path=cache_dir,
+    )
+
+
+def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
+    """``UPDATE``: rmtree the existing cache and re-clone.
+
+    Today's pre-wizard behavior, now opt-in.
+    """
+    LOGGER.info(
+        "cache-collision: re-cloning %r over existing %r",
+        source.repo,
+        cache_dir,
+    )
+    shutil.rmtree(cache_dir)
+    _clone_marketplace(source, cache_dir)
+    return MarketplaceSource(
+        source=MarketplaceSourceKind.PATH,
+        path=cache_dir,
+    )
+
+
+def _collision_both(
+    source: MarketplaceSource, cache_dir: Path, new_dir: Path | None
+) -> MarketplaceSource:
+    """``BOTH``: clone into the wizard-supplied ``new_dir``.
+
+    Leaves the existing ``cache_dir`` untouched.
+    """
     assert new_dir is not None, "wizard contract: BOTH carries new_cache_dir"
     LOGGER.info(
         "cache-collision: cloning %r into new cache %r (existing %r kept)",
