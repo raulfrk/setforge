@@ -8,11 +8,14 @@ under ``~/.local/state/setforge/transitions/`` containing:
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
   added / removed marketplaces (omitted if no plugin delta)
+- ``state_snapshots/`` — pre-command per-host store state (byte bases,
+  spans sidecars, scalar-base manifests) as a ``manifest.json`` plus
+  numbered raw-byte payload files (omitted when nothing was captured)
 
 A subsequent ``setforge revert`` consumes the most recent transition for
 a profile, applies the patch in reverse via ``patch -R``, reverses the
-extension delta, reverses the plugin delta, and records its own reverse
-transition.
+extension delta, reverses the plugin delta, restores the snapshotted
+store state, and records its own reverse transition.
 """
 
 import difflib
@@ -303,6 +306,18 @@ def _write_text_durable(path: Path, text: str) -> None:
     """
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _write_bytes_durable(path: Path, data: bytes) -> None:
+    """Binary sibling of :func:`_write_text_durable` (same fsync contract).
+
+    Used for the staged ``state_snapshots/<n>.payload`` files, which carry
+    verbatim store bytes and must not pass through a text encode/decode.
+    """
+    with open(path, "wb") as fh:
+        fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
 
@@ -649,6 +664,221 @@ def load_reconcile_outcomes(
     return reconcile_outcomes_from_json(raw)
 
 
+class SnapshotStore(StrEnum):
+    """Closed set of per-host state stores a transition can snapshot.
+
+    The string values double as the store's directory name under
+    :func:`state_root`, so the on-disk ``state_snapshots/manifest.json``
+    records exactly the subtree each entry restores into.
+    """
+
+    BASE = "base"
+    SPANS = "spans"
+    SCALAR_BASE = "scalar-base"
+
+
+@dataclass(frozen=True, slots=True)
+class StateSnapshotEntry:
+    """Pre-command state of ONE per-host store entry.
+
+    ``key`` is the tracked-file id (``expand_tracked_file``'s ``sub_name``)
+    the store keys its files by. ``payload`` carries the entry's verbatim
+    bytes; ``None`` means the entry did NOT exist at capture time —
+    distinct from ``b""`` (an existing empty file), and checked ONLY via
+    ``is None`` so the two states never collapse through truthiness.
+    Restoring a ``None`` entry DELETES the store file; restoring a bytes
+    entry rewrites it byte-exact.
+    """
+
+    store: SnapshotStore
+    profile: str
+    key: str
+    payload: bytes | None
+
+
+_STATE_SNAPSHOTS_DIRNAME: Final[str] = "state_snapshots"
+_STATE_SNAPSHOTS_MANIFEST: Final[str] = "manifest.json"
+
+
+def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
+    """Resolve one snapshot entry to its on-disk store path.
+
+    Delegates to each store module's public path accessor so the
+    traversal guard (relative key, no ``..``, stays inside the profile
+    subtree) and the per-store suffix convention (``.json`` for the two
+    manifest stores) live in exactly one place. The store modules import
+    :func:`state_root` from here, so the imports are deferred to call
+    time to keep the module graph acyclic.
+    """
+    from setforge import base_store, scalar_base_store, spans_store
+
+    match store:
+        case SnapshotStore.BASE:
+            return base_store.base_path(profile, key)
+        case SnapshotStore.SPANS:
+            return spans_store.manifest_path(profile, key)
+        case SnapshotStore.SCALAR_BASE:
+            return scalar_base_store.manifest_path(profile, key)
+
+
+def snapshot_store_state(
+    store: SnapshotStore, profile: str, key: str
+) -> StateSnapshotEntry:
+    """Capture the CURRENT on-disk state of one store entry.
+
+    A missing store file captures as ``payload=None`` (the absent state a
+    later restore turns back into a deletion). Read errors other than
+    absence propagate — a snapshot that silently recorded wrong state
+    would corrupt the revert it exists to serve.
+    """
+    target = _snapshot_target(store, profile, key)
+    try:
+        payload: bytes | None = target.read_bytes()
+    except FileNotFoundError:
+        payload = None
+    return StateSnapshotEntry(store=store, profile=profile, key=key, payload=payload)
+
+
+def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
+    """Write every entry's captured state back into its store.
+
+    Per entry: ``payload is None`` → the store file is unlinked
+    (``missing_ok`` — it may already be gone); bytes → rewritten
+    byte-exact via :func:`atomicio.atomic_write_bytes`. Both operations
+    are idempotent, so an interrupted revert can safely re-run the whole
+    restore.
+    """
+    for entry in entries:
+        target = _snapshot_target(entry.store, entry.profile, entry.key)
+        if entry.payload is None:
+            target.unlink(missing_ok=True)
+        else:
+            atomicio.atomic_write_bytes(target, entry.payload)
+
+
+def _stage_state_snapshots(
+    pending: Path, snapshots: tuple[StateSnapshotEntry, ...]
+) -> None:
+    """Stage the ``state_snapshots/`` payload inside the pending dir.
+
+    No-op for the empty tuple so snapshot-free transitions keep the
+    pre-bump on-disk shape. Present payloads land as numbered
+    ``<n>.payload`` files referenced from ``manifest.json``; an absent
+    entry records ``"payload_file": null`` (explicit, never inferred from
+    a zero-length file). Every staged file fsyncs its own fd (durability
+    parity with the other staged payloads); the dir fsync makes the child
+    entries durable before the caller's rename commit.
+    """
+    if not snapshots:
+        return
+    snap_dir = pending / _STATE_SNAPSHOTS_DIRNAME
+    snap_dir.mkdir()
+    records: list[dict[str, object]] = []
+    payload_index = 0
+    for entry in snapshots:
+        payload_file: str | None = None
+        if entry.payload is not None:
+            payload_file = f"{payload_index}.payload"
+            payload_index += 1
+            _write_bytes_durable(snap_dir / payload_file, entry.payload)
+        records.append(
+            {
+                "store": entry.store.value,
+                "profile": entry.profile,
+                "key": entry.key,
+                "payload_file": payload_file,
+            }
+        )
+    _write_text_durable(
+        snap_dir / _STATE_SNAPSHOTS_MANIFEST,
+        json.dumps({"entries": records}, indent=2) + "\n",
+    )
+    atomicio.fsync_dir(snap_dir)
+
+
+_VALID_SNAPSHOT_STORES: frozenset[str] = frozenset(s.value for s in SnapshotStore)
+
+
+def _validate_one_state_snapshot(entry: object, snap_dir: Path) -> StateSnapshotEntry:
+    """Validate one manifest record into a :class:`StateSnapshotEntry`.
+
+    Raises :class:`InvalidTransitionRecord` on any shape deviation,
+    including a ``payload_file`` that is missing on disk or carries a
+    path separator (a hand-edited manifest must never read outside the
+    snapshot dir).
+    """
+    if not isinstance(entry, dict):
+        raise InvalidTransitionRecord(
+            f"state_snapshots manifest: entry must be a dict, got "
+            f"{type(entry).__name__}"
+        )
+    store = entry.get("store")
+    profile = entry.get("profile")
+    key = entry.get("key")
+    payload_file = entry.get("payload_file")
+    if store not in _VALID_SNAPSHOT_STORES:
+        raise InvalidTransitionRecord(
+            f"state_snapshots manifest: store must be in "
+            f"{sorted(_VALID_SNAPSHOT_STORES)}, got {store!r}"
+        )
+    if not isinstance(profile, str) or not isinstance(key, str):
+        raise InvalidTransitionRecord(
+            f"state_snapshots manifest: profile/key must be str, got "
+            f"({type(profile).__name__}, {type(key).__name__})"
+        )
+    payload: bytes | None = None
+    if payload_file is not None:
+        if not isinstance(payload_file, str) or Path(payload_file).name != payload_file:
+            raise InvalidTransitionRecord(
+                f"state_snapshots manifest: malformed payload_file {payload_file!r}"
+            )
+        try:
+            payload = (snap_dir / payload_file).read_bytes()
+        except OSError as exc:
+            raise InvalidTransitionRecord(
+                f"state_snapshots manifest: cannot read payload {payload_file!r}: {exc}"
+            ) from exc
+    return StateSnapshotEntry(
+        store=SnapshotStore(store), profile=profile, key=key, payload=payload
+    )
+
+
+def load_state_snapshots(
+    transition_dir: TransitionDir,
+) -> tuple[StateSnapshotEntry, ...] | None:
+    """Return the state-snapshot entries for a transition directory.
+
+    Returns ``None`` when the ``state_snapshots/`` dir is absent — the
+    backward-compat sentinel for transitions written before this schema
+    bump (revert then skips store restore entirely; the deliberate
+    ``None``-vs-``()`` distinction mirrors how the entries themselves
+    encode absent-vs-empty). Raises :class:`InvalidTransitionRecord` when
+    the dir exists but the manifest is missing or its shape is corrupt.
+    """
+    snap_dir = transition_dir / _STATE_SNAPSHOTS_DIRNAME
+    if not snap_dir.is_dir():
+        return None
+    manifest = snap_dir / _STATE_SNAPSHOTS_MANIFEST
+    try:
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read state_snapshots manifest at {manifest}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise InvalidTransitionRecord(
+            f"state_snapshots manifest at {manifest}: top-level must be a "
+            f"dict, got {type(raw).__name__}"
+        )
+    entries = raw.get("entries")
+    if not isinstance(entries, list):
+        raise InvalidTransitionRecord(
+            f"state_snapshots manifest at {manifest}: entries must be a "
+            f"list, got {type(entries).__name__}"
+        )
+    return tuple(_validate_one_state_snapshot(entry, snap_dir) for entry in entries)
+
+
 def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
     """Return a validated ``list[str]`` built from ``raw``.
 
@@ -771,6 +1001,7 @@ def write_transition(
     ext_delta: ExtensionDelta | None,
     plugin_delta: PluginDelta | None = None,
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
+    state_snapshots: tuple[StateSnapshotEntry, ...] = (),
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -784,8 +1015,9 @@ def write_transition(
     payload-related written after it.
 
     Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
-    (if delta non-empty), ``plugins.json`` (if delta non-empty), and
-    ``reconcile_outcomes.json`` (if non-empty) into a ``.pending-<dirname>/``
+    (if delta non-empty), ``plugins.json`` (if delta non-empty),
+    ``reconcile_outcomes.json`` (if non-empty), and ``state_snapshots/``
+    (if non-empty) into a ``.pending-<dirname>/``
     staging dir; ``os.rename(pending, target)`` — atomic POSIX rename,
     same fs; write ``meta.json`` inside the now-real ``target/`` dir as
     the commit point. A crash before that final ``meta.json`` write
@@ -794,8 +1026,10 @@ def write_transition(
     ``<dirname>/`` without ``meta.json`` (skipped by the existing
     meta.json filter).
 
-    ``reconcile_outcomes`` defaults to an empty tuple so the
-    legacy call shape stays backward-compatible.
+    ``reconcile_outcomes`` and ``state_snapshots`` default to empty
+    tuples so the legacy call shapes stay backward-compatible; an empty
+    ``state_snapshots`` writes no ``state_snapshots/`` dir at all, which
+    :func:`load_state_snapshots` reads back as its ``None`` sentinel.
 
     Returns the absolute path of the committed directory.
 
@@ -838,6 +1072,8 @@ def write_transition(
     outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
     if outcomes_payload is not None:
         _write_text_durable(pending / "reconcile_outcomes.json", outcomes_payload)
+
+    _stage_state_snapshots(pending, state_snapshots)
 
     atomicio.fsync_dir(pending)
     os.rename(pending, target)

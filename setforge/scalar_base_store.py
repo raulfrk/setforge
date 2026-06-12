@@ -94,6 +94,18 @@ def _resolve_target(profile: str, file_id: str) -> Path:
     return target
 
 
+def manifest_path(profile: str, file_id: str) -> Path:
+    """Return the on-disk manifest path for ``(profile, file_id)``.
+
+    Public so the transition state-snapshot integration (Invariant I5)
+    can capture and restore the manifest's verbatim bytes alongside the
+    byte base and the spans sidecar. Applies the same traversal guard as
+    the read/write entry points. Mirrors
+    :func:`setforge.spans_store.manifest_path`.
+    """
+    return _resolve_target(profile, file_id)
+
+
 def _read_manifest(profile: str, file_id: str) -> _Manifest:
     """Return the parsed manifest for ``(profile, file_id)``.
 
