@@ -120,7 +120,7 @@ def _load_validated_host_local_sections(
 
     Shared between :mod:`setforge.cli.install` and
     :mod:`setforge.cli.compare` so both surfaces validate identically
-    before threading the overlay through ``deploy.copy_atomic`` /
+    before threading the overlay through ``deploy.resolve_deploy`` /
     ``compare_profile`` respectively.
     """
     overlay = load_local_host_local_sections()
