@@ -4,8 +4,10 @@ Helpers extracted from ``install()`` body:
 
 - :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
   on no-resolve.
-- :func:`_deploy_all_tracked_files`: per-tracked-file
-  :func:`setforge.deploy.copy_atomic` loop + tracked-baseline stamp.
+- :func:`_deploy_all_tracked_files`: two-pass tracked-file deploy —
+  a read-only :func:`setforge.deploy.resolve_deploy` pass, the
+  ``--strict-spans`` refusal gate, then the write pass
+  (:func:`_execute_pending_deploys`).
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
@@ -80,6 +82,7 @@ from setforge.config import (
     Config,
     ResolvedProfile,
     SharedSpanCollision,
+    TrackedFile,
 )
 from setforge.errors import (
     ExtensionToolMissing,
@@ -471,28 +474,37 @@ def _deploy_all_tracked_files(
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
     strict_spans: bool = False,
 ) -> None:
-    """Deploy each tracked_file via :func:`deploy.copy_atomic` + stamp baselines.
+    """Deploy every tracked_file in two passes: resolve all, THEN write all.
 
-    Echoes the per-file ``copy_atomic`` action to stdout (preserving the
-    pre-refactor format) and stamps tracked-side embedded section hashes
-    after each ``preserve_user_sections`` deploy so the three-way
-    classifier has a baseline on the next install.
+    **Pass 1 (read-only).** For each regular-file sub-entry: plan the
+    disposition base (:func:`_plan_disposition_base` — any migration write is
+    DEFERRED), read the spans sidecar, and compute the full merge + span
+    overlay in memory via :func:`deploy.resolve_deploy`. Nothing is written;
+    the per-file outcomes accumulate as :class:`_PendingDeploy` records
+    (bounded by the config-tree size). Symlink-declared tracked_files are
+    deferred wholesale (``resolved=None``) — their deploy primitive is
+    self-contained and span-free.
 
-    For every regular-file sub-entry whose ``tracked_file.disposition`` is
-    set, the per-host stored base (:mod:`setforge.base_store`) is woven into
-    the deploy: the base is READ before the deploy (the merge ancestor for
-    :func:`deploy.copy_atomic`'s 3-way driver), then — and ONLY after the
-    live write returns successfully — ADVANCED to the merged bytes when the
-    driver signals re-baselining. The ordering is load-bearing: a base that
-    lags live is the safe failure direction (the next install re-merges
-    against a stale-but-valid ancestor); a base written before or around
-    the live write could end up ahead of live, which is corruption. A
-    deferred conflict (``merge_conflicts`` non-empty, ``new_base is None``)
-    keeps live and warns; its base stays put so the divergence re-surfaces
-    next install. After the loop, every base under the profile whose
-    file_id is NOT in this run's disposition keep-set is pruned, so bases
-    for files that left the profile (or dropped their disposition) are
-    cleaned up. The symlink branch never touches the base store.
+    **Refusal gate.** With ``strict_spans`` set, ANY pinned-span orphan
+    across the records refuses the whole install
+    (:func:`_refuse_on_pinned_orphans`) — every orphan is reported and ZERO
+    files, bases, sidecars, or transitions are touched, so there is no
+    partial install to undo.
+
+    **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
+    in order, per file: apply the deferred base migration → write the
+    resolved content (or deploy the symlink) → echo → advance the byte base →
+    advance the spans sidecar (lockstep per file, never
+    write-all-then-advance-all). The advance-only-AFTER-the-live-write
+    ordering is load-bearing: a base that lags live is the safe failure
+    direction (the next install re-merges against a stale-but-valid
+    ancestor); a base written before or around the live write could end up
+    ahead of live, which is corruption. A deferred conflict
+    (``merge_conflicts`` non-empty, ``new_base is None``) keeps live and
+    warns; its base stays put so the divergence re-surfaces next install.
+    After the loop, every base under the profile whose file_id is NOT in
+    this run's disposition keep-set is pruned — gated on pass-2 completion,
+    so a refused install prunes nothing.
 
     ``file_id`` is the ``expand_tracked_file`` synthetic ``sub_name``
     (``name`` for plain files, ``name/relpath`` for directory entries) —
@@ -504,11 +516,12 @@ def _deploy_all_tracked_files(
 
     ``conflict_resolver`` is the OPTIONAL interactive disposition conflict
     resolver (built by :func:`_build_conflict_resolver`), threaded into every
-    disposition :func:`deploy.copy_atomic` call. ``None`` (non-interactive /
-    non-tty / ``--auto``) leaves the bare warn-and-defer behavior unchanged.
+    disposition :func:`deploy.resolve_deploy` call (its prompts fire during
+    pass 1, before any write). ``None`` (non-interactive / non-tty /
+    ``--auto``) leaves the bare warn-and-defer behavior unchanged.
     """
     profile = ctx.profile
-    disposition_file_ids: set[str] = set()
+    pending: list[_PendingDeploy] = []
     for name in ctx.resolved.tracked_files:
         tracked_file = ctx.cfg.tracked_files[name]
         host_local = host_local_sections_map.get(name) or None
@@ -516,38 +529,50 @@ def _deploy_all_tracked_files(
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if tracked_file.symlink is not None:
-                # Symlink-deployed: the link lands at ``sub_dst`` and the tracked
-                # content lands at ``Path(tracked_file.symlink).expanduser()``.
-                # The host-local overlay still composes; the stored base
-                # lifecycle is regular-file-only — never wired here.
-                result = deploy.deploy_symlinked_file(
-                    sub_src, sub_dst, tracked_file, host_local_sections=host_local
+                # Symlink-deployed: deferred wholesale to pass 2
+                # (resolved=None). The link lands at ``sub_dst`` and the
+                # tracked content lands at
+                # ``Path(tracked_file.symlink).expanduser()``. The host-local
+                # overlay still composes; the stored base lifecycle is
+                # regular-file-only — never wired here.
+                pending.append(
+                    _PendingDeploy(
+                        sub_name=sub_name,
+                        sub_src=sub_src,
+                        sub_dst=sub_dst,
+                        tracked_file=tracked_file,
+                        host_local=host_local,
+                        file_spans=[],
+                        resolved=None,
+                        base_plan=None,
+                    )
                 )
-                typer.echo(
-                    f"{result.action.value:>8}  {sub_dst} -> {tracked_file.symlink}"
-                )
-                _echo_host_local_sections_provenance(host_local)
                 continue
             # Stored-base 3-way path is gated on a declared disposition.
-            # PLAN the base BEFORE the deploy (a pure read): it is the merge
-            # ancestor copy_atomic's driver diffs live/tracked against. Any
-            # deferred migration writes are applied just before the deploy.
+            # PLAN the base (a pure read): it is the merge ancestor the
+            # driver diffs live/tracked against. Deferred migration writes
+            # (base seed / live marker strip) are applied in pass 2; when a
+            # live strip is pending, the stripped text overrides the on-disk
+            # live as the merge input (``live_text``).
+            base_plan: DispositionBasePlan | None = None
             base_text: str | None = None
+            live_override: str | None = None
             if tracked_file.disposition is not None:
-                disposition_file_ids.add(sub_name)
                 base_plan = _plan_disposition_base(profile, sub_name, sub_dst)
-                _apply_deferred_base_migration(profile, sub_name, sub_dst, base_plan)
                 base_text = base_plan.base_text
-            # Span re-overlay path: READ the spans sidecar BEFORE the deploy so
-            # the relocation ladder has its derived state. Spans ride the
-            # disposition 3-way path AND the disposition=None markerless
-            # host-local overlay inject, so load them whenever the tracked_file
-            # declares any span, not only on the disposition path.
+                live_override = base_plan.deferred_live_strip
+            # Span re-overlay path: READ the spans sidecar so the relocation
+            # ladder has its derived state. Spans ride the disposition 3-way
+            # path AND the disposition=None markerless host-local overlay
+            # inject, so load them whenever the tracked_file declares any
+            # span, not only on the disposition path.
             file_spans = tracked_file.spans or []
             span_states = (
                 spans_store.get_states(profile, sub_name) if file_spans else {}
             )
-            result = deploy.copy_atomic(
+            # NOTE: a later change adds an upstream rename/delete classifier
+            # here, refining each collected orphan with a reason.
+            resolved = deploy.resolve_deploy(
                 sub_src,
                 sub_dst,
                 host_local_sections=host_local,
@@ -558,23 +583,151 @@ def _deploy_all_tracked_files(
                 conflict_resolver=conflict_resolver,
                 spans=file_spans or None,
                 span_states=span_states or None,
+                live_text=live_override,
             )
-            typer.echo(f"{result.action.value:>8}  {sub_dst}")
-            _echo_host_local_sections_provenance(host_local)
-            # ADVANCE the disposition base only AFTER the live write.
-            if tracked_file.disposition is not None:
-                _advance_disposition_base(profile, sub_name, sub_dst, result)
-            # ADVANCE the spans sidecar + warn on orphans AFTER the live
-            # write, in lockstep with the byte base.
-            if file_spans:
-                _advance_span_states(
-                    profile,
-                    sub_name,
-                    sub_dst,
-                    result,
-                    file_spans,
-                    strict_spans=strict_spans,
+            pending.append(
+                _PendingDeploy(
+                    sub_name=sub_name,
+                    sub_src=sub_src,
+                    sub_dst=sub_dst,
+                    tracked_file=tracked_file,
+                    host_local=host_local,
+                    file_spans=file_spans,
+                    resolved=resolved,
+                    base_plan=base_plan,
                 )
+            )
+    if strict_spans:
+        _refuse_on_pinned_orphans(pending)
+    _execute_pending_deploys(profile, pending, strict_spans=strict_spans)
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingDeploy:
+    """One pass-1 resolution awaiting its pass-2 write.
+
+    ``resolved`` is the in-memory :class:`deploy.ResolvedDeploy` for a
+    regular-file deploy, or ``None`` for a symlink-declared tracked_file
+    (deferred wholesale — pass 2 runs :func:`deploy.deploy_symlinked_file`
+    end to end). ``base_plan`` carries the disposition base plus its deferred
+    migration writes (``None`` when the tracked_file has no disposition or
+    deploys via symlink).
+    """
+
+    sub_name: str
+    sub_src: Path
+    sub_dst: Path
+    tracked_file: TrackedFile
+    host_local: dict[HostLocalSectionName, HostLocalSection] | None
+    file_spans: list[SpanEntry]
+    resolved: deploy.ResolvedDeploy | None
+    base_plan: DispositionBasePlan | None
+
+
+def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
+    """Refuse the whole install when any pass-1 record carries a PINNED orphan.
+
+    The ``--strict-spans`` gate, run BETWEEN pass 1 (read-only resolve) and
+    pass 2 (writes): when at least one pinned span orphaned, every collected
+    orphan warning is printed (same wording as the pass-2 warn in
+    :func:`_advance_span_states` — pass 2 never runs on this path) and ONE
+    aggregated :class:`SetforgeError` is raised with a per-file refusal line,
+    so the user sees the COMPLETE orphan set instead of one file per attempt.
+    No-op when no pinned orphan exists (forked orphans warn in pass 2 but
+    never refuse).
+    """
+    has_pinned = any(
+        orphan.kind is SpanKind.PINNED
+        for record in pending
+        if record.resolved is not None
+        for orphan in record.resolved.span_orphans
+    )
+    if not has_pinned:
+        return
+    failures: list[str] = []
+    for record in pending:
+        if record.resolved is None:
+            continue
+        pinned: list[str] = []
+        for orphan in record.resolved.span_orphans:
+            typer.secho(
+                f"warning: {record.sub_dst}: span {orphan.anchor!r} "
+                f"({orphan.kind.value}) could not be relocated upstream — "
+                f"region preserved, not dropped",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+            if orphan.kind is SpanKind.PINNED:
+                pinned.append(orphan.anchor)
+        if pinned:
+            joined = ", ".join(repr(a) for a in pinned)
+            failures.append(
+                f"{record.sub_dst}: --strict-spans: pinned span(s) {joined} "
+                f"orphaned (anchor gone upstream); refusing install"
+            )
+    raise SetforgeError("\n".join(failures))
+
+
+def _execute_pending_deploys(
+    profile: str,
+    pending: list[_PendingDeploy],
+    *,
+    strict_spans: bool,
+) -> None:
+    """Pass 2: replay the pass-1 records in order, performing every write.
+
+    Per record: apply the deferred base-migration writes (seed-first order +
+    the one-time warning) → write the resolved content via
+    :func:`deploy.write_resolved_deploy` (or run
+    :func:`deploy.deploy_symlinked_file` for a symlink record) → echo the
+    action → advance the disposition byte base → advance the spans sidecar,
+    in lockstep per file. After the loop, prune bases keyed on the executed
+    disposition set — so a gate refusal (which never reaches this function)
+    prunes nothing.
+
+    ``strict_spans`` is accepted for parity with the gate's decision context;
+    the refusal itself fires BEFORE this function (pinned orphans never reach
+    pass 2 under strict mode), so no write here consults it today.
+    """
+    # NOTE: a later change snapshots the pre-install store state here — ONE
+    # barrier before any write — so revert can restore bases/sidecars.
+    disposition_file_ids: set[str] = set()
+    for record in pending:
+        tracked_file = record.tracked_file
+        if tracked_file.symlink is not None:
+            result = deploy.deploy_symlinked_file(
+                record.sub_src,
+                record.sub_dst,
+                tracked_file,
+                host_local_sections=record.host_local,
+            )
+            typer.echo(
+                f"{result.action.value:>8}  {record.sub_dst} -> {tracked_file.symlink}"
+            )
+            _echo_host_local_sections_provenance(record.host_local)
+            continue
+        if record.resolved is None:
+            raise AssertionError(
+                f"pending deploy for {record.sub_name!r} has no resolution "
+                "and no symlink declaration"
+            )
+        if record.base_plan is not None:
+            disposition_file_ids.add(record.sub_name)
+            _apply_deferred_base_migration(
+                profile, record.sub_name, record.sub_dst, record.base_plan
+            )
+        result = deploy.write_resolved_deploy(record.resolved)
+        typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
+        _echo_host_local_sections_provenance(record.host_local)
+        # ADVANCE the disposition base only AFTER the live write.
+        if tracked_file.disposition is not None:
+            _advance_disposition_base(profile, record.sub_name, record.sub_dst, result)
+        # ADVANCE the spans sidecar + warn on orphans AFTER the live write,
+        # in lockstep with the byte base.
+        if record.file_spans:
+            _advance_span_states(
+                profile, record.sub_name, record.sub_dst, result, record.file_spans
+            )
     # PRUNE after the whole loop: bases whose file_id is not in this run's
     # disposition keep-set (file left the profile, or lost its disposition)
     # are removed. Non-disposition files never have a base, so an empty
@@ -906,8 +1059,6 @@ def _advance_span_states(
     sub_dst: Path,
     result: deploy.DeployResult,
     file_spans: list[SpanEntry],
-    *,
-    strict_spans: bool,
 ) -> None:
     """Advance the spans sidecar, prune left spans, and warn on orphans.
 
@@ -915,27 +1066,19 @@ def _advance_span_states(
     the deploy AND prunes any anchor no longer in the file's intent — both
     in LOCKSTEP with the byte base just advanced (Invariant I5). Each
     orphan emits a loud per-span warning; an orphan NEVER aborts the
-    default install (Invariant I6). When ``strict_spans`` is set a PINNED
-    orphan escalates to a refuse-install :class:`SetforgeError`.
+    default install (Invariant I6). The ``--strict-spans`` escalation lives
+    in :func:`_refuse_on_pinned_orphans`, which fires BEFORE any write —
+    a pinned orphan under strict mode never reaches this advance.
     """
     if result.new_span_states is not None:
         spans_store.set_states(profile, file_id, result.new_span_states)
     spans_store.prune(profile, file_id, {span.anchor for span in file_spans})
-    pinned_orphans: list[str] = []
     for orphan in result.span_orphans:
         typer.secho(
             f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
             f"could not be relocated upstream — region preserved, not dropped",
             err=True,
             fg=typer.colors.YELLOW,
-        )
-        if orphan.kind is SpanKind.PINNED:
-            pinned_orphans.append(orphan.anchor)
-    if strict_spans and pinned_orphans:
-        joined = ", ".join(repr(a) for a in pinned_orphans)
-        raise SetforgeError(
-            f"{sub_dst}: --strict-spans: pinned span(s) {joined} orphaned "
-            "(anchor gone upstream); refusing install"
         )
 
 
