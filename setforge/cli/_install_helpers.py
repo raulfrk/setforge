@@ -475,8 +475,12 @@ def _deploy_all_tracked_files(
     section_auto: ReconcileAuto | None = None,
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
     strict_spans: bool = False,
-) -> None:
+) -> tuple[transitions.StateSnapshotEntry, ...]:
     """Deploy every tracked_file in two passes: resolve all, THEN write all.
+
+    Returns the pre-install store snapshots captured at the pass-2 barrier
+    (see :func:`_capture_store_snapshots`) so the caller records them on
+    the install transition for store-state revert.
 
     **Pass 1 (read-only).** For each regular-file sub-entry: plan the
     disposition base (:func:`_plan_disposition_base` — any migration write is
@@ -545,7 +549,7 @@ def _deploy_all_tracked_files(
             )
     if strict_spans:
         _refuse_on_pinned_orphans(pending)
-    _execute_pending_deploys(profile, pending)
+    return _execute_pending_deploys(profile, pending)
 
 
 def _resolve_one_pending(
@@ -726,13 +730,58 @@ def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
     raise SetforgeError("\n".join(failures))
 
 
+def _capture_store_snapshots(
+    profile: str,
+    pending: list[_PendingDeploy],
+) -> tuple[transitions.StateSnapshotEntry, ...]:
+    """Snapshot the pre-install state of every store entry pass 2 can touch.
+
+    The ONE barrier feeding the transition's ``state_snapshots/`` payload:
+    for each regular-file record, a disposition declaration snapshots the
+    byte base AND the scalar-base manifest (the scalar store has no
+    install-path writer yet, but capturing it here means a future writer
+    is covered without a snapshot-schema change), and a span declaration
+    snapshots the spans sidecar manifest. Symlink records are skipped —
+    their deploy primitive never touches the stores. Absent entries
+    capture as ``payload=None`` so revert DELETES what this install
+    seeds. Must run at pass-2 entry, before ANY write (pass 1 is
+    read-only, so nothing can drift between the barrier and the writes).
+    """
+    entries: list[transitions.StateSnapshotEntry] = []
+    for record in pending:
+        tracked_file = record.tracked_file
+        if tracked_file.symlink is not None:
+            continue
+        if tracked_file.disposition is not None:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE, profile, record.sub_name
+                )
+            )
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.SCALAR_BASE, profile, record.sub_name
+                )
+            )
+        if record.file_spans:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.SPANS, profile, record.sub_name
+                )
+            )
+    return tuple(entries)
+
+
 def _execute_pending_deploys(
     profile: str,
     pending: list[_PendingDeploy],
-) -> None:
+) -> tuple[transitions.StateSnapshotEntry, ...]:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
-    Per record: apply the deferred base-migration writes (seed-first order +
+    Snapshots the pre-install store state FIRST (one barrier, before any
+    write — see :func:`_capture_store_snapshots`) and returns the entries
+    so the caller threads them into the install transition. Then, per
+    record: apply the deferred base-migration writes (seed-first order +
     the one-time warning) → write the resolved content via
     :func:`deploy.write_resolved_deploy` (or run
     :func:`deploy.deploy_symlinked_file` for a symlink record) → echo the
@@ -741,8 +790,7 @@ def _execute_pending_deploys(
     disposition set — so a gate refusal (which never reaches this function)
     prunes nothing.
     """
-    # NOTE: a later change snapshots the pre-install store state here — ONE
-    # barrier before any write — so revert can restore bases/sidecars.
+    state_snapshots = _capture_store_snapshots(profile, pending)
     disposition_file_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
@@ -785,6 +833,7 @@ def _execute_pending_deploys(
     # are removed. Non-disposition files never have a base, so an empty
     # keep-set still correctly clears any stale bases under the profile.
     base_store.prune(profile, disposition_file_ids)
+    return state_snapshots
 
 
 @dataclass(slots=True, frozen=True)
@@ -1164,8 +1213,13 @@ def _write_install_transition(
     source_dir: Path | None = None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
     preserve_user_keys_applied: bool | None = None,
+    state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
 ) -> Path:
     """Write the install transition record; return the target directory path.
+
+    ``state_snapshots`` carries the pre-install store state captured at
+    the pass-2 barrier (:func:`_capture_store_snapshots`); ``revert``
+    restores those entries in lockstep with the ``changes.patch`` reverse.
 
     Two arguments carry schema-bump backward-compat history: ``source_dir``
     (when set and pointing at a git repo,
@@ -1199,6 +1253,7 @@ def _write_install_transition(
         ext_delta,
         plugin_delta=plugin_delta,
         reconcile_outcomes=reconcile_outcomes,
+        state_snapshots=state_snapshots,
     )
 
 

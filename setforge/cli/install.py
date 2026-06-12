@@ -374,7 +374,7 @@ def install(
             section_auto=section_auto,
         )
 
-        _deploy_all_tracked_files(
+        state_snapshots = _deploy_all_tracked_files(
             ctx,
             section_decisions=section_decisions,
             live_sections_map=live_sections_map,
@@ -407,6 +407,7 @@ def install(
                 plugin_delta,
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
+                state_snapshots=state_snapshots,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
