@@ -374,32 +374,12 @@ def _add_declared_marketplaces(
             failed.append((mp_name, msg))
 
 
-def reconcile(
-    cfg: Config,
-    profile: ResolvedProfile,
-    *,
-    dry_run: bool = False,
-) -> ReconcileReport:
-    """Three-way reconcile per spec § Δ2.
+def _declared_plugin_ids(cfg: Config, profile: ResolvedProfile) -> set[str]:
+    """Resolve the profile's bare plugin names to ``"name@marketplace"`` ids.
 
-    States:
-    - ``to_install`` = declared - (enabled union disabled)   # genuinely absent
-    - ``to_enable``  = declared intersect disabled                # present but off
-    - ``to_disable`` = enabled - declared  (PRUNE only)
-
-    Marketplaces (always-on, regardless of policy): each declared
-    marketplace not in ``list_marketplaces()`` gets ``marketplace_add``
-    called (except under ``REPORT`` policy or ``dry_run=True``, where it
-    is listed but not executed).  Stale marketplaces are never evicted.
-
-    ``dry_run=True`` logs intended actions and returns without running any
-    write subprocess. ``REPORT`` policy behaves identically to
-    ``dry_run=True`` for write suppression.
-
-    Bare profile names (e.g. ``"superpowers"``) are resolved to
-    ``"<name>@<marketplace>"`` form via the top-level
-    :attr:`Config.claude_plugins` registry before any subprocess work.
-    A name not present in the registry raises :class:`ConfigError`.
+    Bare profile names (e.g. ``"superpowers"``) resolve via the
+    top-level :attr:`Config.claude_plugins` registry. A name not
+    present in the registry raises :class:`ConfigError`.
     """
     declared: set[str] = set()
     for bare_name in profile.claude_plugins:
@@ -410,7 +390,19 @@ def reconcile(
                 f"(add it to top-level claude_plugins:)"
             )
         declared.add(f"{bare_name}@{ref.marketplace}")
+    return declared
 
+
+def _plugin_state_diff(
+    declared: set[str], policy: ReconcilePolicy
+) -> tuple[list[str], list[str], list[str]]:
+    """Diff ``declared`` against the live plugin state per spec § Δ2.
+
+    States:
+    - ``to_install`` = declared - (enabled union disabled)   # genuinely absent
+    - ``to_enable``  = declared intersect disabled                # present but off
+    - ``to_disable`` = enabled - declared  (PRUNE only)
+    """
     installed = list_installed()
     enabled = {pid for pid, p in installed.items() if p.get("enabled", True)}
     disabled = {pid for pid, p in installed.items() if not p.get("enabled", True)}
@@ -419,41 +411,89 @@ def reconcile(
     to_enable = sorted(declared & disabled)
     # Compute to_disable for PRUNE and REPORT (both need the diff);
     # only ADDITIVE suppresses the diff entirely.
-    if profile.plugins_reconcile is not ReconcilePolicy.ADDITIVE:
+    if policy is not ReconcilePolicy.ADDITIVE:
         to_disable = sorted(enabled - declared)
     else:
         to_disable = []
+    return to_install, to_enable, to_disable
+
+
+def _build_report(
+    to_install: list[str],
+    to_enable: list[str],
+    to_disable: list[str],
+    mps_to_add: list[str],
+    *,
+    dry_run: bool,
+    failed: list[tuple[str, str]] | None = None,
+) -> ReconcileReport:
+    """Assemble a :class:`ReconcileReport`, splitting install ids into pairs."""
+    return ReconcileReport(
+        to_install=[_split_id(pid) for pid in to_install],
+        to_enable=to_enable,
+        to_disable=to_disable,
+        marketplaces_added=mps_to_add,
+        dry_run=dry_run,
+        failed=failed if failed is not None else [],
+    )
+
+
+def _read_only_report(
+    to_install: list[str],
+    to_enable: list[str],
+    to_disable: list[str],
+    mps_to_add: list[str],
+) -> ReconcileReport:
+    """Log the intended actions and build the read-only (``dry_run``) report."""
+    LOGGER.info(
+        "reconcile (read-only): to_install=%s to_enable=%s to_disable=%s "
+        "marketplaces_to_add=%s",
+        to_install,
+        to_enable,
+        to_disable,
+        mps_to_add,
+    )
+    return _build_report(to_install, to_enable, to_disable, mps_to_add, dry_run=True)
+
+
+def reconcile(
+    cfg: Config,
+    profile: ResolvedProfile,
+    *,
+    dry_run: bool = False,
+) -> ReconcileReport:
+    """Three-way reconcile per spec § Δ2.
+
+    The plugin-state diff (``to_install`` / ``to_enable`` /
+    ``to_disable``) is computed by :func:`_plugin_state_diff`; bare
+    profile names resolve to ``"<name>@<marketplace>"`` form via
+    :func:`_declared_plugin_ids` before any subprocess work.
+
+    Marketplaces (always-on, regardless of policy): each declared
+    marketplace not in ``list_marketplaces()`` gets ``marketplace_add``
+    called (except under ``REPORT`` policy or ``dry_run=True``, where it
+    is listed but not executed).  Stale marketplaces are never evicted.
+
+    ``dry_run=True`` logs intended actions and returns without running any
+    write subprocess. ``REPORT`` policy behaves identically to
+    ``dry_run=True`` for write suppression.
+    """
+    declared = _declared_plugin_ids(cfg, profile)
+    to_install, to_enable, to_disable = _plugin_state_diff(
+        declared, profile.plugins_reconcile
+    )
 
     # Marketplaces: always-on regardless of policy
-    have_mps = set(list_marketplaces())
-    declared_mps = set(cfg.marketplaces)
-    mps_to_add = sorted(declared_mps - have_mps)
+    mps_to_add = sorted(set(cfg.marketplaces) - set(list_marketplaces()))
 
-    is_read_only = dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT
-
-    if is_read_only:
-        LOGGER.info(
-            "reconcile (read-only): to_install=%s to_enable=%s to_disable=%s "
-            "marketplaces_to_add=%s",
-            to_install,
-            to_enable,
-            to_disable,
-            mps_to_add,
-        )
-        return ReconcileReport(
-            to_install=[_split_id(pid) for pid in to_install],
-            to_enable=to_enable,
-            to_disable=to_disable,
-            marketplaces_added=mps_to_add,
-            dry_run=True,
-        )
+    if dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT:
+        return _read_only_report(to_install, to_enable, to_disable, mps_to_add)
 
     failed: list[tuple[str, str]] = []
 
-    # Host-local install mode dispatch: under LOCAL_CLONE, swap each
+    # Host-local install-mode dispatch: under LOCAL_CLONE, swap each
     # GitHub-backed MarketplaceSource for a PATH source pointing at the
-    # on-disk cache (cloning on first encounter). Under REGULAR, the
-    # transform is a no-op and today's behavior is unchanged.
+    # on-disk cache (see _add_declared_marketplaces).
     install_mode = load_host_local_config().claude.install_mode
     _add_declared_marketplaces(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
@@ -463,13 +503,8 @@ def reconcile(
     if profile.plugins_reconcile is ReconcilePolicy.PRUNE:
         _reconcile_remove(to_disable, failed)
 
-    return ReconcileReport(
-        to_install=[_split_id(pid) for pid in to_install],
-        to_enable=to_enable,
-        to_disable=to_disable,
-        marketplaces_added=mps_to_add,
-        dry_run=False,
-        failed=failed,
+    return _build_report(
+        to_install, to_enable, to_disable, mps_to_add, dry_run=False, failed=failed
     )
 
 
