@@ -491,9 +491,8 @@ def reconcile(
 
     failed: list[tuple[str, str]] = []
 
-    # Host-local install-mode dispatch: under LOCAL_CLONE, swap each
-    # GitHub-backed MarketplaceSource for a PATH source pointing at the
-    # on-disk cache (see _add_declared_marketplaces).
+    # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
+    # for on-disk cache paths; see _add_declared_marketplaces).
     install_mode = load_host_local_config().claude.install_mode
     _add_declared_marketplaces(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed

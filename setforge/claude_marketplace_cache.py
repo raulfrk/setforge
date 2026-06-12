@@ -261,13 +261,11 @@ def resolve_marketplace_source(
     fallback): under :data:`ClaudeInstallMode.REGULAR`, returns
     ``source`` unchanged. Under :data:`ClaudeInstallMode.LOCAL_CLONE`,
     returns a PATH-kind :class:`MarketplaceSource` pointing at the
-    on-disk cache for the GitHub source, lazily cloning if the cache
-    is absent. PATH sources passthrough regardless of mode.
-
-    The cache directory derives its basename from ``source.repo``;
-    ``mp_name`` and ``auto`` thread through to the cache-collision
-    path — see :func:`_resolve_existing_cache` for the URL-drift
-    dispatch and the ``auto=True`` non-interactive contract.
+    on-disk cache for the GitHub source (basename of ``source.repo``),
+    lazily cloning if the cache is absent. PATH sources passthrough
+    regardless of mode. ``mp_name`` and ``auto`` thread through to the
+    cache-collision path — see :func:`_resolve_existing_cache` for the
+    URL-drift dispatch and the ``auto=True`` non-interactive contract.
     """
     root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
     if mode is ClaudeInstallMode.REGULAR:
@@ -285,10 +283,7 @@ def resolve_marketplace_source(
             source, cache_dir, root, mp_name=mp_name, auto=auto
         )
     _clone_marketplace(source, cache_dir)
-    return MarketplaceSource(
-        source=MarketplaceSourceKind.PATH,
-        path=cache_dir,
-    )
+    return MarketplaceSource(source=MarketplaceSourceKind.PATH, path=cache_dir)
 
 
 def _resolve_existing_cache(
