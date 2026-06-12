@@ -103,6 +103,29 @@ def test_bound_span_duplicate_heading_ambiguous() -> None:
         bound_span(doc, "## Dup")
 
 
+def test_duplicate_heading_error_lists_breadcrumb_forms() -> None:
+    # When the duplicate leaves live under DIFFERENT parents, the
+    # ambiguity error enumerates the disambiguating breadcrumb anchors.
+    doc = """\
+## Final checks
+
+### Failure handling
+
+a
+
+## Deployment
+
+### Failure handling
+
+b
+"""
+    with pytest.raises(AnchorAmbiguousError) as excinfo:
+        bound_span(doc, "### Failure handling")
+    message = str(excinfo.value)
+    assert "## Final checks > ### Failure handling" in message
+    assert "## Deployment > ### Failure handling" in message
+
+
 def test_bound_span_returns_level_and_fingerprintable_body() -> None:
     span = bound_span(_DOC, "## Foo")
     assert isinstance(span, MarkdownSpan)

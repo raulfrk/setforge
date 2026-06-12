@@ -40,6 +40,7 @@ def _dotted(anchor: str = "editor.fontSize") -> SpanEntry:
         ("# Top", True),
         ("###### Deep", True),
         ("   ## Indented", True),
+        ("## Final checks > ### Failure handling", True),
         ("editor.fontSize", False),
         ("a.b.c", False),
         ("plain", False),
@@ -78,6 +79,14 @@ def test_structural_allows_dotted_path_anchor(name: str) -> None:
 def test_structural_rejects_heading_anchor(name: str) -> None:
     with pytest.raises(ConfigError, match="dotted path"):
         validate_spans_file_type(name, [_heading()], Path(name))
+
+
+def test_structural_rejects_breadcrumb_anchor() -> None:
+    # A breadcrumb anchor is heading-shaped by its FIRST char, so the
+    # whole string is rejected on a structural file like any heading.
+    crumb = _heading("## Final checks > ### Failure handling")
+    with pytest.raises(ConfigError, match="dotted path"):
+        validate_spans_file_type("c.yaml", [crumb], Path("c.yaml"))
 
 
 # ---------------------------------------------------------------------------

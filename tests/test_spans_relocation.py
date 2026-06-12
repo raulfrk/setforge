@@ -142,6 +142,35 @@ def test_relocate_malformed_stored_anchor_orphans_no_crash() -> None:
     assert result.span is None
 
 
+def test_relocate_breadcrumb_anchor_resolves_via_heading_stage() -> None:
+    # A stored BREADCRUMB anchor parses under _parse_anchor as ONE heading
+    # whose text is the whole chain, so the fingerprint stages find no
+    # candidate heading; Stage 3's bound_span understands the breadcrumb
+    # and resolves the edited (stale-fingerprint) leaf.
+    doc = """\
+## Final checks
+
+### Failure handling
+
+final body
+
+## Deployment
+
+### Failure handling
+
+deploy body
+"""
+    anchor = "## Final checks > ### Failure handling"
+    state = _state_for(doc, anchor)
+    edited = doc.replace("final body", "final body, revised")
+    result = relocate_span(edited, anchor, state)
+    assert result.status is RelocationStatus.LOCATED
+    assert result.stage == "heading-resolve"
+    assert result.span is not None
+    assert "final body, revised" in result.span.body
+    assert "deploy body" not in result.span.body
+
+
 def test_fuzzy_post_match_rejects_non_heading_landing() -> None:
     # The fuzzy stage's char-offset match could drift onto a non-heading
     # line; the post-match structural guard rejects it (orphan) rather

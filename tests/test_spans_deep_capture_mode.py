@@ -81,6 +81,16 @@ def test_deep_rejected_on_heading_anchor() -> None:
         SpanEntry(anchor="## Tweaks", kind=SpanKind.PINNED, deep=True)
 
 
+def test_deep_rejected_on_breadcrumb_anchor() -> None:
+    """``deep=True`` on a breadcrumb anchor (heading-shaped) is rejected too."""
+    with pytest.raises(ValidationError, match="deep"):
+        SpanEntry(
+            anchor="## Final checks > ### Failure handling",
+            kind=SpanKind.PINNED,
+            deep=True,
+        )
+
+
 def test_strip_capture_mode_on_structural_span_does_not_raise() -> None:
     """STRIP capture_mode on a non-section (structural) span is accept-and-ignore."""
     span = SpanEntry(
