@@ -45,6 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from setforge import atomicio
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile
@@ -171,15 +172,6 @@ def _mirror_path(snapshot_dir: Path, live_path: Path) -> Path:
     return snapshot_dir / live_path.relative_to("/")
 
 
-def _fsync_path(path: Path) -> None:
-    """fsync ``path`` (file or directory) if the OS exposes the fd."""
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _copy_one(src: Path, dst: Path) -> None:
     """Copy one live path into the snapshot tree, preserving symlinks + mode.
 
@@ -207,7 +199,9 @@ def _copy_one(src: Path, dst: Path) -> None:
     shutil.copy2(src, dst, follow_symlinks=False)
     src_mode = src.stat().st_mode
     dst.chmod(stat.S_IMODE(src_mode) & _SETUID_SETGID_MASK)
-    _fsync_path(dst)
+    # strict=True: snapshot durability is contractual — a swallowed
+    # fsync failure would commit a snapshot whose bytes never landed.
+    atomicio.fsync_path(dst, strict=True)
 
 
 def _write_meta(snapshot_dir: Path, meta: SnapshotMeta) -> None:
@@ -215,7 +209,7 @@ def _write_meta(snapshot_dir: Path, meta: SnapshotMeta) -> None:
     meta_path = snapshot_dir / _META_FILENAME
     payload = json.dumps(meta.to_dict(), indent=2) + "\n"
     meta_path.write_text(payload, encoding="utf-8")
-    _fsync_path(meta_path)
+    atomicio.fsync_path(meta_path, strict=True)
 
 
 def _load_meta(snapshot_dir: Path) -> SnapshotMeta:

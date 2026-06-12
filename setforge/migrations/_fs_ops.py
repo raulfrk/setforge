@@ -71,6 +71,12 @@ def atomic_replace(src_tmp: Path, dst: Path) -> None:
     Requires both paths to be on the same filesystem (the standard
     constraint for atomic-rename semantics). Migrations always stage
     the tmp file in ``dst.parent`` to satisfy this.
+
+    Deliberately a bare ``os.replace`` with NO fsync: the caller has
+    already staged the tmp file, so there is no write for
+    :mod:`setforge.atomicio` to wrap (its writers create their own
+    temp), and this helper has never fsynced — adding durability here
+    would silently change migration behavior.
     """
     os.replace(src_tmp, dst)
 
