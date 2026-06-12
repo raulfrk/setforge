@@ -265,18 +265,9 @@ def resolve_marketplace_source(
     is absent. PATH sources passthrough regardless of mode.
 
     The cache directory derives its basename from ``source.repo``;
-    ``mp_name`` (the YAML-side marketplace key) is threaded only
-    for the cache-collision wizard's prompt text. When ``mp_name`` is
-    ``None`` we fall back to ``source.repo`` for the prompt label —
-    callers in reconcile / sync paths supply it explicitly.
-
-    ``auto=True`` (e.g. from a ``--auto`` CLI flag) suppresses the
-    interactive cache-collision wizard and raises
-    :class:`MarketplaceCacheMiss` instead, per
-    :mod:`setforge.marketplace_cache_wizard`'s spec-locked safe
-    default. Cache collision arises only on URL drift; the
-    happy-path (cache hit with matching origin, cache miss) is
-    unaffected.
+    ``mp_name`` and ``auto`` thread through to the cache-collision
+    path — see :func:`_resolve_existing_cache` for the URL-drift
+    dispatch and the ``auto=True`` non-interactive contract.
     """
     root = cache_root if cache_root is not None else MARKETPLACE_CACHE_ROOT
     if mode is ClaudeInstallMode.REGULAR:
@@ -290,22 +281,52 @@ def resolve_marketplace_source(
         )
     cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
     if cache_dir.exists():
-        current = _cache_origin_url(cache_dir)
-        if (
-            current is not None
-            and current != source.repo
-            and not _urls_equivalent(current, source.repo)
-        ):
-            return _resolve_cache_collision(
-                source=source,
-                cache_dir=cache_dir,
-                cache_root=root,
-                existing_origin=current,
-                mp_name=mp_name or source.repo,
-                auto=auto,
-            )
-    else:
-        _clone_marketplace(source, cache_dir)
+        return _resolve_existing_cache(
+            source, cache_dir, root, mp_name=mp_name, auto=auto
+        )
+    _clone_marketplace(source, cache_dir)
+    return MarketplaceSource(
+        source=MarketplaceSourceKind.PATH,
+        path=cache_dir,
+    )
+
+
+def _resolve_existing_cache(
+    source: MarketplaceSource,
+    cache_dir: Path,
+    cache_root: Path,
+    *,
+    mp_name: str | None,
+    auto: bool,
+) -> MarketplaceSource:
+    """Return the PATH source for a cache hit, dispatching URL drift.
+
+    Probes the cache's ``origin`` remote; when it drifted from
+    ``source.repo`` (modulo :func:`_urls_equivalent` normalization)
+    the collision wizard decides via :func:`_resolve_cache_collision`.
+    A failed probe (``None``) or a matching origin reuses ``cache_dir``
+    as-is. ``mp_name`` (the YAML-side marketplace key) is threaded only
+    for the wizard's prompt text; when ``None`` we fall back to
+    ``source.repo`` for the prompt label — callers in reconcile / sync
+    paths supply it explicitly. ``auto=True`` (e.g. from a ``--auto``
+    CLI flag) suppresses the interactive wizard and raises
+    :class:`MarketplaceCacheMiss` instead, per
+    :mod:`setforge.marketplace_cache_wizard`'s spec-locked safe
+    default.
+    """
+    # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
+    # by resolve_marketplace_source for GITHUB sources
+    repo = source.repo or ""
+    current = _cache_origin_url(cache_dir)
+    if current is not None and current != repo and not _urls_equivalent(current, repo):
+        return _resolve_cache_collision(
+            source=source,
+            cache_dir=cache_dir,
+            cache_root=cache_root,
+            existing_origin=current,
+            mp_name=mp_name or repo,
+            auto=auto,
+        )
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=cache_dir,
