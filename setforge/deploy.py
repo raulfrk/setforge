@@ -413,7 +413,7 @@ def _resolve_disposition_content(
             SpanOrphan(
                 anchor=o.anchor,
                 kind=o.kind,
-                reason=o.reason,
+                reason=o.reason.value,
                 tracked_siblings=o.tracked_siblings,
             )
             for o in resolution.structural_span_orphans
