@@ -179,11 +179,11 @@ def _decode_state(anchor: str, record: object, profile: str, file_id: str) -> Sp
 def manifest_path(profile: str, file_id: str) -> Path:
     """Return the on-disk manifest path for ``(profile, file_id)``.
 
-    Public so the revert-lockstep integration (Invariant I5) can snapshot
-    the sidecar's JSON file into the transition record alongside the live
-    file — the existing ``changes.patch`` / ``patch -R`` mechanism then
-    rolls the sidecar back in lockstep with live + base. Applies the same
-    traversal guard as the read/write entry points.
+    Public so the transition state-snapshot integration (Invariant I5)
+    can capture and restore the sidecar's verbatim bytes alongside the
+    byte base — revert then rolls the sidecar back in lockstep with
+    live + base. Applies the same traversal guard as the read/write
+    entry points.
     """
     return _resolve_target(profile, file_id)
 
