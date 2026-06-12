@@ -59,7 +59,10 @@ _SIDECAR_PINNED = (
     "/home/tester/.local/state/setforge/spans/test-spans-pinned/spans_pinned_md.json"
 )
 
-# The canonical tracked body (matches the fixture src on disk).
+# The canonical tracked body (matches the fixture src on disk). The two
+# trailing "### Failure handling" leaves under DIFFERENT ## parents are the
+# duplicate-heading shape only a BREADCRUMB anchor can pin; every simple
+# span anchor above them stays unique.
 _TRACKED_MD_BODY = (
     "# Spans fixture\n\n"
     "## Upstream\n"
@@ -71,12 +74,34 @@ _TRACKED_MD_BODY = (
     "## Forked Section\n"
     "forked body line 1\n"
     "forked body mid\n"
-    "forked body line 3\n"
+    "forked body line 3\n\n"
+    "## Final checks\n"
+    "final intro line\n\n"
+    "### Failure handling\n"
+    "final failure line 1\n"
+    "final failure line 2\n\n"
+    "## Deployment\n"
+    "deploy intro line\n\n"
+    "### Failure handling\n"
+    "deploy failure line 1\n"
+    "deploy failure line 2\n"
 )
 
 # The pinned region body (heading inclusive) the user freezes locally.
 _PINNED_REGION = "## Pinned Section\npinned body line 1\npinned body line 2\n\n"
 _PINNED_REGION_LIVE = "## Pinned Section\nPINNED-LIVE-EDIT-1\nPINNED-LIVE-EDIT-2\n\n"
+
+# The breadcrumb-pinned duplicate leaf (under ``## Final checks``) and its
+# live-frozen form. The SIBLING duplicate leaf under ``## Deployment``
+# shares the same heading line — only the breadcrumb tells them apart.
+_CRUMB_LEAF = "### Failure handling\nfinal failure line 1\nfinal failure line 2\n\n"
+_CRUMB_LEAF_LIVE = "### Failure handling\nCRUMB-LIVE-EDIT-1\nCRUMB-LIVE-EDIT-2\n\n"
+
+# Live dst + host-local local.yaml for the breadcrumb-pin scenario, which
+# rides the spans_overlay_md tracked_file (no pre-declared spans) so the
+# pin is declared at test time in local.yaml.
+_LIVE_CRUMB = "/home/tester/.setforge_e2e/spans/overlay.md"
+_HOME_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
 
 
 def _setforge(
@@ -445,3 +470,54 @@ def test_revert_rolls_live_base_and_sidecar_in_lockstep(
     assert c.read_text(_LIVE_PINNED) == live_pre_v2, c.read_text(_LIVE_PINNED)
     assert c.read_text(_BASE_PINNED) == base_v1, c.read_text(_BASE_PINNED)
     assert c.read_text(_SIDECAR_PINNED) == sidecar_v1, c.read_text(_SIDECAR_PINNED)
+
+
+# ---------------------------------------------------------------------------
+# breadcrumb anchor — a host-local pin on a DUPLICATE leaf heading,
+# disambiguated by its parent chain, preserves the pinned section.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_breadcrumb_pin_in_local_yaml_preserves_section(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """breadcrumb pin: the right duplicate leaf is frozen, the sibling not.
+
+    ``spans/note.md`` carries TWO ``### Failure handling`` leaves under
+    different ``##`` parents, so only the breadcrumb anchor ``"## Final
+    checks > ### Failure handling"`` pins the first unambiguously. The pin
+    is declared host-locally in local.yaml on the spans_overlay_md
+    tracked_file (no tracked-side spans). Install, freeze the pinned leaf
+    in live, reinstall: the live pinned bytes survive while the SIBLING
+    duplicate leaf (under ``## Deployment``) stays at tracked bytes.
+    """
+    c = docker_container()
+    c.write_text(
+        _HOME_LOCAL_YAML,
+        "tracked_files:\n"
+        "  spans_overlay_md:\n"
+        "    spans:\n"
+        '      - anchor: "## Final checks > ### Failure handling"\n'
+        "        kind: pinned\n"
+        "        semantics: host-local\n",
+    )
+    rc, _stdout, stderr = _install(c, "test-spans-overlay")
+    assert rc == 0, stderr
+    assert c.read_text(_LIVE_CRUMB) == _TRACKED_MD_BODY
+
+    # Freeze the breadcrumb-pinned leaf with host-only edits.
+    live_frozen = _TRACKED_MD_BODY.replace(_CRUMB_LEAF, _CRUMB_LEAF_LIVE)
+    c.write_text(_LIVE_CRUMB, live_frozen)
+
+    rc, stdout, stderr = _install(c, "test-spans-overlay")
+    assert rc == 0, stderr
+    merged = c.read_text(_LIVE_CRUMB)
+    # The pinned leaf kept the LIVE bytes (post-merge override, live wins).
+    assert "CRUMB-LIVE-EDIT-1" in merged, merged
+    assert "final failure line 1" not in merged, merged
+    # The SIBLING duplicate leaf under ## Deployment is untouched.
+    assert "deploy failure line 1" in merged, merged
+    assert "deploy failure line 2" in merged, merged
+    # No orphan / relocation warning — the breadcrumb resolved cleanly.
+    assert "could not be relocated" not in (stdout + stderr).lower(), stdout + stderr
