@@ -173,10 +173,9 @@ def _resolve_drift_paths(
     exact string that becomes ``FileCompare.name`` — so directory sub-files
     (``name/relpath``) do not collide on a bare basename. Returns one
     ``(entry, sub_src, sub_dst)`` tuple per DRIFTED
-    entry with drift content (``unexpected_drift_keys``, ``diff``, or
-    ``mode_drift`` non-empty). Entries with no path match fall back to
-    the entry name in both positions, preserving the pre-extraction
-    behavior.
+    entry with drift content (``diff`` or ``mode_drift`` non-empty).
+    Entries with no path match fall back to the entry name in both
+    positions, preserving the pre-extraction behavior.
     """
     paths_by_name: dict[str, tuple[Path, Path]] = {}
     for _tracked_file, sub_name, sub_src, sub_dst in _iter_all_tracked_files(ctx):
@@ -190,7 +189,7 @@ def _resolve_drift_paths(
     for entry in drift_report.entries:
         if entry.status is not CompareStatus.DRIFTED:
             continue
-        if not (entry.unexpected_drift_keys or entry.diff or entry.mode_drift):
+        if not (entry.diff or entry.mode_drift):
             continue
         paths = paths_by_name.get(entry.name)
         if paths is None:

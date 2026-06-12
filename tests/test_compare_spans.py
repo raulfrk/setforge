@@ -163,8 +163,6 @@ def test_file_compare_span_drift_is_expected() -> None:
         name="doc",
         status=CompareStatus.DRIFTED,
         diff="-x\n+y\n",
-        expected_drift_keys=[],
-        unexpected_drift_keys=[],
         disposition=Disposition.SHARED,
         span_only_drift=True,
     )
@@ -176,8 +174,6 @@ def test_file_compare_shared_non_span_drift_not_expected() -> None:
         name="doc",
         status=CompareStatus.DRIFTED,
         diff="-x\n+y\n",
-        expected_drift_keys=[],
-        unexpected_drift_keys=[],
         disposition=Disposition.SHARED,
         span_only_drift=False,
     )

@@ -250,13 +250,12 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
 
     Counts are split into three buckets:
 
-    - ``user_section``: entries with section markers AND a non-empty
-      diff body.
-    - ``expected``: entries whose drift is fully covered by preserve
-      overlays (``expected_drift_keys`` set, no diff body).
-    - ``unexpected``: anything else (the fallback branch, including
-      entries with ``unexpected_drift_keys`` and diff-bearing entries
-      without section markers).
+    - ``user_section``: diff-bearing entries on a tracked_file under the
+      unified reconcile model (a disposition or any span).
+    - ``unexpected``: every other DRIFTED entry (including mode-only
+      drift and diff-bearing entries without a reconcile model).
+    - ``expected``: retired with the preserve-overlay model — always 0,
+      kept so the render shape is stable.
 
     This is an approximation — precise section-reconcile
     classification requires a full reconcile pass which status
@@ -266,7 +265,6 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
     report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
     unexpected = 0
     user_section = 0
-    expected = 0
     for entry in report.entries:
         if entry.status is not CompareStatus.DRIFTED:
             continue
@@ -278,17 +276,11 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
             tracked_file
             and (tracked_file.disposition is not None or tracked_file.spans)
         )
-        if entry.unexpected_drift_keys:
-            unexpected += 1
-        elif entry.diff and section_bearing:
+        if entry.diff and section_bearing:
             user_section += 1
-        elif entry.expected_drift_keys and not entry.diff:
-            expected += 1
         else:
             unexpected += 1
-    return _DriftCounts(
-        unexpected=unexpected, user_section=user_section, expected=expected
-    )
+    return _DriftCounts(unexpected=unexpected, user_section=user_section, expected=0)
 
 
 def _read_overlay_counts(local_yaml: Path) -> dict[str, int]:

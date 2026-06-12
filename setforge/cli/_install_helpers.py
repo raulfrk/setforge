@@ -71,6 +71,7 @@ from setforge.cli._helpers import (
 )
 from setforge.compare import (
     CompareStatus,
+    DriftClass,
     expand_tracked_file,
     resolve_dst,
     resolve_src,
@@ -399,18 +400,15 @@ def _check_unexpected_drift(
 ) -> None:
     """Reject unexpected drift on a bare install, or return when a flag resolves it.
 
-    The only live unexpected-drift axis at schema 2.0 is ``mode_drift``
-    (permission bits); the legacy ``unexpected_drift_keys`` axis is
-    retired and always empty. When a ``DRIFTED`` entry carries either and
-    neither ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set,
-    print an actionable error and raise ``typer.Exit(1)``. With a flag
-    set, the confirm gate in :func:`_confirm_legacy_drift_or_exit` has
-    already run, so this is a no-op. No-op when nothing carries unexpected
-    drift.
+    The only unexpected-drift axis this gate rejects is ``mode_drift``
+    (permission bits). When a ``DRIFTED`` entry carries it and neither
+    ``--auto-accept-tracked`` nor ``--auto-accept-live`` is set, print an
+    actionable error and raise ``typer.Exit(1)``. With a flag set, the
+    confirm gate in :func:`_confirm_legacy_drift_or_exit` has already
+    run, so this is a no-op. No-op when nothing carries unexpected drift.
     """
     has_real_unexpected = any(
-        e.status == CompareStatus.DRIFTED and (e.unexpected_drift_keys or e.mode_drift)
-        for e in drift_report.entries
+        e.status == CompareStatus.DRIFTED and e.mode_drift for e in drift_report.entries
     )
     if not has_real_unexpected:
         return
@@ -418,8 +416,7 @@ def _check_unexpected_drift(
     unexpected_count = sum(
         1
         for e in drift_report.entries
-        if e.status == CompareStatus.DRIFTED
-        and (e.unexpected_drift_keys or e.mode_drift)
+        if e.status == CompareStatus.DRIFTED and e.mode_drift
     )
     if not (auto_accept_tracked or auto_accept_live):
         typer.secho(
@@ -1032,35 +1029,15 @@ def _build_unexpected_drift_plan(
     """Build an AutoPlan from a drift report for the --auto-accept-* paths.
 
     Delegates name → (sub_src, sub_dst) resolution to the shared
-    ``_resolve_drift_paths`` helper, then surfaces two drift axes:
-    ``unexpected_drift_keys`` (content keys → ``file_changes``) and
-    ``mode_drift`` (permission bits → a per-file risk line). A mode-only
-    drift therefore yields a non-empty plan (a risk line) so the confirm
-    gate actually fires instead of silently auto-proceeding on an empty
-    plan while deploy reapplies the tracked mode.
+    ``_resolve_drift_paths`` helper, then surfaces the one unexpected
+    drift axis this gate owns: ``mode_drift`` (permission bits → a
+    per-file risk line). A mode-only drift therefore yields a non-empty
+    plan (a risk line) so the confirm gate actually fires instead of
+    silently auto-proceeding on an empty plan while deploy reapplies the
+    tracked mode. Diff-only entries fall through to the bare-install path.
     """
-    file_changes: list[FileChange] = []
     mode_risks: list[str] = []
-    for entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
-        # Surface entries that carry unexpected-drift keys OR permission-mode
-        # drift; diff-only entries fall through to the bare-install path.
-        if not (entry.unexpected_drift_keys or entry.mode_drift):
-            continue
-        if entry.unexpected_drift_keys:
-            match direction:
-                case AutoDirection.TRACKED_TO_LIVE:
-                    source, dest = sub_src, sub_dst
-                case AutoDirection.LIVE_TO_TRACKED:
-                    source, dest = sub_dst, sub_src
-                case _ as never:
-                    assert_never(never)
-            file_changes.append(
-                FileChange(
-                    source=source,
-                    dest=dest,
-                    changed=len(entry.unexpected_drift_keys),
-                ),
-            )
+    for entry, _sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
         if (
             entry.mode_drift
             and entry.live_mode is not None
@@ -1074,26 +1051,10 @@ def _build_unexpected_drift_plan(
                 f"{entry.live_mode:#o} → {entry.tracked_mode:#o} "
                 f"(reset to tracked on deploy)"
             )
-    if not file_changes and not mode_risks:
-        return AutoPlan(
-            direction=direction,
-            file_changes=(),
-            risks=(),
-            revert_command=f"setforge revert --profile={ctx.profile}",
-        )
-    risks: list[str] = []
-    if file_changes:
-        risk_target = (
-            "live" if direction is AutoDirection.TRACKED_TO_LIVE else "tracked"
-        )
-        risks.append(
-            f"{risk_target} values on {len(file_changes)} file(s) will be overwritten"
-        )
-    risks.extend(mode_risks)
     return AutoPlan(
         direction=direction,
-        file_changes=tuple(file_changes),
-        risks=tuple(risks),
+        file_changes=(),
+        risks=tuple(mode_risks),
         revert_command=f"setforge revert --profile={ctx.profile}",
     )
 
@@ -1422,7 +1383,7 @@ def _dry_run_emit_drift_gate(
     unexpected = sum(
         1
         for e in drift_report.entries
-        if e.status == CompareStatus.DRIFTED and e.unexpected_drift_keys
+        if e.drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
     )
     typer.echo(f"unexpected drift in {unexpected} file(s)")
     typer.echo(

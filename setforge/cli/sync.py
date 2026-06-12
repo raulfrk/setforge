@@ -78,21 +78,21 @@ def _build_capture_plan(
 ) -> AutoPlan:
     """Build an AutoPlan for the live → tracked capture path (sync --auto=use-live).
 
-    Joins the ``CompareReport.entries`` (entries marked DRIFTED with any
-    drift keys) against the tracked_file path map. Direction is always
-    LIVE_TO_TRACKED — sync absorbs live edits.
+    Joins the ``CompareReport.entries`` (entries marked DRIFTED with a
+    diff or mode drift) against the tracked_file path map. Direction is
+    always LIVE_TO_TRACKED — sync absorbs live edits.
     """
     file_changes: list[FileChange] = []
     # sync absorbs ANY drift on use-live (not just unexpected) — the
     # capture writes everything that differs into tracked. The shared
     # ``_resolve_drift_paths`` helper already filters to entries with
-    # ``unexpected_drift_keys or diff``, which matches sync's intent.
-    for entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
+    # ``diff or mode_drift``, which matches sync's intent.
+    for _entry, sub_src, sub_dst in _resolve_drift_paths(drift_report, ctx):
         file_changes.append(
             FileChange(
                 source=sub_dst,
                 dest=sub_src,
-                changed=max(len(entry.unexpected_drift_keys), 1),
+                changed=1,
             ),
         )
     if not file_changes:

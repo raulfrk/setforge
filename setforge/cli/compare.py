@@ -139,21 +139,26 @@ def _compare_json_data(report: compare_mod.CompareReport) -> dict[str, Any]:
     Renders the same report the human view shows, projected as plain
     dict/list/string shapes so ``json.dumps`` can serialise without
     custom encoders. Per-entry fields: ``name``, ``status`` (StrEnum
-    value), ``unexpected_drift_keys`` (sorted), ``expected_drift_keys``
-    (sorted), ``disposition`` (string or null), ``drift_is_expected``
-    (bool). Orphans surface as a list of strings. No diff bodies in
-    JSON mode — they belong to the human view; ``compare --full-diff``
-    is a human-oriented surface.
+    value), ``disposition`` (string or null), ``drift_class`` (string or
+    null — null unless DRIFTED), ``reason`` (string or null),
+    ``span_only_drift`` (bool), ``forked_scalar_conflicts`` (list of
+    strings, empty today), ``drift_is_expected`` (bool, derived). No
+    diff bodies in JSON mode — they belong to the human view;
+    ``compare --full-diff`` is a human-oriented surface.
     """
     entries = [
         {
             "name": entry.name,
             "status": entry.status.value,
-            "unexpected_drift_keys": sorted(entry.unexpected_drift_keys),
-            "expected_drift_keys": sorted(entry.expected_drift_keys),
             "disposition": entry.disposition.value
             if entry.disposition is not None
             else None,
+            "drift_class": entry.drift_class.value
+            if entry.drift_class is not None
+            else None,
+            "reason": entry.reason,
+            "span_only_drift": entry.span_only_drift,
+            "forked_scalar_conflicts": list(entry.forked_scalar_conflicts),
             "drift_is_expected": entry.drift_is_expected,
         }
         for entry in report.entries

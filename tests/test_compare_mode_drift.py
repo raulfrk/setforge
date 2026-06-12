@@ -133,8 +133,6 @@ def test_install_gate_catches_mode_drift_only() -> None:
         name="hook_script",
         status=CompareStatus.DRIFTED,
         diff="",
-        expected_drift_keys=[],
-        unexpected_drift_keys=[],
         mode_drift=True,
     )
     report = CompareReport(entries=[entry], has_unexpected_drift=True)
@@ -192,8 +190,6 @@ def _mode_drift_report() -> CompareReport:
         name="hook_script",
         status=CompareStatus.DRIFTED,
         diff="",
-        expected_drift_keys=[],
-        unexpected_drift_keys=[],
         mode_drift=True,
         live_mode=0o644,
         tracked_mode=0o755,

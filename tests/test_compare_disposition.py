@@ -238,7 +238,7 @@ def test_regression_no_disposition_unexpected_drift(tmp_path: Path) -> None:
 
 
 def test_regression_json_fields_intact_for_plain_file(tmp_path: Path) -> None:
-    """REGRESSION: JSON output for a plain drifted file has all original fields."""
+    """REGRESSION: JSON output for a plain drifted file carries the schema keys."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x.yaml", "a: 1\nb: 2\n")
     dst = tmp_path / "live" / "x.yaml"
@@ -251,12 +251,18 @@ def test_regression_json_fields_intact_for_plain_file(tmp_path: Path) -> None:
     data = _compare_json_data(report)
 
     entry_json = data["entries"][0]
-    # Original fields still present
-    assert "name" in entry_json
-    assert "status" in entry_json
-    assert "expected_drift_keys" in entry_json
-    assert "unexpected_drift_keys" in entry_json
-    # New fields with defaults
+    # Required-keys subset (NOT exact-dict — additive growth must not churn)
+    required = {
+        "name",
+        "status",
+        "disposition",
+        "drift_class",
+        "reason",
+        "span_only_drift",
+        "forked_scalar_conflicts",
+        "drift_is_expected",
+    }
+    assert required <= entry_json.keys()
     assert entry_json["disposition"] is None
     assert entry_json["drift_is_expected"] is False
 
@@ -267,7 +273,7 @@ def test_regression_json_fields_intact_for_plain_file(tmp_path: Path) -> None:
 
 
 def test_compare_summary_table_shows_disposition_tag(tmp_path: Path) -> None:
-    """compare_summary_table includes disposition tag for each disposition value."""
+    """compare_summary_table's Disposition column shows each disposition value."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x", "tracked\n")
     dst = tmp_path / "live" / "x"
@@ -285,13 +291,13 @@ def test_compare_summary_table_shows_disposition_tag(tmp_path: Path) -> None:
         console = Console(file=buf, highlight=False, markup=False, no_color=True)
         console.print(table)
         output = buf.getvalue()
-        assert f"[{disposition}]" in output, (
-            f"Expected '[{disposition}]' tag in table output, got:\n{output}"
+        assert disposition in output, (
+            f"Expected '{disposition}' in table output, got:\n{output}"
         )
 
 
 def test_compare_summary_table_forked_shows_expected_note(tmp_path: Path) -> None:
-    """compare_summary_table shows 'expected' indicator for forked/pinned drift."""
+    """compare_summary_table's Class column shows 'expected' for forked drift."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x", "tracked\n")
     dst = tmp_path / "live" / "x"

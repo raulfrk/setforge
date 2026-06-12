@@ -1,11 +1,16 @@
 """Drift compare for tracked → live deployments.
 
-Two-axis classification:
+Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
 
-- ``preserve_user_keys`` paths in YAML files mark drift that we *expect*
-  (live overlays tracked on the next deploy, by design).
-- Everything else is *unexpected* drift — what ``compare --check`` flags
-  for CI and what the install drift gate (``--auto-accept-*``) resolves.
+- ``expected`` — intentional host divergence: ``forked``/``pinned``
+  disposition, or drift confined to pinned/forked spans (Invariant I13).
+- ``stale`` — live still equals the stored base while tracked advanced;
+  the next install fast-forwards live. Not flagged by ``compare --check``.
+- ``unexpected`` — drift nothing above explains: what ``compare --check``
+  flags for CI and what the install drift gate (``--auto-accept-*``)
+  resolves.
+- ``conflicted`` — reserved for forked-scalar span conflicts (the
+  detection is not wired yet; see :func:`_classify_drifted` slot 1).
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously
@@ -19,7 +24,7 @@ import json
 import os
 import stat
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +34,7 @@ from rich.table import Table
 from ruamel.yaml import YAML
 
 from setforge import (
+    base_store,
     host_local_inject,
     jsonc,
     section_reconcile,
@@ -42,6 +48,7 @@ from setforge.config import (
     TrackedFile,
     resolve_profile,
 )
+from setforge.errors import BaseStoreError
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -72,6 +79,18 @@ class CompareStatus(StrEnum):
     MISSING = "missing"
 
 
+class DriftClass(StrEnum):
+    """Why a ``DRIFTED`` file drifted; see :func:`_classify_drifted`."""
+
+    EXPECTED = "expected"
+    UNEXPECTED = "unexpected"
+    STALE = "stale"
+    CONFLICTED = "conflicted"
+
+
+_STALE_REASON = "tracked advanced since last install — install will update"
+
+
 @dataclass(frozen=True, slots=True)
 class FileCompare:
     """Per-file drift result from :func:`compare_profile`.
@@ -87,8 +106,6 @@ class FileCompare:
     name: str
     status: CompareStatus
     diff: str
-    expected_drift_keys: list[str]
-    unexpected_drift_keys: list[str]
     mode_drift: bool = False
     """True when the tracked_file declares ``mode:`` and the live file's
     permission bits (via :func:`stat.S_IMODE`) differ. Always False when
@@ -117,6 +134,19 @@ class FileCompare:
     ONLY divergence lives inside its spans is intentional host divergence,
     not unsynced shared drift — so it must NOT render identically to a real
     shared-drift case. Always False for files without spans.
+    """
+    drift_class: DriftClass | None = None
+    """Why the file drifted, per :func:`_classify_drifted`. ``None`` unless
+    ``status`` is ``DRIFTED``.
+    """
+    reason: str | None = None
+    """Human-readable note for the drift class (the summary table's ``Why``
+    column). ``None`` when the class needs no elaboration.
+    """
+    forked_scalar_conflicts: list[str] = field(default_factory=list)
+    """Forked-scalar span conflicts (``base ≠ live AND base ≠ tracked``).
+    Always empty today — the CONFLICTED detection is not wired yet; the
+    field reserves the ``--json`` schema slot.
     """
 
     @property
@@ -479,6 +509,7 @@ def compare_profile(
                 sub_src,
                 sub_dst,
                 tracked_file,
+                profile=profile_name,
                 host_local_sections=host_local,
             )
             entries.append(entry)
@@ -511,6 +542,7 @@ def _compare_one(
     dst: Path,
     tracked_file: TrackedFile,
     *,
+    profile: str | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
@@ -520,7 +552,12 @@ def _compare_one(
     # rather than MISSING.
     if tracked_file.symlink is not None:
         return _compare_symlinked(
-            name, src, dst, tracked_file, host_local_sections=host_local_sections
+            name,
+            src,
+            dst,
+            tracked_file,
+            profile=profile,
+            host_local_sections=host_local_sections,
         )
 
     disposition = tracked_file.disposition
@@ -531,8 +568,6 @@ def _compare_one(
                 name=name,
                 status=CompareStatus.MISSING,
                 diff="",
-                expected_drift_keys=[],
-                unexpected_drift_keys=[],
                 disposition=disposition,
             ),
             True,
@@ -543,9 +578,6 @@ def _compare_one(
         dst,
         host_local_sections=host_local_sections,
     )
-
-    expected_keys: list[str] = []
-    unexpected_keys: list[str] = []
 
     mode_drift = False
     live_mode: int | None = None
@@ -558,9 +590,7 @@ def _compare_one(
         tracked_mode = tracked_file.mode
         mode_drift = live_mode != tracked_file.mode
 
-    is_drifted = (
-        bool(diff) or bool(expected_keys) or bool(unexpected_keys) or mode_drift
-    )
+    is_drifted = bool(diff) or mode_drift
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
 
     span_only_drift = _span_only_drift(src, dst, tracked_file) if diff else False
@@ -569,20 +599,95 @@ def _compare_one(
         name=name,
         status=status,
         diff=diff,
-        expected_drift_keys=expected_keys,
-        unexpected_drift_keys=unexpected_keys,
         mode_drift=mode_drift,
         live_mode=live_mode,
         tracked_mode=tracked_mode,
         disposition=disposition,
         span_only_drift=span_only_drift,
     )
-    # A disposition file with FORKED or PINNED drift is intentionally
-    # host-diverged: it does NOT count as unexpected drift.  SHARED drift
-    # OUTSIDE a span needs attention → unexpected; drift confined to a
-    # pinned/forked span is expected (Invariant I13).
-    is_unexpected = (bool(diff) or mode_drift) and not entry.drift_is_expected
+    return _classify_entry(entry, profile=profile, src=src, dst=dst)
+
+
+def _classify_entry(
+    entry: FileCompare,
+    *,
+    profile: str | None,
+    src: Path,
+    dst: Path,
+    probe_stale: bool = True,
+) -> tuple[FileCompare, bool]:
+    """Attach the drift class to a ``DRIFTED`` entry and derive its
+    unexpected flag.
+
+    Non-``DRIFTED`` entries pass through with ``drift_class=None`` and an
+    unexpected flag of ``False`` (a MISSING entry never reaches here — its
+    caller returns the existing ``True`` contract directly).
+    """
+    if entry.status is not CompareStatus.DRIFTED:
+        return entry, False
+    drift_class, reason = _classify_drifted(
+        entry, profile=profile, src=src, dst=dst, probe_stale=probe_stale
+    )
+    entry = replace(entry, drift_class=drift_class, reason=reason)
+    is_unexpected = drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
     return entry, is_unexpected
+
+
+def _classify_drifted(
+    entry: FileCompare,
+    *,
+    profile: str | None,
+    src: Path,
+    dst: Path,
+    probe_stale: bool = True,
+) -> tuple[DriftClass, str | None]:
+    """Classify a ``DRIFTED`` entry; first matching slot wins.
+
+    ``probe_stale=False`` skips the base-store read for entries whose
+    ``src``/``dst`` byte comparison is meaningless (symlink metadata
+    drift). ``profile=None`` (direct unit-scope calls) also skips it —
+    the stored base is keyed by profile.
+    """
+    # Slot 1 — CONFLICTED: a forked-scalar span where base ≠ live AND
+    # base ≠ tracked. Detection not wired yet; a follow-up populates
+    # ``forked_scalar_conflicts`` and short-circuits here.
+    # Slot 2 — UNEXPECTED (clobber): span-only drift with no stored byte
+    # base — a first install would overwrite the live span edits. Probe
+    # not wired yet; a follow-up adds it here with its own reason.
+    # Slot 3 — STALE: live still equals the stored base while tracked
+    # advanced; the next install fast-forwards live.
+    if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
+        return DriftClass.STALE, _STALE_REASON
+    # Slot 4 — EXPECTED: intentional host divergence (forked/pinned
+    # disposition, or drift confined to pinned/forked spans).
+    if entry.drift_is_expected:
+        return DriftClass.EXPECTED, None
+    # Slot 5 — UNEXPECTED: drift nothing above explains.
+    return DriftClass.UNEXPECTED, None
+
+
+def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
+    """True when live (``dst``) still equals the stored base while tracked
+    (``src``) advanced — the stale-deploy shape where the next install
+    fast-forwards live.
+
+    State-aware but crash-free: any base-store or filesystem read error
+    degrades to ``False`` (the entry then classifies via the later slots).
+    The read is not locked against a concurrent install — single-user CLI;
+    the read-once race is accepted.
+    """
+    try:
+        base = base_store.read_base(profile, file_id)
+    except (BaseStoreError, OSError):
+        return False
+    if base is None:
+        return False
+    try:
+        live = dst.read_bytes()
+        tracked = src.read_bytes()
+    except OSError:
+        return False
+    return live == base and tracked != base
 
 
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
@@ -649,6 +754,7 @@ def _compare_symlinked(
     dst: Path,
     tracked_file: TrackedFile,
     *,
+    profile: str | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
     """Classify a symlink-deployed tracked_file's live state.
@@ -688,18 +794,16 @@ def _compare_symlinked(
                 name=name,
                 status=CompareStatus.DRIFTED,
                 diff=(f"expected symlink to {expected!r}, found regular file at {dst}"),
-                expected_drift_keys=[],
-                unexpected_drift_keys=[],
                 disposition=disposition,
             )
-            return entry, not entry.drift_is_expected
+            return _classify_entry(
+                entry, profile=profile, src=src, dst=dst, probe_stale=False
+            )
         return (
             FileCompare(
                 name=name,
                 status=CompareStatus.MISSING,
                 diff="",
-                expected_drift_keys=[],
-                unexpected_drift_keys=[],
                 disposition=disposition,
             ),
             True,
@@ -710,11 +814,11 @@ def _compare_symlinked(
             name=name,
             status=CompareStatus.DRIFTED,
             diff=(f"symlink target drift at {dst}: {actual!r} != {expected!r}"),
-            expected_drift_keys=[],
-            unexpected_drift_keys=[],
             disposition=disposition,
         )
-        return entry, not entry.drift_is_expected
+        return _classify_entry(
+            entry, profile=profile, src=src, dst=dst, probe_stale=False
+        )
 
     # Link metadata is correct; probe the target's CONTENT for drift.
     # ``diff_file`` returns ``""`` when its second argument does not
@@ -734,19 +838,17 @@ def _compare_symlinked(
             name=name,
             status=CompareStatus.DRIFTED,
             diff=target_diff,
-            expected_drift_keys=[],
-            unexpected_drift_keys=[],
             disposition=disposition,
         )
-        return entry, not entry.drift_is_expected
+        return _classify_entry(
+            entry, profile=profile, src=src, dst=dst, probe_stale=False
+        )
 
     return (
         FileCompare(
             name=name,
             status=CompareStatus.UNCHANGED,
             diff="",
-            expected_drift_keys=[],
-            unexpected_drift_keys=[],
             disposition=disposition,
         ),
         False,
@@ -936,37 +1038,37 @@ def _format_overlay_footer_summary(
     )
 
 
+_DRIFT_CLASS_STYLES: dict[DriftClass, str] = {
+    DriftClass.EXPECTED: "dim cyan",
+    DriftClass.STALE: "yellow",
+    DriftClass.UNEXPECTED: "bold red",
+    DriftClass.CONFLICTED: "bold red",
+}
+
+
 def compare_summary_table(report: CompareReport) -> Table:
     """Build a rich :class:`~rich.table.Table` summarising the compare report.
 
-    One row per ``DRIFTED`` entry with columns: ``file``, ``expected drift``,
-    ``unexpected drift``.  When a file carries a ``disposition``, a bracketed
-    tag (``[shared]`` / ``[forked]`` / ``[pinned]``) is appended to the file
-    name; forked/pinned drift also appends an ``(expected)`` note to signal
-    the drift is intentional host divergence.  Expected-drift counts render
-    in dim cyan; unexpected in bold red when > 0.
+    One row per ``DRIFTED`` entry with columns ``File`` / ``Disposition`` /
+    ``Class`` / ``Why``. ``Class`` is the entry's :class:`DriftClass`
+    (expected in dim cyan, stale in yellow, unexpected/conflicted in bold
+    red); ``Why`` carries the class's reason note when it has one.
     """
     table = Table(title="Drift Summary", show_header=True, header_style="bold")
-    table.add_column("file")
-    table.add_column("expected drift", justify="right")
-    table.add_column("unexpected drift", justify="right")
+    table.add_column("File")
+    table.add_column("Disposition")
+    table.add_column("Class")
+    table.add_column("Why")
 
     for entry in report.entries:
         if entry.status != CompareStatus.DRIFTED:
             continue
-        exp_count = len(entry.expected_drift_keys)
-        unexp_count = len(entry.unexpected_drift_keys)
-        exp_str = f"[dim cyan]{exp_count}[/dim cyan]"
-        if unexp_count > 0:
-            unexp_str = f"[bold red]{unexp_count}[/bold red]"
+        disposition = entry.disposition.value if entry.disposition is not None else ""
+        if entry.drift_class is not None:
+            style = _DRIFT_CLASS_STYLES[entry.drift_class]
+            class_str = f"[{style}]{entry.drift_class.value}[/{style}]"
         else:
-            unexp_str = str(unexp_count)
-
-        file_label = entry.name
-        if entry.disposition is not None:
-            file_label = f"{file_label} [{entry.disposition.value}]"
-            if entry.drift_is_expected:
-                file_label = f"{file_label} (expected)"
-        table.add_row(file_label, exp_str, unexp_str)
+            class_str = ""
+        table.add_row(entry.name, disposition, class_str, entry.reason or "")
 
     return table
