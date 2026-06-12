@@ -337,6 +337,24 @@ def test_pinned_install_never_overwrites_live(
     assert c.read_text(_LIVE_PINNED) == "PINNED-LIVE-WINS\n", c.read_text(_LIVE_PINNED)
 
 
+@pytest.mark.xdist_group("docker_daemon")
+def test_pinned_fresh_host_first_install_deploys_tracked(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """pinned fresh host (no base, no live): first install deploys the tracked
+    bytes (NOT an empty file); the second install is a byte-level no-op."""
+    c = docker_container()
+    rc, _stdout, stderr = _install(c, "test-disposition-pinned")
+    assert rc == 0, stderr
+    assert c.read_text(_LIVE_PINNED) == _TRACKED_MD_BODY, c.read_text(_LIVE_PINNED)
+    mtime_first = c.exec(["stat", "-c", "%Y", _LIVE_PINNED], check=True).stdout.strip()
+    rc2, _stdout2, stderr2 = _install(c, "test-disposition-pinned")
+    assert rc2 == 0, stderr2
+    assert c.read_text(_LIVE_PINNED) == _TRACKED_MD_BODY
+    mtime_second = c.exec(["stat", "-c", "%Y", _LIVE_PINNED], check=True).stdout.strip()
+    assert mtime_second == mtime_first, "second install must be a NOOP write"
+
+
 # ---------------------------------------------------------------------------
 # compare — reports disposition and marks forked drift as expected
 # ---------------------------------------------------------------------------
