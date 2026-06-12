@@ -488,8 +488,9 @@ def _deploy_all_tracked_files(
     **Refusal gate.** With ``strict_spans`` set, ANY pinned-span orphan
     across the records refuses the whole install
     (:func:`_refuse_on_pinned_orphans`) — every orphan is reported and ZERO
-    files, bases, sidecars, or transitions are touched, so there is no
-    partial install to undo.
+    tracked files, bases, sidecars, or transitions are touched (bootstrap
+    stubs are created earlier in the pipeline), so there is no partial
+    install to undo.
 
     **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
     in order, per file: apply the deferred base migration → write the

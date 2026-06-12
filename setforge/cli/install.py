@@ -158,9 +158,10 @@ def install(
         help=(
             "Escalate an orphaned PINNED span (its anchor went missing "
             "upstream) from a warning to a refuse-install. The refusal "
-            "fires before any file is written — nothing deploys, no "
-            "transition lands. Forked-span and non-strict orphans always "
-            "warn and continue."
+            "fires before any tracked file is written — no tracked file "
+            "deploys, no transition lands (bootstrap stubs are created "
+            "earlier in the pipeline). Forked-span and non-strict orphans "
+            "always warn and continue."
         ),
     ),
     dry_run: bool = typer.Option(
