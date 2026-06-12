@@ -120,6 +120,35 @@ def testresolve_marketplace_source_existing_cache_no_clone(
     assert fake.clone_count() == 0
 
 
+def testresolve_marketplace_source_origin_probe_failure_reuses_cache(
+    fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed origin probe reuses the cache as-is — no wizard, no clone.
+
+    ``_cache_origin_url`` is best-effort and returns ``None`` on any git
+    failure (no remote, corrupted checkout); the resolver must fall
+    through to the existing cache rather than treat the miss as URL
+    drift.
+    """
+    from setforge import claude_marketplace_cache as mp_cache
+    from setforge.claude_marketplace_cache import resolve_marketplace_source
+
+    fake = fake_git(known_repos={"anthropic/plug"})
+    cache_root = tmp_path / "cache"
+    cache_dir = cache_root / "plug"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / ".git").mkdir()
+    # Origin probe fails (e.g. remote unset): _cache_origin_url -> None.
+    monkeypatch.setattr(mp_cache, "_cache_origin_url", lambda _cache_dir: None)
+    src = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="anthropic/plug")
+    out = resolve_marketplace_source(
+        src, ClaudeInstallMode.LOCAL_CLONE, cache_root=cache_root
+    )
+    assert out.source is MarketplaceSourceKind.PATH
+    assert out.path == cache_dir
+    assert fake.clone_count() == 0
+
+
 def testresolve_marketplace_source_url_drift_invokes_wizard(
     fake_git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
