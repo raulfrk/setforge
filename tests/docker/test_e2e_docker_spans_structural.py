@@ -217,6 +217,42 @@ def test_orphaned_pinned_structural_path_warns_and_succeeds(
 
 
 # ---------------------------------------------------------------------------
+# orphan — an upstream RENAME of the pinned path is attributed to upstream
+# and the warning offers a did-you-mean naming the renamed sibling.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_upstream_renamed_pinned_path_warns_with_did_you_mean(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """orphan: an upstream key rename warns with upstream attribution + hint.
+
+    Install once (the stored base learns ``editor.fontSize``). Then UPSTREAM
+    renames the pinned leaf (``fontSize`` → ``fontSizes``) while the live
+    copy no longer carries the old key — the stored base HAD a value at the
+    path and tracked no longer does, so the orphan classifies as an upstream
+    rename/delete instead of a local delete. The bare install still exits 0
+    (Invariant I6) but the warning must attribute the loss to upstream and
+    append a did-you-mean naming the closest tracked sibling.
+    """
+    c = docker_container()
+    rc, _out, err = _install(c)
+    assert rc == 0, err
+
+    # Upstream renames the pinned leaf; the live copy drops the old key (so
+    # the absence is attributable to upstream, not a fresh local edit).
+    c.write_text(_TRACKED, _TRACKED_BODY.replace("fontSize: 12", "fontSizes: 12"))
+    c.write_text(_LIVE, _TRACKED_BODY.replace("  fontSize: 12\n", ""))
+
+    rc, out, err = _install(c)
+    assert rc == 0, out + err
+    combined = out + err
+    assert "renamed or deleted upstream" in combined, combined
+    assert "did you mean 'fontSizes'?" in combined, combined
+
+
+# ---------------------------------------------------------------------------
 # sync — a span path absent in tracked drops from capture and warns, so a
 # host-local value never bakes into the shared config repo.
 # ---------------------------------------------------------------------------
