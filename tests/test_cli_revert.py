@@ -807,7 +807,7 @@ def test_revert_unlinks_overlay_only_symlink(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A symlink declared ONLY via ``symlink_target`` in local.yaml is
-    unlinked on revert — the bug this bead fixes.
+    unlinked on revert — the bug this fixes.
 
     ``_revert_symlink_deployments`` now folds the host-local overlay, so
     the overlay-declared link (invisible to the resolved profile before
