@@ -115,7 +115,12 @@ def install_cargo_binaries(crates: Iterable[str]) -> list[tuple[str, str]]:
         typer.echo(f"cargo install {crate}")
         try:
             subprocess.run(
-                [cargo, "install", crate],
+                # ``--`` terminates option parsing so a crate name from
+                # user YAML that begins with ``-`` is treated as a positional
+                # crate, never a cargo flag (cargo documents
+                # ``cargo install [OPTIONS] [--] [crate]...``). Mirrors the
+                # ``claude mcp add`` separator guard in setforge.mcp_servers.
+                [cargo, "install", "--", crate],
                 check=True,
                 text=True,
                 capture_output=True,

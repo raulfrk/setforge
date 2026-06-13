@@ -37,7 +37,7 @@ class FakeCargo:
 
     def run(self, argv, **kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(argv))
-        # [cargo, install, --list] | [cargo, install, <crate>]
+        # [cargo, install, --list] | [cargo, install, --, <crate>]
         if argv[1] == "install" and argv[2] == "--list":
             lines = []
             for name in sorted(self.installed):
@@ -45,7 +45,8 @@ class FakeCargo:
                 lines.append(f"    {name}")
             return subprocess.CompletedProcess(argv, 0, stdout="\n".join(lines) + "\n")
         if argv[1] == "install":
-            crate = argv[2]
+            assert argv[2] == "--", f"expected literal -- separator, got {argv[2]!r}"
+            crate = argv[3]
             if crate in self.install_errors:
                 raise subprocess.CalledProcessError(
                     1, argv, stderr=self.install_errors[crate]
@@ -85,7 +86,7 @@ def test_skip_if_present_does_not_invoke_install(fake_cargo) -> None:
     cli = fake_cargo(installed={"ast-grep"})
     failed = cargo.install_cargo_binaries(["ast-grep"])
     assert failed == []
-    # `cargo install --list` ran, but no `cargo install ast-grep`.
+    # `cargo install --list` ran, but no `cargo install -- ast-grep`.
     install_calls = [c for c in cli.calls if c[1] == "install" and c[2] != "--list"]
     assert install_calls == []
 
@@ -95,7 +96,26 @@ def test_installs_absent_crate(fake_cargo) -> None:
     failed = cargo.install_cargo_binaries(["ast-grep"])
     assert failed == []
     assert "ast-grep" in cli.installed
-    assert ["/fake/cargo", "install", "ast-grep"] in cli.calls
+    # The argv carries a literal ``--`` end-of-options separator before the
+    # crate so a leading-dash crate name can never be parsed as a cargo flag.
+    assert ["/fake/cargo", "install", "--", "ast-grep"] in cli.calls
+
+
+def test_install_argv_has_double_dash_before_crate(fake_cargo) -> None:
+    cli = fake_cargo(installed=set())
+    cargo.install_cargo_binaries(["ast-grep"])
+    install_call = next(c for c in cli.calls if c[1] == "install" and c[2] != "--list")
+    assert install_call == ["/fake/cargo", "install", "--", "ast-grep"]
+
+
+def test_leading_dash_crate_is_positional_not_a_flag(fake_cargo) -> None:
+    # A crate name beginning with ``-`` must land AFTER the ``--`` separator
+    # so cargo never parses it as an option.
+    cli = fake_cargo(installed=set())
+    cargo.install_cargo_binaries(["--evil"])
+    install_call = next(c for c in cli.calls if c[1] == "install" and c[2] != "--list")
+    assert install_call == ["/fake/cargo", "install", "--", "--evil"]
+    assert install_call.index("--") < install_call.index("--evil")
 
 
 def test_per_crate_failure_isolated(fake_cargo) -> None:
