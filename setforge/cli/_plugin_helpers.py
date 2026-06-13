@@ -27,6 +27,7 @@ from setforge import claude_plugins as claude_plugins_mod
 from setforge import transitions, vscode_extensions
 from setforge._redact import redact_argv
 from setforge.cli._confirm import FailureAction, prompt_failure_action
+from setforge.cli._mcp_helpers import _reverse_mcp
 from setforge.config import (
     Config,
     MarketplaceSource,
@@ -1082,6 +1083,13 @@ def _write_reverse_transition(
         if reverse_plugin_delta.is_empty():
             reverse_plugin_delta = None
 
+    mcp_file = transition / "mcp.json"
+    reverse_mcp_delta: transitions.MCPDelta | None = None
+    if mcp_file.exists():
+        mcp_raw = json.loads(mcp_file.read_text(encoding="utf-8"))
+        mcp_payload = transitions.mcp_delta_from_json(mcp_raw)
+        reverse_mcp_delta, _ = _reverse_mcp(mcp_payload)
+
     file_post = transitions.snapshot_paths(touched_paths)
     reverse_meta = transitions.make_meta(
         transitions.TransitionCommand.REVERT,
@@ -1103,4 +1111,5 @@ def _write_reverse_transition(
         reverse_delta,
         plugin_delta=reverse_plugin_delta,
         state_snapshots=state_snapshots,
+        mcp_delta=reverse_mcp_delta,
     )

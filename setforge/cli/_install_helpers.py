@@ -1189,6 +1189,7 @@ def _write_install_transition(
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
     preserve_user_keys_applied: bool | None = None,
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
+    mcp_delta: transitions.MCPDelta | None = None,
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
@@ -1229,6 +1230,7 @@ def _write_install_transition(
         plugin_delta=plugin_delta,
         reconcile_outcomes=reconcile_outcomes,
         state_snapshots=state_snapshots,
+        mcp_delta=mcp_delta,
     )
 
 
@@ -1571,6 +1573,8 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
         f"({len(ctx.resolved.extensions.exclude)} excluded)"
     )
     typer.echo(f"  claude_plugins: {len(ctx.resolved.claude_plugins)}")
+    typer.echo(f"  mcp_servers:    {len(ctx.resolved.mcp_servers)}")
+    typer.echo(f"  cargo_binaries: {len(ctx.resolved.cargo_binaries)}")
     typer.echo(f"  bootstrap:      {len(ctx.resolved.bootstrap)}")
     typer.echo("  host overlay:   none (host-local layer not yet enabled)")
 

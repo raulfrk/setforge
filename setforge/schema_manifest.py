@@ -29,6 +29,7 @@ from setforge.config import (
     Config,
     Extensions,
     MarketplaceSource,
+    McpServerRef,
     Profile,
     ResolvedProfile,
     TrackedFile,
@@ -45,6 +46,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     Extensions,
     MarketplaceSource,
     ClaudePluginRef,
+    McpServerRef,
     ResolvedProfile,
     SpanEntry,
 )
@@ -89,6 +91,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "tracked_files": "dict[str, setforge.config.TrackedFile]",
         "marketplaces": "dict[str, setforge.config.MarketplaceSource]",
         "claude_plugins": "dict[str, setforge.config.ClaudePluginRef]",
+        "mcp_servers": "dict[str, setforge.config.McpServerRef]",
         "profiles": "dict[str, setforge.config.Profile]",
     },
     "Profile": {
@@ -98,6 +101,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "claude_plugins": "list[str]",
         "plugins_reconcile": "<enum 'ReconcilePolicy'>",
         "bootstrap": "list[pathlib.Path]",
+        "mcp_servers": "list[str]",
+        "cargo_binaries": "list[str]",
     },
     "TrackedFile": {
         "src": "<class 'pathlib.Path'>",
@@ -119,6 +124,10 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "path": "pathlib.Path | None",
     },
     "ClaudePluginRef": {"marketplace": "<class 'str'>"},
+    "McpServerRef": {
+        "command": "list[str]",
+        "scope": "<class 'str'>",
+    },
     "ResolvedProfile": {
         "extends": "<class 'NoneType'>",
         "tracked_files": "list[str]",
@@ -126,6 +135,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "claude_plugins": "list[str]",
         "plugins_reconcile": "<enum 'ReconcilePolicy'>",
         "bootstrap": "list[pathlib.Path]",
+        "mcp_servers": "list[str]",
+        "cargo_binaries": "list[str]",
     },
     "SpanEntry": {
         "anchor": "<class 'str'>",

@@ -13,6 +13,9 @@ from typing import assert_never
 import typer
 
 from setforge import (
+    cargo as cargo_mod,
+)
+from setforge import (
     compare as compare_mod,
 )
 from setforge import (
@@ -50,6 +53,7 @@ from setforge.cli._install_helpers import (
     migrate_local_overlay_spans_on_install,
     seed_overlay_migration_snapshot,
 )
+from setforge.cli._mcp_helpers import reconcile_mcp_servers
 from setforge.cli._plugin_helpers import (
     _emit_reconcile_summary,
     _reconcile_extensions,
@@ -299,6 +303,13 @@ def install(
         overlay_migration = migrate_local_overlay_spans_on_install(profile)
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
+        # Cargo binaries install during install, BEFORE deploy. A missing
+        # cargo toolchain warns once and continues (soft); per-crate
+        # build failures warn (yellow) but do NOT gate the exit code — a
+        # crate that won't build is a host-specific outcome, not a config
+        # error. No revert tracking — cargo binaries are not cleanly
+        # reversible.
+        cargo_mod.install_cargo_binaries(resolved.cargo_binaries)
 
         # P4.3: check for unexpected drift before deploying.
         # Only DRIFTED entries (existing live files that diverge from tracked
@@ -389,6 +400,7 @@ def install(
         plugin_delta, plugin_outcomes = _reconcile_plugins(
             cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes
         )
+        mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved)
 
         file_post = transitions.snapshot_paths(dst_paths)
 
@@ -404,9 +416,23 @@ def install(
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
                 state_snapshots=state_snapshots,
+                mcp_delta=mcp_delta,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
+
+        # Exit gate on aggregated MCP-server failures. Cargo failures do
+        # NOT gate (a crate that won't build is a soft, host-specific
+        # outcome — the warning already surfaced), but a declared MCP
+        # server that could not be registered is a hard reconcile failure.
+        if mcp_failed:
+            names = ", ".join(name for name, _err in mcp_failed)
+            typer.secho(
+                f"install completed with MCP server failures: {names}",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
 
 
 def _handle_secret_findings(

@@ -35,7 +35,13 @@ from setforge.config import ClaudeInstallMode
 from setforge.errors import BinaryOverrideInvalid, ConfigError
 
 LOCAL_CONFIG_PATH: Final[Path] = Path.home() / ".config" / "setforge" / "local.yaml"
-SUPPORTED_BINARIES: Final[tuple[str, ...]] = ("claude", "code", "gitleaks", "patch")
+SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
+    "claude",
+    "code",
+    "gitleaks",
+    "patch",
+    "cargo",
+)
 _ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
 

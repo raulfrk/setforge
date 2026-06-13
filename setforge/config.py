@@ -311,6 +311,33 @@ class ClaudePluginRef(BaseModel):
     marketplace: str
 
 
+class McpServerRef(BaseModel):
+    """A single MCP-server registry entry referenced by a profile.
+
+    ``command`` holds the tokens that follow the ``--`` separator on a
+    ``claude mcp add --scope <scope> <name> -- <tokens...>`` invocation —
+    the program plus its arguments. It is a token LIST (never a joined
+    string) so the install path can pass it to ``subprocess.run`` with
+    ``shell=False``; an empty list is rejected since a server with no
+    command cannot be registered. ``scope`` selects the ``claude mcp add``
+    ``--scope`` value and defaults to ``"user"`` (the host-wide registration
+    Serena and friends use). Mirrors the shape of
+    :class:`ClaudePluginRef` / :class:`MarketplaceSource`.
+    """
+
+    model_config = _STRICT
+
+    command: list[str]
+    scope: str = "user"
+
+    @field_validator("command")
+    @classmethod
+    def _command_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("McpServerRef.command must be a non-empty token list")
+        return v
+
+
 class Extensions(BaseModel):
     model_config = _STRICT
 
@@ -328,6 +355,8 @@ class Profile(BaseModel):
     claude_plugins: list[str] = []
     plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
     bootstrap: list[Path] = []
+    mcp_servers: list[str] = []
+    cargo_binaries: list[str] = []
 
 
 class ResolvedProfile(BaseModel):
@@ -346,6 +375,8 @@ class ResolvedProfile(BaseModel):
     claude_plugins: list[str] = []
     plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
     bootstrap: list[Path] = []
+    mcp_servers: list[str] = []
+    cargo_binaries: list[str] = []
 
 
 class Config(BaseModel):
@@ -384,6 +415,7 @@ class Config(BaseModel):
     tracked_files: dict[str, TrackedFile]
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
+    mcp_servers: dict[str, McpServerRef] = {}
     profiles: dict[str, Profile]
 
 
@@ -455,6 +487,8 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
             tracked_files=_merge_list(resolved.tracked_files, profile.tracked_files),
             claude_plugins=_merge_list(resolved.claude_plugins, profile.claude_plugins),
             bootstrap=_merge_list(resolved.bootstrap, profile.bootstrap),
+            mcp_servers=_merge_list(resolved.mcp_servers, profile.mcp_servers),
+            cargo_binaries=_merge_list(resolved.cargo_binaries, profile.cargo_binaries),
             extensions=_merge_extensions(resolved.extensions, profile.extensions),
             plugins_reconcile=(
                 profile.plugins_reconcile
@@ -500,6 +534,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
         _validate_tolerant(data) if tolerate_unknown else Config.model_validate(data)
     )
     _validate_plugin_references(config)
+    _validate_mcp_references(config)
     _warn_on_schema_mismatch(config)
     return config
 
@@ -1125,6 +1160,33 @@ def _validate_plugin_references(config: Config) -> None:
         raise ConfigError(
             f"profile claude_plugins reference undeclared plugin(s): "
             f"{details} (add to top-level claude_plugins:)"
+        )
+
+
+def _validate_mcp_references(config: Config) -> None:
+    """Verify every ``profile.mcp_servers`` entry exists in the top-level
+    ``Config.mcp_servers`` registry.
+
+    Mirrors :func:`_validate_plugin_references`: collects every offender
+    across every profile into a single :class:`ConfigError` so the user
+    fixes all references in one round-trip. Empty / whitespace refs are
+    skipped (no dedicated empty-ref check exists for MCP names yet, but a
+    blank entry would never match the registry, so skipping it here keeps
+    the error message focused on genuine typos).
+    """
+    registry = set(config.mcp_servers)
+    offenders: list[tuple[str, str]] = []
+    for profile_name, profile in config.profiles.items():
+        for bare_name in profile.mcp_servers:
+            if not bare_name.strip():
+                continue
+            if bare_name not in registry:
+                offenders.append((profile_name, bare_name))
+    if offenders:
+        details = ", ".join(f"{profile}.{name}" for profile, name in offenders)
+        raise ConfigError(
+            f"profile mcp_servers reference undeclared server(s): "
+            f"{details} (add to top-level mcp_servers:)"
         )
 
 

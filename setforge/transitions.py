@@ -478,6 +478,37 @@ class PluginDelta:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class MCPDelta:
+    """Net successful changes to the registered MCP-server set during a
+    state-changing command.
+
+    Two fields because an MCP reconcile has two invertible actions:
+
+    - ``added`` — ``(name, command, scope)`` triples for servers
+      registered for the first time this command. The inverse is
+      ``claude mcp remove``; the command + scope are nonetheless stored
+      (not just the name) so a redo — a revert of the revert — can re-add
+      the exact registration, making the round-trip closed.
+    - ``updated`` — ``(name, prior_command, prior_scope)`` triples for
+      servers whose declared command differed and were therefore
+      removed + re-added. The PRIOR command + scope is stored because the
+      inverse is re-adding the original registration — a flat name list
+      would be non-invertible. Follows
+      :class:`PluginDelta.marketplaces_removed`'s (name, repr) precedent.
+
+    Records ONLY successfully-applied operations so revert never tries to
+    reverse a no-op, mirroring :class:`ExtensionDelta` / :class:`PluginDelta`.
+    An empty delta serializes to no ``mcp.json`` at all (omit-when-empty).
+    """
+
+    added: tuple[tuple[str, tuple[str, ...], str], ...]
+    updated: tuple[tuple[str, tuple[str, ...], str], ...]
+
+    def is_empty(self) -> bool:
+        return not (self.added or self.updated)
+
+
 class ReconcileKind(StrEnum):
     """Closed set of item kinds a :class:`ReconcileOutcome` can record.
 
@@ -1002,6 +1033,7 @@ def write_transition(
     plugin_delta: PluginDelta | None = None,
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
     state_snapshots: tuple[StateSnapshotEntry, ...] = (),
+    mcp_delta: MCPDelta | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1068,6 +1100,10 @@ def write_transition(
     plugin_payload = _serialize_plugin_payload(plugin_delta)
     if plugin_payload is not None:
         _write_text_durable(pending / "plugins.json", plugin_payload)
+
+    mcp_payload = _serialize_mcp_payload(mcp_delta)
+    if mcp_payload is not None:
+        _write_text_durable(pending / "mcp.json", mcp_payload)
 
     outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
     if outcomes_payload is not None:
@@ -1139,6 +1175,75 @@ def _serialize_plugin_payload(plugin_delta: PluginDelta | None) -> str | None:
         )
         + "\n"
     )
+
+
+def _serialize_mcp_payload(mcp_delta: MCPDelta | None) -> str | None:
+    """Return the ``mcp.json`` body, or ``None`` when there's nothing to write.
+
+    Both ``added`` and ``updated`` are
+    ``tuple[tuple[name, command, scope], ...]`` → each serialized as
+    ``[[name, [cmd...], scope], ...]`` so it round-trips through
+    ``json.loads`` as a 3-element list (the loader converts the command
+    list back to a tuple by position). Empty deltas return ``None`` so no
+    ``mcp.json`` is written (omit-when-empty).
+    """
+    if mcp_delta is None or mcp_delta.is_empty():
+        return None
+
+    def _triples(
+        entries: tuple[tuple[str, tuple[str, ...], str], ...],
+    ) -> list[list[object]]:
+        return [[name, list(command), scope] for name, command, scope in entries]
+
+    return (
+        json.dumps(
+            {
+                "added": _triples(mcp_delta.added),
+                "updated": _triples(mcp_delta.updated),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def mcp_delta_from_json(raw: dict[str, object]) -> MCPDelta:
+    """Reconstruct an :class:`MCPDelta` from a JSON-deserialized ``mcp.json``.
+
+    Inverse of :func:`_serialize_mcp_payload`. Validates each ``added`` /
+    ``updated`` entry is a ``[str, [str...], str]`` triple, raising
+    :class:`InvalidTransitionRecord` on any deviation. Mirrors the
+    boundary guard on :func:`plugin_delta_from_json`: without it a
+    corrupted ``mcp.json`` (hand-edit, partial write) would surface as an
+    opaque unpack error mid-revert instead of a clean
+    :class:`SetforgeError` at the JSON boundary.
+    """
+
+    def _triples(key: str) -> tuple[tuple[str, tuple[str, ...], str], ...]:
+        entries_raw = raw.get(key, [])
+        if not isinstance(entries_raw, list):
+            raise InvalidTransitionRecord(
+                f"mcp.json: {key} must be a list, got {type(entries_raw).__name__}"
+            )
+        validated: list[tuple[str, tuple[str, ...], str]] = []
+        for entry in entries_raw:
+            if not (isinstance(entry, list) and len(entry) == 3):
+                raise InvalidTransitionRecord(
+                    f"mcp.json: malformed {key} entry: {entry!r}"
+                )
+            name, command, scope = entry
+            if not isinstance(name, str) or not isinstance(scope, str):
+                raise InvalidTransitionRecord(
+                    f"mcp.json: {key} entry has wrong types: "
+                    f"({type(name).__name__}, _, {type(scope).__name__})"
+                )
+            command_tokens = _validated_str_list(
+                command, key=f"{key}.command", source_label="mcp.json"
+            )
+            validated.append((name, tuple(command_tokens), scope))
+        return tuple(validated)
+
+    return MCPDelta(added=_triples("added"), updated=_triples("updated"))
 
 
 def load_latest(
