@@ -27,7 +27,8 @@ Three concerns are kept separate:
   attached comment).
 """
 
-from collections.abc import Mapping, MutableMapping
+import copy
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -40,7 +41,7 @@ from json5.model import (
     JSONText,
     Value,
 )
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from setforge.errors import MergeTypeMismatch
 from setforge.jsonc import _find_key_index, _key_text
@@ -57,10 +58,12 @@ __all__ = [
     "StructuralMergeResult",
     "delete_at_path",
     "get_at_path",
+    "get_node_at_path",
     "list_keys_at_path",
     "merge_structural",
     "resolve_path_prefix",
     "set_at_path",
+    "set_node_at_path",
 ]
 
 
@@ -704,6 +707,50 @@ def set_at_path(model: object, path: str, value: object) -> None:
     _set_leaf(parent, leaf, value, path)
 
 
+def set_node_at_path(model: object, path: str, node: object) -> None:
+    """Splice the WRAPPED ``node`` in at dotted ``path`` in ``model`` in place.
+
+    The comment-preserving sibling of :func:`set_at_path` for a whole-subtree
+    re-assert: where :func:`set_at_path` writes an UNWRAPPED plain snapshot
+    (which carries no comments, so the pinned subtree's OWN interior comments
+    are lost), this seam splices the still-WRAPPED backend node — a ruamel
+    ``CommentedMap`` / ``CommentedSeq`` or a json-five ``JSONObject`` /
+    ``JSONArray`` — so the node's interior comment tokens survive the swap.
+
+    ``node`` MUST already be a deep copy (the caller snapshots it BEFORE the
+    in-place merge mutates the source model); this seam does not copy it.
+
+    Per backend:
+
+    * ruamel: a plain ``parent[leaf] = node`` preserves the node's ``.ca``
+      tokens. Before the splice the node's anchor is dedup'd against ``model``
+      — a deep-copied subtree keeps its ``&anchor`` string verbatim, so an
+      anchor whose name collides with a DIFFERENT node already in ``model``
+      would emit a duplicate / ambiguous anchor definition; the colliding
+      anchor (and any colliding descendant anchor) is cleared.
+    * json-five: the parent's stored ``.keys`` / ``.values`` are spliced in
+      LOCKSTEP at the leaf's index (the derived ``key_value_pairs`` re-zips
+      keys/values on access, so editing only one list desyncs it); the
+      replaced value's ``wsc_before`` is carried onto the new node so the
+      leaf's leading whitespace / same-line position is unchanged.
+    * a plain ``dict`` carries no comments, so assignment suffices.
+
+    ``path`` is the same DOTTED grammar as :func:`set_at_path`; a list-suffix
+    segment raises :class:`ValueError`, a missing intermediate parent raises
+    :class:`KeyError`, and a non-mapping parent raises
+    :class:`~setforge.errors.MergeTypeMismatch` — the same orphan postures the
+    re-assert caller already wraps.
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for set-node-at-path: {path!r}")
+    segments = path.split(".")
+    inner = _json5_inner(model)
+    parent = _descend_set_parent(inner, segments, path)
+    leaf = segments[-1]
+    _dedup_ruamel_anchors(node, inner)
+    _set_node_leaf(parent, leaf, node, path)
+
+
 def delete_at_path(model: object, path: str) -> None:
     """Delete the leaf at dotted ``path`` from ``model`` in place.
 
@@ -766,6 +813,35 @@ def get_at_path(model: object, path: str) -> object:
             return ABSENT
         node = child
     return _to_plain(node)
+
+
+def get_node_at_path(model: object, path: str) -> object:
+    """Return a DEEP-COPIED WRAPPED node at dotted ``path`` (or :data:`ABSENT`).
+
+    The comment-preserving sibling of :func:`get_at_path`: where that seam
+    unwraps to a plain value (stripping comments), this returns a
+    :func:`copy.deepcopy` of the still-WRAPPED backend node — a ruamel
+    ``CommentedMap`` / ``CommentedSeq`` or a json-five ``JSONObject`` /
+    ``JSONArray`` — so the captured node carries its own interior comment
+    tokens for a later :func:`set_node_at_path` re-assert. The deep copy is
+    MANDATORY: :func:`merge_structural` mutates the source model in place, so an
+    un-copied node reference would reflect post-merge state (B-S1 / B-S2).
+
+    ``path`` is the same DOTTED grammar; a list-suffix segment raises
+    :class:`ValueError`. Returns :data:`~setforge.scalar_merge.ABSENT` when any
+    segment is missing (never raises on a miss).
+    """
+    if "[*]" in path or "[]" in path:
+        raise ValueError(f"list suffix not allowed for get-node-at-path: {path!r}")
+    node = _json5_inner(model)
+    for seg in path.split("."):
+        if not _is_mapping_node(node):
+            return ABSENT
+        child = _child_node(node, seg)
+        if child is ABSENT:
+            return ABSENT
+        node = child
+    return copy.deepcopy(node)
 
 
 def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
@@ -876,3 +952,93 @@ def _set_leaf(parent: object, leaf: str, value: object, path: str) -> None:
     raise MergeTypeMismatch(
         f"cannot set leaf at {path!r}: parent is {type(parent).__name__}, not a mapping"
     )
+
+
+def _set_node_leaf(parent: object, leaf: str, node: object, path: str) -> None:
+    """Splice the WRAPPED ``node`` at ``parent[leaf]`` per the parent's backend.
+
+    json-five parents go through :func:`_set_jsonc_node` (keys/values spliced
+    in lockstep, replaced value's ``wsc_before`` carried forward); ruamel
+    ``CommentedMap`` and plain ``dict`` take a plain assignment that preserves
+    the node's own attached comments. A non-mapping parent raises
+    :class:`~setforge.errors.MergeTypeMismatch`.
+    """
+    if isinstance(parent, JSONObject):
+        _set_jsonc_node(parent, leaf, node)
+        return
+    if isinstance(parent, MutableMapping):
+        parent[leaf] = node
+        return
+    raise MergeTypeMismatch(
+        f"cannot set node at {path!r}: parent is {type(parent).__name__}, not a mapping"
+    )
+
+
+def _set_jsonc_node(parent: JSONObject, leaf: str, node: object) -> None:
+    """Splice a wrapped json-five ``node`` at ``parent[leaf]`` in lockstep.
+
+    Replacing an existing leaf swaps the value node in place at its index
+    (carrying the replaced value's ``wsc_before`` so its leading whitespace /
+    same-line position is unchanged) and leaves ``.keys`` untouched — the
+    stored ``.keys`` / ``.values`` stay equal-length so the derived
+    ``key_value_pairs`` zip never desyncs. A missing leaf is added through the
+    scalar setter's append path, which already maintains both lists.
+    """
+    if not isinstance(node, Value):
+        # A plain-python node (no backend wrapper) carries no json-five comment
+        # tokens; route it through the scalar setter so it still lands.
+        _set_jsonc_leaf(parent, leaf, node)
+        return
+    idx = _find_key_index(parent, leaf)
+    if idx is None:
+        # No existing leaf: there is no wrapped value to carry whitespace from,
+        # so fall back to the append path (keys/values kept in lockstep there).
+        _set_jsonc_leaf(parent, leaf, _to_plain(node))
+        return
+    existing = parent.values[idx]
+    node.wsc_before = getattr(existing, "wsc_before", None) or [" "]
+    parent.values[idx] = node
+
+
+def _dedup_ruamel_anchors(node: object, target: object) -> None:
+    """Clear any anchor in ``node``'s subtree whose name already exists in ``target``.
+
+    A deep-copied ruamel node keeps its ``&anchor`` string verbatim. When that
+    name also labels a DIFFERENT node already present in ``target``, splicing
+    the copy in emits two definitions of the same anchor — a duplicate /
+    ambiguous-alias hazard on re-parse. Collect the names already anchored in
+    ``target`` and strip exactly the colliding anchors from ``node``'s subtree
+    (leaving non-colliding anchors intact). A no-op for json-five / plain-dict
+    nodes, which carry no ruamel anchors.
+    """
+    existing: set[str] = set()
+    _walk_ruamel_anchored_nodes(target, lambda name, _holder: existing.add(name))
+    if not existing:
+        return
+
+    def _clear_if_collides(name: str, holder: CommentedMap | CommentedSeq) -> None:
+        if name in existing:
+            holder.yaml_set_anchor(None)
+
+    _walk_ruamel_anchored_nodes(node, _clear_if_collides)
+
+
+def _walk_ruamel_anchored_nodes(
+    node: object, visit: Callable[[str, CommentedMap | CommentedSeq], None]
+) -> None:
+    """Call ``visit(anchor_name, holder)`` for every anchored ruamel node below.
+
+    Recurses ``CommentedMap`` values and ``CommentedSeq`` elements; only those
+    two carry a ``&anchor``, so any other node (json-five / plain) terminates
+    that branch.
+    """
+    if isinstance(node, CommentedMap | CommentedSeq):
+        anchor = node.yaml_anchor()
+        if anchor is not None and anchor.value:
+            visit(anchor.value, node)
+    if isinstance(node, CommentedMap):
+        for value in node.values():
+            _walk_ruamel_anchored_nodes(value, visit)
+    elif isinstance(node, CommentedSeq):
+        for elem in node:
+            _walk_ruamel_anchored_nodes(elem, visit)

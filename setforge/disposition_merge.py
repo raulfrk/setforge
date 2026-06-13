@@ -74,9 +74,11 @@ from setforge.structural_merge import (
     PathConflict,
     delete_at_path,
     get_at_path,
+    get_node_at_path,
     list_keys_at_path,
     merge_structural,
     set_at_path,
+    set_node_at_path,
 )
 
 __all__ = [
@@ -350,6 +352,14 @@ def _resolve_structural(
     live_snapshots: dict[str, object] = {
         span.anchor: get_at_path(live_model, span.anchor) for span in pinned
     }
+    # ALSO capture the still-WRAPPED live node per pin (deep-copied BEFORE the
+    # merge mutates live_model in place). The shallow whole-subtree re-assert
+    # splices this comment-bearing node so the pinned subtree's OWN interior
+    # comments survive; the plain snapshot above (comment-stripped) still feeds
+    # the deep-merge path and the scalar/leaf re-assert. Both captures kept.
+    live_wrapped: dict[str, object] = {
+        span.anchor: get_node_at_path(live_model, span.anchor) for span in pinned
+    }
     # CLASSIFY upstream-gone paths BEFORE the merge too (the base / tracked
     # models are parsed exactly once, above): when the stored base HAD a value
     # at P and tracked no longer does, a live-absent P is an upstream
@@ -381,7 +391,7 @@ def _resolve_structural(
     # value wins over an upstream auto-resolved-toward-theirs ``P`` (the whole
     # point of a pin). Orphans are preserved + reported, never raised.
     orphans = _reassert_pinned_spans(
-        result.merged_model, pinned, live_snapshots, upstream_gone
+        result.merged_model, pinned, live_snapshots, live_wrapped, upstream_gone
     )
 
     # SUPPRESS pinned-path conflicts (B-S6 / I1): a pin is deterministic
@@ -493,6 +503,7 @@ def _reassert_pinned_spans(
     model: object,
     pinned: list[SpanEntry],
     live_snapshots: dict[str, object],
+    live_wrapped: dict[str, object],
     upstream_gone: dict[str, tuple[str, ...] | None],
 ) -> list[StructuralSpanOrphan]:
     """Re-impose each pinned span's snapshotted live value onto ``model``.
@@ -508,10 +519,20 @@ def _reassert_pinned_spans(
     :func:`~setforge.structural_merge.set_at_path` orphan-warns + skips, never
     an uncaught raise (B-S3).
 
-    A span with ``deep=True`` DEEP-merges its snapshot over the merged value
-    (tracked-only sub-keys survive) instead of whole-replacing — the schema
-    2.0 carrier for the legacy ``preserve_user_keys_deep`` semantics. The
-    same orphan postures apply on the deep path.
+    The SHALLOW whole-subtree re-assert dispatches on the snapshot SHAPE: a
+    dict / list snapshot splices the comment-bearing WRAPPED node
+    (``live_wrapped``) via :func:`~setforge.structural_merge.set_node_at_path`
+    so the pinned subtree's OWN interior comments survive; a scalar snapshot
+    stays on the unchanged plain :func:`~setforge.structural_merge.set_at_path`
+    path. The dispatch keys on shape (not on "is pinned") so scalar/leaf pins
+    are never routed through the node path.
+
+    A span with ``deep=True`` DEEP-merges its (PLAIN) snapshot over the merged
+    value (tracked-only sub-keys survive) instead of whole-replacing — the
+    schema 2.0 carrier for the legacy ``preserve_user_keys_deep`` semantics.
+    The deep path always consumes the plain snapshot (a wrapped ``CommentedMap``
+    would pass the deep-merge ``isinstance(Mapping)`` guard unintentionally).
+    The same orphan postures apply on the deep path.
     """
     orphans: list[StructuralSpanOrphan] = []
     for span in pinned:
@@ -539,7 +560,12 @@ def _reassert_pinned_spans(
         try:
             if span.deep:
                 _deep_reassert_span(model, span.anchor, snapshot)
+            elif isinstance(snapshot, dict | list):
+                # Whole-subtree pin: splice the comment-bearing wrapped node so
+                # the subtree's own interior comments survive the re-assert.
+                set_node_at_path(model, span.anchor, live_wrapped[span.anchor])
             else:
+                # Scalar / leaf pin: unchanged plain set (carries wsc_before).
                 set_at_path(model, span.anchor, snapshot)
         except (KeyError, ValueError):
             orphans.append(
