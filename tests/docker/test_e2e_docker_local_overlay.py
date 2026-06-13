@@ -416,3 +416,82 @@ def test_compare_footer_summary_correct_counts(
         f"extensions 1+/0{minus}; marketplaces 1+/0{minus} via local.yaml]"
     )
     assert expected_summary in stdout, stdout
+
+
+# ---------------------------------------------------------------------------
+# Orphan overlay diagnostics — validate (unknown / off-profile) + compare
+# ---------------------------------------------------------------------------
+
+
+def test_validate_orphan_overlay_unknown_id_errors_with_did_you_mean(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A local.yaml overlay referencing a tracked_file id unknown to
+    setforge.yaml fails `validate` (exit 1) with a did-you-mean line.
+
+    ``minimal_tex`` is Levenshtein 1 from the real ``minimal_text`` id, so
+    the close-match suggester surfaces it.
+    """
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n  minimal_tex:\n    mode: 0o755\n",
+    )
+    rc, stdout, stderr = _setforge(
+        c,
+        ["validate", "--profile=test-minimal", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert rc != 0
+    combined = stdout + stderr
+    assert "minimal_tex" in combined, combined
+    assert "Did you mean 'minimal_text'" in combined, combined
+
+
+def test_validate_orphan_overlay_off_profile_id_notes_exit_zero(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """An overlay id declared in setforge.yaml but not used by the validated
+    profile is off-profile: a non-fatal note, exit 0.
+
+    ``json_settings`` is a real tracked_file, but profile ``test-minimal``
+    only uses ``minimal_text``.
+    """
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        "tracked_files:\n  json_settings:\n    mode: 0o755\n",
+    )
+    rc, stdout, stderr = _setforge(
+        c,
+        ["validate", "--profile=test-minimal", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert rc == 0, stdout + stderr
+    combined = stdout + stderr
+    assert "json_settings" in combined, combined
+
+
+def test_compare_lists_skipped_overlay_entries(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """`compare` lists both an off-profile and an unknown overlay entry
+    under the ``Skipped overlay entries`` block, each tagged with its
+    class."""
+    c = docker_container()
+    _write_local_yaml(
+        c,
+        (
+            "tracked_files:\n"
+            "  json_settings:\n"
+            "    mode: 0o755\n"  # off-profile (real id, not in test-minimal)
+            "  bogus_id:\n"
+            "    mode: 0o755\n"  # unknown (not in setforge.yaml)
+        ),
+    )
+    rc, stdout, stderr = _setforge(
+        c,
+        ["compare", "--profile=test-minimal", f"--config={CONFIG_FIXTURE}"],
+    )
+    assert rc == 0, stderr
+    assert "Skipped overlay entries" in stdout, stdout
+    assert "json_settings [off_profile]" in stdout, stdout
+    assert "bogus_id [unknown]" in stdout, stdout

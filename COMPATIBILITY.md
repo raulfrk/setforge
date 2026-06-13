@@ -134,3 +134,29 @@ zero spurious delta. It differs from the schema class on two axes:
   **and** removes the seeded base in lockstep — returning the file to exactly its
   pre-install state with no stranded base for the next install to mis-merge
   against.
+
+## `validate` orphan-overlay diagnostics
+
+`local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /
+`dst` / `symlink_target` / `disposition` / `spans` knobs). `setforge install`,
+`sync`, and `override` **silently skip** an overlay entry whose `id` is not in
+the resolved profile — their exit codes and output are unaffected by a stale or
+typo'd entry. The two read-only diagnosis verbs surface those skipped entries
+instead:
+
+- `setforge validate --profile=X` **exits 1** when an overlay `id` appears
+  nowhere in `setforge.yaml`'s `tracked_files` (a typo or stale entry), with a
+  "Did you mean '<close-match>'" suggestion over the known ids. An `id` that
+  **is** declared in `setforge.yaml` but not used by the validated profile(s) is
+  an off-profile entry (legitimate on a multi-profile host): `validate` prints a
+  non-fatal note to stderr and **exit stays 0**.
+- `setforge compare --profile=X` lists every skipped entry under a `Skipped
+  overlay entries (N):` block (human) and an additive top-level
+  `orphan_overlay_entries: [{ "id", "class" }]` array (`--format=json`, where
+  `class` is `unknown` or `off_profile`). The existing `--json` keys are
+  untouched.
+
+The unknown-id `validate` failure is a tightening of `validate`'s **diagnostic
+strictness only** — it does not change any deploy/capture behavior or any
+`schema_version`. A `local.yaml` that previously passed `validate` with a typo'd
+overlay `id` now fails it; fix the `id` or remove the entry.
