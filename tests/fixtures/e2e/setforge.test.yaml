@@ -151,7 +151,7 @@ tracked_files:
     src: host-local/settings.json
     dst: ~/.setforge_e2e/host-local/settings.json
 
-  # ---- Seed-once section-template fixture (bpt3) -----------------------
+  # ---- Seed-once section-template fixture -----------------------------
   # A tracked markdown file declaring a host-local marker named after the
   # profile's section_slots key; first install seeds the empty slot from
   # the section_templates library body.
@@ -268,7 +268,7 @@ claude_plugins:
     marketplace: claude-plugins-official
 
 # ----------------------------------------------------------------------
-# Section-template library (bpt3) — seed-once host-local section bodies.
+# Section-template library — seed-once host-local section bodies.
 # ----------------------------------------------------------------------
 section_templates:
   python-conventions:
@@ -387,7 +387,7 @@ profiles:
     tracked_files:
       - host_local_json_reject
 
-  # ---- Seed-once section templates (bpt3) ------------------------------
+  # ---- Seed-once section templates -------------------------------------
   test-section-templates:
     tracked_files:
       - section_seed_doc

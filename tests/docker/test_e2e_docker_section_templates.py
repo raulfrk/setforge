@@ -1,4 +1,4 @@
-"""Docker e2e tests for seed-once host-local section templates (bpt3).
+"""Docker e2e tests for seed-once host-local section templates.
 
 Exercises the SEED-ONCE template library end to end against a fresh
 Debian container with the real installed ``setforge`` CLI:
