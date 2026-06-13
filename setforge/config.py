@@ -590,6 +590,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     )
     _validate_plugin_references(config)
     _validate_mcp_references(config)
+    _validate_section_slot_references(config)
     _warn_on_schema_mismatch(config)
     return config
 
@@ -1242,6 +1243,37 @@ def _validate_mcp_references(config: Config) -> None:
         raise ConfigError(
             f"profile mcp_servers reference undeclared server(s): "
             f"{details} (add to top-level mcp_servers:)"
+        )
+
+
+def _validate_section_slot_references(config: Config) -> None:
+    """Verify every ``profile.section_slots`` value names a declared template.
+
+    Each slot maps a host-local section NAME (the key) to a template name
+    (the value) that MUST exist in the top-level
+    :attr:`Config.section_templates` registry. Collects every offender
+    across every profile into a single :class:`ConfigError` so the user
+    fixes all references in one round-trip (mirrors
+    :func:`_validate_plugin_references`).
+    """
+    from setforge.cli._validate_errors import suggest_close_match
+
+    registry = sorted(config.section_templates)
+    registry_set = set(registry)
+    offenders: list[str] = []
+    for profile_name, profile in config.profiles.items():
+        for slot_name, template_name in profile.section_slots.items():
+            if template_name not in registry_set:
+                hint = suggest_close_match(template_name, registry)
+                did_you_mean = f" (did you mean {hint!r}?)" if hint else ""
+                offenders.append(
+                    f"{profile_name}.{slot_name}→{template_name}{did_you_mean}"
+                )
+    if offenders:
+        details = ", ".join(offenders)
+        raise ConfigError(
+            f"profile section_slots reference undeclared template(s): "
+            f"{details} (add to top-level section_templates:)"
         )
 
 

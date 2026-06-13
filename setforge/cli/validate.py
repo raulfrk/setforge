@@ -61,6 +61,7 @@ from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.markdown_spans import bound_span
 from setforge.migrations._local_yaml import guard_local_yaml_schema
 from setforge.paths import template_context
+from setforge.sections import SectionSemantics, section_semantics
 from setforge.source import (
     ExtensionOverlay,
     HostLocalSection,
@@ -109,6 +110,8 @@ def _check_profile(
         return
 
     _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
+
+    _check_section_slots(cfg, resolved, repo_root, ctx)
 
     _check_spans_file_types(cfg, resolved, repo_root, ctx, failures)
 
@@ -321,6 +324,56 @@ def _check_host_local_sections(
                     f"{ctx}: tracked_file {tf_id!r}: "
                     f"host_local_sections.{section_name}: {exc}"
                 )
+
+
+def _check_section_slots(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    ctx: str,
+) -> None:
+    """Check (advisory): each ``section_slots`` name maps to a host-local marker.
+
+    The unknown-template-name cross-ref (slot value not in
+    ``Config.section_templates``) is a HARD error already enforced by
+    :func:`setforge.config._validate_section_slot_references` at
+    ``load_config`` time. This check is the softer companion: a non-fatal
+    yellow warning when a slot NAME (the key) does not correspond to a
+    ``host-local`` user-section marker declared in any of the profile's
+    tracked markdown sources. Such a slot still seeds (the body lands at
+    end-of-file), so it does NOT fail validate — the warning just flags a
+    likely typo / a marker the config author forgot to add.
+
+    Emitted to stderr (not appended to ``failures``) so exit stays 0; the
+    text is always written and only the color is TTY-gated so it survives
+    CliRunner / Docker e2e capture.
+    """
+    if not resolved.section_slots:
+        return
+    declared: set[str] = set()
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files.get(tf_id)
+        if tracked_file is None:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        if not src.exists():
+            continue
+        if src.suffix.lower() not in {".md", ".markdown"}:
+            continue
+        text = src.read_text(encoding="utf-8")
+        for name, sem in section_semantics(text, allow_legacy=True).items():
+            if sem is SectionSemantics.HOST_LOCAL:
+                declared.add(name)
+    for slot_name in resolved.section_slots:
+        if slot_name not in declared:
+            typer.secho(
+                f"warning: {ctx}: section_slots name {slot_name!r} resolves "
+                f"to no declared host-local section marker in the profile's "
+                f"tracked sources; the seeded body will be injected at "
+                f"end-of-file",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
 
 
 def _check_spans_file_types(
