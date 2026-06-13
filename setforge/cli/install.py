@@ -436,18 +436,25 @@ def install(
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
-        # Exit gate on aggregated MCP-server failures. Cargo failures do
-        # NOT gate (a crate that won't build is a soft, host-specific
-        # outcome — the warning already surfaced), but a declared MCP
-        # server that could not be registered is a hard reconcile failure.
-        if mcp_failed:
-            names = ", ".join(name for name, _err in mcp_failed)
-            typer.secho(
-                f"install completed with MCP server failures: {names}",
-                err=True,
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(code=1)
+        _gate_on_mcp_failures(mcp_failed)
+
+
+def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
+    """Exit non-zero when any declared MCP server failed to register.
+
+    Cargo failures do NOT gate (a crate that won't build is a soft,
+    host-specific outcome — the warning already surfaced), but a declared
+    MCP server that could not be registered is a hard reconcile failure.
+    """
+    if not mcp_failed:
+        return
+    names = ", ".join(name for name, _err in mcp_failed)
+    typer.secho(
+        f"install completed with MCP server failures: {names}",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
 
 
 def _seed_section_templates_for_install(
