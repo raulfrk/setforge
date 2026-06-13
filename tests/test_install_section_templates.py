@@ -31,6 +31,7 @@ from setforge.config import (
     TrackedFile,
     resolve_profile,
 )
+from setforge.errors import ConfigError
 
 _PROFILE = "seed-test"
 
@@ -124,6 +125,33 @@ def test_seed_no_markdown_tracked_file_is_noop(tmp_path: Path) -> None:
     )
     resolved = resolve_profile(cfg, _PROFILE)
     assert st.plan_section_seeds(cfg, resolved, repo, existing_overlay={}) == []
+
+
+def test_seed_refuses_non_mapping_local_yaml(tmp_path: Path) -> None:
+    """A non-mapping local.yaml must raise rather than be clobbered with a
+    fresh map (which would discard the user's content)."""
+    repo = _repo_with_template(tmp_path)
+    cfg = _cfg()
+    resolved = resolve_profile(cfg, _PROFILE)
+    local = tmp_path / "local.yaml"
+    local.write_text("- just\n- a\n- list\n", encoding="utf-8")
+    plan = st.plan_section_seeds(cfg, resolved, repo, existing_overlay={})
+    with pytest.raises(ConfigError, match="must be a mapping"):
+        st.seed_section_templates(plan, local)
+    # File left untouched.
+    assert local.read_text(encoding="utf-8") == "- just\n- a\n- list\n"
+
+
+def test_seed_refuses_non_mapping_tracked_files(tmp_path: Path) -> None:
+    """A non-mapping tracked_files value must raise rather than be clobbered."""
+    repo = _repo_with_template(tmp_path)
+    cfg = _cfg()
+    resolved = resolve_profile(cfg, _PROFILE)
+    local = tmp_path / "local.yaml"
+    local.write_text("tracked_files: not-a-map\n", encoding="utf-8")
+    plan = st.plan_section_seeds(cfg, resolved, repo, existing_overlay={})
+    with pytest.raises(ConfigError, match=r"tracked_files .* must be a mapping"):
+        st.seed_section_templates(plan, local)
 
 
 # --------------------------------------------------------------------------

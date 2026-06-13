@@ -142,6 +142,25 @@ def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str 
     return None
 
 
+def _load_local_config_map(local_config_path: Path) -> CommentedMap:
+    """Round-trip-load ``local.yaml`` as a :class:`CommentedMap`.
+
+    A missing or empty file yields a fresh map. A non-mapping top level is
+    a corrupt ``local.yaml``, so raise :class:`ConfigError` rather than
+    clobber it with a fresh map (which would discard the user's content) —
+    mirroring :mod:`setforge.source`'s non-mapping-top-level contract.
+    """
+    if not local_config_path.exists():
+        return CommentedMap()
+    with local_config_path.open("r", encoding="utf-8") as fh:
+        data = yaml_rt().load(fh)
+    if data is None:
+        return CommentedMap()
+    if not isinstance(data, CommentedMap):
+        raise ConfigError(f"top-level of {local_config_path} must be a mapping")
+    return data
+
+
 def seed_section_templates(plan: list[SeedPlanEntry], local_config_path: Path) -> bool:
     """Write the seed plan into ``local.yaml`` host_local_sections (seed-once).
 
@@ -151,8 +170,10 @@ def seed_section_templates(plan: list[SeedPlanEntry], local_config_path: Path) -
     is a ruamel round-trip via
     :func:`setforge.migrations._yaml_ops.atomic_write_yaml` (comments,
     order, quoting, and file mode preserved). Returns ``True`` when at
-    least one section was written, ``False`` on the empty-plan no-op (no
-    file write occurs, so re-running converges).
+    least one section was written, ``False`` on a no-op — either the
+    empty plan or a non-empty plan whose every section already carries a
+    host-local body (nothing left to seed). No file write occurs in
+    either no-op case, so re-running converges.
 
     A pre-existing ``host_local_sections.<name>`` for a planned section is
     left untouched — but ``plan_section_seeds`` already excludes populated
@@ -161,19 +182,14 @@ def seed_section_templates(plan: list[SeedPlanEntry], local_config_path: Path) -
     """
     if not plan:
         return False
-    yaml = yaml_rt()
-    if local_config_path.exists():
-        with local_config_path.open("r", encoding="utf-8") as fh:
-            data = yaml.load(fh)
-        if not isinstance(data, CommentedMap):
-            data = CommentedMap()
-    else:
-        data = CommentedMap()
+    data = _load_local_config_map(local_config_path)
 
     tracked_files = data.get("tracked_files")
-    if not isinstance(tracked_files, CommentedMap):
+    if tracked_files is None:
         tracked_files = CommentedMap()
         data["tracked_files"] = tracked_files
+    elif not isinstance(tracked_files, CommentedMap):
+        raise ConfigError(f"tracked_files in {local_config_path} must be a mapping")
 
     wrote = False
     for entry in plan:
