@@ -216,8 +216,6 @@ def _declared_refs(
 def reconcile(
     cfg: Config,
     profile: ResolvedProfile,
-    *,
-    dry_run: bool = False,
 ) -> McpReconcileReport:
     """Converge the declared MCP-server set (add-absent / update-on-change).
 
@@ -233,9 +231,13 @@ def reconcile(
 
     Undeclared live servers are NEVER removed. Per-server subprocess
     failures are caught and appended to the report's ``failed`` list so
-    one bad server does not abort the pass. ``dry_run=True`` plans the
-    work (populating ``added`` / ``updated``) without running any write
-    subprocess.
+    one bad server does not abort the pass.
+
+    Raises:
+        ConfigError: a profile MCP name absent from the top-level
+            ``mcp_servers:`` registry (from :func:`_declared_refs`).
+        PluginToolMissing: the ``claude`` binary cannot be resolved (from
+            the first ``claude mcp`` subprocess via :func:`_get_claude_bin`).
     """
     declared = _declared_refs(cfg, profile)
     added: list[tuple[str, list[str], str]] = []
@@ -259,12 +261,11 @@ def reconcile(
                 ref,
                 prior_command=prior_command,
                 prior_scope=prior_scope,
-                dry_run=dry_run,
                 updated=updated,
                 failed=failed,
             )
             continue
-        _converge_add(name, ref, dry_run=dry_run, added=added, failed=failed)
+        _converge_add(name, ref, added=added, failed=failed)
 
     return McpReconcileReport(added=added, updated=updated, failed=failed)
 
@@ -273,15 +274,11 @@ def _converge_add(
     name: str,
     ref: McpServerRef,
     *,
-    dry_run: bool,
     added: list[tuple[str, list[str], str]],
     failed: list[tuple[str, str]],
 ) -> None:
     """Add an absent server; swallow an "already exists" stderr as a no-op."""
     LOGGER.info("adding mcp server: %s", name)
-    if dry_run:
-        added.append((name, list(ref.command), ref.scope))
-        return
     try:
         mcp_add(name, ref)
         added.append((name, list(ref.command), ref.scope))
@@ -300,7 +297,6 @@ def _converge_update(
     *,
     prior_command: list[str],
     prior_scope: str,
-    dry_run: bool,
     updated: list[tuple[str, list[str], str]],
     failed: list[tuple[str, str]],
 ) -> None:
@@ -311,9 +307,6 @@ def _converge_update(
     invertible. Only recorded on a fully-successful remove + re-add.
     """
     LOGGER.info("updating mcp server: %s", name)
-    if dry_run:
-        updated.append((name, list(prior_command), prior_scope))
-        return
     try:
         mcp_remove(name, scope=prior_scope)
         mcp_add(name, ref)
