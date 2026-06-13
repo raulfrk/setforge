@@ -76,6 +76,10 @@ def _isolated_local_config(
         tmp_path / "local.yaml",
     )
     monkeypatch.setattr("setforge.source._cli_source", None)
+    # Reset the pre-consent seed-injection payload so a test that sets it
+    # (directly or via a faulted install that should have cleared it)
+    # cannot leak the seed into a later test's local.yaml parses.
+    monkeypatch.setattr("setforge.source._pending_seed", None)
 
 
 @pytest.fixture(autouse=True)

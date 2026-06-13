@@ -64,6 +64,36 @@ def test_install_seeds_empty_section(
     assert "python-conventions" in local, local
 
 
+def test_revert_restores_unseeded_local(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """The seed COMMIT is recorded in the transition; revert restores an
+    unseeded local.yaml (p5qc.23 — the seed is now under the lock and
+    snapshotted with a pre-seed baseline)."""
+    c = docker_container()
+    rc, _stdout, stderr = _install(c)
+    assert rc == 0, stderr
+    seeded = c.read_text(_HOME_LOCAL_YAML)
+    assert "python-conventions" in seeded, seeded
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            f"--profile={_PROFILE}",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ],
+    )
+    assert revert.returncode == 0, revert.stderr
+
+    restored = c.read_text(_HOME_LOCAL_YAML)
+    assert "python-conventions" not in restored, restored
+    assert _TEMPLATE_BODY_MARKER not in restored, restored
+
+
 def test_live_edit_survives_reinstall(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

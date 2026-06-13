@@ -23,7 +23,9 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from setforge import section_templates as st
+from setforge import source as source_mod
 from setforge.cli import app
+from setforge.cli._welcome import WelcomeChoice
 from setforge.config import (
     Config,
     Profile,
@@ -31,7 +33,7 @@ from setforge.config import (
     TrackedFile,
     resolve_profile,
 )
-from setforge.errors import ConfigError
+from setforge.errors import ConfigError, DirtySourceCheckout
 
 _PROFILE = "seed-test"
 
@@ -296,3 +298,203 @@ def test_install_leaves_prepopulated_section_untouched(
     live = _live_doc_path().read_text(encoding="utf-8")
     assert "PRE-EXISTING HOST BODY" in live
     assert "SEEDED PYTHON CONVENTIONS" not in live
+
+
+# --------------------------------------------------------------------------
+# Consent-gate ordering (p5qc.23): the seed must NOT touch local.yaml until
+# AFTER the welcome consent and git-status gates have passed.
+# --------------------------------------------------------------------------
+
+
+def _is_seeded(local: Path) -> bool:
+    """True when local.yaml carries the seeded template body.
+
+    The Typer root callback writes a comment-only stub on every
+    invocation, so file existence is NOT a seed signal — the body marker
+    is. The stub never contains the template body.
+    """
+    if not local.exists():
+        return False
+    return "SEEDED PYTHON CONVENTIONS" in local.read_text(encoding="utf-8")
+
+
+@pytest.mark.fresh_host
+def test_install_welcome_decline_leaves_local_unseeded(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the fresh-host welcome leaves local.yaml unwritten.
+
+    The seed is only PLANNED before consent; the disk COMMIT is gated
+    behind a PROCEED. A decline must return with zero mutation.
+    """
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    assert not local.exists()
+    # Reach the welcome gate (no --yes) and force a non-PROCEED choice.
+    monkeypatch.setattr(
+        "setforge.cli.install.prompt_welcome",
+        lambda **_kwargs: WelcomeChoice.ABORT,
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--no-secrets-scan",
+            "--no-git-check",
+            "--no-transition",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert not _is_seeded(local), "declining the welcome must not seed local.yaml: " + (
+        local.read_text(encoding="utf-8") if local.exists() else ""
+    )
+    assert source_mod._pending_seed is None
+
+
+def test_install_git_check_abort_leaves_local_unseeded(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A git-status abort leaves local.yaml unwritten.
+
+    The git-check gate fires before the under-lock COMMIT, so a dirty /
+    stale source that raises must leave local.yaml untouched.
+    """
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    assert not local.exists()
+
+    def _abort(**_kwargs: object) -> None:
+        raise DirtySourceCheckout("source tree is dirty")
+
+    monkeypatch.setattr("setforge.cli.install.run_git_check_or_raise", _abort)
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--no-secrets-scan",
+            "--yes",
+            "--no-transition",
+        ],
+    )
+    assert result.exit_code != 0
+    assert not _is_seeded(local), "a git-check abort must not seed local.yaml: " + (
+        local.read_text(encoding="utf-8") if local.exists() else ""
+    )
+    assert source_mod._pending_seed is None
+
+
+def test_install_clears_pending_seed_on_happy_path(repo: Path, tmp_path: Path) -> None:
+    """A successful install leaves no leaked seed payload in module state."""
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+    assert source_mod._pending_seed is None
+
+
+def test_dry_run_install_does_not_seed_or_leak(repo: Path, tmp_path: Path) -> None:
+    """A top-level --dry-run neither writes local.yaml nor leaves a seed set."""
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--no-secrets-scan",
+            "--no-git-check",
+            "--yes",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert not _is_seeded(local)
+    assert source_mod._pending_seed is None
+
+
+# --------------------------------------------------------------------------
+# In-memory injection: with a seed plan pending, the overlay readers observe
+# the seeded section WITHOUT any disk write.
+# --------------------------------------------------------------------------
+
+
+def test_injected_seed_feeds_overlay_readers(tmp_path: Path) -> None:
+    """``injected_seed`` makes the plan visible to local.yaml parses.
+
+    All three pre-consent readers funnel through
+    ``source._load_local_source_config``; a pending seed must surface in
+    ``load_local_host_local_sections`` with no file on disk, then clear
+    on context exit.
+    """
+    repo = _repo_with_template(tmp_path)
+    cfg = _cfg()
+    resolved = resolve_profile(cfg, _PROFILE)
+    plan = st.plan_section_seeds(cfg, resolved, repo, existing_overlay={})
+    local = tmp_path / "absent-local.yaml"
+    assert not local.exists()
+
+    # Without the injection, an absent local.yaml projects no sections.
+    assert source_mod.load_local_host_local_sections(local) == {}
+
+    with source_mod.injected_seed(plan):
+        overlay = source_mod.load_local_host_local_sections(local)
+        assert "doc" in overlay
+        assert "py" in {str(name) for name in overlay["doc"]}
+    # No disk write, and the payload is cleared on exit.
+    assert not local.exists()
+    assert source_mod._pending_seed is None
+
+
+def test_injected_seed_is_not_reentrant(tmp_path: Path) -> None:
+    """A nested injection is a caller bug — the context manager refuses it."""
+    # The nesting IS the assertion (an outer injection active when an inner
+    # one is opened); it cannot be flattened into a single `with`.
+    with source_mod.injected_seed([]):  # noqa: SIM117
+        with pytest.raises(AssertionError):
+            with source_mod.injected_seed([]):
+                pass
+    assert source_mod._pending_seed is None
+
+
+# --------------------------------------------------------------------------
+# Revert: the seed COMMIT is recorded in the transition, so revert restores
+# an unseeded local.yaml (acceptance #4).
+# --------------------------------------------------------------------------
+
+
+def test_revert_after_seed_restores_unseeded_local(repo: Path, tmp_path: Path) -> None:
+    """Install seeds local.yaml; revert restores its pre-seed content."""
+    config = _write_config(repo)
+    local = _local_yaml_path(tmp_path)
+    # Install WITH a transition record (no --no-transition) so revert has
+    # something to reverse.
+    install = CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--no-secrets-scan",
+            "--no-git-check",
+            "--yes",
+        ],
+    )
+    assert install.exit_code == 0, install.output
+    assert _is_seeded(local), "install should have seeded local.yaml"
+
+    revert = CliRunner().invoke(
+        app,
+        [
+            "revert",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--yes",
+        ],
+    )
+    assert revert.exit_code == 0, revert.output
+    assert not _is_seeded(local), "revert must restore an unseeded local.yaml: " + (
+        local.read_text(encoding="utf-8") if local.exists() else "<absent>"
+    )

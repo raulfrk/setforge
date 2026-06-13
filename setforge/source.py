@@ -25,10 +25,11 @@ at load time.
 
 import os
 import shlex
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Final, Literal, NewType
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from ruamel.yaml import YAML
@@ -57,6 +58,9 @@ from setforge.errors import (
 )
 from setforge.migrations import _local_yaml
 from setforge.spans import SpanEntry, SpanKind
+
+if TYPE_CHECKING:
+    from setforge.section_templates import SeedPlanEntry
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -504,6 +508,81 @@ class _LocalSourceConfig(BaseModel):
         return data
 
 
+_pending_seed: "list[SeedPlanEntry] | None" = None
+"""In-memory section-template seed plan visible to local.yaml parses.
+
+Set by :func:`injected_seed` over the install command's pre-consent
+window so the three host-local overlay readers
+(:func:`detect_shared_span_collisions`,
+:func:`apply_host_local_tracked_file_overrides`,
+:func:`_load_validated_host_local_sections`) — all of which funnel
+through :func:`_load_local_source_config` — observe a freshly-planned
+seed WITHOUT any disk write, exactly as if the block had been committed.
+``None`` (the unset sentinel) means no seed is pending; the disk COMMIT
+happens later, under the install lock, after consent. Mirrors the
+:data:`_cli_source` module-state idiom (single-process, non-reentrant).
+"""
+
+
+@contextmanager
+def injected_seed(plan: "list[SeedPlanEntry]") -> Iterator[None]:
+    """Make a pre-consent seed ``plan`` visible to local.yaml parses.
+
+    Single-process and non-reentrant: asserts no seed is already pending
+    on entry (a nested injection is a caller bug). Always clears in
+    ``finally`` so a welcome decline, a git-check abort, or any other
+    exception cannot leak the payload into the under-lock migration read
+    or a later in-process command.
+    """
+    global _pending_seed
+    assert _pending_seed is None, "injected_seed is not reentrant"
+    _pending_seed = plan
+    try:
+        yield
+    finally:
+        _pending_seed = None
+
+
+def _merge_pending_seed_into(data: Mapping[str, object]) -> None:
+    """Merge the pending seed plan into a freshly-parsed local.yaml ``data``.
+
+    Each :class:`SeedPlanEntry` becomes a
+    ``tracked_files.<id>.host_local_sections.<name>`` block (anchor
+    ``at-end-of-file``, inline ``body``) — the SAME shape
+    :func:`setforge.section_templates.seed_section_templates` writes to
+    disk — so the downstream :func:`_local_yaml.relocate_retired_keys`
+    converts it to the identical OVERLAY span the disk path would
+    produce. A section name already present in ``data`` is left untouched
+    (belt-and-suspenders against a host that already adopted it).
+
+    Mutates ``data`` in place; ``data`` is the local, freshly-parsed dict
+    owned by :func:`_load_local_source_config` (never an alias of a
+    caller's object and never written back to disk), and the
+    :data:`_pending_seed` entries are read but never mutated.
+    """
+    if _pending_seed is None:
+        return
+    tracked_files = data.get("tracked_files")
+    if not isinstance(tracked_files, dict):
+        tracked_files = {}
+        data["tracked_files"] = tracked_files  # type: ignore[index]
+    for entry in _pending_seed:
+        tf_block = tracked_files.get(entry.tracked_file_id)
+        if not isinstance(tf_block, dict):
+            tf_block = {}
+            tracked_files[entry.tracked_file_id] = tf_block
+        sections = tf_block.get("host_local_sections")
+        if not isinstance(sections, dict):
+            sections = {}
+            tf_block["host_local_sections"] = sections
+        if entry.section_name in sections:
+            continue
+        sections[entry.section_name] = {
+            "anchor": {"kind": "at-end-of-file"},
+            "body": entry.body,
+        }
+
+
 def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     """Parse the ``source:`` block from ``local.yaml``.
 
@@ -521,17 +600,33 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     install path's snapshot-aware migration step, which captures the
     pre-migration bytes first so ``revert`` restores them byte-for-byte.
     """
+    # An absent / empty local.yaml normally short-circuits, but a pending
+    # pre-consent seed must still surface (a fresh host has no local.yaml
+    # yet), so build an empty document to merge into instead.
+    data: object
     if not path.exists():
-        return _LocalSourceConfig()
-    yaml = YAML(typ="safe")
-    try:
-        data = yaml.load(path.read_text(encoding="utf-8"))
-    except YAMLError as exc:
-        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
-    if data is None:
-        return _LocalSourceConfig()
+        if _pending_seed is None:
+            return _LocalSourceConfig()
+        data = {}
+    else:
+        yaml = YAML(typ="safe")
+        try:
+            data = yaml.load(path.read_text(encoding="utf-8"))
+        except YAMLError as exc:
+            raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
+        if data is None:
+            if _pending_seed is None:
+                return _LocalSourceConfig()
+            data = {}
     if not isinstance(data, Mapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
+    # Merge any pre-consent seed plan into the parsed document BEFORE the
+    # retired-key relocation, so a freshly-planned host_local_sections
+    # block is retired to an OVERLAY span exactly as a disk-committed seed
+    # would be — the single chokepoint that makes all three overlay
+    # readers observe the seed without a write (p5qc.23). No-op when no
+    # seed is pending.
+    _merge_pending_seed_into(data)
     # detect→guard→relocate, BEFORE strict model_validate. The guard
     # refuses a newer-major local.yaml cleanly; the in-memory relocation
     # retires legacy keys (host_local_sections → spans) so the strict

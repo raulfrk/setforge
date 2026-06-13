@@ -200,84 +200,92 @@ def install(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    # Seed-once host-local section templates BEFORE any local.yaml overlay
-    # read/fold below, so a freshly-seeded body participates in the
-    # host-local span fold (apply_host_local_tracked_file_overrides) and is
-    # picked up by this install's deploy AND migrated into a unified OVERLAY
-    # span by the under-lock rewrite. Gated on absence: a section the host
-    # already carries (an overlay body) is never reseeded, so library
-    # template edits do NOT propagate and the host's own edits survive every
-    # re-install. Skipped on --dry-run (the read-only path must not mutate
-    # local.yaml).
-    if not dry_run:
-        _seed_section_templates_for_install(cfg, resolved, repo_root)
-    # Resolve host-local↔shared span intent collisions BEFORE the overlay
-    # fold so the chosen winner per collided anchor flows into the fold.
-    # Bare install stays silent host-local-wins; --auto routes the
-    # adopt-shared / keep-host-local decision; a non-tty
-    # --reconcile-user-sections raises rather than burying the collision.
-    # Returns the (tf_id, anchor) pairs whose SHARED span should
-    # win the fold.
-    prefer_shared_anchors = _reconcile_shared_spans(
-        cfg,
-        profile=profile,
-        reconcile_user_sections=reconcile_user_sections,
-        section_auto=section_auto,
+    # Seed-once host-local section templates: PLAN now (pure, in-memory),
+    # COMMIT later under the lock AFTER consent (p5qc.23). The plan reads the
+    # host's current overlay + the template bodies but writes NOTHING; the
+    # injected_seed window (below) makes the planned bodies visible to the
+    # overlay readers AND the fresh-host welcome preview — exactly as if the
+    # block were already committed — while the disk write waits behind the
+    # welcome / git-check gates. Empty plan on --dry-run (the read-only path
+    # must not seed) so both the injection and the under-lock COMMIT no-op.
+    seed_plan = (
+        [] if dry_run else _plan_section_templates_for_install(cfg, resolved, repo_root)
     )
-    # Apply local.yaml host-local mode/dst/symlink_target overlay
-    # — also AFTER profile resolution. Rebuilds each TrackedFile with the
-    # overlay-fields overrides applied so downstream resolve_dst / deploy /
-    # deploy_symlinked_file consume the override transparently.
-    apply_host_local_tracked_file_overrides(
-        cfg, prefer_shared_anchors=prefer_shared_anchors
-    )
-    # Load + validate the local.yaml host_local_sections overlay (host-local).
-    # Validation is file-type only at this layer: anchors / bodies are
-    # resolved during deploy._compute_content. Empty mapping when local.yaml
-    # is absent or declares no host-local sections.
-    host_local_sections_map = _load_validated_host_local_sections(
-        cfg, resolved, repo_root
-    )
-    # Reject spans on non-markdown tracked_files BEFORE any file is
-    # written (the host-local overlay has already folded host-local spans
-    # into each TrackedFile.spans above).
-    _validate_span_file_types(cfg, resolved, repo_root)
-    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
-    # — also AFTER profile resolution. Mutates resolved
-    # and cfg in place so the existing reconcile path consumes the
-    # merged sets transparently. Raises LocalOverlayError (a
-    # ConfigError) on collision / unknown-remove, surfaced via the
-    # standard SetforgeError handler. The cross-ref check fires
-    # defensively here even when validate ran first (Q8).
-    apply_local_overlay(cfg, resolved, profile)
-    ctx = ProfileContext(
-        cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
-    )
-
-    # Fresh-host welcome gate. Fires BEFORE every other
-    # phase (git-check, dry-run dispatch, state-dir probe, bootstrap,
-    # deploy) so a brand-new host can preview what the install will do
-    # and consent before any mutation OR diagnostic that depends on a
-    # specific source-tree state (the git-check on a dirty fresh-host
-    # source would otherwise raise before the user ever sees the
-    # welcome). ``--yes`` skips the welcome (the caller has consented
-    # out-of-band); ``--auto=*`` is rejected on a fresh host because
-    # there is no drift yet for the auto-resolver to act on.
-    fresh = is_fresh_host()
-    if fresh and not dry_run:
-        reject_auto_on_fresh_host(auto=auto)
-        inventory = build_welcome_inventory(ctx)
-
-        def _welcome_dry_run() -> None:
-            _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
-
-        welcome_choice = prompt_welcome(
-            inventory=inventory,
-            yes=yes,
-            run_dry_run=_welcome_dry_run,
+    # Pre-consent seed-injection window. The planned bodies are visible to
+    # the three overlay readers below AND the fresh-host welcome preview
+    # (all funnel through source._load_local_source_config), with NO disk
+    # write. The window closes — clearing the module state — before the
+    # git-check + lock, so a welcome decline or a git abort leaves local.yaml
+    # untouched (p5qc.23). On --dry-run seed_plan is empty, so the context
+    # manager is a no-op.
+    with source_mod.injected_seed(seed_plan):
+        # Resolve host-local↔shared span intent collisions BEFORE the overlay
+        # fold so the chosen winner per collided anchor flows into the fold.
+        # Bare install stays silent host-local-wins; --auto routes the
+        # adopt-shared / keep-host-local decision; a non-tty
+        # --reconcile-user-sections raises rather than burying the collision.
+        # Returns the (tf_id, anchor) pairs whose SHARED span should
+        # win the fold.
+        prefer_shared_anchors = _reconcile_shared_spans(
+            cfg,
+            profile=profile,
+            reconcile_user_sections=reconcile_user_sections,
+            section_auto=section_auto,
         )
-        if welcome_choice is not WelcomeChoice.PROCEED:
-            return
+        # Apply local.yaml host-local mode/dst/symlink_target overlay
+        # — also AFTER profile resolution. Rebuilds each TrackedFile with the
+        # overlay-fields overrides applied so downstream resolve_dst / deploy /
+        # deploy_symlinked_file consume the override transparently.
+        apply_host_local_tracked_file_overrides(
+            cfg, prefer_shared_anchors=prefer_shared_anchors
+        )
+        # Load + validate the local.yaml host_local_sections overlay
+        # (host-local). Validation is file-type only at this layer: anchors /
+        # bodies are resolved during deploy._compute_content. Empty mapping
+        # when local.yaml is absent or declares no host-local sections.
+        host_local_sections_map = _load_validated_host_local_sections(
+            cfg, resolved, repo_root
+        )
+        # Reject spans on non-markdown tracked_files BEFORE any file is
+        # written (the host-local overlay has already folded host-local spans
+        # into each TrackedFile.spans above).
+        _validate_span_file_types(cfg, resolved, repo_root)
+        # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
+        # — also AFTER profile resolution. Mutates resolved
+        # and cfg in place so the existing reconcile path consumes the
+        # merged sets transparently. Raises LocalOverlayError (a
+        # ConfigError) on collision / unknown-remove, surfaced via the
+        # standard SetforgeError handler. The cross-ref check fires
+        # defensively here even when validate ran first (Q8).
+        apply_local_overlay(cfg, resolved, profile)
+        ctx = ProfileContext(
+            cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
+        )
+
+        # Fresh-host welcome gate. Fires BEFORE every other
+        # phase (git-check, dry-run dispatch, state-dir probe, bootstrap,
+        # deploy) so a brand-new host can preview what the install will do
+        # and consent before any mutation OR diagnostic that depends on a
+        # specific source-tree state (the git-check on a dirty fresh-host
+        # source would otherwise raise before the user ever sees the
+        # welcome). ``--yes`` skips the welcome (the caller has consented
+        # out-of-band); ``--auto=*`` is rejected on a fresh host because
+        # there is no drift yet for the auto-resolver to act on.
+        fresh = is_fresh_host()
+        if fresh and not dry_run:
+            reject_auto_on_fresh_host(auto=auto)
+            inventory = build_welcome_inventory(ctx)
+
+            def _welcome_dry_run() -> None:
+                _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
+
+            welcome_choice = prompt_welcome(
+                inventory=inventory,
+                yes=yes,
+                run_dry_run=_welcome_dry_run,
+            )
+            if welcome_choice is not WelcomeChoice.PROCEED:
+                return
 
     # Pre-deploy git-status check. Fires BEFORE the drift
     # gate so a dirty / stale source is surfaced before any other slow
@@ -308,6 +316,14 @@ def install(
     with profile_lock(profile):
         if not no_transition:
             transitions.ensure_state_dir_writable()
+        # COMMIT the seed-once plan now — UNDER the lock, AFTER the welcome /
+        # git-check consent gates (p5qc.23). Captures local.yaml's pre-seed
+        # bytes FIRST so the install transition's file_pre baseline is the
+        # genuine unseeded content (recorded below), making revert restore an
+        # unseeded local.yaml. Runs before the overlay-span migration so the
+        # just-written legacy block is folded into a unified span exactly as
+        # a pre-existing block would be.
+        seeded, local_pre_seed = _commit_seed_under_lock(seed_plan)
         # Transparent, idempotent local.yaml rewrite: retire any legacy
         # host_local_sections block into unified `spans` OVERLAY entries so
         # the on-disk representation matches the new model. Runs under the
@@ -386,6 +402,12 @@ def install(
         # post-migration content; seed file_pre with the genuine pre-migration
         # text) so revert restores it byte-exact in LOCKSTEP with live.
         seed_overlay_migration_snapshot(overlay_migration, dst_paths, file_pre)
+        _record_seed_pre_seed_baseline(
+            seeded=seeded,
+            local_pre_seed=local_pre_seed,
+            dst_paths=dst_paths,
+            file_pre=file_pre,
+        )
 
         # Interactive disposition conflict wizard: built ONLY when this install
         # is in interactive-reconcile mode AND stdout is a tty (the same gate
@@ -457,43 +479,110 @@ def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
     raise typer.Exit(code=1)
 
 
-def _seed_section_templates_for_install(
+def _plan_section_templates_for_install(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> None:
-    """Seed-once any empty/missing host-local section named in ``section_slots``.
+) -> list[section_templates_mod.SeedPlanEntry]:
+    """PLAN seed-once host-local section templates — PURE, no disk write.
 
     Reads the host's current host-local overlay (legacy block + migrated
-    spans), plans seeds for slots whose section is absent, and writes the
-    template bodies into ``local.yaml`` as ``host_local_sections`` blocks.
-    A no-op when the profile declares no slots or every slotted section is
-    already populated on the host (the seed-once gate). The downstream
-    install pipeline migrates the seeded blocks into OVERLAY spans and
-    injects them at deploy time, so the seeded content rides the standard
-    host-local survival path.
+    spans) and the template bodies, and returns the seed plan for slots
+    whose section is absent. An empty list when the profile declares no
+    slots or every slotted section is already populated on the host (the
+    seed-once gate). The bodies are committed to ``local.yaml`` later by
+    :func:`_commit_section_template_seed`, under the install lock and
+    after consent; meanwhile :func:`setforge.source.injected_seed` makes
+    the planned bodies visible to the overlay readers + welcome preview
+    without a write (p5qc.23).
     """
     if not resolved.section_slots:
-        return
+        return []
     overlay = source_mod.load_local_host_local_sections(source_mod.LOCAL_CONFIG_PATH)
     # Project the provenance-marked HostLocalSectionName keys to plain str
     # for the seed planner's presence set.
     existing: dict[str, set[str]] = {
         tf_id: {str(name) for name in sections} for tf_id, sections in overlay.items()
     }
-    plan = section_templates_mod.plan_section_seeds(
+    return section_templates_mod.plan_section_seeds(
         cfg, resolved, repo_root, existing_overlay=existing
     )
-    if not plan:
-        return
+
+
+def _commit_section_template_seed(
+    seed_plan: list[section_templates_mod.SeedPlanEntry],
+) -> bool:
+    """COMMIT the seed plan to ``local.yaml`` — the disk write, post-consent.
+
+    Writes the planned template bodies into ``local.yaml`` as
+    ``host_local_sections`` blocks and emits the one-time green seeded
+    message. Returns ``True`` when at least one section was written,
+    ``False`` on the empty-plan / already-populated no-op. The caller
+    runs this under ``profile_lock`` after the welcome + git-check gates,
+    so a declined or aborted install never reaches it.
+    """
     seeded = section_templates_mod.seed_section_templates(
-        plan, source_mod.LOCAL_CONFIG_PATH
+        seed_plan, source_mod.LOCAL_CONFIG_PATH
     )
     if seeded:
-        names = ", ".join(sorted(e.section_name for e in plan))
+        names = ", ".join(sorted(e.section_name for e in seed_plan))
         typer.secho(
             f"seeded host-local section template(s): {names}",
             err=True,
             fg=typer.colors.GREEN,
         )
+    return seeded
+
+
+def _read_local_yaml_pre_seed() -> str | None:
+    """Read ``local.yaml``'s current bytes (``None`` when absent).
+
+    Captured BEFORE :func:`_commit_section_template_seed` so the install
+    transition's ``file_pre`` baseline is the genuine pre-seed content and
+    revert restores an unseeded ``local.yaml``.
+    """
+    try:
+        return source_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def _commit_seed_under_lock(
+    seed_plan: list[section_templates_mod.SeedPlanEntry],
+) -> tuple[bool, str | None]:
+    """Capture local.yaml's pre-seed bytes, then COMMIT the seed plan.
+
+    Returns ``(seeded, local_pre_seed)``: whether a section was written
+    and the genuine pre-seed bytes (``None`` when nothing was planned).
+    The pre-seed snapshot is taken BEFORE the write so the caller can
+    record it as the transition's ``file_pre`` baseline (revert restores
+    an unseeded ``local.yaml``).
+    """
+    local_pre_seed = _read_local_yaml_pre_seed() if seed_plan else None
+    seeded = _commit_section_template_seed(seed_plan)
+    return seeded, local_pre_seed
+
+
+def _record_seed_pre_seed_baseline(
+    *,
+    seeded: bool,
+    local_pre_seed: str | None,
+    dst_paths: list[Path],
+    file_pre: dict[Path, str | None],
+) -> None:
+    """Override the local.yaml ``file_pre`` baseline with pre-seed bytes.
+
+    The overlay-span migration captured a POST-seed ``pre_text`` (the seed
+    wrote just before it), so when THIS install committed a seed, force the
+    transition baseline back to the genuine pre-seed content. ``file_post``
+    still captures the final migrated text, so revert restores an UNSEEDED
+    ``local.yaml``. A run that only migrated a pre-existing block (no new
+    seed) keeps the migration's own baseline untouched. Mutates
+    ``dst_paths`` and ``file_pre`` in place.
+    """
+    if not seeded:
+        return
+    if source_mod.LOCAL_CONFIG_PATH not in dst_paths:
+        dst_paths.append(source_mod.LOCAL_CONFIG_PATH)
+    file_pre[source_mod.LOCAL_CONFIG_PATH] = local_pre_seed
 
 
 def _handle_secret_findings(
