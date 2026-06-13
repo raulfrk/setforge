@@ -25,7 +25,7 @@ at load time.
 
 import os
 import shlex
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
@@ -543,7 +543,7 @@ def injected_seed(plan: "list[SeedPlanEntry]") -> Iterator[None]:
         _pending_seed = None
 
 
-def _merge_pending_seed_into(data: Mapping[str, object]) -> None:
+def _merge_pending_seed_into(data: MutableMapping[str, object]) -> None:
     """Merge the pending seed plan into a freshly-parsed local.yaml ``data``.
 
     Each :class:`SeedPlanEntry` becomes a
@@ -565,7 +565,7 @@ def _merge_pending_seed_into(data: Mapping[str, object]) -> None:
     tracked_files = data.get("tracked_files")
     if not isinstance(tracked_files, dict):
         tracked_files = {}
-        data["tracked_files"] = tracked_files  # type: ignore[index]
+        data["tracked_files"] = tracked_files
     for entry in _pending_seed:
         tf_block = tracked_files.get(entry.tracked_file_id)
         if not isinstance(tf_block, dict):
@@ -618,13 +618,13 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
             if _pending_seed is None:
                 return _LocalSourceConfig()
             data = {}
-    if not isinstance(data, Mapping):
+    if not isinstance(data, MutableMapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
     # Merge any pre-consent seed plan into the parsed document BEFORE the
     # retired-key relocation, so a freshly-planned host_local_sections
     # block is retired to an OVERLAY span exactly as a disk-committed seed
     # would be — the single chokepoint that makes all three overlay
-    # readers observe the seed without a write (p5qc.23). No-op when no
+    # readers observe the seed without a write. No-op when no
     # seed is pending.
     _merge_pending_seed_into(data)
     # detect→guard→relocate, BEFORE strict model_validate. The guard

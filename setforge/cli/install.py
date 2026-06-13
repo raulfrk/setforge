@@ -201,7 +201,7 @@ def install(
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
     # Seed-once host-local section templates: PLAN now (pure, in-memory),
-    # COMMIT later under the lock AFTER consent (p5qc.23). The plan reads the
+    # COMMIT later under the lock AFTER consent. The plan reads the
     # host's current overlay + the template bodies but writes NOTHING; the
     # injected_seed window (below) makes the planned bodies visible to the
     # overlay readers AND the fresh-host welcome preview — exactly as if the
@@ -216,7 +216,7 @@ def install(
     # (all funnel through source._load_local_source_config), with NO disk
     # write. The window closes — clearing the module state — before the
     # git-check + lock, so a welcome decline or a git abort leaves local.yaml
-    # untouched (p5qc.23). On --dry-run seed_plan is empty, so the context
+    # untouched. On --dry-run seed_plan is empty, so the context
     # manager is a no-op.
     with source_mod.injected_seed(seed_plan):
         # Resolve host-local↔shared span intent collisions BEFORE the overlay
@@ -317,7 +317,7 @@ def install(
         if not no_transition:
             transitions.ensure_state_dir_writable()
         # COMMIT the seed-once plan now — UNDER the lock, AFTER the welcome /
-        # git-check consent gates (p5qc.23). Captures local.yaml's pre-seed
+        # git-check consent gates. Captures local.yaml's pre-seed
         # bytes FIRST so the install transition's file_pre baseline is the
         # genuine unseeded content (recorded below), making revert restore an
         # unseeded local.yaml. Runs before the overlay-span migration so the
@@ -492,7 +492,7 @@ def _plan_section_templates_for_install(
     :func:`_commit_section_template_seed`, under the install lock and
     after consent; meanwhile :func:`setforge.source.injected_seed` makes
     the planned bodies visible to the overlay readers + welcome preview
-    without a write (p5qc.23).
+    without a write.
     """
     if not resolved.section_slots:
         return []

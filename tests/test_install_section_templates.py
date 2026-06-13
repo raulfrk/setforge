@@ -301,7 +301,7 @@ def test_install_leaves_prepopulated_section_untouched(
 
 
 # --------------------------------------------------------------------------
-# Consent-gate ordering (p5qc.23): the seed must NOT touch local.yaml until
+# Consent-gate ordering: the seed must NOT touch local.yaml until
 # AFTER the welcome consent and git-status gates have passed.
 # --------------------------------------------------------------------------
 
