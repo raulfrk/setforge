@@ -37,6 +37,12 @@ _PROFILE = "test-spans-structural"
 _TRACKED = "/workspace/tests/fixtures/e2e/tracked/spans/structural.yaml"
 _LIVE = "/home/tester/.setforge_e2e/spans/structural.yaml"
 
+# A SECOND tracked_file in the same profile, pinning the WHOLE `pinned`
+# subtree (not a scalar leaf), used to exercise the comment-preserving
+# node-level whole-subtree re-assert.
+_SUBTREE_TRACKED = "/workspace/tests/fixtures/e2e/tracked/spans/structural_subtree.yaml"
+_SUBTREE_LIVE = "/home/tester/.setforge_e2e/spans/structural_subtree.yaml"
+
 _TRACKED_BODY = (
     "editor:\n"
     "  fontSize: 12\n"
@@ -143,6 +149,51 @@ def test_compare_marks_pinned_structural_drift_expected(
         ["compare", f"--profile={_PROFILE}", f"--config={CONFIG_FIXTURE}", "--check"],
     )
     assert rc == 0, err
+
+
+# ---------------------------------------------------------------------------
+# install (pinned subtree) — a whole-subtree pin preserves the live subtree's
+# OWN interior comments across an upstream edit (node-level re-assert).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_pinned_structural_subtree_preserves_live_comments(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """pinned subtree: the live subtree's interior comments survive a deploy.
+
+    Install once (live == tracked). The host freezes the pinned `pinned`
+    subtree to local values WITH interior comments; upstream then rewrites the
+    SAME subtree (dropping the comments). A second install must re-assert the
+    LIVE subtree — values AND its own `# x comment` / `# y comment` — through
+    the comment-preserving node-level swap, not a comment-stripped plain
+    snapshot.
+    """
+    c = docker_container()
+    rc, _out, err = _install(c)
+    assert rc == 0, err
+    assert _value_at(c.read_text(_SUBTREE_LIVE), "pinned.x") == 1
+
+    # Host freezes the pinned subtree to local values, keeping its comments.
+    live_frozen = "pinned:\n  x: 10  # x comment\n  y: 20  # y comment\nother: keep\n"
+    c.write_text(_SUBTREE_LIVE, live_frozen)
+
+    # Upstream rewrites the SAME subtree, dropping the interior comments.
+    c.write_text(
+        _SUBTREE_TRACKED,
+        "pinned:\n  x: 99\n  y: 88\nother: keep\n",
+    )
+
+    rc, _out, err = _install(c)
+    assert rc == 0, err
+    merged = c.read_text(_SUBTREE_LIVE)
+    # The pin re-asserted the LIVE subtree values, not upstream's.
+    assert _value_at(merged, "pinned.x") == 10, merged
+    assert _value_at(merged, "pinned.y") == 20, merged
+    # The live subtree's OWN interior comments survive the node-level swap.
+    assert "# x comment" in merged, merged
+    assert "# y comment" in merged, merged
 
 
 # ---------------------------------------------------------------------------

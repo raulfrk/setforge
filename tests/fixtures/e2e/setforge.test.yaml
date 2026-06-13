@@ -232,6 +232,14 @@ tracked_files:
       - anchor: telemetry.level
         kind: forked
         semantics: shared
+  spans_structural_subtree_yaml:
+    src: spans/structural_subtree.yaml
+    dst: ~/.setforge_e2e/spans/structural_subtree.yaml
+    disposition: shared
+    spans:
+      - anchor: pinned
+        kind: pinned
+        semantics: shared
 
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
@@ -407,6 +415,7 @@ profiles:
   test-spans-structural:
     tracked_files:
       - spans_structural_yaml
+      - spans_structural_subtree_yaml
   test-spans-overlay:
     tracked_files:
       - spans_overlay_md
