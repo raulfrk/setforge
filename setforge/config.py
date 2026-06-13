@@ -108,6 +108,20 @@ class Disposition(StrEnum):
     PINNED = "pinned"
 
 
+class McpScope(StrEnum):
+    """The ``--scope`` value passed to ``claude mcp add`` / ``remove``.
+
+    A closed set mirroring the ``claude mcp`` CLI's own choices:
+    ``user`` (host-wide), ``project`` (committed ``.mcp.json``), and
+    ``local`` (project-private). Defaults to ``user`` — the host-wide
+    registration setforge tracks for tools like Serena.
+    """
+
+    USER = "user"
+    PROJECT = "project"
+    LOCAL = "local"
+
+
 # SectionMode now lives in the leaf module setforge.section_mode so
 # setforge.spans (imported by config below) can carry it on
 # SpanEntry.capture_mode without a spans → config → spans import cycle.
@@ -320,15 +334,15 @@ class McpServerRef(BaseModel):
     string) so the install path can pass it to ``subprocess.run`` with
     ``shell=False``; an empty list is rejected since a server with no
     command cannot be registered. ``scope`` selects the ``claude mcp add``
-    ``--scope`` value and defaults to ``"user"`` (the host-wide registration
-    Serena and friends use). Mirrors the shape of
-    :class:`ClaudePluginRef` / :class:`MarketplaceSource`.
+    ``--scope`` value (a closed :class:`McpScope` set) and defaults to
+    ``McpScope.USER`` (the host-wide registration Serena uses). Mirrors the
+    shape of :class:`ClaudePluginRef` / :class:`MarketplaceSource`.
     """
 
     model_config = _STRICT
 
     command: list[str]
-    scope: str = "user"
+    scope: McpScope = McpScope.USER
 
     @field_validator("command")
     @classmethod

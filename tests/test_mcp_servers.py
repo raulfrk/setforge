@@ -20,6 +20,7 @@ import pytest
 from setforge import mcp_servers as mcp
 from setforge.config import (
     Config,
+    McpScope,
     McpServerRef,
     Profile,
     ResolvedProfile,
@@ -186,7 +187,7 @@ def test_converge_adds_absent_server(fake_mcp) -> None:
 def test_add_argv_has_flags_before_name_and_double_dash(fake_mcp) -> None:
     cli = fake_mcp(registry={})
     cfg = _cfg(
-        {"serena": McpServerRef(command=["serena", "--port", "9"], scope="user")}
+        {"serena": McpServerRef(command=["serena", "--port", "9"], scope=McpScope.USER)}
     )
     mcp.reconcile(cfg, _resolved(["serena"]))
     add_call = next(c for c in cli.calls if c[2] == "add")

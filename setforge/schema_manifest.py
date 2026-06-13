@@ -126,7 +126,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     "ClaudePluginRef": {"marketplace": "<class 'str'>"},
     "McpServerRef": {
         "command": "list[str]",
-        "scope": "<class 'str'>",
+        "scope": "<enum 'McpScope'>",
     },
     "ResolvedProfile": {
         "extends": "<class 'NoneType'>",

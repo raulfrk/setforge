@@ -18,7 +18,7 @@ import typer
 
 from setforge import mcp_servers as mcp_mod
 from setforge import transitions
-from setforge.config import Config, McpServerRef, ResolvedProfile
+from setforge.config import Config, McpScope, McpServerRef, ResolvedProfile
 from setforge.errors import PluginToolMissing
 
 
@@ -160,7 +160,7 @@ def _try_readd(
     step). An already-absent server is benign — the subsequent add
     re-establishes the prior registration regardless.
     """
-    prior_ref = McpServerRef(command=list(prior_command), scope=prior_scope)
+    prior_ref = McpServerRef(command=list(prior_command), scope=McpScope(prior_scope))
     try:
         with contextlib.suppress(
             subprocess.CalledProcessError, subprocess.TimeoutExpired
