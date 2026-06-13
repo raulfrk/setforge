@@ -6,7 +6,62 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-13
+
+The host-reproducibility and schema-versioning release. v0.3.0 makes a
+setup reproducible on a fresh host (MCP servers, cargo binaries,
+shareable section templates), adds a per-host override layer backed by
+stored-base 3-way merge, and introduces a versioned config schema with
+bidirectional migrations.
+
+### Added
+- **Config schema versioning + bidirectional compatibility.** Every
+  `setforge.yaml` carries a `schema_version`; the engine ships up + down
+  migrations per bump, an expand→contract policy for breaking changes
+  (see [`COMPATIBILITY.md`](COMPATIBILITY.md)), and a CI schema-compat
+  matrix. `setforge migrate --check`/`--apply` reports and runs the
+  needed chain; `setforge upgrade` surfaces a version bump's schema
+  impact.
+- **Per-host override layer.** A `local.yaml` overlay carries host-local
+  `mode` / `dst` / `symlink_target` field overrides and markerless
+  host-local sections; a disposition model (`shared` / `forked` /
+  `pinned`) governs how `sync`/`install` reconcile each file, with
+  in-file pinned regions excluded from capture. An `override` CLI
+  (`list` / `fork` / `pin` / `show`) drives it.
+- **Stored-base 3-way merge.** A per-host stored-base byte store anchors
+  a real 3-way merge: a markdown engine (merge3 + histogram), a
+  structural engine for JSON / YAML / JSONC, and a hunk-level conflict
+  wizard. Whole-subtree structural pins preserve the live node's
+  comments.
+- **MCP servers + cargo binaries in `setforge.yaml`.** A new
+  `mcp_servers:` registry (plus a per-profile list) registers servers
+  via `claude mcp add` on install — converge-declared (hand-registered
+  servers are left untouched), revertible via a recorded delta. A
+  `cargo_binaries:` list installs crates during install (skip-if-present;
+  a missing cargo toolchain warns and continues).
+- **Shareable host-local section templates.** A `section_templates:`
+  registry plus per-profile `section_slots:` seed-once a template body
+  into an empty/missing host-local section; a populated section is never
+  overwritten, so library edits do not clobber a host that has adopted
+  the section.
+- **`init` scaffolds the config repo** (`setforge.yaml` + `tracked/`),
+  not just `local.yaml`; `install` transparently migrates a legacy
+  stealth layout and warns.
+
 ### Changed
+- **schema_version bumped 1.0 → 2.0.** The unified-span contract
+  retires the legacy host-local-section markers in favor of `spans`
+  OVERLAY entries; `install` migrates live configs forward (and `revert`
+  restores them), with an optional `minimum_version` floor for
+  operator-attested contraction.
+- **`install` is now two-pass** — `--strict-spans` refuses before any
+  file write, so a span-resolution failure can no longer leave a
+  partial, unrevertable install.
+- **`validate` flags orphan overlay entries** — a `local.yaml` overlay
+  id unknown to `setforge.yaml` fails with a did-you-mean, an
+  off-profile id is noted — and `compare` lists skipped orphan overlays
+  (human output and `--json`).
+- **Consolidated every atomic-write site** onto `setforge/atomicio.py`.
 - **`compare` now classifies every drifted file** with a per-file drift
   class — `expected`, `stale` (live still equals the stored base while
   tracked advanced; the next install fast-forwards it), `unexpected`, or
@@ -37,6 +92,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   span pin declares host-local. (Exception: on a SHARED file with no
   stored base yet, compare classifies the same drift `unexpected` with
   a clobber warning — the first install would overwrite it.)
+
+### Fixed
+- **`revert` now removes overlay-declared symlinks.** A symlink declared
+  only in `local.yaml` (via `symlink_target:`) was skipped by the revert
+  unlink pass, leaving a dangling link; revert now folds the host-local
+  overlay before the unlink pass, matching install/compare/sync.
+- **Full revert state restoration.** Revert restores seeded byte-bases,
+  scalar-base manifests, and span sidecars from per-transition state
+  snapshots, not just file content — so a revert leaves no orphaned
+  per-host base state behind.
+- **Install-time upstream rename/delete classifier** for span paths,
+  with a did-you-mean suggestion when a tracked anchor disappears
+  upstream.
 
 ## [0.2.2] - 2026-06-02
 
