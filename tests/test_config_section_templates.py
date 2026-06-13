@@ -10,6 +10,7 @@ validation that every slot value names a declared template.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from setforge.config import (
     Config,
@@ -38,6 +39,12 @@ def _cfg(
 def test_section_template_ref_src() -> None:
     ref = SectionTemplateRef(src=Path("python-conventions.md"))
     assert ref.src == Path("python-conventions.md")
+
+
+def test_section_template_ref_rejects_control_chars_in_src() -> None:
+    """``src`` carries the same control-char guard as ``TrackedFile.src``."""
+    with pytest.raises(ValidationError, match="forbidden control character"):
+        SectionTemplateRef(src=Path("a\tb.md"))
 
 
 def test_config_defaults_empty_section_templates() -> None:

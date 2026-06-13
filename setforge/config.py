@@ -370,6 +370,25 @@ class SectionTemplateRef(BaseModel):
 
     src: Path
 
+    @field_validator("src", mode="before")
+    @classmethod
+    def _no_control_chars_in_path(cls, v: object) -> object:
+        """Reject paths containing C0 control characters or DEL.
+
+        Mirrors :meth:`TrackedFile._no_control_chars_in_path`: tab and
+        newline corrupt unified-diff field separators, and DEL / other C0
+        controls are hostile to most tooling. Cleaner to fail at config
+        load than to silently emit a malformed transition.
+        """
+        s = str(v)
+        bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
+        if bad:
+            escaped = ", ".join(f"\\x{ord(c):02x}" for c in bad)
+            raise ValueError(
+                f"path contains forbidden control character(s) [{escaped}]: {s!r}"
+            )
+        return v
+
 
 class Extensions(BaseModel):
     model_config = _STRICT
