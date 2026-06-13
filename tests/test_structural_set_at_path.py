@@ -315,6 +315,33 @@ def test_yaml_set_node_byte_stable_on_noop() -> None:
     assert after == before
 
 
+def test_yaml_set_node_anchored_subtree_byte_stable_on_noop() -> None:
+    """A pinned subtree carrying an ``&anchor`` and the ``*alias`` that references
+    it survives a no-op swap byte-identical — the pair is NOT flattened.
+
+    The ``&shared`` definition and the ``*shared`` alias both live inside the
+    pinned subtree, so :func:`copy.deepcopy` keeps them the same object (the
+    snapshot the re-assert seam captures). But the target's pinned slot still
+    carries the SAME ``&shared`` name, so the dedup's existing-anchor walk finds
+    it and — unless the slot being replaced is excluded — clears the copy's own
+    anchor. ruamel then re-synthesizes opaque ``&id001`` / ``*id001`` names,
+    flattening the original ``&shared`` / ``*shared`` pair on every deploy. The
+    fix excludes the slot under replacement, so the named pair round-trips
+    byte-identical.
+    """
+    text = (
+        "pinned:\n  base: &shared\n    x: 1\n    y: 2\n  user: *shared\nother: keep\n"
+    )
+    dst = _yload(text)
+    before = _ydump(dst)
+    node = copy.deepcopy(_ynode_at(dst, "pinned"))  # carries &shared + *shared
+    set_node_at_path(dst, "pinned", node)
+    after = _ydump(dst)
+    assert after == before
+    assert "&shared" in after
+    assert "*shared" in after
+
+
 def test_jsonc_set_node_byte_stable_on_noop() -> None:
     """Swapping a json-five node for a deep-copy of itself is byte-stable."""
     text = '{\n  "pinned": {\n    "x": 1 // x comment\n  },\n  "other": "keep"\n}\n'
