@@ -352,6 +352,25 @@ class McpServerRef(BaseModel):
         return v
 
 
+class SectionTemplateRef(BaseModel):
+    """One shareable host-local section-body template in the library.
+
+    ``src`` is a path relative to the config-repo's ``templates/``
+    directory (mirroring :attr:`TrackedFile.src`, which is relative to
+    ``tracked/``); the body file is read at install time to seed an
+    empty/missing host-local section named in a profile's
+    :attr:`Profile.section_slots`. The library is SEED-ONCE: a populated
+    host-local section is never overwritten, so template-body edits do
+    not propagate to a host that has already adopted the section. This is
+    distinct from the disposition (pinned/forked) model and from the
+    shared-section three-way reconciler.
+    """
+
+    model_config = _STRICT
+
+    src: Path
+
+
 class Extensions(BaseModel):
     model_config = _STRICT
 
@@ -371,6 +390,15 @@ class Profile(BaseModel):
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
     cargo_binaries: list[str] = []
+    section_slots: dict[str, str] = {}
+    """Map a host-local user-section NAME → a template name in the
+    top-level :attr:`Config.section_templates` registry.
+
+    On install, an empty/missing host-local section named here is seeded
+    once from the selected template body; a populated section is left
+    untouched (host owns it). Merged across the ``extends:`` chain by
+    dict-union (child keys override parent keys for the same slot name).
+    """
 
 
 class ResolvedProfile(BaseModel):
@@ -391,6 +419,7 @@ class ResolvedProfile(BaseModel):
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
     cargo_binaries: list[str] = []
+    section_slots: dict[str, str] = {}
 
 
 class Config(BaseModel):
@@ -430,6 +459,7 @@ class Config(BaseModel):
     marketplaces: dict[str, MarketplaceSource] = {}
     claude_plugins: dict[str, ClaudePluginRef] = {}
     mcp_servers: dict[str, McpServerRef] = {}
+    section_templates: dict[str, SectionTemplateRef] = {}
     profiles: dict[str, Profile]
 
 

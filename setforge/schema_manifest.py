@@ -32,6 +32,7 @@ from setforge.config import (
     McpServerRef,
     Profile,
     ResolvedProfile,
+    SectionTemplateRef,
     TrackedFile,
 )
 from setforge.spans import SpanEntry
@@ -47,6 +48,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     MarketplaceSource,
     ClaudePluginRef,
     McpServerRef,
+    SectionTemplateRef,
     ResolvedProfile,
     SpanEntry,
 )
@@ -92,6 +94,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "marketplaces": "dict[str, setforge.config.MarketplaceSource]",
         "claude_plugins": "dict[str, setforge.config.ClaudePluginRef]",
         "mcp_servers": "dict[str, setforge.config.McpServerRef]",
+        "section_templates": "dict[str, setforge.config.SectionTemplateRef]",
         "profiles": "dict[str, setforge.config.Profile]",
     },
     "Profile": {
@@ -103,6 +106,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
         "cargo_binaries": "list[str]",
+        "section_slots": "dict[str, str]",
     },
     "TrackedFile": {
         "src": "<class 'pathlib.Path'>",
@@ -128,6 +132,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "command": "list[str]",
         "scope": "<enum 'McpScope'>",
     },
+    "SectionTemplateRef": {"src": "<class 'pathlib.Path'>"},
     "ResolvedProfile": {
         "extends": "<class 'NoneType'>",
         "tracked_files": "list[str]",
@@ -137,6 +142,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
         "cargo_binaries": "list[str]",
+        "section_slots": "dict[str, str]",
     },
     "SpanEntry": {
         "anchor": "<class 'str'>",
