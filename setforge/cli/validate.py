@@ -52,6 +52,7 @@ from setforge.errors import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
     ConfigError,
+    MarkerError,
     SetforgeError,
     ValidationErrorWithContext,
 )
@@ -326,6 +327,39 @@ def _check_host_local_sections(
                 )
 
 
+def _declared_host_local_sections(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+) -> set[str]:
+    """Collect host-local marker names across the profile's markdown sources.
+
+    A tracked source with a malformed marker is SKIPPED (its
+    :class:`~setforge.errors.MarkerError` is swallowed): the grammar is a
+    hard error surfaced elsewhere at deploy time, and letting it abort the
+    advisory caller would contradict that check's "exit stays 0" contract.
+    """
+    declared: set[str] = set()
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files.get(tf_id)
+        if tracked_file is None:
+            continue
+        src = resolve_src(tracked_file, repo_root)
+        if not src.exists():
+            continue
+        if src.suffix.lower() not in {".md", ".markdown"}:
+            continue
+        text = src.read_text(encoding="utf-8")
+        try:
+            semantics = section_semantics(text, allow_legacy=True)
+        except MarkerError:
+            continue
+        for name, sem in semantics.items():
+            if sem is SectionSemantics.HOST_LOCAL:
+                declared.add(name)
+    return declared
+
+
 def _check_section_slots(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -347,23 +381,17 @@ def _check_section_slots(
     Emitted to stderr (not appended to ``failures``) so exit stays 0; the
     text is always written and only the color is TTY-gated so it survives
     CliRunner / Docker e2e capture.
+
+    A tracked source with a malformed user-section marker is SKIPPED by
+    this advisory check: :func:`_declared_host_local_sections` swallows the
+    :class:`~setforge.errors.MarkerError` rather than letting it abort,
+    since the marker grammar is surfaced as a hard error elsewhere at
+    deploy time and aborting here would contradict the "exit stays 0"
+    contract.
     """
     if not resolved.section_slots:
         return
-    declared: set[str] = set()
-    for tf_id in resolved.tracked_files:
-        tracked_file = cfg.tracked_files.get(tf_id)
-        if tracked_file is None:
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        if not src.exists():
-            continue
-        if src.suffix.lower() not in {".md", ".markdown"}:
-            continue
-        text = src.read_text(encoding="utf-8")
-        for name, sem in section_semantics(text, allow_legacy=True).items():
-            if sem is SectionSemantics.HOST_LOCAL:
-                declared.add(name)
+    declared = _declared_host_local_sections(cfg, resolved, repo_root)
     for slot_name in resolved.section_slots:
         if slot_name not in declared:
             typer.secho(

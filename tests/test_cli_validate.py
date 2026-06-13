@@ -1281,3 +1281,32 @@ profiles:
     assert result.exit_code == 0, result.output
     assert "python-conventions" in result.output
     assert "no declared host-local section marker" in result.output
+
+
+def test_validate_section_slot_malformed_marker_exit_0(tmp_path: Path) -> None:
+    """A malformed marker in a tracked source must not abort the advisory slot
+    check: it is skipped and validate still exits 0 (not a crash)."""
+    yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: claude.md
+    dst: ~/.claude.md
+section_templates:
+  py-conv:
+    src: py-conv.md
+profiles:
+  p:
+    tracked_files: [d]
+    section_slots:
+      python-conventions: py-conv
+"""
+    cfg = _write_config(tmp_path, yaml, create_src=False)
+    # An end marker with no matching start is a MarkerError; the advisory
+    # slot check must swallow it rather than abort validate nonzero.
+    (tmp_path / "tracked" / "claude.md").write_text(
+        "# C\n<!-- setforge:user-section end host-local python-conventions -->\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
