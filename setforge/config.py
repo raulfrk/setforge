@@ -475,6 +475,16 @@ def _merge_list[T](parent: list[T], child: list[T]) -> list[T]:
     return merged
 
 
+def _merge_dict[V](parent: dict[str, V], child: dict[str, V]) -> dict[str, V]:
+    """Union two dicts; child values override parent for the same key.
+
+    Parent-first insertion order is preserved for keys only in the parent,
+    then child-only keys append in their own order — matching the
+    first-occurrence ordering :func:`_merge_list` gives list fields.
+    """
+    return {**parent, **child}
+
+
 def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
     """Merge two Extensions blocks. Lists concatenate; ``reconcile``
     overrides only when explicitly set in child (per ``model_fields_set``)."""
@@ -534,6 +544,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
             mcp_servers=_merge_list(resolved.mcp_servers, profile.mcp_servers),
             cargo_binaries=_merge_list(resolved.cargo_binaries, profile.cargo_binaries),
             extensions=_merge_extensions(resolved.extensions, profile.extensions),
+            section_slots=_merge_dict(resolved.section_slots, profile.section_slots),
             plugins_reconcile=(
                 profile.plugins_reconcile
                 if "plugins_reconcile" in fields_set
