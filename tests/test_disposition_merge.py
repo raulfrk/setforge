@@ -717,6 +717,96 @@ def test_whole_subtree_pin_preserves_sibling_comments() -> None:
     assert "# sibling comment" in res.text
 
 
+def test_whole_subtree_pin_preserves_own_internal_comments_yaml() -> None:
+    # The pinned subtree's OWN internal comments must survive the re-assert.
+    # set_at_path re-asserts a comment-stripped plain snapshot; the node-level
+    # swap re-asserts the wrapped live node so `# x comment` / `# y comment`
+    # (interior to the pinned subtree) survive.
+    base = "pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n"
+    live = "pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n"
+    tracked = "pinned:\n  x: 9\n  y: 8\nother: keep\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("pinned")],
+    )
+    # Live subtree won at `pinned`.
+    assert _yaml_value_at(res.text, "pinned.x") == 1
+    assert _yaml_value_at(res.text, "pinned.y") == 2
+    # The pinned subtree's interior comments survive the node-level swap.
+    assert "# x comment" in res.text
+    assert "# y comment" in res.text
+
+
+def test_whole_subtree_pin_preserves_own_internal_comments_jsonc() -> None:
+    # json-five variant: pin a subtree carrying // comments and assert they
+    # survive a whole-subtree re-assert (a scalar-only setter would desync the
+    # keys/values zip and drop the interior comment metadata).
+    base = (
+        '{\n  "pinned": {\n    "x": 1, // x comment\n    "y": 2 // y comment\n  },\n'
+        '  "other": "keep"\n}\n'
+    )
+    live = base
+    tracked = '{\n  "pinned": {\n    "x": 9,\n    "y": 8\n  },\n  "other": "keep"\n}\n'
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("settings.json"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("pinned")],
+    )
+    # Live subtree won at `pinned`.
+    doc = _json5_loads(res.text)
+    assert doc["pinned"]["x"] == 1
+    assert doc["pinned"]["y"] == 2
+    # The pinned subtree's interior comments survive the node-level swap.
+    assert "// x comment" in res.text
+    assert "// y comment" in res.text
+
+
+def test_whole_subtree_pin_byte_stable_on_noop_yaml() -> None:
+    # B-S byte-stability: live == tracked == base at a pinned subtree -> the
+    # node swap must be a faithful no-op (no spurious reformat / comment churn):
+    # the dumped subtree region is byte-identical to the input.
+    text = "pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=text,
+        live=text,
+        tracked=text,
+        auto=None,
+        structural_spans=[_pin("pinned")],
+    )
+    assert res.text == text
+
+
+def test_scalar_pin_unchanged_by_node_swap_yaml() -> None:
+    # Dispatch keys on snapshot SHAPE: a SCALAR pin must still route through the
+    # plain set_at_path path, never the node-level swap. Re-asserting live's
+    # scalar over an upstream change preserves the leaf's own trailing comment.
+    base = "editor:\n  fontSize: 12  # size\nother: keep\n"
+    live = "editor:\n  fontSize: 12  # size\nother: keep\n"
+    tracked = "editor:\n  fontSize: 99  # size\nother: keep\n"
+    res = resolve_file(
+        Disposition.SHARED,
+        Path("c.yaml"),
+        base=base,
+        live=live,
+        tracked=tracked,
+        auto=None,
+        structural_spans=[_pin("editor.fontSize")],
+    )
+    assert _yaml_value_at(res.text, "editor.fontSize") == 12
+    assert "# size" in res.text
+
+
 # ---- orphans: parent-type-changed, missing parent, absent-in-live ----
 
 

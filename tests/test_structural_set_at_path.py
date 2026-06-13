@@ -8,6 +8,7 @@ whitespace/comment across all three backends (ruamel YAML, json-five JSONC,
 plain dict), and never auto-vivify a missing parent.
 """
 
+import copy
 import io
 from collections.abc import Mapping
 
@@ -19,7 +20,7 @@ from json5.loader import loads as json5_loads
 from json5.model import JSONObject
 from ruamel.yaml import YAML
 
-from setforge.structural_merge import set_at_path
+from setforge.structural_merge import set_at_path, set_node_at_path
 
 
 def _yaml() -> YAML:
@@ -224,3 +225,111 @@ def test_jsonc_set_existing_keeps_siblings_byte_stable() -> None:
     assert "// c3" in out
     assert '"a": 1' in out
     assert '"c": 3' in out
+
+
+# ---------------------------------------------------------------------------
+# 7. set_node_at_path: splice a WRAPPED subtree node (comments-on-the-node
+#    preserved), the comment-preserving whole-subtree re-assert seam.
+# ---------------------------------------------------------------------------
+
+
+def _ynode_at(doc: object, key: str) -> object:
+    """Return the still-wrapped child node at top-level ``key``."""
+    assert isinstance(doc, Mapping)
+    return doc[key]
+
+
+def _jnode_at(model: object, key: str) -> object:
+    """Return the still-wrapped json-five value node at top-level ``key``."""
+    top = _jtop(model)
+    idx = next(
+        i for i, k in enumerate(top.keys) if getattr(k, "characters", None) == key
+    )
+    return top.values[idx]
+
+
+def test_yaml_set_node_preserves_subtree_internal_comments() -> None:
+    """Splicing a wrapped CommentedMap carries its OWN interior comments."""
+    src = _yload("pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n")
+    node = copy.deepcopy(_ynode_at(src, "pinned"))
+    dst = _yload("pinned:\n  x: 9\nother: keep\n")
+    set_node_at_path(dst, "pinned", node)
+    out = _ydump(dst)
+    assert "# x comment" in out
+    assert "# y comment" in out
+    assert "other: keep" in out
+
+
+def test_jsonc_set_node_preserves_subtree_internal_comments() -> None:
+    """Splicing a wrapped JSONObject carries its OWN interior // comments."""
+    src = _jload(
+        '{\n  "pinned": {\n    "x": 1, // x comment\n    "y": 2 // y comment\n  },\n'
+        '  "other": "keep"\n}\n'
+    )
+    node = copy.deepcopy(_jnode_at(src, "pinned"))
+    dst = _jload('{\n  "pinned": {\n    "x": 9\n  },\n  "other": "keep"\n}\n')
+    set_node_at_path(dst, "pinned", node)
+    out = _jdump(dst)
+    assert "// x comment" in out
+    assert "// y comment" in out
+    assert '"other": "keep"' in out
+    # keys / values stayed in lockstep (the derived zip re-reads them on dump).
+    top = _jtop(dst)
+    assert len(top.keys) == len(top.values)
+
+
+def test_jsonc_set_node_keys_values_stay_in_lockstep() -> None:
+    """A whole-value swap edits parent.keys[idx]/parent.values[idx] in lockstep."""
+    src = _jload('{\n  "a": {"n": 1},\n  "b": 2,\n  "c": 3\n}\n')
+    node = copy.deepcopy(_jnode_at(src, "a"))
+    dst = _jload('{\n  "a": {"n": 9},\n  "b": 2,\n  "c": 3\n}\n')
+    set_node_at_path(dst, "a", node)
+    top = _jtop(dst)
+    assert len(top.keys) == len(top.values) == 3
+    out = _jdump(dst)
+    assert json5_loads(out) == {"a": {"n": 1}, "b": 2, "c": 3}
+
+
+def test_yaml_set_node_dedups_colliding_anchor() -> None:
+    """A swapped node whose anchor name collides with a DIFFERENT target node
+    is dedup'd so the dump carries no duplicate anchor definition."""
+    src = _yload("pinned: &shared\n  x: 1\nother: keep\n")
+    node = copy.deepcopy(_ynode_at(src, "pinned"))  # carries &shared
+    dst = _yload("pinned:\n  x: 9\nelsewhere: &shared\n  z: 5\nref: *shared\n")
+    set_node_at_path(dst, "pinned", node)
+    out = _ydump(dst)
+    # The swapped node must NOT re-emit a second `&shared` definition.
+    assert out.count("&shared") == 1
+    # Re-parsing must not raise a duplicate-anchor / reused-anchor error.
+    _yload(out)
+
+
+def test_yaml_set_node_byte_stable_on_noop() -> None:
+    """Swapping a node for a deep-copy of the identical node is byte-stable."""
+    text = "pinned:\n  x: 1  # x comment\n  y: 2  # y comment\nother: keep\n"
+    dst = _yload(text)
+    before = _ydump(dst)
+    node = copy.deepcopy(_ynode_at(dst, "pinned"))
+    set_node_at_path(dst, "pinned", node)
+    after = _ydump(dst)
+    assert after == before
+
+
+def test_jsonc_set_node_byte_stable_on_noop() -> None:
+    """Swapping a json-five node for a deep-copy of itself is byte-stable."""
+    text = '{\n  "pinned": {\n    "x": 1 // x comment\n  },\n  "other": "keep"\n}\n'
+    dst = _jload(text)
+    before = _jdump(dst)
+    node = copy.deepcopy(_jnode_at(dst, "pinned"))
+    set_node_at_path(dst, "pinned", node)
+    after = _jdump(dst)
+    assert after == before
+
+
+def test_set_node_missing_parent_raises_keyerror() -> None:
+    """A nested node splice whose parent is absent raises KeyError."""
+    src = _yload("a:\n  b: 1\n")
+    node = copy.deepcopy(_ynode_at(src, "a"))
+    dst = _yload("a:\n  b: 1\n")
+    with pytest.raises(KeyError):
+        set_node_at_path(dst, "missing.child", node)
