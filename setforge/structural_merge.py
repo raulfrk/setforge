@@ -723,11 +723,14 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     Per backend:
 
     * ruamel: a plain ``parent[leaf] = node`` preserves the node's ``.ca``
-      tokens. Before the splice the node's anchor is dedup'd against ``model``
-      — a deep-copied subtree keeps its ``&anchor`` string verbatim, so an
-      anchor whose name collides with a DIFFERENT node already in ``model``
-      would emit a duplicate / ambiguous anchor definition; the colliding
-      anchor (and any colliding descendant anchor) is cleared.
+      tokens. Before the splice the node's anchor is dedup'd against the rest
+      of ``model`` — a deep-copied subtree keeps its ``&anchor`` string
+      verbatim, so an anchor whose name collides with a DIFFERENT node
+      elsewhere in ``model`` would emit a duplicate / ambiguous anchor
+      definition; the colliding anchor (and any colliding descendant anchor) is
+      cleared. The slot the node is about to replace is excluded from the
+      collision set, so an ``&anchor``/``*alias`` pair living inside the pinned
+      subtree survives a no-op re-assert byte-identical.
     * json-five: the parent's stored ``.keys`` / ``.values`` are spliced in
       LOCKSTEP at the leaf's index (the derived ``key_value_pairs`` re-zips
       keys/values on access, so editing only one list desyncs it); the
@@ -747,7 +750,8 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     inner = _json5_inner(model)
     parent = _descend_set_parent(inner, segments, path)
     leaf = segments[-1]
-    _dedup_ruamel_anchors(node, inner)
+    replaced = parent.get(leaf) if isinstance(parent, Mapping) else None
+    _dedup_ruamel_anchors(node, inner, replaced)
     _set_node_leaf(parent, leaf, node, path)
 
 
@@ -1000,19 +1004,30 @@ def _set_jsonc_node(parent: JSONObject, leaf: str, node: object) -> None:
     parent.values[idx] = node
 
 
-def _dedup_ruamel_anchors(node: object, target: object) -> None:
-    """Clear any anchor in ``node``'s subtree whose name already exists in ``target``.
+def _dedup_ruamel_anchors(
+    node: object, target: object, replaced: object = None
+) -> None:
+    """Clear anchors in ``node``'s subtree colliding with a DIFFERENT ``target`` node.
 
-    A deep-copied ruamel node keeps its ``&anchor`` string verbatim. When that
-    name also labels a DIFFERENT node already present in ``target``, splicing
-    the copy in emits two definitions of the same anchor — a duplicate /
-    ambiguous-alias hazard on re-parse. Collect the names already anchored in
-    ``target`` and strip exactly the colliding anchors from ``node``'s subtree
+    Called BEFORE ``node`` is spliced into ``target``, while ``replaced`` is
+    still the node occupying the destination slot. A deep-copied ruamel node
+    keeps its ``&anchor`` string verbatim. When that name also labels a
+    DIFFERENT node already present in ``target``, splicing the copy in emits
+    two definitions of the same anchor — a duplicate / ambiguous-alias hazard
+    on re-parse. Collect the names anchored ELSEWHERE in ``target`` — skipping
+    the ``replaced`` slot, since the node about to be overwritten is not a
+    different node (and a ruamel ``*alias`` is the SAME python object as the
+    ``&anchor`` it points at, so excluding the slot by identity also skips an
+    alias that references it). An ``&anchor``/``*alias`` pair whose anchor lives
+    inside the pinned subtree must therefore survive a no-op deploy
+    byte-identical. Strip exactly the colliding anchors from ``node``'s subtree
     (leaving non-colliding anchors intact). A no-op for json-five / plain-dict
     nodes, which carry no ruamel anchors.
     """
     existing: set[str] = set()
-    _walk_ruamel_anchored_nodes(target, lambda name, _holder: existing.add(name))
+    _walk_ruamel_anchored_nodes(
+        target, lambda name, _holder: existing.add(name), exclude=replaced
+    )
     if not existing:
         return
 
@@ -1024,21 +1039,28 @@ def _dedup_ruamel_anchors(node: object, target: object) -> None:
 
 
 def _walk_ruamel_anchored_nodes(
-    node: object, visit: Callable[[str, CommentedMap | CommentedSeq], None]
+    node: object,
+    visit: Callable[[str, CommentedMap | CommentedSeq], None],
+    exclude: object = None,
 ) -> None:
     """Call ``visit(anchor_name, holder)`` for every anchored ruamel node below.
 
     Recurses ``CommentedMap`` values and ``CommentedSeq`` elements; only those
     two carry a ``&anchor``, so any other node (json-five / plain) terminates
-    that branch.
+    that branch. When ``exclude`` is the same object as a visited node, that
+    node AND its whole subtree are skipped (identity, not equality) — so the
+    slot a splice is about to overwrite is excluded from the target's
+    existing-anchor set.
     """
+    if exclude is not None and node is exclude:
+        return
     if isinstance(node, CommentedMap | CommentedSeq):
         anchor = node.yaml_anchor()
         if anchor is not None and anchor.value:
             visit(anchor.value, node)
     if isinstance(node, CommentedMap):
         for value in node.values():
-            _walk_ruamel_anchored_nodes(value, visit)
+            _walk_ruamel_anchored_nodes(value, visit, exclude)
     elif isinstance(node, CommentedSeq):
         for elem in node:
-            _walk_ruamel_anchored_nodes(elem, visit)
+            _walk_ruamel_anchored_nodes(elem, visit, exclude)
