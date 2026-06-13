@@ -23,6 +23,8 @@ from setforge import (
     transitions,
 )
 from setforge import secrets as secrets_mod
+from setforge import section_templates as section_templates_mod
+from setforge import source as source_mod
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -68,6 +70,8 @@ from setforge.cli._welcome import (
     reject_auto_on_fresh_host,
 )
 from setforge.config import (
+    Config,
+    ResolvedProfile,
     apply_host_local_tracked_file_overrides,
     apply_local_overlay,
     load_config,
@@ -196,6 +200,17 @@ def install(
     cfg = load_config(config)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    # Seed-once host-local section templates BEFORE any local.yaml overlay
+    # read/fold below, so a freshly-seeded body participates in the
+    # host-local span fold (apply_host_local_tracked_file_overrides) and is
+    # picked up by this install's deploy AND migrated into a unified OVERLAY
+    # span by the under-lock rewrite. Gated on absence: a section the host
+    # already carries (an overlay body) is never reseeded, so library
+    # template edits do NOT propagate and the host's own edits survive every
+    # re-install. Skipped on --dry-run (the read-only path must not mutate
+    # local.yaml).
+    if not dry_run:
+        _seed_section_templates_for_install(cfg, resolved, repo_root)
     # Resolve host-local↔shared span intent collisions BEFORE the overlay
     # fold so the chosen winner per collided anchor flows into the fold.
     # Bare install stays silent host-local-wins; --auto routes the
@@ -433,6 +448,45 @@ def install(
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)
+
+
+def _seed_section_templates_for_install(
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+) -> None:
+    """Seed-once any empty/missing host-local section named in ``section_slots``.
+
+    Reads the host's current host-local overlay (legacy block + migrated
+    spans), plans seeds for slots whose section is absent, and writes the
+    template bodies into ``local.yaml`` as ``host_local_sections`` blocks.
+    A no-op when the profile declares no slots or every slotted section is
+    already populated on the host (the seed-once gate). The downstream
+    install pipeline migrates the seeded blocks into OVERLAY spans and
+    injects them at deploy time, so the seeded content rides the standard
+    host-local survival path.
+    """
+    if not resolved.section_slots:
+        return
+    overlay = source_mod.load_local_host_local_sections(source_mod.LOCAL_CONFIG_PATH)
+    # Project the provenance-marked HostLocalSectionName keys to plain str
+    # for the seed planner's presence set.
+    existing: dict[str, set[str]] = {
+        tf_id: {str(name) for name in sections} for tf_id, sections in overlay.items()
+    }
+    plan = section_templates_mod.plan_section_seeds(
+        cfg, resolved, repo_root, existing_overlay=existing
+    )
+    if not plan:
+        return
+    seeded = section_templates_mod.seed_section_templates(
+        plan, source_mod.LOCAL_CONFIG_PATH
+    )
+    if seeded:
+        names = ", ".join(sorted(e.section_name for e in plan))
+        typer.secho(
+            f"seeded host-local section template(s): {names}",
+            err=True,
+            fg=typer.colors.GREEN,
+        )
 
 
 def _handle_secret_findings(
