@@ -32,6 +32,7 @@ from setforge.cli._validate_errors import (
 from setforge.compare import resolve_src
 from setforge.config import (
     Config,
+    OrphanOverlay,
     OrphanOverlayClass,
     Profile,
     ResolvedProfile,
@@ -825,6 +826,29 @@ def _check_local_yaml_tracked_files(
                 )
 
 
+def _partition_orphan_ids(
+    orphans: list[OrphanOverlay],
+    seen_unknown: set[str],
+    seen_off: set[str],
+    unknown_ids: list[str],
+    off_profile_ids: list[str],
+) -> None:
+    """Classify one profile's ``orphans`` into the unknown / off-profile buckets.
+
+    Dedups across profiles via the ``seen_*`` sets (an id surfaced by an
+    earlier profile is not re-appended) and appends first-seen ids to the
+    matching ordered list in place.
+    """
+    for orphan in orphans:
+        if orphan.class_ is OrphanOverlayClass.UNKNOWN:
+            if orphan.id not in seen_unknown:
+                seen_unknown.add(orphan.id)
+                unknown_ids.append(orphan.id)
+        elif orphan.id not in seen_off:
+            seen_off.add(orphan.id)
+            off_profile_ids.append(orphan.id)
+
+
 def _check_orphan_overlays(
     cfg: Config,
     profiles_to_check: list[str],
@@ -878,14 +902,9 @@ def _check_orphan_overlays(
             # aborting the whole validate run before report-all-then-refuse
             # completes.
             return []
-        for orphan in orphans:
-            if orphan.class_ is OrphanOverlayClass.UNKNOWN:
-                if orphan.id not in seen_unknown:
-                    seen_unknown.add(orphan.id)
-                    unknown_ids.append(orphan.id)
-            elif orphan.id not in seen_off:
-                seen_off.add(orphan.id)
-                off_profile_ids.append(orphan.id)
+        _partition_orphan_ids(
+            orphans, seen_unknown, seen_off, unknown_ids, off_profile_ids
+        )
 
     known_ids = list(cfg.tracked_files)
     for tf_id in unknown_ids:
