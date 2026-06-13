@@ -32,11 +32,13 @@ from setforge.cli._validate_errors import (
 from setforge.compare import resolve_src
 from setforge.config import (
     Config,
+    OrphanOverlayClass,
     Profile,
     ResolvedProfile,
     TrackedFile,
     _fold_overlay_spans,
     apply_local_overlay,
+    collect_orphan_overlays,
     load_config,
     resolve_profile,
 )
@@ -823,6 +825,157 @@ def _check_local_yaml_tracked_files(
                 )
 
 
+def _check_orphan_overlays(
+    cfg: Config,
+    profiles_to_check: list[str],
+    local_yaml_path: Path,
+    failures: list[ValidationErrorWithContext | str],
+) -> list[str]:
+    """Surface ``local.yaml`` overlay ids the apply site silently skips.
+
+    Two classes (see :class:`setforge.config.OrphanOverlayClass`):
+
+    - **Unknown** — id absent from ``cfg.tracked_files`` (a typo / stale
+      entry). Appended to ``failures`` as a
+      :class:`~setforge.errors.ValidationErrorWithContext` (exit 1), with a
+      did-you-mean suggestion drawn from the known tracked_file ids.
+    - **Off-profile** — id in ``cfg.tracked_files`` but in none of the
+      checked profiles' resolved lists. Returned as a non-fatal note
+      string for the caller to print to stderr; never added to
+      ``failures`` (exit stays 0).
+
+    The off-profile bucket aggregates across ``profiles_to_check``: under
+    ``--all`` an id legitimately used by ANOTHER profile is not flagged.
+    For a single ``--profile=X`` the aggregation degenerates to that one
+    profile, matching the per-profile spec semantics exactly.
+
+    Returns the off-profile note lines (possibly empty). Reads the
+    ``local.yaml`` CommentedMap once to anchor the unknown-id failure's
+    line/column on the offending ``tracked_files.<id>`` key.
+    """
+    unknown_ids: list[str] = []
+    in_some_profile: set[str] = set()
+    off_profile_ids: list[str] = []
+    seen_off: set[str] = set()
+    seen_unknown: set[str] = set()
+    for prof_name in profiles_to_check:
+        try:
+            resolved = resolve_profile(cfg, prof_name)
+        except SetforgeError:
+            # A broken profile chain is already surfaced by
+            # _check_profile_resolution; skip the orphan pass for it.
+            continue
+        in_some_profile.update(resolved.tracked_files)
+        try:
+            orphans = collect_orphan_overlays(
+                cfg, resolved, local_config_path=local_yaml_path
+            )
+        except (SetforgeError, ValidationError, OSError, UnicodeDecodeError):
+            # A malformed / unparseable / unreadable / schema-mismatched
+            # local.yaml is already reported by _check_local_yaml (the
+            # dedicated local.yaml pass). The orphan classifier re-parses
+            # the same file; swallow its load failure here rather than
+            # aborting the whole validate run before report-all-then-refuse
+            # completes.
+            return []
+        for orphan in orphans:
+            if orphan.class_ is OrphanOverlayClass.UNKNOWN:
+                if orphan.id not in seen_unknown:
+                    seen_unknown.add(orphan.id)
+                    unknown_ids.append(orphan.id)
+            elif orphan.id not in seen_off:
+                seen_off.add(orphan.id)
+                off_profile_ids.append(orphan.id)
+
+    known_ids = list(cfg.tracked_files)
+    for tf_id in unknown_ids:
+        failures.append(
+            _orphan_overlay_unknown_failure(local_yaml_path, tf_id, known_ids)
+        )
+
+    # An id off-profile for every checked profile is a real note; one used
+    # by SOME checked profile is legitimate and dropped.
+    notes = [
+        _orphan_overlay_off_profile_note(tf_id)
+        for tf_id in off_profile_ids
+        if tf_id not in in_some_profile
+    ]
+    return notes
+
+
+def _orphan_overlay_unknown_failure(
+    local_yaml_path: Path, tf_id: str, known_ids: list[str]
+) -> ValidationErrorWithContext:
+    """Build the unknown-orphan-overlay failure carrier.
+
+    Resolves the offending ``tracked_files.<id>`` key's line/column from
+    the on-disk ``local.yaml`` (best-effort; falls back to ``(1, 1)`` when
+    the file can't be re-read or the key isn't locatable), and attaches a
+    did-you-mean suggestion via :func:`suggest_close_match` over the known
+    tracked_file ids.
+    """
+    line_1, col_1, snippet_lines = _locate_local_tracked_file_key(
+        local_yaml_path, tf_id
+    )
+    suggestion = suggest_close_match(tf_id, known_ids)
+    fix_hint = (
+        f"edit {_home_relative(local_yaml_path)}:{line_1} — "
+        f"local.yaml references tracked_file {tf_id!r}, which is not declared "
+        f"in setforge.yaml. Fix the id or remove the overlay entry."
+    )
+    return ValidationErrorWithContext(
+        file_path=local_yaml_path,
+        line=line_1,
+        column=col_1,
+        snippet_lines=snippet_lines,
+        field_value=tf_id,
+        fix_hint=fix_hint,
+        suggestion=suggestion,
+    )
+
+
+def _orphan_overlay_off_profile_note(tf_id: str) -> str:
+    """Render the non-fatal off-profile note line.
+
+    The id is a real tracked_file but is not used by any profile under
+    validation — legitimate on a multi-profile host, so it is informational
+    only.
+    """
+    return (
+        f"note: local.yaml overlay for tracked_file {tf_id!r} is declared in "
+        f"setforge.yaml but not used by the validated profile(s); the overlay "
+        f"is skipped (off-profile, not an error)."
+    )
+
+
+def _locate_local_tracked_file_key(
+    local_yaml_path: Path, tf_id: str
+) -> tuple[int, int, list[str]]:
+    """Best-effort (line, col, snippet) of ``tracked_files.<id>`` in local.yaml.
+
+    Re-reads the file in round-trip mode to walk the ``.lc`` tables.
+    Falls back to ``(1, 1, [])`` when the file is unreadable, unparseable,
+    or the key is not locatable — the failure still surfaces, just without
+    a precise pointer.
+    """
+    try:
+        raw_text = local_yaml_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 1, 1, []
+    try:
+        data = YAML(typ="rt").load(raw_text)
+    except YAMLError:
+        return 1, 1, []
+    if not isinstance(data, Mapping):
+        return 1, 1, []
+    tracked = data.get("tracked_files")
+    if not isinstance(tracked, Mapping) or tf_id not in tracked:
+        return 1, 1, []
+    line_1, col_1 = _lookup_key_position(tracked, tf_id)
+    snippet_lines = _build_snippet(raw_text.splitlines(), line_1)
+    return line_1, col_1, snippet_lines
+
+
 def _extract_yaml_error_position(exc: YAMLError) -> tuple[int, int]:
     """Best-effort (line, col) extraction from a ruamel ``YAMLError``.
 
@@ -1428,6 +1581,15 @@ def validate(
     # with mockup-D UX. Collect into the same failures list so the
     # report-all-then-refuse contract holds across all check categories.
     _check_local_yaml(_LOCAL_CONFIG_PATH, failures)
+
+    # Check 8: orphan local.yaml overlay entries. Unknown ids → failures
+    # (exit 1, did-you-mean); off-profile ids → non-fatal stderr notes
+    # (exit stays 0). The apply site stays silent; validate is the surface.
+    off_profile_notes = _check_orphan_overlays(
+        cfg, profiles_to_check, _LOCAL_CONFIG_PATH, failures
+    )
+    for note in off_profile_notes:
+        typer.secho(note, err=True, fg=typer.colors.YELLOW)
 
     if failures:
         typer.echo(_render_failures(failures))
