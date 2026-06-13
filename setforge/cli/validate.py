@@ -898,10 +898,10 @@ def _check_orphan_overlays(
             # A malformed / unparseable / unreadable / schema-mismatched
             # local.yaml is already reported by _check_local_yaml (the
             # dedicated local.yaml pass). The orphan classifier re-parses
-            # the same file; swallow its load failure here rather than
-            # aborting the whole validate run before report-all-then-refuse
-            # completes.
-            return []
+            # the same file; skip only THIS profile rather than abandoning
+            # the rest of the run — under --all, unknown-id failures from
+            # other profiles must still surface.
+            continue
         _partition_orphan_ids(
             orphans, seen_unknown, seen_off, unknown_ids, off_profile_ids
         )

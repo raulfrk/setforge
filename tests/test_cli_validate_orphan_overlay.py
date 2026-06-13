@@ -139,3 +139,49 @@ def test_all_profiles_off_profile_only_when_in_no_profile(
     result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
     assert "ok" in result.output
+
+
+def test_all_one_profile_classifier_raises_other_unknown_still_surfaces(
+    tmp_path: Path,
+    local_yaml_at: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under ``--all``, a classifier load failure on ONE profile must not
+    abandon the rest of the run: an unknown overlay surfaced by another
+    profile still fails (exit 1).
+
+    The orphan pass iterates profiles ``p`` then ``q``. We make the first
+    ``collect_orphan_overlays`` call raise (as a malformed/unreadable
+    local.yaml re-read would) and delegate every later call to the real
+    classifier, which still flags the unknown ``zzzzzzzz`` overlay id.
+    """
+    cfg = _write_minimal_config(tmp_path)
+    local_yaml_at.write_text(
+        "tracked_files:\n  zzzzzzzz:\n    mode: 0o755\n",
+        encoding="utf-8",
+    )
+
+    from setforge.cli import validate as validate_mod
+    from setforge.config import Config, OrphanOverlay, ResolvedProfile
+
+    real_collect = validate_mod.collect_orphan_overlays
+    calls = {"n": 0}
+
+    def flaky_collect(
+        config: Config,
+        resolved: ResolvedProfile,
+        *,
+        local_config_path: Path | None = None,
+    ) -> list[OrphanOverlay]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated unreadable local.yaml re-read")
+        return real_collect(config, resolved, local_config_path=local_config_path)
+
+    monkeypatch.setattr(validate_mod, "collect_orphan_overlays", flaky_collect)
+
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
+    assert calls["n"] >= 2, "second profile should still be classified"
+    assert result.exit_code == 1, result.output
+    assert "zzzzzzzz" in result.output
+    assert "validation FAILED" in result.output
