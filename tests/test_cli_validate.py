@@ -1192,3 +1192,92 @@ profiles:
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
     assert "did you mean" not in result.output, result.output
+
+
+# ---------------------------------------------------------------------------
+# section_slots cross-ref (bpt3)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_unknown_section_template_exits_1(tmp_path: Path) -> None:
+    """A section_slots value naming an undeclared template → exit 1, with the
+    profile, slot, and offending template named."""
+    yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: claude.md
+    dst: ~/.claude.md
+section_templates:
+  py-conv:
+    src: py-conv.md
+profiles:
+  p:
+    tracked_files: [d]
+    section_slots:
+      python-conventions: py-convs
+"""
+    cfg = _write_config(tmp_path, yaml, create_src=False)
+    (tmp_path / "tracked" / "claude.md").write_text("# C\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "py-convs" in result.output
+    # did-you-mean fires on the near-miss template name (Levenshtein 1).
+    assert "did you mean" in result.output.lower()
+    assert "py-conv" in result.output
+
+
+def test_validate_section_slots_clean_exits_0(tmp_path: Path) -> None:
+    """A slot whose name matches a declared host-local marker validates clean."""
+    yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: claude.md
+    dst: ~/.claude.md
+section_templates:
+  py-conv:
+    src: py-conv.md
+profiles:
+  p:
+    tracked_files: [d]
+    section_slots:
+      python-conventions: py-conv
+"""
+    cfg = _write_config(tmp_path, yaml, create_src=False)
+    (tmp_path / "tracked" / "claude.md").write_text(
+        "# C\n"
+        "<!-- setforge:user-section start host-local python-conventions -->\n"
+        "<!-- setforge:user-section end host-local python-conventions hash="
+        + "a" * 64
+        + " -->\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "ok" in result.output
+
+
+def test_validate_section_slot_no_marker_warns_but_exit_0(tmp_path: Path) -> None:
+    """A slot whose name matches no host-local marker → non-fatal warning, exit 0."""
+    yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: claude.md
+    dst: ~/.claude.md
+section_templates:
+  py-conv:
+    src: py-conv.md
+profiles:
+  p:
+    tracked_files: [d]
+    section_slots:
+      python-conventions: py-conv
+"""
+    cfg = _write_config(tmp_path, yaml, create_src=False)
+    (tmp_path / "tracked" / "claude.md").write_text("# C\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "python-conventions" in result.output
+    assert "no declared host-local section marker" in result.output
