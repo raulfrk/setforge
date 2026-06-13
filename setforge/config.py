@@ -1018,6 +1018,90 @@ def apply_host_local_tracked_file_overrides(
     return applied
 
 
+class OrphanOverlayClass(StrEnum):
+    """How a ``local.yaml`` overlay entry fails to match the resolved profile.
+
+    ``UNKNOWN`` — the id appears NOWHERE in :attr:`Config.tracked_files`
+    (the full registry); almost always a typo or a stale entry. Surfaced
+    as a hard ``validate`` failure (with a did-you-mean suggestion).
+
+    ``OFF_PROFILE`` — the id IS in :attr:`Config.tracked_files` but not in
+    THIS profile's resolved ``tracked_files`` list; a legitimate state on a
+    multi-profile host. Surfaced as a non-fatal note only.
+    """
+
+    UNKNOWN = "unknown"
+    OFF_PROFILE = "off_profile"
+
+
+@dataclass(frozen=True, slots=True)
+class OrphanOverlay:
+    """One ``local.yaml`` overlay entry the apply site silently skipped.
+
+    Returned by :func:`collect_orphan_overlays` for the read-only
+    diagnosis verbs (``validate`` / ``compare``) so a stale or typo'd
+    overlay entry becomes discoverable without changing the silent
+    install/sync/override apply path. ``class_`` carries the trailing
+    underscore because ``class`` is a Python keyword.
+    """
+
+    id: str
+    class_: OrphanOverlayClass
+
+
+def collect_orphan_overlays(
+    config: Config,
+    resolved: ResolvedProfile,
+    *,
+    local_config_path: Path | None = None,
+) -> list[OrphanOverlay]:
+    """Classify the ``local.yaml`` overlay ids the apply site skipped.
+
+    :func:`apply_host_local_tracked_file_overrides` silently ``continue``s
+    on any overlay id missing from the resolved profile (SPEC-8 precedent —
+    install/sync/override must not warn on every run). This pure sibling
+    re-loads the same overlay block and classifies each id that would NOT
+    apply to ``resolved`` into one of two :class:`OrphanOverlayClass`
+    buckets:
+
+    - ``UNKNOWN`` — the id is absent from ``config.tracked_files`` (the
+      full registry): a typo or stale entry.
+    - ``OFF_PROFILE`` — the id is in ``config.tracked_files`` but not in
+      ``resolved.tracked_files``: a legitimate multi-profile host.
+
+    An overlay entry that declares no overlay fields is skipped here for
+    the same reason the apply site short-circuits it — it never mutates a
+    TrackedFile, so it is not a meaningful orphan. Returns the orphans in
+    ``local.yaml`` declaration order; an in-profile overlay is omitted.
+
+    Read-only: never mutates ``config`` or ``resolved``. Lazy-imports
+    :mod:`setforge.source` to dodge the config <-> source cycle, mirroring
+    the apply site.
+    """
+    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
+
+    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
+    overlays = load_local_tracked_file_overlays(path)
+    profile_ids = set(resolved.tracked_files)
+    orphans: list[OrphanOverlay] = []
+    for tf_id, overlay in overlays.items():
+        if (
+            overlay.mode is None
+            and overlay.dst is None
+            and overlay.symlink_target is None
+            and overlay.disposition is None
+            and not overlay.spans
+        ):
+            continue
+        if tf_id not in config.tracked_files:
+            orphans.append(OrphanOverlay(id=tf_id, class_=OrphanOverlayClass.UNKNOWN))
+        elif tf_id not in profile_ids:
+            orphans.append(
+                OrphanOverlay(id=tf_id, class_=OrphanOverlayClass.OFF_PROFILE)
+            )
+    return orphans
+
+
 def _validate_plugin_references(config: Config) -> None:
     """Verify every ``profile.claude_plugins`` entry exists in the
     top-level ``Config.claude_plugins`` registry.
