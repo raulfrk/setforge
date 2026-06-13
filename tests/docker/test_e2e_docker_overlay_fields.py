@@ -426,11 +426,11 @@ def test_revert_after_install_with_host_local_overrides(
     - ``hook_script`` (``symlink_target`` overlay, dst absent
       pre-install): the transition records the symlink's TARGET as the
       touched path, so ``patch -R`` removes the target file's content.
-      The link OBJECT at dst stays in place: revert resolves the
-      profile WITHOUT folding the host-local overlay, so the
-      overlay-declared link is invisible to its symlink-unlink pass
-      (unlike a tracked-side ``symlink:`` declaration, which IS
-      unlinked — see ``test_e2e_docker_symlinks``).
+      The link OBJECT at dst is ALSO removed: revert folds the
+      host-local overlay (``apply_host_local_tracked_file_overrides``)
+      before its symlink-unlink pass, so the overlay-declared link is
+      visible and gets unlinked — symmetric with a tracked-side
+      ``symlink:`` declaration (see ``test_e2e_docker_symlinks``).
     """
     c = docker_container()
     _bootstrap(c, cfg_text=_REVERT_CFG)
@@ -474,8 +474,7 @@ def test_revert_after_install_with_host_local_overrides(
 
     # The symlink TARGET's content rolled back to absence...
     assert c.exec(["test", "-e", target], check=False).returncode != 0
-    # ...while the link object at dst remains, still pointing at the
-    # (now absent) target — the pinned current contract.
-    assert c.exec(["test", "-L", _DEFAULT_DST], check=False).returncode == 0
-    link = c.exec(["readlink", _DEFAULT_DST], check=True).stdout.strip()
-    assert link == target, link
+    # ...and the link object at dst is removed too: the revert path now
+    # folds the host-local overlay, so the overlay-declared link is
+    # unlinked rather than left dangling.
+    assert c.exec(["test", "-e", _DEFAULT_DST], check=False).returncode != 0

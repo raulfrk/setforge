@@ -760,3 +760,105 @@ def test_revert_to_before_wrong_profile_errors(
     assert revert_result.exit_code == 1
     assert isinstance(revert_result.exception, SetforgeError)
     assert "for profile 'other'" in str(revert_result.exception)
+
+
+# ---------------------------------------------------------------------------
+# Overlay-only symlink revert (host-local ``symlink_target`` in local.yaml).
+#
+# These drive ``_revert_symlink_deployments`` directly — the transition /
+# patch-reverse machinery is orthogonal to the unlink pass these exercise.
+# ---------------------------------------------------------------------------
+
+_SYMLINK_FIXTURE_YAML = """\
+version: 1
+tracked_files:
+  hook:
+    src: hook.sh
+    dst: {dst}
+profiles:
+  vmh:
+    tracked_files: [hook]
+"""
+
+
+def _setup_symlink_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """Build a tracked/ tree + setforge.yaml whose ``hook`` has a plain
+    ``dst`` (no tracked-side ``symlink:``). Returns ``(cfg, dst)``."""
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    (repo / "tracked" / "hook.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    dst = tmp_path / "live" / "hook.sh"
+    cfg = repo / "setforge.yaml"
+    cfg.write_text(_SYMLINK_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
+    return cfg, dst
+
+
+def _point_local_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
+) -> None:
+    """Write ``local.yaml`` and redirect the source-layer ``LOCAL_CONFIG_PATH``
+    at it — the fold reads ``~/.config/setforge/local.yaml`` by default."""
+    local = tmp_path / "local.yaml"
+    local.write_text(body, encoding="utf-8")
+    monkeypatch.setattr("setforge.source.LOCAL_CONFIG_PATH", local)
+
+
+def test_revert_unlinks_overlay_only_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlink declared ONLY via ``symlink_target`` in local.yaml is
+    unlinked on revert — the bug this bead fixes.
+
+    ``_revert_symlink_deployments`` now folds the host-local overlay, so
+    the overlay-declared link (invisible to the resolved profile before
+    the fold) is seen by the unlink pass and removed.
+    """
+    from setforge.cli.revert import _revert_symlink_deployments
+
+    cfg, dst = _setup_symlink_repo(tmp_path)
+    target = tmp_path / "live" / "hook-target.sh"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _point_local_yaml(
+        tmp_path,
+        monkeypatch,
+        f"tracked_files:\n  hook:\n    symlink_target: {target}\n",
+    )
+    # Simulate the install-deployed link object at dst -> target.
+    dst.symlink_to(target)
+    assert dst.is_symlink()
+
+    _revert_symlink_deployments(config=cfg, profile="vmh")
+
+    # The link object is gone, not left dangling.
+    assert not dst.exists()
+    assert not dst.is_symlink()
+
+
+def test_revert_skips_link_when_overlay_dropped_before_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision E (fold CURRENT local.yaml, no install snapshot): if the
+    ``symlink_target`` overlay entry is REMOVED from local.yaml between
+    install and revert, the link is invisible to the fold and survives.
+
+    Accepted, symmetric-with-file-revert edge: revert folds the live
+    local.yaml, not a snapshot taken at install time, so an overlay that
+    no longer declares the symlink leaves the link in place rather than
+    guessing it should unlink. Documented here so the asymmetry is a
+    pinned contract rather than a silent regression.
+    """
+    from setforge.cli.revert import _revert_symlink_deployments
+
+    cfg, dst = _setup_symlink_repo(tmp_path)
+    target = tmp_path / "live" / "hook-target.sh"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # local.yaml present but NO overlay entry for hook (entry dropped).
+    _point_local_yaml(tmp_path, monkeypatch, "tracked_files: {}\n")
+    dst.symlink_to(target)
+    assert dst.is_symlink()
+
+    _revert_symlink_deployments(config=cfg, profile="vmh")
+
+    # Without the overlay the resolved profile has symlink is None for
+    # hook, so the link is not unlinked — it survives (accepted edge).
+    assert dst.is_symlink()
