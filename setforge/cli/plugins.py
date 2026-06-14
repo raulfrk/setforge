@@ -218,12 +218,16 @@ def _register_plugin_in_yaml(
 def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
     """Run ``claude plugin install`` then ``claude plugin enable``.
 
-    ``claude plugin install`` writes
-    ``installed_plugins.json`` without flipping ``enabledPlugins`` — without
-    the second call the plugin lands disabled. Strict failure on enable
-    matches the interactive single-plugin shape of ``plugin add``: a silent
-    warning would be a footgun. The install half retains today's pattern;
-    latent subprocess-error handling on install is tracked separately.
+    Older claude-code releases write ``installed_plugins.json`` without
+    flipping ``enabledPlugins`` — without the explicit enable the plugin
+    lands disabled. Recent releases (2.1.x) auto-enable on install, so the
+    enable is then a no-op; :func:`claude_plugins.plugin_enable` treats the
+    resulting "already enabled" exit as success, keeping ``plugin add``
+    correct across both. A genuine enable failure still surfaces strictly
+    here, matching the interactive single-plugin shape of ``plugin add``:
+    a silent warning would be a footgun. The install half retains today's
+    pattern; latent subprocess-error handling on install is tracked
+    separately.
     """
     pid = f"{plugin_name}@{mp_name}"
     try:

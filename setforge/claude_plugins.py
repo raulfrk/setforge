@@ -294,15 +294,26 @@ def plugin_enable(plugin_id: str) -> None:
 
     This is a cheap re-activation — no re-download happens.  ``plugin_id``
     should be in ``"<name>@<marketplace>"`` form.
+
+    Idempotent: ``claude plugin install`` auto-enables on recent claude-code
+    releases (observed on 2.1.x), so a follow-up enable exits non-zero with
+    an "already enabled" message. That state is the desired end state, so it
+    is treated as success rather than an error — both the single-plugin
+    ``plugin add`` path and the reconcile install loop call through here.
     """
     claude = str(_get_claude_bin())
-    subprocess.run(
-        [claude, "plugin", "enable", plugin_id],
-        check=True,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-    )
+    try:
+        subprocess.run(
+            [claude, "plugin", "enable", plugin_id],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except subprocess.CalledProcessError as exc:
+        if "already enabled" in stderr_of(exc).lower():
+            return
+        raise
 
 
 def plugin_disable(plugin_id: str) -> None:
