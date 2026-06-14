@@ -140,6 +140,12 @@ def yaml_remove_marketplace(config_path: Path, name: str) -> bool:
     mps = doc.get("marketplaces")
     if mps and name in mps:
         del mps[name]
+        # Drop the now-empty block so removal restores the document to its
+        # pre-add shape (``yaml_add_marketplace`` re-materializes it on
+        # demand). A leftover ``marketplaces: {}`` breaks byte-parity for
+        # add-then-rollback flows.
+        if not mps:
+            del doc["marketplaces"]
     _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
