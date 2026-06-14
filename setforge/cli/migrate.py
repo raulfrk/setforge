@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import typer
+from ruamel.yaml.error import YAMLError
 
 from setforge import atomicio, sections, transitions
 from setforge._redact import redact_argv
@@ -496,6 +497,51 @@ def _print_multi_file_diff_preview(
             typer.echo(line.rstrip("\n"))
 
 
+def _preview_read_dependencies(roots: MigrationRoots) -> tuple[Path, ...]:
+    """Tracked markdown srcs a migration READS but does not write.
+
+    The 1.2->2.0 contract migration reads each tracked_file's ``src``
+    (``preserve_user_sections: true``) to enumerate its user-section markers,
+    yet lists only ``setforge.yaml`` + ``local.yaml`` in ``affected_paths``.
+    Those read-only srcs must still be mirrored into the preview's shadow tree
+    or the rendered diff under-reports the section spans the real apply writes.
+
+    Enumerated straight from the raw ``setforge.yaml`` via ruamel (NOT
+    ``load_config``, which rejects a pre-contract schema). Resolved the same
+    way the migration resolves them: ``roots.repo_root / src``. Best-effort —
+    a malformed/unreadable config returns ``()`` so the preview still renders
+    (the migration's own apply surfaces the real error).
+    """
+    if not roots.cfg_path.exists():
+        return ()
+    try:
+        with roots.cfg_path.open("r", encoding="utf-8") as fh:
+            data = _yaml_ops.yaml_rt().load(fh)
+    except (OSError, YAMLError):
+        return ()
+    if not isinstance(data, Mapping):
+        return ()
+    tracked_files = data.get("tracked_files")
+    if not isinstance(tracked_files, Mapping):
+        return ()
+    deps: list[Path] = []
+    seen: set[Path] = set()
+    for entry in tracked_files.values():
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("preserve_user_sections") is not True:
+            continue
+        src_raw = entry.get("src")
+        if src_raw is None:
+            continue
+        dep = roots.repo_root / str(src_raw)
+        if dep in seen:
+            continue
+        seen.add(dep)
+        deps.append(dep)
+    return tuple(deps)
+
+
 def _render_chain_previews(
     *,
     chain: Sequence[Migration],
@@ -512,14 +558,38 @@ def _render_chain_previews(
         tmp_root = Path(tmp)
         mapping: dict[Path, Path] = {}
         for original in paths:
-            shadow = tmp_root / _shadow_name(original)
+            shadow = _shadow_path(tmp_root, original)
             if original.exists():
+                shadow.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(original, shadow)
             mapping[original] = shadow
+        # Read-only dependencies: files a migration READS but does not list in
+        # affected_paths (it writes neither, so they never enter `mapping` /
+        # the diff). The 1.2->2.0 contract step reads each tracked markdown src
+        # to enumerate its user-section markers and emit one span per section;
+        # if those srcs are absent from the shadow tree, ``src.exists()`` is
+        # False during preview and the rendered setforge.yaml "after" silently
+        # omits EVERY section span (and its disposition) the real apply writes —
+        # a confirm-on-wrong-diff defect on the most destructive migration.
+        # Mirror them into the shadow at their real repo_root-relative layout
+        # so the preview's apply finds them exactly as the real apply does.
+        for dep in _preview_read_dependencies(roots):
+            shadow_dep = _shadow_path(tmp_root, dep)
+            if dep.exists() and not shadow_dep.exists():
+                shadow_dep.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(dep, shadow_dep)
+        # Mirror the real directory layout in the shadow tree (rather than
+        # flattening) so EVERY path a migration derives from its roots —
+        # not just cfg_path — lands on the shadow copy the preview reads
+        # back. Otherwise a migration that writes a root-derived path such
+        # as ``roots.home/.config/setforge/local.yaml`` would write into an
+        # unmirrored tmp subtree, and the preview would render "no diff" for
+        # that file even though apply rewrites it (audit: hidden local.yaml
+        # contraction).
         shadow_roots = MigrationRoots(
-            cfg_path=mapping.get(roots.cfg_path, tmp_root / "setforge.yaml"),
-            repo_root=tmp_root / "repo",
-            home=tmp_root / "home",
+            cfg_path=_shadow_path(tmp_root, roots.cfg_path),
+            repo_root=_shadow_path(tmp_root, roots.repo_root),
+            home=_shadow_path(tmp_root, roots.home),
         )
         # Best-effort: re-run the chain against shadows. Migrations that
         # branch on actual user filesystem layout may not be exercisable
@@ -537,15 +607,23 @@ def _render_chain_previews(
         return triples
 
 
-def _shadow_name(p: Path) -> str:
-    """Map an absolute affected path to a flat shadow filename.
+def _shadow_path(tmp_root: Path, p: Path) -> Path:
+    """Map an absolute path into the shadow tree, preserving its layout.
 
-    The shadow tree is flat so each preview path is uniquely-named
-    without recreating the user's full directory layout. We replace
-    path separators with ``__`` so the original name survives in the
-    shadow filename for debugging.
+    The shadow tree MIRRORS the user's real directory layout (the
+    absolute path's leading separator is stripped and the remainder
+    rejoined under ``tmp_root``) rather than flattening to a single
+    filename. Mirroring is what lets ``shadow_roots`` be derived by the
+    same transform: any path a migration computes from its roots (e.g.
+    ``roots.home/.config/setforge/local.yaml``) then resolves to the
+    same shadow file the preview snapshots and diffs.
+
+    The transform is purely lexical (``anchor``-strip + rejoin, no
+    ``resolve()``) so it matches the migration's own literal root joins
+    byte-for-byte: a migration that writes ``shadow_roots.home / ...``
+    lands on exactly the file this returns for the same real path.
     """
-    return p.as_posix().replace("/", "__").lstrip("_")
+    return tmp_root / p.relative_to(p.anchor)
 
 
 def _read_or_empty(p: Path) -> str:

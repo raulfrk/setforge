@@ -696,29 +696,58 @@ def _warn_reconciliation_adjacent_strip(fields: list[str]) -> None:
 
 
 def _validate_tolerant(data: object) -> Config:
-    """Validate ``data`` forward-tolerantly: ignore (warn about) unknown keys.
+    """Validate ``data`` forward-tolerantly: ignore (warn about) unknown keys
+    AND unknown enum values on existing fields.
 
     Lets Pydantic decide what is genuinely extra — running ``model_validate``
     once and inspecting the error set. This correctly accounts for keys an
     alias or a ``mode="before"`` validator legitimately consumes, which a raw
     key-vs-``model_fields`` diff cannot
-    see. If EVERY error is ``extra_forbidden`` (a newer-version field or a
-    typo), strip exactly those locations, warn, and retry. Any non-extra
-    error means a real validation failure and propagates unchanged.
+    see. Two forward-compat classes are tolerated:
+
+    - ``extra_forbidden`` — a newer-version field or a typo. Strip exactly
+      those locations, warn, and retry.
+    - ``enum`` — a newer minor added a VALUE to an existing field (e.g. a
+      future ``disposition: layered``). Per COMPATIBILITY.md the schema may
+      grow enum members within a major, so an older engine must not crash on
+      one. Strip the offending key so the field reverts to its default, warn,
+      and retry. If stripping does not clear the error (a *required* enum
+      field with no default, or an enum nested in a list entry that this
+      reader cannot safely default), refuse cleanly via :class:`ConfigError`
+      ("upgrade setforge") rather than leaking a raw Pydantic traceback.
+
+    Any error that is neither class means a real validation failure and
+    propagates unchanged.
     """
     try:
         return Config.model_validate(data)
     except ValidationError as exc:
         errors = exc.errors()
         extra_locs = [e["loc"] for e in errors if e.get("type") == "extra_forbidden"]
-        if not extra_locs or len(extra_locs) != len(errors):
-            raise  # mixed with real errors (or none extra) — a genuine failure
+        enum_locs = [e["loc"] for e in errors if e.get("type") == "enum"]
+        if len(extra_locs) + len(enum_locs) != len(errors) or not (
+            extra_locs or enum_locs
+        ):
+            raise  # mixed with real errors (or none tolerable) — a genuine failure
         adjacent, ordinary = _partition_reconciliation_adjacent(data, extra_locs)
         if ordinary:
             _warn_unknown_keys([_format_loc(loc) for loc in ordinary])
         if adjacent:
             _warn_reconciliation_adjacent_strip([_format_loc(loc) for loc in adjacent])
-        return Config.model_validate(_strip_extra_locs(data, extra_locs))
+        if enum_locs:
+            _warn_unknown_enum_values([_format_loc(loc) for loc in enum_locs])
+        stripped = _strip_extra_locs(data, [*extra_locs, *enum_locs])
+        try:
+            return Config.model_validate(stripped)
+        except ValidationError as retry_exc:
+            # Stripping could not clear every error: a required enum field with
+            # no safe default, or an enum nested in a list entry the reader
+            # cannot default. Refuse cleanly instead of leaking the traceback.
+            raise ConfigError(
+                "this setforge does not understand a value in setforge.yaml "
+                f"({_format_loc(retry_exc.errors()[0]['loc'])}) — it was likely "
+                "added by a newer setforge; upgrade setforge to read this config"
+            ) from retry_exc
 
 
 def _format_loc(loc: tuple[object, ...]) -> str:
@@ -858,6 +887,27 @@ def _warn_unknown_keys(unknown: list[str]) -> None:
         sys.stderr.write(
             f"{prefix} ignoring unknown setforge.yaml key {field_path!r} "
             f"(unrecognized by this setforge — a newer-version field or a typo)\n"
+        )
+
+
+def _warn_unknown_enum_values(fields: list[str]) -> None:
+    """Warn (one line per field) for every stripped, unknown enum VALUE.
+
+    A newer minor may add a member to an existing enum field (e.g. a future
+    ``disposition: layered``). COMPATIBILITY.md permits that within a major,
+    so the field reverts to its default here rather than crashing. Text is
+    always written; only the color is TTY-gated, so the warning survives
+    CliRunner / Docker e2e / CI capture.
+    """
+    import sys
+
+    color = sys.stderr.isatty()
+    prefix = "\033[33mwarning:\033[0m" if color else "warning:"
+    for field_path in fields:
+        sys.stderr.write(
+            f"{prefix} ignoring unrecognized value for setforge.yaml key "
+            f"{field_path!r} (a newer-version enum member); reverting it to "
+            f"this setforge's default — upgrade setforge to honor it\n"
         )
 
 

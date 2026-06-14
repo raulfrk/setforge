@@ -12,6 +12,7 @@ applying. ``--yes`` short-circuits the wizard for non-interactive use.
 
 import json
 import os
+import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,6 +62,7 @@ from setforge.errors import (
     RevertFailed,
     SetforgeError,
 )
+from setforge.locking import profile_lock
 
 
 def _human_age(timestamp: datetime, now: datetime) -> str:
@@ -258,13 +260,27 @@ def _build_revert_plan(
             patch_file.read_text(encoding="utf-8")
         )
 
+    # Per-path mode restore: when the forward transition recorded a
+    # pre-install mode for a path, revert will chmod it back — surface that
+    # in the preview so a mode-only revert (empty content patch) is not
+    # silent. Missing file_modes.json (pre-bump) → empty map → no note.
+    recorded_modes = transitions.load_file_modes(transition)
     touched = [Path(p) for p in meta_payload.get("paths", [])]
+    # A content-NOOP + mode-only install records the path in file_modes but
+    # NOT in meta.json's ``paths`` (no content delta), so union the
+    # mode-only paths in — preserving the touched-paths order first — so the
+    # preview lists every file revert will mutate on EITHER axis.
+    touched_set = set(touched)
+    mode_only = [p for p in recorded_modes if p not in touched_set]
     file_mutations = tuple(
         FileMutation(
             path=p,
             diff_summary=diff_summaries.get(str(p), "+0 -0"),
+            mode_restore=(
+                f"mode → {recorded_modes[p]:#o}" if p in recorded_modes else None
+            ),
         )
-        for p in touched
+        for p in [*touched, *mode_only]
     )
 
     return RevertPlan(
@@ -346,6 +362,17 @@ def _apply_revert(
     when store files were patch-recorded. The reverse transition is
     written LAST (meta.json is its commit marker), so an interrupted
     revert is re-runnable: the idempotent restore simply re-applies.
+
+    File-mode restore: when the transition carries a ``file_modes.json``
+    (a forward command changed a file's permission bits), each recorded
+    path is chmod-ed back to its pre-command mode AFTER the patch reverse —
+    the content patch carries bytes only, so this is the only inverse of
+    the install chmod (e.g. a 0600 secret retracked to 0644 is restored to
+    0600). The CURRENT mode of each such path is recaptured FIRST and
+    recorded on the reverse transition so a second revert (redo) restores
+    the install-applied mode — mode redo symmetry mirrors the store-state
+    recapture. A pre-bump transition (no ``file_modes.json``) reads back as
+    an empty map and skips mode work entirely (backward-compat).
     """
     transitions.ensure_state_dir_writable()
     typer.echo(f"reverting: {transition}")
@@ -364,10 +391,20 @@ def _apply_revert(
             for e in pre_store_state
         )
 
+    # Recapture the CURRENT mode of every mode-recorded path BEFORE the
+    # restore so the reverse transition can redo the install chmod. Empty
+    # for a pre-bump transition (no file_modes.json → {}), which then
+    # records no file_modes on the reverse record (omit-when-empty).
+    pre_command_modes = transitions.load_file_modes(transition)
+    reverse_modes = _recapture_modes(pre_command_modes)
+
     transitions.apply_patch_reverse(transition)
     _revert_symlink_deployments(config=config, profile=profile)
     if pre_store_state is not None:
         transitions.restore_state_snapshots(pre_store_state)
+    # Restore each path's pre-install mode AFTER the patch reverse rewrote
+    # its bytes (the content patch never carries permission bits).
+    _restore_modes(pre_command_modes)
 
     target = _write_reverse_transition(
         transition,
@@ -375,9 +412,45 @@ def _apply_revert(
         touched_paths,
         file_pre,
         state_snapshots=reverse_store_state,
+        file_modes=reverse_modes,
     )
     typer.echo(f"transition: {target}")
     typer.echo(f"to REDO this revert: setforge revert --profile={profile}")
+
+
+def _recapture_modes(recorded: dict[Path, int]) -> dict[Path, int]:
+    """Snapshot the CURRENT mode of every path in ``recorded`` (redo data).
+
+    Returns ``{path: live_mode}`` for each path that still exists — the
+    install-applied mode this revert is about to undo. The reverse
+    transition records this so a second revert (redo) re-applies the
+    install chmod, mirroring the store-state recapture. A path that no
+    longer exists (deleted out-of-band) is dropped: there is nothing to
+    redo a chmod onto. Must run BEFORE :func:`_restore_modes` mutates the
+    live modes.
+    """
+    out: dict[Path, int] = {}
+    for path in recorded:
+        try:
+            out[path] = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            continue
+    return out
+
+
+def _restore_modes(recorded: dict[Path, int]) -> None:
+    """chmod each recorded path back to its pre-command mode.
+
+    Runs AFTER the patch reverse restored the path's bytes, so the mode
+    axis is reverted in lockstep with the content axis. A path that no
+    longer exists is skipped (idempotent — an interrupted revert can
+    re-run); no-op for the empty map (pre-bump transition).
+    """
+    for path, mode in recorded.items():
+        try:
+            os.chmod(path, mode)
+        except FileNotFoundError:
+            continue
 
 
 def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
@@ -487,7 +560,14 @@ def revert(
     if choice is RevertChoice.ABORT:
         return
 
-    _apply_revert(transition, profile, config)
+    # Serialize the live mutation against concurrent install/sync/revert on
+    # the same profile, matching install.py / sync.py. The deploy model
+    # relies on a single-serialized-process assumption (the resolve->write
+    # staleness and symlink-ordering windows are only safe under this lock);
+    # acquiring it here — after the confirm wizard, before any patch-reverse
+    # or store restore — keeps revert inside that contract.
+    with profile_lock(profile):
+        _apply_revert(transition, profile, config)
 
 
 def _resolve_to_before_chain(
@@ -571,14 +651,19 @@ def _revert_to_before(profile: str, to_before: str, *, config: Path, yes: bool) 
         return
 
     total = len(chain)
-    for index, entry in enumerate(chain, start=1):
-        try:
-            _apply_revert(entry.directory, profile, config)
-        except RevertFailed as exc:
-            raise SetforgeError(
-                f"applied {index - 1} of {total}; system is in inconsistent "
-                f"state; run setforge transitions show to inspect:\n{exc}"
-            ) from exc
+    # Hold the profile lock across the whole apply loop so the multi-step
+    # reverse chain cannot interleave with a concurrent install/sync/revert
+    # (each step's reverse patch is defined against the state the previous
+    # step produced; an interleaving deploy would invalidate that chain).
+    with profile_lock(profile):
+        for index, entry in enumerate(chain, start=1):
+            try:
+                _apply_revert(entry.directory, profile, config)
+            except RevertFailed as exc:
+                raise SetforgeError(
+                    f"applied {index - 1} of {total}; system is in inconsistent "
+                    f"state; run setforge transitions show to inspect:\n{exc}"
+                ) from exc
 
 
 transitions_app: typer.Typer = typer.Typer(

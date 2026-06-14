@@ -8,6 +8,10 @@ under ``~/.local/state/setforge/transitions/`` containing:
 - ``extensions.json`` — added/removed extension IDs (omitted if no delta)
 - ``plugins.json`` — installed / enabled / disabled plugin IDs plus
   added / removed marketplaces (omitted if no plugin delta)
+- ``file_modes.json`` — per-path pre-command permission bits for files
+  whose MODE (not just content) the command changed (omitted if none).
+  The content patch carries bytes only; this records the mode axis so
+  revert can chmod each reverted path back to its pre-command mode.
 - ``state_snapshots/`` — pre-command per-host store state (byte bases,
   spans sidecars, scalar-base manifests) as a ``manifest.json`` plus
   numbered raw-byte payload files (omitted when nothing was captured)
@@ -397,17 +401,46 @@ def compute_patch(
         after_lines = (after or "").splitlines(keepends=True)
         from_path = "/dev/null" if before is None else _diff_path(path)
         to_path = "/dev/null" if after is None else _diff_path(path)
-        chunks.append(
-            "".join(
-                difflib.unified_diff(
-                    before_lines,
-                    after_lines,
-                    fromfile=from_path,
-                    tofile=to_path,
-                )
+        diff_lines = list(
+            difflib.unified_diff(
+                before_lines,
+                after_lines,
+                fromfile=from_path,
+                tofile=to_path,
             )
         )
+        chunks.append(_annotate_no_newline(diff_lines))
     return "".join(chunks)
+
+
+_NO_NEWLINE_MARKER = "\\ No newline at end of file\n"
+
+
+def _annotate_no_newline(diff_lines: list[str]) -> str:
+    """Insert GNU patch's ``\\ No newline at end of file`` marker so the
+    diff round-trips under ``patch`` (forward and ``-R`` reverse).
+
+    :func:`difflib.unified_diff` never emits this marker, so a hunk line
+    drawn from content without a trailing newline lacks its own ``\\n``
+    and concatenates with whatever follows (``-beta+GAMMA``), which GNU
+    patch rejects as a malformed patch. For every body line (``' '``,
+    ``'-'``, ``'+'``) that does not end in ``\\n`` we append the marker on
+    its own line; the marker applies to the immediately preceding line per
+    the unified-diff format.
+    """
+    out: list[str] = []
+    for line in diff_lines:
+        # Header lines (---/+++/@@) always carry their own newline from
+        # difflib and are not body content; pass them through untouched.
+        if line.startswith(("---", "+++", "@@")):
+            out.append(line)
+            continue
+        if line[:1] in (" ", "-", "+") and not line.endswith("\n"):
+            out.append(line + "\n")
+            out.append(_NO_NEWLINE_MARKER)
+        else:
+            out.append(line)
+    return "".join(out)
 
 
 @dataclass(frozen=True, slots=True)
@@ -686,7 +719,12 @@ def load_reconcile_outcomes(
     path = transition_dir / "reconcile_outcomes.json"
     if not path.exists():
         return ()
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read reconcile_outcomes.json at {path}: {exc}"
+        ) from exc
     if not isinstance(raw, dict):
         raise InvalidTransitionRecord(
             f"reconcile_outcomes.json: top-level must be a dict, got "
@@ -910,6 +948,73 @@ def load_state_snapshots(
     return tuple(_validate_one_state_snapshot(entry, snap_dir) for entry in entries)
 
 
+_FILE_MODES_FILENAME: Final[str] = "file_modes.json"
+
+
+def _serialize_file_modes(file_modes: Mapping[Path, int]) -> str | None:
+    """Return the ``file_modes.json`` body, or ``None`` when empty.
+
+    Records the pre-command permission bits of every path whose MODE the
+    command changed (a content-NOOP mode-only fixup, or a content UPDATE
+    whose tracked mode differed from live). The content patch carries
+    bytes only, so this sibling is the ONLY reversible record of the mode
+    axis; ``revert`` chmods each reverted path back to its recorded value.
+    Modes serialize as decimal ints (``json.dumps`` has no octal literal);
+    :func:`load_file_modes` reads them back verbatim. Empty map → ``None``
+    so no file is written (omit-when-empty, backward-compat-safe).
+    """
+    if not file_modes:
+        return None
+    body = {str(path): mode for path, mode in file_modes.items()}
+    return json.dumps(body, indent=2, sort_keys=True) + "\n"
+
+
+def load_file_modes(transition_dir: TransitionDir) -> dict[Path, int]:
+    """Return the per-path pre-command mode map for a transition directory.
+
+    Returns ``{}`` when ``file_modes.json`` is absent — the backward-compat
+    path for transitions written before this schema bump, so an older record
+    reverts with NO mode change (treat missing map as no-op). Raises
+    :class:`InvalidTransitionRecord` when the file exists but its shape is
+    corrupt (non-dict top level, non-str key, or non-int / out-of-range
+    mode value).
+    """
+    path = transition_dir / _FILE_MODES_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read file_modes.json at {path}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise InvalidTransitionRecord(
+            f"file_modes.json at {path}: top-level must be a dict, got "
+            f"{type(raw).__name__}"
+        )
+    out: dict[Path, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            raise InvalidTransitionRecord(
+                f"file_modes.json at {path}: key must be str, got {type(key).__name__}"
+            )
+        # JSON has no bool/int distinction at the type level for our needs,
+        # but ``True``/``False`` ARE ``int`` instances in Python — reject
+        # them explicitly so a hand-edited ``true`` never chmods to 0o1.
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise InvalidTransitionRecord(
+                f"file_modes.json at {path}: mode for {key!r} must be int, "
+                f"got {type(value).__name__}"
+            )
+        if not 0 <= value <= 0o7777:
+            raise InvalidTransitionRecord(
+                f"file_modes.json at {path}: mode for {key!r} out of range: {value!r}"
+            )
+        out[Path(key)] = value
+    return out
+
+
 def _validated_str_list(raw: object, *, key: str, source_label: str) -> list[str]:
     """Return a validated ``list[str]`` built from ``raw``.
 
@@ -1034,6 +1139,7 @@ def write_transition(
     reconcile_outcomes: tuple[ReconcileOutcome, ...] = (),
     state_snapshots: tuple[StateSnapshotEntry, ...] = (),
     mcp_delta: MCPDelta | None = None,
+    file_modes: Mapping[Path, int] | None = None,
 ) -> TransitionDir:
     """Write a complete transition directory under :func:`transitions_root`.
 
@@ -1048,7 +1154,8 @@ def write_transition(
 
     Write order: stage ``changes.patch`` (if non-empty), ``extensions.json``
     (if delta non-empty), ``plugins.json`` (if delta non-empty),
-    ``reconcile_outcomes.json`` (if non-empty), and ``state_snapshots/``
+    ``reconcile_outcomes.json`` (if non-empty), ``file_modes.json`` (if
+    non-empty), and ``state_snapshots/``
     (if non-empty) into a ``.pending-<dirname>/``
     staging dir; ``os.rename(pending, target)`` — atomic POSIX rename,
     same fs; write ``meta.json`` inside the now-real ``target/`` dir as
@@ -1062,6 +1169,11 @@ def write_transition(
     tuples so the legacy call shapes stay backward-compatible; an empty
     ``state_snapshots`` writes no ``state_snapshots/`` dir at all, which
     :func:`load_state_snapshots` reads back as its ``None`` sentinel.
+
+    ``file_modes`` is the per-path pre-command permission map (paths whose
+    MODE the command changed). ``None`` / empty writes no ``file_modes.json``
+    at all, which :func:`load_file_modes` reads back as ``{}`` (the
+    no-mode-change backward-compat path for pre-bump records).
 
     Returns the absolute path of the committed directory.
 
@@ -1108,6 +1220,10 @@ def write_transition(
     outcomes_payload = _serialize_reconcile_outcomes(reconcile_outcomes)
     if outcomes_payload is not None:
         _write_text_durable(pending / "reconcile_outcomes.json", outcomes_payload)
+
+    file_modes_payload = _serialize_file_modes(file_modes or {})
+    if file_modes_payload is not None:
+        _write_text_durable(pending / _FILE_MODES_FILENAME, file_modes_payload)
 
     _stage_state_snapshots(pending, state_snapshots)
 

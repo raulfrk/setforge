@@ -95,6 +95,14 @@ def _run_git(
         raise GitOpError(
             f"git {_sanitize_args(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
         ) from exc
+    except OSError as exc:
+        # A which()-resolved git can still fail to spawn (removed in the
+        # TOCTOU window, replaced by a non-executable file, broken wrapper).
+        # Convert to GitOpError so the clean exit-1 + masked-args contract
+        # holds for every call site instead of a raw traceback.
+        raise GitOpError(
+            f"git {_sanitize_args(args)} could not be executed: {exc}"
+        ) from exc
 
 
 def git_clone(url: str, dest: Path) -> None:

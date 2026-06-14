@@ -38,7 +38,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NewType, assert_never
 
@@ -144,14 +144,18 @@ class _WalkState:
     """Mutable state machine accumulator for :func:`_walk_markers`.
 
     Tracks the currently-open section (``None`` when no section is open)
-    and the next 0-based index to assign to an unnamed section. Mutated
-    in place by :func:`_handle_start_marker` and :func:`_handle_end_marker`.
+    and the next 0-based index to assign to an unnamed section. ``seen_keys``
+    records every section key already closed so a second pair sharing one
+    key is rejected (it would otherwise collapse silently in the dict-keyed
+    primitives). Mutated in place by :func:`_handle_start_marker` and
+    :func:`_handle_end_marker`.
     """
 
     in_section: bool = False
     section_name: str | None = None
     section_semantics: SectionSemantics | None = None
     unnamed_index: int = 0
+    seen_keys: set[str] = field(default_factory=set)
 
 
 def _handle_start_marker(
@@ -184,14 +188,21 @@ def _handle_end_marker(
     semantics: SectionSemantics,
     embedded_hash: str | None,
     allow_legacy: bool,
+    reject_duplicate_keys: bool,
     state: _WalkState,
 ) -> _EndMarker:
     """Validate an end marker, mutate ``state``, return the event.
 
     Raises :class:`MarkerError` on end-without-start, name mismatch with
-    the open section, semantics mismatch with the open section, or
-    missing ``hash=<...>`` segment when ``allow_legacy`` is false. On
-    success, closes the open section and (for unnamed sections)
+    the open section, semantics mismatch with the open section, or missing
+    ``hash=<...>`` segment when ``allow_legacy`` is false. When
+    ``reject_duplicate_keys`` is true, also raises on a section key already
+    closed earlier in the same text — a duplicate name would otherwise
+    collapse silently in the dict-keyed primitives, splicing one surviving
+    body into both regions and corrupting the first region's end-marker
+    hash. The line-iterating strip/migration helpers leave the flag false
+    so they can still de-marker a live file that already carries duplicate
+    pairs. On success, closes the open section and (for unnamed sections)
     increments ``state.unnamed_index``.
     """
     if not state.in_section:
@@ -217,6 +228,9 @@ def _handle_end_marker(
         if state.section_name is not None
         else str(state.unnamed_index)
     )
+    if reject_duplicate_keys and key in state.seen_keys:
+        raise MarkerError(f"line {lineno}: duplicate user-section name {key!r}")
+    state.seen_keys.add(key)
     event = _EndMarker(line, state.section_name, key, semantics, embedded_hash)
     if state.section_name is None:
         state.unnamed_index += 1
@@ -325,7 +339,12 @@ def _parse_marker_line(
     return kind, semantics_raw, name, embedded_hash
 
 
-def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerEvent]:
+def _walk_markers(
+    text: str,
+    *,
+    allow_legacy: bool = False,
+    reject_duplicate_keys: bool = False,
+) -> Iterator[_MarkerEvent]:
     """Yield one event per line in ``text``, validating marker pairing.
 
     Centralizes the state machine shared by :func:`extract_sections`,
@@ -343,6 +362,18 @@ def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerE
     :attr:`SectionSemantics.SHARED`, and end markers missing the
     ``hash=<...>`` segment yield ``embedded_hash=None`` instead of
     raising. All other validation is unaffected.
+
+    ``reject_duplicate_keys`` (default false) makes a second section pair
+    sharing one key raise :class:`MarkerError` instead of yielding it. The
+    dict-keyed primitives (:func:`extract_sections`, :func:`merge_sections`,
+    :func:`set_marker_hashes`, :func:`hash_sections`,
+    :func:`extract_marker_hashes`, :func:`section_semantics`) pass it true,
+    because there a duplicate name silently drops the first body and
+    corrupts its end-marker hash. The default stays false so the
+    line-iterating consumers (the strip/migration helpers, and
+    :func:`setforge.host_local_inject._find_after_section_offsets`, which
+    deliberately collects every same-named match to raise its own
+    ambiguity error) keep their event-by-event behavior.
     """
     state = _WalkState()
     for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
@@ -356,7 +387,14 @@ def _walk_markers(text: str, *, allow_legacy: bool = False) -> Iterator[_MarkerE
             yield _handle_start_marker(line, lineno, name, semantics, state)
         else:
             yield _handle_end_marker(
-                line, lineno, name, semantics, embedded_hash, allow_legacy, state
+                line,
+                lineno,
+                name,
+                semantics,
+                embedded_hash,
+                allow_legacy,
+                reject_duplicate_keys,
+                state,
             )
 
     if state.in_section:
@@ -417,6 +455,36 @@ def detect_legacy_markers(text: str) -> bool:
     return False
 
 
+def detect_duplicate_section_names(text: str) -> str | None:
+    """Return the first user-section name that appears on two start markers.
+
+    Regex-only scan (does NOT call :func:`_walk_markers`). Lets the CLI
+    layer surface a clear "rename one of the duplicate sections" error
+    before the strict parser's :class:`MarkerError` propagates as a raw
+    ``line N: duplicate user-section name`` message. The core parse/merge/
+    hash primitives reject duplicates loudly via :func:`_handle_end_marker`;
+    this detector is the user-actionable pre-check mirroring
+    :func:`detect_legacy_markers`.
+
+    Unnamed sections (no NAME token) are keyed positionally and can never
+    collide, so they are ignored here. Returns ``None`` when no named
+    start marker repeats.
+    """
+    seen: set[str] = set()
+    for line in text.splitlines():
+        match = _MARKER_RE.match(line)
+        if match is None:
+            continue
+        kind = match.group(1)
+        name = match.group(3)
+        if kind != "start" or name is None:
+            continue
+        if name in seen:
+            return name
+        seen.add(name)
+    return None
+
+
 def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]:
     """Return the content between every marker pair in ``text``.
 
@@ -433,7 +501,9 @@ def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]
     """
     sections: dict[str, str] = {}
     section_lines: list[str] = []
-    for event in _walk_markers(text, allow_legacy=allow_legacy):
+    for event in _walk_markers(
+        text, allow_legacy=allow_legacy, reject_duplicate_keys=True
+    ):
         match event:
             case _BodyLine(line=line):
                 section_lines.append(line)
@@ -480,7 +550,7 @@ def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
     # arm of this cascade legitimately consumes ``line``. Compare
     # ``extract_sections`` above where some arms (e.g. ``_StartMarker()``)
     # genuinely don't need the capture and elide it.
-    for event in _walk_markers(tracked_text):
+    for event in _walk_markers(tracked_text, reject_duplicate_keys=True):
         match event:
             case _OutsideLine(line=line):
                 out_lines.append(line)
@@ -538,7 +608,9 @@ def extract_marker_hashes(
     """
     return {
         event.key: event.embedded_hash
-        for event in _walk_markers(text, allow_legacy=allow_legacy)
+        for event in _walk_markers(
+            text, allow_legacy=allow_legacy, reject_duplicate_keys=True
+        )
         if isinstance(event, _EndMarker)
     }
 
@@ -578,7 +650,9 @@ def set_marker_hashes(
         )
 
     out_lines: list[str] = []
-    for event in _walk_markers(text, allow_legacy=allow_legacy):
+    for event in _walk_markers(
+        text, allow_legacy=allow_legacy, reject_duplicate_keys=True
+    ):
         match event:
             case _EndMarker(name=name, semantics=semantics, key=key, line=line):
                 out_lines.append(_format_end_marker(name, semantics, hashes[key], line))
@@ -627,7 +701,9 @@ def section_semantics(
     """
     return {
         event.key: event.semantics
-        for event in _walk_markers(text, allow_legacy=allow_legacy)
+        for event in _walk_markers(
+            text, allow_legacy=allow_legacy, reject_duplicate_keys=True
+        )
         if isinstance(event, _EndMarker)
     }
 

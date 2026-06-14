@@ -68,6 +68,7 @@ from setforge.cli._helpers import (
     _extract_live_sections_map,
     _iter_all_tracked_files,
     _iter_section_tracked_files,
+    _refuse_duplicate_section_names,
     _resolve_drift_paths,
     _resolve_section_decisions,
 )
@@ -449,12 +450,14 @@ def _deploy_all_tracked_files(
     section_auto: ReconcileAuto | None = None,
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
     strict_spans: bool = False,
-) -> tuple[transitions.StateSnapshotEntry, ...]:
+) -> DeployOutcome:
     """Deploy every tracked_file in two passes: resolve all, THEN write all.
 
-    Returns the pre-install store snapshots captured at the pass-2 barrier
-    (see :func:`_capture_store_snapshots`) so the caller records them on
-    the install transition for store-state revert.
+    Returns a :class:`DeployOutcome` carrying the pre-install store
+    snapshots captured at the pass-2 barrier (see
+    :func:`_capture_store_snapshots`) AND the per-path pre-install mode map,
+    so the caller records both on the install transition for store-state +
+    file-mode revert.
 
     **Pass 1 (read-only).** For each regular-file sub-entry: plan the
     disposition base (:func:`_plan_disposition_base` — any migration write is
@@ -747,25 +750,49 @@ def _capture_store_snapshots(
     return tuple(entries)
 
 
+@dataclass(slots=True, frozen=True)
+class DeployOutcome:
+    """The pass-2 deploy outputs the caller threads into the transition.
+
+    ``state_snapshots`` is the pre-install store state captured at the
+    pass-2 barrier (:func:`_capture_store_snapshots`). ``prior_modes`` maps
+    each live path whose MODE this install changed to the permission bits it
+    held BEFORE the install chmod-ed it (from
+    :attr:`deploy.DeployResult.prior_mode`) — the data ``revert`` needs to
+    chmod the path back in lockstep with the content patch reverse. A deploy
+    that touched no mode (fresh CREATE, true NOOP, mode-already-matched
+    UPDATE, or a symlink record) contributes nothing.
+    """
+
+    state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
+    prior_modes: dict[Path, int]
+
+
 def _execute_pending_deploys(
     profile: str,
     pending: list[_PendingDeploy],
-) -> tuple[transitions.StateSnapshotEntry, ...]:
+) -> DeployOutcome:
     """Pass 2: replay the pass-1 records in order, performing every write.
 
     Snapshots the pre-install store state FIRST (one barrier, before any
-    write — see :func:`_capture_store_snapshots`) and returns the entries
-    so the caller threads them into the install transition. Then, per
+    write — see :func:`_capture_store_snapshots`) and returns it together
+    with the per-path pre-install mode map so the caller threads both into
+    the install transition. Then, per
     record: apply the deferred base-migration writes (seed-first order +
     the one-time warning) → write the resolved content via
     :func:`deploy.write_resolved_deploy` (or run
     :func:`deploy.deploy_symlinked_file` for a symlink record) → echo the
     action → advance the disposition byte base → advance the spans sidecar,
-    in lockstep per file. After the loop, prune bases keyed on the executed
-    disposition set — so a gate refusal (which never reaches this function)
-    prunes nothing.
+    in lockstep per file. Each write whose :class:`deploy.DeployResult`
+    reports a ``prior_mode`` (the live mode it overwrote) records that mode
+    under the deployed path, keyed by the SAME path the transition snapshots
+    — ``real_dst`` (symlink-resolved), so the revert chmod targets the file
+    the patch reverse rewrites. After the loop, prune bases keyed on the
+    executed disposition set — so a gate refusal (which never reaches this
+    function) prunes nothing.
     """
     state_snapshots = _capture_store_snapshots(profile, pending)
+    prior_modes: dict[Path, int] = {}
     disposition_file_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
@@ -792,6 +819,11 @@ def _execute_pending_deploys(
                 profile, record.sub_name, record.sub_dst, record.base_plan
             )
         result = deploy.write_resolved_deploy(record.resolved)
+        if result.prior_mode is not None:
+            # ``result.dst`` is the symlink-resolved real_dst — the SAME
+            # path the transition snapshots and the patch reverse rewrites,
+            # so revert's chmod target lines up with its content restore.
+            prior_modes[result.dst] = result.prior_mode
         typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
         _echo_host_local_sections_provenance(record.host_local)
         # ADVANCE the disposition base only AFTER the live write.
@@ -808,7 +840,7 @@ def _execute_pending_deploys(
     # are removed. Non-disposition files never have a base, so an empty
     # keep-set still correctly clears any stale bases under the profile.
     base_store.prune(profile, disposition_file_ids)
-    return state_snapshots
+    return DeployOutcome(state_snapshots=state_snapshots, prior_modes=prior_modes)
 
 
 @dataclass(slots=True, frozen=True)
@@ -1190,12 +1222,18 @@ def _write_install_transition(
     preserve_user_keys_applied: bool | None = None,
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     mcp_delta: transitions.MCPDelta | None = None,
+    file_modes: Mapping[Path, int] | None = None,
 ) -> Path:
     """Write the install transition record; return the target directory path.
 
     ``state_snapshots`` carries the pre-install store state captured at
     the pass-2 barrier (:func:`_capture_store_snapshots`); ``revert``
     restores those entries in lockstep with the ``changes.patch`` reverse.
+
+    ``file_modes`` is the per-path pre-install permission map (paths whose
+    MODE this install changed); ``revert`` chmods each reverted path back to
+    its recorded value in lockstep with the patch reverse, so a mode-only
+    install (empty content patch) is still a faithful inverse.
 
     Two arguments carry schema-bump backward-compat history: ``source_dir``
     (when set and pointing at a git repo,
@@ -1231,6 +1269,7 @@ def _write_install_transition(
         reconcile_outcomes=reconcile_outcomes,
         state_snapshots=state_snapshots,
         mcp_delta=mcp_delta,
+        file_modes=file_modes,
     )
 
 
@@ -1404,7 +1443,15 @@ def _run_predeploy_gates(
     and short-circuits when its triggering flag is unset; the order
     matches the pre-extraction body verbatim so flag interactions stay
     unchanged.
+
+    A duplicate user-section name is structural corruption (NOT a
+    migratable legacy-marker artifact, so install does not silently fix it
+    the way it migrates pre-hash markers): refuse it FIRST, before any
+    other gate, so a duplicate-bearing tracked/live file aborts the install
+    with the actionable rename message rather than collapsing a section
+    body during deploy.
     """
+    _refuse_duplicate_section_names(ctx, command="install")
     _confirm_legacy_drift_or_exit(
         drift_report=drift_report,
         ctx=ctx,
@@ -1534,7 +1581,24 @@ def _dry_run_pipeline(
     """
     typer.echo(_DRY_RUN_HEADER)
     _dry_run_emit_profile_summary(ctx)
-    drift_report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
+    # Thread the validated host_local_sections overlay into the drift
+    # compare so a live file that already received its injected host-local
+    # sections does NOT surface as spurious content drift — matching what
+    # ``setforge compare`` reports (compare.py threads the same overlay).
+    # Without this the dry-run report AND the fresh-host welcome preview
+    # (which both route through this function) over-report drift on any
+    # tracked_file using legacy host_local_sections marker injection.
+    # Loaded here rather than carried on ``ctx`` so this read-only path
+    # stays self-contained, mirroring ``_dry_run_emit_host_local_inject``.
+    host_local_sections_map = _load_validated_host_local_sections(
+        ctx.cfg, ctx.resolved, ctx.repo_root
+    )
+    drift_report = compare_mod.compare_profile(
+        ctx.cfg,
+        ctx.profile,
+        ctx.repo_root,
+        host_local_sections=host_local_sections_map,
+    )
     # Pre-extract live user-sections via the SAME helper the real
     # pipeline calls (anti-pattern check #3 — no parallel compute).
     # In dry-run the map is informational (a count surface); the real

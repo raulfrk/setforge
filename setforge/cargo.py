@@ -66,7 +66,10 @@ def _installed_crates(cargo: str) -> set[str]:
             capture_output=True,
             timeout=_LIST_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        # OSError covers a which()-resolved cargo that fails to exec
+        # (removed/replaced in the TOCTOU window, broken wrapper): degrade
+        # to "assume nothing installed" rather than crashing install.
         LOGGER.warning("`cargo install --list` failed: %s", stderr_of(exc))
         return set()
     crates: set[str] = set()
@@ -126,7 +129,14 @@ def install_cargo_binaries(crates: Iterable[str]) -> list[tuple[str, str]]:
                 capture_output=True,
                 timeout=_INSTALL_TIMEOUT_S,
             )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as exc:
+            # OSError covers a which()-resolved cargo that fails to exec
+            # (TOCTOU removal/replacement, broken wrapper): record the
+            # per-crate failure rather than aborting the whole install.
             msg = stderr_of(exc)
             LOGGER.warning("cargo install failed for %s: %s", crate, msg)
             _warn(f"warning: cargo install {crate} failed — {msg}")

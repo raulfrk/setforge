@@ -104,11 +104,18 @@ class FileMutation:
     cleanly on conflict. The empty default exists so the panel can
     surface conflict ranges in a future version that pre-walks the
     reverse-hunks against live state (e.g. diff vs. recorded baseline).
+
+    ``mode_restore`` is a human-readable note (e.g. ``"mode → 0o600"``)
+    set when the revert will also chmod this path back to its pre-install
+    permission bits (the content patch carries bytes only, so a mode-only
+    install would otherwise be silently reverted on the mode axis). ``None``
+    when the install changed no mode for this path.
     """
 
     path: Path
     diff_summary: str
     user_edit_collision: tuple[tuple[int, int], ...] = ()
+    mode_restore: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -172,7 +179,8 @@ def _render_files_section(plan: RevertPlan, console: Console) -> None:
     """Render the ``files affected (N)`` listing."""
     console.print(f"  files affected ({len(plan.file_mutations)}):")
     for fm in plan.file_mutations:
-        console.print(f"    M  {fm.path}  (line-delta: {fm.diff_summary})")
+        suffix = f", {fm.mode_restore}" if fm.mode_restore else ""
+        console.print(f"    M  {fm.path}  (line-delta: {fm.diff_summary}{suffix})")
 
 
 def _render_plugins_section(plan: RevertPlan, console: Console) -> None:

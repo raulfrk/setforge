@@ -10,7 +10,11 @@ yellow warning to stderr and returns an empty
 Gitleaks exit-code triage per research brief §5:
 
 - ``0`` — scan ran cleanly, no findings.
-- ``1`` — scan found ≥1 finding; parse JSON, filter via allowlist.
+- ``1`` — scan found ≥1 finding; parse JSON, filter via allowlist. An
+  *unparseable* exit-1 report raises :class:`SetforgeError` (fail
+  closed) rather than degrading to a clean/empty result — gitleaks
+  positively detected secrets, so a parse failure must block the
+  install, never wave it through.
 - other — scan-runtime failure; emit yellow warning + empty result;
   install proceeds (soft-requirement contract).
 
@@ -34,6 +38,7 @@ from typing import Final
 import typer
 
 from setforge import binaries
+from setforge.errors import SetforgeError
 
 _DEFAULT_ALLOWLIST_PATH: Final[Path] = (
     Path.home() / ".config" / "setforge" / "secrets-allowlist"
@@ -134,33 +139,60 @@ def _load_allowlist(allowlist_path: Path) -> frozenset[str]:
 def _parse_gitleaks_json(stdout: str) -> tuple[SecretFinding, ...]:
     """Parse gitleaks' ``--report-format=json`` stdout into findings.
 
-    Gitleaks v8 emits a JSON array of finding objects. Empty / whitespace
-    stdout yields an empty tuple (gitleaks emits ``[]`` for clean scans,
-    but defense-in-depth covers the empty case). Malformed JSON returns
-    empty + warns (the scan otherwise reported exit 1, so something
-    matched; surfacing the parse failure preserves the install path).
+    Gitleaks v8 emits a JSON array of finding objects. This is only
+    called on exit 1 (gitleaks positively detected ≥1 secret), so an
+    *unparseable* report is a fail-open hazard: if we returned an empty
+    tuple, the install gate (``if scan_result.findings: ...``) would read
+    the scan as clean and deploy secrets that gitleaks just flagged.
+
+    A valid JSON array (including an empty ``[]``) parses normally — zero
+    findings after a successful parse means every leak was allowlisted.
+    But empty / whitespace stdout, malformed JSON, or a non-array payload
+    on an exit-1 scan all :class:`SetforgeError` rather than degrading the
+    security gate to "clean proceed". The error is surfaced by the CLI
+    top-level handler as ``error: <message>`` and exits 1, so a parse
+    failure blocks the install instead of silently waving it through.
     """
     payload = stdout.strip()
     if not payload:
-        return ()
+        raise SetforgeError(
+            "gitleaks reported secrets (exit 1) but its report was empty; "
+            "refusing to deploy on an unreadable secrets-scan result. "
+            "Re-run the scan or check the gitleaks invocation."
+        )
     try:
         raw = json.loads(payload)
     except json.JSONDecodeError as exc:
-        _warn(f"warning: failed to parse gitleaks JSON output: {exc}")
-        return ()
+        raise SetforgeError(
+            "gitleaks reported secrets (exit 1) but its JSON report could "
+            f"not be parsed ({exc}); refusing to deploy on an unreadable "
+            "secrets-scan result. Re-run the scan or check the gitleaks "
+            "invocation."
+        ) from exc
     if not isinstance(raw, list):
-        _warn("warning: gitleaks JSON output was not a list")
-        return ()
+        raise SetforgeError(
+            "gitleaks reported secrets (exit 1) but its JSON report was not "
+            "a list; refusing to deploy on an unreadable secrets-scan "
+            "result. Re-run the scan or check the gitleaks invocation."
+        )
     out: list[SecretFinding] = []
     for entry in raw:
         if not isinstance(entry, dict):
             continue
         snippet = str(entry.get("Secret", entry.get("Match", "")))
+        # StartLine is cosmetic; a non-numeric value (malformed report or a
+        # future gitleaks shape change) must not raise a bare ValueError on
+        # this fail-closed exit-1 path. Fall back to 0 so the finding is still
+        # produced and the install gate still fires on the detected secret.
+        try:
+            line_number = int(entry.get("StartLine", 0) or 0)
+        except (ValueError, TypeError):
+            line_number = 0
         out.append(
             SecretFinding(
                 rule_id=str(entry.get("RuleID", "")),
                 file_path=Path(str(entry.get("File", ""))),
-                line_number=int(entry.get("StartLine", 0) or 0),
+                line_number=line_number,
                 snippet=snippet,
                 snippet_hash=_sha256_hex(snippet),
                 secret_kind=str(entry.get("Description", entry.get("RuleID", ""))),
@@ -196,7 +228,8 @@ def run_pre_deploy_scan(
     §5:
 
     - ``0`` — clean; empty result.
-    - ``1`` — findings; parse JSON, filter via allowlist.
+    - ``1`` — findings; parse JSON, filter via allowlist. An unparseable
+      exit-1 report raises :class:`SetforgeError` (fail closed).
     - other — scan-runtime failure; yellow warning + empty result.
 
     Subprocess invocation uses ``check=False`` (manual exit-code
@@ -229,6 +262,16 @@ def run_pre_deploy_scan(
     except subprocess.TimeoutExpired:
         _warn(
             f"warning: gitleaks scan timed out after {_GITLEAKS_TIMEOUT_SECONDS}s; "
+            "continuing without secrets check"
+        )
+        return SecretsScanResult(findings=(), files_scanned=0)
+    except OSError as exc:
+        # A which()-resolved gitleaks can still fail to exec (became
+        # non-executable, broken shebang, removed in the TOCTOU window).
+        # Degrade to the documented warn-and-continue contract rather
+        # than crashing install with a raw traceback.
+        _warn(
+            f"warning: gitleaks scan could not be executed ({exc}); "
             "continuing without secrets check"
         )
         return SecretsScanResult(findings=(), files_scanned=0)

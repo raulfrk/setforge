@@ -10,6 +10,7 @@ capabilities (mockup scenario 2) without overwriting local.yaml.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from dataclasses import dataclass
@@ -289,7 +290,11 @@ def _prompt_apply_confirm(*, no_prompt: bool) -> ApplyChoice:
 
     result = _self.radiolist_dialog(
         title="ready to apply?",
-        text="proceed creates the directories above; abort makes no changes",
+        text=(
+            "proceed creates the directories above and (re)writes "
+            "local.yaml — a customized local.yaml is backed up to a .bak "
+            "first; abort makes no changes"
+        ),
         values=[
             (ApplyChoice.PROCEED, "proceed"),
             (ApplyChoice.ABORT, "abort"),
@@ -384,7 +389,7 @@ def _build_source_block(spec: SourceSpec) -> str:
                 "# Pre-configured by `setforge init --path-source`:\n"
                 "source:\n"
                 "  kind: path\n"
-                f"  path: {spec.path}\n"
+                f"  path: {json.dumps(str(spec.path))}\n"
             )
         case SourceChoice.GIT:
             assert spec.url is not None, "GIT choice requires url"
@@ -393,8 +398,8 @@ def _build_source_block(spec: SourceSpec) -> str:
                 "# Pre-configured by `setforge init --git-source`:\n"
                 "source:\n"
                 "  kind: git\n"
-                f"  url: {spec.url}\n"
-                f"  ref: {spec.ref}\n"
+                f"  url: {json.dumps(spec.url)}\n"
+                f"  ref: {json.dumps(spec.ref)}\n"
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -502,25 +507,60 @@ def _handle_config_repo(*, no_prompt: bool, console: Console) -> int:
     return 0
 
 
+def _local_yaml_is_pristine_stub() -> bool:
+    """Return True iff the existing local.yaml is an untouched stub.
+
+    The root Typer callback writes ``_STUB_TEMPLATE`` on every invocation,
+    and the PATH/GIT init paths append a generated ``source:`` block to it.
+    A file whose content is exactly the stub (optionally followed by the
+    generated source block) carries no user customization and is safe to
+    overwrite. Any other content — a hand-edited ``binaries:`` block, a
+    custom ``source:``, plugin/extension overlays — must be preserved.
+
+    Returns True when the file is absent (nothing to clobber) or its
+    content starts with the pristine stub template; False when it holds
+    customized content that an overwrite would destroy.
+    """
+    if not LOCAL_CONFIG_PATH.exists():
+        return True
+    try:
+        text = LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    except OSError:
+        # Unreadable file: treat as customized so we err on the safe side
+        # (back it up rather than silently discard).
+        return False
+    return text.startswith(_STUB_TEMPLATE)
+
+
 def _apply_bootstrap(
     probe: EnvProbe,
     *,
     source_spec: SourceSpec,
     console: Console,
+    force: bool = False,
 ) -> None:
     """Create the three init paths + write the local.yaml stub.
 
     Uses :func:`_mkdir_with_retry` for the TOCTOU-resilient idempotent
     mkdir per research brief §7. The root callback's
     ``ensure_local_config_stub`` may have already created
-    ``LOCAL_CONFIG_PATH``; this function rewrites it unconditionally
-    (callers gate on ``--force`` semantics upstream). When
+    ``LOCAL_CONFIG_PATH``; this function rewrites it. When
     ``source_spec`` carries a PATH or GIT choice, appends a
     pre-configured ``source:`` block to the stub.
+
+    ``force=True`` means the caller already resolved the overwrite/backup
+    decision (the ``--force`` flow), so the rewrite is unconditional.
+    ``force=False`` (the auto-bootstrap flows reached when the host-local
+    layer is not yet initialized) MUST NOT silently clobber a customized
+    local.yaml: a non-pristine-stub file is snapshotted to a timestamped
+    ``.bak`` via :func:`_backup_existing` before being rewritten, so a
+    hand-edited config is always recoverable.
     """
     console.print("=== applying ===")
     _mkdir_with_retry(config_dir_path())
     _mkdir_with_retry(host_local_dir_path())
+    if not force and not _local_yaml_is_pristine_stub():
+        _backup_existing(console=console)
     LOCAL_CONFIG_PATH.write_text(
         _STUB_TEMPLATE + _build_source_block(source_spec), encoding="utf-8"
     )
@@ -608,7 +648,7 @@ def _handle_force_mode(
         case _ as unreachable:
             assert_never(unreachable)
     probe = probe_environment()
-    _apply_bootstrap(probe, source_spec=source_spec, console=console)
+    _apply_bootstrap(probe, source_spec=source_spec, console=console, force=True)
     _print_completion_report(
         source_spec=source_spec, backup_path=backup_path, console=console
     )

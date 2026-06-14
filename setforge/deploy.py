@@ -57,6 +57,16 @@ class DeployResult:
     ``new_base`` / ``merge_conflicts`` are populated on the disposition
     (byte-base 3-way) path; ``new_span_states`` / ``span_orphans`` ride the
     span re-overlay path. All are inert defaults on a plain verbatim deploy.
+
+    ``prior_mode`` records the live file's permission bits AS THEY WERE
+    immediately before this deploy chmod-ed them, and ONLY when the deploy
+    actually changed the mode of a pre-existing file (a content-NOOP
+    mode-only fixup, or a content UPDATE whose tracked mode differs from
+    the live mode). It is ``None`` whenever the mode was untouched (fresh
+    CREATE, true NOOP, or an UPDATE whose mode already matched). The
+    install-side transition writer records this so ``revert`` can restore
+    the pre-install mode in lockstep with the content patch reverse — the
+    content patch alone never carries permission bits.
     """
 
     dst: Path
@@ -66,6 +76,7 @@ class DeployResult:
     merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
     new_span_states: dict[str, SpanState] | None = None
     span_orphans: list[SpanOrphan] = field(default_factory=list)
+    prior_mode: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -510,7 +521,8 @@ def _write_resolved_content(
         # mode-only drift; apply it here (path-based chmod is safe — no
         # content swap to race, real_dst already symlink-resolved) so
         # install fixes perms instead of reporting "unchanged".
-        if mode is not None and stat.S_IMODE(real_dst.stat().st_mode) != mode:
+        prior_mode: int | None = stat.S_IMODE(real_dst.stat().st_mode)
+        if mode is not None and prior_mode != mode:
             os.chmod(real_dst, mode)
             return DeployResult(
                 dst=real_dst,
@@ -520,6 +532,10 @@ def _write_resolved_content(
                 merge_conflicts=merge_conflicts,
                 new_span_states=new_span_states,
                 span_orphans=span_orphans,
+                # The content patch is empty for a mode-only fixup, so the
+                # pre-install mode is the ONLY reversible record of this
+                # change — hand it to the transition writer for revert.
+                prior_mode=prior_mode,
             )
         return DeployResult(
             dst=real_dst,
@@ -531,6 +547,17 @@ def _write_resolved_content(
             span_orphans=span_orphans,
         )
 
+    # Capture the live mode BEFORE the atomic write swaps perms, but only
+    # when this UPDATE actually changes them (pre-existing dst whose mode
+    # differs from the mode the write will apply). ``revert`` restores the
+    # content via the patch reverse; ``prior_mode`` lets it restore perms in
+    # lockstep, since atomic_write_text fchmods to the tracked/source mode.
+    prior_mode = None
+    if dst_existed:
+        live_mode = stat.S_IMODE(real_dst.stat().st_mode)
+        write_mode = mode if mode is not None else stat.S_IMODE(src.stat().st_mode)
+        if live_mode != write_mode:
+            prior_mode = live_mode
     backup_path = _atomic_write(content, src, real_dst, dst_existed, backup, mode)
     return DeployResult(
         dst=real_dst,
@@ -540,6 +567,7 @@ def _write_resolved_content(
         merge_conflicts=merge_conflicts,
         new_span_states=new_span_states,
         span_orphans=span_orphans,
+        prior_mode=prior_mode,
     )
 
 

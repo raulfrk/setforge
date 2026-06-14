@@ -550,7 +550,21 @@ def _apply_span(
 
     new_span = SpanEntry(anchor=anchor, kind=kind, semantics=semantics)
     # Validate the COMBINED span set (overlap / nesting) before writing.
-    combined = [s for s in existing if s.anchor != anchor] + [new_span]
+    # The other scope's spans are folded in too: install merges host-local
+    # and shared spans into one set (apply_host_local_tracked_file_overrides),
+    # so a cross-scope structural overlap must be refused at pin time, not just
+    # caught by the offline validate gate / aborted mid-deploy. The own-scope
+    # spans replace the anchor being written; the other scope is read-only here.
+    other_scope = (
+        _existing_spans_host_local(file_id)
+        if shared
+        else _existing_spans_shared(cfg_path, file_id)
+    )
+    combined = (
+        [s for s in existing if s.anchor != anchor]
+        + [s for s in other_scope if s.anchor != anchor]
+        + [new_span]
+    )
     _validate_combined_spans(combined, src)
 
     if shared:

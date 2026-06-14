@@ -28,6 +28,7 @@ Three concerns are kept separate:
 """
 
 import copy
+import datetime
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -41,7 +42,7 @@ from json5.model import (
     JSONText,
     Value,
 )
-from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 
 from setforge.errors import MergeTypeMismatch
 from setforge.jsonc import _find_key_index, _key_text
@@ -56,9 +57,11 @@ from setforge.scalar_path import _delete_jsonc_leaf, _set_jsonc_leaf
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
+    "deep_merge_into_node",
     "delete_at_path",
     "get_at_path",
     "get_node_at_path",
+    "is_mapping_node",
     "list_keys_at_path",
     "merge_structural",
     "resolve_path_prefix",
@@ -129,6 +132,37 @@ def _to_plain(node: object) -> object:
         return {key: _to_plain(value) for key, value in node.items()}
     if isinstance(node, list):
         return [_to_plain(elem) for elem in node]
+    return _unwrap_ruamel_scalar(node)
+
+
+def _unwrap_ruamel_scalar(node: object) -> object:
+    """Normalize a ruamel round-trip scalar leaf to a plain-python value.
+
+    Round-trip mode does NOT keep builtin types for formatted scalars:
+    ``1.5``/``1e3`` -> ``ScalarFloat``, ``0xFF`` -> ``HexCapsInt``,
+    ``1_000`` -> ``ScalarInt``, ``2020-01-01`` -> ``datetime.date``,
+    ``!!str 5`` -> ``TaggedScalar``. These subclass/aren't the builtins
+    :func:`setforge.scalar_merge._is_scalar` allows by EXACT type, so they
+    must collapse to a builtin here (the single divergence-test entry point)
+    or the scalar resolver rejects them as non-scalar.
+
+    ``bool`` is checked first (it subclasses ``int``) so ``True``/``False``
+    survive as bools, keeping the ``True != 1`` distinction; the int/float
+    split is preserved so ``1 != 1.0`` still holds. A ``TaggedScalar``
+    collapses to a comparable ``str`` (the only round-trippable handle on its
+    payload). A plain builtin (the common ``int``/``bool``/``None`` case) and
+    any unrecognized leaf pass through unchanged.
+    """
+    if isinstance(node, TaggedScalar):
+        return str(node.value)
+    if isinstance(node, datetime.date | datetime.datetime):
+        return node.isoformat()
+    if isinstance(node, bool):
+        return bool(node)
+    if isinstance(node, int):
+        return int(node)
+    if isinstance(node, float):
+        return float(node)
     return node
 
 
@@ -162,6 +196,16 @@ def _plain_eq(a: object, b: object) -> bool:
 def _is_mapping_node(node: object) -> bool:
     """Whether ``node`` is a mapping in any supported backend."""
     return isinstance(node, JSONObject | Mapping)
+
+
+def is_mapping_node(node: object) -> bool:
+    """Public alias of :func:`_is_mapping_node` for cross-module span callers.
+
+    The deep-pin re-assert in :mod:`setforge.disposition_merge` gates on whether
+    the WRAPPED merged subtree is a mapping (both backends) before deep-merging
+    live over it; expose the predicate without reaching into the private name.
+    """
+    return _is_mapping_node(node)
 
 
 def _is_list_node(node: object) -> bool:
@@ -753,6 +797,54 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     replaced = parent.get(leaf) if isinstance(parent, Mapping) else None
     _dedup_ruamel_anchors(node, inner, replaced)
     _set_node_leaf(parent, leaf, node, path)
+
+
+def deep_merge_into_node(target: object, live: Mapping, path: str) -> None:
+    """Deep-merge a PLAIN ``live`` mapping OVER the WRAPPED ``target`` node in place.
+
+    The comment-preserving sibling of
+    :func:`setforge.yaml_merge._deep_merge_dicts`: that helper merges two PLAIN
+    dicts (the result carries no comment tokens), this one mutates the still-
+    WRAPPED backend node (ruamel ``CommentedMap`` / json-five ``JSONObject``) so
+    every untouched key — and the comment tokens attached to it — survives.
+
+    Semantics mirror the plain deep merge so the two paths are interchangeable:
+
+    * a live-only key is added (its plain value is wrapped by the backend setter);
+    * a key shared as mappings on both sides recurses (the wrapped child keeps its
+      interior comments);
+    * a key shared as lists is whole-replaced with live's list;
+    * a scalar/list-vs-mapping shape mismatch raises
+      :class:`~setforge.errors.MergeTypeMismatch`;
+    * any other shared key (both scalars, or whole-replaced container) takes
+      live's value, replacing the wrapped leaf in place so its OWN trailing
+      comment / leading whitespace survives.
+
+    Tracked-only keys are never iterated, so they (and their comments) are left
+    byte-identical. ``target`` MUST already be a deep copy — this seam mutates it
+    in place and the caller splices the result back via :func:`set_node_at_path`.
+    """
+    for key, live_value in live.items():
+        sub_path = f"{path}.{key}"
+        child = _child_node(target, key)
+        if child is ABSENT:
+            _set_leaf(target, key, live_value, sub_path)
+            continue
+        if _is_mapping_node(child) and isinstance(live_value, Mapping):
+            deep_merge_into_node(child, live_value, sub_path)
+            continue
+        if _is_list_node(child) and isinstance(live_value, list):
+            _set_leaf(target, key, live_value, sub_path)
+            continue
+        child_shape = _shape_tag(child)
+        live_shape = _shape_tag(live_value)
+        if child_shape != live_shape:
+            raise MergeTypeMismatch(
+                f"type mismatch at {sub_path!r}: merged is {child_shape}, "
+                f"live is {live_shape}"
+            )
+        # Both scalars: live wins, replacing the wrapped leaf in place.
+        _set_leaf(target, key, live_value, sub_path)
 
 
 def delete_at_path(model: object, path: str) -> None:

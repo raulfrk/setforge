@@ -112,6 +112,21 @@ def classify_section_drift(
     placeholder behaviour. ``set_marker_hashes`` callers are likewise
     expected to operate on the post-merge content.
 
+    UNNAMED sections are keyed positionally (``"0"``, ``"1"``, ... in
+    order of appearance among unnamed sections, per
+    :func:`setforge.sections.extract_sections`). That key is only a
+    stable section identity when the tracked and live marker structures
+    line up: deleting or reordering an unnamed section on one side shifts
+    every later unnamed key, so a naive ``tracked["0"]`` vs ``live["0"]``
+    intersection would compare two semantically-unrelated bodies and
+    classify phantom drift / conflict. To avoid splicing the wrong
+    tracked body over a live section, unnamed-keyed sections are
+    classified ONLY when the full ordered key sequences of tracked and
+    live are identical (so positional keys denote the same section on
+    both sides); when they diverge, unnamed keys are skipped and left to
+    the keep-live default. NAMED keys carry a stable identity and are
+    always classified when present on both sides.
+
     For ``host-local`` sections the state is always
     :attr:`SectionDriftState.NO_DRIFT` from the *reconciler*'s point of
     view — they're not subject to the three-way logic. The caller
@@ -135,6 +150,11 @@ def classify_section_drift(
     live_embedded = extract_marker_hashes(live_text, allow_legacy=True)
     semantics_map = section_semantics(tracked_text)
 
+    structures_match = list(tracked_bodies) == list(live_bodies)
+    unnamed_keys = _unnamed_section_keys(tracked_bodies) | _unnamed_section_keys(
+        live_bodies
+    )
+
     return {
         name: _classify_one_marker(
             name=name,
@@ -147,8 +167,35 @@ def classify_section_drift(
             e_l=live_embedded.get(name),
         )
         for name in tracked_bodies
-        if name in live_bodies
+        if name in live_bodies and (structures_match or name not in unnamed_keys)
     }
+
+
+def _unnamed_section_keys(bodies: Mapping[str, str]) -> set[str]:
+    """Return the positional keys that came from UNNAMED sections.
+
+    :func:`setforge.sections.extract_sections` keys unnamed sections by
+    their 0-based ordinal among unnamed sections (``"0"``, ``"1"``, ...),
+    assigned in order of appearance. Because the dict preserves that
+    insertion order, an unnamed key is exactly one whose value equals the
+    running count of unnamed keys seen so far. Named keys (anything else)
+    are stable identities and excluded here.
+
+    Edge case: a section the user literally named ``"0"`` (or ``"1"``,
+    ...) at the position the running count expects is indistinguishable
+    from an unnamed section through the public dict API; it is treated as
+    unnamed here, which only makes the positional guard MORE conservative
+    (it may skip such a collision-named section when structures diverge,
+    never compares the wrong body). That name/index collision is a
+    separate pre-existing marker-grammar hazard, out of scope here.
+    """
+    unnamed: set[str] = set()
+    running = 0
+    for key in bodies:
+        if key == str(running):
+            unnamed.add(key)
+            running += 1
+    return unnamed
 
 
 def _require_section_key[T](mapping: Mapping[str, T], name: str, source: str) -> T:

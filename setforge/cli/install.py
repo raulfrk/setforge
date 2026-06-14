@@ -316,22 +316,6 @@ def install(
     with profile_lock(profile):
         if not no_transition:
             transitions.ensure_state_dir_writable()
-        # COMMIT the seed-once plan now — UNDER the lock, AFTER the welcome /
-        # git-check consent gates. Captures local.yaml's pre-seed
-        # bytes FIRST so the install transition's file_pre baseline is the
-        # genuine unseeded content (recorded below), making revert restore an
-        # unseeded local.yaml. Runs before the overlay-span migration so the
-        # just-written legacy block is folded into a unified span exactly as
-        # a pre-existing block would be.
-        seeded, local_pre_seed = _commit_seed_under_lock(seed_plan)
-        # Transparent, idempotent local.yaml rewrite: retire any legacy
-        # host_local_sections block into unified `spans` OVERLAY entries so
-        # the on-disk representation matches the new model. Runs under the
-        # lock (after the state-dir probe) and BEFORE the deploy snapshot so
-        # the pre-migration text can seed the transition's file_pre for a
-        # byte-exact revert. This install still deploys from the already-loaded
-        # legacy host_local_sections_map (representation changed, not behavior).
-        overlay_migration = migrate_local_overlay_spans_on_install(profile)
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
         # Cargo binaries install during install, BEFORE deploy. A missing
@@ -346,7 +330,14 @@ def install(
         # Only DRIFTED entries (existing live files that diverge from tracked
         # in unexpected ways) gate install. MISSING entries are expected on
         # first install and are handled by deploy below.
-        drift_report = compare_mod.compare_profile(cfg, profile, repo_root)
+        # Thread the validated host-local sections overlay (computed at
+        # line 246) so a live file that already received its injected
+        # host-local sections does NOT surface as spurious drift in the
+        # report feeding the section-reconcile gate — matching what the
+        # standalone `setforge compare` reports.
+        drift_report = compare_mod.compare_profile(
+            cfg, profile, repo_root, host_local_sections=host_local_sections_map
+        )
 
         _run_predeploy_gates(
             drift_report=drift_report,
@@ -396,6 +387,27 @@ def install(
         # at the pass-2 barrier (state_snapshots below) and revert restores
         # them through that mechanism — recording them here too would
         # double-restore (Invariant I5 now lives in the snapshot path).
+
+        # COMMIT the seed-once plan now — UNDER the lock, AFTER every
+        # refuse-before-write gate (welcome / git-check, validate_srcs_exist,
+        # the predeploy drift reject, and the secrets-scan abort) so an
+        # aborted install never mutates local.yaml without a transition to
+        # undo it. Captures local.yaml's pre-seed bytes FIRST so the install
+        # transition's file_pre baseline is the genuine unseeded content
+        # (recorded below), making revert restore an unseeded local.yaml.
+        # Runs before the overlay-span migration so the just-written legacy
+        # block is folded into a unified span exactly as a pre-existing block
+        # would be.
+        seeded, local_pre_seed = _commit_seed_under_lock(seed_plan)
+        # Transparent, idempotent local.yaml rewrite: retire any legacy
+        # host_local_sections block into unified `spans` OVERLAY entries so
+        # the on-disk representation matches the new model. Runs under the
+        # lock (after every abort gate) and BEFORE the deploy snapshot so
+        # the pre-migration text can seed the transition's file_pre for a
+        # byte-exact revert. This install still deploys from the already-loaded
+        # legacy host_local_sections_map (representation changed, not behavior).
+        overlay_migration = migrate_local_overlay_spans_on_install(profile)
+
         file_pre = transitions.snapshot_paths(dst_paths)
         # When the overlay-span rewrite moved a legacy block, record local.yaml
         # in the transition (append to dst_paths so file_post captures its
@@ -418,7 +430,7 @@ def install(
             section_auto=section_auto,
         )
 
-        state_snapshots = _deploy_all_tracked_files(
+        deploy_outcome = _deploy_all_tracked_files(
             ctx,
             section_decisions=section_decisions,
             live_sections_map=live_sections_map,
@@ -452,8 +464,9 @@ def install(
                 plugin_delta,
                 source_dir=ctx.repo_root,
                 reconcile_outcomes=plugin_outcomes + ext_outcomes,
-                state_snapshots=state_snapshots,
+                state_snapshots=deploy_outcome.state_snapshots,
                 mcp_delta=mcp_delta,
+                file_modes=deploy_outcome.prior_modes,
             )
             typer.echo(f"transition: {target}")
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")

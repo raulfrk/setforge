@@ -11,6 +11,7 @@ mirrors into ``MARKETPLACE_CACHE_ROOT / <repo-basename>``.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -19,7 +20,7 @@ from typing import Final
 
 import platformdirs
 
-from setforge import marketplace_cache_wizard
+from setforge import atomicio, marketplace_cache_wizard
 from setforge.binaries import stderr_of
 from setforge.config import (
     ClaudeInstallMode,
@@ -37,14 +38,26 @@ _TIMEOUT_S = 30
 _CLONE_TIMEOUT_S = 120
 
 #: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
-#: clones into ``MARKETPLACE_CACHE_ROOT / <marketplace-name>``. Tests
-#: monkeypatch this module attribute to redirect into ``tmp_path``.
+#: clones into ``MARKETPLACE_CACHE_ROOT / <repo-basename>`` (the segment
+#: after the final ``/`` of ``MarketplaceSource.repo``). Tests monkeypatch
+#: this module attribute to redirect into ``tmp_path``.
 MARKETPLACE_CACHE_ROOT: Final[Path] = (
     Path(platformdirs.user_cache_dir("setforge")) / "marketplaces"
 )
 
+#: Sidecar filename (under the cache root) recording ``owner/repo -> cache
+#: subdir`` aliases. Written by the ``BOTH`` collision outcome when a repo
+#: is cloned into a non-basename subdir (e.g. ``plug-v2``); consulted by the
+#: declared-identity computation so the next reconcile resolves the
+#: marketplace to that subdir instead of recomputing ``cache_root/<basename>``.
+#: Keyed by the full ``owner/repo`` slug because the basename collides by
+#: definition. Absent/legacy sidecar degrades to plain basename behavior.
+MARKETPLACE_ALIAS_SIDECAR: Final[str] = ".aliases.json"
+
 __all__ = [
+    "MARKETPLACE_ALIAS_SIDECAR",
     "MARKETPLACE_CACHE_ROOT",
+    "read_cache_aliases",
     "resolve_marketplace_source",
     "sync_marketplace_cache",
 ]
@@ -93,9 +106,11 @@ def _run_git(
     via ``git -C <cwd>`` rather than the subprocess ``cwd=`` kwarg so
     monkeypatched ``subprocess.run`` fakes that key off argv shape
     (e.g. ``FakeGit``) keep working without extra wiring.
-    Maps :class:`subprocess.CalledProcessError` and
-    :class:`subprocess.TimeoutExpired` to a generic
-    :class:`MarketplaceCacheMiss` carrying ``stderr_of(exc)``; callers
+    Maps :class:`subprocess.CalledProcessError`,
+    :class:`subprocess.TimeoutExpired`, and :class:`OSError` (exec
+    failure — git resolved on PATH but could not be launched) to a
+    generic :class:`MarketplaceCacheMiss` carrying ``stderr_of(exc)``;
+    callers
     that want a more specific remediation message should catch and
     re-raise with their own context. Raises before any subprocess
     call if ``git`` is not on PATH (via :func:`_resolve_git_or_raise`).
@@ -113,7 +128,11 @@ def _run_git(
             capture_output=True,
             timeout=timeout,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         LOGGER.debug("git %s stderr: %s", args, stderr_of(exc))
         raise MarketplaceCacheMiss(
             f"`git {' '.join(args)}` failed: {stderr_of(exc)}"
@@ -150,6 +169,53 @@ def _safe_cache_dir(cache_root: Path, subdir_name: str) -> Path:
     return cache_dir
 
 
+def read_cache_aliases(cache_root: Path) -> dict[str, str]:
+    """Return the ``owner/repo -> cache subdir name`` alias map for ``cache_root``.
+
+    Reads the :data:`MARKETPLACE_ALIAS_SIDECAR` JSON file. A missing
+    sidecar (the common / legacy case) returns an empty map, so callers
+    degrade to plain ``cache_root/<basename>`` resolution. A malformed or
+    unreadable sidecar is logged and treated as empty rather than raising —
+    a corrupt alias file must not wedge every reconcile; the worst case is
+    one re-fired collision wizard, the same as no sidecar at all. Only
+    ``str -> str`` entries are kept (defensive against hand-edited files).
+    """
+    sidecar = cache_root / MARKETPLACE_ALIAS_SIDECAR
+    try:
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning(
+            "ignoring unreadable marketplace alias sidecar %s: %s", sidecar, exc
+        )
+        return {}
+    if not isinstance(raw, dict):
+        LOGGER.warning(
+            "ignoring malformed marketplace alias sidecar %s (not an object)",
+            sidecar,
+        )
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
+    """Persist ``repo -> cache_dir.name`` into the cache-root alias sidecar.
+
+    Read-modify-write of the JSON map, written atomically via
+    :func:`setforge.atomicio.atomic_write_text`. The subdir *name* (not the
+    absolute path) is stored so the sidecar stays portable if the cache
+    root moves; the declared-identity computation rejoins it onto its own
+    ``cache_root``.
+    """
+    aliases = read_cache_aliases(cache_root)
+    aliases[repo] = cache_dir.name
+    atomicio.atomic_write_text(
+        cache_root / MARKETPLACE_ALIAS_SIDECAR,
+        json.dumps(aliases, indent=2, sort_keys=True) + "\n",
+    )
+
+
 def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
 
@@ -178,7 +244,11 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
             capture_output=True,
             timeout=_CLONE_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         LOGGER.debug("git clone %r stderr: %s", source.repo, stderr_of(exc))
         raise MarketplaceCacheMiss(
             f"marketplace {source.repo!r} not in local cache and `git clone` "
@@ -238,7 +308,11 @@ def _cache_origin_url(cache_dir: Path) -> str | None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         LOGGER.debug(
             "git remote get-url origin (cache %s) stderr: %s",
             cache_dir,
@@ -363,7 +437,7 @@ def _resolve_cache_collision(
         return _collision_keep(source, cache_dir, mp_name)
     if resolution.action is CollisionAction.UPDATE:
         return _collision_update(source, cache_dir)
-    return _collision_both(source, cache_dir, resolution.new_cache_dir)
+    return _collision_both(source, cache_dir, resolution.new_cache_dir, cache_root)
 
 
 def _collision_keep(
@@ -388,17 +462,34 @@ def _collision_keep(
 
 
 def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
-    """``UPDATE``: rmtree the existing cache and re-clone.
+    """``UPDATE``: re-clone ``source`` over the existing cache atomically.
 
-    Today's pre-wizard behavior, now opt-in.
+    Stages the new clone in a temporary sibling dir, and only swaps it
+    into place once the clone succeeds. A failed clone (offline, auth,
+    bad repo) leaves the existing cache untouched — critical because in
+    LOCAL_CLONE mode that cache is the offline source of truth and the
+    UPDATE path is reached precisely when the network may be down.
     """
     LOGGER.info(
         "cache-collision: re-cloning %r over existing %r",
         source.repo,
         cache_dir,
     )
+    staging = cache_dir.with_name(cache_dir.name + ".tmp")
+    # A leftover staging dir from a prior interrupted run would make the
+    # clone-into-empty-dest fail; clear it before staging.
+    if staging.exists():
+        shutil.rmtree(staging)
+    try:
+        _clone_marketplace(source, staging)
+    except MarketplaceCacheMiss:
+        # Clone failed — discard the partial staging dir and leave the
+        # original cache intact so the offline fallback survives.
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
     shutil.rmtree(cache_dir)
-    _clone_marketplace(source, cache_dir)
+    staging.rename(cache_dir)
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=cache_dir,
@@ -406,11 +497,24 @@ def _collision_update(source: MarketplaceSource, cache_dir: Path) -> Marketplace
 
 
 def _collision_both(
-    source: MarketplaceSource, cache_dir: Path, new_dir: Path | None
+    source: MarketplaceSource,
+    cache_dir: Path,
+    new_dir: Path | None,
+    cache_root: Path,
 ) -> MarketplaceSource:
-    """``BOTH``: clone into the wizard-supplied ``new_dir``.
+    """``BOTH``: clone into the wizard-supplied ``new_dir`` and persist the alias.
 
-    Leaves the existing ``cache_dir`` untouched.
+    Leaves the existing ``cache_dir`` untouched. Because the new repo is
+    cloned into a non-basename subdir (e.g. ``plug-v2``), the declared
+    identity computed by :func:`setforge.claude_plugins._source_identity`
+    would otherwise recompute as ``cache_root/<basename>`` (the ORIGINAL
+    colliding dir) on the next reconcile — making the marketplace look
+    unregistered and re-firing this wizard on every install. To keep the
+    outcome idempotent, record an ``owner/repo -> <new_dir name>`` alias in
+    the cache-root sidecar (:func:`_record_cache_alias`); the identity
+    computation consults it and resolves the declared marketplace to
+    ``new_dir`` thereafter. The alias is written only after the clone
+    succeeds, so a failed clone leaves no dangling mapping.
     """
     assert new_dir is not None, "wizard contract: BOTH carries new_cache_dir"
     LOGGER.info(
@@ -420,6 +524,8 @@ def _collision_both(
         cache_dir,
     )
     _clone_marketplace(source, new_dir)
+    if source.repo:
+        _record_cache_alias(cache_root, source.repo, new_dir)
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=new_dir,
@@ -507,6 +613,27 @@ def sync_marketplace_cache(
             raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
         cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
         if cache_dir.exists():
+            # The cache dir is keyed by repo basename, so two marketplaces
+            # from different owners sharing a repo name (alice/tools vs
+            # bob/tools) map to the same dir. Verify the existing clone's
+            # origin matches THIS marketplace's repo before refreshing —
+            # otherwise `git fetch` + `git reset --hard origin/HEAD` would
+            # silently reset the colliding repo's checkout against the wrong
+            # remote, serving wrong content with no warning.
+            origin = _cache_origin_url(cache_dir)
+            if (
+                origin is not None
+                and origin != source.repo
+                and not _urls_equivalent(origin, source.repo)
+            ):
+                raise MarketplaceCacheMiss(
+                    f"marketplace {mp_name!r}: cache dir {cache_dir} already "
+                    f"holds a clone of {origin!r}, but this marketplace "
+                    f"declares repo {source.repo!r}. These repos share a "
+                    f"basename and collide in the cache layout. Rename one "
+                    f"marketplace's repo basename or remove {cache_dir} and "
+                    f"re-run."
+                )
             LOGGER.info("sync-cache: refreshing %s at %s", mp_name, cache_dir)
             _refresh_marketplace_cache(source, cache_dir)
         else:

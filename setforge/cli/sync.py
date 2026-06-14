@@ -6,6 +6,7 @@
   also records a transition so ``revert`` can replay it.
 """
 
+import stat
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -13,15 +14,19 @@ from pathlib import Path
 import typer
 
 from setforge import (
+    atomicio,
+    section_wizard,
+    transitions,
+    vscode_extensions,
+)
+from setforge import (
     capture as capture_mod,
 )
 from setforge import (
     compare as compare_mod,
 )
 from setforge import (
-    section_wizard,
-    transitions,
-    vscode_extensions,
+    source as source_mod,
 )
 from setforge._redact import redact_argv
 from setforge.cli import (
@@ -44,6 +49,7 @@ from setforge.cli._helpers import (
     ProfileContext,
     _iter_all_tracked_files,
     _parse_capture_auto,
+    _refuse_duplicate_section_names,
     _refuse_legacy_live_markers,
     _resolve_drift_paths,
 )
@@ -143,9 +149,22 @@ def capture(
     # write — without this fold the overlay body leaks into the shared repo.
     apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
-    results = _run_capture(
-        cfg, profile, repo_root, config, auto_enum, command="capture"
-    )
+    try:
+        results = _run_capture(
+            cfg, profile, repo_root, config, auto_enum, command="capture"
+        )
+    except KeyboardInterrupt:
+        # Plain ``capture`` takes no snapshot (only ``sync`` records a
+        # transition + restorable snapshots), and ``capture_profile`` has
+        # no internal rollback — so writes already committed survive.
+        # Report that truthfully instead of a false "restored" claim.
+        typer.secho(
+            "capture cancelled (Ctrl-C); some files may have been partially "
+            "written — run `setforge compare` to inspect",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(130) from None
     _render_capture_results(results)
 
 
@@ -196,6 +215,7 @@ def sync(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
     _refuse_legacy_live_markers(ctx, command="sync")
+    _refuse_duplicate_section_names(ctx, command="sync")
 
     with profile_lock(profile):
         if not no_transition:
@@ -211,13 +231,34 @@ def sync(
 
         src_paths = _sync_snapshot_paths(ctx, config)
         file_pre = transitions.snapshot_paths(src_paths)
+        # Snapshot the per-host store state (byte bases / spans sidecars /
+        # scalar bases) BEFORE _run_capture re-baselines them, so revert
+        # restores the stores in lockstep with the tracked patch. Without
+        # this, a sync that re-baselines a SHARED base followed by revert
+        # would leave the base AHEAD of the reverted tracked src — the
+        # corruption direction the codebase guards against.
+        state_pre = _capture_sync_store_snapshots(ctx)
 
-        results = _run_capture(
-            cfg, profile, repo_root, config, auto_enum, command="sync"
-        )
-        _render_capture_results(results)
+        try:
+            results = _run_capture(
+                cfg, profile, repo_root, config, auto_enum, command="sync"
+            )
+            _render_capture_results(results)
 
-        _capture_extensions(config, profile)
+            _capture_extensions(config, profile)
+        except KeyboardInterrupt:
+            # capture_profile writes tracked srcs and re-baselines stores
+            # one at a time with no internal rollback. Restore the
+            # pre-capture file + store snapshots so an interrupted sync
+            # leaves no partial tracked writes and no base advanced ahead
+            # of its tracked src — then report the truth (files restored).
+            _restore_sync_snapshots(file_pre, state_pre)
+            typer.secho(
+                "sync cancelled (Ctrl-C); files restored from snapshot",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+            raise typer.Exit(130) from None
 
         file_post = transitions.snapshot_paths(src_paths)
         if not no_transition:
@@ -225,6 +266,7 @@ def sync(
                 ctx,
                 file_pre=file_pre,
                 file_post=file_post,
+                state_snapshots=state_pre,
             )
 
 
@@ -263,11 +305,54 @@ def _run_capture_confirm_gate(
         raise typer.Exit(0)
 
 
+def _capture_sync_store_snapshots(
+    ctx: ProfileContext,
+) -> tuple[transitions.StateSnapshotEntry, ...]:
+    """Snapshot the pre-sync state of every store entry capture can re-baseline.
+
+    Sync's analogue of install's ``_capture_store_snapshots`` barrier:
+    capture re-baselines a disposition file's byte base
+    (``base_store.write_base``) and advances span sidecars, but unlike
+    install it had recorded NO ``state_snapshots``, so ``revert`` left the
+    base AHEAD of the reverted tracked src (the corruption direction).
+
+    For each non-symlink tracked-file in the profile, a disposition
+    declaration snapshots the byte base AND the scalar-base manifest, and
+    a span declaration snapshots the spans sidecar manifest — keyed by the
+    ``expand_tracked_file`` synthetic ``sub_name`` the stores key by.
+    Symlink records are skipped (their capture never touches the stores).
+    Must run BEFORE :func:`_run_capture`, before any re-baseline write.
+    """
+    entries: list[transitions.StateSnapshotEntry] = []
+    for tracked_file, sub_name, _sub_src, _sub_dst in _iter_all_tracked_files(ctx):
+        if tracked_file.symlink is not None:
+            continue
+        if tracked_file.disposition is not None:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE, ctx.profile, sub_name
+                )
+            )
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.SCALAR_BASE, ctx.profile, sub_name
+                )
+            )
+        if tracked_file.spans:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.SPANS, ctx.profile, sub_name
+                )
+            )
+    return tuple(entries)
+
+
 def _write_sync_transition(
     ctx: ProfileContext,
     *,
     file_pre: dict[Path, str | None],
     file_post: dict[Path, str | None],
+    state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
 ) -> None:
     """Write the SYNC transition record + echo the user-visible breadcrumb.
 
@@ -276,6 +361,10 @@ def _write_sync_transition(
     metadata) and the trailing ``transition: ...`` /
     ``↩  revert with: ...`` echoes so the caller body stays a flat
     capture-and-write skeleton.
+
+    ``state_snapshots`` carries the pre-sync per-host store state captured
+    by :func:`_capture_sync_store_snapshots` so ``revert`` restores the
+    byte bases / spans sidecars in lockstep with the tracked patch.
 
     Skips the write entirely when capture produced no file mutations
     (``file_pre == file_post``). An empty SYNC transition would shadow a
@@ -296,6 +385,7 @@ def _write_sync_transition(
         file_pre,
         file_post,
         None,  # sync's extension change is reflected in the YAML diff
+        state_snapshots=state_snapshots,
     )
     typer.echo(f"transition: {target}")
     typer.echo(f"↩  revert with: setforge revert --profile={ctx.profile}")
@@ -305,18 +395,33 @@ def _sync_snapshot_paths(
     ctx: ProfileContext,
     config: Path,
 ) -> list[Path]:
-    """Every tracked src path under the profile plus ``setforge.yaml`` itself.
+    """Tracked srcs under the profile + ``setforge.yaml`` + local.yaml.
 
-    Excludes :data:`LOCAL_CONFIG_PATH`: the promote wizard fires (and
-    mutates local.yaml) BEFORE this function is called, so any
-    file_pre/file_post snapshot captured here would be byte-identical.
-    The promote path's own ``TransitionCommand.PROMOTE`` record
-    (written inside ``_run_promote_wizard``) snapshots local.yaml
-    pre-mutation, so ``revert`` rolls the drop back independently of
-    the surrounding SYNC transition.
+    Includes :data:`LOCAL_CONFIG_PATH` so any capture-time mutation of
+    local.yaml rides the SYNC transition's patch. ``capture`` writes
+    local.yaml when a host-local OVERLAY body has been hand-edited and
+    the user (or ``--auto=use-live`` -> KEEP) keeps the edit:
+    ``_capture_overlay_bodies`` calls
+    ``overlay_body_wizard.write_edited_body_to_local`` inside
+    ``_run_capture``, AFTER ``file_pre`` is captured here. Snapshotting
+    local.yaml in both ``file_pre`` and ``file_post`` lets ``revert``
+    restore the pre-edit body instead of silently losing it.
+
+    The PROMOTE wizard also mutates local.yaml, but it fires BEFORE this
+    function and records its own ``TransitionCommand.PROMOTE`` snapshot
+    (taken pre-mutation). Because ``file_pre`` here is captured AFTER
+    promote has already applied, the SYNC snapshot only spans the
+    capture-time delta layered on top — the two transitions reverse
+    disjoint diffs and do not double-record the same change.
     """
     paths = [sub_src for _, _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
+    # Resolve LOCAL_CONFIG_PATH off the module so it tracks any runtime
+    # override (tests monkeypatch ``setforge.source.LOCAL_CONFIG_PATH``;
+    # ``capture`` reads the same attribute lazily when it writes the
+    # kept overlay body) — a module-bound import would diverge from the
+    # path capture actually mutates.
+    paths.append(source_mod.LOCAL_CONFIG_PATH.resolve())
     return paths
 
 
@@ -457,10 +562,12 @@ def _run_capture(
 ) -> list[capture_mod.CaptureResult]:
     """Run ``capture_profile`` with the standard CLI error mapping.
 
-    Centralizes the ``CaptureRequiresInteractive`` → exit-1 and
-    ``KeyboardInterrupt`` → exit-130 mapping shared between
-    :func:`capture` and :func:`sync`. ``command`` names the caller so
-    the Ctrl-C message reads "<command> cancelled".
+    Maps ``CaptureRequiresInteractive`` → exit-1. ``KeyboardInterrupt``
+    is NOT swallowed here: ``capture_profile`` performs no internal
+    snapshot/restore, so the caller owns the Ctrl-C contract — ``sync``
+    restores from the pre-capture snapshot it took and ``capture`` reports
+    the partial-write truth. ``command`` is retained for call-site parity
+    but no longer drives a (false) "restored from snapshot" message.
 
     Loads the local.yaml host_local_sections overlay so
     capture-back filters out the names install would have injected from
@@ -480,10 +587,34 @@ def _run_capture(
     except CaptureRequiresInteractive as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(1) from exc
-    except KeyboardInterrupt:
-        typer.secho(
-            f"{command} cancelled (Ctrl-C); files restored from snapshot",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        raise typer.Exit(130) from None
+
+
+def _restore_sync_snapshots(
+    file_pre: dict[Path, str | None],
+    state_pre: tuple[transitions.StateSnapshotEntry, ...],
+) -> None:
+    """Restore the tracked srcs / configs and stored bases to pre-sync state.
+
+    Invoked from :func:`sync`'s Ctrl-C handler so an interrupted capture
+    leaves NO partially-written tracked srcs and NO base advanced ahead
+    of its (now restored) tracked src — the corruption direction the
+    transition machinery exists to prevent. Mirrors the file+state restore
+    ``revert`` performs, but in-process from the snapshots ``sync`` took
+    before :func:`_run_capture`.
+
+    Per path in ``file_pre``: ``None`` (absent pre-sync) → unlinked;
+    text → rewritten atomically, preserving the file's current permission
+    bits (falling back to 0o644 when it was created during the aborted
+    capture) so a restore never demotes an executable or 0o644 config to
+    the 0600 mkstemp default. Store state is restored via
+    :func:`transitions.restore_state_snapshots`.
+    """
+    for path, pre_text in file_pre.items():
+        if pre_text is None:
+            path.unlink(missing_ok=True)
+            continue
+        if path.exists() and path.read_text(encoding="utf-8") == pre_text:
+            continue
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+        atomicio.atomic_write_text(path, pre_text, mode=mode)
+    transitions.restore_state_snapshots(state_pre)

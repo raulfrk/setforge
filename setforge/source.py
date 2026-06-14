@@ -929,6 +929,33 @@ def check_source_yaml_clean(source: Source) -> None:
     )
 
 
+def _fast_forward_branch_ref(clone_dest: Path, ref: str) -> None:
+    """Fast-forward a checked-out branch ref to its fetched remote-tracking tip.
+
+    ``git fetch`` advances ``origin/<ref>`` but never the local branch, and
+    ``git checkout <branch>`` lands on the (stale) local branch — so without
+    this step a re-fetch of an existing clone keeps serving the commit the
+    branch had at first clone. After fetch + checkout, if ``ref`` resolves
+    to a remote-tracking branch (``refs/remotes/origin/<ref>``), advance the
+    local branch with ``merge --ff-only`` so the working tree reflects the
+    upstream tip. SHAs and tags do not resolve to that ref, so they are
+    left untouched (detached / pinned, as intended). ``--ff-only`` keeps the
+    update a pure fast-forward: it refuses (and surfaces a clear error)
+    rather than creating a merge commit if the local branch ever diverged.
+
+    Uses :mod:`git_ops` subprocess hygiene (credential masking + GitOpError
+    wrapping) so a failure surfaces consistently with the rest of fetch.
+    """
+    probe = git_ops._run_git(
+        ["rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{ref}"],
+        cwd=clone_dest,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return  # not a branch (SHA / tag); nothing to fast-forward
+    git_ops._run_git(["merge", "--ff-only", f"origin/{ref}"], cwd=clone_dest)
+
+
 def fetch_source(source: Source) -> str:
     """Clone-on-missing + fetch + ref-checkout the given git source.
 
@@ -937,8 +964,9 @@ def fetch_source(source: Source) -> str:
     ``"source is a path; nothing to fetch"`` immediately (no git ops).
     GitSource: (1) compute clone_dest, clone if missing; (2) fetch
     origin; (3) verify ``tracked/`` is clean; (4) check out the
-    pinned ref. Errors propagate (:class:`GitOpError`,
-    :class:`DirtySourceCheckout`).
+    pinned ref; (5) fast-forward the local branch to the fetched
+    upstream tip when ``ref`` is a branch (a no-op for SHAs/tags).
+    Errors propagate (:class:`GitOpError`, :class:`DirtySourceCheckout`).
     """
     if isinstance(source, PathSource):
         return "source is a path; nothing to fetch"
@@ -957,6 +985,7 @@ def fetch_source(source: Source) -> str:
             "Commit or stash before fetching."
         )
     git_ops.git_checkout(clone_dest, source.ref)
+    _fast_forward_branch_ref(clone_dest, source.ref)
     action = "cloned and checked out" if cloned else "fetched and checked out"
     return f"{action} {source.ref} at {clone_dest}"
 

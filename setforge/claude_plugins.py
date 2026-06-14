@@ -331,6 +331,122 @@ def _split_id(pid: str) -> tuple[str, str]:
     return name, mp
 
 
+def _source_identity(
+    src: MarketplaceSource,
+    install_mode: ClaudeInstallMode = ClaudeInstallMode.REGULAR,
+    cache_root: Path | None = None,
+) -> str:
+    """Canonical comparison key for a declared :class:`MarketplaceSource`.
+
+    GITHUB sources reduce to their ``owner/repo`` slug; PATH sources to
+    the resolved filesystem path. Used to match a declared marketplace
+    against the ``source`` claude reports in ``list_marketplaces()``,
+    instead of comparing the YAML key against claude's derived name.
+
+    Under :data:`ClaudeInstallMode.LOCAL_CLONE` a GITHUB source is
+    registered (by :func:`_add_declared_marketplaces`) under its on-disk
+    cache PATH, not its slug — so the declared identity must mirror that
+    cache path (``cache_root / <repo-basename>``) for the next reconcile
+    to recognize it as already-registered. Without this the slug-vs-path
+    mismatch re-adds the marketplace on every run (idempotency bug).
+
+    When a basename collision was resolved by the ``BOTH`` wizard outcome,
+    the repo was cloned into a non-basename subdir (e.g. ``plug-v2``) and
+    an ``owner/repo -> subdir`` alias was persisted to the cache-root
+    sidecar. The alias is consulted first so the declared identity resolves
+    to that subdir rather than the (colliding) basename dir; absent/legacy
+    sidecar degrades to plain basename resolution.
+    """
+    if src.source is MarketplaceSourceKind.GITHUB:
+        if install_mode is ClaudeInstallMode.LOCAL_CLONE and src.repo:
+            root = (
+                cache_root
+                if cache_root is not None
+                else _mp_cache.MARKETPLACE_CACHE_ROOT
+            )
+            alias = _mp_cache.read_cache_aliases(root).get(src.repo)
+            subdir = alias if alias is not None else src.repo.rsplit("/", 1)[-1]
+            cache_dir = root / subdir
+            return str(cache_dir.expanduser())
+        return _normalize_github_source(src.repo or "")
+    return str(Path(src.path or "").expanduser())
+
+
+def _normalize_github_source(raw: str) -> str:
+    """Reduce a GitHub source string to a bare ``owner/repo`` slug.
+
+    claude's ``marketplace list --json`` reports the source with a
+    ``github:`` scheme prefix (``github:anthropics/plugins``); the YAML
+    declares the bare slug (``anthropics/plugins``). Stripping the
+    optional prefix lets both forms compare equal so an already-registered
+    marketplace is not re-added every reconcile when its YAML key differs
+    from claude's derived name.
+    """
+    return raw.removeprefix("github:")
+
+
+def _registered_source_identities(installed: dict[str, dict]) -> set[str]:
+    """Collect canonical source identities of already-registered marketplaces.
+
+    Each value from :func:`list_marketplaces` is a claude-reported entry
+    whose ``source`` field carries the origin (``github:owner/repo`` or a
+    filesystem path). Normalizes each so it can be matched against
+    :func:`_source_identity` of a declared marketplace.
+    """
+    identities: set[str] = set()
+    for entry in installed.values():
+        source = entry.get("source")
+        if not isinstance(source, str) or not source:
+            continue
+        if _is_github_source(source):
+            identities.add(_normalize_github_source(source))
+        else:
+            identities.add(str(Path(source).expanduser()))
+    return identities
+
+
+def _is_github_source(source: str) -> bool:
+    """Heuristic: is a claude-reported source string a GitHub origin?
+
+    True for the explicit ``github:owner/repo`` scheme claude emits, and
+    for the bare ``owner/repo`` slug a freshly-added marketplace records
+    (no scheme, relative, exactly one path segment + repo). PATH sources
+    are absolute or ``~``-anchored filesystem paths and fall through to
+    the PATH branch.
+    """
+    if source.startswith("github:"):
+        return True
+    if source.startswith(("/", "~", ".")):
+        return False
+    return source.count("/") == 1
+
+
+def _marketplaces_to_add(
+    cfg: Config,
+    install_mode: ClaudeInstallMode = ClaudeInstallMode.REGULAR,
+    cache_root: Path | None = None,
+) -> list[str]:
+    """Declared marketplace YAML keys whose source is not yet registered.
+
+    Matches by SOURCE identity, not YAML key: ``claude plugin marketplace
+    add`` registers a marketplace under a name it derives from the
+    repo manifest, which may differ from the YAML key. Comparing keys
+    against claude's reported names re-adds such marketplaces on every
+    reconcile (non-idempotent); comparing source identities does not.
+
+    ``install_mode`` / ``cache_root`` thread into :func:`_source_identity`
+    so that under :data:`ClaudeInstallMode.LOCAL_CLONE` the declared
+    identity mirrors the on-disk cache PATH a GITHUB source is registered
+    under — keeping reconcile idempotent in local-clone mode too.
+    """
+    registered = _registered_source_identities(list_marketplaces())
+    return sorted(
+        name
+        for name, src in cfg.marketplaces.items()
+        if _source_identity(src, install_mode, cache_root) not in registered
+    )
+
+
 def _add_declared_marketplaces(
     cfg: Config,
     mps_to_add: list[str],
@@ -471,9 +587,14 @@ def reconcile(
     :class:`ConfigError` when a profile name is absent from the registry.
 
     Marketplaces (always-on, regardless of policy): each declared
-    marketplace not in ``list_marketplaces()`` gets ``marketplace_add``
-    called (except under ``REPORT`` policy or ``dry_run=True``, where it
-    is listed but not executed).  Stale marketplaces are never evicted.
+    marketplace whose SOURCE is not already registered (matched by
+    ``owner/repo`` slug or filesystem path against the ``source`` field
+    of each ``list_marketplaces()`` entry, NOT by YAML key) gets
+    ``marketplace_add`` called (except under ``REPORT`` policy or
+    ``dry_run=True``, where it is listed but not executed).  Matching by
+    source keeps reconcile idempotent when claude registers a marketplace
+    under a manifest-derived name that differs from the YAML key.  Stale
+    marketplaces are never evicted.
 
     ``dry_run=True`` logs intended actions and returns without running any
     write subprocess. ``REPORT`` policy behaves identically to
@@ -484,17 +605,25 @@ def reconcile(
         declared, profile.plugins_reconcile
     )
 
-    # Marketplaces: always-on regardless of policy
-    mps_to_add = sorted(set(cfg.marketplaces) - set(list_marketplaces()))
+    # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
+    # for on-disk cache paths; see _add_declared_marketplaces). Loaded
+    # before the diff so _marketplaces_to_add can compute the declared
+    # identity in the SAME shape the marketplace is registered under
+    # (cache PATH under LOCAL_CLONE) — required for idempotency.
+    install_mode = load_host_local_config().claude.install_mode
+
+    # Marketplaces: always-on regardless of policy. Match by SOURCE
+    # identity (not YAML key) so a marketplace claude registered under a
+    # manifest-derived name is not re-added every run (idempotency).
+    mps_to_add = _marketplaces_to_add(
+        cfg, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
+    )
 
     if dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT:
         return _read_only_report(to_install, to_enable, to_disable, mps_to_add)
 
     failed: list[tuple[str, str]] = []
 
-    # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
-    # for on-disk cache paths; see _add_declared_marketplaces).
-    install_mode = load_host_local_config().claude.install_mode
     _add_declared_marketplaces(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
     )

@@ -44,11 +44,14 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _CODE_BIN = "code"
 _TIMEOUT_S = 30
-# Extension IDs are publisher.name where each part is lowercase alphanum +
-# hyphens (matches the legacy Makefile's grep filter). The Remote-SSH `code`
-# CLI prepends an "Extensions installed on SSH: <ip>:" header line that we
-# filter out via this regex.
-_EXT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$")
+# Extension IDs are publisher.name where each part is alphanum + hyphens.
+# Real IDs commonly carry uppercase letters (e.g. `GitHub.copilot`,
+# `VisualStudioExptTeam.vscodeintellicode`), so the character class is
+# case-insensitive — a lowercase-only filter would silently drop those
+# installed extensions. The Remote-SSH `code` CLI prepends an
+# "Extensions installed on SSH: <ip>:" header line (it has spaces and a
+# colon) which this regex still rejects.
+_EXT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9-]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,13 +131,32 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
     """
     code = _ensure_code()
     installed = list_installed()
-    effective = set(ext.include) - set(ext.exclude)
+    # `exclude` always wins, and VSCode treats extension IDs
+    # case-insensitively, so subtract on casefolded keys — otherwise a
+    # `github.copilot` exclude would silently fail to drop an included
+    # `GitHub.copilot`, defeating the documented invariant.
+    exclude_keys = {e.casefold() for e in ext.exclude}
+    effective = {i for i in ext.include if i.casefold() not in exclude_keys}
 
-    to_install = sorted(effective - installed)
+    # VSCode treats extension IDs case-insensitively, and `code
+    # --list-extensions` echoes each ID with its publisher's original
+    # casing (e.g. `GitHub.copilot`). Diff on casefolded keys so a
+    # declared `github.copilot` matches an installed `GitHub.copilot` —
+    # otherwise reconcile would re-install it on every run (ADDITIVE) or
+    # uninstall-then-reinstall it (PRUNE). Original casing is preserved
+    # for the subprocess invocations via these lookup maps.
+    installed_by_key = {e.casefold(): e for e in installed}
+    effective_by_key = {e.casefold(): e for e in effective}
+    installed_keys = set(installed_by_key)
+    effective_keys = set(effective_by_key)
+
+    to_install = sorted(effective_by_key[k] for k in effective_keys - installed_keys)
     if ext.reconcile is ReconcilePolicy.ADDITIVE:
         to_uninstall: list[str] = []
     else:
-        to_uninstall = sorted(installed - effective)
+        to_uninstall = sorted(
+            installed_by_key[k] for k in installed_keys - effective_keys
+        )
 
     report = ReconcileReport(
         policy=ext.reconcile,
@@ -270,8 +292,10 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     ruamel.yaml round-trip mode.
 
     Raises :class:`ConfigError` if ``ext_id`` is in this profile's
-    literal ``exclude`` list, since "exclude wins" would silently drop
-    the new addition on the next reconcile.
+    literal ``exclude`` list — or in any ancestor profile's ``exclude``
+    via the ``extends:`` chain — since "exclude wins" (exclude is merged
+    across the chain) would silently drop the new addition on the next
+    reconcile.
     """
     cfg = load_config(config_path)
     if profile not in cfg.profiles:
@@ -280,6 +304,14 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
         raise ConfigError(
             f"{ext_id!r} is in {profile}.extensions.exclude — remove it from "
             "exclude first (e.g. by editing setforge.yaml) before adding to include"
+        )
+    excluding_ancestor = _ancestor_excluding(cfg, profile, ext_id)
+    if excluding_ancestor is not None:
+        raise ConfigError(
+            f"{ext_id!r} is in inherited profile {excluding_ancestor!r}'s "
+            f"exclude list — remove it from {excluding_ancestor}.extensions.exclude "
+            "first (e.g. by editing setforge.yaml) before adding to include, since "
+            "the merged 'exclude wins' would silently drop the addition on reconcile"
         )
     yaml, doc = _load_yaml_doc(config_path)
     ext_block = _profile_extensions_block(doc, profile)
@@ -306,6 +338,22 @@ def _ancestor_declaring(cfg: Config, profile: str, ext_id: str) -> str | None:
     return None
 
 
+def _ancestor_excluding(cfg: Config, profile: str, ext_id: str) -> str | None:
+    """Walk the extends: chain of ``profile`` (excluding ``profile`` itself)
+    and return the first ancestor whose literal ``exclude`` lists ``ext_id``,
+    or ``None``. Mirrors :func:`_ancestor_declaring` for the exclude side:
+    merged exclude "always wins", so an inherited exclude would silently drop
+    an addition to a child's ``include`` on reconcile."""
+    current = cfg.profiles[profile].extends
+    while current is not None:
+        if current not in cfg.profiles:
+            return None
+        if ext_id in cfg.profiles[current].extensions.exclude:
+            return current
+        current = cfg.profiles[current].extends
+    return None
+
+
 def capture_extensions(config_path: Path, profile: str) -> bool:
     """Replace ``profiles.<profile>.extensions.include`` with the current
     installed set minus the resolved profile's ``exclude``.
@@ -320,8 +368,11 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     cfg = load_config(config_path)
     resolved = resolve_profile(cfg, profile)
     installed = list_installed()
-    excluded = set(resolved.extensions.exclude)
-    new_include = sorted(installed - excluded)
+    # Subtract `exclude` case-insensitively (VSCode extension IDs are
+    # case-insensitive) so a lowercase exclude can't leak a differently
+    # cased installed ID back into `include`.
+    exclude_keys = {e.casefold() for e in resolved.extensions.exclude}
+    new_include = sorted(i for i in installed if i.casefold() not in exclude_keys)
 
     yaml, doc = _load_yaml_doc(config_path)
     ext_block = _profile_extensions_block(doc, profile)

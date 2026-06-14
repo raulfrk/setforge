@@ -47,8 +47,8 @@ still merges as text rather than crashing the install.
 """
 
 import io
-from collections.abc import Callable, Mapping, MutableMapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -58,7 +58,7 @@ from json5.loader import ModelLoader
 from json5.loader import loads as _json5_loads
 from ruamel.yaml import YAML
 
-from setforge import jsonc, yaml_merge
+from setforge import jsonc
 from setforge.config import Disposition
 from setforge.errors import ConfigError, MergeTypeMismatch
 from setforge.markdown_merge import (
@@ -72,9 +72,11 @@ from setforge.section_wizard import ReconcileAuto
 from setforge.spans import SpanEntry, SpanKind
 from setforge.structural_merge import (
     PathConflict,
+    deep_merge_into_node,
     delete_at_path,
     get_at_path,
     get_node_at_path,
+    is_mapping_node,
     list_keys_at_path,
     merge_structural,
     set_at_path,
@@ -155,13 +157,19 @@ class StructuralSpanOrphanReason(StrEnum):
     did-you-mean. The two ``set_at_path`` failure reasons are NOT refined —
     they name a more specific parent-level seam and their fixtures stay
     distinguishable (a parent-level upstream removal still reports WHERE the
-    re-assert failed).
+    re-assert failed). ``STRUCTURAL_FALLBACK`` — a shape clash between sides
+    forced the whole file off the structural engine onto the raw line-based
+    merge (:class:`~setforge.structural_merge.MergeTypeMismatch` from
+    :func:`merge_structural`); the pin could not be re-asserted onto the
+    line-merged text (the re-parse or the per-path re-assert failed), so the
+    merged value is PRESERVED and warned rather than silently dropped (I1 / I6).
     """
 
     ABSENT_IN_LIVE = "absent-in-live"
     MISSING_PARENT = "missing-parent"
     PARENT_NOT_MAPPING = "parent-not-mapping"
     UPSTREAM_RENAMED_OR_DELETED = "upstream-renamed-or-deleted"
+    STRUCTURAL_FALLBACK = "structural-fallback"
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,8 +294,13 @@ def resolve_file(
             )
         except MergeTypeMismatch:
             # A structurally-incompatible file (shape clash between sides)
-            # still merges as raw text via the line-based path.
-            return _resolve_line_based(base, live, tracked, auto, resolver)
+            # still merges as raw text via the line-based path — but pinned
+            # spans MUST NOT be silently dropped (I1 / I6): re-assert them onto
+            # the line-merged text, orphan-warning any pin that cannot be
+            # honored. Preserve-and-warn is the contract; silent drop is not.
+            return _resolve_structural_fallback(
+                dst, base, live, tracked, auto, resolver, structural_spans
+            )
 
     return _resolve_line_based(base, live, tracked, auto, resolver)
 
@@ -381,7 +394,7 @@ def _resolve_structural(
         )
     elif auto is ReconcileAuto.USE_TRACKED:
         for pc in result.conflicts:
-            set_at_path(result.merged_model, pc.path, pc.theirs)
+            _apply_theirs_or_delete(result.merged_model, pc.path, pc.theirs)
         advance = True
     else:
         # KEEP_LIVE or bare: ours is already in the model; nothing to write.
@@ -424,6 +437,110 @@ def _resolve_structural(
         conflicts=conflicts,
         advance_base=advance,
         base_absent=False,
+        structural_span_orphans=orphans,
+    )
+
+
+def _resolve_structural_fallback(
+    dst: Path,
+    base: str,
+    live: str,
+    tracked: str,
+    auto: ReconcileAuto | None,
+    resolver: ConflictResolver | None,
+    structural_spans: list[SpanEntry] | None,
+) -> FileResolution:
+    """Line-based merge for a shape-clashed structural file, pins preserved.
+
+    Reached only from the ``except MergeTypeMismatch`` arm of
+    :func:`resolve_file`: a shape clash anywhere in the file made
+    :func:`~setforge.structural_merge.merge_structural` unusable, so the whole
+    file falls back to the raw line-based merge. Without re-asserting pins here
+    the line merge would resolve a PINNED line's conflict toward tracked under
+    ``--auto=use-tracked``, silently overwriting the user's host-local value
+    (the bug this guards). Instead:
+
+    1. run the line-based merge to get the merged text;
+    2. snapshot each PINNED span's live value (from the FRESH live parse);
+    3. re-parse the line-merged text structurally and re-assert each pin onto
+       it (the same comment-preserving seams the structural path uses).
+
+    Any pin that cannot be re-asserted — the line-merged text does not parse
+    structurally, the pin is absent from live, or the per-path re-assert hits a
+    missing / non-mapping parent — is PRESERVED (the line-merged value is left
+    intact) and reported as a
+    :data:`StructuralSpanOrphanReason.STRUCTURAL_FALLBACK` orphan. The contract
+    is preserve-or-warn for every pin: a pin is never both un-honored AND
+    un-warned (I1 / I6).
+    """
+    line_res = _resolve_line_based(base, live, tracked, auto, resolver)
+    pinned = _pinned_structural_spans(structural_spans)
+    if not pinned:
+        return line_res
+
+    is_jsonc = jsonc.is_jsonc_file(dst)
+
+    def _fallback_orphans() -> list[StructuralSpanOrphan]:
+        return [
+            StructuralSpanOrphan(
+                anchor=span.anchor,
+                kind=span.kind,
+                reason=StructuralSpanOrphanReason.STRUCTURAL_FALLBACK,
+            )
+            for span in pinned
+        ]
+
+    # The pins live in YAML/JSONC value space, so re-asserting them requires a
+    # structural model. Parse the live side (for the snapshots) and the
+    # line-merged output (the target). If EITHER fails to parse, no pin can be
+    # honored — preserve the line-merged text and warn every pin.
+    try:
+        live_model = _load_structural(live, is_jsonc)
+        merged_model = _load_structural(line_res.text, is_jsonc)
+    except Exception:
+        # Best-effort: the line-merged text of a shape-clashed file may not be
+        # valid YAML / JSONC. A parse failure means no pin can be re-asserted,
+        # so preserve the line-merged text and warn every pin (never silent).
+        return replace(line_res, structural_span_orphans=_fallback_orphans())
+
+    live_snapshots: dict[str, object] = {
+        span.anchor: get_at_path(live_model, span.anchor) for span in pinned
+    }
+    live_wrapped: dict[str, object] = {
+        span.anchor: get_node_at_path(live_model, span.anchor) for span in pinned
+    }
+
+    orphans: list[StructuralSpanOrphan] = []
+    for span in pinned:
+        snapshot = live_snapshots[span.anchor]
+        if snapshot is ABSENT:
+            orphans.append(
+                StructuralSpanOrphan(
+                    anchor=span.anchor,
+                    kind=span.kind,
+                    reason=StructuralSpanOrphanReason.STRUCTURAL_FALLBACK,
+                )
+            )
+            continue
+        try:
+            if span.deep:
+                _deep_reassert_span(merged_model, span.anchor, snapshot)
+            elif isinstance(snapshot, dict | list):
+                set_node_at_path(merged_model, span.anchor, live_wrapped[span.anchor])
+            else:
+                set_at_path(merged_model, span.anchor, snapshot)
+        except (KeyError, ValueError, MergeTypeMismatch):
+            orphans.append(
+                StructuralSpanOrphan(
+                    anchor=span.anchor,
+                    kind=span.kind,
+                    reason=StructuralSpanOrphanReason.STRUCTURAL_FALLBACK,
+                )
+            )
+
+    return replace(
+        line_res,
+        text=_dump_structural(merged_model, is_jsonc),
         structural_span_orphans=orphans,
     )
 
@@ -595,26 +712,33 @@ def _deep_reassert_span(model: object, anchor: str, snapshot: object) -> None:
     tracked-only sub-key the 3-way merge kept survives, while live's edited
     sub-keys win.
 
-    Both sides are unwrapped plain values — :func:`get_at_path` returns the
-    merged value already unwrapped, and ``snapshot`` is the unwrapped live
-    snapshot — so the deep merge runs on backend-agnostic python structures via
-    :func:`setforge.yaml_merge._deep_merge_dicts`; the result is written back
-    through :func:`~setforge.structural_merge.set_at_path` (the same comment-
-    preserving seam the shallow re-assert uses). When either side is not a
-    mapping the deep merge is degenerate, so live whole-replaces (set the
-    snapshot) — matching the legacy overlay's scalar/list terminal.
+    Live's ``snapshot`` is an unwrapped plain value, but the merged subtree is
+    fetched WRAPPED via :func:`~setforge.structural_merge.get_node_at_path` (a
+    comment-bearing deep copy) so the deep merge runs over the comment-carrying
+    backend node, not a stripped :func:`get_at_path` copy. The merge is delegated
+    to :func:`~setforge.structural_merge.deep_merge_into_node` — the comment-
+    preserving sibling of :func:`setforge.yaml_merge._deep_merge_dicts` — which
+    overlays live's plain sub-keys onto the wrapped node IN PLACE, leaving every
+    tracked-only key (and its interior comments / formatting) byte-identical; the
+    merged wrapped node is then spliced back through
+    :func:`~setforge.structural_merge.set_node_at_path` (the same comment-bearing
+    seam the shallow whole-subtree re-assert uses). When either side is not a
+    mapping the deep merge is degenerate, so live whole-replaces via the plain
+    :func:`~setforge.structural_merge.set_at_path` — matching the legacy
+    overlay's scalar/list terminal.
 
     Raises the same ``KeyError`` / ``ValueError`` / ``MergeTypeMismatch`` the
     shallow path raises on a missing / non-mapping parent, so the caller's
     orphan postures cover the deep path too.
     """
-    merged_value = get_at_path(model, anchor)
-    if isinstance(merged_value, MutableMapping) and isinstance(snapshot, Mapping):
-        # Deep-merge live's snapshot over the merged subtree in place, then
-        # write the merged result back at the anchor.
-        yaml_merge._deep_merge_dicts(merged_value, snapshot, anchor)
-        set_at_path(model, anchor, merged_value)
-        return
+    if isinstance(snapshot, Mapping):
+        merged_node = get_node_at_path(model, anchor)
+        if is_mapping_node(merged_node):
+            # Deep-merge live's snapshot over the WRAPPED merged subtree in
+            # place (comments survive), then splice the wrapped result back.
+            deep_merge_into_node(merged_node, snapshot, anchor)
+            set_node_at_path(model, anchor, merged_node)
+            return
     # Degenerate (scalar / list / absent terminal): live whole-replaces.
     set_at_path(model, anchor, snapshot)
 
@@ -707,6 +831,21 @@ def exclude_structural_spans_for_capture(
     return _dump_structural(live_model, is_jsonc), warnings
 
 
+def _apply_theirs_or_delete(model: object, path: str, value: object) -> None:
+    """Write ``value`` at ``path``, or DELETE the leaf when ``value`` is ABSENT.
+
+    A ``PathConflict.theirs`` (or an EDIT verdict) of :data:`ABSENT` means
+    tracked DELETED the key — "take theirs" must drop the leaf, not bake the
+    sentinel into the comment-preserving model (which the structural dump
+    cannot serialize). :func:`~setforge.structural_merge.delete_at_path` is a
+    safe no-op when the leaf is already gone.
+    """
+    if value is ABSENT:
+        delete_at_path(model, path)
+    else:
+        set_at_path(model, path, value)
+
+
 def _apply_structural_resolver(
     model: object,
     conflicts: list[PathConflict],
@@ -725,9 +864,9 @@ def _apply_structural_resolver(
             case ConflictChoice.KEEP_OURS:
                 pass  # ours already in the model.
             case ConflictChoice.TAKE_THEIRS:
-                set_at_path(model, pc.path, pc.theirs)
+                _apply_theirs_or_delete(model, pc.path, pc.theirs)
             case ConflictChoice.EDIT:
-                set_at_path(model, pc.path, res.edited_value)
+                _apply_theirs_or_delete(model, pc.path, res.edited_value)
             case ConflictChoice.SKIP:
                 any_skip = True
     return not any_skip

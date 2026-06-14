@@ -1058,6 +1058,7 @@ def _write_reverse_transition(
     file_pre: Mapping[Path, str | None],
     *,
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
+    file_modes: Mapping[Path, int] | None = None,
 ) -> Path:
     """Reverse plugin/extension deltas from ``transition`` and write the redo record.
 
@@ -1065,6 +1066,11 @@ def _write_reverse_transition(
     the caller so a second revert (redo) can restore it — the
     store-state mirror of ``file_pre``. Defaults empty for callers that
     revert snapshot-less transitions.
+
+    ``file_modes`` carries the PRE-revert (install-applied) permission bits
+    recaptured by the caller so a second revert (redo) re-applies the
+    install chmod — the file-mode mirror of ``file_pre``. ``None`` / empty
+    for callers reverting a transition that changed no file modes.
     """
     ext_file = transition / "extensions.json"
     reverse_added: list[str] = []
@@ -1112,4 +1118,5 @@ def _write_reverse_transition(
         plugin_delta=reverse_plugin_delta,
         state_snapshots=state_snapshots,
         mcp_delta=reverse_mcp_delta,
+        file_modes=file_modes,
     )

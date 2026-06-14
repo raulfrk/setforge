@@ -22,6 +22,7 @@ the CLI layer renders this as a non-zero exit with a clear migration
 hint.
 """
 
+import stat
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -32,6 +33,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from setforge import (
+    atomicio,
     base_store,
     disposition_merge,
     jsonc,
@@ -137,15 +139,45 @@ def capture_tracked_file(
         content = sections.strip_host_local_sections(
             content, names=host_local_section_names, allow_legacy=True
         )
+    if _keep_tracked_refuses(auto, src, content):
+        return CaptureResult(
+            name=src.name, action=CaptureAction.SKIPPED, reason="keep-tracked"
+        )
     return _write_if_changed(src, content)
 
 
+def _keep_tracked_refuses(auto: "CaptureAuto | None", src: Path, content: str) -> bool:
+    """Return whether ``--auto=keep-tracked`` should refuse this writeback.
+
+    ``keep-tracked`` is the drift-refusal resolution: when the would-be
+    capture content diverges from the existing tracked source, the tracked
+    bytes (and, for SHARED, the stored base) must be left untouched. A
+    no-drift writeback (tracked already equals ``content``) is a NOOP either
+    way, so only an actual divergence is refused.
+    """
+    if auto is not CaptureAuto.KEEP_TRACKED:
+        return False
+    if not src.exists():
+        return False
+    return src.read_text(encoding="utf-8") != content
+
+
 def _write_if_changed(src: Path, content: str) -> CaptureResult:
-    """Write ``content`` to ``src`` unless it already matches; return action."""
+    """Write ``content`` to ``src`` unless it already matches; return action.
+
+    Preserves the tracked file's existing permission bits across the atomic
+    rewrite. ``atomic_write_text`` with no ``mode`` would let the 0600
+    ``mkstemp`` default ride in via ``os.replace`` — silently demoting an
+    executable hook (0o755) or a 0o644 config in the shared config repo and
+    propagating that mode cross-host on the next deploy. On a fresh tracked
+    file (``src`` absent) fall back to 0o644, the conventional non-executable
+    default, rather than the 0600 mkstemp leftover.
+    """
     src.parent.mkdir(parents=True, exist_ok=True)
     if src.exists() and src.read_text(encoding="utf-8") == content:
         return CaptureResult(name=src.name, action=CaptureAction.NOOP)
-    src.write_text(content, encoding="utf-8")
+    mode = stat.S_IMODE(src.stat().st_mode) if src.exists() else 0o644
+    atomicio.atomic_write_text(src, content, mode=mode)
     return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
 
 
@@ -485,6 +517,13 @@ def _capture_disposition_file(
                 capture_text = spans_overlay.exclude_spans_for_capture(
                     capture_text, tracked_text, pinned_forked, span_states
                 )
+    if _keep_tracked_refuses(auto, src, capture_text):
+        # keep-tracked refuses the drift: leave tracked AND the stored base
+        # untouched. Skipping the re-baseline is essential — re-baselining to
+        # the live bytes would silently absorb the very drift we refused.
+        return CaptureResult(
+            name=src.name, action=CaptureAction.SKIPPED, reason="keep-tracked"
+        )
     result = _write_if_changed(src, capture_text)
     # Re-baseline AFTER the tracked write succeeded: write tracked first,
     # then base, so a base-write failure leaves base lagging (safe) rather

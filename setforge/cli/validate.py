@@ -432,16 +432,35 @@ def _check_spans_file_types(
     :func:`setforge.spans.validate_spans_file_type` /
     :func:`setforge.disposition_merge.validate_structural_spans` to a string
     failure (existing UX). No-op for tracked_files without spans.
+
+    Like :func:`_check_spans_path_existence`, the validated span list is the
+    local.yaml-overlay-FOLDED view (:func:`_overlay_folded_spans`) — host-local
+    span declarations are checked exactly like tracked-side ones. Without the
+    fold, a host-local structural span overlapping a shared span (Invariant
+    I11) would pass this offline gate yet abort ``install`` mid-deploy, because
+    :func:`setforge.config.apply_host_local_tracked_file_overrides` folds both
+    scopes into one overlapping set before
+    :func:`~setforge.disposition_merge.validate_structural_spans` runs at merge
+    time.
     """
+    try:
+        overlays = source_mod.load_local_tracked_file_overlays(
+            source_mod.LOCAL_CONFIG_PATH
+        )
+    except (ConfigError, ValidationError, OSError):
+        # A malformed local.yaml is reported by Check 7 (_check_local_yaml);
+        # fold nothing here rather than double-report.
+        overlays = {}
     for tf_id in resolved.tracked_files:
         tracked_file = cfg.tracked_files[tf_id]
-        if not tracked_file.spans:
+        spans = _overlay_folded_spans(tf_id, tracked_file, overlays)
+        if not spans:
             continue
         src = resolve_src(tracked_file, repo_root)
         try:
-            validate_spans_file_type(tf_id, tracked_file.spans, src)
+            validate_spans_file_type(tf_id, spans, src)
             if is_structural(src):
-                validate_structural_spans(list(tracked_file.spans))
+                validate_structural_spans(list(spans))
         except ConfigError as exc:
             failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
 

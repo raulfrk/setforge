@@ -169,11 +169,16 @@ def _register_plugin_in_yaml(
     if plugin_declared:
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
+    # Bind the profile to the BARE plugin name: the top-level registry key is
+    # the bare name (see yaml_add_plugin above), and every reader of
+    # profile.claude_plugins (_validate_plugin_references, _declared_plugin_ids,
+    # sync_marketplace_cache) treats entries as bare registry keys. Writing the
+    # `@`-form here would brick the config on the next load_config.
     profile_added = claude_yaml_editor_mod.yaml_add_plugin_to_profile(
-        config, profile, f"{plugin_name}@{mp_name}"
+        config, profile, plugin_name
     )
     if profile_added:
-        typer.echo(f"added to {profile}.claude_plugins: {plugin_name}@{mp_name}")
+        typer.echo(f"added to {profile}.claude_plugins: {plugin_name}")
 
 
 def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
@@ -227,18 +232,22 @@ def plugin_remove(
 ) -> None:
     """Remove a plugin from the profile's claude_plugins list."""
     config = _resolve_config_arg(config)
-    plugin_ref = name  # already in <name>@<marketplace> form or just name
+    # Profile bindings are stored under the BARE plugin name (see plugin_add),
+    # so strip any trailing @marketplace for the YAML removal to keep it
+    # symmetric with the corrected add path. The claude `plugin disable`
+    # binary still wants the full <name>@<marketplace> id, so it gets `name`.
+    bare_ref = name.split("@", 1)[0]
     changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
-        config, profile, plugin_ref
+        config, profile, bare_ref
     )
     if changed:
-        typer.echo(f"removed from {profile}.claude_plugins: {plugin_ref}")
+        typer.echo(f"removed from {profile}.claude_plugins: {bare_ref}")
     else:
-        typer.echo(f"not in {profile}.claude_plugins: {plugin_ref}")
+        typer.echo(f"not in {profile}.claude_plugins: {bare_ref}")
     if disable:
         try:
-            claude_plugins_mod.plugin_disable(plugin_ref)
-            typer.echo(f"disabled plugin: {plugin_ref}")
+            claude_plugins_mod.plugin_disable(name)
+            typer.echo(f"disabled plugin: {name}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -394,6 +403,12 @@ def marketplace_add_cmd(
         claude_plugins_mod.marketplace_add(name, source)
         typer.echo(f"registered marketplace: {name}")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        # Atomicity: the YAML entry is written before the binary call. If the
+        # binary fails we must roll the entry back, or the config repo is left
+        # with an orphaned marketplace declaration that diverges from claude's
+        # state. Only revert the entry we just added (yaml_changed).
+        if yaml_changed:
+            claude_yaml_editor_mod.yaml_remove_marketplace(config, name)
         typer.secho(f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
