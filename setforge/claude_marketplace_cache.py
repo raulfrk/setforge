@@ -462,13 +462,17 @@ def _collision_keep(
 
 
 def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
-    """``UPDATE``: re-clone ``source`` over the existing cache atomically.
+    """``UPDATE``: re-clone ``source`` over the existing cache, clone-safe.
 
     Stages the new clone in a temporary sibling dir, and only swaps it
     into place once the clone succeeds. A failed clone (offline, auth,
     bad repo) leaves the existing cache untouched — critical because in
     LOCAL_CLONE mode that cache is the offline source of truth and the
-    UPDATE path is reached precisely when the network may be down.
+    UPDATE path is reached precisely when the network may be down. The
+    final swap (``rmtree`` then ``rename``) is not crash-atomic — an
+    interruption between the two leaves the cache absent — but that
+    window is bounded and the clone-failure path above is the one that
+    matters for the offline-fallback guarantee.
     """
     LOGGER.info(
         "cache-collision: re-cloning %r over existing %r",

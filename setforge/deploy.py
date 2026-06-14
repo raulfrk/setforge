@@ -649,9 +649,10 @@ def deploy_symlinked_file(
        pattern :func:`_atomic_write` uses for regular files, closing
        the TOCTOU window between ``unlink`` and ``symlink``.
 
-    Refusal contract: if ``dst`` already exists as a *regular file*
-    (not a symlink), this function raises :class:`SetforgeError`. The
-    caller should treat that case as drift requiring user intervention
+    Refusal contract: if ``dst`` already exists as a *regular file* or a
+    *directory* (anything that is not a symlink), this function raises
+    :class:`SetforgeError` — with a message distinguishing the two cases.
+    The caller should treat that as drift requiring user intervention
     rather than silently clobbering local content. A pre-existing
     symlink at ``dst`` — regardless of where it points — is replaced
     atomically by :func:`os.replace`.
