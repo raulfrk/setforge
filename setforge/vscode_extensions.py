@@ -13,6 +13,7 @@ mutate a profile's ``extensions.include`` / ``extensions.exclude`` lists
 in ``setforge.yaml`` without losing comments.
 """
 
+import io
 import logging
 import re
 import subprocess
@@ -25,6 +26,7 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
+from setforge.atomicio import atomic_write_text
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import (
     Config,
@@ -105,7 +107,11 @@ def list_installed() -> set[str]:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         raise ExtensionInstallFailed(
             f"`code --list-extensions` failed: {stderr_of(exc)}"
         ) from exc
@@ -180,7 +186,11 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
                 capture_output=True,
                 timeout=_TIMEOUT_S,
             )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as exc:
             msg = stderr_of(exc)
             LOGGER.warning("install failed for %s: %s", name, msg)
             failed.append((name, msg))
@@ -199,6 +209,7 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
             except (
                 subprocess.CalledProcessError,
                 subprocess.TimeoutExpired,
+                OSError,
             ) as exc:
                 msg = stderr_of(exc)
                 LOGGER.warning("uninstall failed for %s: %s", name, msg)
@@ -228,7 +239,11 @@ def install_one(ext_id: str) -> None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         raise ExtensionInstallFailed(
             f"install of {ext_id!r} failed: {stderr_of(exc)}"
         ) from exc
@@ -249,7 +264,11 @@ def uninstall_one(ext_id: str) -> None:
             capture_output=True,
             timeout=_TIMEOUT_S,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ) as exc:
         raise ExtensionInstallFailed(
             f"uninstall of {ext_id!r} failed: {stderr_of(exc)}"
         ) from exc
@@ -265,6 +284,22 @@ def _load_yaml_doc(config_path: Path) -> tuple[YAML, CommentedMap]:
     yaml.preserve_quotes = True
     with config_path.open("r", encoding="utf-8") as fh:
         return yaml, yaml.load(fh)
+
+
+def _dump_yaml_doc(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
+    """Atomically serialize ``doc`` back to ``config_path``.
+
+    Dumps to an in-memory buffer first, then writes via
+    :func:`atomicio.atomic_write_text` (write-temp + fsync + os.replace)
+    so a crash, SIGTERM, disk-full, or ruamel serialization error
+    mid-dump can never truncate the live ``setforge.yaml`` — the single
+    source of truth for every profile / tracked-file. The file's
+    permission bits are preserved across the replace.
+    """
+    buf = io.StringIO()
+    yaml.dump(doc, buf)
+    mode = config_path.stat().st_mode & 0o777 if config_path.exists() else None
+    atomic_write_text(config_path, buf.getvalue(), mode=mode)
 
 
 def _profile_extensions_block(doc: CommentedMap, profile: str) -> CommentedMap:
@@ -319,8 +354,7 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
     if ext_id in include:
         return False
     include.append(ext_id)
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _dump_yaml_doc(yaml, doc, config_path)
     return True
 
 
@@ -380,8 +414,7 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     if list(current) == new_include:
         return False
     ext_block["include"] = CommentedSeq(new_include)
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _dump_yaml_doc(yaml, doc, config_path)
     return True
 
 
@@ -431,6 +464,5 @@ def remove_from_include(
             changed = True
     if not changed:
         return False
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(doc, fh)
+    _dump_yaml_doc(yaml, doc, config_path)
     return True

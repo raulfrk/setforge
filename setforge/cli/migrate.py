@@ -380,8 +380,31 @@ def _dispatch_finalize(*, cfg_path: Path, yes: bool) -> None:
 
     paths = [src for src, _, _ in plans]
     file_pre = transitions.snapshot_paths(paths)
-    for src, _, after in plans:
-        atomicio.atomic_write_text(src, after)
+    # The batch is recorded as ONE revertible transition only after every
+    # write lands. atomic_write_text is per-file atomic, but the loop is not
+    # transactional: a write failure on file N (disk full, EACCES, read-only
+    # mount) would otherwise leave files 1..N-1 stripped with no transition to
+    # revert. Snapshot raw bytes up front and roll the whole batch back on any
+    # failure so finalize stays all-or-nothing on write errors — symmetric with
+    # the --apply path's mid-chain rollback.
+    snapshots: dict[Path, bytes | None] = {
+        src: (src.read_bytes() if src.exists() else None) for src in paths
+    }
+    written: list[Path] = []
+    try:
+        for src, _, after in plans:
+            atomicio.atomic_write_text(src, after)
+            written.append(src)
+    except OSError as exc:
+        _rollback(snapshots)
+        typer.secho(
+            f"finalize FAILED writing {src} after "
+            f"{len(written)} file(s) written; rolled back the whole batch: "
+            f"{exc}",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from exc
     file_post = transitions.snapshot_paths(paths)
     _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     typer.echo(f"stripped host-local markers from {len(plans)} tracked file(s).")

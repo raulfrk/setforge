@@ -118,6 +118,10 @@ def test_plugin_remove_disable_subprocess_error_is_clean(
     import setforge.cli.plugins as plugins_mod
 
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
+    # plugin_remove now loads the config to resolve a bare plugin name to its
+    # marketplace for the disable id; stub it so this mock-only test never
+    # touches a real setforge.yaml. The @-form id passes straight through.
+    monkeypatch.setattr(plugins_mod, "load_config", lambda c: object())
     monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod,
         "yaml_remove_plugin_from_profile",
@@ -149,6 +153,14 @@ def test_plugin_add_marketplace_register_subprocess_error_is_clean(
     # New marketplace → the register path invokes `claude marketplace add`.
     monkeypatch.setattr(
         plugins_mod.claude_yaml_editor_mod, "yaml_add_marketplace", lambda *a, **k: True
+    )
+    # The register path now rolls the YAML entry back on binary failure
+    # (atomicity fix); stub the removal so this mock-only test never reads a
+    # real setforge.yaml during rollback.
+    monkeypatch.setattr(
+        plugins_mod.claude_yaml_editor_mod,
+        "yaml_remove_marketplace",
+        lambda *a, **k: True,
     )
 
     def boom(*_a: object, **_k: object) -> None:

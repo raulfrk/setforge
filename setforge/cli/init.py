@@ -507,19 +507,33 @@ def _handle_config_repo(*, no_prompt: bool, console: Console) -> int:
     return 0
 
 
+#: Marker comment prefix that ``_build_source_block`` emits for an
+#: init-generated ``source:`` block. A bare ``startswith(_STUB_TEMPLATE)``
+#: check cannot tell an init-written overlay apart from a user-appended one
+#: (the stub instructs users to add their own ``source:`` block at the end);
+#: the marker is what distinguishes "init wrote this" from customization.
+_SOURCE_BLOCK_MARKER = "\n# Pre-configured by `setforge init"
+
+
 def _local_yaml_is_pristine_stub() -> bool:
     """Return True iff the existing local.yaml is an untouched stub.
 
     The root Typer callback writes ``_STUB_TEMPLATE`` on every invocation,
     and the PATH/GIT init paths append a generated ``source:`` block to it.
-    A file whose content is exactly the stub (optionally followed by the
-    generated source block) carries no user customization and is safe to
-    overwrite. Any other content — a hand-edited ``binaries:`` block, a
-    custom ``source:``, plugin/extension overlays — must be preserved.
+    A file whose content is exactly the stub — or the stub followed solely
+    by an init-generated, marker-tagged source block — carries no user
+    customization and is safe to overwrite. Any other content — a
+    hand-edited ``binaries:`` block, a custom or hand-appended ``source:``,
+    plugin/extension overlays — must be preserved.
 
-    Returns True when the file is absent (nothing to clobber) or its
-    content starts with the pristine stub template; False when it holds
-    customized content that an overwrite would destroy.
+    A bare ``startswith(_STUB_TEMPLATE)`` would misclassify a stub plus a
+    user-appended ``source:``/``plugins:``/``extensions:`` block (exactly
+    what the stub's own instructions tell users to add) as pristine and
+    overwrite it without a backup. We therefore require the suffix after the
+    stub to be empty or an init-written, marker-tagged source block.
+
+    Returns True when the file is absent (nothing to clobber); False when it
+    holds customized content that an overwrite would destroy.
     """
     if not LOCAL_CONFIG_PATH.exists():
         return True
@@ -529,7 +543,11 @@ def _local_yaml_is_pristine_stub() -> bool:
         # Unreadable file: treat as customized so we err on the safe side
         # (back it up rather than silently discard).
         return False
-    return text.startswith(_STUB_TEMPLATE)
+    if not text.startswith(_STUB_TEMPLATE):
+        return False
+    suffix = text[len(_STUB_TEMPLATE) :]
+    # Exactly the stub, or the stub plus an init-generated source block.
+    return suffix == "" or suffix.startswith(_SOURCE_BLOCK_MARKER)
 
 
 def _apply_bootstrap(

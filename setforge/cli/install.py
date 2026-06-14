@@ -77,6 +77,7 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
+from setforge.errors import SetforgeError
 from setforge.locking import profile_lock
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
@@ -348,6 +349,16 @@ def install(
             yes=yes,
         )
 
+        # Refuse-before-write: pre-flight the symlink-dst clobber refusal.
+        # deploy_symlinked_file() raises when a regular file or directory
+        # already sits at a symlink tracked_file's dst, but that check only
+        # fires at pass-2 WRITE time — a symlink ordered after regular files
+        # would let those earlier writes land, then abort with no transition
+        # recorded (un-revertable partial install). Surfacing the same
+        # condition HERE, before any mutation (seed commit, overlay migration,
+        # or deploy), keeps the install all-or-nothing.
+        _refuse_on_symlink_dst_conflicts(ctx)
+
         tracked_root = config.resolve().parent / "tracked"
         scan_result = secrets_mod.run_pre_deploy_scan(
             tracked_root=tracked_root,
@@ -472,6 +483,35 @@ def install(
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
         _gate_on_mcp_failures(mcp_failed)
+
+
+def _refuse_on_symlink_dst_conflicts(ctx: ProfileContext) -> None:
+    """Refuse the install when a symlink tracked_file's dst is already occupied.
+
+    Mirrors the refusal in :func:`deploy.deploy_symlinked_file` (a regular file
+    or a directory — but NOT a pre-existing symlink — sitting at the link's
+    ``dst``), but runs as a pass-1 refuse-before-write gate so the abort fires
+    BEFORE any file is written or any store / local.yaml is mutated. Without
+    this pre-flight the same condition only surfaces at pass-2 write time, where
+    a symlink ordered after regular-file tracked_files would let those earlier
+    writes land and then raise with no transition recorded — an un-revertable
+    partial install. Every conflicting dst is collected so the user sees the
+    complete set in one aggregated error rather than one failure per attempt.
+    """
+    failures: list[str] = []
+    for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
+        if tracked_file.symlink is None:
+            continue
+        if sub_dst.is_symlink() or not sub_dst.exists():
+            continue
+        kind = "directory" if sub_dst.is_dir() else "regular file"
+        failures.append(
+            f"refusing to deploy symlink at {sub_dst}: a {kind} is already "
+            f"present. Move it aside or remove it before deploying "
+            f"tracked_file with symlink: {tracked_file.symlink!r}."
+        )
+    if failures:
+        raise SetforgeError("\n".join(failures))
 
 
 def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:

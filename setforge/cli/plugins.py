@@ -28,6 +28,7 @@ from setforge.cli._help_examples import (
 from setforge.cli._plugin_helpers import _parse_marketplace_from
 from setforge.config import (
     ClaudeInstallMode,
+    Config,
     MarketplaceSource,
     ReconcilePolicy,
     load_config,
@@ -141,6 +142,28 @@ def _validate_plugin_add_args(name: str, marketplace: str | None) -> tuple[str, 
     raise typer.Exit(code=1)
 
 
+def _resolve_add_source(source: MarketplaceSource, mp_name: str) -> MarketplaceSource:
+    """Route a CLI-supplied source through the host-local install-mode policy.
+
+    Under ``claude.install_mode: local-clone`` the reconcile path adds
+    marketplaces by their on-disk cache PATH (via
+    :func:`resolve_marketplace_source`), and ``_source_identity`` keys
+    idempotency on that PATH. The explicit CLI add paths must use the
+    identical transform or they (a) hand claude the raw GitHub slug —
+    defeating the offline cache — and (b) register a slug-derived source
+    the next reconcile cannot match, re-adding the marketplace every run.
+    Under ``regular`` mode this is a passthrough.
+    """
+    host_local = binaries.load_host_local_config()
+    return claude_mp_cache_mod.resolve_marketplace_source(
+        source,
+        host_local.claude.install_mode,
+        cache_root=claude_mp_cache_mod.MARKETPLACE_CACHE_ROOT,
+        mp_name=mp_name,
+        auto=True,
+    )
+
+
 def _register_plugin_in_yaml(
     config: Path,
     profile: str,
@@ -153,11 +176,22 @@ def _register_plugin_in_yaml(
     if mp_added:
         typer.echo(f"registered marketplace: {mp_name}")
         try:
-            claude_plugins_mod.marketplace_add(mp_name, source)
+            claude_plugins_mod.marketplace_add(
+                mp_name, _resolve_add_source(source, mp_name)
+            )
             typer.echo(f"marketplace added: {mp_name}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            MarketplaceCacheMiss,
+        ) as exc:
+            # Atomicity: mirror the standalone `marketplace add` path. The YAML
+            # entry was written before the binary call, so on failure roll it
+            # back or the config repo keeps an orphaned marketplace declaration
+            # that diverges from claude's state. Only revert the entry we added.
+            claude_yaml_editor_mod.yaml_remove_marketplace(config, mp_name)
             typer.secho(
                 f"error: {binaries.stderr_of(exc)}", err=True, fg=typer.colors.RED
             )
@@ -219,6 +253,28 @@ def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
     typer.echo(f"enabled plugin: {pid}")
 
 
+def _resolve_disable_id(cfg: Config, name: str) -> str:
+    """Build the full ``<name>@<marketplace>`` id that ``claude plugin disable`` needs.
+
+    The ``@``-form is passed straight through. A bare name is resolved
+    against the top-level :attr:`Config.claude_plugins` registry to
+    recover its marketplace; a bare name absent from the registry exits 1
+    with a clear message rather than handing claude an id it rejects.
+    """
+    if "@" in name:
+        return name
+    ref = cfg.claude_plugins.get(name)
+    if ref is None:
+        typer.secho(
+            f"error: cannot disable bare plugin {name!r}: not declared in "
+            "claude_plugins (pass <name>@<marketplace> explicitly)",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+    return f"{name}@{ref.marketplace}"
+
+
 @plugin_app.command("remove", epilog=PLUGIN_REMOVE_EXAMPLES)
 def plugin_remove(
     name: str = typer.Argument(..., help="Plugin name (bare or <name>@<marketplace>)."),
@@ -232,10 +288,10 @@ def plugin_remove(
 ) -> None:
     """Remove a plugin from the profile's claude_plugins list."""
     config = _resolve_config_arg(config)
+    cfg = load_config(config)
     # Profile bindings are stored under the BARE plugin name (see plugin_add),
     # so strip any trailing @marketplace for the YAML removal to keep it
-    # symmetric with the corrected add path. The claude `plugin disable`
-    # binary still wants the full <name>@<marketplace> id, so it gets `name`.
+    # symmetric with the corrected add path.
     bare_ref = name.split("@", 1)[0]
     changed = claude_yaml_editor_mod.yaml_remove_plugin_from_profile(
         config, profile, bare_ref
@@ -245,9 +301,14 @@ def plugin_remove(
     else:
         typer.echo(f"not in {profile}.claude_plugins: {bare_ref}")
     if disable:
+        # The claude `plugin disable` binary requires the full
+        # <name>@<marketplace> id. When the user passed the bare form,
+        # reconstruct it from the top-level registry; a pass-through bare id
+        # would be rejected by claude and the disable would silently never run.
+        disable_id = _resolve_disable_id(cfg, name)
         try:
-            claude_plugins_mod.plugin_disable(name)
-            typer.echo(f"disabled plugin: {name}")
+            claude_plugins_mod.plugin_disable(disable_id)
+            typer.echo(f"disabled plugin: {disable_id}")
         except PluginToolMissing as exc:
             typer.secho(f"warning: {exc}", err=True, fg=typer.colors.YELLOW)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -400,9 +461,13 @@ def marketplace_add_cmd(
         typer.echo(f"marketplace already declared: {name}")
 
     try:
-        claude_plugins_mod.marketplace_add(name, source)
+        claude_plugins_mod.marketplace_add(name, _resolve_add_source(source, name))
         typer.echo(f"registered marketplace: {name}")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        MarketplaceCacheMiss,
+    ) as exc:
         # Atomicity: the YAML entry is written before the binary call. If the
         # binary fails we must roll the entry back, or the config repo is left
         # with an orphaned marketplace declaration that diverges from claude's

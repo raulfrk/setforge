@@ -398,6 +398,16 @@ def _apply_revert(
     pre_command_modes = transitions.load_file_modes(transition)
     reverse_modes = _recapture_modes(pre_command_modes)
 
+    # Pre-flight the symlink-revert refusal conditions (link retargeted /
+    # replaced by a regular file) BEFORE any live mutation — symmetric to
+    # ``apply_patch_reverse``'s own ``--dry-run`` gate. Without this, a
+    # symlink refusal raised AFTER the content patch was already reversed
+    # would leave a partial, un-redoable revert (content reverted, link
+    # untouched, no reverse transition written). The dry-run pass runs the
+    # same readlink / regular-file probes the real unlink does, so revert
+    # refuses cleanly with zero mutation.
+    _revert_symlink_deployments(config=config, profile=profile, dry_run=True)
+
     transitions.apply_patch_reverse(transition)
     _revert_symlink_deployments(config=config, profile=profile)
     if pre_store_state is not None:
@@ -453,7 +463,9 @@ def _restore_modes(recorded: dict[Path, int]) -> None:
             continue
 
 
-def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
+def _revert_symlink_deployments(
+    *, config: Path, profile: str, dry_run: bool = False
+) -> None:
     """Unlink every symlink-deployed tracked_file in the resolved profile.
 
     Loads the resolved profile via the same path the install side uses
@@ -468,6 +480,13 @@ def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
     the resolved ``sub_dst`` (the link path). The helper is idempotent
     on absent links (returns False) and refuses on user-mutated state
     (raises :class:`setforge.errors.SetforgeError`).
+
+    When ``dry_run=True``: run only the refusal probes (link retargeted /
+    replaced by a regular file) on each ``sub_dst`` WITHOUT unlinking, so a
+    caller can pre-flight the whole pass and refuse with zero mutation —
+    mirroring :func:`setforge.transitions.apply_patch_reverse`'s own
+    ``--dry-run`` gate. The probe conditions are the exact refusal contract
+    of :func:`revert_symlink_deployment`.
 
     The profile-agnostic ``migrate`` transition label has no config profile
     and never deploys symlinks, so it no-ops cleanly. Any OTHER profile that
@@ -495,7 +514,38 @@ def _revert_symlink_deployments(*, config: Path, profile: str) -> None:
     for tracked_file, _sub_name, _sub_src, sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is None:
             continue
+        if dry_run:
+            _check_symlink_revertable(sub_dst, tracked_file.symlink)
+            continue
         revert_symlink_deployment(sub_dst, tracked_file.symlink)
+
+
+def _check_symlink_revertable(dst: Path, expected_target: str) -> None:
+    """Raise if reverting ``dst``'s symlink would refuse — without unlinking.
+
+    Read-only pre-flight mirroring the refusal contract of
+    :func:`setforge.cli._install_helpers.revert_symlink_deployment`:
+    raises :class:`SetforgeError` when ``dst`` is a symlink retargeted away
+    from ``expected_target`` or a regular file replacing setforge's link.
+    A symlink with the expected target, or an absent path, is revertable —
+    no raise (the real unlink pass handles those idempotently).
+    """
+    if dst.is_symlink():
+        actual = os.readlink(dst)
+        if actual != expected_target:
+            raise SetforgeError(
+                f"refusing to unlink {dst}: symlink target changed since "
+                f"deploy ({actual!r} != {expected_target!r}). Re-point or "
+                f"remove the link manually if you want revert to proceed."
+            )
+        return
+    if dst.exists():
+        raise SetforgeError(
+            f"refusing to unlink {dst}: a regular file is present where "
+            f"setforge previously installed a symlink "
+            f"(target {expected_target!r}). Remove the file manually if "
+            f"you want revert to proceed."
+        )
 
 
 _TO_BEFORE_OPTION = typer.Option(

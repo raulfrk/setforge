@@ -365,17 +365,60 @@ def snapshot_paths(paths: Iterable[Path]) -> dict[Path, str | None]:
     return out
 
 
+def _cquote_path(s: str) -> str:
+    """Wrap ``s`` in C-style quotes (git's ``quote_c_style`` form) so a
+    diff header carrying whitespace or quote/backslash chars round-trips
+    through GNU ``patch``.
+
+    GNU patch only unquotes a C-quoted header when it appears in a
+    *git-style* diff (one preceded by a ``diff --git`` line); a plain
+    unified-diff header is taken verbatim and terminates the filename at
+    the first whitespace. :func:`compute_patch` therefore emits the
+    ``diff --git`` sentinel whenever any quoting is needed.
+    """
+    out = ['"']
+    for ch in s:
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def _needs_quoting(s: str) -> bool:
+    return any(c.isspace() or c in '"\\' for c in s)
+
+
+def _root_relative(path: Path) -> str:
+    """Return ``path`` with any leading ``/`` stripped."""
+    s = str(path)
+    return s.lstrip("/") if s.startswith("/") else s
+
+
 def _diff_path(path: Path) -> str:
     """Format a Path for a diff header.
 
     GNU patch's safe-paths feature rejects absolute paths as "potentially
     dangerous." Workaround: emit paths root-relative (no leading ``/``),
-    and apply with ``patch -d /`` so the relative path resolves
+    and apply with ``patch -p0 -d /`` so the relative path resolves
     absolute. ``/dev/null`` is the standard sentinel for missing files
     and must NOT be stripped.
+
+    A root-relative form containing whitespace (or a quote/backslash) is
+    C-quoted so the header round-trips through GNU ``patch`` — which
+    otherwise terminates the filename at the first whitespace and reports
+    "can't find file to patch". The quoting is only honored inside a
+    *git-style* diff, so :func:`compute_patch` pairs a quoted header with
+    a ``diff --git`` sentinel line. Space-free paths are emitted verbatim
+    (unquoted, no sentinel), byte-identical to the historical format.
     """
-    s = str(path)
-    return s.lstrip("/") if s.startswith("/") else s
+    rel = _root_relative(path)
+    return _cquote_path(rel) if _needs_quoting(rel) else rel
 
 
 def compute_patch(
@@ -389,7 +432,15 @@ def compute_patch(
     creations on forward (``+++ a/b``) and deletions on reverse
     (``--- a/b`` paired with ``+++ /dev/null``). Real paths are emitted
     root-relative (leading ``/`` stripped) so :func:`apply_patch_reverse`
-    can invoke ``patch -d /`` and bypass GNU patch's safe-paths check.
+    can invoke ``patch -p0 -d /`` and bypass GNU patch's safe-paths
+    check.
+
+    A destination whose root-relative path contains whitespace (or a
+    quote/backslash) gets C-quoted headers plus a leading ``diff --git``
+    sentinel line, which is what makes GNU patch unquote the header (a
+    plain unified-diff header is taken verbatim and would terminate the
+    filename at the first space, breaking revert). Space-free paths emit
+    the historical unquoted, sentinel-free form unchanged.
     """
     chunks: list[str] = []
     for path in sorted(set(pre) | set(post), key=str):
@@ -399,8 +450,9 @@ def compute_patch(
             continue
         before_lines = (before or "").splitlines(keepends=True)
         after_lines = (after or "").splitlines(keepends=True)
-        from_path = "/dev/null" if before is None else _diff_path(path)
-        to_path = "/dev/null" if after is None else _diff_path(path)
+        diff_path = _diff_path(path)
+        from_path = "/dev/null" if before is None else diff_path
+        to_path = "/dev/null" if after is None else diff_path
         diff_lines = list(
             difflib.unified_diff(
                 before_lines,
@@ -409,7 +461,12 @@ def compute_patch(
                 tofile=to_path,
             )
         )
-        chunks.append(_annotate_no_newline(diff_lines))
+        chunk = _annotate_no_newline(diff_lines)
+        # The git-style sentinel makes GNU patch honor the C-quoted
+        # header; only needed (and only emitted) when the path is quoted.
+        if _needs_quoting(_root_relative(path)):
+            chunk = f"diff --git {diff_path} {diff_path}\n" + chunk
+        chunks.append(chunk)
     return "".join(chunks)
 
 
@@ -1498,12 +1555,23 @@ def apply_patch_reverse(
         "--input",
         str(patch_file.resolve()),
     ]
-    dry = subprocess.run(
-        [*base_args, "--dry-run"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        dry = subprocess.run(
+            [*base_args, "--dry-run"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RevertFailed(
+            "patch -R dry-run timed out after 60s; no files changed."
+        ) from exc
+    except OSError as exc:
+        # A resolve_binary()-validated patch can still fail to spawn
+        # (removed in the TOCTOU window, replaced by a non-executable
+        # file, broken wrapper). Convert to RevertFailed so the clean
+        # exit-1 contract holds instead of a raw traceback.
+        raise RevertFailed(f"patch binary could not be executed: {exc}") from exc
     if dry.returncode != 0:
         raise RevertFailed(
             f"patch -R dry-run failed (exit {dry.returncode}); no files changed:\n"
@@ -1511,12 +1579,19 @@ def apply_patch_reverse(
         )
     if dry_run:
         return
-    result = subprocess.run(
-        base_args,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            base_args,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RevertFailed(
+            "patch -R timed out after 60s; the live tree may be partially reverted."
+        ) from exc
+    except OSError as exc:
+        raise RevertFailed(f"patch binary could not be executed: {exc}") from exc
     if result.returncode != 0:
         # Should not happen after a clean dry-run; surface for forensics.
         raise RevertFailed(
