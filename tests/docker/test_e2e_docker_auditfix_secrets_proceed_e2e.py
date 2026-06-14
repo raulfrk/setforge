@@ -89,8 +89,11 @@ def _drive_wizard(
 
     ``downs`` arrow-down presses move the selection off the default ABORT
     row (0): ``downs=1`` selects ALLOWLIST, ``downs=2`` selects
-    SILENCE_ONE_SHOT. Then Enter (``\\r``) confirms and the install proceeds
-    to deploy, exiting 0.
+    SILENCE_ONE_SHOT. Submitting a ``radiolist_dialog`` requires the full
+    sequence — arrow to highlight, Enter to commit the radio, Tab to focus
+    the OK button, Enter to submit — after which the install proceeds to
+    deploy, exiting 0. (A bare trailing Enter only toggles the radio and
+    leaves the dialog open, hanging the process.)
     """
     session = pyte_pty_session(
         container=c.cid,
@@ -98,7 +101,10 @@ def _drive_wizard(
         timeout=120.0,
     )
     session.expect_in_display(_DIALOG_ANCHOR, timeout=60.0)
-    session.send_keys("\x1b[B" * downs + "\r")
+    session.send_keys("\x1b[B" * downs)  # move selection off ABORT
+    session.send_keys("\r")  # commit the radio
+    session.send_keys("\t")  # focus the OK button
+    session.send_keys("\r")  # submit the dialog
     session.wait_for_exit(timeout=60, expected_code=0)
     return session
 

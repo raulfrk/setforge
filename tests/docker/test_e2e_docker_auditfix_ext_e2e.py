@@ -59,7 +59,9 @@ def _write_config(c: ContainerHandle, *, reconcile: str | None = None) -> None:
         )
     c.write_text(
         _CFG_YAML,
-        "version: 1\nschema_version: '1.0'\nprofiles:\n  base:\n" + ext_block,
+        "version: 1\nschema_version: '1.0'\n"
+        "tracked_files: {}\n"
+        "profiles:\n  base:\n" + ext_block,
     )
 
 

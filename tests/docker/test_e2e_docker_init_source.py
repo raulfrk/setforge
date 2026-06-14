@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
+from ruamel.yaml import YAML
 
 from tests.docker.conftest import ContainerHandle
 from tests.docker.pyte_session import PyteSession
@@ -68,6 +69,11 @@ def test_init_path_source_writes_source_block(
 
     # The written local.yaml carries the path source block built from the
     # interactively-entered directory (pre-fix it would have stayed SKIP).
+    # The path is emitted JSON-quoted (YAML-injection hardening), so assert
+    # the quoted literal AND that the document round-trips to the chosen path.
     local_yaml = c.read_text(_LOCAL_YAML)
     assert "kind: path" in local_yaml, local_yaml
-    assert f"path: {_CHOSEN_PATH}" in local_yaml, local_yaml
+    assert f'path: "{_CHOSEN_PATH}"' in local_yaml, local_yaml
+    parsed = YAML(typ="safe").load(local_yaml)
+    assert parsed["source"]["kind"] == "path", local_yaml
+    assert parsed["source"]["path"] == _CHOSEN_PATH, local_yaml

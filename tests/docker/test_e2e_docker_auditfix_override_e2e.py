@@ -129,7 +129,13 @@ def test_override_fork_shared_writes_yaml_and_sync_never_captures_back(
     assert "setforge.yaml" in status
 
     # End-to-end forked behavior: install, edit live, sync — tracked unchanged.
-    rc, out, err = _setforge(c, ["install", f"--profile={_PROFILE}", f"--config={cfg}"])
+    # The fork step deliberately leaves the config repo dirty (asserted above),
+    # so install needs --no-git-check to bypass the non-TTY stale-state refusal
+    # (the dirty repo is orthogonal to the forked-disposition behavior under test).
+    rc, out, err = _setforge(
+        c,
+        ["install", f"--profile={_PROFILE}", f"--config={cfg}", "--no-git-check"],
+    )
     assert rc == 0, out + err
     tracked_before = c.read_text(f"{repo}/tracked/disposition/note.md")
     live = c.read_text(_MD_LIVE)
