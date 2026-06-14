@@ -133,7 +133,7 @@ never released to PyPI separately.
 ### Changed
 - **Restructured the README as a landing page**, splitting the detailed
   command reference into `docs/`. Added an install version note and
-  tightened the beads-invisibility guidance.
+  tightened the task-tracker-invisibility guidance.
 
 ### Fixed
 - **Docker e2e CI reliability** — write container files via `tee` so the

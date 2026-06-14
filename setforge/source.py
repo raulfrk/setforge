@@ -670,9 +670,9 @@ def validate_host_local_sections_file_type(
     ``host_local_sections`` is REJECTED for non-markdown tracked_files
     (.md / .markdown). Anchor grammar (after-heading / before-heading /
     after-section) is intrinsically markdown-shaped; JSON / JSONC /
-    YAML files have no headings. For host-local JSON/JSONC keys, see
-    follow-up bd ``host_local_keys for JSON and YAML tracked_files``
-    (filed at batch close-out per SPEC 1).
+    YAML files have no headings. Host-local JSON/JSONC keys are a deferred
+    follow-up (``host_local_keys for JSON and YAML tracked_files``,
+    deferred at batch close-out per SPEC 1).
 
     No-op when ``section_count`` is 0 — the file may not be markdown
     but no host-local sections were declared.
@@ -686,8 +686,8 @@ def validate_host_local_sections_file_type(
         "host_local_sections is supported only for markdown tracked_files "
         f"(.md / .markdown). tracked_file {tracked_file_id!r} resolves to "
         f"src={src} (extension {suffix!r} not in {sorted(_MARKDOWN_SUFFIXES)}). "
-        "For host-local JSON/JSONC/YAML keys, see follow-up bd "
-        "'host_local_keys for JSON and YAML tracked_files'."
+        "Host-local JSON/JSONC/YAML keys are a deferred follow-up "
+        "('host_local_keys for JSON and YAML tracked_files')."
     )
 
 

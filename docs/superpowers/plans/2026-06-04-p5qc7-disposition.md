@@ -1,4 +1,4 @@
-# p5qc.7 — disposition model + file-level merge wiring + lock — Implementation Plan
+# Disposition model + file-level merge wiring + lock — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans / TDD. Steps use `- [ ]`.
 

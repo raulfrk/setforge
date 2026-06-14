@@ -1,3 +1,6 @@
+# commit-msg stage is required for the bd-ref message check below; declare it so
+# `pre-commit install` wires both hook types.
+default_install_hook_types: [pre-commit, commit-msg]
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.0
@@ -18,3 +21,15 @@ repos:
         types: [python]
         pass_filenames: false
         args: [setforge/, tests/]
+      - id: check-no-bd-refs
+        name: check-no-bd-refs (no leaked tracker references)
+        entry: scripts/check-no-bd-refs.sh
+        language: system
+        types: [text]
+        pass_filenames: true
+      - id: check-no-bd-refs-msg
+        name: check-no-bd-refs (commit message)
+        entry: scripts/check-no-bd-refs.sh --commit-msg
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true

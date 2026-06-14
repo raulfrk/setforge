@@ -250,7 +250,7 @@ def _classify_one(
 ) -> SectionDriftState:
     """Map one (A_T, A_L, E_T, E_L) tuple to a :class:`SectionDriftState`.
 
-    Order of checks matches the design table in the bd contract:
+    Order of checks matches the documented design table:
 
     1. Bodies identical → no drift.
     2. Either embedded hash missing → legacy fallback.

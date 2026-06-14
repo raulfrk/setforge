@@ -115,7 +115,7 @@ class ClaudeLocalConfig:
     the network-fetched marketplace flow (``REGULAR``, default — current
     behavior) and the locally-cloned mirror flow (``LOCAL_CLONE``).
     Additional host-local knobs (log level, cache age) belong here when
-    they land in future beads.
+    they land in a future iteration.
     """
 
     install_mode: ClaudeInstallMode = ClaudeInstallMode.REGULAR

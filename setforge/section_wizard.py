@@ -220,8 +220,8 @@ def state_label(state: SectionDriftState) -> str:
     """Human-readable state label rendered in the prompt header.
 
     The exact label text is part of the contract — Docker e2e tests
-    grep stdout for ``"pending tracked update"`` (variant 2 from the
-    bd --notes) and ``"three-way"`` (variant 18). Changes here must
+    grep stdout for ``"pending tracked update"`` (variant 2) and
+    ``"three-way"`` (variant 18). Changes here must
     keep the substrings the tests assert against.
     """
     mapping = {

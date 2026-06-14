@@ -1,4 +1,4 @@
-# p5qc.3.4 — wire forked-scalar into deploy — Implementation Plan
+# Wire forked-scalar into deploy — Implementation Plan
 
 **Goal:** Upgrade the `preserve_user_keys` overlay from blind live-wins to a
 stored-base 3-way **scalar** merge `{scalar-base, live, tracked}`, so upstream
@@ -16,10 +16,10 @@ preserve_user_keys e2e/unit tests must stay green.
 preserve_user_keys leaves (whole list/dict replace) and `preserve_user_keys_deep`
 keep their current overlay behavior this wave (the scalar primitives only address
 scalar leaves). This is the `disposition is None` legacy-preserve path — it is a
-DIFFERENT file set than p5qc.7's disposition files (mutual-exclusion guarantees
+DIFFERENT file set than the disposition work's files (mutual-exclusion guarantees
 no overlap).
 
-Spec: `~/.claude/plans/eager-bouncing-sunrise.md` (p5qc.3.4 section + pitfalls —
+Spec: `~/.claude/plans/eager-bouncing-sunrise.md` (the forked-scalar section + pitfalls —
 esp. ABSENT-with-`is`, batched `set_bases` not per-path loop, present:false vs
 value:null, json-five derived key_value_pairs).
 
@@ -27,7 +27,7 @@ value:null, json-five derived key_value_pairs).
 - `scalar_merge.resolve_scalar(base, ours, theirs) -> ScalarResolution{outcome: TAKE/DELETE/CONFLICT, value}`; `ABSENT` (compare with `is`).
 - `scalar_path.read_scalar_{yaml,jsonc}(doc, path) -> value|None|ABSENT`; `write_scalar_{yaml,jsonc}(doc, path, ScalarResolution)`; rejects list-suffix; `MergeTypeMismatch` on non-scalar leaf.
 - `scalar_base_store.get_base(profile, file_id, path) -> typed|None|ABSENT`; `set_bases(profile, file_id, {path: value})` (BATCH — primary); `prune(profile, file_id, live_paths)`.
-- `base_store`/install-loop byte-base lifecycle from p5qc.7 — mirror its read-before / write-after-live / loud-failure / prune ordering for the scalar store.
+- `base_store`/install-loop byte-base lifecycle from the disposition work — mirror its read-before / write-after-live / loud-failure / prune ordering for the scalar store.
 
 ## Tasks
 1. **Scalar overlay 3-way driver** (`setforge/scalar_overlay.py` NEW): a pure-ish

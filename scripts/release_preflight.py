@@ -140,19 +140,6 @@ def step_7_workflow_yaml_integrity() -> None:
             )
 
 
-def step_8_bd_ready_p012_empty() -> None:
-    """Verify `bd ready` returns no P0/P1/P2 unfinished work."""
-    result = _run("bd", "ready", "--explain")
-    blocking_lines = [
-        line
-        for line in result.stdout.splitlines()
-        if "● P0 " in line or "● P1 " in line or "● P2 " in line
-    ]
-    if blocking_lines:
-        joined = "\n    ".join(blocking_lines)
-        raise AssertionError(f"unfinished P0/P1/P2 work blocks release:\n    {joined}")
-
-
 def _run_step(name: str, fn: Callable[[], None]) -> bool:
     """Run one step; print result; return True on pass, False on fail."""
     print(f"  • {name}", end=" ", flush=True)
@@ -218,7 +205,6 @@ def main() -> int:
             lambda: step_6_import_version(version),
         ),
         ("7: workflow YAML integrity", step_7_workflow_yaml_integrity),
-        ("8: bd ready P0/P1/P2 empty", step_8_bd_ready_p012_empty),
     ]
     for name, fn in remaining:
         if not _run_step(name, fn):

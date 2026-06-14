@@ -1,4 +1,4 @@
-# p5qc.9 — interactive hunk conflict wizard — Implementation Plan
+# Interactive hunk conflict wizard — Implementation Plan
 
 **Goal:** When an install-time disposition merge produces genuine conflicts and
 the session is interactive, prompt the user per conflict
@@ -17,7 +17,7 @@ non-interactively and short-circuits the wizard.
 `structural_merge.{PathConflict, set_at_path, merge_structural}`,
 `disposition_merge.resolve_file`.
 
-Spec: `~/.claude/plans/eager-bouncing-sunrise.md` (p5qc.9 section + pitfalls).
+Spec: `~/.claude/plans/eager-bouncing-sunrise.md` (hunk-wizard section + pitfalls).
 
 ## Task 1: injectable per-conflict resolver in disposition_merge
 File: `setforge/disposition_merge.py`; Test: `tests/test_disposition_merge_resolver.py`.
