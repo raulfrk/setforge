@@ -26,6 +26,7 @@ repos:
         entry: scripts/check-no-bd-refs.sh
         language: system
         types: [text]
+        stages: [pre-commit]
         pass_filenames: true
       - id: check-no-bd-refs-msg
         name: check-no-bd-refs (commit message)

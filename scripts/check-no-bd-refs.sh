@@ -32,13 +32,13 @@ is_exempt() {
   case "$1" in
     */CLAUDE.md|CLAUDE.md) return 0 ;;
     */.claude/skills/*|*/.claude/agents/*|.claude/skills/*|.claude/agents/*) return 0 ;;
-    *tracked/claude/*) return 0 ;;
+    */tracked/claude/*|tracked/claude/*) return 0 ;;
     # Ignore-files reference `.beads/` to EXCLUDE it from the image / index —
     # that is the invisibility mechanism, not a leak; removing it would expose
     # the tracker DB.
     .dockerignore|*/.dockerignore|.gitignore|*/.gitignore) return 0 ;;
     # The detector's own source + its test carry the patterns by necessity.
-    */check-no-bd-refs.sh|check-no-bd-refs.sh|*test_check_no_bd_refs.py) return 0 ;;
+    */check-no-bd-refs.sh|check-no-bd-refs.sh|*/test_check_no_bd_refs.py|test_check_no_bd_refs.py) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -57,7 +57,7 @@ else
   for f in "$@"; do
     [ -f "$f" ] || continue
     is_exempt "$f" && continue
-    if matches=$(grep -nE "$PATTERN" "$f"); then
+    if matches=$(grep -InE "$PATTERN" "$f"); then
       echo "bd-leak: tracker reference in $f:" >&2
       echo "$matches" | sed "s|^|  $f:|" >&2
       rc=1
