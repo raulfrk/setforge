@@ -105,7 +105,7 @@ class SpanSemantics(StrEnum):
     ``host-local`` — intent lives in ``local.yaml``, gitignored,
     per-machine. ``shared`` — intent lives in the tracked ``setforge.yaml``
     and propagates across hosts (tracked-side updates surface in the
-    reconcile flow; that surface is a sibling bead). Mirrors
+    reconcile flow). Mirrors
     :class:`setforge.sections.SectionSemantics`.
     """
 

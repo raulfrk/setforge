@@ -6,7 +6,7 @@ states the guarantees the schema/migration work must deliver — how the
 `setforge.yaml` schema is allowed to evolve, what the release process must
 guarantee, and what users can rely on across engine versions. It is a forward
 specification, not a description of what any one shipped engine already does;
-the v0.3.0 schema/migration sub-epic implements against it.
+the v0.3.0 schema/migration work implements against it.
 
 Under this contract, every `setforge.yaml` carries a `schema_version`, and the
 engine guarantees that a config written for an older schema upgrades to the

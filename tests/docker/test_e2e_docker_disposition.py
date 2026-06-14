@@ -3,7 +3,7 @@
 Exercises the opt-in per-file ``disposition: shared|forked|pinned`` field
 end-to-end against a fresh Debian container with the actual installed
 ``setforge`` CLI, through the non-interactive install / sync / compare
-surfaces. The interactive hunk-resolution wizard is a separate bead and is
+surfaces. The interactive hunk-resolution wizard is out of scope and is
 NOT tested here.
 
 Behavior under exercise:

@@ -1157,8 +1157,8 @@ def extension_delta_from_json(raw: dict[str, object]) -> ExtensionDelta:
 
     Validates ``added`` and ``removed`` are lists of strings via
     :func:`_validated_str_list`, raising :class:`InvalidTransitionRecord`
-    on any deviation. Mirrors the boundary guard added to
-    :func:`plugin_delta_from_json` in bead dtm. Without this guard a
+    on any deviation. Mirrors the boundary guard on
+    :func:`plugin_delta_from_json`. Without this guard a
     corrupted extensions.json (hand-edit, partial write, or a bug in a
     future writer) would surface as an opaque :class:`TypeError` from
     a downstream ``iter()`` call rather than a clean

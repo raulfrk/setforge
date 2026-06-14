@@ -4,8 +4,8 @@ The engine reads its declarative config (``setforge.yaml`` + ``tracked/``)
 from a *source* — a directory containing both. Sources are typed as a
 discriminated union of ``PathSource`` (a plain directory path on disk)
 and ``GitSource`` (a clone destination derived from a git URL; the actual
-clone/fetch logic lives in :mod:`setforge.git_ops`, landing in a
-follow-up bead).
+clone/fetch logic lives in :mod:`setforge.git_ops`, not yet
+implemented).
 
 Discovery walks four precedence layers, first non-empty wins entirely
 (mirrors :func:`setforge.binaries.resolve_binary`):
@@ -111,8 +111,8 @@ class PathSource(BaseModel):
 class GitSource(BaseModel):
     """Source backed by a git repository to be cloned to ``clone_dest``.
 
-    Cloning + checkout is handled by :mod:`setforge.git_ops` (a follow-up
-    bead). This module only resolves the *expected on-disk location*:
+    Cloning + checkout is handled by :mod:`setforge.git_ops` (not yet
+    implemented). This module only resolves the *expected on-disk location*:
     ``clone_dest`` if set, otherwise ``DEFAULT_CLONE_ROOT / <name>``.
     """
 

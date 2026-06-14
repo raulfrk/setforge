@@ -6,7 +6,7 @@ injects it AFTER the whole-file merge and excises it BEFORE the merge, and
 capture excises the exact body bytes before any tracked write. No markers
 appear in the deployed file — the body is naked text.
 
-The load-bearing invariant of this whole bead lives here: the body's
+The load-bearing invariant of this module lives here: the body's
 identity is the **exact recorded body BYTES** (the needle set), never a
 re-derived anchor / structure / offset. Inject splices the canonical body
 at a resolved anchor; excise removes the *unique* occurrence of a known

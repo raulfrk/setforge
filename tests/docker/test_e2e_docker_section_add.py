@@ -9,7 +9,7 @@ CLI. Coverage matrix:
 - Refusals: non-markdown suffix, duplicate-name, anchor-past-EOF.
 - Non-TTY no-flags → exit 2.
 - Help-surface presence checks.
-- Cross-bead-integration: bare ``install`` after ``section add`` deploys
+- Cross-feature integration: bare ``install`` after ``section add`` deploys
   the new marker pair cleanly.
 """
 
@@ -190,7 +190,7 @@ def test_section_add_scripted_with_file_body_in_container(
 def test_section_add_then_install_deploys_marker_pair_to_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Cross-bead: add a shared marker, install, the live file gets it."""
+    """Cross-feature: add a shared marker, install, the live file gets it."""
     c = docker_container()
     add = _setforge(
         c,

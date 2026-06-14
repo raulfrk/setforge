@@ -1,6 +1,6 @@
 """Docker e2e canonical leak gate for markerless OVERLAY spans.
 
-The whole bead exists to guarantee one invariant end-to-end: a heading-less
+This suite exists to guarantee one invariant end-to-end: a heading-less
 host-local OVERLAY body deploys into the live file, then `sync` captures —
 and the body NEVER appears in the tracked src nor the per-host stored base.
 This exercises the real install + sync CLI against a fresh container.

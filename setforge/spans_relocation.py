@@ -19,7 +19,7 @@ never the location key):
 5. **ORPHAN** — no confident hit.
 
 The fuzzy stage adds the ``diff-match-patch`` dependency. Structural
-spans have NO fuzzy stage (a sibling bead) — keys are identity-matched
+spans have NO fuzzy stage — keys are identity-matched
 only.
 """
 

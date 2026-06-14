@@ -229,8 +229,8 @@ def _epilog_for(leaf_path: tuple[str, ...]) -> str:
 def test_epilog_flags_exist(runner: CliRunner, leaf_path: tuple[str, ...]) -> None:
     """Every flag cited in a leaf's epilog must exist on that leaf's ``--help``.
 
-    Regression guard for the ``--quiet`` bug: a flag from a not-yet-merged
-    bead snuck into the install epilog because no test cross-referenced
+    Regression guard for the ``--quiet`` bug: a flag from not-yet-merged
+    work snuck into the install epilog because no test cross-referenced
     epilog text against the actual command surface. Tokenize the epilog
     for long-option flags, drop universal Typer flags, then assert each
     remaining flag appears in the leaf's ``--help`` Options block.

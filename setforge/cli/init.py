@@ -356,7 +356,7 @@ def _backup_existing(*, console: Console) -> Path | None:
     because no existing file was found. Backup files are NEVER
     auto-deleted — user controls cleanup (research brief §7, scope
     note). Restore is a copy operation the user runs by hand; we do
-    not ship ``init --restore-backup`` in this bead.
+    not currently ship ``init --restore-backup``.
     """
     if not LOCAL_CONFIG_PATH.exists():
         return None

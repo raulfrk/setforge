@@ -32,7 +32,7 @@ Wired as its own CI step (see ``.github/workflows/ci.yml``) with no
 Known seed-gate limitation: a brand-new Pydantic model absent from
 :data:`setforge.schema_manifest._MODELS` is invisible to the field-removal
 gate (the manifest can only compare models it enumerates). Fixing that
-is out of scope here; it is deferred to a contract bead.
+is out of scope here (deferred).
 """
 
 from __future__ import annotations
@@ -113,8 +113,8 @@ def gate_field_removal(
     """Fail on any additive-only violation between frozen and live schema.
 
     Reuses :func:`additivity_violations` verbatim (blanket-forbid: a
-    marker-aware allowance is explicitly out of scope, deferred to a
-    contract bead). ``frozen`` defaults to :data:`FROZEN_FIELD_MANIFEST` and
+    marker-aware allowance is explicitly out of scope, deferred).
+    ``frozen`` defaults to :data:`FROZEN_FIELD_MANIFEST` and
     ``live`` to the live Pydantic models; both are injectable (via the
     ``None`` sentinel, not a mutable default) so a test can simulate a
     removal on a deep-copied manifest.
