@@ -43,12 +43,13 @@ inside the config repo to lock it in. `capture` is the lower-level piece
 
 ## Subcommand groups
 
-setforge ships nine subcommand groups for narrow inspections and edits. Run
+setforge ships ten subcommand groups for narrow inspections and edits. Run
 `setforge <group> --help` for each:
 
 | Group | Subcommands | Purpose |
 |---|---|---|
 | `section` | `add`, `emit` | Manage user-section markers in tracked markdown. |
+| `override` | `fork`, `pin`, `unpin`, `unfork`, `reset`, `list`, `show` | Tracked-file disposition + sub-file span overrides. |
 | `plugin` | `list`, `add`, `remove`, `reconcile`, `sync-cache` | Claude plugins in a profile's `claude_plugins:` block. |
 | `marketplace` | `add`, `remove`, `update` | Claude plugin marketplaces (upstream plugin sources). |
 | `ext` | `list`, `add`, `remove`, `reconcile` | VSCode extensions in a profile's `extensions:` block. |

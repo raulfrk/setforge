@@ -86,10 +86,11 @@ Optional per-entry keys:
 - `mode` — file mode, written as a **YAML-1.2 octal literal** (`0o755`, not
   `0755` or `755`). Omit to preserve the source file's mode.
 - `symlink` — deploy as a symlink instead of copying.
-- `preserve_user_sections` — opt into marker-based per-host preservation
-  (markdown; see below).
-- `preserve_user_keys` / `preserve_user_keys_deep` — overlay live values at the
-  given JSONPath-lite paths on every deploy (YAML/JSON; see below).
+- `disposition` — file-level reconciliation policy (`shared` / `forked` /
+  `pinned`): opt into the stored-base 3-way merge instead of a verbatim deploy
+  (see below).
+- `spans` — sub-file pinned/forked regions (the schema-2.0 model that
+  superseded the legacy `preserve_*` family). See below.
 
 `src` must exist on disk under `<config-repo>/tracked/` — `setforge validate`
 checks this.
@@ -153,12 +154,16 @@ are migrated to this span model by `setforge migrate` (and transparently on
 grammar; adding marker pairs is automated by `setforge section` — see
 [commands.md](commands.md).
 
-### YAML / JSON: preserved keys
+### YAML / JSON: preserved keys → spans
 
-A tracked file can declare `preserve_user_keys: list[str]` (or
-`preserve_user_keys_deep`). Live values at those JSONPath-lite paths overlay
-tracked content on every deploy and are stripped from tracked on every capture,
-keeping host-local keys out of your config repo.
+Schema 2.0 replaced the per-key `preserve_user_keys` / `preserve_user_keys_deep`
+flags with the unified **span** model. To keep host-local values out of the
+config repo while still deploying a tracked file, give the file
+`disposition: forked` and declare PINNED `spans` at the structural paths you
+want preserved (a deep span pins a whole subtree). The `setforge override` CLI
+(`fork` / `pin` / `list` / `show`) manages these; legacy
+`preserve_user_keys[_deep]` configs are auto-translated to PINNED spans by
+`setforge migrate`.
 
 ## Host-local, never-tracked files
 

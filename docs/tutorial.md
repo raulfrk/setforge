@@ -84,7 +84,7 @@ back. Each step shows the real command and what you'll see.
 $ git clone https://github.com/raulfrk/setforge && cd setforge
 $ uv sync
 $ uv run setforge --version
-setforge 0.3.0
+0.3.0
 ```
 
 `uv sync` installs the package into the project venv, so `uv run setforge`
@@ -542,8 +542,8 @@ drifted section:
 
 *(reconcile wizard rendered from `setforge/section_wizard.py`)*
 
-A worked example of the host-local vs shared model and `preserve_user_keys` is
-in **[configuration.md](configuration.md)**.
+A worked example of the host-local vs shared model and the `disposition` /
+`spans` preservation model is in **[configuration.md](configuration.md)**.
 
 <a id="overrides--the-conflict-wizard"></a>
 ### Overrides: fork / pin + the conflict wizard
