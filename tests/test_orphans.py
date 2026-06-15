@@ -139,7 +139,15 @@ def test_detect_orphans_ignores_corrupt_meta(tmp_path: Path) -> None:
         "20260518T130000000000Z-install-p",
         [str(live_orphan)],
     )
-    config = _make_config_with({})
+    # A tracked_file establishes ``tmp_path/live`` as a managed dst root so
+    # the orphan (a sibling under it) survives the managed-scope guard.
+    config = _make_config_with(
+        {
+            "kept": TrackedFile(
+                src=Path("kept.txt"), dst=str(tmp_path / "live" / "kept.txt")
+            )
+        }
+    )
     detection = detect_orphans(
         resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
     )
@@ -193,7 +201,16 @@ def test_detect_orphans_excludes_tracked_source(tmp_path: Path) -> None:
         "20260518T120000000000Z-install-p",
         [str(src_file), str(live_orphan)],
     )
-    config = _make_config_with({})
+    # A tracked_file establishes ``tmp_path/live`` as a managed dst root so
+    # the orphan survives managed-scope; the src under ``tracked/`` is still
+    # excluded by the source guard.
+    config = _make_config_with(
+        {
+            "kept": TrackedFile(
+                src=Path("kept.txt"), dst=str(tmp_path / "live" / "kept.txt")
+            )
+        }
+    )
     detection = detect_orphans(
         resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
     )
@@ -274,18 +291,204 @@ def test_detect_orphans_retains_dangling_symlink_drops_absent(tmp_path: Path) ->
         "20260518T120000000000Z-install-p",
         [str(dangling), str(absent)],
     )
-    config = _make_config_with({})
+    # A tracked_file establishes ``tmp_path/live`` as a managed dst root so
+    # both candidates survive managed-scope (then split by the existence gate).
+    config = _make_config_with(
+        {
+            "kept": TrackedFile(
+                src=Path("kept.txt"), dst=str(tmp_path / "live" / "kept.txt")
+            )
+        }
+    )
     detection = detect_orphans(
         resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
     )
     assert detection.orphans == [OrphanEntry(path=dangling)]
     assert detection.skipped_absent == 1
     assert detection.skipped_source == 0
+    assert detection.skipped_unmanaged == 0
 
 
 def resolve_profile_wrap(config: Config, name: str) -> Any:
     """Wrap ``resolve_profile`` so the helper above stays single-line."""
     return compare_mod.resolve_profile(config, name)
+
+
+# ---------------------------------------------------------------------------
+# detect_orphans() — managed-scope guard (setforge-y8hl)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def managed_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Treat ``tmp_path`` as a generic root so the managed-dst-root climb
+    stops there.
+
+    Without this, ``tmp_path`` (a shared ancestor of every fixture dst)
+    would itself be a managed root, making every sibling subtree under it
+    count as managed and defeating the exclusion assertions. In production
+    the climb stops at the real ``$HOME``/``~/.config``/``/tmp`` etc.; the
+    fixture reproduces that boundary at the test root.
+    """
+    monkeypatch.setattr(
+        compare_mod,
+        "GENERIC_DST_ROOTS",
+        compare_mod.GENERIC_DST_ROOTS | {compare_mod._norm(tmp_path)},
+    )
+    return tmp_path
+
+
+def test_detect_orphans_skips_unmanaged_path(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """A previously-deployed path outside every managed dst root (e.g. a
+    config left by a retired profile) is dropped as unmanaged, even when
+    it still exists on disk."""
+    transitions_dir = tmp_path / "transitions"
+    config = _make_config_with(
+        {
+            "keep": TrackedFile(
+                src=Path("keep"), dst=str(tmp_path / "managed" / "keep.txt")
+            )
+        }
+    )
+    unmanaged = tmp_path / "retired" / "worktrunk.toml"
+    unmanaged.parent.mkdir(parents=True, exist_ok=True)
+    unmanaged.write_text("live config\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir, "20260518T120000000000Z-install-p", [str(unmanaged)]
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == []
+    assert detection.skipped_unmanaged == 1
+
+
+def test_detect_orphans_skips_source_manifest(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """The config source manifest (setforge.yaml), recorded by a migrate
+    transition, is never an orphan — it lives outside the managed dst
+    roots (and is excluded by scope, not just absence)."""
+    transitions_dir = tmp_path / "transitions"
+    config = _make_config_with(
+        {
+            "keep": TrackedFile(
+                src=Path("keep"), dst=str(tmp_path / "managed" / "keep.txt")
+            )
+        }
+    )
+    manifest = tmp_path / "config-repo" / "setforge.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("schema_version: '2.0'\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir, "20260518T120000000000Z-migrate-migrate", [str(manifest)]
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == []
+    assert detection.skipped_unmanaged == 1
+
+
+def test_detect_orphans_keeps_removed_managed_subtree(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """A file removed from a still-managed tree surfaces: it shares a
+    managed ancestor (the deploy dir) with surviving tracked dsts even
+    though nothing tracked remains in its own subdir."""
+    transitions_dir = tmp_path / "transitions"
+    skills = tmp_path / "managed" / "skills"
+    config = _make_config_with(
+        {"keep": TrackedFile(src=Path("keep"), dst=str(skills / "keep" / "SKILL.md"))}
+    )
+    gone = skills / "gone" / "SKILL.md"
+    gone.parent.mkdir(parents=True, exist_ok=True)
+    gone.write_text("retired skill\n", encoding="utf-8")
+    _write_meta_record(transitions_dir, "20260518T120000000000Z-install-p", [str(gone)])
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == [OrphanEntry(path=gone)]
+    assert detection.skipped_unmanaged == 0
+
+
+def test_detect_orphans_managed_root_prefix_not_substring(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """Managed-scope containment is component-wise (``is_relative_to``), so a
+    sibling whose name is a string prefix of a managed dir does NOT match
+    it: ``…/managed-evil`` is not inside ``…/managed``."""
+    transitions_dir = tmp_path / "transitions"
+    config = _make_config_with(
+        {
+            "keep": TrackedFile(
+                src=Path("keep"), dst=str(tmp_path / "managed" / "keep.txt")
+            )
+        }
+    )
+    sibling = tmp_path / "managed-evil" / "x.txt"
+    sibling.parent.mkdir(parents=True, exist_ok=True)
+    sibling.write_text("not managed\n", encoding="utf-8")
+    _write_meta_record(
+        transitions_dir, "20260518T120000000000Z-install-p", [str(sibling)]
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == []
+    assert detection.skipped_unmanaged == 1
+
+
+def test_detect_orphans_overreach_regression(
+    tmp_path: Path, managed_boundary: Path
+) -> None:
+    """End-to-end regression for setforge-y8hl: a ledger mixing the source
+    manifest, a retired-profile config, /tmp scratch, AND one genuinely
+    removed managed dst surfaces ONLY the removed managed dst. The junk all
+    EXISTS on disk (except the /tmp path) to prove exclusion is by scope,
+    not by absence — guard ordering is source/manifest → managed → existence."""
+    transitions_dir = tmp_path / "transitions"
+    managed_dir = tmp_path / "managed"
+    managed_dir.mkdir(parents=True, exist_ok=True)
+    config = _make_config_with(
+        {"keep": TrackedFile(src=Path("keep"), dst=str(managed_dir / "keep.txt"))}
+    )
+    real_orphan = managed_dir / "orphan.txt"
+    real_orphan.write_text("orphan\n", encoding="utf-8")
+    manifest = tmp_path / "config-repo" / "setforge.yaml"
+    retired = tmp_path / "retired" / "worktrunk.toml"
+    for junk in (manifest, retired):
+        junk.parent.mkdir(parents=True, exist_ok=True)
+        junk.write_text("junk\n", encoding="utf-8")
+    scratch = Path("/tmp/mig2/setforge.yaml")  # generic /tmp root, never created
+    _write_meta_record(
+        transitions_dir,
+        "20260518T120000000000Z-install-p",
+        [str(real_orphan), str(manifest), str(retired), str(scratch)],
+    )
+    detection = detect_orphans(
+        resolve_profile_wrap(config, "p"), config, transitions_dir, tmp_path
+    )
+    assert detection.orphans == [OrphanEntry(path=real_orphan)]
+    assert detection.skipped_unmanaged == 3
+    assert detection.skipped_absent == 0
+
+
+def test_rmdir_empty_parents_keeps_dir_with_sibling(tmp_path: Path) -> None:
+    """``_rmdir_empty_parents`` removes a dir emptied by the deletion but
+    keeps one still holding an unrelated sibling (Decision 5: keep the
+    directory unless the orphan was its only content)."""
+    emptied = tmp_path / "emptied"
+    emptied.mkdir()
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "user_file.txt").write_text("keep me\n", encoding="utf-8")
+    orphans_mod._rmdir_empty_parents([emptied, shared], Console())
+    assert not emptied.exists()
+    assert shared.exists()
+    assert (shared / "user_file.txt").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +595,7 @@ def test_dry_run_prints_skip_note(
     assert "skipped 1 previously-touched path(s)" in plain
     assert "1 no longer on disk" in plain
     assert "0 tracked source" in plain
+    assert "0 unmanaged" in plain
 
 
 def test_dry_run_no_skip_note_when_clean(

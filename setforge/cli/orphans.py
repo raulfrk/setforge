@@ -108,21 +108,27 @@ def _append_ignored_orphan(ignore_id: str) -> None:
 
 
 def _print_skip_note(
-    console: Console, *, skipped_absent: int, skipped_source: int
+    console: Console,
+    *,
+    skipped_absent: int,
+    skipped_source: int,
+    skipped_unmanaged: int,
 ) -> None:
     """Print a one-line note when the detection guards filtered candidates.
 
     Suppressed when nothing was filtered. For a destructive tool the
     count is a trust signal — it explains why a previously-touched path
-    is absent from the WOULD-delete list (gone from disk, or a tracked
-    source that can never be an orphan).
+    is absent from the WOULD-delete list (gone from disk, a tracked
+    source that can never be an orphan, or a path outside every
+    currently-managed destination root).
     """
-    total = skipped_absent + skipped_source
+    total = skipped_absent + skipped_source + skipped_unmanaged
     if total == 0:
         return
     console.print(
         f"note: skipped {total} previously-touched path(s) — "
-        f"{skipped_absent} no longer on disk, {skipped_source} tracked source"
+        f"{skipped_absent} no longer on disk, {skipped_source} tracked source, "
+        f"{skipped_unmanaged} unmanaged"
     )
 
 
@@ -132,6 +138,7 @@ def _print_dry_run(
     *,
     skipped_absent: int = 0,
     skipped_source: int = 0,
+    skipped_unmanaged: int = 0,
 ) -> None:
     """Print the default-mode dry-run output."""
     if not orphans:
@@ -142,7 +149,10 @@ def _print_dry_run(
             console.print(f"WOULD delete  {orphan.path}")
         console.print("=== rerun with --apply to delete ===")
     _print_skip_note(
-        console, skipped_absent=skipped_absent, skipped_source=skipped_source
+        console,
+        skipped_absent=skipped_absent,
+        skipped_source=skipped_source,
+        skipped_unmanaged=skipped_unmanaged,
     )
 
 
@@ -170,6 +180,7 @@ def _detect_orphans_live(
         orphans=report.orphans,
         skipped_absent=report.orphan_skipped_absent,
         skipped_source=report.orphan_skipped_source,
+        skipped_unmanaged=report.orphan_skipped_unmanaged,
     )
     return cfg, detection
 
@@ -447,6 +458,7 @@ def cleanup_orphans(
             console,
             skipped_absent=detection.skipped_absent,
             skipped_source=detection.skipped_source,
+            skipped_unmanaged=detection.skipped_unmanaged,
         )
         return
 

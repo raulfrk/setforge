@@ -168,6 +168,11 @@ def test_apply_with_yes_applies_with_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--yes`` collapses to APPLY_WITH_BACKUP without TTY/radiolist."""
+    # ``migrate --apply`` writes a real transition via transitions_root() →
+    # Path.home(); pin SETFORGE_STATE_DIR so the record lands in a per-test
+    # tmp tree independent of the autouse HOME-isolation fixture (belt-and-
+    # suspenders — the HOME fixture alone is a single point of failure).
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     chain = (_SetforgeYamlEditMigration(),)

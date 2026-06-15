@@ -205,6 +205,7 @@ class CompareReport:
     orphans: list[OrphanEntry] = field(default_factory=list)
     orphan_skipped_absent: int = 0
     orphan_skipped_source: int = 0
+    orphan_skipped_unmanaged: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,14 +214,18 @@ class OrphanDetection:
 
     ``orphans`` is the kept set (deployed dst paths that still exist on
     disk and are no longer tracked). ``skipped_absent`` /
-    ``skipped_source`` tally the candidates the guards filtered out — a
-    path no longer on disk, or a path that is a tracked SOURCE rather
-    than a deployed dst — so the CLI can surface a transparency note.
+    ``skipped_source`` / ``skipped_unmanaged`` tally the candidates the
+    guards filtered out — a path no longer on disk, a path that is a
+    tracked SOURCE rather than a deployed dst, or a path outside every
+    currently-managed destination root (e.g. an unrelated config under
+    a retired profile, or stray ``/tmp`` scratch) — so the CLI can
+    surface a transparency note.
     """
 
     orphans: list[OrphanEntry]
     skipped_absent: int = 0
     skipped_source: int = 0
+    skipped_unmanaged: int = 0
 
 
 def _norm(path: Path) -> Path:
@@ -233,6 +238,66 @@ def _norm(path: Path) -> Path:
     / ``..`` aliasing cannot make a guard fail open.
     """
     return Path(os.path.normpath(path.expanduser()))
+
+
+# Generic shared destination roots that must NEVER count as a managed
+# orphan-scope root. Climbing a tracked dst's ancestors (see
+# :func:`_managed_dst_roots`) stops before any of these, so an unrelated
+# path living under, e.g., ``~/.config`` or ``/tmp`` is never pulled into
+# orphan scope. This denylist is the backstop against the orphan
+# over-reach class — a path setforge deployed under a now-retired config,
+# or stray ``/tmp`` scratch, must not resurface as a deletable orphan.
+# Named constant (not inlined) so the set is auditable in one place.
+GENERIC_DST_ROOTS: frozenset[Path] = frozenset(
+    _norm(Path(raw))
+    for raw in (
+        "~",
+        "~/.config",
+        "~/.local",
+        "~/.local/state",
+        "~/.local/share",
+        "~/.cache",
+        "/tmp",
+        "/var",
+        "/var/tmp",
+        "/etc",
+        "/usr",
+        "/opt",
+        "/",
+    )
+)
+
+
+def _managed_dst_roots(config: Config, repo_root: Path) -> set[Path]:
+    """Directories setforge currently deploys into — the orphan scope.
+
+    For every tracked_file dst in the WHOLE config (all profiles,
+    directory-expanded via :func:`expand_tracked_file`), walk its
+    ancestor directories and collect each one until a generic shared root
+    (:data:`GENERIC_DST_ROOTS`) or the filesystem root is reached. A
+    candidate orphan is kept only if it lives under one of these roots
+    (see :func:`detect_orphans`).
+
+    This is what stops the over-reach: a path setforge deployed under a
+    now-retired config (e.g. ``~/.config/worktrunk/config.toml`` left by
+    an old profile) reaches a current tracked dst only via the generic
+    ``~/.config`` ancestor — which is never added — so it is out of
+    scope, while a file removed from a still-managed tree (e.g.
+    ``~/.claude/skills/<gone>/SKILL.md``, sharing the managed ``~/.claude``
+    ancestor with surviving dsts) still surfaces. Built from ALL
+    ``config.tracked_files`` (not just the resolved profile) so a path
+    deployed by a sibling profile is still recognized as managed.
+    """
+    roots: set[Path] = set()
+    for name, tracked_file in config.tracked_files.items():
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for _, _, sub_dst in expand_tracked_file(name, src, dst):
+            for ancestor in _norm(sub_dst).parents:
+                if ancestor in GENERIC_DST_ROOTS or ancestor == ancestor.parent:
+                    break
+                roots.add(ancestor)
+    return roots
 
 
 def _resolved_tracked_dsts(
@@ -321,7 +386,7 @@ def detect_orphans(
 
     Walks every ``transitions_dir/*/meta.json`` ``paths`` field (the
     set of paths setforge actually touched on this host), subtracts the
-    set of currently-resolved tracked destinations, then applies two
+    set of currently-resolved tracked destinations, then applies three
     guards so the result can never schedule a non-orphan for deletion:
 
     1. **Source guard** — a candidate under ``repo_root/tracked`` or
@@ -329,20 +394,32 @@ def detect_orphans(
        file is never a deployed dst, so it can never be an orphan;
        without this a stale ``meta.json`` that recorded src paths would
        list the config source of truth for deletion.
-    2. **Existence gate** — a candidate no longer present on disk is
+    2. **Managed-scope guard** — a candidate that does not live under any
+       currently-managed destination root (:func:`_managed_dst_roots`) is
+       dropped. The transition ``paths`` ledger records every path any
+       command touched — installs, migrations (which rewrite the source
+       manifest), even ``/tmp`` scratch — so ledger-membership alone is
+       too broad. Restricting to managed roots is what keeps the source
+       manifest, configs left by retired profiles, and stray ``/tmp``
+       paths out of the WOULD-delete list while still surfacing a file
+       removed from a still-managed tree.
+    3. **Existence gate** — a candidate no longer present on disk is
        dropped. Uses :func:`os.path.lexists` (lstat semantics) to match
        the apply path's ``_lstat_safe`` delete check, so a dangling
        symlink (still a real, deletable dir entry) is RETAINED while a
        fully-absent path is filtered. The report then equals exactly
        what ``--apply`` would delete.
 
-    The source guard runs BEFORE the existence gate so a tracked source
-    that happens to exist on disk is tallied as a source skip, not
-    leaked through. ``ignored`` is a set of tracked_file IDs the user
-    marked "keep orphan" via ``cleanup-orphans --ignore <id>``; their
-    resolved destinations join the tracked set so they never surface.
-    Returns an :class:`OrphanDetection` carrying the kept orphans and
-    the per-guard skip tallies.
+    The source and managed-scope guards run BEFORE the existence gate so
+    an excluded path that happens to exist on disk is tallied as a skip,
+    not leaked through. Containment uses :func:`Path.is_relative_to`
+    (component-wise — ``/foo`` never matches ``/foobar``) over lexically
+    normalized paths on both sides; no ``resolve()`` is applied, matching
+    how setforge records paths. ``ignored`` is a set of tracked_file IDs
+    the user marked "keep orphan" via ``cleanup-orphans --ignore <id>``;
+    their resolved destinations join the tracked set so they never
+    surface. Returns an :class:`OrphanDetection` carrying the kept
+    orphans and the per-guard skip tallies.
     """
     tracked_paths = _resolved_tracked_dsts(
         resolved, config, repo_root, extra_ids=ignored
@@ -350,13 +427,18 @@ def detect_orphans(
     touched_paths = _touched_paths_from_meta(transitions_dir)
     src_root = _norm(repo_root / "tracked")
     src_paths = _tracked_source_paths(config, repo_root)
+    managed_roots = _managed_dst_roots(config, repo_root)
 
     kept: list[OrphanEntry] = []
     skipped_absent = 0
     skipped_source = 0
+    skipped_unmanaged = 0
     for path in sorted(touched_paths - tracked_paths, key=str):
         if path.is_relative_to(src_root) or path in src_paths:
             skipped_source += 1
+            continue
+        if not any(path.is_relative_to(root) for root in managed_roots):
+            skipped_unmanaged += 1
             continue
         if not os.path.lexists(path):
             skipped_absent += 1
@@ -366,6 +448,7 @@ def detect_orphans(
         orphans=kept,
         skipped_absent=skipped_absent,
         skipped_source=skipped_source,
+        skipped_unmanaged=skipped_unmanaged,
     )
 
 
@@ -535,6 +618,7 @@ def compare_profile(
     orphans: list[OrphanEntry] = []
     skipped_absent = 0
     skipped_source = 0
+    skipped_unmanaged = 0
     if transitions_dir is not None:
         detection = detect_orphans(
             resolved, config, transitions_dir, repo_root, ignored=ignored
@@ -542,6 +626,7 @@ def compare_profile(
         orphans = detection.orphans
         skipped_absent = detection.skipped_absent
         skipped_source = detection.skipped_source
+        skipped_unmanaged = detection.skipped_unmanaged
 
     return CompareReport(
         entries=entries,
@@ -549,6 +634,7 @@ def compare_profile(
         orphans=orphans,
         orphan_skipped_absent=skipped_absent,
         orphan_skipped_source=skipped_source,
+        orphan_skipped_unmanaged=skipped_unmanaged,
     )
 
 
