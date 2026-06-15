@@ -356,7 +356,9 @@ transition: 20260615T083640Z-install-default
     if any reverse-hunk collides with a live edit.
 
 === REDO (after revert lands) ===
-  setforge install --profile=default      # re-applies the original deploy
+  setforge revert acts as an inverse op. To REDO this install — run:
+  setforge revert --profile=default
+  again. Second invocation re-applies the original mutations.
 
 setforge revert (install)
   ▸ no, abort (default — safe)

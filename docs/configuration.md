@@ -148,8 +148,9 @@ the span model rather than letting markers survive in the live file:
   shared`); the end marker's `hash=<sha256-hex>` segment lets the reconciler
   distinguish pending-tracked drift from live edits.
 
-Legacy `version: 1` configs that relied on marker *survival* in the live file
-are migrated to this span model by `setforge migrate` (and transparently on
+Configs predating schema 2.0 (no `schema_version`, or an older one) that relied
+on marker *survival* in the live file are migrated to this span model by
+`setforge migrate` (and transparently on
 `install`). The project-root [CLAUDE.md](../CLAUDE.md) documents the full marker
 grammar; adding marker pairs is automated by `setforge section` — see
 [commands.md](commands.md).
