@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **`cleanup-orphans` no longer over-reaches.** Orphan detection now
+  scopes candidates to currently-managed destination roots — an ancestor
+  directory of a tracked file's destination, excluding generic shared
+  roots such as `~/.config` and `/tmp`. The config source manifest, files
+  left by a retired profile, and stray `/tmp` scratch are no longer
+  offered for deletion, while a file removed from a still-managed tree
+  still surfaces. The dry-run note now reports an `unmanaged` skip count.
+
 ## [0.3.0] - 2026-06-15
 
 The host-reproducibility and schema-versioning release. v0.3.0 makes a
