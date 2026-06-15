@@ -90,16 +90,26 @@ def _install_minimal(container: ContainerHandle) -> None:
 
 
 def _orphan_yaml() -> str:
-    """A copy of the test config WITHOUT ``minimal_text`` in test-minimal.
+    """Config that DROPS ``minimal_text`` but keeps a sibling tracked_file
+    under ``~/.setforge_e2e/``.
 
-    Drops the single tracked_file entry from test-minimal's
-    ``tracked_files`` list AND from the top-level ``tracked_files``
-    block. Once setforge re-resolves the profile, the previously-
-    deployed ``~/.setforge_e2e/minimal/text.txt`` becomes an orphan.
+    Dropping ``minimal_text`` makes the previously-deployed
+    ``~/.setforge_e2e/minimal/text.txt`` an orphan. The retained
+    ``keeper`` entry (deploying elsewhere under ``~/.setforge_e2e/``)
+    keeps that tree a MANAGED destination root, so orphan detection's
+    managed-scope guard still surfaces the orphan — this mirrors the
+    realistic "removed one entry, others remain" case (which is exactly
+    how the over-reach bug arose). An empty ``tracked_files`` would leave
+    setforge managing nothing, in which case the guard correctly declines
+    to surface anything. ``keeper`` is absent from the resolved profile
+    and was never deployed, so it is not itself an orphan.
     """
     return (
-        "version: 1\n"
-        "tracked_files: {}\n"
+        "schema_version: '2.0'\n"
+        "tracked_files:\n"
+        "  keeper:\n"
+        "    src: json/settings.json\n"
+        "    dst: ~/.setforge_e2e/json/settings.json\n"
         "profiles:\n"
         "  test-minimal:\n"
         "    tracked_files: []\n"
