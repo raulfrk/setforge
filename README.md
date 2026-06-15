@@ -68,7 +68,7 @@ your-config/
 
 ```yaml
 # your-config/setforge.yaml
-version: 1
+schema_version: "2.0"
 tracked_files:
   example:
     src: example.txt            # lives at tracked/example.txt
@@ -83,16 +83,22 @@ Put any content in `tracked/example.txt`, then `git init` the directory.
 See [docs/configuration.md](docs/configuration.md) for the full schema
 (templates, file modes, extensions, plugins, per-host preservation).
 
+(Existing configs written with the legacy `version: 1` key still load and are
+migrated forward by `setforge migrate` — `schema_version: "2.0"` is the current
+shape for new repos.)
+
 **4. Wire setforge to your config**
 
 ```bash
 setforge init --path-source=~/your-config
-# or, for a git-hosted config repo:
+# or, for a git-hosted config repo (record the source, then clone it):
 # setforge init --git-source=git@github.com:you/your-config.git --git-ref=main
+# setforge fetch
 ```
 
 `setforge init` writes `~/.config/setforge/local.yaml` with the `source:` block
-for you — no hand-editing.
+for you — no hand-editing. For a git source, `init --git-source` records it and
+`setforge fetch` then clones/updates it and checks out the pinned ref.
 
 **5. Deploy**
 
@@ -120,8 +126,25 @@ uv run setforge validate --profile=<profile>   # config-shape check (no live tar
 command surface, run `setforge --help` or see
 [docs/commands.md](docs/commands.md).
 
+## Command overview
+
+Beyond the daily commands above, setforge's full surface groups as:
+
+- **Lifecycle:** install · compare · sync · capture · revert · status · validate
+- **Config repo:** init · fetch · migrate · upgrade
+- **Cleanup:** cleanup-orphans
+- **Subcommand groups:** override · plugin · marketplace · ext · section ·
+  snapshot · profile · transitions · config · completion
+
+New to setforge, or want to see what each command's output looks like? The
+**[guided tutorial](docs/tutorial.md)** walks the whole lifecycle and documents
+every command with worked examples and terminal mockups. Exhaustive flags live
+in [docs/commands.md](docs/commands.md).
+
 ## Concepts & deep reference
 
+- **Guided tutorial** — the full lifecycle plus every command with examples and
+  output mockups: [docs/tutorial.md](docs/tutorial.md).
 - **Configuration & the config repo** — source discovery, the `setforge.yaml`
   schema, per-host preservation: [docs/configuration.md](docs/configuration.md).
 - **Command reference & subcommand groups** — every command, the nine
