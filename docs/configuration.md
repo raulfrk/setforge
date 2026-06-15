@@ -110,7 +110,7 @@ profiles:
     extensions:
       include:
         - ms-python.python
-    extends: []          # inherit from another profile
+    # extends: base      # optional — inherit from one parent profile (by name)
 ```
 
 Inspect resolved profiles with `setforge profile list` / `setforge profile
@@ -170,8 +170,10 @@ want preserved (a deep span pins a whole subtree). The `setforge override` CLI
 
 ## Host-local, never-tracked files
 
-`~/.claude/additional-content.md` is intentionally per-host. `setforge install`
-creates it as an empty file if missing; the engine never tracks its content.
+Some files are intentionally per-host and never tracked. List such a path in a
+profile's `bootstrap:` block and `setforge install` creates it as an empty stub
+if missing (e.g. `~/.claude/additional-content.md`) — the engine never tracks
+its content.
 
 ## Adding a tracked file or extension
 

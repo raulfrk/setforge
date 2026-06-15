@@ -438,8 +438,9 @@ quick index.
 
 - **`migrate`** — run schema migrations against the active `setforge.yaml`.
   `--check` previews, `--apply` writes, `--pin`/`--to` target a version,
-  `--finalize` strips migration markers. *When:* after a schema bump (e.g. a
-  `version: 1` config), or on upgrade.
+  `--finalize` strips vestigial host-local user-section markers from tracked
+  sources (gated on a `minimum_version` floor). *When:* after a `schema_version`
+  bump, or on upgrade.
 
   ```console
   $ setforge migrate --check
