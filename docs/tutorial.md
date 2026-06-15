@@ -205,16 +205,14 @@ unexpected drift in 0 file(s)
 === rerun without --dry-run to apply for real ===
 ```
 
-Then apply. Interactively, setforge confirms before mutating and shows the
-revert command up front:
+Then apply. When setforge needs to confirm a mutation (for example an `--auto`
+reconcile), it prints the change plus its risks and the revert command, then
+asks:
 
 ```
-setforge install — profile=default
-Proceed with the deploy above?
-  ▸ abort — no changes
-    proceed
-    proceed (skip secrets scan)
-    proceed + open editor
+Proceed with the mutation above?
+  ▸ No  — abort, no mutations
+    Yes — apply the changes
 ```
 
 *(confirm prompt rendered from `setforge/cli/_confirm.py`)*
@@ -230,7 +228,7 @@ content. If it finds something, you decide per-finding:
 
 How would you like to proceed?
   ▸ Abort install — review and remove the secret
-    Proceed (allowlist this finding; persisted host-local)
+    Proceed (allowlist this snippet hash; persisted host-local)
     Proceed (silence one-shot — do NOT add to allowlist)
 ```
 

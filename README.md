@@ -53,7 +53,8 @@ uv sync --extra dev
 ```
 
 Run it with `uv run setforge …` from the repo (`uv sync` installs the package,
-so `setforge --version` reports the real version).
+so `setforge --version` reports the real version). After `uv sync`, bare
+`setforge` and `uv run setforge` are interchangeable; examples below use both.
 
 **3. Create a minimal config repo**
 
