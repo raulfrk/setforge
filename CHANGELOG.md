@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-06-13
+## [0.3.0] - 2026-06-15
 
 The host-reproducibility and schema-versioning release. v0.3.0 makes a
 setup reproducible on a fresh host (MCP servers, cargo binaries,

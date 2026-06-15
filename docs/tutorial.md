@@ -82,7 +82,7 @@ back. Each step shows the real command and what you'll see.
 $ git clone https://github.com/raulfrk/setforge && cd setforge
 $ uv sync
 $ uv run setforge --version
-setforge 0.2.2
+setforge 0.3.0
 ```
 
 `uv sync` installs the package into the project venv, so `uv run setforge`
