@@ -561,13 +561,13 @@ it:
 - **pin** — live always wins; the file is never merged or clobbered.
 
 ```console
-$ setforge override fork notes        # merge upstream, keep live edits
-$ setforge override pin gitconfig     # freeze live, ignore tracked changes
-$ setforge override list
-$ setforge override show notes        # spans + annotations for one file
-$ setforge override unfork notes      # drop a FORKED override
-$ setforge override unpin gitconfig   # drop a PINNED override
-$ setforge override reset             # clear ALL override state
+$ setforge override fork notes --profile=default      # merge upstream, keep live edits
+$ setforge override pin gitconfig --profile=default   # freeze live, ignore tracked changes
+$ setforge override list --profile=default
+$ setforge override show notes --profile=default      # spans + annotations for one file
+$ setforge override unfork notes --profile=default    # drop a FORKED override
+$ setforge override unpin gitconfig --profile=default # drop a PINNED override
+$ setforge override reset notes --profile=default     # clear ALL override state for one file
 ```
 
 When a forked file's merge hits a real conflict (both sides changed the same
@@ -642,7 +642,7 @@ a coarse, whole-tree safety net distinct from per-transition revert.
 ```console
 $ setforge snapshot create before-experiment --profile=default
 $ setforge snapshot list
-$ setforge snapshot restore before-experiment   # overlay a snapshot onto live (additive)
+$ setforge snapshot restore before-experiment --profile=default   # overlay onto live (additive)
 ```
 
 *When:* before a risky manual change you want a guaranteed way back from.
@@ -696,8 +696,8 @@ $ setforge transitions show <id>        # full audit-detail panel
 ```console
 $ setforge config show --effective --profile=default   # resolved view
 $ setforge config show --tracked tracked_files          # a dotted-path slice
-$ setforge config add --tracked profiles.default.tracked_files notes
-$ setforge config remove --tracked profiles.default.tracked_files notes
+$ setforge config add --tracked profiles.default.tracked_files notes --profile=default
+$ setforge config remove --tracked profiles.default.tracked_files notes --profile=default
 ```
 `config show` requires one of `--local` / `--tracked` / `--effective` (and
 `--effective` requires `--profile`). *When:* scripted edits, or inspecting the
@@ -707,7 +707,7 @@ resolved config without opening the file.
 ### Completion + global options
 
 ```console
-$ setforge completion install        # install shell completion (zsh/bash/fish)
+$ setforge completion install zsh    # install shell completion (or bash / fish)
 ```
 
 **Global options** (before the command) apply everywhere:

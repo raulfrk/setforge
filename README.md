@@ -148,7 +148,7 @@ in [docs/commands.md](docs/commands.md).
   output mockups: [docs/tutorial.md](docs/tutorial.md).
 - **Configuration & the config repo** — source discovery, the `setforge.yaml`
   schema, per-host preservation: [docs/configuration.md](docs/configuration.md).
-- **Command reference & subcommand groups** — every command, the nine
+- **Command reference & subcommand groups** — every command, the ten
   subcommand groups, and `--auto=*` confirmation:
   [docs/commands.md](docs/commands.md).
 - **Cutting a release** — CI gates and the tag-push flow:
