@@ -315,7 +315,7 @@ def resolve_profile_wrap(config: Config, name: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# detect_orphans() — managed-scope guard (setforge-y8hl)
+# detect_orphans() — managed-scope guard
 # ---------------------------------------------------------------------------
 
 
@@ -444,11 +444,14 @@ def test_detect_orphans_managed_root_prefix_not_substring(
 def test_detect_orphans_overreach_regression(
     tmp_path: Path, managed_boundary: Path
 ) -> None:
-    """End-to-end regression for setforge-y8hl: a ledger mixing the source
+    """End-to-end over-reach regression: a ledger mixing the source
     manifest, a retired-profile config, /tmp scratch, AND one genuinely
     removed managed dst surfaces ONLY the removed managed dst. The junk all
     EXISTS on disk (except the /tmp path) to prove exclusion is by scope,
-    not by absence — guard ordering is source/manifest → managed → existence."""
+    not by absence. None of the junk is under ``tracked/`` or a tracked
+    src, so the source guard passes it through and the managed-scope guard
+    is what excludes it (hence ``skipped_unmanaged == 3``); guard order is
+    source → managed → existence."""
     transitions_dir = tmp_path / "transitions"
     managed_dir = tmp_path / "managed"
     managed_dir.mkdir(parents=True, exist_ok=True)

@@ -398,7 +398,8 @@ def detect_orphans(
        currently-managed destination root (:func:`_managed_dst_roots`) is
        dropped. The transition ``paths`` ledger records every path any
        command touched — installs, migrations (which rewrite the source
-       manifest), even ``/tmp`` scratch — so ledger-membership alone is
+       manifest), and scratch paths from local test/dogfood runs (e.g.
+       under ``/tmp``) — so ledger-membership alone is
        too broad. Restricting to managed roots is what keeps the source
        manifest, configs left by retired profiles, and stray ``/tmp``
        paths out of the WOULD-delete list while still surfacing a file
