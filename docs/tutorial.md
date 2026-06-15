@@ -306,8 +306,9 @@ $ setforge compare --profile=default --full-diff
 
 The **Class** column tells you what kind of drift each file has — `unexpected`
 (live changed off-book), `stale` (tracked changed, live not yet updated),
-`conflicted` (both sides moved). `compare --check` exits non-zero when any drift
-exists, which makes it a clean CI gate.
+`conflicted` (both sides moved). `compare --check` exits non-zero on
+*unexpected* drift — a clean CI gate; add `--strict` to also fail on stale or
+expected drift.
 
 **When to use:** before install/sync, in CI, or any time you want to know
 whether live and tracked agree.
@@ -615,7 +616,7 @@ $ setforge plugin sync-cache                            # clone/refresh marketpl
 ```console
 $ setforge marketplace add mymarket --from github:owner/repo
 $ setforge marketplace remove mymarket
-$ setforge marketplace update                # `claude plugin marketplace update`
+$ setforge marketplace update mymarket       # claude plugin marketplace update (per-marketplace)
 ```
 
 **VSCode extensions:**
