@@ -57,8 +57,10 @@ Run `setforge fetch` to clone-if-missing, fetch, and check out the ref; a dirty
 
 ## `setforge.yaml`
 
-Two top-level keys are required: `tracked_files` and `profiles`. Unknown
-top-level keys are rejected. Everything else has a default:
+Two top-level keys are required: `tracked_files` and `profiles`. `setforge
+validate` rejects unknown top-level keys; the normal load path (install / sync)
+instead warns and strips them, so a config from a newer same-major engine still
+loads. Everything else has a default:
 
 | Key | Required | Default | Purpose |
 |---|---|---|---|
