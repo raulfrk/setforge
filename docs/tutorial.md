@@ -605,11 +605,11 @@ setforge can also reconcile **Claude plugins** (+ their **marketplaces**) and
 **Claude plugins:**
 
 ```console
-$ setforge plugin list                                  # declared vs installed
-$ setforge plugin add myplugin@mymarket --from github:owner/repo   # register + declare + install
-$ setforge plugin remove myplugin                       # drop from the profile
-$ setforge plugin reconcile                             # apply declared state
-$ setforge plugin sync-cache                            # clone/refresh marketplace caches
+$ setforge plugin list --profile=default                # declared vs installed
+$ setforge plugin add myplugin@mymarket --from github:owner/repo --profile=default   # register + install
+$ setforge plugin remove myplugin --profile=default     # drop from the profile
+$ setforge plugin reconcile --profile=default           # apply declared state
+$ setforge plugin sync-cache --profile=default          # clone/refresh marketplace caches
 ```
 
 **Marketplaces:**
@@ -623,10 +623,10 @@ $ setforge marketplace update mymarket       # claude plugin marketplace update 
 **VSCode extensions:**
 
 ```console
-$ setforge ext list
-$ setforge ext add ms-python.python
-$ setforge ext remove ms-python.python
-$ setforge ext reconcile
+$ setforge ext list --profile=default
+$ setforge ext add ms-python.python --profile=default
+$ setforge ext remove ms-python.python --profile=default
+$ setforge ext reconcile --profile=default
 ```
 
 *When:* to keep your Claude plugin set and VSCode extension set declarative and
