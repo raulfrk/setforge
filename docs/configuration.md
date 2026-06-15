@@ -120,26 +120,38 @@ offers two mechanisms.
 
 ### Markdown: user-section markers
 
-Wrap any region of a tracked markdown file in HTML-comment markers and the live
-body survives subsequent `install` runs. Both markers need a `host-local` or
-`shared` semantics keyword:
+Wrap a region of a tracked markdown *source* file in HTML-comment markers to
+**declare** it a user section. The marker pair is the authoring syntax in the
+source — as of schema 2.0 it is **not** what gets deployed (see below). Both
+markers need a `host-local` or `shared` semantics keyword:
 
 ```markdown
 <!-- setforge:user-section start host-local NAME -->
-... live edits here always survive re-install (host-specific) ...
+... per-machine body; stored in local.yaml, never shared ...
 <!-- setforge:user-section end host-local NAME -->
 
 <!-- setforge:user-section start shared NAME -->
-... live edits survive, and tracked-side updates surface via
+... shared body; tracked-side updates reconcile via
     `install --reconcile-user-sections` ...
 <!-- setforge:user-section end shared NAME -->
 ```
 
-The end marker also carries a `hash=<sha256-hex>` segment that `install`
-rewrites on every run, so the three-way reconciler can tell pending-tracked
-drift from live edits. The project-root
-[CLAUDE.md](../CLAUDE.md) documents the full marker grammar. Adding marker pairs
-is automated by `setforge section` — see [commands.md](commands.md).
+**The deployed file is markerless.** Under the schema-2.0 unified-span contract,
+`install` strips the tracked-authored markers and resolves each section through
+the span model rather than letting markers survive in the live file:
+
+- **host-local** → the per-host body is injected *markerless* into the live file
+  and kept as an OVERLAY span in `local.yaml` (nothing host-specific reaches the
+  config repo).
+- **shared** → the region becomes a stored-base 3-way merge (`disposition:
+  shared`); the end marker's `hash=<sha256-hex>` segment lets the reconciler
+  distinguish pending-tracked drift from live edits.
+
+Legacy `version: 1` configs that relied on marker *survival* in the live file
+are migrated to this span model by `setforge migrate` (and transparently on
+`install`). The project-root [CLAUDE.md](../CLAUDE.md) documents the full marker
+grammar; adding marker pairs is automated by `setforge section` — see
+[commands.md](commands.md).
 
 ### YAML / JSON: preserved keys
 

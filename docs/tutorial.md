@@ -59,10 +59,12 @@ a realistic terminal mockup, and a note on when to reach for it.
 - **Live vs tracked.** *Tracked* is the content in your config repo. *Live* is
   what's deployed on the host. `install` pushes tracked → live; `sync`/`capture`
   pull live → tracked; `compare` reports the difference.
-- **User sections.** A marked region inside a tracked file can be **host-local**
-  (per-machine, kept in `local.yaml`, never shared) or **shared** (travels in
-  the config repo). Drift in a shared section is resolved by the reconcile
-  wizard at install time.
+- **User sections.** A region you mark in a tracked *source* file as
+  **host-local** (per-machine; body kept in `local.yaml`, never shared) or
+  **shared** (travels in the config repo). The markers are the source-side
+  declaration only — under schema 2.0 the live file is driven by spans, not
+  marker survival: host-local bodies deploy *markerless*, and shared-section
+  drift is reconciled by a stored-base 3-way merge (the reconcile wizard).
 
 For the precise schema and every field, see **[configuration.md](configuration.md)**.
 
@@ -480,13 +482,29 @@ cleaned up.
 <a id="user-sections--the-reconcile-wizard"></a>
 ### User sections (host-local vs shared) + the reconcile wizard
 
-A **user section** is a marker-delimited region inside a tracked file. It is
-either **host-local** (intent lives in `local.yaml`, per-machine, never shared)
-or **shared** (intent lives in the tracked `setforge.yaml` and travels across
-hosts). This lets one tracked file carry both shared content and per-machine
-content.
+A **user section** is a region you mark in a tracked *source* markdown file with
+HTML-comment markers. The marker pair is the **authoring syntax** — it is *not*
+what ends up in the deployed file. A section is either **host-local**
+(per-machine; the body lives in `local.yaml` and is never shared) or **shared**
+(travels in the config repo). This lets one tracked file carry both shared and
+per-machine content.
 
-Emit a marker pair to paste into a tracked file, or insert it in place:
+**The deployed file is markerless.** As of schema 2.0 (the unified-span
+contract), `install` no longer relies on markers surviving in the live file — it
+strips the tracked-authored markers and resolves each section through the span
+model instead:
+
+- **host-local** → the per-host body is injected *markerless* into the live file
+  and stored as an OVERLAY span in `local.yaml` (nothing host-specific in the
+  config repo, no markers in the live file).
+- **shared** → the region becomes a stored-base 3-way merge (`disposition:
+  shared`); tracked-side updates reconcile against live edits via the wizard.
+
+Legacy `version: 1` configs that relied on marker *survival* are migrated to
+this span model by `setforge migrate` (and on `install`).
+
+Declare a section with `section emit` (paste the pair into the source yourself)
+or `section add` (insert it at an anchor line):
 
 ```console
 $ setforge section emit host-local mymachine
