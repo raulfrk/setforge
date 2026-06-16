@@ -226,6 +226,31 @@ def _patch_pypi(
     monkeypatch.setattr("setforge.cli.upgrade.fetch_latest_version", fake_fetch)
 
 
+def _newer_version() -> str:
+    """Return a version string strictly greater than the installed one.
+
+    ``upgrade()`` short-circuits to exit 0 when the planned target equals the
+    installed ``setforge.__version__`` ("already on the latest version"). The
+    integration tests below need a target that is *newer* than whatever is
+    installed; deriving it from ``__version__`` keeps them immune to release
+    bumps that would otherwise collide with a hardcoded literal. Only the
+    leading numeric ``MAJOR.MINOR.PATCH`` segment is parsed, so a future
+    ``.devN`` / ``+local`` / ``rcN`` suffix on ``__version__`` is tolerated.
+    """
+    import re
+
+    from setforge import __version__
+
+    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", __version__)
+    if match is None:  # unparseable — fall back to an unmistakably newer value
+        return "999.0.0"
+    major, minor, patch = (int(group) for group in match.groups())
+    return f"{major}.{minor}.{patch + 1}"
+
+
+_NEXT_VERSION = _newer_version()
+
+
 def _patch_notes(monkeypatch: pytest.MonkeyPatch, *, notes: str | None) -> None:
     monkeypatch.setattr("setforge.cli.upgrade._load_release_notes", lambda _v: notes)
 
@@ -330,7 +355,7 @@ def test_cli_upgrade_already_latest_short_circuits(
 
 def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end with subprocess mocked: pypi → wrap → verify → rollback line."""
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="### Added\n- shiny")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -339,13 +364,15 @@ def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
         subprocess.CompletedProcess(
             args=["uv", "tool", "upgrade", "setforge"],
             returncode=0,
-            stdout="Resolved 12 packages in 200ms\nInstalled setforge==0.3.0\n",
+            stdout=(
+                f"Resolved 12 packages in 200ms\nInstalled setforge=={_NEXT_VERSION}\n"
+            ),
             stderr="",
         ),
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout="setforge 0.3.0\n",
+            stdout=f"setforge {_NEXT_VERSION}\n",
             stderr="",
         ),
     ]
@@ -357,14 +384,14 @@ def test_cli_upgrade_full_flow_no_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls[0][1:] == ["tool", "upgrade", "setforge"]
     assert calls[1][1:] == ["tool", "list"]
     assert "rollback:" in result.output
-    assert "upgraded to 0.3.0" in result.output
+    assert f"upgraded to {_NEXT_VERSION}" in result.output
 
 
 def test_cli_upgrade_full_flow_with_migrate_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When schema is DETECTED, --no-prompt auto-runs migrate --check."""
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(
         monkeypatch,
         notes="### Changed\n- schema_version bumped 1.0 → 1.1 (additive)\n",
@@ -376,13 +403,13 @@ def test_cli_upgrade_full_flow_with_migrate_check(
         subprocess.CompletedProcess(
             args=["uv", "tool", "upgrade", "setforge"],
             returncode=0,
-            stdout="Installed setforge==0.3.0\n",
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
             stderr="",
         ),
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout="setforge 0.3.0\n",
+            stdout=f"setforge {_NEXT_VERSION}\n",
             stderr="",
         ),
         subprocess.CompletedProcess(
@@ -404,7 +431,7 @@ def test_cli_upgrade_full_flow_with_migrate_check(
 def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(
         monkeypatch,
         notes="### Changed\n- schema_version bumped 1.0 → 1.1\n",
@@ -414,10 +441,13 @@ def test_cli_upgrade_migrate_check_soft_fails_when_command_missing(
 
     responses = [
         subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="Installed setforge==0.3.0\n", stderr=""
+            args=[],
+            returncode=0,
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
+            stderr="",
         ),
         subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="setforge 0.3.0\n", stderr=""
+            args=[], returncode=0, stdout=f"setforge {_NEXT_VERSION}\n", stderr=""
         ),
         subprocess.CompletedProcess(
             args=[],
@@ -437,7 +467,7 @@ def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Per research brief §2: STDOUT 'Nothing to upgrade' = no-op, exit 0."""
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -450,7 +480,7 @@ def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
             stderr="",
         ),
         subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="setforge 0.3.0\n", stderr=""
+            args=[], returncode=0, stdout=f"setforge {_NEXT_VERSION}\n", stderr=""
         ),
     ]
     _patch_subprocess_run(monkeypatch, responses=responses)
@@ -463,7 +493,7 @@ def test_cli_upgrade_parses_nothing_to_upgrade_as_noop(
 def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -488,14 +518,17 @@ def test_cli_upgrade_wrap_failure_surfaces_upgrade_error(
 def test_cli_upgrade_post_verify_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
     responses = [
         subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="Installed setforge==0.3.0\n", stderr=""
+            args=[],
+            returncode=0,
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
+            stderr="",
         ),
         subprocess.CompletedProcess(
             args=[], returncode=0, stdout="setforge 0.2.0\n", stderr=""
@@ -535,7 +568,7 @@ def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_radiolist(
     """Non-TTY + no ``--no-prompt`` must raise before any radiolist opens."""
     from setforge.errors import ConfirmRequiresInteractive
 
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -560,7 +593,7 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``--no-prompt`` on a non-TTY auto-applies (``yes=True``) and proceeds."""
-    _patch_pypi(monkeypatch, version="0.3.0")
+    _patch_pypi(monkeypatch, version=_NEXT_VERSION)
     _patch_notes(monkeypatch, notes="- body")
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -572,13 +605,13 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
         subprocess.CompletedProcess(
             args=["uv", "tool", "upgrade", "setforge"],
             returncode=0,
-            stdout="Installed setforge==0.3.0\n",
+            stdout=f"Installed setforge=={_NEXT_VERSION}\n",
             stderr="",
         ),
         subprocess.CompletedProcess(
             args=["uv", "tool", "list"],
             returncode=0,
-            stdout="setforge 0.3.0\n",
+            stdout=f"setforge {_NEXT_VERSION}\n",
             stderr="",
         ),
     ]
@@ -591,7 +624,7 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
     assert recorder.call_count == 0
     assert len(calls) == 2
     assert calls[0][1:] == ["tool", "upgrade", "setforge"]
-    assert "upgraded to 0.3.0" in result.output
+    assert f"upgraded to {_NEXT_VERSION}" in result.output
 
 
 # ---------------------------------------------------------------------------
