@@ -30,7 +30,7 @@ runtime relocation error. Resolution of structural dotted paths lives in
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -38,12 +38,18 @@ from setforge.anchors import Anchor
 from setforge.errors import ConfigError
 from setforge.section_mode import SectionMode
 
+if TYPE_CHECKING:
+    # Type-only: importing Disposition at runtime would cycle
+    # (setforge.config imports SpanEntry from this module).
+    from setforge.config import Disposition
+
 __all__ = [
     "OverlaySpanPayload",
     "SpanEntry",
     "SpanKind",
     "SpanSemantics",
     "is_heading_anchor",
+    "validate_span_disposition",
     "validate_spans_file_type",
 ]
 
@@ -248,6 +254,47 @@ class SpanEntry(BaseModel):
                 "(dotted-path) span anchors only"
             )
         return self
+
+
+def validate_span_disposition(
+    tracked_file_id: str,
+    spans: Sequence[SpanEntry],
+    disposition: "Disposition | None",
+) -> None:
+    """Raise :class:`ConfigError` if a PINNED/FORKED span has no disposition.
+
+    A ``pinned``/``forked`` span is consumed only on the disposition merge
+    path (:func:`setforge.disposition_merge.resolve_file` → span re-overlay).
+    On a ``disposition: None`` file the verbatim deploy
+    (:func:`setforge.deploy._verbatim_with_overlay`) processes ONLY ``overlay``
+    spans, so a pinned/forked span is silently ignored on deploy AND its region
+    is never excluded from capture — host-local content can then leak into
+    tracked under ``sync --auto=use-live``.
+
+    ``overlay`` spans are EXEMPT: they are the markerless host-local-body
+    mechanism and run on the ``disposition=None`` path. Any disposition
+    (``shared``/``forked``/``pinned``) routes the file through the merge path
+    where the span IS honored, so only a ``None`` disposition is rejected. Keys
+    strictly on ``disposition`` (the file's merge policy), never on a span's
+    ``semantics`` (an orthogonal axis: where the intent is declared).
+
+    Raises on the FIRST offending span (mirrors
+    :func:`validate_spans_file_type`); the caller annotates with the
+    tracked_file context.
+    """
+    if disposition is not None:
+        return
+    for span in spans:
+        if span.kind is SpanKind.OVERLAY:
+            continue
+        raise ConfigError(
+            f"tracked_file {tracked_file_id!r} declares a {span.kind.value!r} "
+            f"span (anchor {span.anchor!r}) but its disposition is None, so the "
+            "span is silently ignored on deploy and not excluded on capture "
+            "(host-local content can leak into tracked). Fix: set "
+            "'disposition: shared|forked|pinned' on the tracked_file, or use "
+            "'kind: overlay' for a host-local body that needs no disposition."
+        )
 
 
 def validate_spans_file_type(

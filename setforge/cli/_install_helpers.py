@@ -103,7 +103,12 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
-from setforge.spans import SpanEntry, SpanKind, validate_spans_file_type
+from setforge.spans import (
+    SpanEntry,
+    SpanKind,
+    validate_span_disposition,
+    validate_spans_file_type,
+)
 from setforge.spans_overlay import SpanOrphan
 
 
@@ -256,6 +261,9 @@ def _validate_span_file_types(
             continue
         src = resolve_src(tracked_file, repo_root)
         validate_spans_file_type(tf_id, tracked_file.spans, src)
+        # ``tracked_file`` here is the host-local-folded model (disposition +
+        # spans already merged via apply_host_local_tracked_file_overrides).
+        validate_span_disposition(tf_id, tracked_file.spans, tracked_file.disposition)
 
 
 def _reconcile_shared_spans(

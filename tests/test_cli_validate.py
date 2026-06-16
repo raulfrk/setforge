@@ -671,7 +671,42 @@ profiles:
 
 
 def test_validate_span_on_markdown_file_exits_0(tmp_path: Path) -> None:
-    """A span anchor on a markdown tracked_file passes the file-type gate."""
+    """A span anchor on a markdown tracked_file passes the file-type gate.
+
+    A disposition is required so the pinned span is actually consumed (see
+    ``validate_span_disposition``); the file-type gate is what's under test.
+    """
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.some-tracked_file
+    disposition: forked
+    spans:
+      - anchor: "## My Tweaks"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## My Tweaks\n\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+
+
+def test_validate_pinned_span_without_disposition_exits_1(tmp_path: Path) -> None:
+    """A pinned/forked span on a tracked_file with no disposition is rejected.
+
+    Such a span is silently ignored on the disposition=None deploy path
+    (``_verbatim_with_overlay`` processes only OVERLAY spans) and is not
+    excluded on capture, so host-local content can leak into tracked. The
+    offline gate must name the tracked_file + anchor and refuse.
+    """
     span_yaml = """\
 version: 1
 tracked_files:
@@ -691,7 +726,95 @@ profiles:
         "## My Tweaks\n\nbody\n", encoding="utf-8"
     )
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "disposition" in result.output
+    assert "'d'" in result.output
+    assert "## My Tweaks" in result.output
+
+
+def test_validate_pinned_span_with_pinned_disposition_exits_0(tmp_path: Path) -> None:
+    """``disposition: pinned`` satisfies the guard — only ``None`` is the leak
+    path, and rejecting ``pinned`` would break authored configs."""
+    span_yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.some-tracked_file
+    disposition: pinned
+    spans:
+      - anchor: "## My Tweaks"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+    cfg = _write_config(tmp_path, span_yaml, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## My Tweaks\n\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
+
+
+_PINNED_NO_DISP_YAML = """\
+version: 1
+tracked_files:
+  d:
+    src: note.md
+    dst: ~/.some-tracked_file
+    spans:
+      - anchor: "## My Tweaks"
+        kind: pinned
+        semantics: shared
+profiles:
+  p:
+    tracked_files: [d]
+"""
+
+
+def test_validate_localyaml_disposition_override_satisfies_guard(
+    tmp_path: Path,
+) -> None:
+    """A pinned span with no tracked-side disposition validates when local.yaml
+    supplies one — the guard reads the local.yaml-FOLDED disposition (the
+    migration puts a host-local pinned span / its disposition in separate
+    files, so the merged view must be used)."""
+    cfg = _write_config(tmp_path, _PINNED_NO_DISP_YAML, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## My Tweaks\n\nbody\n", encoding="utf-8"
+    )
+    (tmp_path / "local.yaml").write_text(
+        "tracked_files:\n  d:\n    disposition: forked\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+
+
+def test_install_aborts_on_pinned_span_without_disposition(tmp_path: Path) -> None:
+    """The guard fires at install pre-flight too, not just validate."""
+    cfg = _write_config(tmp_path, _PINNED_NO_DISP_YAML, create_src=False)
+    (tmp_path / "tracked" / "note.md").write_text(
+        "## My Tweaks\n\nbody\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=p",
+            f"--config={cfg}",
+            "--no-git-check",
+            "--no-secrets-scan",
+            "--yes",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    # ConfigError is raised at pre-flight (same path as validate_spans_file_type),
+    # surfaced via the exception rather than printed to stdout.
+    combined = result.output + str(result.exception or "")
+    assert "disposition is None" in combined
+    assert "'d'" in combined
 
 
 # ---------------------------------------------------------------------------

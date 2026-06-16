@@ -76,6 +76,7 @@ from setforge.spans import (
     SpanEntry,
     SpanKind,
     is_heading_anchor,
+    validate_span_disposition,
     validate_spans_file_type,
 )
 from setforge.structural_merge import (
@@ -457,8 +458,17 @@ def _check_spans_file_types(
         if not spans:
             continue
         src = resolve_src(tracked_file, repo_root)
+        # Fold the local.yaml disposition override the same way the spans are
+        # folded (cfg is not mutated here — validate --all reuses one Config).
+        overlay = overlays.get(tf_id)
+        disposition = (
+            overlay.disposition
+            if overlay is not None and overlay.disposition is not None
+            else tracked_file.disposition
+        )
         try:
             validate_spans_file_type(tf_id, spans, src)
+            validate_span_disposition(tf_id, spans, disposition)
             if is_structural(src):
                 validate_structural_spans(list(spans))
         except ConfigError as exc:

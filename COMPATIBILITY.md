@@ -160,3 +160,26 @@ The unknown-id `validate` failure is a tightening of `validate`'s **diagnostic
 strictness only** — it does not change any deploy/capture behavior or any
 `schema_version`. A `local.yaml` that previously passed `validate` with a typo'd
 overlay `id` now fails it; fix the `id` or remove the entry.
+
+## `validate` / `install` span-disposition diagnostics
+
+A `pinned`/`forked` span is consumed only on the disposition merge path. On a
+tracked_file with **no `disposition`**, the verbatim deploy processes only
+`overlay` spans, so a `pinned`/`forked` span is **silently ignored on deploy and
+not excluded on capture** (host-local content can leak into tracked). To turn
+that silent no-op into a fast failure:
+
+- `setforge validate` **exits 1**, and `setforge install` **refuses at
+  pre-flight**, when a `pinned`/`forked` span is declared on a tracked_file whose
+  (local.yaml-folded) `disposition` is `None`. The message names the
+  tracked_file, the span anchor, and the fix: set
+  `disposition: shared|forked|pinned`, or use `kind: overlay` for a host-local
+  body that needs no disposition. `overlay` spans are exempt; `disposition:
+  pinned` is accepted (only `None` is the leak path).
+
+Like the orphan-overlay case above, this is a tightening of **diagnostic
+strictness only** — no deploy/capture behavior changes and no `schema_version`
+bump. A config that previously passed but did nothing (the span was ignored) now
+fails; add a `disposition` or switch the span to `kind: overlay`. The schema-2.0
+migration already pairs every emitted `pinned`/`forked` span with a disposition,
+so migrated configs are unaffected.
