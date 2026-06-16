@@ -31,6 +31,18 @@ from setforge.migrations import (
 _LOCAL_YAML_RELPARTS = (".config", "setforge", "local.yaml")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the transition log into the test's tmp dir.
+
+    ``migrate --apply`` writes a real transition via ``transitions_root()`` →
+    ``Path.home()``; pinning ``SETFORGE_STATE_DIR`` keeps the record in a
+    per-test tmp tree independent of the autouse HOME-isolation fixture
+    (belt-and-suspenders — the HOME fixture alone is a single point of failure).
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+
+
 def _local_yaml(roots: MigrationRoots) -> Path:
     path = roots.home
     for part in _LOCAL_YAML_RELPARTS:

@@ -62,6 +62,11 @@ def _invoke_apply(repo: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     home = repo.parent / "home"
     home.mkdir()
     monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
+    # ``migrate --apply`` writes a real transition via transitions_root() →
+    # Path.home(); pin SETFORGE_STATE_DIR so the record lands in a per-test
+    # tmp tree independent of the autouse HOME-isolation fixture (belt-and-
+    # suspenders — the HOME fixture alone is a single point of failure).
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(repo.parent / "state"))
     monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
     cfg = repo / "setforge.yaml"
     runner = CliRunner()
