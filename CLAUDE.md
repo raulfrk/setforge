@@ -1,6 +1,6 @@
 # setforge
 
-Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `setforge.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the engine/config split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (private).
+Tracked-file + VSCode-extension + Claude-plugin orchestration CLI. The engine repo (this one) ships the `setforge` tool; the user's personal config (a `setforge.yaml` + `tracked/` tree) lives in a SEPARATE config repo per the engine/config split. The config repo is discovered via the source-layer (CLI `--source` > `SETFORGE_SOURCE` env > `~/.config/setforge/local.yaml` `source:` block > CWD fallback). The author's personal config now lives at `raulfrk/setforge-config` (public).
 
 ## The meta-twist: live vs tracked
 
