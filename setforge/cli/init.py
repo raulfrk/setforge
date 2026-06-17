@@ -605,13 +605,10 @@ def _print_completion_report(
     console.print("=== init complete ===")
     if source_spec.choice is SourceChoice.SKIP:
         console.print(
-            "  next steps: edit local.yaml source: block; "
-            "setforge validate --list-profiles;"
+            "  next steps: edit local.yaml source: block; setforge profile list;"
         )
     else:
-        console.print(
-            "  next steps: setforge validate --list-profiles; (source: pre-configured)"
-        )
+        console.print("  next steps: setforge profile list; (source: pre-configured)")
     console.print("              setforge install --profile=<name> --dry-run")
     console.print(
         "  to undo: rm -rf ~/.config/setforge ~/.local/share/setforge/host-local"
