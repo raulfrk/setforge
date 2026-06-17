@@ -305,13 +305,13 @@ def test_e2e_docker_install_local_clone_cache_miss_points_to_sync_cache(
 # ---------------------------------------------------------------------------
 # (5) local-clone, github SHORTHAND marketplace → bare `owner/repo` is
 #     expanded to a full https://github.com/owner/repo URL before cloning.
-#     The m97t regression guard. Network-free via a git `insteadOf` rewrite.
+#     The shorthand-expansion regression guard. Network-free via insteadOf.
 # ---------------------------------------------------------------------------
 
 # A github-backed marketplace whose `repo` is a real `owner/repo` SHORTHAND
 # (NOT a local path) — the shape the author's real config uses. Cases 1-4 fake
 # github with a local bare-repo path, which `git clone` accepts verbatim and so
-# never exercised the shorthand→URL expansion that m97t fixes.
+# never exercised the shorthand→URL expansion this case guards.
 _SHORTHAND_REPO = "testorg/testmp"
 _SHORTHAND_BASENAME = "testmp"
 _SHORTHAND_CACHE_DIR = (
@@ -349,7 +349,7 @@ def _rewrite_github_url_to_local(
     forcing the real code path: setforge must build the full
     ``https://github.com/<shorthand>`` URL for the rewrite to match. The
     pre-fix code passed the bare ``<shorthand>`` verbatim, which does NOT match
-    this rewrite and fails — so this test passes ONLY with the m97t fix.
+    this rewrite and fails — so this test passes ONLY with the URL-expansion fix.
     """
     c.exec(
         [
@@ -368,7 +368,7 @@ def test_e2e_docker_sync_cache_expands_github_shorthand_to_url(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """A bare ``owner/repo`` shorthand is expanded to a full HTTPS URL before
-    cloning — the m97t regression guard.
+    cloning — the shorthand-expansion regression guard.
 
     Real git rejects a bare ``owner/repo`` ("does not appear to be a git
     repository") even when online, because only ``claude`` / ``gh`` understand
@@ -388,7 +388,7 @@ def test_e2e_docker_sync_cache_expands_github_shorthand_to_url(
     # The clone succeeds ONLY because setforge expanded the bare shorthand to
     # `https://github.com/testorg/testmp`, which the insteadOf rewrite then
     # maps to the local bare repo. The pre-fix code passed the bare shorthand
-    # verbatim — no rewrite match — and would fail here. This is the m97t guard.
+    # verbatim — no rewrite match — and would fail here. This is the guard.
     assert res.returncode == 0, res.stdout + res.stderr
     combined = res.stdout + res.stderr
     assert "refreshed fixture-mp" in combined, combined

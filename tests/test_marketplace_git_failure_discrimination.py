@@ -1,4 +1,6 @@
-"""Three-way git-failure discrimination for marketplace clone/refresh.
+"""Git-failure discrimination for marketplace clone/refresh.
+
+Classifies into offline / repository-not-found / auth, with a generic fallback.
 
 Regression for the bug where every ``git clone`` / ``git fetch`` failure was
 labelled "likely offline" — so a renamed/moved/private marketplace repo
@@ -48,7 +50,7 @@ _WEIRD = "fatal: something nobody has ever seen before"
 @pytest.mark.parametrize(
     ("repo", "expected"),
     [
-        # bare owner/repo shorthand -> expanded (the m97t root-cause fix)
+        # bare owner/repo shorthand -> expanded (the root-cause fix)
         (
             "anthropics/claude-plugins-official",
             "https://github.com/anthropics/claude-plugins-official",
@@ -103,7 +105,7 @@ def test_clone_message_offline_does_not_misreport() -> None:
 
 def test_clone_message_repo_not_found_is_not_offline() -> None:
     msg = _marketplace_clone_failure_message("a/b", _REPO_NOT_FOUND)
-    # The whole point of m97t: a not-found repo must NOT be called offline.
+    # The whole point of the fix: a not-found repo must NOT be called offline.
     assert "offline" not in msg.lower()
     assert "not found" in msg.lower()
     assert "setforge.yaml" in msg  # remediation points at the repo URL

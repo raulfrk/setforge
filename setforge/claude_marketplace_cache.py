@@ -293,7 +293,10 @@ def _github_clone_url(repo: str) -> str:
     ``scp``-style ``git@host:owner/repo``, or a filesystem path) is returned
     unchanged, so full URLs, SSH remotes, and local-bare-repo test fixtures
     keep working. Only a bare ``owner/repo`` gets the ``https://github.com/``
-    prefix.
+    prefix. Detection assumes a github ``owner/repo`` or a fully-qualified
+    remote — a user-less scp shorthand (``host:owner/repo``) is NOT recognised,
+    but a GITHUB-kind ``MarketplaceSource.repo`` is ``owner/repo`` by contract,
+    so that shape never reaches here.
     """
     if (
         "://" in repo
@@ -368,11 +371,13 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
 
     Network is required. Resolves ``git`` via :func:`_resolve_git_or_raise`
-    (raises :class:`MarketplaceCacheMiss` when missing). Argv carries the
-    ``--`` separator before ``source.repo`` per CRITICAL-2 (flag-injection
-    defense). On non-zero / timeout ``git clone`` exit, raises
-    :class:`MarketplaceCacheMiss` with the spec-locked remediation
-    message ("...likely offline; run sync-cache while online first").
+    (raises :class:`MarketplaceCacheMiss` when missing). A bare ``owner/repo``
+    shorthand is expanded to a full HTTPS URL via :func:`_github_clone_url`
+    before cloning; argv carries the ``--`` separator before that URL per
+    CRITICAL-2 (flag-injection defense). On non-zero / timeout ``git clone``
+    exit, raises :class:`MarketplaceCacheMiss` with a category-aware
+    remediation built by :func:`_marketplace_clone_failure_message`
+    (offline / repository-not-found / auth / generic).
     """
     git = _resolve_git_or_raise()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
