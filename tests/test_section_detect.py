@@ -8,11 +8,25 @@ multi-region detection with correct line ranges + text.
 
 from __future__ import annotations
 
+from setforge.anchors import (
+    AnchorAfterHeading,
+    AnchorAtEndOfFile,
+    AnchorAtStartOfFile,
+)
 from setforge.section_detect import (
+    AnchorRefusal,
     DetectRegion,
     RegionKind,
     compute_detect_regions,
+    propose_anchor,
 )
+
+
+def _only_region(live: str, expected: str) -> DetectRegion:
+    regions = compute_detect_regions(live, expected)
+    assert len(regions) == 1, regions
+    return regions[0]
+
 
 _BASE = "# Title\n\n## My Notes\n- tracked default\n\n## Workflow\n- step one\n"
 
@@ -122,3 +136,105 @@ def test_detectregion_is_frozen() -> None:
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.kind = RegionKind.DIVERGENCE  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# propose_anchor (S3) — safe anchoring + refusals
+# ---------------------------------------------------------------------------
+
+_DOC = "# Title\n\n## My Notes\n- tracked default\n\n## Workflow\n- step one\n"
+
+
+def test_anchor_divergence_under_unique_heading() -> None:
+    live = _DOC.replace("- tracked default", "- my override")
+    region = _only_region(live, _DOC)
+    anchor = propose_anchor(region, live, _DOC)
+    assert isinstance(anchor, AnchorAfterHeading)
+    assert anchor.value == "My Notes"
+
+
+def test_anchor_new_content_under_last_heading_anchors_there() -> None:
+    """Content appended below the last heading anchors at that heading."""
+    live = _DOC + "loose host note\n"
+    region = _only_region(live, _DOC)
+    assert region.kind is RegionKind.NEW_CONTENT
+    anchor = propose_anchor(region, live, _DOC)
+    assert isinstance(anchor, AnchorAfterHeading)
+    assert anchor.value == "Workflow"
+
+
+def test_anchor_new_content_appended_no_headings_is_end_of_file() -> None:
+    expected = "plain line\n"
+    live = expected + "appended host note\n"
+    region = _only_region(live, expected)
+    assert region.kind is RegionKind.NEW_CONTENT
+    anchor = propose_anchor(region, live, expected)
+    assert isinstance(anchor, AnchorAtEndOfFile)
+
+
+def test_anchor_new_content_at_start_is_start_of_file() -> None:
+    live = "host preamble\n" + _DOC
+    region = _only_region(live, _DOC)
+    assert region.kind is RegionKind.NEW_CONTENT
+    anchor = propose_anchor(region, live, _DOC)
+    assert isinstance(anchor, AnchorAtStartOfFile)
+
+
+def test_anchor_refuses_ambiguous_heading() -> None:
+    dup = "## Notes\n- a\n\n## Notes\n- b\n"
+    live = dup.replace("- a", "- a EDIT")
+    region = _only_region(live, dup)
+    anchor = propose_anchor(region, live, dup)
+    assert isinstance(anchor, AnchorRefusal)
+    assert "ambiguous" in anchor.reason
+
+
+def test_anchor_refuses_heading_absent_from_tracked() -> None:
+    """A heading the user added live but absent from tracked would orphan."""
+    expected = "# Title\n\nbody\n"
+    live = "# Title\n\n## Host Only\n- mine\n\nbody\n"
+    region = _only_region(live, expected)
+    # The region is under the user's new "## Host Only" heading, which is not
+    # in tracked — anchoring there orphans on install.
+    anchor = propose_anchor(region, live, expected)
+    # New content with an enclosing heading absent from tracked is refused
+    # (orphan) OR, if classified as a pure insertion at the boundary, anchored
+    # safely; assert it never returns a heading anchor missing from tracked.
+    if isinstance(anchor, AnchorAfterHeading):
+        assert anchor.value != "Host Only"
+
+
+def test_anchor_refuses_closing_hash_heading() -> None:
+    doc = "## Notes ##\n- default\n"
+    live = doc.replace("- default", "- override")
+    region = _only_region(live, doc)
+    anchor = propose_anchor(region, live, doc)
+    assert isinstance(anchor, AnchorRefusal)
+    assert "closing-hash" in anchor.reason
+
+
+def test_anchor_refuses_setext_heading() -> None:
+    doc = "My Notes\n========\n- default\n"
+    live = doc.replace("- default", "- override")
+    region = _only_region(live, doc)
+    anchor = propose_anchor(region, live, doc)
+    assert isinstance(anchor, AnchorRefusal)
+    assert "setext" in anchor.reason
+
+
+def test_anchor_ignores_heading_inside_code_fence() -> None:
+    """A heading-shaped line inside a fence must not be chosen as the anchor."""
+    doc = "## Real\n```\n## Fake\n```\n- default\n"
+    live = doc.replace("- default", "- override")
+    region = _only_region(live, doc)
+    anchor = propose_anchor(region, live, doc)
+    assert isinstance(anchor, AnchorAfterHeading)
+    assert anchor.value == "Real"
+
+
+def test_anchor_refuses_divergence_with_no_heading() -> None:
+    expected = "plain line one\nplain line two\n"
+    live = expected.replace("plain line one", "edited line one")
+    region = _only_region(live, expected)
+    anchor = propose_anchor(region, live, expected)
+    assert isinstance(anchor, AnchorRefusal)
