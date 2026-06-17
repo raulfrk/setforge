@@ -22,6 +22,10 @@ from pathlib import Path
 from rich.console import Console
 
 from setforge import deploy, spans_store
+from setforge.cli._install_helpers import (
+    _load_validated_host_local_sections,
+    _plan_disposition_base,
+)
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import Config, TrackedFile, load_config, resolve_profile
 from setforge.section_detect import compute_detect_regions
@@ -64,40 +68,28 @@ def _markdown_targets(
     return out
 
 
-def _load_host_local_overlay(
-    profile: str, file_id: str
-) -> dict[HostLocalSectionName, HostLocalSection] | None:
-    """Validated ``local.yaml`` ``host_local_sections`` overlay for ``file_id``.
-
-    Stubbed for the command skeleton (Task 1); wired to the install/compare
-    loader in Task 2.
-    """
-    return None
-
-
-def _expected_base_text(profile: str, target: DetectTarget) -> str | None:
-    """Disposition base (merge ancestor) for ``target``, or ``None``.
-
-    Stubbed for the command skeleton (Task 1); wired to the install planner in
-    Task 2.
-    """
-    return None
-
-
-def expected_deploy_text(profile: str, target: DetectTarget) -> str:
+def expected_deploy_text(
+    profile: str,
+    target: DetectTarget,
+    host_local: dict[HostLocalSectionName, HostLocalSection] | None,
+) -> str:
     """Return the **live-independent** expected deploy output for ``target``.
 
-    ``live_text=""`` is the load-bearing choice: it stops the disposition 3-way
-    merge from absorbing the user's live hand-edits, so
-    :func:`compute_detect_regions` surfaces them as drift. For the
-    ``disposition=None`` markerless path the content is the tracked source with
-    its overlay bodies injected — already live-independent.
+    ``live_text=""`` is the load-bearing choice (plan P1): it stops the
+    disposition 3-way merge from absorbing the user's live hand-edits, so
+    :func:`compute_detect_regions` surfaces them as drift rather than silently
+    folding them into ``expected``. For the ``disposition=None`` markerless path
+    the content is the tracked source with its overlay bodies injected — already
+    live-independent. ``host_local`` is the per-file overlay map (loaded once by
+    the caller, mirroring install/compare); ``None`` when the file declares no
+    host-local section.
     """
     tf = target.tracked_file
     file_spans = tf.spans or []
     states = spans_store.get_states(profile, target.name) if file_spans else {}
-    host_local = _load_host_local_overlay(profile, target.name)
-    base_text = _expected_base_text(profile, target)
+    base_text: str | None = None
+    if tf.disposition is not None:
+        base_text = _plan_disposition_base(profile, target.name, target.dst).base_text
     resolved = deploy.resolve_deploy(
         target.src,
         target.dst,
@@ -116,6 +108,8 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
     """Top-level ``section detect`` entry point (skeleton — wizard lands in Task 5)."""
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
+    resolved = resolve_profile(cfg, profile)
+    overlay_map = _load_validated_host_local_sections(cfg, resolved, repo_root)
     console = Console()
     targets = _markdown_targets(cfg, profile, repo_root, tracked_file)
     any_drift = False
@@ -123,7 +117,7 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
         if not target.dst.exists():
             continue
         live = target.dst.read_text(encoding="utf-8")
-        expected = expected_deploy_text(profile, target)
+        expected = expected_deploy_text(profile, target, overlay_map.get(target.name))
         regions = compute_detect_regions(live, expected)
         if not regions:
             continue
