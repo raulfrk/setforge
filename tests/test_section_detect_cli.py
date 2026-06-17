@@ -79,9 +79,9 @@ def test_expected_matches_deploy_then_edit_surfaces() -> None:
     assert "Hand-written host note" in regions[0].live_text
 
 
-def test_disposition_file_expected_is_live_independent() -> None:
-    """For a disposition file, ``live_text=""`` keeps expected pristine so a
-    live divergence still surfaces (plan P1/P3 — the pinned-carve target)."""
+def test_disposition_file_expected_matches_deploy() -> None:
+    """For a disposition file, expected is the deploy output (plan P1/P3 — the
+    pinned-carve target); a divergence from it surfaces as a region."""
     from setforge.cli import _detect_helpers as dh
     from setforge.config import load_config
     from setforge.section_detect import compute_detect_regions

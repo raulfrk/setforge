@@ -29,7 +29,13 @@ from setforge.cli._install_helpers import (
     _plan_disposition_base,
 )
 from setforge.compare import resolve_dst, resolve_src
-from setforge.config import Config, TrackedFile, load_config, resolve_profile
+from setforge.config import (
+    Config,
+    TrackedFile,
+    apply_host_local_tracked_file_overrides,
+    load_config,
+    resolve_profile,
+)
 from setforge.host_local_inject import _normalise_eol
 from setforge.markdown_spans import _scan_headings
 from setforge.overlay_deploy import _state_from_injection
@@ -92,16 +98,19 @@ def expected_deploy_text(
     target: DetectTarget,
     host_local: dict[HostLocalSectionName, HostLocalSection] | None,
 ) -> str:
-    """Return the **live-independent** expected deploy output for ``target``.
+    """Return the expected deploy output for ``target`` — what ``install`` would
+    actually write right now (plan P1).
 
-    ``live_text=""`` is the load-bearing choice (plan P1): it stops the
-    disposition 3-way merge from absorbing the user's live hand-edits, so
-    :func:`compute_detect_regions` surfaces them as drift rather than silently
-    folding them into ``expected``. For the ``disposition=None`` markerless path
-    the content is the tracked source with its overlay bodies injected — already
-    live-independent. ``host_local`` is the per-file overlay map (loaded once by
-    the caller, mirroring install/compare); ``None`` when the file declares no
-    host-local section.
+    Computed from the REAL on-disk live (``live_text`` left at its default so
+    :func:`deploy.resolve_deploy` reads ``dst``), so the diff in
+    :func:`compute_detect_regions` surfaces exactly the live edits install would
+    CLOBBER (the ones worth carving) and NOT the ones it already preserves —
+    a carved overlay/pinned/forked region deploys back to itself, so it does not
+    re-surface (idempotency). For a ``disposition=None`` markerless file the
+    content is the tracked source with its overlay bodies injected, independent
+    of live either way. ``host_local`` is the per-file overlay map (loaded once
+    by the caller, mirroring install/compare); ``None`` when the file declares
+    no host-local section.
     """
     tf = target.tracked_file
     file_spans = tf.spans or []
@@ -118,7 +127,6 @@ def expected_deploy_text(
         base_text=base_text,
         spans=file_spans or None,
         span_states=states or None,
-        live_text="",
     )
     return resolved.content
 
@@ -432,6 +440,11 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_profile(cfg, profile)
+    # Fold local.yaml host-local overlay spans onto tracked_file.spans so the
+    # expected-deploy computation injects them markerless exactly as install
+    # does (mirrors compare; without this an already-carved overlay would
+    # re-surface as drift on every re-detect).
+    apply_host_local_tracked_file_overrides(cfg)
     overlay_map = _load_validated_host_local_sections(cfg, resolved, repo_root)
     console = Console()
     targets = _markdown_targets(cfg, profile, repo_root, tracked_file)
