@@ -1,4 +1,4 @@
-"""Unit tests for the exact-position OVERLAY anchor (setforge-b300).
+"""Unit tests for the exact-position OVERLAY anchor.
 
 Regression coverage for the bug where carved host-local content relocated to
 just under its enclosing heading instead of staying where it was hand-typed.
@@ -44,7 +44,7 @@ _MULTI = "# Title\n\n## A\na1\na2\na3\n\n## B\nb1\n"
 
 def test_mid_section_insert_relands_where_typed() -> None:
     """Content typed between a1 and a2 re-lands between a1 and a2 — not under
-    the heading (the core b300 regression)."""
+    the heading (the core anchor-positioning regression)."""
     live = "# Title\n\n## A\na1\nHOST NOTE\na2\na3\n\n## B\nb1\n"
     region = _only_region(live, _MULTI)
     assert region.kind is RegionKind.NEW_CONTENT

@@ -157,7 +157,7 @@ def test_anchor_divergence_under_unique_heading() -> None:
 def test_anchor_new_content_below_section_content_is_in_section() -> None:
     """Content appended below a section's existing content gets an exact
     in-section anchor (preceding line + offset), not just the heading — so it
-    re-lands where typed instead of jumping under the heading (setforge-b300)."""
+    re-lands where typed instead of jumping under the heading."""
     live = _DOC + "loose host note\n"
     region = _only_region(live, _DOC)
     assert region.kind is RegionKind.NEW_CONTENT

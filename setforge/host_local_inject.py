@@ -214,8 +214,9 @@ def _resolve_in_section(text: str, anchor: AnchorInSection) -> tuple[int, bool]:
 
     1. **preceding line** — when ``after_line`` is recorded and matches a
        UNIQUE line in the section, splice immediately after it (exact).
-    2. **offset** — else ``hl + 1 + offset`` when it lands within the section
-       (exact-ish; survives text edits but not line insert/delete above).
+    2. **offset** — else ``hl + 1 + offset`` when it lands within or at the end
+       boundary of the section (exact-ish; survives text edits but not line
+       insert/delete above).
     3. **end-of-section fallback** — else the section's end line, with
        ``fell_back=True`` so the caller (deploy) can warn the user.
 

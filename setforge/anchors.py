@@ -108,7 +108,7 @@ class AnchorInSection(BaseModel):
     ``after_line`` is the nearest preceding NON-BLANK content line (LF-stripped)
     and is the primary, text-stable splice point; ``offset`` (lines below the
     heading) is the secondary resolver used when ``after_line`` is absent or no
-    longer unique. When BOTH fail but the heading still resolves, the body
+    longer uniquely present. When BOTH fail but the heading still resolves, the body
     degrades to the end of the section (the resolver signals this so deploy can
     warn). See :func:`setforge.host_local_inject._resolve_in_section`.
     """

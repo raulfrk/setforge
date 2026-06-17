@@ -254,7 +254,7 @@ def test_detect_overlay_position_preserved(
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
     """A host note typed in the MIDDLE of a section re-deploys in the middle —
-    not relocated to just under the heading (setforge-b300).
+    not relocated to just under the heading.
 
     Unlike ``test_detect_overlay_carve_roundtrip`` (presence-only, appended at
     EOF), this asserts POSITION on a multi-section file: the body must land

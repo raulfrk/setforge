@@ -10,7 +10,7 @@ The unified span model represents the same intent as an OVERLAY ``spans`` entry:
           - anchor: <name>           # the span IDENTITY (the legacy section name)
             kind: overlay
             semantics: host-local
-            anchor: <structured>     # the 5-kind splice point, copied verbatim
+            anchor: <structured>     # the structured splice point, copied verbatim
             body: ...                # (or body_file:) copied verbatim
 
 This module performs the ON-DISK rewrite so the canonical representation matches

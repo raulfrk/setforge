@@ -226,7 +226,7 @@ tracked_files:
     disposition: shared
   # Multi-section markdown (no disposition → markerless OVERLAY path) used to
   # prove an in-section overlay body re-deploys at its TYPED position, not just
-  # under the enclosing heading (setforge-b300 anchor-positioning regression).
+  # under the enclosing heading (the anchor-positioning regression).
   section_position_md:
     src: section-position/multi.md
     dst: ~/.setforge_e2e/section-position/multi.md
@@ -448,7 +448,7 @@ profiles:
     tracked_files:
       - spans_overlay_md
 
-  # ---- In-section anchor positioning (setforge-b300) -------------------
+  # ---- In-section anchor positioning -----------------------------------
   # Multi-section markdown for the position-asserting overlay round-trip:
   # a host note typed in the MIDDLE of a section must re-deploy in the
   # middle, not relocate to just under the heading.
