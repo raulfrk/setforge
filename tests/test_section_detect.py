@@ -12,6 +12,7 @@ from setforge.anchors import (
     AnchorAfterHeading,
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
+    AnchorInSection,
 )
 from setforge.section_detect import (
     AnchorRefusal,
@@ -153,14 +154,17 @@ def test_anchor_divergence_under_unique_heading() -> None:
     assert anchor.value == "My Notes"
 
 
-def test_anchor_new_content_under_last_heading_anchors_there() -> None:
-    """Content appended below the last heading anchors at that heading."""
+def test_anchor_new_content_below_section_content_is_in_section() -> None:
+    """Content appended below a section's existing content gets an exact
+    in-section anchor (preceding line + offset), not just the heading — so it
+    re-lands where typed instead of jumping under the heading (setforge-b300)."""
     live = _DOC + "loose host note\n"
     region = _only_region(live, _DOC)
     assert region.kind is RegionKind.NEW_CONTENT
     anchor = propose_anchor(region, live, _DOC)
-    assert isinstance(anchor, AnchorAfterHeading)
-    assert anchor.value == "Workflow"
+    assert isinstance(anchor, AnchorInSection)
+    assert anchor.heading == "Workflow"
+    assert anchor.after_line == "- step one"
 
 
 def test_anchor_new_content_appended_no_headings_is_end_of_file() -> None:

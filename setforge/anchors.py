@@ -1,10 +1,10 @@
-"""Leaf anchor model: the 5-kind markdown splice-point discriminated union.
+"""Leaf anchor model: the 6-kind markdown splice-point discriminated union.
 
 An :data:`Anchor` names WHERE a host-local body / section is spliced into a
-markdown tracked file at install time. The five shapes — ``after-heading``,
+markdown tracked file at install time. The six shapes — ``after-heading``,
 ``before-heading``, ``at-start-of-file``, ``at-end-of-file``,
-``after-section`` — are matched byte-exact (no slugify / case-fold) by the
-inject engine (:mod:`setforge.host_local_inject`).
+``after-section``, ``in-section`` — are matched byte-exact (no slugify /
+case-fold) by the inject engine (:mod:`setforge.host_local_inject`).
 
 This module is a LEAF: it imports nothing from setforge beyond the Pydantic
 primitives, so both :mod:`setforge.source` (the host-local overlay loader)
@@ -27,6 +27,7 @@ __all__ = [
     "AnchorAtEndOfFile",
     "AnchorAtStartOfFile",
     "AnchorBeforeHeading",
+    "AnchorInSection",
     "AnchorKind",
 ]
 
@@ -36,12 +37,14 @@ _STRICT = ConfigDict(extra="forbid")
 class AnchorKind(StrEnum):
     """Closed set of anchor-kind discriminator values.
 
-    Five anchor shapes for splicing a host-local body into a markdown
+    Six anchor shapes for splicing a host-local body into a markdown
     tracked file at install time. ``after-heading`` / ``before-heading``
     match exact heading text (byte-equal — no case-fold, no
     slug-normalise). ``at-start-of-file`` / ``at-end-of-file`` splice at the
     document boundaries. ``after-section`` references an existing
-    user-section in the SAME tracked file by name.
+    user-section in the SAME tracked file by name. ``in-section`` records an
+    EXACT position within a heading's section (preceding line + offset) so
+    host-local content re-lands where it was typed, not just under the heading.
     """
 
     AFTER_HEADING = "after-heading"
@@ -49,6 +52,7 @@ class AnchorKind(StrEnum):
     AT_START_OF_FILE = "at-start-of-file"
     AT_END_OF_FILE = "at-end-of-file"
     AFTER_SECTION = "after-section"
+    IN_SECTION = "in-section"
 
 
 class AnchorAfterHeading(BaseModel):
@@ -94,11 +98,36 @@ class AnchorAfterSection(BaseModel):
     name: str
 
 
+class AnchorInSection(BaseModel):
+    """Anchor for host-local content typed at a specific position WITHIN a
+    section, below the section's first content line.
+
+    Re-lands the body exactly where it was hand-typed rather than just under
+    the enclosing heading. ``heading`` / ``level`` identify the section (the
+    section spans from the heading to the next heading of level <= ``level``);
+    ``after_line`` is the nearest preceding NON-BLANK content line (LF-stripped)
+    and is the primary, text-stable splice point; ``offset`` (lines below the
+    heading) is the secondary resolver used when ``after_line`` is absent or no
+    longer unique. When BOTH fail but the heading still resolves, the body
+    degrades to the end of the section (the resolver signals this so deploy can
+    warn). See :func:`setforge.host_local_inject._resolve_in_section`.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal[AnchorKind.IN_SECTION] = AnchorKind.IN_SECTION
+    heading: str
+    level: int
+    after_line: str | None
+    offset: int
+
+
 Anchor = Annotated[
     AnchorAfterHeading
     | AnchorBeforeHeading
     | AnchorAtStartOfFile
     | AnchorAtEndOfFile
-    | AnchorAfterSection,
+    | AnchorAfterSection
+    | AnchorInSection,
     Field(discriminator="kind"),
 ]

@@ -41,6 +41,11 @@ _PINNED_TF = "host_local_md"
 _PINNED_LIVE = "/home/tester/.setforge_e2e/host-local/host.md"
 _PINNED_TRACKED = "/workspace/tests/fixtures/e2e/tracked/host-local/host.md"
 
+# IN-SECTION position target — a multi-section markdown (markerless overlay).
+_POS_PROFILE = "test-section-position"
+_POS_TF = "section_position_md"
+_POS_LIVE = "/home/tester/.setforge_e2e/section-position/multi.md"
+
 
 def _setforge(c: ContainerHandle, args: list[str]) -> tuple[int, str, str]:
     r = c.exec(["uv", "run", "setforge", *args], check=False)
@@ -239,5 +244,58 @@ def test_detect_overlay_recapture_roundtrip(
     _install(c, _OVERLAY_PROFILE, extra=["--auto=use-tracked", "--yes"])
     assert "OVERLAY BODY two" in c.read_text(_OVERLAY_LIVE)
     rc, out, err = _setforge(c, _detect(_OVERLAY_PROFILE, _OVERLAY_TF))
+    assert rc == 0, err or out
+    assert "no changes detected" in (out + err)
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_detect_overlay_position_preserved(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., PyteSession],
+) -> None:
+    """A host note typed in the MIDDLE of a section re-deploys in the middle —
+    not relocated to just under the heading (setforge-b300).
+
+    Unlike ``test_detect_overlay_carve_roundtrip`` (presence-only, appended at
+    EOF), this asserts POSITION on a multi-section file: the body must land
+    between the two Alpha content lines and stay inside section Alpha across
+    install. Under the old after-heading anchor it jumped to just below
+    ``## Alpha``, which this test would catch.
+    """
+    c = docker_container()
+    c.write_text(_LOCAL_YAML, _SOURCE_BLOCK)
+    _install(c, _POS_PROFILE)
+
+    live0 = c.read_text(_POS_LIVE)
+    assert "alpha line one" in live0
+    assert "alpha line two" in live0
+    # Insert a host note BETWEEN the two Alpha lines (mid-section, not EOF).
+    edited = live0.replace("alpha line one\n", "alpha line one\nMY MIDDLE NOTE\n")
+    c.write_text(_POS_LIVE, edited)
+
+    session = pyte_pty_session(
+        container=c.cid, cmd=_detect_cmd(_POS_PROFILE, _POS_TF), timeout=60.0
+    )
+    session.expect_in_display("[carve/extend/skip]", timeout=30.0)
+    session.send_keys("carve\r")
+    session.expect_in_display("name:", timeout=10.0)
+    session.send_keys("midnote\r")
+    session.expect_in_display("scope", timeout=10.0)
+    session.send_keys("host-local\r")
+    session.expect_in_display("wrote 1 span", timeout=20.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+
+    # install re-injects the overlay body from local.yaml.
+    _install(c, _POS_PROFILE, extra=["--auto=use-tracked", "--yes"])
+
+    lines = c.read_text(_POS_LIVE).splitlines()
+    note = lines.index("MY MIDDLE NOTE")
+    # POSITION assertions: between the two Alpha lines, inside section Alpha.
+    assert lines[note - 1] == "alpha line one"
+    assert lines[note + 1] == "alpha line two"
+    assert lines.index("## Alpha") < note < lines.index("## Beta")
+
+    # Re-detect is idempotent (the body round-trips byte-wise via its needle).
+    rc, out, err = _setforge(c, _detect(_POS_PROFILE, _POS_TF))
     assert rc == 0, err or out
     assert "no changes detected" in (out + err)

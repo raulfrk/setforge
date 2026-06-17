@@ -24,7 +24,9 @@ content" as "already deployed".
 from __future__ import annotations
 
 import hashlib
+import logging
 
+from setforge.anchors import AnchorInSection
 from setforge.overlay_inject import (
     canonical_body,
     excise_unique_needle,
@@ -39,6 +41,8 @@ __all__ = [
     "inject_overlay_bodies",
     "overlay_spans",
 ]
+
+LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _CONTEXT_LINES = 3
 
@@ -188,6 +192,7 @@ def inject_overlay_bodies(
         body = canonical_overlay_body(span.overlay)
         bodies[span.anchor] = body
         line = _resolve_anchor_line(merged_text, span)
+        _warn_on_in_section_fallback(merged_text, span)
         ordered.append((line, span))
 
     text = merged_text
@@ -216,6 +221,32 @@ def _resolve_anchor_line(text: str, span: SpanEntry) -> int:
 
     assert span.overlay is not None
     return _resolve_anchor_lf(_normalise_eol(text), span.overlay.anchor)
+
+
+def _warn_on_in_section_fallback(text: str, span: SpanEntry) -> None:
+    """Warn when an in-section overlay loses its exact position and falls back.
+
+    An :class:`AnchorInSection` body re-lands at the end of its section (instead
+    of the typed position) when neither its preceding-line nor its offset
+    resolver matches the current tracked source — e.g. the surrounding content
+    was edited. The body still round-trips byte-for-byte via its needle; only
+    its placement drifted, so this is a warning, not an error. Non-in-section
+    anchors are silent.
+    """
+    from setforge.host_local_inject import _normalise_eol, _resolve_in_section
+
+    assert span.overlay is not None
+    anchor = span.overlay.anchor
+    if not isinstance(anchor, AnchorInSection):
+        return
+    _line, fell_back = _resolve_in_section(_normalise_eol(text), anchor)
+    if fell_back:
+        LOGGER.warning(
+            "overlay %r: exact position no longer resolves; placed at the end of "
+            "section %r. Re-run `setforge section detect` to re-anchor it.",
+            span.anchor,
+            anchor.heading,
+        )
 
 
 def _locate_injected_body(text: str, body: str, anchor_line: int) -> tuple[int, int]:

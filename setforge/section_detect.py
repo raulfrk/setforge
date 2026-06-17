@@ -28,9 +28,10 @@ from setforge.anchors import (
     AnchorAfterHeading,
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
+    AnchorInSection,
 )
 from setforge.host_local_inject import _normalise_eol
-from setforge.markdown_spans import _scan_headings
+from setforge.markdown_spans import _scan_end, _scan_headings
 
 __all__ = [
     "AnchorRefusal",
@@ -162,8 +163,12 @@ def propose_anchor(
     """Propose a safe markerless anchor for ``region``, or refuse.
 
     The anchor is the **immediately-enclosing ATX heading** (nearest preceding
-    heading of any level), as an :class:`AnchorAfterHeading`. New content with
-    no enclosing heading anchors at the file boundary
+    heading of any level). New content typed BELOW the section's first content
+    line is given an exact-position :class:`AnchorInSection` so it re-lands
+    where it was typed rather than just under the heading; content typed
+    directly under the heading keeps the degenerate :class:`AnchorAfterHeading`,
+    and a divergence is always re-anchored to the heading itself. New content
+    with no enclosing heading anchors at the file boundary
     (:class:`AnchorAtStartOfFile` / :class:`AnchorAtEndOfFile`). The proposal is
     refused (returns :class:`AnchorRefusal`) when the enclosing heading is
     ambiguous (appears more than once in live or in the tracked source), is a
@@ -202,8 +207,62 @@ def propose_anchor(
             "region modifies content with no enclosing heading to anchor to"
         )
 
-    _heading_line, level, heading_text = enclosing
-    return _validated_heading_anchor(level, heading_text, live_n, expected_n)
+    heading_line, level, heading_text = enclosing
+    heading_anchor = _validated_heading_anchor(level, heading_text, live_n, expected_n)
+    if isinstance(heading_anchor, AnchorRefusal):
+        return heading_anchor
+    if region.kind is not RegionKind.NEW_CONTENT:
+        # A divergence re-anchors to the heading itself (the pinned/forked path);
+        # exact intra-section placement only applies to pure insertions.
+        return heading_anchor
+    return _new_content_section_anchor(
+        region, live_lines, heading_line, level, heading_text, heading_anchor
+    )
+
+
+def _new_content_section_anchor(
+    region: DetectRegion,
+    live_lines: list[str],
+    heading_line: int,
+    level: int,
+    heading_text: str,
+    heading_anchor: Anchor,
+) -> Anchor:
+    """Choose between an exact :class:`AnchorInSection` and the degenerate
+    top-of-section :class:`AnchorAfterHeading` for a validated NEW_CONTENT region.
+
+    Walks back from the insertion point to the nearest preceding NON-BLANK line
+    WITHIN the heading's section. If there is none (only blanks between the
+    heading and the splice), the content is top-of-section → keep
+    ``heading_anchor`` (the well-tested after-heading path). Otherwise records:
+
+    * ``after_line`` — that preceding line, but only when it is UNIQUE within
+      the section (else ``None``; the offset carries the position);
+    * ``offset`` — lines from ``heading_line + 1`` to the splice point.
+
+    Offsets/uniqueness are computed in live coordinates, which coincide with the
+    expected-deploy coordinates the resolver sees: the section content above a
+    pure insertion is shared between live and expected, and the body sits at/below
+    the splice, so a live-unique preceding line is also expected-unique.
+    """
+    section_end = _scan_end("\n".join(live_lines), heading_line, level)
+    preceding_idx: int | None = None
+    for idx in range(region.live_start - 1, heading_line, -1):
+        if idx < section_end and live_lines[idx].strip():
+            preceding_idx = idx
+            break
+    if preceding_idx is None:
+        return heading_anchor
+    after_line = live_lines[preceding_idx]
+    occurrences = sum(
+        1 for j in range(heading_line + 1, section_end) if live_lines[j] == after_line
+    )
+    return AnchorInSection(
+        heading=heading_text,
+        level=level,
+        after_line=after_line if occurrences == 1 else None,
+        offset=region.live_start - (heading_line + 1),
+    )
 
 
 def _validated_heading_anchor(

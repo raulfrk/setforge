@@ -224,6 +224,12 @@ tracked_files:
     src: spans/note.md
     dst: ~/.setforge_e2e/spans/overlay.md
     disposition: shared
+  # Multi-section markdown (no disposition → markerless OVERLAY path) used to
+  # prove an in-section overlay body re-deploys at its TYPED position, not just
+  # under the enclosing heading (setforge-b300 anchor-positioning regression).
+  section_position_md:
+    src: section-position/multi.md
+    dst: ~/.setforge_e2e/section-position/multi.md
   # ---- Structural (yaml dotted-path) span fixtures -----------------------
   # A yaml tracked_file whose span anchors are DOTTED PATHS (mapping leaves),
   # not headings. The pinned path is re-asserted to live post-merge; the
@@ -441,6 +447,14 @@ profiles:
   test-spans-overlay:
     tracked_files:
       - spans_overlay_md
+
+  # ---- In-section anchor positioning (setforge-b300) -------------------
+  # Multi-section markdown for the position-asserting overlay round-trip:
+  # a host note typed in the MIDDLE of a section must re-deploy in the
+  # middle, not relocate to just under the heading.
+  test-section-position:
+    tracked_files:
+      - section_position_md
 
   # ---- override CLI journey ---------------------------------------------
   # A markdown + a yaml shared tracked_file, each with no declared spans, so

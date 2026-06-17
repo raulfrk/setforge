@@ -43,6 +43,7 @@ from setforge.anchors import (
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
+    AnchorInSection,
     AnchorKind,
 )
 from setforge.config import (
@@ -1034,6 +1035,7 @@ __all__ = [
     "AnchorAtEndOfFile",
     "AnchorAtStartOfFile",
     "AnchorBeforeHeading",
+    "AnchorInSection",
     "AnchorKind",
     "ExtensionOverlay",
     "GitSource",

@@ -51,6 +51,7 @@ from setforge.source import (
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
+    AnchorInSection,
     HostLocalSection,
     HostLocalSectionName,
 )
@@ -205,6 +206,54 @@ def _resolve_after_section(text: str, anchor: AnchorAfterSection) -> int:
     return matches[0]
 
 
+def _resolve_in_section(text: str, anchor: AnchorInSection) -> tuple[int, bool]:
+    """Resolve an in-section anchor to ``(line_offset, fell_back)``.
+
+    Precedence (all matching is fence-aware and scoped to the heading's
+    section, ``hl+1 .. section_end`` half-open):
+
+    1. **preceding line** — when ``after_line`` is recorded and matches a
+       UNIQUE line in the section, splice immediately after it (exact).
+    2. **offset** — else ``hl + 1 + offset`` when it lands within the section
+       (exact-ish; survives text edits but not line insert/delete above).
+    3. **end-of-section fallback** — else the section's end line, with
+       ``fell_back=True`` so the caller (deploy) can warn the user.
+
+    Raises :class:`AnchorNotFoundError` / :class:`AnchorAmbiguousError` when the
+    enclosing heading itself is gone / duplicated in the tracked source — the
+    same hard-fail the after-heading resolver gives (there is no section to
+    fall back into without the heading).
+
+    The section boundary + level-aware heading match are reused from
+    :mod:`setforge.markdown_spans` via a deferred import (that module imports
+    ``_FENCE_RE`` from here, so a module-level import would cycle).
+    """
+    from setforge.markdown_spans import _find_heading_lines, _scan_end
+
+    matches = _find_heading_lines(text, anchor.level, anchor.heading)
+    if not matches:
+        raise AnchorNotFoundError(
+            f"no heading matched anchor in-section {anchor.heading!r}"
+        )
+    if len(matches) > 1:
+        lines_1 = ", ".join(str(m + 1) for m in matches)
+        raise AnchorAmbiguousError(
+            f"anchor in-section {anchor.heading!r} matches multiple headings at "
+            f"lines {lines_1}; rename one or pick a more specific value"
+        )
+    hl = matches[0]
+    section_end = _scan_end(text, hl, anchor.level)
+    lines = text.splitlines()
+    if anchor.after_line is not None:
+        cands = [i for i in range(hl + 1, section_end) if lines[i] == anchor.after_line]
+        if len(cands) == 1:
+            return cands[0] + 1, False
+    candidate = hl + 1 + anchor.offset
+    if candidate <= section_end:
+        return candidate, False
+    return section_end, True
+
+
 def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
     """Dispatch the anchor match against ``text`` (assumed LF-normalised).
 
@@ -212,6 +261,11 @@ def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
     :func:`inject_host_local_section`) skip the redundant normalisation
     pass by calling this directly. The public :func:`resolve_anchor`
     wraps this with :func:`_normalise_eol`.
+
+    For an :class:`AnchorInSection` only the line offset is returned; the
+    fell-back flag is dropped here so every caller keeps the ``int`` contract.
+    The overlay deploy path calls :func:`_resolve_in_section` directly when it
+    needs the flag to emit a relocation warning.
     """
     match anchor:
         case AnchorAfterHeading():
@@ -224,8 +278,10 @@ def _resolve_anchor_lf(text: str, anchor: Anchor) -> int:
             return _resolve_at_end_of_file(text, anchor)
         case AnchorAfterSection():
             return _resolve_after_section(text, anchor)
+        case AnchorInSection():
+            return _resolve_in_section(text, anchor)[0]
         case _ as never:
-            # Exhaustiveness guard: adding a 6th anchor variant to the
+            # Exhaustiveness guard: adding a 7th anchor variant to the
             # discriminated union without extending this match fails at
             # type-check time (mypy / pyright surface ``never``'s
             # narrowed type as the unhandled variant).
