@@ -161,3 +161,114 @@ def test_pinned_anchor_reconstructs_hashes() -> None:
     # line 4 (0-indexed) is 'body changed'; enclosing heading is '## My Heading'.
     region = _divergence_region(live_start=4, live_end=5)
     assert dh.pinned_anchor_string(region, live) == "## My Heading"
+
+
+# --- Task 4: span construction + atomic carve writes --------------------------
+
+
+def test_build_overlay_span() -> None:
+    from setforge.anchors import AnchorAfterHeading
+    from setforge.cli import _detect_helpers as dh
+    from setforge.overlay_inject import canonical_body
+    from setforge.spans import SpanKind, SpanSemantics
+
+    plan = dh.CarvePlan(
+        kind="overlay",
+        name="vm-notes",
+        anchor=AnchorAfterHeading(value="My Notes"),
+        body="  - x\n",
+        semantics="host-local",
+    )
+    span = dh.build_span(plan)
+    assert span.kind is SpanKind.OVERLAY
+    assert span.semantics is SpanSemantics.HOST_LOCAL
+    assert span.anchor == "vm-notes"  # identity anchor = section name (dual-anchor)
+    assert span.overlay is not None
+    assert span.overlay.body == canonical_body("  - x\n")
+    assert span.overlay.anchor == AnchorAfterHeading(value="My Notes")
+
+
+def test_build_pinned_span() -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.spans import SpanKind
+
+    plan = dh.CarvePlan(
+        kind="pinned",
+        name="notes",
+        anchor="## My Heading",
+        body=None,
+        semantics="host-local",
+    )
+    span = dh.build_span(plan)
+    assert span.kind is SpanKind.PINNED
+    assert span.anchor == "## My Heading"
+    assert span.overlay is None
+
+
+def test_seed_overlay_state_has_canonical_last_deployed_body() -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.overlay_inject import canonical_body
+
+    live = "# H\n\nbody line\n"
+    region = _new_content_region(live_text="body line\n", live_start=2)
+    state = dh.seed_overlay_state("nm", live, region)
+    assert state.last_deployed_body == canonical_body("body line\n")
+
+
+def test_commit_writes_spans(tmp_path: Path) -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.cli import override
+
+    plans = [
+        dh.CarvePlan(
+            kind="pinned", name="a", anchor="## A", body=None, semantics="host-local"
+        )
+    ]
+    dh.commit_carves("p", "sections_md", plans, snapshot_base=tmp_path)
+    data = override._load_local_data()
+    spans = data["tracked_files"]["sections_md"]["spans"]  # type: ignore[index]
+    assert any(s["anchor"] == "## A" for s in spans)
+
+
+def test_commit_rolls_back_on_failure(tmp_path: Path, monkeypatch) -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.cli import override
+
+    # Pre-seed local.yaml so we have a known baseline to restore to.
+    override._append_span_host_local(
+        "sections_md",
+        dh.build_span(
+            dh.CarvePlan(
+                kind="pinned",
+                name="pre",
+                anchor="## Pre",
+                body=None,
+                semantics="host-local",
+            )
+        ),
+    )
+    before = override._local_config_path().read_text(encoding="utf-8")
+
+    real = override._append_span_host_local
+    calls = {"n": 0}
+
+    def flaky(file_id: str, span: object) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("boom")
+        real(file_id, span)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(dh.override, "_append_span_host_local", flaky)
+    plans = [
+        dh.CarvePlan(
+            kind="pinned", name="x", anchor="## X", body=None, semantics="host-local"
+        ),
+        dh.CarvePlan(
+            kind="pinned", name="y", anchor="## Y", body=None, semantics="host-local"
+        ),
+    ]
+    with pytest.raises(RuntimeError):
+        dh.commit_carves("p", "sections_md", plans, snapshot_base=tmp_path)
+
+    after = override._local_config_path().read_text(encoding="utf-8")
+    assert after == before  # snapshot restored — no half-created span

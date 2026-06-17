@@ -21,7 +21,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from setforge import deploy, spans_store
+from setforge import deploy, spans_store, transitions
+from setforge.anchors import Anchor
+from setforge.cli import override
 from setforge.cli._install_helpers import (
     _load_validated_host_local_sections,
     _plan_disposition_base,
@@ -30,8 +32,13 @@ from setforge.compare import resolve_dst, resolve_src
 from setforge.config import Config, TrackedFile, load_config, resolve_profile
 from setforge.host_local_inject import _normalise_eol
 from setforge.markdown_spans import _scan_headings
+from setforge.overlay_deploy import _state_from_injection
+from setforge.overlay_inject import canonical_body
 from setforge.section_detect import DetectRegion, RegionKind, compute_detect_regions
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
+from setforge.spans_store import SpanState
+from setforge.wizard import Snapshot
 
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
 
@@ -153,6 +160,102 @@ def pinned_anchor_string(region: DetectRegion, live: str) -> str:
         raise ValueError("region has no enclosing heading to anchor a pinned span")
     level, htext = enclosing
     return "#" * level + " " + htext
+
+
+@dataclass(slots=True)
+class CarvePlan:
+    """One carve the wizard resolved, awaiting the atomic commit.
+
+    ``anchor`` is dual-typed (plan P4): a structured :class:`Anchor` for an
+    overlay (the splice point in the live file) or the markdown heading string
+    (``'## X'``) for a pinned/forked span. ``body`` is the raw live bytes for an
+    overlay (canonicalised in :func:`build_span`), ``None`` for pinned/forked.
+    ``seed_state`` is the overlay's pre-seeded :class:`SpanState` (carrying
+    ``last_deployed_body``); ``None`` for pinned/forked.
+    """
+
+    kind: str  # "overlay" | "pinned" | "forked"
+    name: str
+    anchor: Anchor | str
+    body: str | None
+    semantics: str
+    seed_state: SpanState | None = None
+
+
+def build_span(plan: CarvePlan) -> SpanEntry:
+    """Build the :class:`SpanEntry` for a carve.
+
+    OVERLAY: identity ``anchor`` is the section NAME; the structured splice
+    anchor + canonicalised body ride the nested ``overlay`` payload (the
+    dual-anchor model). PINNED/FORKED: ``anchor`` is the markdown heading
+    string; no payload.
+    """
+    if plan.kind == "overlay":
+        assert plan.body is not None, "overlay carve requires a body"
+        return SpanEntry(
+            anchor=plan.name,
+            kind=SpanKind.OVERLAY,
+            semantics=SpanSemantics(plan.semantics),
+            overlay=OverlaySpanPayload(
+                anchor=plan.anchor,  # type: ignore[arg-type]
+                body=canonical_body(plan.body),
+            ),
+        )
+    return SpanEntry(
+        anchor=plan.anchor,  # type: ignore[arg-type]
+        kind=SpanKind.PINNED if plan.kind == "pinned" else SpanKind.FORKED,
+        semantics=SpanSemantics(plan.semantics),
+    )
+
+
+def seed_overlay_state(name: str, live: str, region: DetectRegion) -> SpanState:
+    """Seed an overlay's :class:`SpanState` from the live region at carve time.
+
+    Reuses the deploy-side :func:`_state_from_injection` so the seeded
+    ``last_deployed_body`` (the canonical bytes) is the exact excise needle the
+    first install / capture will look for — closing the data-loss round-trip gap
+    (plan P5, the seed pitfall).
+    """
+    body = canonical_body(region.live_text)
+    return _state_from_injection(
+        name, _normalise_eol(live), region.live_start, region.live_end, body
+    )
+
+
+def _default_snapshot_base() -> Path:
+    """The carve-wizard snapshot directory (mirrors ``sync``)."""
+    return transitions.state_root() / "snapshots"
+
+
+def commit_carves(
+    profile: str,
+    file_id: str,
+    plans: list[CarvePlan],
+    *,
+    snapshot_base: Path,
+) -> None:
+    """Write every carve's span to ``local.yaml`` atomically (plan P5).
+
+    All writes for one detect run sit inside a single :class:`Snapshot`; any
+    exception restores ``local.yaml`` to its pre-commit bytes (no half-created
+    span), mirroring :func:`setforge.section_promote.execute_promote_to_shared`.
+    Overlay carves also reseed the spans sidecar's ``last_deployed_body``.
+    """
+    local_yaml = override._local_config_path()
+    snap = Snapshot(files=[local_yaml], snapshot_base=snapshot_base)
+    with snap:
+        try:
+            overlay_states: dict[str, SpanState] = {}
+            for plan in plans:
+                override._append_span_host_local(file_id, build_span(plan))
+                if plan.kind == "overlay" and plan.seed_state is not None:
+                    overlay_states[plan.name] = plan.seed_state
+            if overlay_states:
+                spans_store.set_states(profile, file_id, overlay_states)
+            snap.discard()
+        except BaseException:
+            snap.restore()
+            raise
 
 
 def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> None:
