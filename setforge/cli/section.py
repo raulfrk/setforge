@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, assert_never
+from typing import Any, Final, assert_never
 
 import typer
 from rich.console import Console
@@ -133,6 +133,30 @@ def _validate_semantics(semantics: str) -> None:
         raise typer.BadParameter(
             f"semantics {semantics!r} not in {{shared, host-local}}"
         ) from exc
+
+
+#: Refusal surfaced when `section add` is asked for a host-local section. The
+#: markerless redesign (9hrw) authors host-local content by editing the live
+#: file and running `section detect`; `section add` writing a host-local marker
+#: into the tracked repo was the leak that redesign removes.
+_HOST_LOCAL_REMOVED_MSG: Final[str] = (
+    "section add no longer authors host-local sections. Host-local content is "
+    "authored by editing the live file and running `setforge section detect`. "
+    "Use --semantics=shared for a section that propagates across hosts."
+)
+
+
+def _reject_host_local(semantics: SectionSemantics) -> None:
+    """Refuse a host-local `section add` (markerless redesign).
+
+    Raised as a :class:`typer.BadParameter` so the CLI exits non-zero with a
+    clean message pointing at `section detect`, never a traceback. The
+    convergence point for every `section add` entry path (scripted + interactive)
+    is :func:`_apply_section_add`, so the guard there is the backstop; the
+    interactive picker also stops offering host-local up front.
+    """
+    if semantics is SectionSemantics.HOST_LOCAL:
+        raise typer.BadParameter(_HOST_LOCAL_REMOVED_MSG)
 
 
 def _format_marker_pair_unstamped(*, semantics: str, name: str, body: str) -> str:
@@ -325,6 +349,8 @@ def _apply_section_add(inputs: SectionAddInputs, *, body: str) -> None:
     (CLI flags vs prompt_toolkit dialogs) into a :class:`SectionAddInputs`
     plus the computed marker body.
     """
+    # Backstop for every entry path: host-local is no longer authored here.
+    _reject_host_local(inputs.semantics)
     target = _resolve_tracked_file_path(
         config_path=inputs.config, tracked_file_key=inputs.tracked_file
     )
@@ -377,29 +403,13 @@ def _interactive_pick_tracked_file(*, config_path: Path) -> str:
 
 
 def _interactive_pick_semantics() -> str:
-    # ``radiolist_dialog`` resolves through this module's ``__getattr__``
-    # (lazy prompt_toolkit import); tests monkeypatch the same attribute
-    # path. ``import setforge.cli.section`` would be circular, so we
-    # import the module via the package path.
-    from setforge.cli import section as _self
+    """`section add` authors only ``shared`` sections now.
 
-    result = _self.radiolist_dialog(
-        title="user-section semantics",
-        text=(
-            "shared = propagates across hosts via tracked repo\n"
-            "host-local = per-host only"
-        ),
-        values=[("shared", "shared"), ("host-local", "host-local")],
-        default="shared",
-    ).run()
-    if result is None:
-        typer.echo("aborted.")
-        raise typer.Exit(0)
-    # prompt_toolkit's dialog .run() is typed as Any; the values= tuples
-    # above guarantee a ``str`` return on a non-None path, so narrow
-    # explicitly to satisfy ``mypy --strict``'s no-any-return check.
-    assert isinstance(result, str)
-    return result
+    The host-local path is removed (markerless redesign — host-local content is
+    authored via edit-live + `section detect`), so there is no semantics choice
+    to prompt for: every `section add` is shared.
+    """
+    return SectionSemantics.SHARED.value
 
 
 _MAX_NAME_PROMPT_ATTEMPTS: int = 3

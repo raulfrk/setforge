@@ -225,10 +225,18 @@ def test_section_add_scripted_shared_empty_body(
     assert lines[2].startswith("<!-- setforge:user-section start shared foo")
 
 
-def test_section_add_scripted_host_local_empty_body(
+def test_section_add_scripted_host_local_rejected(
     runner: CliRunner, minimal_config: tuple[Path, Path]
 ) -> None:
+    """`section add` no longer authors host-local sections (markerless redesign).
+
+    Host-local content is authored by editing the live file and running
+    `section detect`; `section add` writing a host-local marker into tracked
+    was the leak this redesign removes. The command must refuse and point at
+    `section detect`, and must NOT write any marker into the tracked file.
+    """
     yaml_path, tracked = minimal_config
+    before = tracked.read_text()
     result = runner.invoke(
         app,
         [
@@ -244,8 +252,11 @@ def test_section_add_scripted_host_local_empty_body(
             "--yes",
         ],
     )
-    assert result.exit_code == 0
-    assert "host-local bar" in tracked.read_text()
+    assert result.exit_code != 0
+    assert "section detect" in result.output
+    # No marker was written into the tracked file.
+    assert tracked.read_text() == before
+    assert "host-local bar" not in tracked.read_text()
 
 
 @pytest.mark.parametrize("anchor", [1, 5])
@@ -627,7 +638,7 @@ def test_section_add_interactive_walks_all_prompts(
     _force_tty(monkeypatch)
     _patch_section_dialogs(
         monkeypatch,
-        radiolist_returns=["shared", "empty"],
+        radiolist_returns=["empty"],
         input_returns="foo",
         yes_no_returns=True,
         pick_anchor_return=2,
@@ -668,7 +679,7 @@ def test_section_add_interactive_aborts_on_confirm_no(
     _force_tty(monkeypatch)
     _patch_section_dialogs(
         monkeypatch,
-        radiolist_returns=["shared", "empty"],
+        radiolist_returns=["empty"],
         input_returns="foo",
         yes_no_returns=False,
         pick_anchor_return=2,
@@ -680,14 +691,26 @@ def test_section_add_interactive_aborts_on_confirm_no(
     assert "shared foo" not in tracked.read_text()
 
 
-def test_section_add_interactive_aborts_on_semantics_cancel(
+def test_section_add_interactive_aborts_on_body_source_cancel(
     runner: CliRunner,
     minimal_config: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Cancelling the body-source dialog aborts cleanly with no write.
+
+    `section add` no longer prompts for semantics (it is always shared since
+    the host-local path moved to `section detect`), so the body-source dialog
+    is the first radiolist; cancelling it (``None``) must abort with exit 0 and
+    leave the tracked file untouched.
+    """
     yaml_path, tracked = minimal_config
     _force_tty(monkeypatch)
-    _patch_section_dialogs(monkeypatch, radiolist_returns=None)
+    _patch_section_dialogs(
+        monkeypatch,
+        radiolist_returns=None,
+        input_returns="foo",
+        pick_anchor_return=2,
+    )
     result = runner.invoke(
         app, ["section", "add", "--profile=testp", f"--config={yaml_path}"]
     )
@@ -704,7 +727,7 @@ def test_section_add_interactive_with_yes_skips_final_confirm(
     _force_tty(monkeypatch)
     recs = _patch_section_dialogs(
         monkeypatch,
-        radiolist_returns=["shared", "empty"],
+        radiolist_returns=["empty"],
         input_returns="foo",
         yes_no_returns=True,
         pick_anchor_return=2,
@@ -744,7 +767,7 @@ def test_section_add_interactive_validates_user_name_input(
     _force_tty(monkeypatch)
     recs = _patch_section_dialogs(
         monkeypatch,
-        radiolist_returns=["shared", "empty"],
+        radiolist_returns=["empty"],
         # First call returns an invalid name; second call returns a valid one.
         input_returns=["BadName", "good-name"],
         yes_no_returns=True,

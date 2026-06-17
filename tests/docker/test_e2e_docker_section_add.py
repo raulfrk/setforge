@@ -137,10 +137,17 @@ def test_section_add_scripted_shared_writes_marker_pair_in_container(
     assert "<!-- setforge:user-section end shared extras hash=" in content
 
 
-def test_section_add_scripted_host_local_writes_marker_pair_in_container(
+def test_section_add_scripted_host_local_rejected_in_container(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
+    """`section add` refuses host-local end-to-end (markerless redesign).
+
+    Host-local content is authored via edit-live + `section detect`; writing a
+    host-local marker into the tracked file was the leak this removes. The
+    command exits non-zero, points at `section detect`, and writes NO marker.
+    """
     c = docker_container()
+    before = c.read_text(_TRACKED_MARKED)
     result = _setforge(
         c,
         [
@@ -157,8 +164,12 @@ def test_section_add_scripted_host_local_writes_marker_pair_in_container(
         ],
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert "host-local morenotes" in c.read_text(_TRACKED_MARKED)
+    assert result.returncode != 0, result.stdout
+    combined = result.stdout + result.stderr
+    assert "section detect" in combined, combined
+    # No host-local marker was written into the tracked file.
+    assert "host-local morenotes" not in c.read_text(_TRACKED_MARKED)
+    assert c.read_text(_TRACKED_MARKED) == before
 
 
 def test_section_add_scripted_with_file_body_in_container(
