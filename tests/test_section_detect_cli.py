@@ -331,3 +331,55 @@ def test_wizard_refuses_shared_scope(monkeypatch) -> None:
     monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
     plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
     assert plans == []
+
+
+# --- Task 6: S4 pitfall coverage ----------------------------------------------
+
+
+def test_wizard_refuses_ambiguous_overlay_body(monkeypatch) -> None:
+    """An overlay body that occurs >1x in live is born ambiguous — the carve is
+    refused (uniqueness pre-flight), never silently written."""
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "# T\n\ndup\n\ndup\n"
+    expected = "# T\n\ndup\n"
+    regions = compute_detect_regions(live, expected)
+    answers = iter(["carve", "dups", "host-local"])
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
+    plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
+    assert plans == []
+
+
+def test_wizard_refuses_divergence_without_disposition(monkeypatch) -> None:
+    """A DIVERGENCE on a disposition=None file has no valid kind (pinned/forked
+    would fail validate_span_disposition); the carve is refused."""
+    from setforge.cli import _detect_helpers as dh
+
+    region = _divergence_region()
+    answers = iter(["carve", "nm", "host-local"])
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
+    plans = dh.carve_wizard(
+        _target("none"), [region], "changed\n", "old\n", _silent_console()
+    )
+    assert plans == []
+
+
+def test_wizard_propagates_anchor_refusal(monkeypatch) -> None:
+    """A divergence under a duplicate heading yields an AnchorRefusal, which the
+    wizard surfaces as a skip rather than fabricating an anchor."""
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "## Dup\n\nA\n\n## Dup\n\nMY EDIT\n"
+    expected = "## Dup\n\nA\n\n## Dup\n\nB\n"
+    regions = compute_detect_regions(live, expected)
+    assert any(r.kind is RegionKind.DIVERGENCE for r in regions)
+    answers = iter(["carve", "nm", "host-local", "pinned"])
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
+    # target has a disposition so pinned/forked are offered (and then refused
+    # at the anchor stage).
+    plans = dh.carve_wizard(
+        _target("shared"), regions, live, expected, _silent_console()
+    )
+    assert plans == []
