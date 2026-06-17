@@ -421,3 +421,64 @@ def test_covered_by_span_false_without_spans() -> None:
     assert (
         dh.covered_by_span(region, "changed\n", _target("none").tracked_file) is False
     )
+
+
+# --- Task 8 (S5): overlay re-capture ------------------------------------------
+
+
+def test_extract_live_body_full_multiline() -> None:
+    """The new overlay body is extracted whole (anchor/prefix/suffix-bounded),
+    not truncated to just the changed lines."""
+    from setforge.cli import _detect_helpers as dh
+
+    # expected: heading + 2-line body + tail; live: middle line edited.
+    expected = "# H\nbody one\nbody two\n\ntail\n"
+    live = "# H\nbody one\nbody EDITED\n\ntail\n"
+    # old body occupies expected lines [1,3): "body one\nbody two\n"
+    new_body = dh._extract_live_body(live, expected, 1, 3)
+    assert new_body == "body one\nbody EDITED\n"
+
+
+def test_recapture_updates_overlay_body(tmp_path: Path) -> None:
+    from setforge.anchors import AnchorAfterHeading
+    from setforge.cli import _detect_helpers as dh
+    from setforge.cli import override
+    from setforge.overlay_inject import canonical_body
+
+    # Seed an overlay span 'vmnotes' with the OLD body.
+    plan = dh.CarvePlan(
+        kind="overlay",
+        name="vmnotes",
+        anchor=AnchorAfterHeading(value="H"),
+        body="old body\n",
+        semantics="host-local",
+        seed_state=None,
+    )
+    override._append_span_host_local("comprehensive_text", dh.build_span(plan))
+
+    dh.recapture_overlay(
+        "p",
+        "comprehensive_text",
+        "vmnotes",
+        "new body\n",
+        snapshot_base=tmp_path,
+    )
+
+    data = override._load_local_data()
+    spans = data["tracked_files"]["comprehensive_text"]["spans"]  # type: ignore[index]
+    overlay = next(s for s in spans if s["anchor"] == "vmnotes")
+    assert overlay["overlay"]["body"] == canonical_body("new body\n")
+
+    from setforge import spans_store
+
+    states = spans_store.get_states("p", "comprehensive_text")
+    assert states["vmnotes"].last_deployed_body == canonical_body("new body\n")
+
+
+def test_recapture_missing_overlay_raises(tmp_path: Path) -> None:
+    from setforge.cli import _detect_helpers as dh
+
+    with pytest.raises(KeyError):
+        dh.recapture_overlay(
+            "p", "comprehensive_text", "ghost", "x\n", snapshot_base=tmp_path
+        )

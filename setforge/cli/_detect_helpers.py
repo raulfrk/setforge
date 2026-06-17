@@ -16,6 +16,8 @@ file-placement decision.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,7 +37,7 @@ from setforge.config import (
 )
 from setforge.host_local_inject import _normalise_eol
 from setforge.markdown_spans import _scan_headings
-from setforge.overlay_deploy import _state_from_injection
+from setforge.overlay_deploy import _state_from_injection, overlay_spans
 from setforge.overlay_inject import (
     OverlayAmbiguousError,
     canonical_body,
@@ -454,6 +456,201 @@ def covered_by_span(region: DetectRegion, live: str, tf: TrackedFile) -> bool:
     return anchor in pinned_forked
 
 
+def _overlay_body_needle(span: SpanEntry, states: dict[str, SpanState]) -> str:
+    """The canonical bytes that locate ``span``'s body in the pristine baseline."""
+    state = states.get(span.anchor)
+    if state is not None and state.last_deployed_body:
+        return state.last_deployed_body
+    assert span.overlay is not None
+    assert span.overlay.body is not None
+    return canonical_body(span.overlay.body)
+
+
+def _overlay_expected_range(expected: str, needle: str) -> tuple[int, int] | None:
+    """Return the ``[start, end)`` LF-line range ``needle`` occupies in ``expected``.
+
+    ``None`` when the needle is absent (the overlay was not injected here).
+    """
+    norm = _normalise_eol(expected)
+    idx = norm.find(needle)
+    if idx < 0:
+        return None
+    start = norm.count("\n", 0, idx)
+    return start, start + needle.count("\n")
+
+
+def _extract_live_body(live: str, expected: str, a: int, b: int) -> str:
+    """Extract the WHOLE live body occupying expected lines ``[a, b)``.
+
+    Prefix (``expected[:a]``) and suffix (``expected[b:]``) match live verbatim
+    (only the body differs), so the live body is everything between the shared
+    prefix and the shared suffix — captured whole, never truncated to just the
+    changed lines (the multi-line data-loss trap).
+    """
+    exp_lines = _normalise_eol(expected).splitlines(keepends=True)
+    live_lines = _normalise_eol(live).splitlines(keepends=True)
+    tail = len(exp_lines) - b
+    return "".join(live_lines[a : len(live_lines) - tail])
+
+
+def _overlapping_overlay(
+    region: DetectRegion,
+    expected: str,
+    spans: list[SpanEntry],
+    states: dict[str, SpanState],
+) -> tuple[SpanEntry, int, int] | None:
+    """Return ``(span, a, b)`` for the overlay whose injected body in ``expected``
+    overlaps ``region``, else ``None`` (the region is a fresh edit, not a
+    re-capture)."""
+    for span in overlay_spans(spans):
+        rng = _overlay_expected_range(expected, _overlay_body_needle(span, states))
+        if rng is None:
+            continue
+        a, b = rng
+        if region.expected_start < b and region.expected_end > a:
+            return span, a, b
+    return None
+
+
+def recapture_overlay(
+    profile: str,
+    file_id: str,
+    span_name: str,
+    new_body: str,
+    *,
+    snapshot_base: Path,
+) -> None:
+    """Update an existing overlay span's body from the live region (S5).
+
+    Canonicalises ``new_body``, rewrites the ``local.yaml`` overlay body, and
+    reseeds the sidecar ``last_deployed_body`` so the next deploy excises the NEW
+    bytes (closing the byte-needle-drift leak). Atomic under a
+    :class:`Snapshot`; raises :class:`KeyError` when no overlay span by that name
+    exists.
+    """
+    canonical = canonical_body(new_body)
+    local_yaml = override._local_config_path()
+    snap = Snapshot(files=[local_yaml], snapshot_base=snapshot_base)
+    with snap:
+        try:
+            data = override._load_local_data()
+            block = override._local_tf_block(data, file_id)
+            raw = block.get("spans")
+            spans = list(raw) if isinstance(raw, list) else []
+            found = False
+            for entry in spans:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("anchor") == span_name
+                    and entry.get("kind") == "overlay"
+                    and isinstance(entry.get("overlay"), dict)
+                ):
+                    entry["overlay"]["body"] = canonical
+                    found = True
+            if not found:
+                raise KeyError(f"no overlay span named {span_name!r} for {file_id}")
+            block["spans"] = spans
+            override._dump_local_data(data)
+            states = spans_store.get_states(profile, file_id)
+            old = states.get(span_name)
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if old is not None:
+                new_state = dataclasses.replace(
+                    old, last_deployed_body=canonical, fingerprint=digest
+                )
+            else:
+                new_state = SpanState(
+                    anchor=span_name,
+                    fingerprint=digest,
+                    prefix=[],
+                    suffix=[],
+                    position_hint_start_line=0,
+                    position_hint_n_lines=canonical.count("\n"),
+                    heading_level=0,
+                    last_deployed_body=canonical,
+                )
+            spans_store.set_states(profile, file_id, {span_name: new_state})
+            snap.discard()
+        except BaseException:
+            snap.restore()
+            raise
+
+
+def _split_regions(
+    regions: list[DetectRegion],
+    live: str,
+    expected: str,
+    spans: list[SpanEntry],
+    states: dict[str, SpanState],
+) -> tuple[dict[str, str], list[DetectRegion]]:
+    """Partition regions into ``({overlay_name: new_body}, fresh_regions)``.
+
+    A region overlapping an existing overlay's injected body is an EDIT to that
+    overlay (S5 re-capture); everything else is a fresh carve.
+    """
+    recaptures: dict[str, str] = {}
+    fresh: list[DetectRegion] = []
+    for region in regions:
+        match = _overlapping_overlay(region, expected, spans, states)
+        if match is None:
+            fresh.append(region)
+            continue
+        span, a, b = match
+        recaptures.setdefault(span.anchor, _extract_live_body(live, expected, a, b))
+    return recaptures, fresh
+
+
+def _detect_one_target(
+    profile: str,
+    target: DetectTarget,
+    host_local: dict[HostLocalSectionName, HostLocalSection] | None,
+    console: Console,
+) -> bool:
+    """Run detect for one tracked_file; return True when it had drift."""
+    if not target.dst.exists():
+        return False
+    live = target.dst.read_text(encoding="utf-8")
+    expected = expected_deploy_text(profile, target, host_local)
+    regions = [
+        r
+        for r in compute_detect_regions(live, expected)
+        if not covered_by_span(r, live, target.tracked_file)
+    ]
+    if not regions:
+        return False
+    render_diff(target, regions, live, console)
+
+    spans = target.tracked_file.spans or []
+    states = spans_store.get_states(profile, target.name)
+    recaptures, fresh = _split_regions(regions, live, expected, spans, states)
+
+    wrote = False
+    for span_name, new_body in recaptures.items():
+        answer = _ask(f"overlay {span_name!r} body changed [update/skip]: ").lower()
+        if answer != "update":
+            continue
+        recapture_overlay(
+            profile,
+            target.name,
+            span_name,
+            new_body,
+            snapshot_base=_default_snapshot_base(),
+        )
+        console.print(f"updated overlay {span_name!r} in local.yaml")
+        wrote = True
+
+    plans = carve_wizard(target, fresh, live, expected, console)
+    if plans:
+        commit_carves(
+            profile, target.name, plans, snapshot_base=_default_snapshot_base()
+        )
+        console.print(f"wrote {len(plans)} span(s) to local.yaml.")
+        wrote = True
+    if wrote:
+        console.print(f"run: setforge install --profile={profile}")
+    return True
+
+
 def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> None:
     """Top-level ``section detect`` entry point."""
     cfg = load_config(config_path)
@@ -469,27 +666,7 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
     targets = _markdown_targets(cfg, profile, repo_root, tracked_file)
     any_drift = False
     for target in targets:
-        if not target.dst.exists():
-            continue
-        live = target.dst.read_text(encoding="utf-8")
-        expected = expected_deploy_text(profile, target, overlay_map.get(target.name))
-        regions = [
-            r
-            for r in compute_detect_regions(live, expected)
-            if not covered_by_span(r, live, target.tracked_file)
-        ]
-        if not regions:
-            continue
-        any_drift = True
-        render_diff(target, regions, live, console)
-        plans = carve_wizard(target, regions, live, expected, console)
-        if plans:
-            commit_carves(
-                profile, target.name, plans, snapshot_base=_default_snapshot_base()
-            )
-            console.print(
-                f"wrote {len(plans)} span(s) to local.yaml. "
-                f"run: setforge install --profile={profile}"
-            )
+        if _detect_one_target(profile, target, overlay_map.get(target.name), console):
+            any_drift = True
     if not any_drift:
         console.print("no changes detected — live matches expected deploy output")
