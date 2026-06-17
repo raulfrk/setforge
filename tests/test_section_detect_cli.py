@@ -15,6 +15,8 @@ import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
+from setforge.cli._detect_helpers import DetectTarget
+from setforge.section_detect import DetectRegion, RegionKind
 
 _CFG = "tests/fixtures/e2e/setforge.test.yaml"
 
@@ -92,3 +94,70 @@ def test_disposition_file_expected_is_live_independent() -> None:
     assert edited != expected
     regions = compute_detect_regions(edited, expected)
     assert any(r.kind.value == "divergence" for r in regions)
+
+
+# --- Task 3: KIND gating + pinned anchor reconstruction -----------------------
+
+
+def _target(disposition_key: str) -> DetectTarget:
+    """A real DetectTarget from the fixture: ``sections_md`` (disposition=None)
+    or ``host_local_md`` (disposition=shared)."""
+    from setforge.cli import _detect_helpers as dh
+    from setforge.config import load_config
+
+    cfg_path = Path(_CFG)
+    cfg = load_config(cfg_path)
+    repo_root = cfg_path.resolve().parent
+    if disposition_key == "none":
+        return dh._markdown_targets(
+            cfg, "test-text-sections", repo_root, "sections_md"
+        )[0]
+    return dh._markdown_targets(cfg, "test-host-local", repo_root, "host_local_md")[0]
+
+
+def _new_content_region(live_text: str = "X\n", live_start: int = 0) -> DetectRegion:
+    return DetectRegion(
+        kind=RegionKind.NEW_CONTENT,
+        live_start=live_start,
+        live_end=live_start + 1,
+        expected_start=0,
+        expected_end=0,
+        live_text=live_text,
+        expected_text="",
+    )
+
+
+def _divergence_region(live_start: int = 0, live_end: int = 1) -> DetectRegion:
+    return DetectRegion(
+        kind=RegionKind.DIVERGENCE,
+        live_start=live_start,
+        live_end=live_end,
+        expected_start=live_start,
+        expected_end=live_end,
+        live_text="changed\n",
+        expected_text="old\n",
+    )
+
+
+def test_allowed_kinds_new_content_overlay_only() -> None:
+    from setforge.cli import _detect_helpers as dh
+
+    assert dh.allowed_kinds(_new_content_region(), _target("none")) == ["overlay"]
+
+
+def test_allowed_kinds_divergence_needs_disposition() -> None:
+    from setforge.cli import _detect_helpers as dh
+
+    div = _divergence_region()
+    assert dh.allowed_kinds(div, _target("shared")) == ["pinned", "forked"]
+    # DIVERGENCE on a disposition=None file → no valid kind (refused; plan P3).
+    assert dh.allowed_kinds(div, _target("none")) == []
+
+
+def test_pinned_anchor_reconstructs_hashes() -> None:
+    from setforge.cli import _detect_helpers as dh
+
+    live = "# Top\n\n## My Heading\n\nbody changed\n"
+    # line 4 (0-indexed) is 'body changed'; enclosing heading is '## My Heading'.
+    region = _divergence_region(live_start=4, live_end=5)
+    assert dh.pinned_anchor_string(region, live) == "## My Heading"

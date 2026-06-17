@@ -28,7 +28,9 @@ from setforge.cli._install_helpers import (
 )
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import Config, TrackedFile, load_config, resolve_profile
-from setforge.section_detect import compute_detect_regions
+from setforge.host_local_inject import _normalise_eol
+from setforge.markdown_spans import _scan_headings
+from setforge.section_detect import DetectRegion, RegionKind, compute_detect_regions
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
@@ -102,6 +104,55 @@ def expected_deploy_text(
         live_text="",
     )
     return resolved.content
+
+
+def allowed_kinds(region: DetectRegion, target: DetectTarget) -> list[str]:
+    """KINDs the wizard may offer for ``region`` on ``target`` (plan P3).
+
+    NEW_CONTENT → ``overlay`` only (a pinned/forked anchor would orphan — the
+    content is absent from tracked). DIVERGENCE → ``pinned``/``forked``, but
+    ONLY when the tracked_file declares a file-level ``disposition``: a
+    pinned/forked span is consumed on the disposition merge path, and
+    :func:`setforge.spans.validate_span_disposition` rejects one on a
+    ``disposition=None`` file. A divergence on such a file yields ``[]`` (the
+    wizard refuses that range with a reason).
+    """
+    if region.kind is RegionKind.NEW_CONTENT:
+        return ["overlay"]
+    if target.tracked_file.disposition is None:
+        return []
+    return ["pinned", "forked"]
+
+
+def _enclosing_heading(live_n: str, live_start: int) -> tuple[int, str] | None:
+    """Return ``(level, text)`` of the immediately-enclosing ATX heading.
+
+    Mirrors :func:`setforge.section_detect.propose_anchor`'s scan: the nearest
+    preceding fence-aware heading of any level. ``live_n`` MUST be EOL-normalised
+    (``live_start`` indexes its ``splitlines`` like the detect engine's regions).
+    """
+    enclosing: tuple[int, str] | None = None
+    for line_idx, level, htext in _scan_headings(live_n):
+        if line_idx <= live_start:
+            enclosing = (level, htext)
+    return enclosing
+
+
+def pinned_anchor_string(region: DetectRegion, live: str) -> str:
+    """Rebuild the markdown heading anchor (``'#'*level + ' ' + text``) for a
+    pinned/forked carve (plan P4).
+
+    ``propose_anchor`` returns the heading TEXT only; pinned/forked span anchors
+    are the full markdown heading string (the ``#`` run encodes the level), so
+    re-derive the level from the enclosing heading. Raises :class:`ValueError`
+    when the region has no enclosing heading (``propose_anchor`` would already
+    have refused such a divergence).
+    """
+    enclosing = _enclosing_heading(_normalise_eol(live), region.live_start)
+    if enclosing is None:
+        raise ValueError("region has no enclosing heading to anchor a pinned span")
+    level, htext = enclosing
+    return "#" * level + " " + htext
 
 
 def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> None:
