@@ -33,8 +33,18 @@ from setforge.config import Config, TrackedFile, load_config, resolve_profile
 from setforge.host_local_inject import _normalise_eol
 from setforge.markdown_spans import _scan_headings
 from setforge.overlay_deploy import _state_from_injection
-from setforge.overlay_inject import canonical_body
-from setforge.section_detect import DetectRegion, RegionKind, compute_detect_regions
+from setforge.overlay_inject import (
+    OverlayAmbiguousError,
+    canonical_body,
+    excise_unique_needle,
+)
+from setforge.section_detect import (
+    AnchorRefusal,
+    DetectRegion,
+    RegionKind,
+    compute_detect_regions,
+    propose_anchor,
+)
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
 from setforge.spans_store import SpanState
@@ -258,8 +268,167 @@ def commit_carves(
             raise
 
 
+def _ask(prompt: str) -> str:
+    """Read one line of input (thin wrapper, monkeypatched in tests)."""
+    from prompt_toolkit import prompt as _pt_prompt
+
+    return str(_pt_prompt(prompt)).strip()
+
+
+def render_diff(
+    target: DetectTarget,
+    regions: list[DetectRegion],
+    live: str,
+    console: Console,
+) -> None:
+    """Print the changed regions line-numbered (the v1 scrollable diff)."""
+    live_lines = _normalise_eol(live).splitlines()
+    console.print(
+        f"{len(regions)} changed region(s) in {target.dst} "
+        "(live vs expected deploy output)"
+    )
+    for idx, region in enumerate(regions, 1):
+        console.print(
+            f"  region {idx}: lines {region.live_start + 1}-{region.live_end} "
+            f"({region.kind.value})"
+        )
+        for ln in range(region.live_start, region.live_end):
+            if 0 <= ln < len(live_lines):
+                console.print(f"   {ln + 1:>4} | {live_lines[ln]}")
+
+
+def _merge_regions(
+    a: DetectRegion, b: DetectRegion, live_lines: list[str]
+) -> DetectRegion:
+    """Merge two regions into one contiguous span (the wizard's ``extend``).
+
+    The kind escalates to DIVERGENCE if either part diverges (a merged range
+    that touches a tracked section can no longer be a pure insertion).
+    """
+    start = min(a.live_start, b.live_start)
+    end = max(a.live_end, b.live_end)
+    kind = (
+        RegionKind.DIVERGENCE
+        if RegionKind.DIVERGENCE in (a.kind, b.kind)
+        else RegionKind.NEW_CONTENT
+    )
+    return DetectRegion(
+        kind=kind,
+        live_start=start,
+        live_end=end,
+        expected_start=min(a.expected_start, b.expected_start),
+        expected_end=max(a.expected_end, b.expected_end),
+        live_text="".join(live_lines[start:end]),
+        expected_text=a.expected_text + b.expected_text,
+    )
+
+
+def _carve_one(
+    target: DetectTarget,
+    region: DetectRegion,
+    live: str,
+    expected: str,
+    console: Console,
+) -> CarvePlan | None:
+    """Prompt NAME + SCOPE + KIND for one region; return a plan or ``None``.
+
+    Returns ``None`` (skip-with-reason) on empty name, a non-host-local scope
+    (detect targets host-local — D7), an unanchorable region
+    (:class:`AnchorRefusal`), a divergence on a disposition-less file, or a
+    non-unique overlay body (the data-loss uniqueness pre-flight).
+    """
+    name = _ask("  name: ")
+    if not name:
+        console.print("  empty name; skipping")
+        return None
+    # SCOPE is always asked, never auto-defaulted (data-loss pitfall).
+    scope = _ask("  scope (host-local/shared): ").lower()
+    if scope != "host-local":
+        console.print(
+            "  detect carves host-local only (shared → use 'section add'); skipping"
+        )
+        return None
+    allowed = allowed_kinds(region, target)
+    if not allowed:
+        console.print(
+            "  a divergence on a file with no disposition can't be pinned/forked; "
+            "skipping"
+        )
+        return None
+    kind = allowed[0] if len(allowed) == 1 else _ask(f"  kind ({'/'.join(allowed)}): ")
+    kind = kind.lower()
+    if kind not in allowed:
+        console.print(f"  invalid kind {kind!r}; skipping")
+        return None
+    anchor = propose_anchor(region, live, expected)
+    if isinstance(anchor, AnchorRefusal):
+        console.print(f"  cannot anchor: {anchor.reason}; skipping")
+        return None
+    if kind == "overlay":
+        body = region.live_text
+        try:
+            excise_unique_needle(_normalise_eol(live), [canonical_body(body)])
+        except OverlayAmbiguousError:
+            console.print(
+                "  overlay body appears more than once in live; refusing; skipping"
+            )
+            return None
+        return CarvePlan(
+            kind="overlay",
+            name=name,
+            anchor=anchor,
+            body=body,
+            semantics="host-local",
+            seed_state=seed_overlay_state(name, live, region),
+        )
+    return CarvePlan(
+        kind=kind,
+        name=name,
+        anchor=pinned_anchor_string(region, live),
+        body=None,
+        semantics="host-local",
+    )
+
+
+def carve_wizard(
+    target: DetectTarget,
+    regions: list[DetectRegion],
+    live: str,
+    expected: str,
+    console: Console,
+) -> list[CarvePlan]:
+    """Walk each region: ``carve`` (name/scope/kind), ``extend`` (merge the next
+    region in), or ``skip`` (re-detected next run). Returns the carve plans."""
+    live_lines = _normalise_eol(live).splitlines(keepends=True)
+    work = list(regions)
+    plans: list[CarvePlan] = []
+    i = 0
+    while i < len(work):
+        region = work[i]
+        action = _ask(
+            f"region {i + 1} lines {region.live_start + 1}-{region.live_end} "
+            "[carve/extend/skip]: "
+        ).lower()
+        if action == "skip":
+            i += 1
+            continue
+        if action == "extend" and i + 1 < len(work):
+            work[i] = _merge_regions(region, work[i + 1], live_lines)
+            del work[i + 1]
+            continue  # re-prompt the merged region
+        if action != "carve":
+            console.print("  unknown action; skipping")
+            i += 1
+            continue
+        plan = _carve_one(target, region, live, expected, console)
+        if plan is not None:
+            plans.append(plan)
+        i += 1
+    return plans
+
+
 def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> None:
-    """Top-level ``section detect`` entry point (skeleton — wizard lands in Task 5)."""
+    """Top-level ``section detect`` entry point."""
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_profile(cfg, profile)
@@ -276,9 +445,15 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
         if not regions:
             continue
         any_drift = True
-        console.print(
-            f"{len(regions)} changed region(s) in {target.dst} "
-            "(live vs expected deploy output)"
-        )
+        render_diff(target, regions, live, console)
+        plans = carve_wizard(target, regions, live, expected, console)
+        if plans:
+            commit_carves(
+                profile, target.name, plans, snapshot_base=_default_snapshot_base()
+            )
+            console.print(
+                f"wrote {len(plans)} span(s) to local.yaml. "
+                f"run: setforge install --profile={profile}"
+            )
     if not any_drift:
         console.print("no changes detected — live matches expected deploy output")

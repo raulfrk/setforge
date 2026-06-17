@@ -9,9 +9,11 @@ loop, and S5 overlay re-capture.
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from setforge.cli import app
@@ -24,6 +26,10 @@ _CFG = "tests/fixtures/e2e/setforge.test.yaml"
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
+
+
+def _silent_console() -> Console:
+    return Console(file=io.StringIO())
 
 
 def test_detect_no_drift_exits_zero(runner: CliRunner) -> None:
@@ -272,3 +278,56 @@ def test_commit_rolls_back_on_failure(tmp_path: Path, monkeypatch) -> None:
 
     after = override._local_config_path().read_text(encoding="utf-8")
     assert after == before  # snapshot restored — no half-created span
+
+
+# --- Task 5: carve wizard (line-prompt UI) ------------------------------------
+
+
+def test_wizard_carves_one_overlay(monkeypatch) -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "# Title\n\nbody\n  - x\n"
+    expected = "# Title\n\nbody\n"
+    regions = compute_detect_regions(live, expected)
+    assert len(regions) == 1
+    assert regions[0].kind is RegionKind.NEW_CONTENT
+
+    # overlay kind is auto-selected (only one allowed), so no kind prompt.
+    answers = iter(["carve", "vm-notes", "host-local"])
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
+
+    plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.kind == "overlay"
+    assert plan.name == "vm-notes"
+    assert plan.body == "  - x\n"
+    assert plan.seed_state is not None
+
+
+def test_wizard_skip_produces_no_plan(monkeypatch) -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "# Title\n\nbody\n  - x\n"
+    expected = "# Title\n\nbody\n"
+    regions = compute_detect_regions(live, expected)
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: "skip")
+    plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
+    assert plans == []
+
+
+def test_wizard_refuses_shared_scope(monkeypatch) -> None:
+    """Scope is asked explicitly and never auto-defaulted; shared is out of
+    scope for detect, so a shared answer skips the carve (no plan)."""
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "# Title\n\nbody\n  - x\n"
+    expected = "# Title\n\nbody\n"
+    regions = compute_detect_regions(live, expected)
+    answers = iter(["carve", "vm-notes", "shared"])
+    monkeypatch.setattr(dh, "_ask", lambda _prompt: next(answers))
+    plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
+    assert plans == []
