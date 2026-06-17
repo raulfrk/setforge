@@ -1,10 +1,9 @@
 """Guard that ``init``'s completion-report next-steps stay valid commands.
 
-dtbz: the printed "next steps" suggested ``setforge validate --list-profiles``,
-a flag that does not exist on the ``validate`` command. The profile-listing
-verb is ``setforge profile list``. This pins both completion-report branches
-(source skipped vs pre-configured) to a current command so a stale flag cannot
-creep back unnoticed.
+The printed "next steps" previously suggested ``setforge validate
+--list-profiles`` — a flag that does not exist; the profile-listing verb is
+``setforge profile list``. Pin both branches (source skipped vs pre-configured)
+to a current command so a stale flag cannot creep back.
 """
 
 from __future__ import annotations
