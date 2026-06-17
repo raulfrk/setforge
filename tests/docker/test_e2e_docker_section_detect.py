@@ -187,3 +187,57 @@ def test_detect_abort_leaves_no_span(
     session.close()
 
     assert c.read_text(_LOCAL_YAML) == local_before  # no span written
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_detect_overlay_recapture_roundtrip(
+    docker_container: Callable[..., ContainerHandle],
+    pyte_pty_session: Callable[..., PyteSession],
+) -> None:
+    """S5: carve an overlay, install, edit its body live, re-detect → the wizard
+    UPDATES the saved body (no duplicate, no leak); install re-injects the new
+    body; re-detect is idempotent."""
+    c = docker_container()
+    c.write_text(_LOCAL_YAML, _SOURCE_BLOCK)
+    _install(c, _OVERLAY_PROFILE)
+
+    # Carve an overlay with the OLD body.
+    live0 = c.read_text(_OVERLAY_LIVE)
+    c.write_text(_OVERLAY_LIVE, live0 + "OVERLAY BODY one\n")
+    session = pyte_pty_session(
+        container=c.cid, cmd=_detect_cmd(_OVERLAY_PROFILE, _OVERLAY_TF), timeout=60.0
+    )
+    session.expect_in_display("[carve/extend/skip]", timeout=30.0)
+    session.send_keys("carve\r")
+    session.expect_in_display("name:", timeout=10.0)
+    session.send_keys("ov\r")
+    session.expect_in_display("scope", timeout=10.0)
+    session.send_keys("host-local\r")
+    session.expect_in_display("wrote 1 span", timeout=20.0)
+    session.wait_for_exit(timeout=60.0, expected_code=0)
+
+    _install(c, _OVERLAY_PROFILE, extra=["--auto=use-tracked", "--yes"])
+    assert "OVERLAY BODY one" in c.read_text(_OVERLAY_LIVE)
+
+    # Edit the overlay body live, then re-detect → re-capture (update).
+    edited = c.read_text(_OVERLAY_LIVE).replace("OVERLAY BODY one", "OVERLAY BODY two")
+    c.write_text(_OVERLAY_LIVE, edited)
+    session2 = pyte_pty_session(
+        container=c.cid, cmd=_detect_cmd(_OVERLAY_PROFILE, _OVERLAY_TF), timeout=60.0
+    )
+    session2.expect_in_display("body changed", timeout=30.0)
+    session2.send_keys("update\r")
+    session2.expect_in_display("updated overlay", timeout=20.0)
+    session2.wait_for_exit(timeout=60.0, expected_code=0)
+
+    # local.yaml carries the NEW body; the OLD body never leaked into tracked.
+    local_yaml = c.read_text(_LOCAL_YAML)
+    assert "OVERLAY BODY two" in local_yaml
+    assert "OVERLAY BODY one" not in c.read_text(_OVERLAY_TRACKED)
+
+    # install re-injects the new body; re-detect is idempotent.
+    _install(c, _OVERLAY_PROFILE, extra=["--auto=use-tracked", "--yes"])
+    assert "OVERLAY BODY two" in c.read_text(_OVERLAY_LIVE)
+    rc, out, err = _setforge(c, _detect(_OVERLAY_PROFILE, _OVERLAY_TF))
+    assert rc == 0, err or out
+    assert "no changes detected" in (out + err)
