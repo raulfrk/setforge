@@ -659,6 +659,11 @@ def section_detect(
     from setforge.cli import _detect_helpers
 
     config_path = _resolve_config_arg(config)
-    _detect_helpers.run_detect(
-        config_path=config_path, profile=profile, tracked_file=tracked_file
-    )
+    try:
+        _detect_helpers.run_detect(
+            config_path=config_path, profile=profile, tracked_file=tracked_file
+        )
+    except KeyError as exc:
+        raise typer.BadParameter(
+            f"tracked_file {exc.args[0]!r} is not in profile {profile!r}"
+        ) from exc

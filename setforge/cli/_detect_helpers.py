@@ -37,7 +37,11 @@ from setforge.config import (
 )
 from setforge.host_local_inject import _normalise_eol
 from setforge.markdown_spans import _scan_headings
-from setforge.overlay_deploy import _state_from_injection, overlay_spans
+from setforge.overlay_deploy import (
+    _state_from_injection,
+    canonical_overlay_body,
+    overlay_spans,
+)
 from setforge.overlay_inject import (
     OverlayAmbiguousError,
     canonical_body,
@@ -251,10 +255,13 @@ def commit_carves(
 ) -> None:
     """Write every carve's span to ``local.yaml`` atomically (plan P5).
 
-    All writes for one detect run sit inside a single :class:`Snapshot`; any
-    exception restores ``local.yaml`` to its pre-commit bytes (no half-created
-    span), mirroring :func:`setforge.section_promote.execute_promote_to_shared`.
-    Overlay carves also reseed the spans sidecar's ``last_deployed_body``.
+    The ``local.yaml`` writes for one detect run sit inside a single
+    :class:`Snapshot`; any exception restores ``local.yaml`` to its pre-commit
+    bytes (no half-created span), mirroring
+    :func:`setforge.section_promote.execute_promote_to_shared`. The overlay
+    sidecar reseed (``set_states``) is the terminal mutation before
+    ``discard()`` — it is not file-snapshotted, but it runs last, so a failure
+    anywhere still leaves ``local.yaml`` consistent.
     """
     local_yaml = override._local_config_path()
     snap = Snapshot(files=[local_yaml], snapshot_base=snapshot_base)
@@ -338,9 +345,10 @@ def _carve_one(
     """Prompt NAME + SCOPE + KIND for one region; return a plan or ``None``.
 
     Returns ``None`` (skip-with-reason) on empty name, a non-host-local scope
-    (detect targets host-local — D7), an unanchorable region
-    (:class:`AnchorRefusal`), a divergence on a disposition-less file, or a
-    non-unique overlay body (the data-loss uniqueness pre-flight).
+    (detect targets host-local — D7), a divergence on a disposition-less file
+    (no valid KIND), an invalid KIND answer, an unanchorable region
+    (:class:`AnchorRefusal`), or a non-unique overlay body (the data-loss
+    uniqueness pre-flight).
     """
     name = _ask("  name: ")
     if not name:
@@ -462,8 +470,9 @@ def _overlay_body_needle(span: SpanEntry, states: dict[str, SpanState]) -> str:
     if state is not None and state.last_deployed_body:
         return state.last_deployed_body
     assert span.overlay is not None
-    assert span.overlay.body is not None
-    return canonical_body(span.overlay.body)
+    # canonical_overlay_body resolves both inline body AND body_file (the
+    # either-or accessor) — never reach into span.overlay.body directly.
+    return canonical_overlay_body(span.overlay)
 
 
 def _overlay_expected_range(expected: str, needle: str) -> tuple[int, int] | None:
@@ -512,6 +521,27 @@ def _overlapping_overlay(
     return None
 
 
+def _reseeded_state(old: SpanState | None, span_name: str, canonical: str) -> SpanState:
+    """The overlay's SpanState with ``last_deployed_body`` reseeded to the new
+    canonical bytes (replacing ``old`` in place, or a minimal record when no
+    prior state exists)."""
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if old is not None:
+        return dataclasses.replace(
+            old, last_deployed_body=canonical, fingerprint=digest
+        )
+    return SpanState(
+        anchor=span_name,
+        fingerprint=digest,
+        prefix=[],
+        suffix=[],
+        position_hint_start_line=0,
+        position_hint_n_lines=canonical.count("\n"),
+        heading_level=0,
+        last_deployed_body=canonical,
+    )
+
+
 def recapture_overlay(
     profile: str,
     file_id: str,
@@ -552,23 +582,7 @@ def recapture_overlay(
             block["spans"] = spans
             override._dump_local_data(data)
             states = spans_store.get_states(profile, file_id)
-            old = states.get(span_name)
-            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            if old is not None:
-                new_state = dataclasses.replace(
-                    old, last_deployed_body=canonical, fingerprint=digest
-                )
-            else:
-                new_state = SpanState(
-                    anchor=span_name,
-                    fingerprint=digest,
-                    prefix=[],
-                    suffix=[],
-                    position_hint_start_line=0,
-                    position_hint_n_lines=canonical.count("\n"),
-                    heading_level=0,
-                    last_deployed_body=canonical,
-                )
+            new_state = _reseeded_state(states.get(span_name), span_name, canonical)
             spans_store.set_states(profile, file_id, {span_name: new_state})
             snap.discard()
         except BaseException:
