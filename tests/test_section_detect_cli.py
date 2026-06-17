@@ -383,3 +383,41 @@ def test_wizard_propagates_anchor_refusal(monkeypatch) -> None:
         _target("shared"), regions, live, expected, _silent_console()
     )
     assert plans == []
+
+
+# --- Task 7 follow-up: subtract span-covered regions (idempotency) ------------
+
+
+def test_covered_by_span_subtracts_carved_pinned() -> None:
+    from setforge.cli import _detect_helpers as dh
+    from setforge.config import Disposition, TrackedFile
+    from setforge.spans import SpanEntry, SpanKind, SpanSemantics
+
+    tf = TrackedFile(
+        src=Path("x.md"),
+        dst="~/x.md",
+        disposition=Disposition.SHARED,
+        spans=[
+            SpanEntry(
+                anchor="## Workflow",
+                kind=SpanKind.PINNED,
+                semantics=SpanSemantics.HOST_LOCAL,
+            )
+        ],
+    )
+    live = "## Workflow\n\nmy edited body\n"
+    region = _divergence_region(live_start=2, live_end=3)
+    assert dh.covered_by_span(region, live, tf) is True
+
+    other = "## Other\n\nmy edit\n"
+    region2 = _divergence_region(live_start=2, live_end=3)
+    assert dh.covered_by_span(region2, other, tf) is False
+
+
+def test_covered_by_span_false_without_spans() -> None:
+    from setforge.cli import _detect_helpers as dh
+
+    region = _divergence_region(live_start=0, live_end=1)
+    assert (
+        dh.covered_by_span(region, "changed\n", _target("none").tracked_file) is False
+    )

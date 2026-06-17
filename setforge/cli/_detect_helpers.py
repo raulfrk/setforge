@@ -24,10 +24,7 @@ from rich.console import Console
 from setforge import deploy, spans_store, transitions
 from setforge.anchors import Anchor
 from setforge.cli import override
-from setforge.cli._install_helpers import (
-    _load_validated_host_local_sections,
-    _plan_disposition_base,
-)
+from setforge.cli._install_helpers import _load_validated_host_local_sections
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import (
     Config,
@@ -98,33 +95,31 @@ def expected_deploy_text(
     target: DetectTarget,
     host_local: dict[HostLocalSectionName, HostLocalSection] | None,
 ) -> str:
-    """Return the expected deploy output for ``target`` — what ``install`` would
-    actually write right now (plan P1).
+    """Return the **pristine** expected output for ``target`` (plan P1).
 
-    Computed from the REAL on-disk live (``live_text`` left at its default so
-    :func:`deploy.resolve_deploy` reads ``dst``), so the diff in
-    :func:`compute_detect_regions` surfaces exactly the live edits install would
-    CLOBBER (the ones worth carving) and NOT the ones it already preserves —
-    a carved overlay/pinned/forked region deploys back to itself, so it does not
-    re-surface (idempotency). For a ``disposition=None`` markerless file the
-    content is the tracked source with its overlay bodies injected, independent
-    of live either way. ``host_local`` is the per-file overlay map (loaded once
-    by the caller, mirroring install/compare); ``None`` when the file declares
-    no host-local section.
+    The pristine baseline is the tracked source rendered with its host-local
+    OVERLAY bodies injected and any shared markers maintained — the
+    ``disposition=None`` verbatim+overlay path, FORCED regardless of the file's
+    real disposition. This is live-INDEPENDENT, so the diff in
+    :func:`compute_detect_regions` surfaces EVERY live edit that diverges from
+    the shared template, not just the ones a disposition merge would clobber
+    (a shared/forked merge keeps the user's edit, which would otherwise hide it).
+    Already-carved pinned/forked regions are filtered separately by
+    :func:`covered_by_span` so they do not re-surface (idempotency); already-
+    carved overlays match here because their body is injected into the baseline.
+    ``host_local`` is the per-file overlay map (loaded once by the caller,
+    mirroring install/compare); ``None`` when the file declares no host-local
+    section.
     """
     tf = target.tracked_file
     file_spans = tf.spans or []
     states = spans_store.get_states(profile, target.name) if file_spans else {}
-    base_text: str | None = None
-    if tf.disposition is not None:
-        base_text = _plan_disposition_base(profile, target.name, target.dst).base_text
     resolved = deploy.resolve_deploy(
         target.src,
         target.dst,
         host_local_sections=host_local,
         mode=tf.mode,
-        disposition=tf.disposition,
-        base_text=base_text,
+        disposition=None,  # forced: pristine tracked render, not the live merge
         spans=file_spans or None,
         span_states=states or None,
     )
@@ -435,6 +430,30 @@ def carve_wizard(
     return plans
 
 
+def covered_by_span(region: DetectRegion, live: str, tf: TrackedFile) -> bool:
+    """True when ``region`` is already protected by a pinned/forked span.
+
+    A divergence whose enclosing heading anchor matches an existing
+    pinned/forked span's anchor is already carved — the pristine baseline shows
+    it as drift (the span is not applied there), so it must be subtracted to
+    keep re-detect idempotent (plan P2; spec §2b step 3). Overlay-covered
+    regions need no subtraction: their body is injected into the baseline, so
+    they already match live.
+    """
+    pinned_forked = {
+        s.anchor
+        for s in (tf.spans or [])
+        if s.kind in (SpanKind.PINNED, SpanKind.FORKED)
+    }
+    if not pinned_forked:
+        return False
+    try:
+        anchor = pinned_anchor_string(region, live)
+    except ValueError:
+        return False
+    return anchor in pinned_forked
+
+
 def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> None:
     """Top-level ``section detect`` entry point."""
     cfg = load_config(config_path)
@@ -454,7 +473,11 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
             continue
         live = target.dst.read_text(encoding="utf-8")
         expected = expected_deploy_text(profile, target, overlay_map.get(target.name))
-        regions = compute_detect_regions(live, expected)
+        regions = [
+            r
+            for r in compute_detect_regions(live, expected)
+            if not covered_by_span(r, live, target.tracked_file)
+        ]
         if not regions:
             continue
         any_drift = True
