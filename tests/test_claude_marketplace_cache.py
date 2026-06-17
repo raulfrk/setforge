@@ -231,10 +231,12 @@ def test_clone_marketplace_argv_uses_dash_dash_separator(
     clone_calls = [c for c in fake.calls if c[1:2] == ["clone"]]
     assert len(clone_calls) == 1
     argv = clone_calls[0]
-    # argv = [git, "clone", "--", repo, dest]
+    # argv = [git, "clone", "--", clone_url, dest]
     assert argv[1] == "clone"
     assert argv[2] == "--"
-    assert argv[3] == "anthropic/plug"
+    # The bare `anthropic/plug` shorthand is expanded to a full HTTPS URL
+    # before cloning — raw `git clone` cannot resolve the shorthand.
+    assert argv[3] == "https://github.com/anthropic/plug"
 
 
 # ---------------------------------------------------------------------------

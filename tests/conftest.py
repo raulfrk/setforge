@@ -483,11 +483,18 @@ class FakeGit:
 
         # git clone -- <repo> <dest>
         # Defense-in-depth: `_clone_marketplace` always passes the `--`
-        # separator before source.repo to prevent argv flag injection.
+        # separator before the clone target to prevent argv flag injection.
         if len(cmd) >= 4 and cmd[0] == "clone" and cmd[1] == "--":
             repo = cmd[2]
             dest = Path(cmd[3])
-            if self.known_repos is not None and repo not in self.known_repos:
+            # `_clone_marketplace` now expands a bare `owner/repo` shorthand
+            # to a full `https://github.com/owner/repo` URL before cloning,
+            # so normalize back to the shorthand for the `known_repos`
+            # membership test (mirrors `_urls_equivalent`'s normalization).
+            if (
+                self.known_repos is not None
+                and self._normalize_repo(repo) not in self.known_repos
+            ):
                 raise subprocess.CalledProcessError(
                     128, args, stderr=f"fatal: repository '{repo}' not found"
                 )
@@ -519,6 +526,25 @@ class FakeGit:
             return subprocess.CompletedProcess(args, 0, "", "")
 
         raise AssertionError(f"unexpected git invocation: {args!r}")
+
+    @staticmethod
+    def _normalize_repo(url: str) -> str:
+        """Reduce a clone target to ``owner/repo`` for membership tests.
+
+        Mirrors ``claude_marketplace_cache._urls_equivalent``'s normalization
+        so a clone of the expanded ``https://github.com/owner/repo`` URL still
+        matches a ``known_repos`` entry written in the short ``owner/repo``
+        form. Non-github / path targets pass through unchanged.
+        """
+        stripped = url.removesuffix(".git").rstrip("/")
+        for prefix in (
+            "https://github.com/",
+            "git@github.com:",
+            "ssh://git@github.com/",
+        ):
+            if stripped.startswith(prefix):
+                return stripped[len(prefix) :]
+        return stripped
 
     def clone_count(self) -> int:
         return sum(1 for c in self.calls if c[1:2] == ["clone"])

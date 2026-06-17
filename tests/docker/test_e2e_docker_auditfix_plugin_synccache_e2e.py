@@ -277,8 +277,8 @@ def test_e2e_docker_install_local_clone_cache_miss_points_to_sync_cache(
     The marketplace cache is absent and its github source points at a
     nonexistent path, so the on-demand clone fails and raises
     MarketplaceCacheMiss. That surfaces as a per-marketplace reconcile
-    FAILED line carrying the spec-locked remediation
-    ("run `setforge plugin sync-cache ...` while online first"). The
+    FAILED line carrying the category-aware remediation (a missing repo
+    path classifies as "repository not found" and names sync-cache). The
     cache-miss does NOT gate the install exit code (only MCP failures
     do), so the contract under test is the remediation message + no
     traceback escaping.
@@ -294,7 +294,110 @@ def test_e2e_docker_install_local_clone_cache_miss_points_to_sync_cache(
     combined = res.stdout + res.stderr
     # The remediation must name sync-cache so the user knows the fix.
     assert "sync-cache" in combined, combined
-    # And it must be the cache-miss remediation, not some unrelated mention.
-    assert "while online" in combined, combined
+    # And it must be the cache-miss remediation: a missing repo path is
+    # classified as "repository not found" (NOT mislabeled offline).
+    assert "repository not found" in combined.lower(), combined
+    assert "offline" not in combined.lower(), combined
     # No unhandled traceback should escape the graceful-degradation path.
     assert "Traceback (most recent call last)" not in combined, combined
+
+
+# ---------------------------------------------------------------------------
+# (5) local-clone, github SHORTHAND marketplace → bare `owner/repo` is
+#     expanded to a full https://github.com/owner/repo URL before cloning.
+#     The m97t regression guard. Network-free via a git `insteadOf` rewrite.
+# ---------------------------------------------------------------------------
+
+# A github-backed marketplace whose `repo` is a real `owner/repo` SHORTHAND
+# (NOT a local path) — the shape the author's real config uses. Cases 1-4 fake
+# github with a local bare-repo path, which `git clone` accepts verbatim and so
+# never exercised the shorthand→URL expansion that m97t fixes.
+_SHORTHAND_REPO = "testorg/testmp"
+_SHORTHAND_BASENAME = "testmp"
+_SHORTHAND_CACHE_DIR = (
+    f"/home/tester/.cache/setforge/marketplaces/{_SHORTHAND_BASENAME}"
+)
+_SHORTHAND_MP_YAML = f"""\
+version: 1
+schema_version: '1.0'
+tracked_files:
+  foo:
+    src: foo.md
+    dst: /tmp/out/foo.md
+marketplaces:
+  fixture-mp:
+    source: github
+    repo: {_SHORTHAND_REPO}
+claude_plugins:
+  some-plugin:
+    marketplace: fixture-mp
+profiles:
+  base:
+    tracked_files:
+      - foo
+    claude_plugins:
+      - some-plugin
+"""
+
+
+def _rewrite_github_url_to_local(
+    c: ContainerHandle, *, shorthand: str, local: str
+) -> None:
+    """Make ``https://github.com/<shorthand>`` resolve to a local bare repo.
+
+    A global git ``insteadOf`` rewrite keeps the test network-free while still
+    forcing the real code path: setforge must build the full
+    ``https://github.com/<shorthand>`` URL for the rewrite to match. The
+    pre-fix code passed the bare ``<shorthand>`` verbatim, which does NOT match
+    this rewrite and fails — so this test passes ONLY with the m97t fix.
+    """
+    c.exec(
+        [
+            "git",
+            "config",
+            "--global",
+            f"url.{local}.insteadOf",
+            f"https://github.com/{shorthand}",
+        ],
+        check=True,
+    )
+
+
+@pytest.mark.xdist_group("docker_daemon")
+def test_e2e_docker_sync_cache_expands_github_shorthand_to_url(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A bare ``owner/repo`` shorthand is expanded to a full HTTPS URL before
+    cloning — the m97t regression guard.
+
+    Real git rejects a bare ``owner/repo`` ("does not appear to be a git
+    repository") even when online, because only ``claude`` / ``gh`` understand
+    the shorthand. setforge must prepend ``https://github.com/``. Proven
+    network-free: a git ``insteadOf`` rewrite maps the EXPANDED
+    ``https://github.com/testorg/testmp`` URL to a local bare repo, so the
+    clone succeeds iff setforge built the full URL. The pre-fix bare-shorthand
+    clone would not match the rewrite and would fail.
+    """
+    c = docker_container()
+    _make_bare_marketplace_repo(c)  # local bare repo at _BARE_REPO
+    _rewrite_github_url_to_local(c, shorthand=_SHORTHAND_REPO, local=_BARE_REPO)
+    _write_config(c, body=_SHORTHAND_MP_YAML)
+    _point_source_at(c, install_mode="local-clone")
+
+    res = _sync_cache(c, check=False)
+    # The clone succeeds ONLY because setforge expanded the bare shorthand to
+    # `https://github.com/testorg/testmp`, which the insteadOf rewrite then
+    # maps to the local bare repo. The pre-fix code passed the bare shorthand
+    # verbatim — no rewrite match — and would fail here. This is the m97t guard.
+    assert res.returncode == 0, res.stdout + res.stderr
+    combined = res.stdout + res.stderr
+    assert "refreshed fixture-mp" in combined, combined
+    assert "Traceback (most recent call last)" not in combined, combined
+    # The cache mirror landed on disk under the shorthand basename.
+    post = c.exec(["test", "-d", f"{_SHORTHAND_CACHE_DIR}/.git"], check=False)
+    assert post.returncode == 0, f"cache git checkout missing at {_SHORTHAND_CACHE_DIR}"
+    # NB: a second sync-cache is intentionally NOT exercised here. The insteadOf
+    # rewrite makes git record the LOCAL path as the cache's origin, so the
+    # drift check would see it differ from the declared `testorg/testmp` — a
+    # fixture artifact, not real behavior (a real clone records the github URL).
+    # Refresh idempotency is covered by the local-path marketplace in case (3).

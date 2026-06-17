@@ -15,6 +15,7 @@ import json
 import logging
 import shutil
 import subprocess
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -216,6 +217,153 @@ def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
     )
 
 
+class _GitFailureKind(StrEnum):
+    """Category of a failed ``git clone`` / ``git fetch`` for remediation.
+
+    Replaces the historical blanket "likely offline" label, which misreported
+    an online-but-unfound repo (renamed / moved / private) as a connectivity
+    problem. Classified from git's stderr; ``UNKNOWN`` is the honest fallback
+    for stderr matching no known signature.
+    """
+
+    OFFLINE = "offline"
+    REPO_NOT_FOUND = "repo-not-found"
+    AUTH = "auth"
+    UNKNOWN = "unknown"
+
+
+#: stderr substrings (lowercased) identifying each failure category. The check
+#: ORDER in :func:`_classify_git_failure` is load-bearing: an explicit auth
+#: signature must win over the broad "not found" match, because GitHub returns
+#: "Repository not found" for private repos you cannot authenticate to.
+_OFFLINE_SIGNATURES: Final[tuple[str, ...]] = (
+    "could not resolve host",
+    "could not connect",
+    "couldn't connect",
+    "failed to connect",
+    "connection timed out",
+    "connection refused",
+    "network is unreachable",
+    "temporary failure in name resolution",
+)
+_AUTH_SIGNATURES: Final[tuple[str, ...]] = (
+    "authentication failed",
+    "could not read username",
+    "could not read password",
+    "permission denied",
+    "403 forbidden",
+    "invalid username or password",
+)
+_NOT_FOUND_SIGNATURES: Final[tuple[str, ...]] = (
+    "repository not found",
+    "not found",
+    "does not appear to be a git repository",
+    "does not exist",
+)
+
+
+def _classify_git_failure(stderr: str) -> _GitFailureKind:
+    """Map a git clone/fetch ``stderr`` to a :class:`_GitFailureKind`.
+
+    Offline first (a DNS/connection signature is unambiguous), then auth (an
+    explicit auth message must beat the broad not-found match), then
+    not-found, else ``UNKNOWN``.
+    """
+    s = stderr.lower()
+    if any(sig in s for sig in _OFFLINE_SIGNATURES):
+        return _GitFailureKind.OFFLINE
+    if any(sig in s for sig in _AUTH_SIGNATURES):
+        return _GitFailureKind.AUTH
+    if any(sig in s for sig in _NOT_FOUND_SIGNATURES):
+        return _GitFailureKind.REPO_NOT_FOUND
+    return _GitFailureKind.UNKNOWN
+
+
+def _github_clone_url(repo: str) -> str:
+    """Expand a bare ``owner/repo`` GitHub shorthand to a clonable HTTPS URL.
+
+    ``MarketplaceSource.repo`` for a GITHUB source is typically the short
+    ``owner/repo`` form that ``claude`` / ``gh`` accept — but raw ``git
+    clone`` does NOT understand it (it treats ``owner/repo`` as a local path
+    and fails with "does not appear to be a git repository" even when online).
+    Passing the shorthand verbatim to ``git clone`` was the root cause of the
+    "fails while online" bug.
+
+    Idempotent: an already-qualified value (an explicit ``scheme://``, an
+    ``scp``-style ``git@host:owner/repo``, or a filesystem path) is returned
+    unchanged, so full URLs, SSH remotes, and local-bare-repo test fixtures
+    keep working. Only a bare ``owner/repo`` gets the ``https://github.com/``
+    prefix.
+    """
+    if (
+        "://" in repo
+        or repo.startswith("git@")
+        or repo.startswith(("/", "./", "../", "~"))
+    ):
+        return repo
+    return f"https://github.com/{repo}"
+
+
+def _marketplace_clone_failure_message(repo: str | None, stderr: str) -> str:
+    """Build a category-aware remediation for a failed marketplace clone."""
+    base = f"marketplace {repo!r} not in local cache and `git clone` failed"
+    match _classify_git_failure(stderr):
+        case _GitFailureKind.OFFLINE:
+            return (
+                f"{base} — network unreachable ({stderr}). Check your "
+                f"connection, then run `setforge plugin sync-cache "
+                f"--profile=<name>` while online."
+            )
+        case _GitFailureKind.REPO_NOT_FOUND:
+            return (
+                f"{base} — repository not found ({stderr}). The marketplace "
+                f"repo may have been renamed, moved, or made private; verify "
+                f"its URL in setforge.yaml, then re-run `setforge plugin "
+                f"sync-cache --profile=<name>`."
+            )
+        case _GitFailureKind.AUTH:
+            return (
+                f"{base} — authentication failed ({stderr}). The repository "
+                f"may be private; configure git credentials for this host, "
+                f"then re-run `setforge plugin sync-cache --profile=<name>`."
+            )
+        case _GitFailureKind.UNKNOWN:
+            return (
+                f"{base}: {stderr}. Check the marketplace repo URL in "
+                f"setforge.yaml and your network connection."
+            )
+
+
+def _marketplace_refresh_failure_message(
+    repo: str | None, detail: str, cache_dir: Path
+) -> str:
+    """Build a category-aware remediation for a failed marketplace refresh."""
+    base = f"marketplace {repo!r}: refresh failed"
+    match _classify_git_failure(detail):
+        case _GitFailureKind.OFFLINE:
+            return (
+                f"{base} — network unreachable ({detail}). Re-run `setforge "
+                f"plugin sync-cache --profile=<name>` while online."
+            )
+        case _GitFailureKind.REPO_NOT_FOUND:
+            return (
+                f"{base} — repository not found ({detail}). The repo may have "
+                f"been renamed, moved, or made private; verify its URL in "
+                f"setforge.yaml, then delete {cache_dir} and re-run sync-cache."
+            )
+        case _GitFailureKind.AUTH:
+            return (
+                f"{base} — authentication failed ({detail}). The repository "
+                f"may be private; configure git credentials, then re-run "
+                f"sync-cache."
+            )
+        case _GitFailureKind.UNKNOWN:
+            return (
+                f"{base} ({detail}). Delete {cache_dir} and re-run `setforge "
+                f"plugin sync-cache --profile=<name>` while online."
+            )
+
+
 def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """Clone ``source.repo`` into ``dest_path`` via ``git clone``.
 
@@ -228,17 +376,19 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
     """
     git = _resolve_git_or_raise()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    # A bare `owner/repo` shorthand must be expanded to a full HTTPS URL —
+    # raw `git clone` does not understand the shorthand and fails as if
+    # offline. Full URLs / SSH remotes / local paths pass through unchanged.
+    clone_url = _github_clone_url(source.repo or "")
     try:
         # `--` separates options from positional args. Defends against
-        # argv flag injection if source.repo ever starts with `-`
+        # argv flag injection if the clone target ever starts with `-`
         # (e.g. `-upload-pack=...`), which git would otherwise interpret
         # as a flag rather than as the repo positional. CLAUDE.md
         # subprocess hygiene already mandates list-form argv and no
         # shell=True; this is the defense-in-depth completion of that.
-        # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
-        # by resolve_marketplace_source for GITHUB sources
         result = subprocess.run(
-            [str(git), "clone", "--", source.repo or "", str(dest_path)],
+            [str(git), "clone", "--", clone_url, str(dest_path)],
             check=True,
             text=True,
             capture_output=True,
@@ -249,14 +399,11 @@ def _clone_marketplace(source: MarketplaceSource, dest_path: Path) -> None:
         subprocess.TimeoutExpired,
         OSError,
     ) as exc:
-        LOGGER.debug("git clone %r stderr: %s", source.repo, stderr_of(exc))
+        LOGGER.debug("git clone %r stderr: %s", clone_url, stderr_of(exc))
         raise MarketplaceCacheMiss(
-            f"marketplace {source.repo!r} not in local cache and `git clone` "
-            f"failed (likely offline): {stderr_of(exc)}. "
-            f"Run `setforge plugin sync-cache --profile=<name>` while online "
-            f"first."
+            _marketplace_clone_failure_message(source.repo, stderr_of(exc))
         ) from exc
-    _debug_git_output(f"git clone {source.repo!r}", result)
+    _debug_git_output(f"git clone {clone_url!r}", result)
 
 
 def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> None:
@@ -277,8 +424,7 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
         _run_git("reset", "--hard", "origin/HEAD", cwd=cache_dir, timeout=_TIMEOUT_S)
     except MarketplaceCacheMiss as exc:
         raise MarketplaceCacheMiss(
-            f"marketplace {source.repo!r}: refresh failed ({exc}). "
-            f"Delete {cache_dir} and re-run sync-cache while online."
+            _marketplace_refresh_failure_message(source.repo, str(exc), cache_dir)
         ) from exc
 
 

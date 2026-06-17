@@ -170,10 +170,11 @@ def test_collision_update_success_swaps_in_new_clone(fake_git, tmp_path: Path) -
     assert (cache_dir / ".git").exists()
     # Staging dir cleaned up after the rename.
     assert not (cache_root / "tools.tmp").exists()
-    # The clone was directed at bob/tools.
+    # The clone was directed at bob/tools (expanded to a full HTTPS URL —
+    # raw `git clone` cannot resolve the bare `owner/repo` shorthand).
     clone_calls = [c for c in fake.calls if c[1:2] == ["clone"]]
     assert clone_calls
-    assert "bob/tools" in clone_calls[0]
+    assert "https://github.com/bob/tools" in clone_calls[0]
 
 
 def test_collision_update_clears_stale_staging_dir(fake_git, tmp_path: Path) -> None:
