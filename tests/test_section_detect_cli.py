@@ -51,9 +51,8 @@ def test_detect_no_drift_exits_zero(runner: CliRunner) -> None:
 
 
 def test_expected_matches_deploy_then_edit_surfaces() -> None:
-    """The expected-deploy string is deterministic + live-independent: it equals
-    a no-drift baseline (idempotency) and a fresh live edit surfaces as a
-    NEW_CONTENT region (plan P1/P2)."""
+    """expected_deploy_text is deterministic (same output across calls) and a
+    fresh live edit against it surfaces as a NEW_CONTENT region (plan P1/P2)."""
     from setforge.cli import _detect_helpers as dh
     from setforge.config import load_config
     from setforge.section_detect import compute_detect_regions
@@ -68,8 +67,8 @@ def test_expected_matches_deploy_then_edit_surfaces() -> None:
     expected = dh.expected_deploy_text("test-text-sections", target, None)
     assert expected.strip(), "expected deploy output must be non-empty"
 
-    # Idempotency: live == expected → zero regions.
-    assert compute_detect_regions(expected, expected) == []
+    # Deterministic: a second call returns byte-identical output.
+    assert dh.expected_deploy_text("test-text-sections", target, None) == expected
 
     # A fresh live edit (a new trailing block) surfaces as NEW_CONTENT.
     edited = expected + "\nHand-written host note\n"
@@ -236,7 +235,9 @@ def test_commit_writes_spans(tmp_path: Path) -> None:
     assert any(s["anchor"] == "## A" for s in spans)
 
 
-def test_commit_rolls_back_on_failure(tmp_path: Path, monkeypatch) -> None:
+def test_commit_rolls_back_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from setforge.cli import _detect_helpers as dh
     from setforge.cli import override
 
@@ -283,7 +284,7 @@ def test_commit_rolls_back_on_failure(tmp_path: Path, monkeypatch) -> None:
 # --- Task 5: carve wizard (line-prompt UI) ------------------------------------
 
 
-def test_wizard_carves_one_overlay(monkeypatch) -> None:
+def test_wizard_carves_one_overlay(monkeypatch: pytest.MonkeyPatch) -> None:
     from setforge.cli import _detect_helpers as dh
     from setforge.section_detect import compute_detect_regions
 
@@ -306,7 +307,7 @@ def test_wizard_carves_one_overlay(monkeypatch) -> None:
     assert plan.seed_state is not None
 
 
-def test_wizard_skip_produces_no_plan(monkeypatch) -> None:
+def test_wizard_skip_produces_no_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     from setforge.cli import _detect_helpers as dh
     from setforge.section_detect import compute_detect_regions
 
@@ -318,7 +319,7 @@ def test_wizard_skip_produces_no_plan(monkeypatch) -> None:
     assert plans == []
 
 
-def test_wizard_refuses_shared_scope(monkeypatch) -> None:
+def test_wizard_refuses_shared_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scope is asked explicitly and never auto-defaulted; shared is out of
     scope for detect, so a shared answer skips the carve (no plan)."""
     from setforge.cli import _detect_helpers as dh
@@ -336,7 +337,7 @@ def test_wizard_refuses_shared_scope(monkeypatch) -> None:
 # --- Task 6: S4 pitfall coverage ----------------------------------------------
 
 
-def test_wizard_refuses_ambiguous_overlay_body(monkeypatch) -> None:
+def test_wizard_refuses_ambiguous_overlay_body(monkeypatch: pytest.MonkeyPatch) -> None:
     """An overlay body that occurs >1x in live is born ambiguous — the carve is
     refused (uniqueness pre-flight), never silently written."""
     from setforge.cli import _detect_helpers as dh
@@ -351,7 +352,9 @@ def test_wizard_refuses_ambiguous_overlay_body(monkeypatch) -> None:
     assert plans == []
 
 
-def test_wizard_refuses_divergence_without_disposition(monkeypatch) -> None:
+def test_wizard_refuses_divergence_without_disposition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A DIVERGENCE on a disposition=None file has no valid kind (pinned/forked
     would fail validate_span_disposition); the carve is refused."""
     from setforge.cli import _detect_helpers as dh
@@ -365,7 +368,7 @@ def test_wizard_refuses_divergence_without_disposition(monkeypatch) -> None:
     assert plans == []
 
 
-def test_wizard_propagates_anchor_refusal(monkeypatch) -> None:
+def test_wizard_propagates_anchor_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     """A divergence under a duplicate heading yields an AnchorRefusal, which the
     wizard surfaces as a skip rather than fabricating an anchor."""
     from setforge.cli import _detect_helpers as dh
@@ -482,3 +485,44 @@ def test_recapture_missing_overlay_raises(tmp_path: Path) -> None:
         dh.recapture_overlay(
             "p", "comprehensive_text", "ghost", "x\n", snapshot_base=tmp_path
         )
+
+
+# --- Review-fix coverage: CLI error model + extend ----------------------------
+
+
+def test_detect_invalid_tracked_file_is_bad_parameter(runner: CliRunner) -> None:
+    """A --tracked-file not in the profile exits as a clean BadParameter, not a
+    raw KeyError traceback."""
+    result = runner.invoke(
+        app,
+        [
+            "section",
+            "detect",
+            f"--config={_CFG}",
+            "--profile=test-text-sections",
+            "--tracked-file=does_not_exist",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "does_not_exist" in result.output
+
+
+def test_wizard_extend_merges_then_carves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`extend` merges the next region into the current one; the carved overlay
+    body spans both (the merge path, not just the skip path)."""
+    from setforge.cli import _detect_helpers as dh
+    from setforge.section_detect import compute_detect_regions
+
+    live = "# H\nADD1\nkeep\nADD2\n"
+    expected = "# H\nkeep\n"
+    regions = compute_detect_regions(live, expected)
+    assert len(regions) == 2
+
+    answers = iter(["extend", "carve", "merged", "host-local"])
+    monkeypatch.setattr(dh, "_ask", lambda _p: next(answers))
+    plans = dh.carve_wizard(_target("none"), regions, live, expected, _silent_console())
+    assert len(plans) == 1
+    body = plans[0].body
+    assert body is not None
+    assert "ADD1" in body
+    assert "ADD2" in body
