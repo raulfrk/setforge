@@ -638,3 +638,27 @@ def section_add(
         body_file=body_file,
         yes=yes,
     )
+
+
+@section_app.command("detect")
+def section_detect(
+    profile: str = _PROFILE_OPTION,
+    config: Path = _CONFIG_OPTION,
+    tracked_file: str | None = typer.Option(
+        None,
+        "--tracked-file",
+        help="tracked_files key; omit to scan every markdown tracked_file with drift",
+    ),
+) -> None:
+    """Detect hand-edited regions in live markdown and carve them into spans.
+
+    Diffs each live markdown file against its expected deploy output, surfaces
+    the regions you hand-edited, and walks an interactive wizard to carve each
+    into a durable markerless host-local span (overlay / pinned / forked).
+    """
+    from setforge.cli import _detect_helpers
+
+    config_path = _resolve_config_arg(config)
+    _detect_helpers.run_detect(
+        config_path=config_path, profile=profile, tracked_file=tracked_file
+    )
