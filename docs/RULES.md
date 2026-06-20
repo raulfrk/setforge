@@ -94,7 +94,7 @@ Part 2(b)).
 
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
-| PY-1 | Enum classes that are string-valued use `StrEnum`. | DETERMINISTIC | ruff / AST lint |
+| PY-1 | Enum classes that are string-valued use `StrEnum`. | ADVISORY | `python-specifics-reviewer` (until a StrEnum AST lint lands) |
 | PY-2 | Plain record types use `@dataclass` (not ad-hoc dicts / tuples). | ADVISORY | `python-specifics-reviewer` |
 | PY-3 | Filesystem paths use `pathlib`, not `os.path`. | DETERMINISTIC | ruff (`PTH`) |
 | PY-4 | Unions use PEP 604 syntax (`X | None`), not `Optional[X]` / `Union[...]`. | DETERMINISTIC | ruff (`UP007`/`UP045`) |
@@ -103,8 +103,7 @@ Part 2(b)).
 
 > Tag note: ruff/mypy already ship the `PTH`, `UP*`, and strict-hint rules, so
 > PY-3/4/5/6 are deterministic today. PY-1 needs a small AST lint to catch a
-> string-valued plain `Enum` (ruff has no built-in for it); until that lint
-> lands, treat PY-1 as advisory.
+> string-valued plain `Enum` (ruff has no built-in for it).
 
 ---
 
@@ -117,7 +116,7 @@ Part 2(b)).
 | PROV-3 | `REPORT` / dry-run performs **no writes** (pure diff). | DETERMINISTIC | provisioner-protocol tests (no-write assertion) |
 | PROV-4 | Idempotent skip: a component whose key already matches installed state is a **no-op**. | DETERMINISTIC | provisioner-protocol tests + `@invariant` (INV-7) |
 | PROV-5 | User-scope by default; system (apt) needs `allow_system: true` **and** runtime root/sudo capability, else **soft-fail** (warn + skip, never hang). | DETERMINISTIC | e2e (soft-fail path) + `design-invariant-reviewer` |
-| PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | `legacy-API-ban` / direct-write lint + e2e |
+| PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | `legacy-API-ban` lint + e2e |
 
 ---
 
@@ -126,7 +125,7 @@ Part 2(b)).
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
 | SELF-1 | A proposal **must cite an external signal** (gate verdict / surviving mutant / dismissed finding / template-drift). Pure self-eval is rejected. | ADVISORY | human gate (revdiff approval) |
-| SELF-2 | Proposals are **never auto-applied** — they land only on explicit approval. | DETERMINISTIC | no auto-apply path exists (architecture) + human gate |
+| SELF-2 | Proposals are **never auto-applied** — they land only on explicit approval. | ADVISORY | human gate (revdiff approval); architecture has no auto-apply path |
 | SELF-3 | Proposals are **untrusted data**: they describe a change, never inject behavior/commands/URLs. | ADVISORY | human gate (review against the rule's `git log -p` origin) |
 | SELF-4 | Capture on the **2nd occurrence** (one-offs are noise); declined proposals are never re-raised. | ADVISORY | backlog dedup/supersede; human gate |
 
@@ -136,8 +135,8 @@ Part 2(b)).
 
 | Tag | Count |
 |---|---|
-| DETERMINISTIC | 31 |
-| ADVISORY | 11 |
+| DETERMINISTIC | 29 |
+| ADVISORY | 13 |
 | **Total** | **42** |
 
 ---
@@ -188,6 +187,7 @@ stateful machine assembles them into one model over `install`/`sync`/`revert`/
 | provisioner-protocol (reconcile/error model) | INV-7 |
 | bundle-model (components, `depends_on`) | INV-9 |
 | migrate (config + package reshape, snapshot/revert) | INV-3, INV-5 |
+| (whole-machine — see note below) | INV-4 |
 
 INV-4 (reconcile idempotence) is a whole-machine property over repeated
 `install` steps and is asserted by the harness across the reconcile path, not
