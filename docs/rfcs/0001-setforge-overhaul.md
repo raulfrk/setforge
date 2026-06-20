@@ -42,7 +42,7 @@ Legend: `SETTLED` = sure · `LEANING` = tentative · `OPEN` = needs figuring out
 | Operational-tail skills: **docs-sync** (RULES/CLAUDE/RFC/CHANGELOG drift) + **security/dependency-triage** (wrap gitleaks + dep-audit); flaky-triage optional | SETTLED |
 | Every tool carries a **self-improvement loop**: grounded proposal → backlog → revdiff → approve/decline; never auto-apply; gates ratchet up only | SETTLED |
 | Session-flow integration: tooling overlays the 7 phases, **tightly integrated** (no standalone); bridge = **CLAUDE.md manifest** (P5); gates **always-on pre-commit+CI**; self-improve at **P6+session-end** | SETTLED |
-| **Build order tooling-first**: harness/gates/agents/theme/widget/self-improvement (Wave 0) before feature epics; scaffolds codified with their first instance | SETTLED |
+| **Build order spine-first**: a tooling/test spine (gates, review agents, rule index, self-improvement, Hypothesis harness) is built FIRST and hard-blocks even the theme/widget and the rest of testing; then D + feature epics; scaffolds codified with their first instance | SETTLED |
 | claude-merge UX: instruction optional (Enter=default, prompt shown first); per-conflict session **discarded** on accept/cancel | SETTLED |
 | Staging: marking `share` **auto-drafts** shared wording (+ follow-up prompts); **local ⇄ shared via re-stage** (bidirectional, no extra verb) | SETTLED |
 | Store encoding: file-id = `tracked_files` key; index hunks matched by **content-hash + 3-way position** (label cosmetic); class local/shared/pending | SETTLED |
@@ -77,30 +77,38 @@ Legend: `SETTLED` = sure · `LEANING` = tentative · `OPEN` = needs figuring out
 
 ## 4. Build order (read the rest of this doc in this sequence)
 
-This is the **whole-project build plan**, not just the tooling. **Tooling-first:** the harness, gates,
-agents, rule index, theme/widget, and self-improvement land FIRST (Wave 0) so every feature epic is
-built *with* them — scaffolds generate the boilerplate, invariants guard from day 1, gates enforce from
-the first commit. One nuance: a **scaffold that codifies a pattern is built alongside that pattern's
-first instance** (e.g. `scaffold-provisioner` lands with B1, then generates B2–B5).
+This is the **whole-project build plan**, not just the tooling. **Spine-first:** a tooling/test **spine**
+— the deterministic gates, review agents, rule index, self-improvement loop, and the Hypothesis harness —
+is built FIRST and **hard-blocks everything below it**, including the theme/widget (D) and the rest of
+testing. Only once the spine is in does the rest proceed: every feature epic is then built *with* it —
+scaffolds generate the boilerplate, invariants guard from day 1, gates enforce from the first commit. One
+nuance: a **scaffold that codifies a pattern is built alongside that pattern's first instance** (e.g.
+`scaffold-provisioner` lands with B1, then generates B2–B5).
 
 ```
- WAVE 0  FOUNDATIONS (build first — used by everything)            → §5–§8
-   project tooling (RULES.md · gates · review agents · scaffolds · maintenance skills)
-   testing harness (INV-1..10 · coverage/mutation)
-   self-improvement loop
-   UX (Tokyo Night theme · button-bar widget)
+ WAVE 0a  TOOLING SPINE (built FIRST — hard-blocks everything below;        → §5–§7
+          gate = F2a + F5 + F7 + E1)
+   F1  rule index + testing rubric
+   F2a deterministic policy/AST lint gates (+ pre-commit/CI wiring)
+   F3 + F4 review agents  →  F5 enforce-tests
+   F7  self-improvement loop (captures proposals emitted by F2a / F3 / F4)
+   E1  Hypothesis harness + state machine + fixtures
+        │   nothing below may start until the spine is in
+ WAVE 0b  UNDER THE SPINE (parallel)                                        → §6, §8
+   D1 theme · D2 widget · D3 apply
+   E3 coverage policy · E4 mutation  →  F2b (wire coverage/mutation into CI)
         │
- WAVE 1  PATTERN-DEFINING FIRST INSTANCES (+ codify the scaffold)  → §9, §10
-   A0 fetch-upstream · A1 store · A2 merge engine · A3 conflict wizard · A7 inspect viewer
-   B1 provisioner protocol  ⊕  scaffold-provisioner
+ WAVE 1  PATTERN-DEFINING FIRST INSTANCES (+ codify the scaffold)           → §9, §10
+   A0 fetch · A1 store · A2 merge · A3 conflict wizard · A7 inspect viewer
+   B1 provisioner protocol  ⊕  scaffold-provisioner (F6)
         │
- WAVE 2  REPLICATE VIA SCAFFOLDS (cheap + conformant)              → §9, §10
-   A4 claude-merge · A5 staging · A6 seed-prompt        (scaffold-wizard)
-   B2 cargo · B3 python · B4 go · B5 github_release      (scaffold-provisioner)
-   B6 bundle · B7 file/override · B8 plugin/ext fold · B9 cleanup
+ WAVE 2  REPLICATE VIA SCAFFOLDS                                            → §9, §10
+   A4 claude-merge · A5 staging · A6 seed-prompt
+   B2 cargo · B3 python · B4 go · B5 github_release · B6 bundle · B7 file/override · B8 plugin/ext · B9 cleanup
+   E2 invariant stateful machine (assembles the per-component @invariants; needs A+B cores)
         │
- WAVE 3  CROSS-CUTTING (needs A+B)                                 → §11
-   C1–C5 migration         (author-migration)
+ WAVE 3  CROSS-CUTTING (needs A+B)                                          → §11
+   C1–C4 + C-guard migration
    B10 lockfile · C5 contract  (later releases)
 ```
 
@@ -130,7 +138,13 @@ A project-scoped `.claude/` toolset (version-controlled in the engine repo), in 
   cheap, high-ROI gaps small projects get bitten by silently.)
 
 **Rule index** `docs/RULES.md` (distilled from this RFC + CLAUDE.md) is the single source of truth
-grounding the agents, the humans, and the generators.
+grounding the agents, the humans, and the generators. It additionally carries the project's **testing
+rubric** (the tier-decision guide + the invariant-ownership map + the coverage/mutation bars).
+
+**Tier-1 gates land as two build steps.** The deterministic lints — **F2a** (wizard-letter-ban,
+theme-hardcode-ban, `shell=True`-ban, legacy-API-ban + pre-commit/CI) — have **no dependency on the test
+harness**, so they are part of the spine and ship first. The **coverage + mutation** gates wire in
+**later (F2b)**, once the E3/E4 policy exists.
 
 ### 5.1 Session-flow integration
 
@@ -178,6 +192,10 @@ checked after every step (the F1/F2 killers):
 | INV-8 | stage fidelity: install deploys exactly the `share`d hunks | staging leak |
 | INV-9 | bundle DAG acyclic + `depends_on` order honored | bundle ordering |
 | INV-10 | store index ↔ on-disk consistent (no orphan classification) | store drift |
+
+The catalog is **authored per component** — each component ships its own `@invariant` alongside its code.
+**E2 is the stateful machine that assembles and runs them together**, so E2 depends on the pillar cores
+and lands **after A+B**, not early.
 
 **Coverage + mutation:** 85% **branch** coverage gate on the **unit** suite only (e2e stays `--no-cov`
 per the known pytest-cov+xdist crash); exclude non-logic; higher bars on the core. **Mutation score >80%**
@@ -651,15 +669,20 @@ Sub-epics + their tasks (the build-order waves are in §4):
 
 **Epic E — Testing harness** (Wave 0)
 - E1. Harness: Hypothesis strategies + invariant helpers + `RuleBasedStateMachine` scaffold
-- E2. Implement the INV-1..10 catalog on the merge/reconcile/store core
+- E2. Invariant stateful machine — a `RuleBasedStateMachine` that ASSEMBLES the per-component
+  `@invariant`s (each authored with its own component) and checks them after every generated step. E2 does
+  not re-implement them centrally; it depends on the pillar cores and lands once A+B exist.
 - E3. Coverage policy: `branch=true`, `fail_under=85` unit-only, exclude config, CI gate
 - E4. Mutation: `mutmut` scoped to core, diff-on-PR + nightly, >80% score
 - E5. e2e audit-and-prune: per-test verdict manifest; thin to critical journeys + smoke
 - E6. Build the integration tier (`tmp_path` + pytest-subprocess) absorbing pushed-down edge cases
 
 **Epic F — Project Claude tooling** (Wave 0)
-- F1. `docs/RULES.md` rule index (distil RFC invariants + design rules + conventions)
-- F2. Tier-1 deterministic gates (hooks + pre-commit + CI) for all domains
+- F1. `docs/RULES.md` rule index (distil RFC invariants + design rules + conventions); also carries the
+  **testing rubric** (tier-decision guide + the invariant-ownership map + coverage/mutation bars)
+- F2a. Deterministic policy/AST lint gates (wizard-letter-ban, theme-hardcode-ban, `shell=True`-ban,
+  legacy-API-ban) + pre-commit/CI + optional commit hook
+- F2b. Wire the coverage + mutation gates into pre-commit/CI (once the E3/E4 policy exists)
 - F3. `test-quality-reviewer` agent
 - F4. `design-invariant-reviewer` agent (grounded in RULES.md)
 - F5. `enforce-tests` skill + wire the fan into session-flow Phase 5/7
@@ -667,7 +690,10 @@ Sub-epics + their tasks (the build-order waves are in §4):
 - F7. Self-improvement loop (proposal schema + bd backlog + revdiff approval)
 - F8. **Maintenance skills:** `docs-sync` + `security/dependency-triage` (operational tail; `flaky-test-triage` optional)
 
-**Deps:** E + F + D(theme/widget) → everything (Wave 0); C → A+B.
+**Deps:** the tooling/test SPINE — F1 → F2a; F1 → F3/F4 → F5; F1 → (F2a/F3/F4) → F7; and E1 — is built
+FIRST and hard-blocks D, the rest of E, and A/B/C. The downstream gate is **F2a + F5 + F7 + E1**. Under
+the spine (parallel): D, and E3/E4 → F2b. Then Wave 1 (A0–A3/A7 + B1 ⊕ F6), Wave 2 (A4–A6 + B2–B9), E2
+once A+B cores exist, and C → A+B (Wave 3).
 
 **Gap-closers** (from the RFC×tooling traceability): INV-9 + deterministic cycle/ref lint (B6); INV-10
 (A1); github_release bad-checksum-abort test (B5); theme 256-fallback-completeness lint (D1); claude-merge
