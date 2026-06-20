@@ -42,7 +42,7 @@ Legend: `SETTLED` = sure · `LEANING` = tentative · `OPEN` = needs figuring out
 | Operational-tail skills: **docs-sync** (RULES/CLAUDE/RFC/CHANGELOG drift) + **security/dependency-triage** (wrap gitleaks + dep-audit); flaky-triage optional | SETTLED |
 | Every tool carries a **self-improvement loop**: grounded proposal → backlog → revdiff → approve/decline; never auto-apply; gates ratchet up only | SETTLED |
 | Session-flow integration: tooling overlays the 7 phases, **tightly integrated** (no standalone); bridge = **CLAUDE.md manifest** (P5); gates **always-on pre-commit+CI**; self-improve at **P6+session-end** | SETTLED |
-| **Build order spine-first**: a tooling/test spine (gates, review agents, rule index, self-improvement, Hypothesis harness) is built FIRST and hard-blocks even the theme/widget and the rest of testing; then D + feature epics; scaffolds codified with their first instance | SETTLED |
+| **Build order spine-first**: a tooling/test spine (gates, review agents, rule index, self-improvement, Hypothesis harness) is built FIRST and hard-blocks even the theme/widget and the rest of testing; then the under-spine layer (D + coverage/mutation policy), then the feature epics; scaffolds codified with their first instance | SETTLED |
 | claude-merge UX: instruction optional (Enter=default, prompt shown first); per-conflict session **discarded** on accept/cancel | SETTLED |
 | Staging: marking `share` **auto-drafts** shared wording (+ follow-up prompts); **local ⇄ shared via re-stage** (bidirectional, no extra verb) | SETTLED |
 | Store encoding: file-id = `tracked_files` key; index hunks matched by **content-hash + 3-way position** (label cosmetic); class local/shared/pending | SETTLED |
