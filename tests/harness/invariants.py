@@ -34,7 +34,9 @@ This module owns NO setforge behavior. It is pure test infrastructure.
 from __future__ import annotations
 
 import functools
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from hypothesis.errors import InvalidDefinition
@@ -42,8 +44,6 @@ from hypothesis.stateful import RuleBasedStateMachine
 from hypothesis.stateful import invariant as _hypothesis_invariant
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from tests.harness.model import StubReconcileModel
 
 # Sentinel attribute stamped on every @invariant-decorated method so the
@@ -152,10 +152,7 @@ class InvariantStateMachine(RuleBasedStateMachine):
             self.rules = ()
             self.invariants = ()
         if root is None:
-            import tempfile
-            from pathlib import Path as _Path
-
-            root = _Path(tempfile.mkdtemp(prefix="setforge_harness_"))
+            root = Path(tempfile.mkdtemp(prefix="setforge_harness_"))
         self.root: Path = root
         self.model: StubReconcileModel = type(self).model_factory(root)
 

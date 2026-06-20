@@ -22,6 +22,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import rule, run_state_machine_as_test
+from pytest_subprocess.exceptions import ProcessNotRegisteredError
 
 from setforge.config import Config
 from tests.harness import strategies as hstrat
@@ -77,10 +78,16 @@ def test_stub_model_drives_four_verbs(tmp_path) -> None:
     model.install()
     assert model.store_index(), "install records a store index"
     model.sync()
+    schema_before_migrate = model.schema_version()
     model.migrate()
+    assert model.schema_version() != schema_before_migrate, "migrate bumps schema"
+    # revert pops exactly one snapshot and restores the pre-migrate state.
+    before = model.transition_count()
     model.revert()
-    # Every verb appended a transition snapshot; revert popped exactly one.
-    assert model.transition_count() >= 1
+    after = model.transition_count()
+    assert after == before - 1, "revert pops exactly one transition"
+    # migrate -> revert restores schema_version (INV-5: migrate reversible).
+    assert model.schema_version() == schema_before_migrate
 
 
 def test_stub_model_store_layout_on_disk(tmp_path) -> None:
@@ -150,6 +157,28 @@ def test_invariant_helper_catches_violation(tmp_path) -> None:
     with pytest.raises(InvariantViolation) as exc:
         machine.assert_invariants()
     assert "_impossible" in str(exc.value)
+
+
+def test_rule_less_machine_supports_assert_invariants(tmp_path) -> None:
+    """An invariants-only machine (no @rule) initializes and asserts cleanly.
+
+    Covers the ``except InvalidDefinition`` fallback in
+    ``InvariantStateMachine.__init__``: Hypothesis's
+    RuleBasedStateMachine.__init__ rejects a machine with zero rules, so
+    the base tolerates it and falls back to a minimal init for the
+    standalone assert_invariants() path.
+    """
+
+    class _InvariantsOnly(InvariantStateMachine):
+        model_factory = staticmethod(StubReconcileModel.create)
+
+        @invariant()
+        def _holds(self) -> None:
+            assert self.model.transition_count() >= 0
+
+    machine = _InvariantsOnly(tmp_path)
+    machine.model.set_config(hstrat.minimal_config())
+    machine.assert_invariants()  # must not raise despite no @rule defined
 
 
 # ---------------------------------------------------------------------------
@@ -262,5 +291,5 @@ def test_mock_subprocess_intercepts_known_binary(mock_cli_subprocess) -> None:
 
 def test_mock_subprocess_blocks_unregistered_calls(mock_cli_subprocess) -> None:
     """An unregistered real-binary call raises rather than escaping the sandbox."""
-    with pytest.raises(Exception):  # noqa: B017,PT011 (process-mock raises its own type)
+    with pytest.raises(ProcessNotRegisteredError):
         subprocess.run(["some-unregistered-binary", "--go"], check=True)

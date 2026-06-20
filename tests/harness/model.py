@@ -45,15 +45,18 @@ _TRANSITIONS = "transitions"
 class _Snapshot:
     """One transition's pre-state, for revert.
 
-    Holds the full live-body + store-index maps captured immediately
-    BEFORE a verb mutated them, plus the verb label. Revert pops the top
-    snapshot and restores it — the stub analog of the real transition
-    record's reverse-patch.
+    Holds the full live-body + store-index maps and the schema version
+    captured immediately BEFORE a verb mutated them, plus the verb label.
+    Revert pops the top snapshot and restores it — the stub analog of the
+    real transition record's reverse-patch. Capturing ``schema_version``
+    is what makes ``migrate`` reversible (INV-5): ``revert`` restores it
+    alongside ``live`` + ``index``.
     """
 
     verb: str
     live: dict[str, str]
     index: dict[str, dict[str, str]]
+    schema_version: str
 
 
 @dataclass(slots=True)
@@ -144,16 +147,18 @@ class StubReconcileModel:
     def revert(self) -> None:
         """Undo the most recent verb by restoring its pre-state snapshot.
 
-        No-op when the transition stack is empty (matching the real
-        ``revert`` refusing cleanly with nothing to undo). EXTENSION POINT
-        (E2 / A1+C4): the real engine reverses the on-disk patch + the
-        extension/plugin deltas; the stub restores the captured maps.
+        The stub silently no-ops where the real revert refuses cleanly
+        (nothing to undo) when the transition stack is empty. EXTENSION
+        POINT (E2 / A1+C4): the real engine reverses the on-disk patch +
+        the extension/plugin deltas; the stub restores the captured maps
+        and schema version (so ``revert ∘ migrate == identity``, INV-5).
         """
         if not self._transitions:
             return
         snap = self._transitions.pop()
         self.live = dict(snap.live)
         self.index = dict(snap.index)
+        self._schema_version = snap.schema_version
         self._persist()
 
     # -- engine seams (replace bodies in E2) ---------------------------
@@ -217,6 +222,7 @@ class StubReconcileModel:
                 verb=verb,
                 live=dict(self.live),
                 index={fid: dict(entry) for fid, entry in self.index.items()},
+                schema_version=self._schema_version,
             )
         )
 
