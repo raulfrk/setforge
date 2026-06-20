@@ -177,3 +177,9 @@ follow_imports = "skip"
 [[tool.mypy.overrides]]
 module = ["diff_match_patch", "diff_match_patch.*"]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.100",
+    "pytest-subprocess>=1.5",
+]
