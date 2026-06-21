@@ -64,10 +64,10 @@ Part 2(b)).
 
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
-| UX-1 | Every choice is a navigable **button bar** (`←/→`/`Tab` move, `Enter` selects, `Esc` cancels). No memorize-a-letter menus. | DETERMINISTIC | `wizard-letter-ban` lint (no letter-menu prompts) |
+| UX-1 | Every choice is a navigable **button bar** (`←/→`/`Tab` move, `Enter` selects, `Esc` cancels). No memorize-a-letter menus. | DETERMINISTIC | `wizard-letter-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (bans `read_one_choice` in `setforge/`) |
 | UX-2 | Letter keys exist only as **hidden accelerators**, never as the documented surface. | ADVISORY | `design-invariant-reviewer` |
-| UX-3 | No hardcoded colors outside the theme module — only semantic Tokyo Night roles (`accent`/`success`/`error`/`warning`/`heading`/`identifier`/`muted`/`text`). | DETERMINISTIC | `theme-hardcode-ban` lint (no raw hex / ANSI escapes outside the theme module) |
-| UX-4 | All wizards + non-wizard CLI output use the one shipped theme + button widget — truecolor with **256-color fallback**, dark-only. | DETERMINISTIC | theme 256-fallback-completeness lint (every role resolves in 256) |
+| UX-3 | No hardcoded colors outside the theme module — only semantic Tokyo Night roles (`accent`/`success`/`error`/`warning`/`heading`/`identifier`/`muted`/`text`). | DETERMINISTIC | `theme-hardcode-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (no raw ANSI / whole-token hex in `setforge/`) |
+| UX-4 | All wizards + non-wizard CLI output use the one shipped theme + button widget — truecolor with **256-color fallback**, dark-only. | DETERMINISTIC | theme 256-fallback-completeness lint (every role resolves in 256) — *planned; lands with the theme module (D1), wired into its acceptance* |
 | UX-5 | All wizards build on prompt_toolkit (`button_dialog`/`radiolist_dialog`/`input_dialog`) — no custom TUI. | ADVISORY | `design-invariant-reviewer` |
 | UX-6 | Unicode box-framing (per the §8 mockups) is part of the theme, applied consistently across surfaces. | ADVISORY | `design-invariant-reviewer` + human (revdiff) |
 
@@ -77,8 +77,8 @@ Part 2(b)).
 
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
-| SAFE-1 | No `shell=True` in subprocess calls; pass argv lists. | DETERMINISTIC | `shell=True`-ban lint (AST) |
-| SAFE-2 | No legacy/deprecated internal APIs — the four old mechanisms (disposition / sections / spans / overlays) are not reached for in new code. | DETERMINISTIC | `legacy-API-ban` lint |
+| SAFE-1 | No `shell=True` in subprocess calls; pass argv lists. | DETERMINISTIC | `shell=True`-ban lint (AST) — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (repo-wide) |
+| SAFE-2 | No legacy/deprecated internal APIs — the four old mechanisms (disposition / sections / spans / overlays) are not reached for in new code. | DETERMINISTIC | `legacy-API-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (namespace-scoped: new-engine packages must not import the legacy subsystem) |
 | SAFE-3 | Config schema evolves **additive-first**: a shipped field's name/type/meaning is fixed; new capability ⇒ new field. | ADVISORY | `python-spec-reviewer` + human gate ([`COMPATIBILITY.md`](../COMPATIBILITY.md)) |
 | SAFE-4 | Breaking schema changes go **expand → contract** — old field stays readable through the expand window; removed only at contract. | ADVISORY | human gate (COMPATIBILITY.md); schema review |
 | SAFE-5 | Every `schema_version` bump ships **both** an up and a down migration (cross-major downgrade = one command). | DETERMINISTIC | migration-pair check (registry has up + down per bump) |
