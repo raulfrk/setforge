@@ -41,7 +41,9 @@ def _lint_cmd() -> list[str]:
 
 
 def run_lints() -> tuple[int, str]:
-    r = subprocess.run(_lint_cmd(), capture_output=True, text=True)
+    # timeout guards the fail-closed property against a hung child: a
+    # TimeoutExpired propagates to the top-level guard in __main__ → exit 2.
+    r = subprocess.run(_lint_cmd(), capture_output=True, text=True, timeout=120)
     return r.returncode, (r.stderr or r.stdout)
 
 

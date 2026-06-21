@@ -85,7 +85,7 @@ LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
 )
 
 # New-engine packages whose code must NOT reach back into the legacy subsystem.
-# Empty of files today (the A/B beads land code here later); the ban activates
+# Empty of files today (the new engine lands here later); the ban activates
 # automatically the moment a file appears under one of these prefixes.
 ENFORCED_PKGS: tuple[str, ...] = ("setforge/reconcile/", "setforge/provision/")
 
@@ -121,7 +121,7 @@ _COLOR_KEYS: frozenset[str] = frozenset(
 _HEX_SUB_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Violation:
     """One policy-lint hit: a stable rule id, a ``file:line``, and a fix hint."""
 
