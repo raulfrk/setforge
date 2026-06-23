@@ -117,6 +117,36 @@ Commits rule); reserve `bd create` ONLY for LARGE follow-ups:
 After ANY inline-fix on main (failure-handling OR Decision-I), re-run the
 Phase 7 gates per `feedback_phase7_rerun_after_inline_fix` memory.
 
+## Review fan — project reviewers (enforce-tests)
+
+This project ships its own Phase-5/7 review entry: the **`enforce-tests`**
+skill (`.claude/skills/enforce-tests/`). When session-flow Phase 5 (post-impl
+review) or Phase 7 (post-merge) fires on an **engine diff**, invoke
+`enforce-tests` instead of running the global python fan bare — it is the
+single orchestrator for setforge review.
+
+What it dispatches, and the contract it owns:
+
+- The two **project reviewers** — `test-quality-reviewer` and
+  `design-invariant-reviewer` (`.claude/agents/`) — run **alongside** the global
+  `reviewing-python-code` + `reviewing-bd-leaks` fans, which `enforce-tests`
+  invokes **by skill name** (never a hard-coded aspect-agent roster, so a new
+  upstream python aspect is picked up automatically).
+- **`enforce-tests` owns the `reviewing-bd-leaks` scan** — it runs the leak fan
+  exactly once. Session-flow's "always run the leak scan" rule is satisfied here;
+  do not also dispatch `reviewing-bd-leaks` separately for an engine diff.
+- It runs the **Tier-1 deterministic gates** first (`scripts/check_policy_lints.py`,
+  `scripts/check_schema_gates.py`, `scripts/check-no-bd-refs.sh`), short-circuiting
+  the fan on failure, and consolidates **one two-axis verdict** (BLOCKING:
+  Tier-1 + bd-leak / ADVISORY: the LLM fan).
+- All reviewers receive the **same once-computed range**, base pinned to
+  `git merge-base HEAD origin/main` — see the skill for the full input contract.
+
+**Cross-host wiring.** The generic hook that makes session-flow Phase 5/7 honor
+this manifest is one project-agnostic line in the global `session-flow` skill
+(maintained in the config repo). This section is the engine half of that bridge;
+the two reference each other.
+
 ## wt post-merge hook
 
 After `wt merge`, the project's wt config (`.config/wt.toml`) runs
