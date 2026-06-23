@@ -1,13 +1,17 @@
-"""F5 wiring acceptance: the enforce-tests skill + CLAUDE.md manifest declare the
-full review roster, pin the canonical base ref, own the bd-leak scan, and carry the
-pending-F2b seam line. Gate-step acceptance (both directions) leans on F2a's pure
-``check_source`` so it has no repo-state dependence.
+"""F5 wiring acceptance: the enforce-tests skill and the CLAUDE.md manifest each
+name the full review roster (3 gate scripts + 2 project agents + the 2 global
+fans), pin the canonical base ref, and the manifest declares bd-leak ownership;
+the skill carries the pending-F2b seam line. Gate-step acceptance (both
+directions) leans on F2a's pure ``check_source`` so it has no repo-state
+dependence.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+
+from scripts.check_policy_lints import check_source
 
 REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / ".claude/skills/enforce-tests/SKILL.md"
@@ -49,10 +53,12 @@ def test_skill_names_full_roster() -> None:
 def test_manifest_section_present_and_complete() -> None:
     text = CLAUDE.read_text()
     assert "enforce-tests" in text, "CLAUDE.md must declare the enforce-tests manifest"
-    for tok in AGENTS + GLOBAL_FANS:
+    for tok in GATE_SCRIPTS + AGENTS + GLOBAL_FANS:
         assert tok in text, f"manifest must name {tok}"
     assert BASE_REF in text, "manifest must pin the canonical base ref"
-    assert re.search(r"bd-leak", text), "manifest must state bd-leak ownership"
+    assert re.search(r"owns the[^\n]{0,20}reviewing-bd-leaks", text), (
+        "manifest must declare bd-leak-scan ownership, not just mention it"
+    )
 
 
 def test_documented_gate_scripts_exist() -> None:
@@ -62,8 +68,6 @@ def test_documented_gate_scripts_exist() -> None:
 
 def test_gate_distinguishes_clean_from_violation() -> None:
     # F5 acceptance #1, both directions, via F2a's pure function.
-    from scripts.check_policy_lints import check_source
-
     clean = check_source("x = 1\n", "setforge/new.py")
     assert clean == [], "clean source must yield no violations"
     dirty = check_source(

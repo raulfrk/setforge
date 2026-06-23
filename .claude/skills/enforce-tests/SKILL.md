@@ -1,6 +1,6 @@
 ---
 name: enforce-tests
-description: setforge's review-fan orchestrator. Invoke at session-flow Phase 5 (post-implementation review) and Phase 7 (post-merge) for engine diffs. Runs the Tier-1 deterministic gates first (short-circuit on failure), then dispatches the review fan — the two setforge project agents (test-quality-reviewer, design-invariant-reviewer) alongside the global reviewing-python-code + reviewing-bd-leaks fans — then consolidates ONE two-axis verdict (BLOCKING vs ADVISORY). Use whenever you would otherwise run the global python review fan on a setforge engine change.
+description: setforge's review-fan orchestrator — invoke at session-flow Phase 5 and Phase 7 on an engine diff, instead of running the global python fan bare. Runs the Tier-1 deterministic gates first (short-circuits the fan on failure), dispatches the two project agents (test-quality-reviewer, design-invariant-reviewer) alongside the global reviewing-python-code + reviewing-bd-leaks fans, and consolidates one two-axis verdict (BLOCKING vs ADVISORY).
 ---
 
 # enforce-tests
@@ -15,9 +15,12 @@ explicit control flow exactly; do not improvise gate invocations.
 
 ## Inputs — compute ONCE, broadcast to every sub-dispatch
 
-Resolve all five up front and pass them **explicitly** into every sub-dispatch.
-Never let a sub-skill fall back to its own default — the defaults diverge (the
-converging fan workflow bases on `merge-base HEAD main`, no `origin/`).
+Resolve the inputs up front and pass the once-computed **range** explicitly into
+every sub-dispatch. Never let a sub-skill fall back to its own default — the
+defaults diverge (the converging fan workflow bases on `merge-base HEAD main`, no
+`origin/`). The input *shapes* differ per reviewer (see Step 2): the python fan
+and the two project agents take five inputs; `reviewing-bd-leaks` takes its own
+four (`BASE_SHA`, `HEAD_SHA`, `changed_files`, `pr_number`).
 
 ```sh
 BASE_SHA=$(git merge-base HEAD origin/main)   # canonical base — pinned
@@ -81,17 +84,19 @@ emit the BLOCKED verdict (below) quoting the failing gate's captured output, and
 
 ## Step 2 — Dispatch the review fan (only when Tier-1 is all-zero)
 
-One parallel batch, broadcasting the same five inputs into each prompt. Reference
-the global fans **by skill name** (so a new upstream aspect agent is picked up
-automatically — never hard-code the python aspect roster):
+One parallel batch over the same computed range. Reference the global fans **by
+skill name** (so a new upstream aspect agent is picked up automatically — never
+hard-code the python aspect roster). Each sub-source takes its own input shape —
+pass them explicitly, do not rely on a sub-skill's default range:
 
-1. **Skill `reviewing-python-code`** — the 4-aspect python fan. Pass `BASE_SHA`,
-   `HEAD_SHA`, `changed_files`, `spec_path`, `bd_id` explicitly.
-2. **Skill `reviewing-bd-leaks`** — the advisory tracker-leak scan. **Owned here**
-   — enforce-tests runs it exactly once; the CLAUDE.md manifest tells session-flow
-   not to also dispatch it.
-3. **Agent `test-quality-reviewer`** (direct) — same five inputs.
-4. **Agent `design-invariant-reviewer`** (direct) — same five inputs.
+1. **Skill `reviewing-python-code`** — the 4-aspect python fan. Inputs: `BASE_SHA`,
+   `HEAD_SHA`, `changed_files`, `spec_path`, `bd_id`.
+2. **Skill `reviewing-bd-leaks`** — the advisory tracker-leak scan. Inputs:
+   `BASE_SHA`, `HEAD_SHA`, `changed_files`, `pr_number` (pass `(none)` when not a
+   PR) — it does NOT take `spec_path` / `bd_id`. **Owned here** — enforce-tests runs
+   it exactly once; the CLAUDE.md manifest tells session-flow not to also dispatch it.
+3. **Agent `test-quality-reviewer`** (direct) — the five inputs (as #1).
+4. **Agent `design-invariant-reviewer`** (direct) — the five inputs (as #1).
 
 **Partial-failure rule.** Every one of the four sub-sources MUST return a verdict.
 A sub-source that dies or returns no `Verdict:` line folds into the consolidation
@@ -158,15 +163,23 @@ output quoted and `FAN SKIPPED (tree cannot merge)`.
 
 ## Bugs and code smells this skill must not commit
 
-Gate-invocation: piped exit code (run unpiped, `$?` next line); uv-crash-vs-violation
-(banner discriminator); dirty-tree snapshot skew (assert clean tree); bd-refs empty /
-spaced / deleted / huge args (guard empty, NUL + `xargs`, rely on script `[ -f ]`);
-policy-lint whole-repo scope (frame BLOCKED as possibly pre-existing); missing
-short-circuit (explicit all-zero precondition; BLOCKING dominates); exit-code
-inversion (0 = pass, derive from `$?`). Orchestration: block-authority conflation
-(separate axes); base-ref drift (broadcast the computed range); broadcast fallback
-gap (all five inputs in every prompt); severity-vocab mismatch (explicit per-source
-mapping; carry sidecars); manifest roster drift (reference fans by skill name);
-cross-repo pointer rot (the manifest and the session-flow pointer reference each
-other); roster double / missed dispatch (own bd-leak once; be the engine entry);
-partial-failure silent drop (every sub-source returns a verdict or folds non-PASS).
+Gate-invocation:
+
+- **Piped exit code** — run unpiped, capture `$?` on the next line.
+- **uv-crash-vs-violation** — use the banner discriminator, not the bare exit code.
+- **Dirty-tree snapshot skew** — assert a clean tree before the gates.
+- **bd-refs empty / spaced / deleted / huge args** — guard the empty set, NUL + `xargs`, rely on the script's `[ -f ]` skip.
+- **policy-lint whole-repo scope** — frame a BLOCKED as possibly pre-existing.
+- **Missing short-circuit** — explicit all-zero precondition; BLOCKING dominates.
+- **Exit-code inversion** — 0 = pass; derive pass/fail from `$?`, never stdout.
+
+Orchestration:
+
+- **Block-authority conflation** — keep the BLOCKING and ADVISORY axes separate.
+- **Base-ref drift** — broadcast the once-computed range to every sub-source.
+- **Broadcast fallback gap** — pass each sub-source its full input shape (Step 2), never let it recompute.
+- **Severity-vocab mismatch** — map each source's vocabulary explicitly; carry the sidecars.
+- **Manifest roster drift** — reference the global fans by skill name, never a hard-coded aspect roster.
+- **Cross-repo pointer rot** — the manifest and the session-flow pointer reference each other.
+- **Roster double / missed dispatch** — own `reviewing-bd-leaks` once; be the engine review entry.
+- **Partial-failure silent drop** — every sub-source returns a verdict or folds to non-PASS.
