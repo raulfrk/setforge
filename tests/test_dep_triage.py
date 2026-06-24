@@ -170,6 +170,26 @@ def test_malformed_json_is_infra_exit_2(
 
 
 # --------------------------------------------------------------------------- #
+# pip-audit crash (exit code outside {0,1}) -> exit 2, never a verdict
+# --------------------------------------------------------------------------- #
+@pytest.mark.usefixtures("pip_audit_on_path")
+def test_pip_audit_crash_is_infra_exit_2(
+    fp: FakeProcess, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An exit code other than 0 (clean) or 1 (found vulns) is a tool crash, not
+    # a finding — it must be COULD NOT RUN, never a false clean or a false BLOCK.
+    _register_version(fp)
+    fp.register(
+        [fp.any(), "--format", "json", fp.any()],
+        stdout="",
+        stderr="Traceback (most recent call last): ...",
+        returncode=2,
+    )
+    assert dep_triage.main() == 2
+    assert "COULD NOT RUN" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
 # Stale pip-audit version -> exit 2 (the JSON shape predates the contract)
 # --------------------------------------------------------------------------- #
 @pytest.mark.usefixtures("pip_audit_on_path")
