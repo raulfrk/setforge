@@ -35,6 +35,66 @@ jobs:
       # fast local feedback but can fail open on unparseable commit commands).
       - run: uv run python scripts/check_policy_lints.py
       - run: uv run pytest
+      # SEAM (do not enable yet): coverage gate.
+      # When the coverage-gate work lands, the line-coverage floor is enforced
+      # HERE as its own step (e.g. `uv run pytest --cov-fail-under=<N>`), with
+      # NO continue-on-error so a regression below the floor fails the PR.
+      # Intentionally absent now: the coverage gate is blocked on separate,
+      # not-yet-landed work. (Coverage is already collected by the `pytest`
+      # step above via pyproject addopts; this seam is the hard FAILING gate.)
+
+  pr-e2e-smoke:
+    name: E2E Docker smoke (PR)
+    # A fast golden-path subset of the full e2e_docker suite (the full suite
+    # runs nightly — see nightly.yml). Gives every PR a real install/validate
+    # smoke without paying the ~40-min full-suite cost.
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      - name: Compute E2E image tag
+        id: tag
+        run: |
+          uv run python -c 'from tests.docker.conftest import _image_tag; print(f"image_tag={_image_tag()}")' >> "$GITHUB_OUTPUT"
+      - name: Build E2E image (with GHA cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/Dockerfile
+          tags: ${{ steps.tag.outputs.image_tag }}
+          load: true
+          cache-from: type=gha,scope=e2e
+          cache-to: type=gha,scope=e2e,mode=max
+      - name: Run E2E smoke subset
+        # The thin `smoke`-marked golden-path subset only. --no-cov for the
+        # same xdist/pytest-cov reason as the full e2e job (see below).
+        run: uv run pytest -m "e2e_docker and smoke" -v --no-cov
+
+  # ---------------------------------------------------------------------------
+  # SEAM (do not enable yet): per-PR diff mutation testing.
+  #
+  # When the mutation-testing work lands, a diff-scoped `mutmut run` (mutating
+  # only the lines this PR changed, not the whole engine — the full run is the
+  # nightly job in nightly.yml) wires in HERE as its own job with NO
+  # continue-on-error, so a surviving mutant on changed lines fails the PR.
+  # Intentionally absent now: mutation testing is blocked on separate,
+  # not-yet-landed work.
+  #
+  #   pr-mutmut-diff:
+  #     name: Mutation testing (PR diff)
+  #     runs-on: ubuntu-latest
+  #     needs: tests
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #         with:
+  #           fetch-depth: 0
+  #       - uses: astral-sh/setup-uv@v4
+  #       - run: uv sync --extra dev
+  #       - run: uv run mutmut run  # scoped to the PR diff range
+  # ---------------------------------------------------------------------------
 
   build-verify:
     name: Build + twine check

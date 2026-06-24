@@ -1,0 +1,77 @@
+name: Nightly
+
+# Deep, slow gates that are too expensive for every PR: the FULL e2e Docker
+# suite and a deep Hypothesis profile run. Scheduled nightly on the default
+# branch, plus a manual trigger.
+on:
+  schedule:
+    # 04:00 UTC daily.
+    - cron: "0 4 * * *"
+  # REQUIRED: a manual trigger so the workflow can be run on demand and so
+  # GitHub cannot silently idle-disable a schedule-only workflow on a quiet
+  # repo (scheduled-only workflows get disabled after 60 days of no commits).
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-docker-full:
+    name: Full E2E Docker suite
+    # Default branch only — the nightly schedule always runs against the
+    # repository's default branch, this guard makes that explicit for the
+    # manual trigger too.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      # The full e2e suite. --no-cov is mandatory: the project conftest
+      # auto-activates xdist (-n 2) for `-m e2e_docker`, and pytest-cov's
+      # Central controller crashes at xdist worker setup when --cov is in
+      # default addopts. No continue-on-error: a failure here MUST fail the
+      # job loudly — a behavior the suite asserted is broken on the default
+      # branch.
+      - run: uv run pytest -m e2e_docker -n 2 --no-cov -v
+
+  hypothesis-deep:
+    name: Deep Hypothesis profile
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      # A deep property-based run: far more examples than the per-PR default,
+      # to shake out rare falsifying inputs the fast profile never reaches.
+      # No continue-on-error: a falsifying example MUST fail the job loudly.
+      - name: Run deep Hypothesis profile
+        env:
+          # Hypothesis honors HYPOTHESIS_PROFILE to select a registered
+          # settings profile; "deep" raises max_examples / deadline for the
+          # nightly budget. The profile is registered in tests/conftest.py.
+          HYPOTHESIS_PROFILE: deep
+        run: uv run pytest -m "not e2e_docker" --no-cov -v
+
+  # ---------------------------------------------------------------------------
+  # SEAM (do not enable yet): full-suite mutation testing.
+  #
+  # When the mutation-testing work lands, a `mutmut run` over the whole engine
+  # wires in HERE as its own job (it is too slow for per-PR CI, so the nightly
+  # budget is its home). It MUST be its own job with NO continue-on-error so a
+  # surviving mutant fails the nightly loudly. Intentionally absent now:
+  # mutation testing is blocked on separate, not-yet-landed work.
+  #
+  #   mutmut-full:
+  #     name: Full mutation testing (mutmut run)
+  #     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+  #     runs-on: ubuntu-latest
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #       - uses: astral-sh/setup-uv@v4
+  #       - run: uv sync --extra dev
+  #       - run: uv run mutmut run
+  #       - run: uv run mutmut results
+  # ---------------------------------------------------------------------------

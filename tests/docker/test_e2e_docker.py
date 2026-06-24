@@ -119,6 +119,7 @@ def _read_live(container: ContainerHandle, path: str) -> str:
 # --- Variant B ------------------------------------------------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.xdist_group("docker_daemon")
 def test_install_minimal_floor(
     docker_container: Callable[..., ContainerHandle],
@@ -711,6 +712,7 @@ def test_install_idempotent_second_run_noop(
 # --- Variant W ------------------------------------------------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.xdist_group("docker_daemon")
 def test_validate_clean_yaml_exit_zero(
     docker_container: Callable[..., ContainerHandle],
