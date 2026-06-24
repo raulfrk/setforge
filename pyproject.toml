@@ -129,7 +129,7 @@ markers = [
     "xdist_group: serialize tagged tests to one xdist worker for daemon-bound resources (see tests/docker/conftest.py docker_daemon convention)",
 ]
 # Default run skips e2e_docker so plain `pytest` stays fast and docker-free.
-addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-missing --cov-fail-under=83"
+addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-missing --cov-fail-under=85"
 
 [tool.coverage.run]
 source = ["setforge"]
@@ -145,7 +145,7 @@ sigterm = true
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 83
+fail_under = 85
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:", "@(typing\\.)?overload"]
 
 [tool.mypy]
