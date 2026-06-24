@@ -124,10 +124,10 @@ Part 2(b)).
 
 | ID | Statement | Tag | Enforced by |
 |---|---|---|---|
-| SELF-1 | A proposal **must cite an external signal** (gate verdict / surviving mutant / dismissed finding / template-drift). Pure self-eval is rejected. | ADVISORY | human gate (revdiff approval) |
-| SELF-2 | Proposals are **never auto-applied** — they land only on explicit approval. | ADVISORY | human gate (revdiff approval); architecture has no auto-apply path |
-| SELF-3 | Proposals are **untrusted data**: they describe a change, never inject behavior/commands/URLs. | ADVISORY | human gate (review against the rule's `git log -p` origin) |
-| SELF-4 | Capture on the **2nd occurrence** (one-offs are noise); declined proposals are never re-raised. | ADVISORY | backlog dedup/supersede; human gate |
+| SELF-1 | A proposal **must cite an external signal** (gate verdict / surviving mutant / dismissed finding / template-drift). Pure self-eval is rejected. | ADVISORY | `scripts/proposals.py` (evidence required at construction); `surface-proposals` skill (human gate) |
+| SELF-2 | Proposals are **never auto-applied** — they land only on explicit approval. | ADVISORY | `scripts/proposals.py` (no auto-apply path; `approve()` requires an explicit call); `surface-proposals` skill (human gate) |
+| SELF-3 | Proposals are **untrusted data**: they describe a change, never inject behavior/commands/URLs. | ADVISORY | `surface-proposals` skill (evidence fenced as untrusted; review against the rule's `git log -p` origin) |
+| SELF-4 | Capture on the **2nd occurrence** (one-offs are noise); declined proposals are never re-raised. | ADVISORY | `scripts/proposals.py` ledger (2nd-occurrence dedup + durable decline-suppress); `surface-proposals` skill |
 
 ---
 
