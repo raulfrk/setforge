@@ -127,6 +127,50 @@ def test_low_severity_emits_nothing_and_exits_0(
 
 
 # --------------------------------------------------------------------------- #
+# CVSS floor boundary: 6.9 just below (no proposal), 7.0 at the floor (proposal)
+# — brackets _HIGH_FLOOR so a moved floor or a flipped >= comparison is caught.
+# --------------------------------------------------------------------------- #
+@pytest.mark.usefixtures("pip_audit_on_path")
+@pytest.mark.parametrize(
+    ("score", "expected_exit", "expect_cve"),
+    [("6.9", 0, False), ("7.0", 1, True)],
+)
+def test_cvss_floor_boundary(
+    fp: FakeProcess,
+    isolated_ledger: Path,
+    score: str,
+    expected_exit: int,
+    expect_cve: bool,
+) -> None:
+    report = {
+        "dependencies": [
+            {
+                "name": "edgepkg",
+                "version": "1.0.0",
+                "vulns": [
+                    {
+                        "id": "GHSA-edge",
+                        "fix_versions": ["1.0.1"],
+                        "severity": [{"type": "CVSS_V3", "score": score}],
+                        "description": "boundary case",
+                    }
+                ],
+            }
+        ],
+        "fixes": [],
+    }
+    _register_version(fp)
+    fp.register(
+        [fp.any(), "--format", "json", fp.any()],
+        stdout=json.dumps(report),
+        returncode=1,
+    )
+    assert dep_triage.main() == expected_exit
+    cve_rows = [r for r in _ledger_rows(isolated_ledger) if r["category"] == "CVE"]
+    assert bool(cve_rows) is expect_cve
+
+
+# --------------------------------------------------------------------------- #
 # Clean audit -> exit 0, no proposals
 # --------------------------------------------------------------------------- #
 @pytest.mark.usefixtures("pip_audit_on_path")

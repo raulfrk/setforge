@@ -209,6 +209,15 @@ def test_rejects_symlink_hunk() -> None:
         )
 
 
+def test_rejects_convert_existing_file_to_symlink() -> None:
+    # An existing tracked file flipped to a symlink uses old mode / new mode
+    # headers (git apply --check accepts this) — the regex must still reject it.
+    with pytest.raises(DiffRejected):
+        validate_diff_paths(
+            "diff --git a/x b/x\nold mode 100644\nnew mode 120000\n", repo_root="/repo"
+        )
+
+
 def test_accepts_in_repo_diff() -> None:
     # Must not raise.
     validate_diff_paths("--- a/setforge/x.py\n+++ b/setforge/x.py\n", repo_root="/repo")

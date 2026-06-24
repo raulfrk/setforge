@@ -266,7 +266,10 @@ class DiffRejected(Exception):
 
 
 _DIFF_TARGET = re.compile(r"^[+-]{3} (.+)$", re.MULTILINE)
-_SYMLINK_HUNK = re.compile(r"^new file mode 120000$", re.MULTILINE)
+# Catches a NEW symlink (`new file mode 120000`) AND an existing file converted
+# to a symlink (`old mode … / new mode 120000`) — `git apply --check` accepts the
+# latter, so this regex is the guard (CVE-2023-23946 symlink-then-write-through).
+_SYMLINK_HUNK = re.compile(r"^(?:new file |new |old )mode 120000$", re.MULTILINE)
 
 
 def validate_diff_paths(diff: str, repo_root: str) -> None:
@@ -276,7 +279,7 @@ def validate_diff_paths(diff: str, repo_root: str) -> None:
     traversal. ``git apply --check`` alone does not catch the symlink case.
     """
     if _SYMLINK_HUNK.search(diff):
-        raise DiffRejected("symlink hunk (new file mode 120000) is not allowed")
+        raise DiffRejected("symlink hunk (mode 120000) is not allowed")
     root = Path(repo_root).resolve()
     for m in _DIFF_TARGET.finditer(diff):
         raw = m.group(1).strip()
