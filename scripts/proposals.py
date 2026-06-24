@@ -37,25 +37,33 @@ class Confidence(StrEnum):
 
 
 # Volatile-token scrubbers: the dedup key must be stable across runs, so a line
-# number / timestamp / pid / absolute path in the evidence must not change it
-# (else the same logical finding never reaches its 2nd sighting → never filed).
+# number / timestamp / pid / address / absolute path in the evidence must not
+# change it (else the same logical finding never reaches its 2nd sighting →
+# never filed).
 _TS = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*")
+_UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
+_HEX = re.compile(r"\b0x[0-9a-f]+\b", re.IGNORECASE)
 _NUM = re.compile(r"#\d+|\bpid=\d+|\b(?:run|session)[-_]?id=\S+", re.IGNORECASE)
 _LINE = re.compile(r":\d+\b")
+_DIGITS = re.compile(r"\b\d{4,}\b")  # bare epoch / large counts
 
 
 def norm(evidence: str) -> str:
     """Strip volatile tokens so the same logical finding hashes identically.
 
-    Removes timestamps, ``#NNN`` / ``pid=`` / ``run-id`` tokens and ``:line``
-    suffixes, then replaces any path-like token (one containing ``/``) with a
-    single ``<path>`` placeholder — the canonical location lives in the
+    Removes timestamps, UUIDs, ``0x`` addresses, ``#NNN`` / ``pid=`` / ``run-id``
+    tokens, ``:line`` suffixes, and bare 4+-digit runs (epochs / counts), then
+    replaces any path-like token (one containing ``/``) with a single
+    ``<path>`` placeholder — the canonical location lives in the
     :attr:`Proposal.file` field, so an incidental path in the evidence text
     must not perturb the fingerprint.
     """
     s = _TS.sub("", evidence)
+    s = _UUID.sub("", s)
+    s = _HEX.sub("", s)
     s = _NUM.sub("", s)
     s = _LINE.sub("", s)
+    s = _DIGITS.sub("", s)
     toks = ["<path>" if "/" in t else t for t in s.split()]
     return " ".join(toks).strip().lower()
 
@@ -154,10 +162,29 @@ class Ledger:
         self._append(self._row(p, "applied"))
 
     def _rows(self) -> list[dict[str, str]]:
+        # The ledger is an external trust boundary: concurrent appends can leave
+        # a torn final line on crash, and it is hand-editable. Skip any line that
+        # is not a well-shaped event rather than failing the whole loop — the
+        # append-only design's intent is "never lose a good row", not "trust
+        # every byte".
+        rows: list[dict[str, str]] = []
         with open(self.path, encoding="utf-8") as f:
-            return [json.loads(ln) for ln in f if ln.strip()]
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    row = json.loads(ln)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and "key" in row and "event" in row:
+                    rows.append(row)
+        return rows
 
     def count(self, key: str) -> int:
+        # Unlocked read by design: count is the cardinality of append-only "seen"
+        # rows, never a mutated scalar, so a concurrent append cannot lose an
+        # increment — the worst case is reading one row late, never a torn count.
         return sum(1 for r in self._rows() if r["key"] == key and r["event"] == "seen")
 
     def is_suppressed(self, key: str) -> bool:
@@ -216,7 +243,7 @@ def emit(p: Proposal) -> EmitResult:
 
 
 def decline(p: Proposal) -> None:
-    """Record a human decline — durable suppress (the skill also closes the bead)."""
+    """Record a human decline — a durable suppress in the ledger."""
     _ledger().record_declined(p)
 
 
@@ -284,11 +311,16 @@ def approve(p: Proposal, *, repo_root: str = ".") -> None:
     )
     if check.returncode != 0:
         raise DiffRejected(f"git apply --check failed: {check.stderr.strip()}")
-    subprocess.run(
+    # --check passed, but a concurrent worktree mutation between the two calls
+    # could still fail the real apply; surface it as DiffRejected (git apply is
+    # all-or-nothing, so a failure leaves no partial residue).
+    applied = subprocess.run(
         ["git", "apply"],
         input=p.proposed_diff,
         text=True,
-        check=True,
+        capture_output=True,
         cwd=repo_root,
     )
+    if applied.returncode != 0:
+        raise DiffRejected(f"git apply failed: {applied.stderr.strip()}")
     mark_applied(p)

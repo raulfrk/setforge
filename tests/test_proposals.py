@@ -9,9 +9,9 @@ and the safe diff-apply path-confinement.
 
 from __future__ import annotations
 
+import multiprocessing
 import re
 import subprocess
-import threading
 from pathlib import Path
 
 import pytest
@@ -50,6 +50,22 @@ def _use_tmp_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SETFORGE_PROPOSALS_LEDGER", str(tmp_path / "l.jsonl"))
 
 
+def _mp_append(path_str: str) -> None:
+    """Module-level worker so multiprocessing (fork) can import it: append one
+    `seen` row from a separate PROCESS — the only way to actually contend the
+    cross-process flock (threads are masked by the GIL + O_APPEND atomicity)."""
+    Ledger(Path(path_str)).record_seen(
+        Proposal(
+            source="mutmut",
+            category="surviving-mutant",
+            evidence="mutant survived at merge.py",
+            proposed_diff="",
+            confidence=Confidence.HIGH,
+            file="setforge/reconcile/merge.py",
+        )
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Task 1 — schema + stable dedup key
 # --------------------------------------------------------------------------- #
@@ -66,6 +82,13 @@ def test_norm_strips_volatile_tokens() -> None:
     # Same logical finding, different incidental line/path/timestamp/pid tokens.
     a = _p(evidence="mutant #142 /a/merge.py:88 2026-06-24T10:00:00 pid=9931")
     b = _p(evidence="mutant #999 /b/merge.py:12 2026-06-25T22:31:02 pid=2")
+    assert a.dedup_key == b.dedup_key
+
+
+def test_norm_strips_addresses_uuids_and_epochs() -> None:
+    # Hex addresses, UUIDs, and bare epoch/large integers are volatile too.
+    a = _p(evidence="leak 0x7f3a a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d 1719230400")
+    b = _p(evidence="leak 0xdead f0e1d2c3-b4a5-6978-8a9b-0c1d2e3f4a5b 1700000000")
     assert a.dedup_key == b.dedup_key
 
 
@@ -98,16 +121,26 @@ def test_decline_is_durable_and_suppresses(tmp_path: Path) -> None:
 
 
 def test_concurrent_appends_no_lost_rows(tmp_path: Path) -> None:
-    led = Ledger(tmp_path / "ledger.jsonl")
+    # Real cross-PROCESS contention (threads are masked by the GIL + O_APPEND):
+    # 20 processes appending to one ledger must yield 20 rows iff the flock holds.
+    path = tmp_path / "ledger.jsonl"
+    Ledger(path)  # create the file
     k = _p().dedup_key
-    threads = [
-        threading.Thread(target=led.record_seen, args=(_p(),)) for _ in range(20)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert led.count(k) == 20  # flock => no lost append
+    ctx = multiprocessing.get_context("fork")
+    with ctx.Pool(8) as pool:
+        pool.map(_mp_append, [str(path)] * 20)
+    assert Ledger(path).count(k) == 20  # flock => no lost append across processes
+
+
+def test_ledger_tolerates_malformed_lines(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    led = Ledger(path)
+    led.record_seen(_p())
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("{not json\n")  # torn / hand-edited garbage
+        f.write('{"shape": "wrong"}\n')  # valid JSON, missing key/event
+    led.record_seen(_p())
+    assert led.count(_p().dedup_key) == 2  # good rows counted, bad lines skipped
 
 
 # --------------------------------------------------------------------------- #
@@ -207,3 +240,14 @@ def test_approve_applies_diff_in_real_repo(
     diff = "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-one\n+two\n"
     approve(_p(file="hello.txt", proposed_diff=diff), repo_root=str(tmp_path))
     assert target.read_text() == "two\n"
+
+
+def test_approve_rejects_unappliable_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SETFORGE_PROPOSALS_LEDGER", str(tmp_path / "l.jsonl"))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    # Context references a file that does not exist → --check fails → DiffRejected.
+    diff = "--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-nope\n+yes\n"
+    with pytest.raises(DiffRejected):
+        approve(_p(file="missing.txt", proposed_diff=diff), repo_root=str(tmp_path))
