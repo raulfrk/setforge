@@ -130,7 +130,10 @@ markers = [
     "xdist_group: serialize tagged tests to one xdist worker for daemon-bound resources (see tests/docker/conftest.py docker_daemon convention)",
 ]
 # Default run skips e2e_docker so plain `pytest` stays fast and docker-free.
-addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-missing --cov-fail-under=85"
+# --ignore=mutants keeps a leftover mutmut sandbox (gitignored mutants/, with its
+# copied mutants/tests/) from breaking a local `uv run pytest` with an
+# ImportPathMismatchError. (mutmut's own runs clear addopts via `-o addopts=`.)
+addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-missing --cov-fail-under=85 --ignore=mutants"
 
 [tool.coverage.run]
 source = ["setforge"]

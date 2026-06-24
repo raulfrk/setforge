@@ -25,7 +25,7 @@ from the denominator (mutmut's standard reporting).
 | field | value |
 |---|---|
 | measured | 2026-06-24 |
-| branch | `setforge-deoq.2.3-e3e4` (base commit `3fafc26`) |
+| base commit | `3fafc26` |
 | tool | `mutmut==3.6.0` |
 | mutated (`source_paths` + `only_mutate`) | the 10 core files below |
 | test scope (`pytest_add_cli_args_test_selection`) | the 15 focused per-module unit files |
@@ -45,9 +45,8 @@ The mutmut run executes only the **focused per-module unit tests** (see
 (CHANGELOG/docs/migrations) fail there and abort the run. Consequently
 **integration tests that also exercise the core (install / capture / auditfix)
 are out of the mutmut test scope**, so a number of the 509 survivors are in
-fact killed by tests not included here. The true score is therefore **≥ 79%**;
-this baseline is a deliberate lower bound, and the per-module survivor counts
-are upper bounds on the real gaps.
+fact killed by tests not included here. The true score is therefore **≥ 79%** —
+a deliberate lower bound.
 
 ## Survivors by module
 
