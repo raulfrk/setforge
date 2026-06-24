@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import settings
 
 from setforge import claude_marketplace_cache as _mp_cache
 from setforge import claude_plugins as _cp
@@ -38,6 +39,12 @@ from setforge.config import (
     ResolvedProfile,
     TrackedFile,
 )
+
+# Property-based test profiles. The default per-PR run keeps the standard
+# example budget; the "deep" profile (selected nightly via
+# HYPOTHESIS_PROFILE=deep) raises max_examples and drops the per-example
+# deadline so the slow nightly job can shake out rare falsifying inputs.
+settings.register_profile("deep", max_examples=1000, deadline=None)
 
 
 @pytest.fixture(autouse=True)
