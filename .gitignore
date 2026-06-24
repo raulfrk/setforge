@@ -32,6 +32,11 @@ __pycache__/
 .coverage
 *.egg-info/
 
+# mutmut mutation-testing run state (mutated source copies + cache).
+# Regenerated on every `mutmut run`; a stale copy serves false results.
+mutants/
+.mutmut-cache
+
 # Build artifacts (uv build / hatchling)
 dist/
 build/

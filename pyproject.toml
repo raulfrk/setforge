@@ -43,6 +43,7 @@ Changelog = "https://github.com/raulfrk/setforge/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
+    "mutmut==3.6.0",
     "mypy>=1.11",
     "pexpect>=4.9",
     "pyte>=0.8.2",
@@ -147,6 +148,75 @@ sigterm = true
 show_missing = true
 fail_under = 85
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:", "@(typing\\.)?overload"]
+
+[tool.mutmut]
+# Mutation testing over the merge/reconcile/store core — RFC §6's "real
+# anti-change-detector measure". REPORT-BASELINE only: run it by hand
+# (`uv run mutmut run || true; uv run mutmut results`), record the score in
+# docs/mutation-baseline.md. It is NOT a gate and NOT in pre-commit — the
+# `|| true` is mandatory because `mutmut run` exits nonzero on survivors.
+# Enforcement (a >80% gate, CI diff-mode on PR + full nightly) is wired
+# separately once the test audit-and-prune lands.
+#
+# source_paths must be the WHOLE package: mutmut copies these into a mutants/
+# sandbox and runs the tests there, so the entire `setforge` package has to be
+# present or the tests' imports break. Scoping mutation to just the core is
+# done with `only_mutate` below — NOT by narrowing source_paths to files.
+source_paths = ["setforge"]
+# Copy the top-level scripts/ package into the sandbox too: a handful of unit
+# tests (docs-sync / author-scaffold / dep-triage) `from scripts import ...`.
+# mutmut already auto-copies tests/, pyproject.toml and setup.cfg; scripts/ is
+# the only other tree the unit suite imports. (The root conftest.py holds no
+# fixtures — only the e2e auto-xdist hook — so it is intentionally not copied.)
+also_copy = ["scripts"]
+# Restrict which files actually get mutated to the merge/reconcile/store core
+# (RFC §6). Everything else is copied (so imports resolve) but never mutated.
+only_mutate = [
+    "setforge/disposition_merge.py",
+    "setforge/markdown_merge.py",
+    "setforge/scalar_merge.py",
+    "setforge/structural_merge.py",
+    "setforge/yaml_merge.py",
+    "setforge/section_reconcile.py",
+    "setforge/base_store.py",
+    "setforge/base_store_format.py",
+    "setforge/scalar_base_store.py",
+    "setforge/spans_store.py",
+]
+# Scope the tests mutmut runs to the focused per-module unit suites for the
+# core. Two reasons: (1) mutmut runs the suite from a mutants/ sandbox that
+# only contains the copied trees, so the broader suite's tests that read repo
+# files (CHANGELOG.md, docs/, migrations) or need uncopied structure fail and
+# mutmut's own `-x` aborts the whole stats run; these focused merge/store/
+# reconcile tests use tmp_path/in-memory data and are sandbox-clean. (2) They
+# are the tests that actually kill core mutants. NOTE: integration tests that
+# also exercise the core (install/capture/auditfix) are out of this scope, so
+# the recorded score is a CONSERVATIVE LOWER BOUND — some survivors here are
+# killed by integration tests not in the mutmut set. The full-suite/CI variant
+# is F2b's job.
+pytest_add_cli_args_test_selection = [
+    "tests/test_disposition_merge.py",
+    "tests/test_disposition_merge_resolver.py",
+    "tests/test_markdown_merge.py",
+    "tests/test_markdown_merge_segments.py",
+    "tests/test_scalar_merge.py",
+    "tests/test_structural_merge.py",
+    "tests/test_structural_set_at_path.py",
+    "tests/test_yaml_merge.py",
+    "tests/test_section_reconcile.py",
+    "tests/test_base_store.py",
+    "tests/test_base_store_format.py",
+    "tests/test_scalar_base_store.py",
+    "tests/test_spans_store.py",
+    "tests/test_spans_overlay.py",
+    "tests/test_spans_relocation.py",
+]
+# Runner neutralization (load-bearing): mutmut shells out to pytest, which
+# would otherwise inherit our default addopts (`--cov=setforge
+# --cov-fail-under=85` + the conftest auto-xdist on e2e) and mis-score a mutant
+# "killed" by the coverage gate firing instead of by an assertion. `-o addopts=`
+# clears the inherited addopts entirely. mutmut adds its own `-x`.
+pytest_add_cli_args = ["-o", "addopts="]
 
 [tool.mypy]
 # Aligned with [project].requires-python and [tool.ruff].target-version
