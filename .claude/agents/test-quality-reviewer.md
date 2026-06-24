@@ -29,6 +29,15 @@ Dispatch inputs:
 - `bd_id` — the issue this work is for.
 - `changed_files` — files touched in `BASE..HEAD`.
 
+## Scope guard — testing-infrastructure diffs
+
+When the diff changes test *configuration* (pyproject `[tool.coverage]` / `[tool.mutmut]`,
+CI test wiring, gate thresholds) but **no test logic**, the per-test manifest is empty by
+definition — do not force N/A across every aspect and DoD item. Instead verify the config
+itself: is the gate at the right tier (unit vs e2e), is its scope / neutralization correct,
+and is any reported number (a coverage floor, a mutation baseline) honestly framed (advisory
+vs enforced, lower-bound vs exact)? PASS unless the config is wrong or oversold.
+
 ## Aspect A — Tier placement (push every test down)
 
 The testing trophy targets ≈ **80 / 15 / 5** (unit / integration / thin-e2e). Pick
@@ -125,6 +134,8 @@ Definition of done:
       mutation would survive.
 - [ ] Cross-checked every touched invariant-owning component for an asserting test
       (Aspect D).
+- [ ] If the diff is testing-infrastructure only (no test logic), reviewed the
+      config's correctness + honesty instead of an empty manifest.
 - [ ] Did NOT run `mutmut` / `pytest` / coverage.
 
 ## Self-improvement

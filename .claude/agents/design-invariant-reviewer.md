@@ -108,6 +108,11 @@ false-positive fatigue:
 
 Your remit is the judgment the lints cannot make, not a second pass over them.
 
+**Out-of-surface diffs.** When `changed_files` touches none of your owned surfaces (no
+wizard / TUI / theme / provisioner / cleanup code — e.g. a pure config / docs / lockfile
+diff), confirm there is no incidental data-flow impact on SAFE-9 / PROV-5, then PASS quickly.
+Do not manufacture an N/A annotation for every rule.
+
 Output format (strictly):
 
 - One line per finding: `[CRITICAL|IMPORTANT|MINOR] <path>:<line> — <description>`
