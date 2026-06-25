@@ -39,8 +39,8 @@ from scripts.author_wizard import draft, main
 def test_rejects_bad_name(tmp_path: Path, bad_name: str) -> None:
     with pytest.raises(ValueError, match="invalid --name"):
         draft(bad_name, dest_root=tmp_path)
-    # And the CLI surfaces a nonzero exit for the same input.
-    assert main(["--name", bad_name, "--dest-root", str(tmp_path)]) != 0
+    # And the CLI surfaces the ValueError exit code (2) for the same input.
+    assert main(["--name", bad_name, "--dest-root", str(tmp_path)]) == 2
 
 
 def test_valid_name_emits_two_files(tmp_path: Path) -> None:

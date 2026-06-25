@@ -1,8 +1,10 @@
 """Reusable button-bar widget — the project's shared selection primitive.
 
 One custom prompt_toolkit full-screen :class:`Application`: an optional
-read-only ``body`` panel above a row of focusable buttons, wrapped in a
-``┌─┐`` frame (drawn by :mod:`setforge.ui.box`). Navigation is ←/→ + Tab/S-Tab;
+read-only ``body`` panel above a row of focusable buttons, bracketed by a top
+rule and bottom rule drawn by :mod:`setforge.ui.box`. Side bars are
+intentionally omitted because the rows are live prompt_toolkit
+:class:`~prompt_toolkit.layout.Window`\\ s. Navigation is ←/→ + Tab/S-Tab;
 Enter selects the focused button; Esc / Ctrl-C cancel with the :data:`CANCEL`
 sentinel. Each button carries a hidden first-letter accelerator; ``?`` toggles
 a cheat-sheet footer listing them.
@@ -70,10 +72,10 @@ _STACK_THRESHOLD: int = 24
 #: Frame width never exceeds this (mirrors :data:`box._MAX_WIDTH`).
 _MAX_WIDTH: int = 100
 
-# Local palette so the widget renders in colour pre-merge. D3 swaps this for
-# pt_style(THEME) once the theme module lands; the class names are stable. ANSI
-# colour names (not hex) keep this UX-3-clean — concrete truecolor values are
-# the theme module's job, not the widget's.
+# Local standalone palette; the theme module's pt_style(THEME) replaces this
+# once both land. The class names are stable. ANSI colour names (not hex) keep
+# this UX-3-clean — concrete truecolor values are the theme module's job, not
+# the widget's.
 _STYLE: Style = Style.from_dict(
     {
         "accent": "ansibrightblue",
@@ -91,19 +93,25 @@ def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:
     """Map each button index to a unique single-letter accelerator.
 
     Explicit ``Button.key`` values are reserved FIRST (and validated unique —
-    a duplicate explicit key raises :class:`ValueError`). Each remaining button
-    then claims the first free lowercase letter of its label; if every letter
-    is already taken it gets no accelerator (omitted from the mapping). Keys
-    that would collide with a reserved navigation key are skipped.
+    a duplicate explicit key raises :class:`ValueError`; a key that collides
+    with a reserved navigation key — ``?``, arrows, enter, tab, escape — also
+    raises). Each remaining button then claims the first free lowercase letter
+    of its label; if every letter is already taken it gets no accelerator
+    (omitted from the mapping).
     """
     result: dict[int, str] = {}
     taken: set[str] = set()
 
-    # Pass 1: reserve explicit keys, rejecting duplicates.
+    # Pass 1: reserve explicit keys, rejecting duplicates and reserved keys.
     for idx, btn in enumerate(buttons):
         if btn.key is None:
             continue
         key = btn.key.lower()
+        if key in _RESERVED_KEYS:
+            raise ValueError(
+                f"explicit accelerator key {btn.key!r} on button {btn.label!r} "
+                f"is reserved (? , arrows, enter, tab, escape)"
+            )
         if key in taken:
             raise ValueError(
                 f"duplicate explicit accelerator key {btn.key!r} on button "
@@ -112,14 +120,16 @@ def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:
         taken.add(key)
         result[idx] = key
 
-    # Pass 2: derive a first-free-letter accelerator for the rest.
+    # Pass 2: derive a first-free-letter accelerator for the rest. A derived
+    # letter is a single ``.isalpha()`` char, never a reserved multi-char word
+    # or ``?``, so only the ``taken`` set needs checking here.
     for idx, btn in enumerate(buttons):
         if idx in result:
             continue
         for ch in btn.label.lower():
             if not ch.isalpha():
                 continue
-            if ch in taken or ch in _RESERVED_KEYS:
+            if ch in taken:
                 continue
             taken.add(ch)
             result[idx] = ch

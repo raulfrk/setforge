@@ -87,6 +87,14 @@ def test_explicit_key_collision_raises() -> None:
         _derive_accelerators(buttons)
 
 
+def test_explicit_reserved_key_raises() -> None:
+    # An explicit key that collides with a reserved navigation key (here ``?``,
+    # the cheat-sheet toggle) is rejected rather than shadowing the binding.
+    buttons = [Button("Foo", 1, key="?")]
+    with pytest.raises(ValueError, match="reserved"):
+        _derive_accelerators(buttons)
+
+
 # ---------------------------------------------------------------------------
 # Task 3 — button_bar Application: nav / select / cancel
 # ---------------------------------------------------------------------------
@@ -166,6 +174,22 @@ def test_question_toggles_cheatsheet() -> None:
     # ``?`` then Enter still resolves the focused value — the toggle does
     # not consume the subsequent selection.
     assert _drive(b"?\r") == "ours"
+
+
+def test_cheatsheet_footer_renders() -> None:
+    # ``?`` turns the cheat sheet on; the rendered frame must actually carry the
+    # letter→label legend (the "keys:" prefix plus each accelerator + label).
+    out = _CaptureOutput()
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"?\r")
+        with create_app_session(input=pipe, output=out):
+            button_bar(_BUTTONS, title="Conflict 1/1", body=None)
+    rendered = out.captured()
+    assert "keys:" in rendered
+    # Each derived accelerator letter and its label is present in the legend.
+    for letter, label in (("o", "Ours"), ("t", "Theirs"), ("e", "Edit"), ("s", "Skip")):
+        assert letter in rendered
+        assert label in rendered
 
 
 def test_body_panel_renders() -> None:

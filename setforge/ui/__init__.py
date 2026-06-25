@@ -1,8 +1,7 @@
 """SetForge shared UI package: theme + reusable widgets.
 
-This module re-exports the D2 button-bar surface. D1's theme symbols
-(``Role``, ``THEME``, ``pt_style``, ``rich_style``, ``sgr``) are added by the
-sibling theme worktree; the two ``__init__`` exports union at the merge gate.
+Re-exports the button-bar widget surface (``Button``, ``button_bar``,
+``CANCEL``); the theme symbols are re-exported from :mod:`setforge.ui.theme`.
 """
 
 from __future__ import annotations

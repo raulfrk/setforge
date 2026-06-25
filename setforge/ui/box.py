@@ -9,7 +9,8 @@ Width is clamped to ``min(width, 100)`` and floored to a small minimum so a
 degenerate terminal size never raises. The caller styles the returned lines
 (the heading class for the title, muted for the rules) when painting them; the
 prompt_toolkit class names are ``class:heading`` / ``class:muted`` (the theme
-module is intentionally *not* imported here — D3 resolves the real styling).
+module is intentionally *not* imported here — the caller supplies real styling
+via the theme's class names).
 """
 
 from __future__ import annotations
