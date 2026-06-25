@@ -9,7 +9,7 @@ import pytest
 
 from setforge.errors import CorruptIndexError, InvariantViolation, UnsafeFileId
 from setforge.reconcile import store
-from setforge.reconcile.types import ABSENT, file_id
+from setforge.reconcile.types import ABSENT, Absent, file_id
 
 # --------------------------------------------------------------------------- #
 # Resolver (Task 4)
@@ -122,7 +122,7 @@ def test_read_index_corrupt_raises(tmp_state: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _record_locked(profile: str, fid, *, base: bytes, local: bytes) -> None:
+def _record_locked(profile: str, fid, *, base: bytes, local: bytes | Absent) -> None:
     from setforge import locking
 
     with locking.profile_lock(profile):
@@ -165,6 +165,56 @@ def test_verify_detects_hash_mismatch(tmp_state: Path) -> None:
     store._resolve(store._local_root(), "p", fid).write_bytes(b"tampered")
     with pytest.raises(InvariantViolation):
         store.verify("p", fid)
+
+
+def test_verify_ok_after_record_absent(tmp_state: Path) -> None:
+    # the ABSENT-recorded leg: present=False, local_hash=None, marker on disk.
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=ABSENT)
+    store.verify("p", fid)  # no raise
+    entry = store.read_index("p").files["f"]
+    assert entry.present is False
+    assert entry.local_hash is None
+
+
+def test_verify_ok_after_record_empty_bytes(tmp_state: Path) -> None:
+    # b"" is a present, recorded file — distinct from ABSENT.
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"")
+    store.verify("p", fid)
+    assert store.read_index("p").files["f"].present is True
+
+
+def test_verify_detects_present_flag_disagreement(tmp_state: Path) -> None:
+    # index says present, but on-disk state is the absence marker -> INV-10.
+    from setforge.reconcile.index_model import FileEntry, Index
+
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=ABSENT)  # writes present=False
+    # rewrite the index to claim present=True while the marker still says absent:
+    store.write_index(
+        "p",
+        Index(files={"f": FileEntry(present=True, local_hash="sha256:00", hunks=[])}),
+    )
+    with pytest.raises(InvariantViolation):
+        store.verify("p", fid)
+
+
+def test_verify_whole_index_discovers_orphan(tmp_state: Path) -> None:
+    # verify(profile) with no fid must DISCOVER an on-disk orphan it was not told
+    # about (INV-10, disk->index direction via the full scan).
+    keep = file_id("keep")
+    _record_locked("p", keep, base=b"B", local=b"L")
+    # plant an on-disk local file with no index entry:
+    store.write_local("p", file_id("orphan"), b"X")
+    with pytest.raises(InvariantViolation):
+        store.verify("p")  # fid=None -> whole-index + on-disk union scan
+
+
+def test_verify_whole_index_passes_when_consistent(tmp_state: Path) -> None:
+    _record_locked("p", file_id("a"), base=b"B1", local=b"L1")
+    _record_locked("p", file_id("b"), base=b"B2", local=ABSENT)
+    store.verify("p")  # no raise over the whole profile
 
 
 # --------------------------------------------------------------------------- #
@@ -213,3 +263,16 @@ def test_prune_removes_unlisted_keeps_listed(tmp_state: Path) -> None:
     assert store.read_local("p", drop) is None
     assert "drop" not in store.read_index("p").files
     assert "keep" in store.read_index("p").files
+
+
+def test_prune_removes_absence_marker(tmp_state: Path) -> None:
+    # an ABSENT-recorded file's marker (in the separate local-absent/ tree) is
+    # pruned too when its file-id drops out of the live set.
+    keep, drop = file_id("keep"), file_id("gone")
+    _record_locked("p", keep, base=b"B1", local=b"L1")
+    _record_locked("p", drop, base=b"B2", local=ABSENT)
+    assert store.read_local("p", drop) is ABSENT
+    store.prune("p", {keep})
+    assert store.read_local("p", drop) is None  # marker gone
+    assert "gone" not in store.read_index("p").files
+    store.verify("p")  # store stays consistent after prune

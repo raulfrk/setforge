@@ -428,11 +428,12 @@ class CorruptIndexError(ReconcileStoreError):
     missing a mandatory field.
 
     A parsed-but-incomplete document (e.g. no ``schema_version`` key) is
-    corruption, NOT a legitimately-absent index. The message names the
-    profile and path and points at the recovery (inspect or delete the
-    index to rebuild it). Fail-closed: the store refuses rather than
-    silently re-seeding, which would resurrect the silent-overwrite class
-    of bug the store exists to kill.
+    corruption, NOT a legitimately-absent index. Raised first by the codec
+    (:func:`~setforge.reconcile.index_model.loads`) with the shape error;
+    :func:`~setforge.reconcile.store.read_index` re-wraps it to add the
+    profile, path, and recovery hint (inspect or delete the index to rebuild
+    it). Fail-closed: the store refuses rather than silently re-seeding, which
+    would resurrect the silent-overwrite class of bug the store exists to kill.
     """
 
 
@@ -452,8 +453,11 @@ class InvariantViolation(ReconcileStoreError):
 
     INV-2 (``base + recorded-local == live``, byte-exact) and INV-10
     (index ↔ on-disk consistent, no orphan classification) are the store's
-    load-bearing invariants. The message names the profile, file-id, and
-    which invariant failed.
+    load-bearing invariants. In this storage layer the INV-2 check is the
+    degenerate case — :func:`~setforge.reconcile.store.verify` confirms the
+    recorded-local bytes hash matches the index (reconstruction is the
+    identity), with the full base-plus-merge form arriving with the 3-way
+    merge. The message names the profile, file-id, and which invariant failed.
     """
 
 

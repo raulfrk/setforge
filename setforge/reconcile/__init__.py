@@ -1,4 +1,4 @@
-"""Reconcile engine: the base/local/index store substrate (A1).
+"""Reconcile engine: the base/local/index store substrate.
 
 Stable public façade — call sites import ``from setforge.reconcile import ...``;
 the submodules (:mod:`~setforge.reconcile.store`, ``index_model``, ``types``) are

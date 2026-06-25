@@ -76,8 +76,10 @@ def test_current_version_loads() -> None:
     assert loads(text) == Index(files={})
 
 
-def test_loads_never_writes(tmp_path) -> None:
-    # codec is pure: no filesystem side effects. (regression guard for B12)
-    before = set(tmp_path.iterdir())
-    loads(dumps(Index(files={})))
-    assert set(tmp_path.iterdir()) == before
+def test_loads_never_writes(tmp_path, monkeypatch) -> None:
+    # codec is pure: migrate-on-read happens in memory, no file is created.
+    # chdir into tmp_path so a stray relative-path write would surface here.
+    monkeypatch.chdir(tmp_path)
+    before = set(tmp_path.rglob("*"))
+    loads(dumps(Index(files={"f": FileEntry(present=True, local_hash=None, hunks=[])})))
+    assert set(tmp_path.rglob("*")) == before

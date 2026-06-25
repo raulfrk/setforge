@@ -7,9 +7,9 @@ string is a type error at the boundary; the resolver re-validates defensively
 because a ``NewType`` cast is a runtime no-op.
 
 :class:`HunkClass` is the per-hunk classification recorded in the index (set by
-later beads — at A1 the hunk list is always empty). :data:`ABSENT` is the
-explicit "this file is absent" sentinel, distinct from a zero-byte file and from
-"not recorded yet" (``None``).
+the later merge/staging layers — in this storage layer the hunk list is always
+empty). :data:`ABSENT` is the explicit "this file is absent" sentinel, distinct
+from a zero-byte file and from "not recorded yet" (``None``).
 """
 
 from __future__ import annotations

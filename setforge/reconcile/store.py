@@ -1,14 +1,16 @@
-"""The base/local/index store substrate for the reconcile engine (A1).
+"""The base/local/index store substrate for the reconcile engine.
 
 Three on-disk stores under ``state_root()``, keyed by ``(profile, file-id)``:
 
 * ``base/<profile>/<file-id>`` — the 3-way merge base (verbatim bytes). Reused
   from :mod:`setforge.base_store`; this module is a thin typed pass-through.
 * ``local/<profile>/<file-id>`` — recorded keep-local content (verbatim bytes).
-  An explicitly-absent file is recorded as a sibling ``<file-id>.absent`` marker,
-  so the verbatim content can never collide with an absence sentinel.
+  An explicitly-absent file is recorded as a marker under a SEPARATE
+  ``local-absent/<profile>/<file-id>`` subtree (not a sibling suffix of the
+  content file), so a file-id can never collide with another file-id's marker.
 * ``index/<profile>.json`` — per-profile classification document
-  (:mod:`setforge.reconcile.index_model`). At A1 every entry's hunk list is empty.
+  (:mod:`setforge.reconcile.index_model`). In this storage layer every entry's
+  hunk list is empty.
 
 The store is **storage only** — no merge, no hunk production, no CLI wiring. It is
 **fail-closed**: :func:`verify` cross-checks the index against the on-disk local
@@ -20,7 +22,7 @@ future-version documents.
 :func:`write_local`, :func:`write_index`, :func:`record`, :func:`prune`) MUST be
 called inside the caller's ``with locking.profile_lock(profile):`` frame. This
 module deliberately does **not** acquire the lock itself: the caller (e.g. the
-future A2 merge / ``install``) already holds it across a larger critical section,
+future merge step / ``install``) already holds it across a larger critical section,
 and a second in-process acquisition on a fresh fd would deadlock. :func:`record`
 writes the index **last**, so a crash leaves at worst a prunable orphan base,
 never a dangling index pointer.
@@ -249,9 +251,10 @@ def _sha(data: bytes) -> str:
 def reconstruct(profile: str, fid: FileId) -> bytes | None | Absent:
     """Reconstruct the live content for ``fid``.
 
-    At A1 the reconstruction operator is the identity: ``base + recorded-local``
-    collapses to the recorded local bytes (the hunk-granular ``+`` arrives with
-    the A2 merge). Returns the same trichotomy as :func:`read_local`.
+    In this storage layer the reconstruction operator is the identity:
+    ``base + recorded-local`` collapses to the recorded local bytes (the
+    hunk-granular ``+`` arrives with the future 3-way merge). Returns the same
+    trichotomy as :func:`read_local`.
     """
     return read_local(profile, fid)
 
