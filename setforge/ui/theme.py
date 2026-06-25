@@ -4,10 +4,17 @@ The project's single visual source of truth (RFC §8): a small set of *semantic*
 colour roles (accent / success / error / ... — never raw hex at call sites),
 each carrying a truecolor ``#rrggbb`` and a curated official xterm-256 index for
 the fallback path. Dark-only; no light variant, no user overrides.
+
+Capability is resolved *per destination stream*, re-evaluated on every call
+(:func:`capability`): ``NO_COLOR`` (set and non-empty) or a non-tty stream
+forces mono; ``COLORTERM`` ∈ {``truecolor``, ``24bit``} unlocks truecolor; every
+other tty falls back to 256. Escapes are NEVER emitted to a piped / non-tty
+stream — the adapters degrade to plain text instead.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -51,3 +58,48 @@ THEME: Mapping[Role, Color] = MappingProxyType(
         Role.TEXT: Color("#c0caf5", 189),
     }
 )
+
+
+class Cap(StrEnum):
+    """A stream's resolved colour capability."""
+
+    MONO = "mono"
+    C256 = "256"
+    TRUECOLOR = "truecolor"
+
+
+def _env_set(name: str) -> bool:
+    """An env var is "set" only when present AND non-empty.
+
+    Per no-color.org, ``NO_COLOR=""`` (empty) does NOT disable colour — only a
+    non-empty value does.
+    """
+    return name in os.environ and os.environ[name] != ""
+
+
+def _isatty(stream: object) -> bool:
+    """``stream.isatty()`` guarded against closed / detached / non-stream objects.
+
+    A missing ``isatty`` (``AttributeError``), a closed stream (``ValueError``),
+    or an OS-level failure (``OSError``) all resolve to "not a tty".
+    """
+    try:
+        return bool(stream.isatty())  # type: ignore[attr-defined]
+    except (ValueError, OSError, AttributeError):
+        return False
+
+
+def capability(stream: object) -> Cap:
+    """Resolve a stream's colour capability — first match wins, per call.
+
+    Precedence: ``NO_COLOR`` (set + non-empty) → mono; non-tty stream → mono;
+    ``COLORTERM`` ∈ {``truecolor``, ``24bit``} (exact membership) → truecolor;
+    otherwise 256. No module-level cache — cheap to re-evaluate per stream.
+    """
+    if _env_set("NO_COLOR"):
+        return Cap.MONO
+    if not _isatty(stream):
+        return Cap.MONO
+    if os.environ.get("COLORTERM") in {"truecolor", "24bit"}:
+        return Cap.TRUECOLOR
+    return Cap.C256

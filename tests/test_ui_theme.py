@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from setforge.ui.theme import THEME, Color, Role
+from setforge.ui.theme import THEME, Cap, Color, Role, capability
 
 CHROMATIC = (
     Role.ACCENT,
@@ -16,6 +16,23 @@ CHROMATIC = (
     Role.HEADING,
     Role.IDENTIFIER,
 )
+
+
+# --------------------------------------------------------------------------- #
+# Fake stream — controllable isatty() (True / False / raises).
+# --------------------------------------------------------------------------- #
+class _FakeStream:
+    def __init__(self, tty: bool | type[BaseException]) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        if isinstance(self._tty, type) and issubclass(self._tty, BaseException):
+            raise self._tty("closed stream")
+        return bool(self._tty)
+
+
+_TTY = _FakeStream(True)
+_PIPE = _FakeStream(False)
 
 
 # --------------------------------------------------------------------------- #
@@ -47,3 +64,69 @@ def test_truecolor_is_hex() -> None:
     for color in THEME.values():
         assert color.truecolor.startswith("#")
         assert len(color.truecolor) == 7
+
+
+# --------------------------------------------------------------------------- #
+# Task 2 — capability precedence matrix (per stream)
+# --------------------------------------------------------------------------- #
+def test_no_color_set_nonempty_is_mono(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_TTY) is Cap.MONO
+
+
+def test_no_color_empty_string_does_not_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "")  # empty → NOT disabling (no-color.org)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_TTY) is Cap.TRUECOLOR
+
+
+def test_non_tty_is_mono(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_PIPE) is Cap.MONO
+
+
+def test_colorterm_truecolor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_TTY) is Cap.TRUECOLOR
+
+
+def test_colorterm_24bit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "24bit")
+    assert capability(_TTY) is Cap.TRUECOLOR
+
+
+def test_colorterm_junk_falls_to_256(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "yes")  # not exact membership
+    assert capability(_TTY) is Cap.C256
+
+
+def test_colorterm_unset_falls_to_256(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+    assert capability(_TTY) is Cap.C256
+
+
+def test_closed_stream_treated_non_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_FakeStream(ValueError)) is Cap.MONO
+
+
+def test_stream_without_isatty_is_mono(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(object()) is Cap.MONO  # AttributeError → non-tty
+
+
+def test_capability_is_per_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert capability(_TTY) is Cap.TRUECOLOR
+    assert capability(_PIPE) is Cap.MONO  # independent, re-evaluated per call
