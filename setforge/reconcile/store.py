@@ -32,13 +32,18 @@ import hashlib
 from pathlib import Path
 
 from setforge import atomicio, base_store
-from setforge.errors import InvariantViolation, ReconcileStoreError, UnsafeFileId
+from setforge.errors import (
+    CorruptIndexError,
+    IndexVersionError,
+    InvariantViolation,
+    ReconcileStoreError,
+    UnsafeFileId,
+)
 from setforge.reconcile import index_model
 from setforge.reconcile.index_model import FileEntry, Index
 from setforge.reconcile.types import ABSENT, Absent, FileId, file_id
 from setforge.transitions import state_root
 
-_ABSENT_SUFFIX = ".absent"
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
 
@@ -63,6 +68,13 @@ __all__ = [
 
 def _local_root() -> Path:
     return state_root() / "local"
+
+
+def _local_absent_root() -> Path:
+    # Absence markers live in their own subtree (NOT a sibling suffix of the
+    # content file), so a file-id literally ending in the marker name can never
+    # collide with another file-id's marker.
+    return state_root() / "local-absent"
 
 
 def _index_root() -> Path:
@@ -138,7 +150,7 @@ def write_base(profile: str, fid: FileId, data: bytes) -> None:
 
 def _local_paths(profile: str, fid: FileId) -> tuple[Path, Path]:
     content = _resolve(_local_root(), profile, str(fid))
-    marker = content.with_name(content.name + _ABSENT_SUFFIX)
+    marker = _resolve(_local_absent_root(), profile, str(fid))
     return content, marker
 
 
@@ -166,12 +178,13 @@ def write_local(profile: str, fid: FileId, data: bytes | Absent) -> None:
     :data:`ABSENT`, an absence marker. Call inside ``profile_lock``.
     """
     content, marker = _local_paths(profile, fid)
-    _mkdir_secure(content.parent)
     try:
         if data is ABSENT:
+            _mkdir_secure(marker.parent)
             atomicio.atomic_write_bytes(marker, b"", mode=_FILE_MODE)
             content.unlink(missing_ok=True)
         else:
+            _mkdir_secure(content.parent)
             atomicio.atomic_write_bytes(content, data, mode=_FILE_MODE)
             marker.unlink(missing_ok=True)
     except OSError as err:
@@ -199,7 +212,17 @@ def read_index(profile: str) -> Index:
         return Index(files={})
     except OSError as err:
         raise ReconcileStoreError(f"failed to read index for {profile}: {err}") from err
-    return index_model.loads(text)
+    try:
+        return index_model.loads(text)
+    except CorruptIndexError as err:
+        raise CorruptIndexError(
+            f"index for profile {profile!r} at {path}: {err}. "
+            f"Inspect or delete it to rebuild."
+        ) from err
+    except IndexVersionError as err:
+        raise IndexVersionError(
+            f"index for profile {profile!r} at {path}: {err}"
+        ) from err
 
 
 def write_index(profile: str, index: Index) -> None:
@@ -280,17 +303,13 @@ def _verify_one(profile: str, fid: FileId, entry: FileEntry | None) -> None:
 
 def _on_disk_file_ids(profile: str) -> set[FileId]:
     """Every file-id with a recorded local content file or absence marker."""
-    profile_root = _local_root() / profile
-    if not profile_root.is_dir():
-        return set()
     found: set[FileId] = set()
-    for path in profile_root.rglob("*"):
-        if not path.is_file():
+    for root in (_local_root() / profile, _local_absent_root() / profile):
+        if not root.is_dir():
             continue
-        rel = path.relative_to(profile_root).as_posix()
-        if rel.endswith(_ABSENT_SUFFIX):
-            rel = rel[: -len(_ABSENT_SUFFIX)]
-        found.add(file_id(rel))
+        for path in root.rglob("*"):
+            if path.is_file():
+                found.add(file_id(path.relative_to(root).as_posix()))
     return found
 
 
@@ -320,17 +339,12 @@ def prune(profile: str, live_fids: set[FileId]) -> None:
     ``profile_lock``. Never removes a listed file-id.
     """
     live_str = {str(f) for f in live_fids}
-    # local store
-    profile_root = _local_root() / profile
-    if profile_root.is_dir():
-        for path in profile_root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(profile_root).as_posix()
-            base_rel = (
-                rel[: -len(_ABSENT_SUFFIX)] if rel.endswith(_ABSENT_SUFFIX) else rel
-            )
-            if base_rel not in live_str:
+    # local content + absence-marker trees
+    for root in (_local_root() / profile, _local_absent_root() / profile):
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.relative_to(root).as_posix() not in live_str:
                 path.unlink(missing_ok=True)
     # base store (reuse its own prune)
     base_store.prune(profile, live_str)
