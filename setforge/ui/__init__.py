@@ -1,7 +1,8 @@
-"""SetForge UI layer — the shared Tokyo Night theme + button-bar widget.
+"""SetForge shared UI package: theme + reusable widgets.
 
-This package re-exports the stable public surface so call sites import from
-``setforge.ui`` rather than reaching into the submodules.
+This module re-exports the D2 button-bar surface. D1's theme symbols
+(``Role``, ``THEME``, ``pt_style``, ``rich_style``, ``sgr``) are added by the
+sibling theme worktree; the two ``__init__`` exports union at the merge gate.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from setforge.ui.theme import (
     sgr,
     styled,
 )
+from setforge.ui.widgets import CANCEL, Button, button_bar
 
 __all__ = [
     "THEME",
@@ -28,4 +30,7 @@ __all__ = [
     "rich_style",
     "sgr",
     "styled",
+    "CANCEL",
+    "Button",
+    "button_bar",
 ]
