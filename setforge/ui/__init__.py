@@ -20,16 +20,16 @@ from setforge.ui.theme import (
 from setforge.ui.widgets import CANCEL, Button, button_bar
 
 __all__ = [
+    "CANCEL",
     "THEME",
+    "Button",
     "Cap",
     "Color",
     "Role",
+    "button_bar",
     "capability",
     "pt_style",
     "rich_style",
     "sgr",
     "styled",
-    "CANCEL",
-    "Button",
-    "button_bar",
 ]
