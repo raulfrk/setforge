@@ -357,9 +357,9 @@ def _theme_dict(tree: ast.AST) -> ast.Dict | None:
 
 def lint_theme_256(tree: ast.AST, path: str) -> list[Violation]:
     """UX-4, theme-scoped: every semantic role resolves to a valid curated 256
-    index. Asserts every :class:`Role` member is a ``THEME`` key, each value's
-    ``xterm256`` arg is an ``ast.Constant`` int in ``0..255``, and chromatic
-    roles sit inside the ``16..231`` colour cube."""
+    index. Asserts every required role name (the :data:`_THEME_ROLES` mirror) is a
+    ``THEME`` key, each value's ``xterm256`` arg is an ``ast.Constant`` int in
+    ``0..255``, and chromatic roles sit inside the ``16..231`` colour cube."""
     if path != THEME_MODULE:  # the only file this gate applies to
         return []
     theme = _theme_dict(tree)
@@ -446,7 +446,7 @@ _LINTS = (
 
 
 def check_source(source: str, path: str) -> list[Violation]:
-    """Run all four lints over one already-read file. Unparseable → a PARSE
+    """Run all five lints over one already-read file. Unparseable → a PARSE
     violation (fail-closed: a file that won't parse cannot silently skip the gate)."""
     try:
         tree = ast.parse(source, filename=path)

@@ -1,6 +1,6 @@
 """Unit tests for the Tokyo Night theme module (setforge/ui/theme.py).
 
-Covers, per the D1 acceptance contract: every role resolves in the THEME table;
+Covers, per the theme acceptance contract: every role resolves in the THEME table;
 xterm256 indices are valid + chromatic roles sit in the colour cube; Color is
 frozen; the per-stream capability precedence matrix (NO_COLOR set/empty/unset x
 isatty T/F x COLORTERM truecolor/24bit/junk/unset); and each render adapter's

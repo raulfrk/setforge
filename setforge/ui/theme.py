@@ -103,6 +103,10 @@ def capability(stream: object) -> Cap:
     Precedence: ``NO_COLOR`` (set + non-empty) → mono; non-tty stream → mono;
     ``COLORTERM`` ∈ {``truecolor``, ``24bit``} (exact membership) → truecolor;
     otherwise 256. No module-level cache — cheap to re-evaluate per stream.
+
+    ``TERM`` (incl. ``TERM=dumb`` / unset) is intentionally NOT consulted — a tty
+    with ``COLORTERM`` truecolor still gets truecolor; everything else falls to
+    the 256 floor.
     """
     if _env_set("NO_COLOR"):
         return Cap.MONO
@@ -189,8 +193,7 @@ def render_demo(stream: object) -> str:
 
 
 def _main() -> None:
-    """``python -m setforge.ui.theme`` — print the palette to stdout, proving the
-    theme renders end-to-end without converting any existing surface."""
+    """``python -m setforge.ui.theme`` — print the palette demo to stdout."""
     import sys
 
     sys.stdout.write(render_demo(sys.stdout))
