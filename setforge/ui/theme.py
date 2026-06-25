@@ -5,6 +5,12 @@ colour roles (accent / success / error / ... — never raw hex at call sites),
 each carrying a truecolor ``#rrggbb`` and a curated official xterm-256 index for
 the fallback path. Dark-only; no light variant, no user overrides.
 
+Three render adapters project the one :data:`THEME` table onto the three colour
+surfaces the project uses — prompt_toolkit (:func:`pt_style`), rich
+(:func:`rich_style`), and raw SGR escapes (:func:`sgr` / :func:`styled`) — and
+their formats are never crossed (a rich style string is never fed to a pt
+``Style``, and vice versa).
+
 Capability is resolved *per destination stream*, re-evaluated on every call
 (:func:`capability`): ``NO_COLOR`` (set and non-empty) or a non-tty stream
 forces mono; ``COLORTERM`` ∈ {``truecolor``, ``24bit``} unlocks truecolor; every
@@ -19,6 +25,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
+
+RESET = "\033[0m"  # SGR reset; every emitted sgr() run is paired with this
 
 
 class Role(StrEnum):
@@ -103,3 +111,63 @@ def capability(stream: object) -> Cap:
     if os.environ.get("COLORTERM") in {"truecolor", "24bit"}:
         return Cap.TRUECOLOR
     return Cap.C256
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """``"#rrggbb"`` → ``(r, g, b)`` ints."""
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def sgr(role: Role, *, stream: object) -> str:
+    """Raw SGR colour introducer for ``role`` on ``stream`` (no reset, no text).
+
+    Truecolor → ``\\033[38;2;r;g;bm``; 256 → ``\\033[38;5;Nm``; mono → ``""``.
+    Returns ``""`` for any non-tty / ``NO_COLOR`` stream so callers never leak
+    escapes into a pipe. Pair the result with :data:`RESET` (or use
+    :func:`styled`).
+    """
+    color = THEME[role]
+    cap = capability(stream)
+    if cap is Cap.TRUECOLOR:
+        r, g, b = _hex_to_rgb(color.truecolor)
+        return f"\033[38;2;{r};{g};{b}m"
+    if cap is Cap.C256:
+        return f"\033[38;5;{color.xterm256}m"
+    return ""  # Cap.MONO
+
+
+def styled(text: str, role: Role, *, stream: object) -> str:
+    """``text`` wrapped in ``role``'s SGR introducer + :data:`RESET`.
+
+    Degrades to bare ``text`` (no escapes) when the stream resolves to mono, so
+    it is always safe to write to a pipe.
+    """
+    introducer = sgr(role, stream=stream)
+    if not introducer:
+        return text
+    return f"{introducer}{text}{RESET}"
+
+
+def rich_style(role: Role, *, stream: object) -> str:
+    """A rich style string for ``role`` on ``stream``.
+
+    Truecolor → hex (``"#7aa2f7"``); 256 → ``"color(N)"``; mono → ``"default"``.
+    """
+    color = THEME[role]
+    cap = capability(stream)
+    if cap is Cap.TRUECOLOR:
+        return color.truecolor
+    if cap is Cap.C256:
+        return f"color({color.xterm256})"
+    return "default"  # Cap.MONO
+
+
+def pt_style(theme: Mapping[Role, Color] = THEME) -> dict[str, str]:
+    """A prompt_toolkit ``Style`` mapping keyed ``class:<role>`` → truecolor hex.
+
+    prompt_toolkit resolves its own 256/mono downgrade from the terminal, so the
+    pt adapter always hands it the truecolor hex (never the rich ``color(N)`` /
+    raw SGR forms — adapter formats are never crossed).
+    """
+    return {f"class:{role.value}": color.truecolor for role, color in theme.items()}

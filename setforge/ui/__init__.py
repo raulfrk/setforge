@@ -6,7 +6,17 @@ This package re-exports the stable public surface so call sites import from
 
 from __future__ import annotations
 
-from setforge.ui.theme import THEME, Cap, Color, Role, capability
+from setforge.ui.theme import (
+    THEME,
+    Cap,
+    Color,
+    Role,
+    capability,
+    pt_style,
+    rich_style,
+    sgr,
+    styled,
+)
 
 __all__ = [
     "THEME",
@@ -14,4 +24,8 @@ __all__ = [
     "Color",
     "Role",
     "capability",
+    "pt_style",
+    "rich_style",
+    "sgr",
+    "styled",
 ]

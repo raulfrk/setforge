@@ -1,12 +1,32 @@
-"""Unit tests for the Tokyo Night theme module (setforge/ui/theme.py)."""
+"""Unit tests for the Tokyo Night theme module (setforge/ui/theme.py).
+
+Covers, per the D1 acceptance contract: every role resolves in the THEME table;
+xterm256 indices are valid + chromatic roles sit in the colour cube; Color is
+frozen; the per-stream capability precedence matrix (NO_COLOR set/empty/unset x
+isatty T/F x COLORTERM truecolor/24bit/junk/unset); and each render adapter's
+exact output for one role in truecolor / 256 / mono (sgr ends in reset, correct
+introducer, no escapes to a piped stream).
+"""
 
 from __future__ import annotations
 
 import dataclasses
+import io
 
 import pytest
 
-from setforge.ui.theme import THEME, Cap, Color, Role, capability
+from setforge.ui.theme import (
+    RESET,
+    THEME,
+    Cap,
+    Color,
+    Role,
+    capability,
+    pt_style,
+    rich_style,
+    sgr,
+    styled,
+)
 
 CHROMATIC = (
     Role.ACCENT,
@@ -130,3 +150,62 @@ def test_capability_is_per_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COLORTERM", "truecolor")
     assert capability(_TTY) is Cap.TRUECOLOR
     assert capability(_PIPE) is Cap.MONO  # independent, re-evaluated per call
+
+
+# --------------------------------------------------------------------------- #
+# Task 3 — render adapters (sgr / styled / pt_style / rich_style)
+# --------------------------------------------------------------------------- #
+def test_sgr_truecolor_introducer_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    # #7aa2f7 → 122;162;247
+    assert sgr(Role.ACCENT, stream=_TTY) == "\033[38;2;122;162;247m"
+    out = styled("hi", Role.ACCENT, stream=_TTY)
+    assert out == "\033[38;2;122;162;247mhi\033[0m"
+    assert out.endswith(RESET)
+
+
+def test_sgr_256(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+    assert sgr(Role.ACCENT, stream=_TTY) == "\033[38;5;111m"
+    assert styled("hi", Role.ACCENT, stream=_TTY) == "\033[38;5;111mhi\033[0m"
+
+
+def test_sgr_mono_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert sgr(Role.ACCENT, stream=_TTY) == ""
+    assert styled("hi", Role.ACCENT, stream=_TTY) == "hi"  # bare text, no escape
+
+
+def test_no_escape_to_piped_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    # The cardinal sin: never emit escapes to a non-tty / piped stream.
+    assert sgr(Role.ACCENT, stream=_PIPE) == ""
+    assert styled("hi", Role.ACCENT, stream=_PIPE) == "hi"
+    assert "\033" not in styled("hi", Role.ERROR, stream=io.StringIO())
+
+
+def test_pt_style_keys() -> None:
+    style = pt_style()
+    assert style["class:accent"] == "#7aa2f7"
+    assert style["class:text"] == "#c0caf5"
+    assert set(style) == {f"class:{role.value}" for role in Role}
+
+
+def test_rich_style_truecolor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert rich_style(Role.ACCENT, stream=_TTY) == "#7aa2f7"
+
+
+def test_rich_style_256(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+    assert rich_style(Role.ACCENT, stream=_TTY) == "color(111)"
+
+
+def test_rich_style_mono(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert rich_style(Role.ACCENT, stream=_TTY) == "default"
