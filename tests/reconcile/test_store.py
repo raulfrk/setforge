@@ -1,0 +1,215 @@
+"""The reconcile store: resolver, local/base, index, reconstruct, verify."""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+import pytest
+
+from setforge.errors import CorruptIndexError, InvariantViolation, UnsafeFileId
+from setforge.reconcile import store
+from setforge.reconcile.types import ABSENT, file_id
+
+# --------------------------------------------------------------------------- #
+# Resolver (Task 4)
+# --------------------------------------------------------------------------- #
+
+
+def test_resolver_ok(tmp_state: Path) -> None:
+    p = store._resolve(store._local_root(), "deb", file_id("claude/CLAUDE.md"))
+    assert str(p).endswith("/local/deb/claude/CLAUDE.md")
+
+
+@pytest.mark.parametrize("profile", ["../../etc", "..", "", ".", "a/b", "x\x00y"])
+def test_resolver_rejects_bad_profile(tmp_state: Path, profile: str) -> None:
+    with pytest.raises(UnsafeFileId):
+        store._resolve(store._local_root(), profile, file_id("x"))
+
+
+@pytest.mark.parametrize("fid", ["a/../../x", "/abs", "..", "", "a/\x00/b"])
+def test_resolver_rejects_bad_fileid(tmp_state: Path, fid: str) -> None:
+    with pytest.raises(UnsafeFileId):
+        store._resolve(store._local_root(), "p", fid)  # raw str; resolver re-checks
+
+
+def test_index_path_rejects_bad_profile(tmp_state: Path) -> None:
+    with pytest.raises(UnsafeFileId):
+        store._index_path("../x")
+
+
+# --------------------------------------------------------------------------- #
+# Local store + base passthrough (Task 5)
+# --------------------------------------------------------------------------- #
+
+
+def test_local_trichotomy(tmp_state: Path) -> None:
+    fid = file_id("f")
+    assert store.read_local("p", fid) is None  # not recorded
+    store.write_local("p", fid, b"")
+    assert store.read_local("p", fid) == b""  # legitimately empty
+    store.write_local("p", fid, ABSENT)
+    assert store.read_local("p", fid) is ABSENT  # explicit absence
+
+
+def test_local_bytes_verbatim(tmp_state: Path) -> None:
+    fid = file_id("f")
+    data = b"a\r\nb\x00c"  # CRLF + NUL, no trailing newline
+    store.write_local("p", fid, data)
+    assert store.read_local("p", fid) == data
+
+
+def test_local_perms(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_local("p", fid, b"x")
+    path = store._resolve(store._local_root(), "p", fid)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o077 == 0
+
+
+def test_absent_then_content_clears_marker(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_local("p", fid, ABSENT)
+    store.write_local("p", fid, b"now here")
+    assert store.read_local("p", fid) == b"now here"
+
+
+def test_base_passthrough(tmp_state: Path) -> None:
+    fid = file_id("c/d.md")
+    assert store.read_base("p", fid) is None
+    store.write_base("p", fid, b"base bytes")
+    assert store.read_base("p", fid) == b"base bytes"
+
+
+# --------------------------------------------------------------------------- #
+# Index read/write (Task 6)
+# --------------------------------------------------------------------------- #
+
+
+def test_read_index_absent_is_empty(tmp_state: Path) -> None:
+    assert store.read_index("p").files == {}
+
+
+def test_index_round_trip(tmp_state: Path) -> None:
+    from setforge.reconcile.index_model import FileEntry, Index
+
+    idx = Index(files={"f": FileEntry(present=True, local_hash="sha256:00", hunks=[])})
+    store.write_index("p", idx)
+    assert store.read_index("p") == idx
+
+
+def test_index_file_perms(tmp_state: Path) -> None:
+    from setforge.reconcile.index_model import Index
+
+    store.write_index("p", Index(files={}))
+    assert store._index_path("p").stat().st_mode & 0o777 == 0o600
+
+
+def test_read_index_corrupt_raises(tmp_state: Path) -> None:
+    store.write_index(
+        "p",
+        __import__("setforge.reconcile.index_model", fromlist=["Index"]).Index(
+            files={}
+        ),
+    )
+    store._index_path("p").write_text("{garbage", encoding="utf-8")
+    with pytest.raises(CorruptIndexError):
+        store.read_index("p")
+
+
+# --------------------------------------------------------------------------- #
+# reconstruct + verify (Task 7)
+# --------------------------------------------------------------------------- #
+
+
+def _record_locked(profile: str, fid, *, base: bytes, local: bytes) -> None:
+    from setforge import locking
+
+    with locking.profile_lock(profile):
+        store.record(profile, fid, base=base, local=local)
+
+
+def test_reconstruct_is_local(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_local("p", fid, b"hi")
+    assert store.reconstruct("p", fid) == b"hi"
+
+
+def test_verify_ok_after_record(tmp_state: Path) -> None:
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"L")
+    store.verify("p", fid)  # no raise
+    entry = store.read_index("p").files["f"]
+    assert entry.local_hash == "sha256:" + hashlib.sha256(b"L").hexdigest()
+
+
+def test_verify_detects_missing_local(tmp_state: Path) -> None:
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"L")
+    store._resolve(store._local_root(), "p", fid).unlink()
+    with pytest.raises(InvariantViolation):
+        store.verify("p", fid)
+
+
+def test_verify_detects_orphan_local(tmp_state: Path) -> None:
+    # a local file with no index entry is an INV-10 orphan
+    fid = file_id("f")
+    store.write_local("p", fid, b"L")  # local written, no index entry
+    with pytest.raises(InvariantViolation):
+        store.verify("p", fid)
+
+
+def test_verify_detects_hash_mismatch(tmp_state: Path) -> None:
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"L")
+    store._resolve(store._local_root(), "p", fid).write_bytes(b"tampered")
+    with pytest.raises(InvariantViolation):
+        store.verify("p", fid)
+
+
+# --------------------------------------------------------------------------- #
+# record (index-last) + prune + lock contract (Task 8)
+# --------------------------------------------------------------------------- #
+
+
+def test_record_writes_index_last(
+    tmp_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(store, "write_base", lambda *a, **k: calls.append("base"))
+    monkeypatch.setattr(store, "write_local", lambda *a, **k: calls.append("local"))
+    monkeypatch.setattr(store, "write_index", lambda *a, **k: calls.append("index"))
+    monkeypatch.setattr(
+        store,
+        "read_index",
+        lambda p: __import__(
+            "setforge.reconcile.index_model", fromlist=["Index"]
+        ).Index(files={}),
+    )
+    store.record("p", file_id("f"), base=b"B", local=b"L")
+    assert calls == ["base", "local", "index"]
+
+
+def test_record_and_prune_do_not_take_lock(
+    tmp_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A1 must NOT acquire profile_lock itself — the caller holds it; a second
+    # in-process acquisition would deadlock.
+    from setforge import locking
+
+    taken: list[str] = []
+    monkeypatch.setattr(locking, "profile_lock", lambda *a, **k: taken.append("lock"))
+    store.record("p", file_id("f"), base=b"B", local=b"L")
+    store.prune("p", {file_id("f")})
+    assert taken == []
+
+
+def test_prune_removes_unlisted_keeps_listed(tmp_state: Path) -> None:
+    keep, drop = file_id("keep"), file_id("drop")
+    _record_locked("p", keep, base=b"B1", local=b"L1")
+    _record_locked("p", drop, base=b"B2", local=b"L2")
+    store.prune("p", {keep})
+    assert store.read_local("p", keep) == b"L1"
+    assert store.read_local("p", drop) is None
+    assert "drop" not in store.read_index("p").files
+    assert "keep" in store.read_index("p").files
