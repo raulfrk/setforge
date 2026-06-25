@@ -134,6 +134,11 @@ class Violation:
         return f"{self.rule_id} {self.path}:{self.line}  {self.message}"
 
 
+# The one module where raw hex / SGR colour literals legitimately live: UX-3
+# (the hardcoded-colour ban) explicitly applies "outside the theme module".
+THEME_MODULE = "setforge/ui/theme.py"
+
+
 def _is_setforge_source(path: str) -> bool:
     """A first-party engine module (the scope for the UX lints — not tests/scripts)."""
     return path.startswith("setforge/") and path.endswith(".py")
@@ -229,7 +234,8 @@ def lint_wizard_letter(tree: ast.AST, path: str) -> list[Violation]:
 
 def lint_theme_hardcode(tree: ast.AST, path: str) -> list[Violation]:
     """UX-3: flag raw ANSI escapes + whole-token / colour-keyword hex literals."""
-    if not _is_setforge_source(path) or path in LEGACY_MODULES:
+    # The theme module is exempt: it is where colour literals legitimately live.
+    if not _is_setforge_source(path) or path in LEGACY_MODULES or path == THEME_MODULE:
         return []
     out: list[Violation] = []
     for node in ast.walk(tree):
