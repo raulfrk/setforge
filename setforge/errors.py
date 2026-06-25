@@ -409,3 +409,59 @@ class BinaryOverrideInvalid(SetforgeError):
             f"{layer} override for {binary!r} → {path!r}: {reason}. "
             f"Edit ~/.config/setforge/local.yaml or unset the override."
         )
+
+
+class ReconcileStoreError(SetforgeError):
+    """Base class for reconcile-engine store (base/local/index) failures.
+
+    The reconcile store (:mod:`setforge.reconcile.store`) holds the merge
+    ``base``, the recorded keep-local content, and a per-profile ``index``
+    under ``<state_root>/{base,local,index}/``. Failures inherit from this
+    class so the CLI top-level handler renders them as ``error: <message>``
+    and exits 1 — a raw :class:`json.JSONDecodeError` or :class:`OSError`
+    must never escape the store.
+    """
+
+
+class CorruptIndexError(ReconcileStoreError):
+    """Raised when ``index/<profile>.json`` is unparseable, wrong-shaped, or
+    missing a mandatory field.
+
+    A parsed-but-incomplete document (e.g. no ``schema_version`` key) is
+    corruption, NOT a legitimately-absent index. The message names the
+    profile and path and points at the recovery (inspect or delete the
+    index to rebuild it). Fail-closed: the store refuses rather than
+    silently re-seeding, which would resurrect the silent-overwrite class
+    of bug the store exists to kill.
+    """
+
+
+class IndexVersionError(ReconcileStoreError):
+    """Raised when ``index/<profile>.json`` records a ``schema_version``
+    NEWER than this engine can read.
+
+    The message names the found-vs-expected versions and the recovery
+    (upgrade setforge). An older version is migrated in memory; only a
+    forward-incompatible (newer) version is refused — a future format is
+    never best-effort parsed.
+    """
+
+
+class InvariantViolation(ReconcileStoreError):
+    """Raised when INV-2 or INV-10 is detected at runtime.
+
+    INV-2 (``base + recorded-local == live``, byte-exact) and INV-10
+    (index ↔ on-disk consistent, no orphan classification) are the store's
+    load-bearing invariants. The message names the profile, file-id, and
+    which invariant failed.
+    """
+
+
+class UnsafeFileId(ReconcileStoreError):
+    """Raised when a profile or file-id fails the store's path-safety check.
+
+    Rejects an absolute path, a ``..`` / ``.`` / empty path component, or a
+    C0/DEL control char in either the profile or the file-id, so a
+    malicious or buggy key can never resolve a path outside the store
+    subtree. The message names the offending value.
+    """
