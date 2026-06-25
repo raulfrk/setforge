@@ -4,7 +4,7 @@
 A STANDALONE script (NOT a pytest test — pytest is skippable via markers and
 ``addopts``, which would silently disarm the contract; same reasoning as
 :mod:`scripts.check_schema_gates`). It walks every tracked ``.py`` file
-(``git ls-files``) and runs four AST-anchored lints:
+(``git ls-files``) and runs five AST-anchored lints:
 
 ============  ======  =======================================================
 Rule          ID      What it bans
@@ -14,6 +14,7 @@ legacy-API    SAFE-2  new-engine code importing the legacy disposition /
                       sections / spans / overlay subsystem
 wizard-letter UX-1    ``setforge.wizard.read_one_choice`` letter menus
 theme-hardcode UX-3   raw ANSI escapes / hex colours outside the theme
+theme-256     UX-4    a theme role with no valid curated 256-colour index
 ============  ======  =======================================================
 
 Scoping (RFC §5 — a DETERMINISTIC rule must BLOCK, but stay ~zero false
@@ -28,9 +29,12 @@ positive, else hard-blocking breeds fatigue):
 * **wizard-letter / theme-hardcode** — all of ``setforge/**`` except the small
   pinned :data:`LEGACY_MODULES` allowlist (the handful of pre-existing
   violators). The allowlist may only SHRINK (SAFE-10 ratchet, pinned by a
-  meta-test) and is self-checked for stale entries.
+  meta-test) and is self-checked for stale entries. ``theme-hardcode`` also
+  exempts :data:`THEME_MODULE` — the one module where colour literals live.
+* **theme-256** — *single-file scoped*: only :data:`THEME_MODULE` itself is
+  checked (no allowlist, no ratchet), since it is the sole owner of the palette.
 
-All four lints are AST-anchored — they inspect :class:`ast.Constant` /
+All five lints are AST-anchored — they inspect :class:`ast.Constant` /
 :class:`ast.Call` / import nodes, never raw source text. Comments and
 docstrings are therefore invisible to them, so doc mentions like
 ``"never shell=True"`` and issue numbers like ``#142916`` in prose cannot
@@ -288,7 +292,157 @@ def lint_theme_hardcode(tree: ast.AST, path: str) -> list[Violation]:
     return out
 
 
-_LINTS = (lint_shell_true, lint_legacy_api, lint_wizard_letter, lint_theme_hardcode)
+# --- UX-4 theme-256-completeness -----------------------------------------------
+# The semantic role vocabulary the theme MUST cover, and the subset whose 256
+# index must sit inside the 16..231 colour cube (the 0..15 system slots are
+# palette-unstable across terminals; muted/text may sit anywhere valid). Mirrors
+# setforge/ui/theme.py's Role enum + spec §3 — kept here so the lint stays
+# AST-only (import-safe) and never imports the module it checks.
+_THEME_ROLES: frozenset[str] = frozenset(
+    {
+        "accent",
+        "success",
+        "error",
+        "warning",
+        "heading",
+        "identifier",
+        "muted",
+        "text",
+    }
+)
+_CHROMATIC_ROLES: frozenset[str] = frozenset(
+    {"accent", "success", "error", "warning", "heading", "identifier"}
+)
+
+
+def _role_key_name(key: ast.expr) -> str | None:
+    """The role name a THEME dict key denotes: ``Role.ACCENT`` → ``"accent"``,
+    a bare ``"accent"`` string → ``"accent"``; anything else → ``None``."""
+    if isinstance(key, ast.Attribute):
+        return key.attr.lower()  # Role.ACCENT → "accent"
+    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+        return key.value.lower()
+    return None
+
+
+def _theme_dict(tree: ast.AST) -> ast.Dict | None:
+    """The dict literal assigned to ``THEME`` (directly or via ``MappingProxyType(
+    {...})``), or ``None`` if no such assignment is present."""
+    for node in ast.walk(tree):
+        # THEME may be a plain assign or an annotated assign
+        # (`THEME: Mapping[...] = ...`); both bind the dict we want.
+        if isinstance(node, ast.Assign):
+            is_theme = any(
+                isinstance(t, ast.Name) and t.id == "THEME" for t in node.targets
+            )
+            value: ast.expr | None = node.value
+        elif isinstance(node, ast.AnnAssign):
+            is_theme = isinstance(node.target, ast.Name) and node.target.id == "THEME"
+            value = node.value
+        else:
+            continue
+        if not is_theme or value is None:
+            continue
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "MappingProxyType"
+            and value.args
+        ):
+            value = value.args[0]
+        if isinstance(value, ast.Dict):
+            return value
+    return None
+
+
+def lint_theme_256(tree: ast.AST, path: str) -> list[Violation]:
+    """UX-4, theme-scoped: every semantic role resolves to a valid curated 256
+    index. Asserts every :class:`Role` member is a ``THEME`` key, each value's
+    ``xterm256`` arg is an ``ast.Constant`` int in ``0..255``, and chromatic
+    roles sit inside the ``16..231`` colour cube."""
+    if path != THEME_MODULE:  # the only file this gate applies to
+        return []
+    theme = _theme_dict(tree)
+    if theme is None:
+        return [
+            Violation(
+                "UX-4",
+                path,
+                0,
+                "no THEME mapping found in the theme module — the 256-completeness "
+                "gate cannot verify role coverage",
+            )
+        ]
+
+    out: list[Violation] = []
+    seen: set[str] = set()
+    for key, value in zip(theme.keys, theme.values, strict=True):
+        role = _role_key_name(key) if key is not None else None
+        if role is None:
+            continue
+        seen.add(role)
+        # The value must be a Color(...) call whose 2nd positional arg is the
+        # xterm256 index (matches `Color(truecolor, xterm256)` in spec §3).
+        index_node = (
+            value.args[1]
+            if isinstance(value, ast.Call) and len(value.args) >= 2
+            else None
+        )
+        line = getattr(value, "lineno", 0)
+        if not (
+            isinstance(index_node, ast.Constant) and isinstance(index_node.value, int)
+        ):
+            out.append(
+                Violation(
+                    "UX-4",
+                    path,
+                    line,
+                    f"role '{role}': xterm256 must be an integer literal "
+                    f"(curated official index, not a computed value)",
+                )
+            )
+            continue
+        index = index_node.value
+        if not 0 <= index <= 255:
+            out.append(
+                Violation(
+                    "UX-4",
+                    path,
+                    line,
+                    f"role '{role}': xterm256 {index} out of range (0..255)",
+                )
+            )
+        elif role in _CHROMATIC_ROLES and not 16 <= index <= 231:
+            out.append(
+                Violation(
+                    "UX-4",
+                    path,
+                    line,
+                    f"role '{role}': chromatic xterm256 {index} must sit in the "
+                    f"16..231 colour cube (0..15 system colours are unstable)",
+                )
+            )
+
+    for role in sorted(_THEME_ROLES - seen):
+        out.append(
+            Violation(
+                "UX-4",
+                path,
+                getattr(theme, "lineno", 0),
+                f"role '{role}' missing from THEME — every semantic role must "
+                f"resolve in 256-colour",
+            )
+        )
+    return out
+
+
+_LINTS = (
+    lint_shell_true,
+    lint_legacy_api,
+    lint_wizard_letter,
+    lint_theme_hardcode,
+    lint_theme_256,
+)
 
 
 def check_source(source: str, path: str) -> list[Violation]:

@@ -67,7 +67,7 @@ Part 2(b)).
 | UX-1 | Every choice is a navigable **button bar** (`←/→`/`Tab` move, `Enter` selects, `Esc` cancels). No memorize-a-letter menus. | DETERMINISTIC | `wizard-letter-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (bans `read_one_choice` in `setforge/`) |
 | UX-2 | Letter keys exist only as **hidden accelerators**, never as the documented surface. | ADVISORY | `design-invariant-reviewer` |
 | UX-3 | No hardcoded colors outside the theme module — only semantic Tokyo Night roles (`accent`/`success`/`error`/`warning`/`heading`/`identifier`/`muted`/`text`). | DETERMINISTIC | `theme-hardcode-ban` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (no raw ANSI / whole-token hex in `setforge/`) |
-| UX-4 | All wizards + non-wizard CLI output use the one shipped theme + button widget — truecolor with **256-color fallback**, dark-only. | DETERMINISTIC | theme 256-fallback-completeness lint (every role resolves in 256) — *planned; lands with the theme module (D1), wired into its acceptance* |
+| UX-4 | All wizards + non-wizard CLI output use the one shipped theme + button widget — truecolor with **256-color fallback**, dark-only. | DETERMINISTIC | `theme-256` lint — [`scripts/check_policy_lints.py`](../scripts/check_policy_lints.py) (every semantic role resolves to a valid curated 256-color index in `setforge/ui/theme.py`) |
 | UX-5 | All wizards build on prompt_toolkit (`button_dialog`/`radiolist_dialog`/`input_dialog`) — no custom TUI. | ADVISORY | `design-invariant-reviewer` |
 | UX-6 | Unicode box-framing (per the §8 mockups) is part of the theme, applied consistently across surfaces. | ADVISORY | `design-invariant-reviewer` + human (revdiff) |
 
