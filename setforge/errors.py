@@ -469,3 +469,25 @@ class UnsafeFileId(ReconcileStoreError):
     malicious or buggy key can never resolve a path outside the store
     subtree. The message names the offending value.
     """
+
+
+class MergeError(ReconcileStoreError):
+    """Raised when the 3-way merge engine hits an internal failure.
+
+    The merge primitive (:func:`setforge.reconcile.merge.merge`) is *total* on
+    content — binary / oversize / recursion-blown inputs degrade to a whole-file
+    conflict, never an error. This wraps the residual case: an unexpected
+    ``merge3`` internal failure (other than recursion), re-raised ``from`` the
+    original so a raw third-party exception never escapes the engine.
+    """
+
+
+class MergeInvariantError(MergeError):
+    """Raised when the merge's fail-closed verify pass detects byte loss.
+
+    Before returning, the engine reconstructs all three inputs from its segment
+    stream (INV-1); a mismatch means a line was dropped or duplicated — a bug in
+    the engine or in ``merge3``. Fail-closed: the engine raises rather than
+    return a result that would silently lose a user's bytes. Should never fire in
+    practice; if it does, it is a defect, not a content condition.
+    """
