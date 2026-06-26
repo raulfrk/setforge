@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from setforge.errors import MergeInvariantError
-from setforge.reconcile import merge as M
-from setforge.reconcile.merge import merge
+from setforge.reconcile.merge import merge  # the public function
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
 from setforge.reconcile.types import ABSENT
+
+# The façade re-exports `merge` (the function), which shadows the
+# `setforge.reconcile.merge` attribute — so fetch the MODULE (for private
+# helpers/consts) via importlib rather than `import ... as M`.
+M = importlib.import_module("setforge.reconcile.merge")
 
 # --------------------------------------------------------------------------- #
 # Task 3 — splitter
