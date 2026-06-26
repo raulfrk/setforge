@@ -613,3 +613,70 @@ def _regular_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     local_path = tmp_path / "local.yaml"
     local_path.write_text("claude:\n  install_mode: regular\n")
     monkeypatch.setattr(bin_mod, "LOCAL_CONFIG_PATH", local_path)
+
+
+# ---------------------------------------------------------------------------
+# Fake ``claude -p`` print-mode binary + ``claude_stub`` fixture (A4)
+# ---------------------------------------------------------------------------
+
+# A standalone executable standing in for the real ``claude`` at the subprocess
+# boundary. It records each invocation's argv + stdin to STUB_LOG (one JSON
+# object per line) and emits scripted stdout/stderr/exit driven by STUB_* env
+# vars — which survive ``claude_session._scrubbed_env`` (only SETFORGE_* is
+# dropped). Used by the claude_session and claude_merge unit suites; no network,
+# no real CLI.
+_CLAUDE_STUB_SCRIPT = """\
+#!/usr/bin/env python3
+import os, sys, json, time
+record = {"argv": sys.argv[1:], "stdin": sys.stdin.read()}
+log = os.environ.get("STUB_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\\n")
+time.sleep(float(os.environ.get("STUB_SLEEP", "0")))
+sys.stderr.write(os.environ.get("STUB_STDERR", ""))
+if os.environ.get("STUB_RAW_STDOUT"):
+    sys.stdout.buffer.write(b"\\xff\\xfe")
+else:
+    sys.stdout.write(os.environ.get("STUB_STDOUT", "MERGED DRAFT\\n"))
+sys.exit(int(os.environ.get("STUB_EXIT", "0")))
+"""
+
+
+class ClaudeStub:
+    """Handle for the faked ``claude`` binary: tune its output, read its calls."""
+
+    def __init__(self, log: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.log = log
+        self._mp = monkeypatch
+
+    def set(self, **env: object) -> None:
+        """Set STUB_* env vars driving the next invocation's behavior."""
+        for key, value in env.items():
+            self._mp.setenv(key, str(value))
+
+    def calls(self) -> list[dict]:
+        """Every recorded invocation (argv + stdin), in order."""
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+
+@pytest.fixture
+def claude_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "ClaudeStub":
+    """Install the recording stub as the resolved ``claude`` binary.
+
+    Points ``SETFORGE_CLAUDE_BIN`` at the stub and clears the
+    :func:`setforge.claude_session._resolve_binary` lru-cache so the override
+    is seen fresh.
+    """
+    from setforge import claude_session as _cs
+
+    script = tmp_path / "claude-stub"
+    script.write_text(_CLAUDE_STUB_SCRIPT, encoding="utf-8")
+    script.chmod(0o755)
+    log = tmp_path / "claude-calls.jsonl"
+    monkeypatch.setenv("SETFORGE_CLAUDE_BIN", str(script))
+    monkeypatch.setenv("STUB_LOG", str(log))
+    _cs._resolve_claude_bin.cache_clear()
+    return ClaudeStub(log, monkeypatch)

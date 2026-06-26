@@ -25,11 +25,12 @@ from enum import Enum, auto
 from typing import Final
 
 from prompt_toolkit.application import Application, get_app
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.containers import AnyContainer
-from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 
@@ -351,6 +352,86 @@ def button_bar[T](
     kb = _build_keybindings(buttons, accelerators, state, select=_select)
 
     app: Application[T | _Cancelled] = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        style=_STYLE if style is None else merge_styles([_STYLE, style]),
+    )
+    return app.run()
+
+
+def text_prompt(
+    *,
+    title: str | None = None,
+    body: str | _Fragments | None = None,
+    style: BaseStyle | None = None,
+) -> str | _Cancelled:
+    """Full-screen single-line themed text input — a sibling of :func:`button_bar`.
+
+    Renders a framed ``body`` panel (optional, same ``str`` / fragments shape as
+    ``button_bar``) above a one-line editable buffer. **Enter** submits the
+    current text — which **may be empty**: a blank submit returns ``""`` (a
+    meaningful answer — e.g. "use the default", not a cancel). **Esc / Ctrl-C**
+    return :data:`CANCEL`. ``style`` is merged over the widget's built-in palette
+    exactly like ``button_bar``; ``None`` keeps the standalone palette.
+
+    Driven headlessly in tests via ``create_app_session`` + a pipe input, the
+    same pattern as ``button_bar`` (text bytes then a terminating ``\\r``).
+    """
+    buffer = Buffer(multiline=False)
+
+    def _accept(buff: Buffer) -> bool:
+        # Enter on a single-line buffer fires the accept handler; exit with the
+        # text (possibly "") as the single result channel — no mutable holder.
+        get_app().exit(result=buff.text)
+        return True  # keep the buffer text (no validation rejection)
+
+    buffer.accept_handler = _accept
+
+    kb = KeyBindings()
+
+    @kb.add("escape", eager=True)
+    def _(event: KeyPressEvent) -> None:
+        event.app.exit(result=CANCEL)
+
+    @kb.add("c-c")
+    def _(event: KeyPressEvent) -> None:
+        event.app.exit(result=CANCEL)
+
+    def _top_rule() -> _Fragments:
+        return [("class:muted", frame([], title=title, width=_frame_width())[0])]
+
+    def _bottom_rule() -> _Fragments:
+        return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
+
+    children: list[AnyContainer] = [
+        Window(content=FormattedTextControl(text=_top_rule), height=1)
+    ]
+    if body is not None:
+        body_frags: _Fragments = (
+            [("class:text", body)] if isinstance(body, str) else list(body)
+        )
+        children.append(
+            Window(
+                content=FormattedTextControl(text=lambda: body_frags),
+                height=Dimension(min=1),
+                wrap_lines=True,
+            )
+        )
+    input_window = Window(content=BufferControl(buffer=buffer), height=1)
+    children.append(input_window)
+    children.append(
+        Window(
+            content=FormattedTextControl(
+                text=lambda: [("class:identifier", "Enter submit · Esc cancel")]
+            ),
+            height=1,
+        )
+    )
+    children.append(Window(content=FormattedTextControl(text=_bottom_rule), height=1))
+    layout = Layout(HSplit(children), focused_element=input_window)
+
+    app: Application[str | _Cancelled] = Application(
         layout=layout,
         key_bindings=kb,
         full_screen=True,

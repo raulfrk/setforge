@@ -24,6 +24,7 @@ from setforge.ui.widgets import (
     _Cancelled,
     _derive_accelerators,
     button_bar,
+    text_prompt,
 )
 
 # ---------------------------------------------------------------------------
@@ -290,3 +291,49 @@ def _drive_with_size(input_keys: bytes, *, columns: int) -> object:
         pipe.send_bytes(input_keys)
         with create_app_session(input=pipe, output=out):
             return button_bar(_BUTTONS, title="Conflict 1/1", body=None)
+
+
+# ---------------------------------------------------------------------------
+# text_prompt — single-line themed input (A4)
+# ---------------------------------------------------------------------------
+
+
+def _drive_prompt(input_keys: bytes, *, body: str | None = None) -> object:
+    """Run :func:`text_prompt` with piped input + dummy output."""
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(input_keys)
+        with create_app_session(input=pipe, output=DummyOutput()):
+            return text_prompt(title="claude-merge", body=body)
+
+
+def test_text_prompt_enter_submits_typed_text() -> None:
+    assert _drive_prompt(b"keep ours\r") == "keep ours"
+
+
+def test_text_prompt_empty_enter_returns_empty_string() -> None:
+    # A blank submit is meaningful (→ use the default prompt), NOT a cancel.
+    out = _drive_prompt(b"\r")
+    assert out == ""
+    assert out is not CANCEL
+
+
+def test_text_prompt_escape_returns_cancel() -> None:
+    assert _drive_prompt(b"\x1b") is CANCEL
+
+
+def test_text_prompt_ctrl_c_returns_cancel() -> None:
+    assert _drive_prompt(b"\x03") is CANCEL
+
+
+def test_text_prompt_backspace_edits_buffer() -> None:
+    # Type "abcX", delete the X (\x7f), submit → real line editing via Buffer.
+    assert _drive_prompt(b"abcX\x7f\r") == "abc"
+
+
+def test_text_prompt_body_renders() -> None:
+    out = _CaptureOutput()
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")
+        with create_app_session(input=pipe, output=out):
+            text_prompt(title="T", body="your instruction ⟩")
+    assert "your instruction ⟩" in out.captured()

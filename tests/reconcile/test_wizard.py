@@ -254,11 +254,29 @@ def test_claude_merge_default_stub_reprompts() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_non_utf8_region_omits_edit_button() -> None:
+def test_non_utf8_region_omits_edit_and_claude_merge_buttons() -> None:
+    # A non-decodable side omits BOTH text flows (Edit and Claude-merge).
     conflict = Conflict(base=b"", ours=b"\xff\xfe", theirs=b"B\n")
     labels = [b.label for b in W._region_buttons(conflict)]
     assert "Edit" not in labels
-    assert labels == ["Ours", "Theirs", "Claude-merge", "Skip"]
+    assert "Claude-merge" not in labels
+    assert labels == ["Ours", "Theirs", "Skip"]
+
+
+def test_non_utf8_base_omits_claude_merge_but_keeps_edit() -> None:
+    # Edit needs only ours+theirs; Claude-merge also sends base, so a
+    # non-decodable base gates Claude-merge off while Edit survives.
+    conflict = Conflict(base=b"\xff\xfe", ours=b"A\n", theirs=b"B\n")
+    labels = [b.label for b in W._region_buttons(conflict)]
+    assert "Edit" in labels
+    assert "Claude-merge" not in labels
+    assert labels == ["Ours", "Theirs", "Edit", "Skip"]
+
+
+def test_all_utf8_region_offers_claude_merge() -> None:
+    conflict = Conflict(base=b"X\n", ours=b"A\n", theirs=b"B\n")
+    labels = [b.label for b in W._region_buttons(conflict)]
+    assert labels == ["Ours", "Theirs", "Edit", "Claude-merge", "Skip"]
 
 
 def test_non_utf8_ours_is_byte_exact() -> None:

@@ -19,9 +19,11 @@ Per region the wizard shows ``Ours · Theirs · [Edit] · Claude-merge · Skip``
 - **Skip** keeps ours and flags :attr:`WizardResult.deferred` so the caller does
   not re-baseline the file.
 - **Edit** opens ``$EDITOR`` seeded with git-style markers (UTF-8 only — the
-  button is omitted for a non-decodable region).
+  button is omitted when *ours* or *theirs* is non-decodable).
 - **Claude-merge** calls the injected :data:`ClaudeMergeFn`; the default stub
-  declines (A4 supplies the real resumable ``claude -p`` session).
+  declines (A4 supplies the real resumable ``claude -p`` session). The button is
+  omitted unless *all three* sides decode as UTF-8 — the merge prompt sends
+  base/ours/theirs to a text model, which cannot round-trip arbitrary bytes.
 
 :data:`~setforge.ui.widgets.CANCEL` means "the user backed out of *this* prompt".
 At the region menu that aborts the whole file (``resolve_conflicts`` returns
@@ -111,6 +113,20 @@ def _both_utf8(conflict: Conflict) -> bool:
     return True
 
 
+def _all_utf8(conflict: Conflict) -> bool:
+    """Whether base, ours, AND theirs decode as UTF-8 (gate for Claude-merge).
+
+    Claude-merge sends all three sides to a text model (the prompt includes
+    ``base`` so it can honour what upstream intended), so a single non-decodable
+    side omits the button — a text LLM can't round-trip arbitrary bytes.
+    """
+    try:
+        conflict.base.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return _both_utf8(conflict)
+
+
 def _sanitize_controls(text: str) -> str:
     """Map C0 controls (except newline) and DEL to caret notation for display.
 
@@ -192,14 +208,18 @@ def _themed_style() -> Style:
 
 
 def _region_buttons(conflict: Conflict) -> list[Button[_Choice]]:
-    """Buttons for one region; Edit is offered only on a UTF-8-decodable region."""
+    """Buttons for one region.
+
+    Edit is offered only when ours+theirs decode as UTF-8; Claude-merge only
+    when all three sides (incl. base) decode — both gates omit a button a text
+    flow can't honour on a non-decodable region.
+    """
     buttons = [Button("Ours", _Choice.OURS), Button("Theirs", _Choice.THEIRS)]
     if _both_utf8(conflict):
         buttons.append(Button("Edit", _Choice.EDIT))
-    buttons += [
-        Button("Claude-merge", _Choice.CLAUDE_MERGE),
-        Button("Skip", _Choice.SKIP),
-    ]
+    if _all_utf8(conflict):
+        buttons.append(Button("Claude-merge", _Choice.CLAUDE_MERGE))
+    buttons.append(Button("Skip", _Choice.SKIP))
     return buttons
 
 
