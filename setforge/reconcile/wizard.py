@@ -31,12 +31,12 @@ it re-prompts the same region.
 
 from __future__ import annotations
 
+import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from subprocess import CalledProcessError
 
 from prompt_toolkit.styles import Style
 
@@ -183,8 +183,7 @@ def _themed_style() -> Style:
     :func:`~setforge.ui.theme.pt_style` returns *reference*-form keys
     (``class:success``), the shape a fragment uses to point at a class;
     :meth:`Style.from_dict` keys are *definition*-form (bare ``success``), so we
-    strip the ``class:`` prefix — mirroring how the widget's own ``_STYLE`` is
-    defined with bare keys and referenced as ``class:button``.
+    strip the ``class:`` prefix.
     """
     rules = {
         key.removeprefix("class:"): value for key, value in pt_style(THEME).items()
@@ -239,8 +238,8 @@ def _edit_region(conflict: Conflict) -> bytes | Cancelled:
     result back. A benign editor abort (``:q!`` → ``CalledProcessError``) or a
     non-UTF-8 read-back re-prompts (``CANCEL``); a config fault (missing
     ``$EDITOR`` etc. → ``SetforgeError`` from :func:`run_editor`) propagates.
-    Empty output or surviving markers also re-prompts. The tempfile is always
-    unlinked.
+    Empty output or surviving markers also re-prompts. The tempfile is unlinked
+    on every editor outcome — success, abort, or non-UTF-8 read-back.
     """
     with tempfile.NamedTemporaryFile(
         "w", suffix=".txt", encoding="utf-8", delete=False
@@ -250,7 +249,7 @@ def _edit_region(conflict: Conflict) -> bytes | Cancelled:
     try:
         run_editor(tmp_path)
         text = tmp_path.read_text(encoding="utf-8")
-    except (CalledProcessError, UnicodeDecodeError):
+    except (subprocess.CalledProcessError, UnicodeDecodeError):
         return CANCEL
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -320,6 +319,8 @@ def resolve_conflicts(
 
     Precondition: ``result`` carries at least one conflict — the caller checks
     ``not result.clean`` first; a clean result raises :class:`ValueError`.
+    Propagates :class:`~setforge.errors.SetforgeError` if an Edit sub-flow hits
+    an editor-config fault (missing / malformed ``$EDITOR``, timeout).
     """
     if result.clean:
         raise ValueError("resolve_conflicts called on a conflict-free result")
