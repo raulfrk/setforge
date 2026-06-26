@@ -22,10 +22,18 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any
+from typing import Any, cast
 
 import merge3
 from patiencediff import PatienceSequenceMatcher
+
+try:
+    # The pure-Python matcher raises this (an ``Exception`` subclass, NOT a
+    # ``RecursionError``) on a pathological unique-anchor structure; the C/Rust
+    # backend doesn't, so it lives at a private path with no public alias.
+    from patiencediff._patiencediff_py import MaxRecursionDepth as _MaxRecursionDepth
+except ImportError:  # pragma: no cover - layout differs across patiencediff builds
+    _MaxRecursionDepth = RecursionError  # type: ignore[assignment,misc]
 
 from setforge.errors import MergeError, MergeInvariantError
 from setforge.reconcile.merge_model import (
@@ -170,9 +178,10 @@ def _body_merge(base: bytes, ours: bytes, theirs: bytes) -> MergeResult:
                 sequence_matcher=PatienceSequenceMatcher,  # type: ignore[arg-type]
             ).merge_groups()
         )
-    except RecursionError:
-        # patiencediff raises (a RecursionError subclass) on a pathological
-        # unique-anchor structure; degrade rather than crash.
+    except (RecursionError, _MaxRecursionDepth):
+        # A pathological unique-anchor structure blows the matcher's recursion
+        # (RecursionError from the C backend, MaxRecursionDepth from pure-Python);
+        # degrade to a whole-file conflict rather than crash (totality).
         return _whole_file_conflict(base, ours, theirs)
     except Exception as err:
         raise MergeError(f"merge3 failed: {err}") from err
@@ -183,12 +192,17 @@ def _body_merge(base: bytes, ours: bytes, theirs: bytes) -> MergeResult:
 def _verify(
     base: MergeInput, ours: MergeInput, theirs: MergeInput, result: MergeResult
 ) -> None:
-    """Fail-closed INV-1 guard: no user edit silently lost.
+    """Fail-closed INV-1 guard: no user *edit* silently dropped.
 
-    Every line a side added/changed relative to ``base`` (its multiset minus
-    base's) must survive into the result's clean output or a conflict side.
-    Positional correctness is covered by the identity-law property tests; this
-    O(n) check catches the dropped/duplicated-line failure mode of the engine.
+    Every line a side added/changed relative to ``base`` (its line-multiset minus
+    base's) must appear somewhere in the result — a clean run or any conflict
+    side. This is a one-directional drop check (a missing edit line raises); it is
+    deliberately NOT a positional 3-way reconstruction (impossible from the lossy
+    public segment stream — a one-sided clean region discards the other sides'
+    pre-image) and does NOT detect duplication or reordering. Positional / INV-6
+    correctness is pinned by the identity-law + two-sided property tests; this
+    O(n) runtime check is the cheap loss-guard that backs the engine's
+    no-silent-data-loss contract.
     """
     base_c = Counter(_split_lines(base)) if isinstance(base, bytes) else Counter()
     present: Counter[bytes] = Counter()
@@ -220,6 +234,12 @@ def merge(base: MergeInput, ours: MergeInput, theirs: MergeInput) -> MergeResult
     :class:`~setforge.errors.MergeError` can surface, both indicating a defect.
     """
     resolved = _resolve_absence(base, ours, theirs)
-    result = resolved if resolved is not None else _body_merge(base, ours, theirs)  # type: ignore[arg-type]
+    if resolved is not None:
+        result = resolved
+    else:
+        # _resolve_absence returns None only when all three sides are present bytes.
+        result = _body_merge(
+            cast("bytes", base), cast("bytes", ours), cast("bytes", theirs)
+        )
     _verify(base, ours, theirs, result)
     return result

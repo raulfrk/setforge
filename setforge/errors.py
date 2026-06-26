@@ -483,11 +483,12 @@ class MergeError(ReconcileStoreError):
 
 
 class MergeInvariantError(MergeError):
-    """Raised when the merge's fail-closed verify pass detects byte loss.
+    """Raised when the merge's fail-closed verify pass detects a dropped edit.
 
-    Before returning, the engine reconstructs all three inputs from its segment
-    stream (INV-1); a mismatch means a line was dropped or duplicated — a bug in
-    the engine or in ``merge3``. Fail-closed: the engine raises rather than
-    return a result that would silently lose a user's bytes. Should never fire in
-    practice; if it does, it is a defect, not a content condition.
+    Before returning, the engine checks that every line a side changed relative to
+    base survives into the result (INV-1, one-directional drop check — see
+    :func:`setforge.reconcile.merge._verify`); a missing edit line means the
+    engine or ``merge3`` lost a user's bytes. Fail-closed: it raises rather than
+    return a lossy result. Should never fire in practice; if it does, it is a
+    defect, not a content condition.
     """

@@ -61,7 +61,9 @@ def test_one_sided_ours(b: bytes, o: bytes) -> None:
 
 @_io
 @given(b=_side(_bytes_or_nul()), o=_side(_bytes_or_nul()), t=_side(_bytes_or_nul()))
-def test_total_never_raises_and_edits_preserved(b, o, t) -> None:
+def test_total_never_raises_and_edits_preserved(
+    b: bytes | Absent, o: bytes | Absent, t: bytes | Absent
+) -> None:
     # merge() runs the fail-closed INV-1 verify internally; returning without
     # raising IS the edit-preservation guarantee over arbitrary bytes/ABSENT.
     r = merge(b, o, t)
@@ -81,12 +83,32 @@ def test_clean_segments_are_bytes(b: bytes, o: bytes, t: bytes) -> None:
             assert isinstance(seg.bytes_, bytes)
 
 
-def test_patiencediff_independent_edits_merge_clean() -> None:
-    # two edits on different lines, separated by a unique anchor → clean merge
-    # (unique-line anchoring keeps them apart; a naive matcher can false-conflict).
+def test_independent_edits_merge_clean() -> None:
+    # two edits on different lines, separated by an unchanged anchor → clean merge
+    # carrying both edits. (Matcher wiring is pinned separately by the spy test
+    # test_merge_uses_patience_matcher.)
     base = b"head\nold1\nMIDDLE\nold2\ntail\n"
     ours = b"head\nNEW1\nMIDDLE\nold2\ntail\n"
     theirs = b"head\nold1\nMIDDLE\nNEW2\ntail\n"
     r = merge(base, ours, theirs)
     assert r.clean is True
     assert r.merged() == b"head\nNEW1\nMIDDLE\nNEW2\ntail\n"
+
+
+_edit = st.text(alphabet="abcXYZ123", min_size=1, max_size=4).map(str.encode)
+
+
+@_io
+@given(e1=_edit, e2=_edit)
+def test_two_sided_independent_edits_positional(e1: bytes, e2: bytes) -> None:
+    # INV-6 (generative): ours edits region 1, theirs edits region 2, separated by
+    # unique anchors → clean merge whose bytes carry BOTH edits + every anchor in
+    # document order. Catches a dropped/mis-coalesced clean run that the multiset
+    # _verify (edits-only) cannot see.
+    base = b"HEAD\x01\nOLD1\x01\nMID\x01\nOLD2\x01\nTAIL\x01\n"
+    new1, new2 = b"N1_" + e1 + b"\n", b"N2_" + e2 + b"\n"
+    ours = base.replace(b"OLD1\x01\n", new1)
+    theirs = base.replace(b"OLD2\x01\n", new2)
+    r = merge(base, ours, theirs)
+    assert r.clean is True
+    assert r.merged() == b"HEAD\x01\n" + new1 + b"MID\x01\n" + new2 + b"TAIL\x01\n"

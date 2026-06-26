@@ -6,7 +6,7 @@ import importlib
 
 import pytest
 
-from setforge.errors import MergeInvariantError
+from setforge.errors import MergeError, MergeInvariantError
 from setforge.reconcile.merge import merge  # the public function
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
 from setforge.reconcile.types import ABSENT
@@ -170,3 +170,79 @@ def test_verify_catches_dropped_user_edit() -> None:
     dropped = MergeResult((Clean(b"a\n"),))  # EDIT silently gone
     with pytest.raises(MergeInvariantError):
         M._verify(base, ours, theirs, dropped)
+
+
+# --------------------------------------------------------------------------- #
+# Degrade paths + matcher wiring (Phase-5 review additions)
+# --------------------------------------------------------------------------- #
+
+
+class _BoomGroups:
+    """A fake Merge3 whose merge_groups() raises the configured exception."""
+
+    exc: type[BaseException] = RecursionError
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def merge_groups(self) -> list[object]:
+        raise self.exc
+
+
+def test_recursion_error_degrades_to_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(M.merge3, "Merge3", _BoomGroups)
+    r = merge(b"a\nb\n", b"a\nX\n", b"a\nY\n")
+    assert r.clean is False
+    assert isinstance(r.segments[0], Conflict)
+
+
+def test_max_recursion_depth_degrades_to_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the pure-Python matcher's MaxRecursionDepth (an Exception subclass) must
+    # also degrade, not be wrapped as MergeError (totality on pure-Python builds).
+    class _Boom(_BoomGroups):
+        exc = M._MaxRecursionDepth
+
+    monkeypatch.setattr(M.merge3, "Merge3", _Boom)
+    assert merge(b"a\nb\n", b"a\nX\n", b"a\nY\n").clean is False
+
+
+def test_generic_merge3_error_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Boom(_BoomGroups):
+        exc = ValueError
+
+    monkeypatch.setattr(M.merge3, "Merge3", _Boom)
+    with pytest.raises(MergeError, match="merge3 failed"):
+        merge(b"a\nb\n", b"a\nX\n", b"a\nY\n")
+
+
+def test_max_lines_degrades_to_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(M, "_MAX_LINES", 2)
+    r = merge(b"a\nb\nc\nd\n", b"a\nX\nc\nd\n", b"a\nb\nc\nY\n")
+    assert r.clean is False
+    assert len(r.segments) == 1
+    assert isinstance(r.segments[0], Conflict)
+
+
+def test_merge_uses_patience_matcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    # directly kill the "swapped to difflib default" mutant: assert merge passes
+    # PatienceSequenceMatcher into Merge3.
+    captured: dict[str, object] = {}
+    real = M.merge3.Merge3
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        captured["sm"] = kwargs.get("sequence_matcher")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(M.merge3, "Merge3", _spy)
+    merge(b"a\nb\n", b"a\nX\n", b"a\nb\n")
+    assert captured["sm"] is M.PatienceSequenceMatcher
+
+
+def test_conflict_keeps_flanking_clean_regions_byte_exact() -> None:
+    # INV-6: the non-conflict lines around a conflict stay byte-identical.
+    r = merge(b"a\nb\nc\n", b"a\nMINE\nc\n", b"a\nUP\nc\n")
+    assert r.clean is False
+    assert r.segments[0] == Clean(b"a\n")
+    assert r.segments[-1] == Clean(b"c\n")
