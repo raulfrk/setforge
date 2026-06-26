@@ -15,10 +15,12 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.styles import Style
 
 from setforge.ui.widgets import (
     CANCEL,
     Button,
+    Cancelled,
     _Cancelled,
     _derive_accelerators,
     button_bar,
@@ -199,6 +201,44 @@ def test_body_panel_renders() -> None:
         with create_app_session(input=pipe, output=out):
             button_bar(_BUTTONS, title="T", body="a read-only body line")
     assert "a read-only body line" in out.captured()
+
+
+def test_body_panel_renders_fragments() -> None:
+    # The fragments-body path (the coloured panel the conflict wizard uses)
+    # renders its text the same as a plain str body.
+    out = _CaptureOutput()
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")
+        with create_app_session(input=pipe, output=out):
+            button_bar(
+                _BUTTONS,
+                title="T",
+                body=[
+                    ("class:success", "ours side\n"),
+                    ("class:warning", "theirs side"),
+                ],
+            )
+    rendered = out.captured()
+    assert "ours side" in rendered
+    assert "theirs side" in rendered
+
+
+def test_style_override_merges_and_resolves() -> None:
+    # A caller style is MERGED over the widget palette (not replacing it), so the
+    # button bar still resolves the focused value normally.
+    style = Style.from_dict({"success": "#9ece6a", "warning": "#e0af68"})
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")
+        with create_app_session(input=pipe, output=DummyOutput()):
+            result = button_bar(_BUTTONS, title="T", body=None, style=style)
+    assert result == "ours"
+
+
+def test_cancelled_alias_resolves_to_sentinel_type() -> None:
+    # The public `type Cancelled` alias resolves to the private sentinel class,
+    # so callers can spell `T | Cancelled` without reaching for the private name.
+    assert Cancelled.__value__ is _Cancelled
+    assert isinstance(CANCEL, _Cancelled)
 
 
 def test_width_floor_guard_zero_size() -> None:

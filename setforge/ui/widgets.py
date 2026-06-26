@@ -31,7 +31,7 @@ from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.containers import AnyContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.styles import Style
+from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 
 from setforge.ui.box import frame
 
@@ -51,6 +51,11 @@ class _Cancelled(Enum):
 #: true singleton, distinct from every button value and from every falsy
 #: stand-in. Callers test ``if result is CANCEL``.
 CANCEL: Final = _Cancelled.TOKEN
+
+#: Public alias for the cancel sentinel's type, so callers can spell the return
+#: union of widgets that may cancel (e.g. ``WizardResult | Cancelled``) without
+#: reaching for the private member name.
+type Cancelled = _Cancelled
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +207,7 @@ def _build_layout(
     state: _BarState,
     *,
     title: str | None,
-    body: str | None,
+    body: str | _Fragments | None,
 ) -> Layout:
     """Assemble the framed body/button-row/legend/cheat-sheet layout."""
 
@@ -216,9 +221,14 @@ def _build_layout(
         Window(content=FormattedTextControl(text=_top_rule), height=1)
     ]
     if body is not None:
+        # A plain str is wrapped in the default text class (back-compat); a
+        # pre-built fragments list is rendered verbatim so callers can colour it.
+        body_frags: _Fragments = (
+            [("class:text", body)] if isinstance(body, str) else list(body)
+        )
         children.append(
             Window(
-                content=FormattedTextControl(text=lambda: [("class:text", body)]),
+                content=FormattedTextControl(text=lambda: body_frags),
                 height=Dimension(min=1),
                 wrap_lines=True,
             )
@@ -310,16 +320,23 @@ def button_bar[T](
     buttons: Sequence[Button[T]],
     *,
     title: str | None = None,
-    body: str | None = None,
+    body: str | _Fragments | None = None,
     initial: int = 0,
+    style: BaseStyle | None = None,
 ) -> T | _Cancelled:
     """Run the button bar; return the chosen ``value`` or :data:`CANCEL`.
 
     ``buttons`` are laid out left-to-right (wrapping on narrow terminals).
     ``title`` is drawn on the frame's top rule, ``body`` (read-only) above the
-    button row. ``initial`` is the index focused on open. Esc / Ctrl-C return
-    :data:`CANCEL`. The result is :meth:`Application.run`'s exit value — the
-    single result channel (no mutable result holder).
+    button row — either a plain ``str`` (rendered in the default text class) or
+    a prompt_toolkit fragments list (``(style_class, text)`` pairs) for a
+    coloured panel. ``initial`` is the index focused on open. ``style``, when
+    given, is *merged over* the widget's built-in palette
+    (:data:`merge_styles`) — so a caller's theme overrides the role colours
+    while the widget's own ``button`` / ``button.focused`` classes survive;
+    ``None`` keeps the standalone palette. Esc / Ctrl-C return :data:`CANCEL`.
+    The result is :meth:`Application.run`'s exit value — the single result
+    channel (no mutable result holder).
     """
     if not buttons:
         raise ValueError("button_bar requires at least one button")
@@ -337,6 +354,6 @@ def button_bar[T](
         layout=layout,
         key_bindings=kb,
         full_screen=True,
-        style=_STYLE,
+        style=_STYLE if style is None else merge_styles([_STYLE, style]),
     )
     return app.run()
