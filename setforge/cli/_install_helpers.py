@@ -904,6 +904,17 @@ def _capture_store_snapshots(
                     transitions.SnapshotStore.SCALAR_BASE, profile, record.sub_name
                 )
             )
+        # A plain reconcile file records its merge base in the SAME base_store
+        # (SnapshotStore.BASE) — snapshot it so revert restores the pre-install
+        # base. Without this, a revert undoes the live file but leaves the base
+        # advanced, and the next install would treat the reverted-away file as a
+        # deliberate deletion (theirs == base) instead of re-deploying it.
+        elif record.reconcile is not None:
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE, profile, record.sub_name
+                )
+            )
         if record.file_spans:
             entries.append(
                 transitions.snapshot_store_state(

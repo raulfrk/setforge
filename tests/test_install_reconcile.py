@@ -170,3 +170,28 @@ def test_auto_keep_live_resolves_conflict_to_local(repo: Path) -> None:
     # ours for the conflicting line, clean lines pass through; base advances.
     assert _live().read_text(encoding="utf-8") == "l1\nLOCAL\nl3\n"
     assert _base() == b"l1\nUPSTREAM\nl3\n"
+
+
+def _revert(config: Path) -> Result:
+    return CliRunner().invoke(
+        app, ["revert", f"--profile={_PROFILE}", f"--config={config}", "--yes"]
+    )
+
+
+def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
+    # Revert must restore the reconcile base, not just the live file: else the
+    # next install sees a stale base (theirs == base) and treats the
+    # reverted-away file as a deletion instead of re-deploying it.
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    assert _base() == b"v1\n"
+
+    assert _revert(config).exit_code == 0, "revert should succeed"
+    assert not _live().exists(), "revert removes the created live file"
+    assert _base() is None, "revert restores the pre-install (absent) base"
+
+    # Reinstall re-creates the file (a fresh first install again).
+    assert _install(config).exit_code == 0
+    assert _live().read_text(encoding="utf-8") == "v1\n"
+    assert _base() == b"v1\n"
