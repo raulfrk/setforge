@@ -145,18 +145,16 @@ def test_divergent_live_without_base_seeds_and_keeps_live(repo: Path) -> None:
 
 def test_clean_reinstall_is_idempotent(repo: Path) -> None:
     # INV-4 (install∘install == install): a second identical install must not
-    # diverge. Beyond live content that means NO store churn (the recorded
-    # base is not rewritten) and the reinstall's transition carries an EMPTY
-    # file delta. install always records a (revertable) transition by design,
-    # so the bite is on that transition having no changes.patch — not on the
-    # transition being absent.
+    # diverge. Beyond live content that means NO store churn — the recorded
+    # merge base is not rewritten. The stronger INV-4 clause (a true no-op
+    # writes NO transition dir at all) is pinned by the companion strict-xfail
+    # test below, NOT blessed here as an empty-but-present transition.
     config = _write_config(repo)
     _write_tracked(repo, "stable\n")
     assert _install(config).exit_code == 0
     before = _live().read_text(encoding="utf-8")
     base_mtime_before = _base_mtime_ns()
     live_mtime_before = _live().stat().st_mtime_ns
-    transitions_before = _transition_dirs()
     # Sleep so a spurious rewrite of live/base would land a DIFFERENT mtime,
     # making the stability asserts below actually bite.
     time.sleep(0.01)
@@ -166,12 +164,31 @@ def test_clean_reinstall_is_idempotent(repo: Path) -> None:
     assert _live().stat().st_mtime_ns == live_mtime_before
     # No store churn: the recorded merge base is not re-written.
     assert _base_mtime_ns() == base_mtime_before
-    # Exactly one new transition, and it carries NO file delta — a
-    # changes.patch would mean the reinstall rewrote a tracked file.
-    new_transitions = _transition_dirs() - transitions_before
-    assert len(new_transitions) == 1, new_transitions
-    new_dir = transitions_root() / next(iter(new_transitions))
-    assert not (new_dir / "changes.patch").exists(), list(new_dir.iterdir())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "INV-4 acceptance clause unmet: an idempotent re-install (no upstream "
+        "change, no local edit) still writes an empty transition dir, kept "
+        "indefinitely per project policy. The empty-patch transition skip "
+        "(skip the transition when changes.patch is empty AND there is no "
+        "store delta) is not yet implemented. strict=True means this gate "
+        "flips to a hard failure (XPASS) the moment the skip lands, forcing "
+        "this marker's removal — instead of the test weakening to accept the "
+        "violation."
+    ),
+)
+def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
+    # INV-4 (no-op-ness): no-new-upstream + no-local-edits must write NO new
+    # transition dir. Asserted strictly here instead of being relaxed to
+    # "exactly one empty transition" — see the xfail reason above.
+    config = _write_config(repo)
+    _write_tracked(repo, "stable\n")
+    assert _install(config).exit_code == 0
+    transitions_before = _transition_dirs()
+    assert _install(config).exit_code == 0
+    assert _transition_dirs() == transitions_before
 
 
 def _setup_conflict(repo: Path) -> Path:
