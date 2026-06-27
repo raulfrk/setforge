@@ -555,7 +555,6 @@ def _is_utf8(data: bytes) -> bool:
 def _plain_reconcile_content(
     outcome: reconcile_apply.ReconcileOutcome,
     live_bytes: bytes | None,
-    tracked_bytes: bytes,
 ) -> str | None:
     """The live str to write for a plain-reconcile outcome, or None to fall back.
 
@@ -583,8 +582,8 @@ def _seed_prompt_interactive(
     The base is recorded from the upstream either way; the choice is whether
     live keeps its local edits (recommended — they become a local change atop
     the base) or is replaced with the upstream version. Esc / Ctrl-C cancels
-    and aborts the file. Minimal A0 form; A6 enriches it with a divergence
-    diff/preview around this same decision.
+    and aborts the file. A later enrichment adds a divergence diff/preview
+    around this same decision.
     """
     return button_bar(
         [
@@ -665,7 +664,7 @@ def _resolve_plain_reconcile(
         # seed keeps live without prompting.
         seed_prompt=_seed_prompt_interactive,
     )
-    new_content = _plain_reconcile_content(outcome, live_bytes, tracked_bytes)
+    new_content = _plain_reconcile_content(outcome, live_bytes)
     if new_content is None:
         return None
     return _PendingDeploy(
@@ -1352,7 +1351,7 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
     live is the safe failure direction). A ``DEFERRED`` outcome (a non-TTY /
     ``--auto`` conflict, or a skipped region) keeps live, does NOT
     re-baseline, and WARNs so the divergence re-surfaces on the next
-    interactive install. ``NOOP`` / ``CANCELLED`` touch the store nothing.
+    interactive install. ``NOOP`` / ``CANCELLED`` leave the store untouched.
     """
     assert record.reconcile is not None
     fid, outcome = record.reconcile

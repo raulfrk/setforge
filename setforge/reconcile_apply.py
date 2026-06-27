@@ -6,11 +6,11 @@ engine for **plain** tracked files — those with no ``disposition`` and no
 carry a disposition or spans stay on the legacy ``deploy`` path until
 they are migrated onto the engine (a separate follow-up).
 
-:func:`reconcile_plain_file` is pure with respect to the filesystem: it
-reads the recorded base from the store, runs :func:`setforge.reconcile.merge`
-against the live + tracked content, drives the conflict wizard when needed,
-and returns a :class:`ReconcileOutcome` describing what the caller should
-do — it never writes the live file and never advances the store itself.
+:func:`reconcile_plain_file` does not MUTATE the filesystem: it reads the
+recorded base from the store, runs :func:`setforge.reconcile.merge` against
+the live + tracked content, drives the conflict wizard when needed, and
+returns a :class:`ReconcileOutcome` describing what the caller should do —
+it never writes the live file and never advances the store itself.
 That split keeps the decision logic unit-testable and lets the caller
 slot the write + ``record`` into the install pipeline's write pass.
 
@@ -160,10 +160,10 @@ def _seed_outcome(
 def _take_side(result: MergeResult, side: AutoSide) -> bytes:
     """Resolve every conflict region to one side; clean regions pass through.
 
-    The non-interactive ``--auto`` resolver: a clean (agreed) run is kept
-    verbatim, and each conflicting region collapses to its ``ours`` (live) or
-    ``theirs`` (tracked) bytes — the same per-region choice the wizard offers,
-    applied uniformly without prompting.
+    The non-interactive ``--auto`` resolver: each clean (agreed) region is
+    kept verbatim, and each conflicting region collapses to its ``ours``
+    (live) or ``theirs`` (tracked) bytes — the same per-region choice the
+    wizard offers, applied uniformly without prompting.
     """
     out: list[bytes] = []
     for seg in result.segments:
