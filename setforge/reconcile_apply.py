@@ -76,6 +76,7 @@ def reconcile_plain_file(
     *,
     live: bytes | Absent,
     tracked: bytes,
+    interactive: bool = False,
     display_path: str | None = None,
     claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
 ) -> ReconcileOutcome:
@@ -85,9 +86,17 @@ def reconcile_plain_file(
     install or a not-yet-seeded divergence), ``ours = live``, ``theirs =
     tracked``. A clean merge that already equals live with the base already
     at tracked is a :attr:`~ReconcileKind.NOOP`; any other clean merge is a
-    :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``. A
-    conflict drives :func:`~setforge.reconcile.resolve_conflicts`; a cancel
-    or a deferred (skipped) region writes nothing and does not re-baseline.
+    :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``.
+
+    A conflict is resolved interactively ONLY when ``interactive`` is set:
+    the per-region wizard (:func:`~setforge.reconcile.resolve_conflicts`)
+    runs, and a cancel / deferred (skipped) region writes nothing and does
+    NOT re-baseline. When ``interactive`` is False (a non-TTY / ``--auto`` /
+    CI install), a conflict is :attr:`~ReconcileKind.DEFERRED` without
+    prompting — keeping the local file, leaving the upstream change to
+    re-surface on the next interactive run, and letting the caller gate the
+    exit code on the deferred count. The full-screen prompt_toolkit wizard
+    must never be reached without a TTY.
     """
     base_raw = read_base(profile, fid)
     base: MergeInput = ABSENT if base_raw is None else base_raw
@@ -98,6 +107,9 @@ def reconcile_plain_file(
         if merged == live and base_raw == tracked:
             return ReconcileOutcome(ReconcileKind.NOOP)
         return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
+
+    if not interactive:
+        return ReconcileOutcome(ReconcileKind.DEFERRED)
 
     wizard = resolve_conflicts(
         fid, result, display_path=display_path, claude_merge=claude_merge

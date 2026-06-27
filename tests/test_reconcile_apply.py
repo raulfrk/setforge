@@ -85,9 +85,25 @@ class TestConflictOutcomes:
         monkeypatch.setattr(
             reconcile_apply, "resolve_conflicts", lambda *a, **k: CANCEL
         )
-        out = reconcile_plain_file(_PROFILE, fid, live=b"ours\n", tracked=b"theirs\n")
+        out = reconcile_plain_file(
+            _PROFILE, fid, live=b"ours\n", tracked=b"theirs\n", interactive=True
+        )
         assert out.kind is ReconcileKind.CANCELLED
         assert out.content is None
+        assert out.new_base is None
+
+    def test_non_interactive_conflict_defers_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A conflict with no TTY must NOT reach the wizard; it defers.
+        fid = self._setup_conflict()
+
+        def _boom(*_a: object, **_k: object) -> object:
+            raise AssertionError("resolve_conflicts must not run non-interactively")
+
+        monkeypatch.setattr(reconcile_apply, "resolve_conflicts", _boom)
+        out = reconcile_plain_file(_PROFILE, fid, live=b"ours\n", tracked=b"theirs\n")
+        assert out.kind is ReconcileKind.DEFERRED
         assert out.new_base is None
 
     def test_deferred_does_not_rebaseline(
@@ -98,7 +114,9 @@ class TestConflictOutcomes:
         monkeypatch.setattr(
             reconcile_apply, "resolve_conflicts", lambda *a, **k: deferred
         )
-        out = reconcile_plain_file(_PROFILE, fid, live=b"ours\n", tracked=b"theirs\n")
+        out = reconcile_plain_file(
+            _PROFILE, fid, live=b"ours\n", tracked=b"theirs\n", interactive=True
+        )
         assert out.kind is ReconcileKind.DEFERRED
         assert out.new_base is None
 
@@ -110,7 +128,9 @@ class TestConflictOutcomes:
         monkeypatch.setattr(
             reconcile_apply, "resolve_conflicts", lambda *a, **k: resolved
         )
-        out = reconcile_plain_file(_PROFILE, fid, live=b"ours\n", tracked=b"theirs\n")
+        out = reconcile_plain_file(
+            _PROFILE, fid, live=b"ours\n", tracked=b"theirs\n", interactive=True
+        )
         assert out.kind is ReconcileKind.WRITE
         assert out.content == b"merged\n"
         # base advances to tracked (theirs), not to the merged content.
