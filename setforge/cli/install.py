@@ -87,6 +87,32 @@ from setforge.transitions import (
 )
 
 
+def _fetch_upstream(
+    install_source: source_mod.Source, *, no_fetch: bool, dry_run: bool
+) -> None:
+    """Fetch the git config source before deploy (the A0 fetch-upstream step).
+
+    A :class:`~setforge.source.PathSource` no-ops inside ``fetch_source``;
+    ``--no-fetch`` skips the pull entirely for offline / CI runs (a missing
+    GitSource clone then surfaces a clean ``SourceNotCloned`` downstream
+    rather than a silent network touch). On ``--dry-run`` the pull is only
+    announced (WOULD-prefixed), never performed. A ``GitOpError`` /
+    ``DirtySourceCheckout`` propagates as a ``SetforgeError`` and aborts the
+    install before any tracked file is written. Only a real GitSource pull
+    echoes a status line, so a PathSource install stays quiet.
+    """
+    if no_fetch:
+        return
+    is_git = isinstance(install_source, source_mod.GitSource)
+    if dry_run:
+        if is_git:
+            typer.echo("WOULD fetch upstream config source")
+        return
+    fetch_message = source_mod.fetch_source(install_source)
+    if is_git:
+        typer.echo(fetch_message)
+
+
 @app.command(epilog=INSTALL_EXAMPLES)
 def install(
     profile: str = _PROFILE_OPTION,
@@ -158,6 +184,16 @@ def install(
             "Skip the pre-deploy git-status check on the config source. "
             "Intended for CI / cron — bypasses the dirty-tree / "
             "cache-lag warning on path / git sources respectively."
+        ),
+    ),
+    no_fetch: bool = typer.Option(
+        False,
+        "--no-fetch",
+        help=(
+            "Skip the pre-deploy upstream fetch of a git config source "
+            "(offline / air-gapped / CI). The install reconciles against the "
+            "already-checked-out clone; nothing is pulled. A path source "
+            "never fetches, so this flag is a no-op there."
         ),
     ),
     strict_spans: bool = typer.Option(
@@ -296,8 +332,14 @@ def install(
     # back to ``repo_root`` (the dir holding the resolved setforge.yaml)
     # which is the right answer for the legacy explicit-``--config``
     # invocations the test suite relies on.
+    # A0 fetch-upstream. Pull the git config source FIRST so the freshly
+    # checked-out content is what gets reconciled below (and what the
+    # git-check then judges for staleness).
+    install_source = resolve_source_for_git_check(repo_root)
+    _fetch_upstream(install_source, no_fetch=no_fetch, dry_run=dry_run)
+
     run_git_check_or_raise(
-        source=resolve_source_for_git_check(repo_root),
+        source=install_source,
         no_git_check=no_git_check,
     )
 
