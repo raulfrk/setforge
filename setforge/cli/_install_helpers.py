@@ -31,7 +31,7 @@ import stat
 import sys
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC
 from pathlib import Path
 from typing import Final, assert_never
@@ -42,6 +42,8 @@ from setforge import (
     base_store,
     deploy,
     disposition_merge,
+    reconcile,
+    reconcile_apply,
     section_reconcile,
     spans_store,
     transitions,
@@ -94,6 +96,7 @@ from setforge.errors import (
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
+from setforge.reconcile import FileId
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics, strip_shared_markers
@@ -537,6 +540,89 @@ def _deploy_all_tracked_files(
     return _execute_pending_deploys(profile, pending)
 
 
+def _is_utf8(data: bytes) -> bool:
+    """Return True iff ``data`` decodes as UTF-8."""
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _plain_reconcile_content(
+    outcome: reconcile_apply.ReconcileOutcome,
+    live_bytes: bytes | None,
+    tracked_bytes: bytes,
+) -> str | None:
+    """The live str to write for a plain-reconcile outcome, or None to fall back.
+
+    ``WRITE`` writes the merged bytes — except a merge that resolved to
+    deletion (``ABSENT`` content) returns ``None`` so the caller falls back
+    to the legacy verbatim path (the str-based deploy writer cannot express
+    a deletion; a rare edge for a locally-deleted file). ``NOOP`` /
+    ``DEFERRED`` / ``CANCELLED`` keep the current live content (empty when
+    live was absent), so :func:`deploy.write_resolved_deploy` detects a NOOP
+    and never clobbers a local edit with the tracked source.
+    """
+    if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
+        if not isinstance(outcome.content, bytes):
+            return None
+        return outcome.content.decode("utf-8")
+    live = live_bytes if live_bytes is not None else b""
+    return live.decode("utf-8")
+
+
+def _resolve_plain_reconcile(
+    profile: str,
+    sub_name: str,
+    sub_src: Path,
+    sub_dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    interactive: bool,
+) -> _PendingDeploy | None:
+    """Resolve a PLAIN tracked file through the 3-way reconcile engine.
+
+    Returns the pass-1 record, or ``None`` to fall back to the legacy
+    verbatim path. The caller has already established eligibility (no
+    disposition, no spans, no host-local overlay, regular file); this
+    function adds the final gate — both live and tracked must be UTF-8, since
+    the deploy write path and the conflict wizard are text-based (a binary
+    plain file stays verbatim). The merged content overrides the verbatim
+    scaffold's ``content``; the store ``record`` rides pass 2.
+    """
+    scaffold = deploy.resolve_deploy(sub_src, sub_dst, mode=tracked_file.mode)
+    tracked_bytes = sub_src.read_bytes()
+    live_bytes = scaffold.real_dst.read_bytes() if scaffold.dst_existed else None
+    if not _is_utf8(tracked_bytes) or (
+        live_bytes is not None and not _is_utf8(live_bytes)
+    ):
+        return None
+    fid = reconcile.file_id(sub_name)
+    outcome = reconcile_apply.reconcile_plain_file(
+        profile,
+        fid,
+        live=reconcile.ABSENT if live_bytes is None else live_bytes,
+        tracked=tracked_bytes,
+        interactive=interactive,
+        display_path=str(sub_dst),
+    )
+    new_content = _plain_reconcile_content(outcome, live_bytes, tracked_bytes)
+    if new_content is None:
+        return None
+    return _PendingDeploy(
+        sub_name=sub_name,
+        sub_src=sub_src,
+        sub_dst=sub_dst,
+        tracked_file=tracked_file,
+        host_local=None,
+        file_spans=[],
+        resolved=replace(scaffold, content=new_content),
+        base_plan=None,
+        reconcile=(fid, outcome),
+    )
+
+
 def _resolve_one_pending(
     profile: str,
     sub_name: str,
@@ -572,6 +658,27 @@ def _resolve_one_pending(
             resolved=None,
             base_plan=None,
         )
+    # A0: a PLAIN tracked file (no disposition, no spans, no host-local
+    # overlay) is routed through the new 3-way reconcile engine instead of a
+    # verbatim copy, so a local edit is merged against the recorded base
+    # rather than silently overwritten. Disposition / span / host-local
+    # files keep the legacy path below (their engine migration is deferred);
+    # a binary or deletion-edge plain file falls back to verbatim (None).
+    if (
+        tracked_file.disposition is None
+        and not tracked_file.spans
+        and host_local is None
+    ):
+        plain = _resolve_plain_reconcile(
+            profile,
+            sub_name,
+            sub_src,
+            sub_dst,
+            tracked_file,
+            interactive=conflict_resolver is not None,
+        )
+        if plain is not None:
+            return plain
     # Stored-base 3-way path is gated on a declared disposition.
     # PLAN the base (a pure read): it is the merge ancestor the
     # driver diffs live/tracked against. Deferred migration writes
@@ -640,6 +747,7 @@ class _PendingDeploy:
     file_spans: list[SpanEntry]
     resolved: deploy.ResolvedDeploy | None
     base_plan: DispositionBasePlan | None
+    reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
 
 
 def _span_orphan_warning(sub_dst: Path, orphan: SpanOrphan) -> str:
@@ -801,7 +909,11 @@ def _execute_pending_deploys(
     """
     state_snapshots = _capture_store_snapshots(profile, pending)
     prior_modes: dict[Path, int] = {}
-    disposition_file_ids: set[str] = set()
+    # Files whose byte base must SURVIVE the end-of-run prune: disposition
+    # files AND plain files routed through the reconcile engine (both persist
+    # a base in the shared base_store, keyed by file_id). A plain file absent
+    # from this set would have its reconcile base pruned every run.
+    base_keep_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
         if tracked_file.symlink is not None:
@@ -822,7 +934,7 @@ def _execute_pending_deploys(
                 "and no symlink declaration"
             )
         if record.base_plan is not None:
-            disposition_file_ids.add(record.sub_name)
+            base_keep_ids.add(record.sub_name)
             _apply_deferred_base_migration(
                 profile, record.sub_name, record.sub_dst, record.base_plan
             )
@@ -834,6 +946,12 @@ def _execute_pending_deploys(
             prior_modes[result.dst] = result.prior_mode
         typer.echo(f"{result.action.value:>8}  {record.sub_dst}")
         _echo_host_local_sections_provenance(record.host_local)
+        # ADVANCE the reconcile store only AFTER the live write (the same
+        # lockstep, same safe-failure-direction reasoning as the disposition
+        # byte base below): a base that lags live re-merges safely next run.
+        if record.reconcile is not None:
+            base_keep_ids.add(record.sub_name)
+            _advance_reconcile_store(profile, record)
         # ADVANCE the disposition base only AFTER the live write.
         if tracked_file.disposition is not None:
             _advance_disposition_base(profile, record.sub_name, record.sub_dst, result)
@@ -844,10 +962,11 @@ def _execute_pending_deploys(
                 profile, record.sub_name, record.sub_dst, result, record.file_spans
             )
     # PRUNE after the whole loop: bases whose file_id is not in this run's
-    # disposition keep-set (file left the profile, or lost its disposition)
-    # are removed. Non-disposition files never have a base, so an empty
-    # keep-set still correctly clears any stale bases under the profile.
-    base_store.prune(profile, disposition_file_ids)
+    # keep-set (a file left the profile, lost its disposition, or stopped
+    # being a reconcile-eligible plain file) are removed. The keep-set spans
+    # disposition + plain-reconcile files, so an engine-routed plain file's
+    # base survives instead of being pruned every run.
+    base_store.prune(profile, base_keep_ids)
     return DeployOutcome(state_snapshots=state_snapshots, prior_modes=prior_modes)
 
 
@@ -1140,6 +1259,32 @@ def _warn_auto_migration(sub_dst: Path, profile: str) -> None:
         err=True,
         fg=typer.colors.YELLOW,
     )
+
+
+def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
+    """Advance the reconcile store for a plain file AFTER its live write.
+
+    A ``WRITE`` outcome ``record``s the new base (= tracked) + the deployed
+    content (a :func:`reconcile.record` failure PROPAGATES — base lagging
+    live is the safe failure direction). A ``DEFERRED`` outcome (a non-TTY /
+    ``--auto`` conflict, or a skipped region) keeps live, does NOT
+    re-baseline, and WARNs so the divergence re-surfaces on the next
+    interactive install. ``NOOP`` / ``CANCELLED`` touch the store nothing.
+    """
+    assert record.reconcile is not None
+    fid, outcome = record.reconcile
+    if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
+        assert isinstance(outcome.content, bytes)
+        assert outcome.new_base is not None
+        reconcile.record(profile, fid, base=outcome.new_base, local=outcome.content)
+    elif outcome.kind is reconcile_apply.ReconcileKind.DEFERRED:
+        typer.secho(
+            f"warning: {record.sub_dst}: merge conflict kept live, base not "
+            f"advanced — conflict re-surfaces next install (re-run "
+            f"interactively to resolve)",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _advance_disposition_base(

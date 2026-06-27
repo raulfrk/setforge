@@ -160,15 +160,31 @@ def test_revert_then_redo_round_trips_the_mode(repo: Path) -> None:
 
 
 def test_content_and_mode_install_reverts_both_axes(repo: Path) -> None:
-    """A content UPDATE that also tightens perms reverts content AND mode."""
+    """A content UPDATE that also tightens perms reverts content AND mode.
+
+    The reconcile engine merges a plain file against its recorded base
+    rather than blindly overwriting live, so the content UPDATE is staged as
+    a clean fast-forward: a first install (live == tracked) records the base,
+    then an upstream edit + a mode tighten produce a single UPDATE whose
+    revert must undo both axes.
+    """
+    _write_tracked(repo, "live-body\n")
+    config = _write_config(repo, mode="0o644")
+    _seed_live("live-body\n", 0o644)
+    # First install: live already matches tracked, so content is a NOOP and
+    # the mode is unchanged — its purpose is to record the merge base.
+    assert _install(config).exit_code == 0
+    assert _live().read_text(encoding="utf-8") == "live-body\n"
+
+    # Upstream edits the content AND the config tightens the mode: a clean
+    # fast-forward UPDATE (live == base, tracked changed) that also chmods.
     _write_tracked(repo, "tracked-body\n")
     config = _write_config(repo, mode="0o600")
-    _seed_live("live-body\n", 0o644)
-
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "tracked-body\n"
     assert _live_mode() == 0o600
 
+    # Revert undoes the second install on BOTH axes.
     assert _revert(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "live-body\n"
     assert _live_mode() == 0o644
