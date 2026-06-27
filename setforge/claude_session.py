@@ -111,12 +111,13 @@ def _tail(stderr: str) -> str:
 
 
 def _kill_group(proc: subprocess.Popen[str]) -> None:
-    """SIGKILL the child's whole process group, reaping any grandchildren.
+    """SIGKILL the child's whole process group, then wait on the direct child.
 
     The child runs with ``start_new_session=True`` so it leads its own group;
-    killing the group (not just the child) prevents an orphaned ``claude``
-    helper from surviving a timeout. Best-effort: a race where the group is
-    already gone is benign.
+    SIGKILLing the group (not just the child) takes down any ``claude`` helper
+    grandchildren too, so none is left orphaned on a timeout. ``wait()`` reaps
+    the direct child here; re-parented grandchildren are reaped by init.
+    Best-effort: a race where the group is already gone is benign.
     """
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -195,6 +196,12 @@ class ClaudeSession:
             raise ClaudeSessionError(
                 "claude produced undecodable (non-UTF-8) output"
             ) from exc
+        except KeyboardInterrupt:
+            # The child leads its own session (start_new_session=True), so a
+            # terminal Ctrl-C reaches only this parent — kill the group so no
+            # claude process is orphaned, then let the interrupt propagate.
+            _kill_group(proc)
+            raise
         if proc.returncode != 0:
             tail = _tail(err)
             detail = f": {tail}" if tail else ""

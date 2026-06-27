@@ -655,7 +655,7 @@ class ClaudeStub:
         for key, value in env.items():
             self._mp.setenv(key, str(value))
 
-    def calls(self) -> list[dict]:
+    def calls(self) -> list[dict[str, Any]]:
         """Every recorded invocation (argv + stdin), in order."""
         if not self.log.exists():
             return []
@@ -663,12 +663,12 @@ class ClaudeStub:
 
 
 @pytest.fixture
-def claude_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "ClaudeStub":
+def claude_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ClaudeStub:
     """Install the recording stub as the resolved ``claude`` binary.
 
     Points ``SETFORGE_CLAUDE_BIN`` at the stub and clears the
-    :func:`setforge.claude_session._resolve_binary` lru-cache so the override
-    is seen fresh.
+    :func:`setforge.claude_session._resolve_claude_bin` lru-cache so the
+    override is seen fresh.
     """
     from setforge import claude_session as _cs
 

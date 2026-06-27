@@ -103,6 +103,29 @@ def test_missing_binary_degrades_not_propagates(
         ClaudeSession().send("x")
 
 
+def test_keyboard_interrupt_kills_group_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A Ctrl-C during the (detached) child must kill the group so no claude is
+    # orphaned, then re-raise — the interrupt is NOT swallowed into CANCEL.
+    from setforge import claude_session as cs
+
+    killed: list[object] = []
+    monkeypatch.setattr(cs, "_kill_group", lambda proc: killed.append(proc))
+    monkeypatch.setattr(cs, "_resolve_claude_bin", lambda: Path("/bin/true"))
+
+    class _FakeProc:
+        pid = 4242
+
+        def communicate(self, input: str, timeout: float) -> tuple[str, str]:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cs.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    with pytest.raises(KeyboardInterrupt):
+        ClaudeSession().send("x")
+    assert killed  # the process group was killed before the interrupt propagated
+
+
 def test_failed_first_turn_retries_fresh(claude_stub: ClaudeStub) -> None:
     # Turn 1 fails → session stays unopened → next send retries with
     # --session-id (fresh), NOT --resume against a session that never existed.

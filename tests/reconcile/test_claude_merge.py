@@ -15,6 +15,7 @@ empty → default prompt) · ``a`` Accept · ``r`` Re-prompt · ``e`` Edit ·
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,15 @@ def test_missing_binary_degrades_to_reprompt(
     assert out.merged.merged() == b"B\n"
 
 
+def test_control_char_draft_folds_raw_bytes(claude_stub: ClaudeStub) -> None:
+    # A draft carrying a control char (ESC) is sanitized only for the review
+    # panel; the accepted fold uses the RAW bytes, byte-exact.
+    claude_stub.set(STUB_STDOUT="line1\x1bline2\n")
+    out = _run(b"c\ra")
+    assert isinstance(out, WizardResult)
+    assert out.merged.merged() == b"line1\x1bline2\n"
+
+
 def test_markered_draft_reprompts(claude_stub: ClaudeStub) -> None:
     # A draft that still carries conflict markers is rejected (re-prompt), so the
     # user backs out to the region menu and picks Ours.
@@ -206,17 +216,16 @@ def test_build_prompt_fences_each_side_with_one_token() -> None:
     conflict = Conflict(base=b"BB\n", ours=b"OO\n", theirs=b"TT\n")
     prompt = _build_prompt(conflict, "do it", _DISPLAY)
     assert _DISPLAY in prompt
-    for content in ("BB", "OO", "TT", "do it"):
-        assert content in prompt
-    # The fence token is a single 32-char hex repeated around every side +
-    # instruction (4 blocks → 8 fence lines) plus one reference in the header
-    # ("each fenced between <token> lines") → 9 occurrences of one token.
-    import re
-
+    # The load-bearing injection-hardening invariant: ONE per-invocation token,
+    # used as a fence line around each of the 4 blocks (base/ours/theirs +
+    # instruction) → at least 8 fence lines. `>= 8` (not a brittle `== 9`) so a
+    # header reword that also names the token can't break a behavior-preserving change.
     tokens = set(re.findall(r"^[0-9a-f]{32}$", prompt, re.MULTILINE))
     assert len(tokens) == 1
     (token,) = tokens
-    assert prompt.count(token) == 9
+    assert prompt.count(token) >= 8
+    for content in ("BB", "OO", "TT", "do it"):
+        assert content in prompt
 
 
 def test_build_prompt_omits_instruction_block_when_empty() -> None:
@@ -226,8 +235,8 @@ def test_build_prompt_omits_instruction_block_when_empty() -> None:
 
 
 def test_make_fn_returns_cancel_sentinel_on_back(claude_stub: ClaudeStub) -> None:
-    # The factory's fn returns CANCEL (the exact sentinel) when the user backs
-    # out of every attempt — proving the wizard's re-prompt contract holds.
+    # The factory's fn returns the EXACT CANCEL sentinel (not a falsy stand-in)
+    # when the user backs out — the value the wizard tests with `is CANCEL`.
     claude_stub.set(STUB_STDOUT="DRAFT\n")
     fn = make_claude_merge_fn(display_path=_DISPLAY)
     conflict = Conflict(base=b"base\n", ours=b"A\n", theirs=b"B\n")

@@ -360,34 +360,8 @@ def button_bar[T](
     return app.run()
 
 
-def text_prompt(
-    *,
-    title: str | None = None,
-    body: str | _Fragments | None = None,
-    style: BaseStyle | None = None,
-) -> str | _Cancelled:
-    """Full-screen single-line themed text input — a sibling of :func:`button_bar`.
-
-    Renders a framed ``body`` panel (optional, same ``str`` / fragments shape as
-    ``button_bar``) above a one-line editable buffer. **Enter** submits the
-    current text — which **may be empty**: a blank submit returns ``""`` (a
-    meaningful answer — e.g. "use the default", not a cancel). **Esc / Ctrl-C**
-    return :data:`CANCEL`. ``style`` is merged over the widget's built-in palette
-    exactly like ``button_bar``; ``None`` keeps the standalone palette.
-
-    Driven headlessly in tests via ``create_app_session`` + a pipe input, the
-    same pattern as ``button_bar`` (text bytes then a terminating ``\\r``).
-    """
-    buffer = Buffer(multiline=False)
-
-    def _accept(buff: Buffer) -> bool:
-        # Enter on a single-line buffer fires the accept handler; exit with the
-        # text (possibly "") as the single result channel — no mutable holder.
-        get_app().exit(result=buff.text)
-        return True  # keep the buffer text (no validation rejection)
-
-    buffer.accept_handler = _accept
-
+def _text_prompt_keybindings() -> KeyBindings:
+    """Esc / Ctrl-C cancel; Enter is owned by the buffer's accept handler."""
     kb = KeyBindings()
 
     @kb.add("escape", eager=True)
@@ -397,6 +371,18 @@ def text_prompt(
     @kb.add("c-c")
     def _(event: KeyPressEvent) -> None:
         event.app.exit(result=CANCEL)
+
+    return kb
+
+
+def _text_prompt_layout(
+    buffer: Buffer, *, title: str | None, body: str | _Fragments | None
+) -> Layout:
+    """Framed (optional) body panel above the single-line input window.
+
+    Mirrors :func:`_build_layout`'s top/bottom-rule framing; the input window is
+    the focused element so typed keys land in ``buffer``.
+    """
 
     def _top_rule() -> _Fragments:
         return [("class:muted", frame([], title=title, width=_frame_width())[0])]
@@ -429,11 +415,42 @@ def text_prompt(
         )
     )
     children.append(Window(content=FormattedTextControl(text=_bottom_rule), height=1))
-    layout = Layout(HSplit(children), focused_element=input_window)
+    return Layout(HSplit(children), focused_element=input_window)
+
+
+def text_prompt(
+    *,
+    title: str | None = None,
+    body: str | _Fragments | None = None,
+    style: BaseStyle | None = None,
+) -> str | _Cancelled:
+    """Full-screen single-line themed text input — a sibling of :func:`button_bar`.
+
+    Renders a framed ``body`` panel (optional, same ``str`` / fragments shape as
+    ``button_bar``) above a one-line editable buffer. **Enter** submits the
+    current text — which **may be empty**: a blank submit returns ``""`` (a
+    meaningful answer — e.g. "use the default", not a cancel). **Esc / Ctrl-C**
+    return :data:`CANCEL`. ``style`` is merged over the widget's built-in palette
+    exactly like ``button_bar``; ``None`` keeps the standalone palette.
+
+    Layout and keybindings are factored into :func:`_text_prompt_layout` /
+    :func:`_text_prompt_keybindings`, matching ``button_bar``'s decomposition.
+    Driven headlessly in tests via ``create_app_session`` + a pipe input, the
+    same pattern as ``button_bar`` (text bytes then a terminating ``\\r``).
+    """
+    buffer = Buffer(multiline=False)
+
+    def _accept(buff: Buffer) -> bool:
+        # Enter on a single-line buffer fires the accept handler; exit with the
+        # text (possibly "") as the single result channel — no mutable holder.
+        get_app().exit(result=buff.text)
+        return True  # keep the buffer text (no validation rejection)
+
+    buffer.accept_handler = _accept
 
     app: Application[str | _Cancelled] = Application(
-        layout=layout,
-        key_bindings=kb,
+        layout=_text_prompt_layout(buffer, title=title, body=body),
+        key_bindings=_text_prompt_keybindings(),
         full_screen=True,
         style=_STYLE if style is None else merge_styles([_STYLE, style]),
     )

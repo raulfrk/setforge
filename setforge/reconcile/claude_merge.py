@@ -35,7 +35,7 @@ from prompt_toolkit.styles import Style
 from setforge._editor import run_editor
 from setforge.claude_session import ClaudeSession, ClaudeSessionError
 from setforge.reconcile.merge_model import Conflict
-from setforge.reconcile.wizard import ClaudeMergeFn
+from setforge.reconcile.wizard import ClaudeMergeFn, _sanitize_controls
 from setforge.ui.theme import THEME, pt_style
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
 
@@ -168,8 +168,13 @@ def _edit_draft(seed: str) -> bytes | Cancelled:
 
 
 def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
-    """Show the draft and the decision bar; return the chosen :class:`_Draft`."""
-    body = f"draft:\n{clean}"
+    """Show the draft and the decision bar; return the chosen :class:`_Draft`.
+
+    The draft is untrusted model output, so it is control-char-sanitized for
+    display (mirroring :func:`~setforge.reconcile.wizard._display`); the folded
+    bytes on Accept always use the raw ``clean``, never this rendering.
+    """
+    body = f"draft:\n{_sanitize_controls(clean)}"
     return button_bar(
         [
             Button("Accept", _Draft.ACCEPT),
@@ -184,8 +189,12 @@ def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
 
 
 def _instr_body(note: str) -> str:
-    """The text-prompt body: the standing hint, plus an inline note when set."""
-    return f"{note}\n{_INSTR_HINT}" if note else _INSTR_HINT
+    """The text-prompt body: the standing hint, plus an inline note when set.
+
+    ``note`` may carry a stderr tail from the untrusted ``claude`` subprocess,
+    so it is control-char-sanitized before it reaches the panel.
+    """
+    return f"{_sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
 
 
 def _merge_one(conflict: Conflict, *, display_path: str) -> bytes | Cancelled:
