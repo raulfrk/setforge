@@ -26,6 +26,7 @@ from setforge.reconcile import (
 from setforge.reconcile.wizard import CANCEL
 from setforge.reconcile_apply import (
     ReconcileKind,
+    SeedChoice,
     reconcile_plain_file,
 )
 
@@ -135,3 +136,61 @@ class TestConflictOutcomes:
         assert out.content == b"merged\n"
         # base advances to tracked (theirs), not to the merged content.
         assert out.new_base == b"theirs\n"
+
+
+class TestSeed:
+    """Divergent pre-existing live file with no recorded base → seed base."""
+
+    def test_non_interactive_keeps_live_and_seeds_base(self) -> None:
+        out = reconcile_plain_file(
+            _PROFILE, _fid(), live=b"local\n", tracked=b"upstream\n"
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"local\n"  # live kept, never overwritten
+        assert out.new_base == b"upstream\n"  # base seeded from upstream
+        assert out.seeded is True  # caller warns
+
+    def test_interactive_keep_live(self) -> None:
+        out = reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            interactive=True,
+            seed_prompt=lambda _p: SeedChoice.KEEP_LIVE,
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"local\n"
+        assert out.new_base == b"upstream\n"
+        assert out.seeded is False  # explicit choice, no warn
+
+    def test_interactive_take_upstream_replaces_live(self) -> None:
+        out = reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            interactive=True,
+            seed_prompt=lambda _p: SeedChoice.TAKE_UPSTREAM,
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"upstream\n"  # live replaced
+        assert out.new_base == b"upstream\n"
+
+    def test_interactive_cancel_aborts(self) -> None:
+        out = reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            interactive=True,
+            seed_prompt=lambda _p: CANCEL,
+        )
+        assert out.kind is ReconcileKind.CANCELLED
+
+    def test_matching_live_no_base_is_not_a_seed(self) -> None:
+        # live == tracked with no base: a clean record, not a seed prompt.
+        out = reconcile_plain_file(_PROFILE, _fid(), live=b"same\n", tracked=b"same\n")
+        assert out.kind is ReconcileKind.WRITE
+        assert out.seeded is False
+        assert out.new_base == b"same\n"

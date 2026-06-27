@@ -107,11 +107,11 @@ def test_local_edit_preserved_when_upstream_unchanged(repo: Path) -> None:
     assert _live().read_text(encoding="utf-8") == "locally edited\n"
 
 
-def test_divergent_live_without_base_is_kept_not_overwritten(repo: Path) -> None:
-    # First install over a pre-existing, divergent live file (no base yet) is
-    # a conflict; non-interactively it DEFERS — the local file is kept, never
-    # silently overwritten with the tracked source (the seed prompt that
-    # lets the user choose upstream lands in a later step).
+def test_divergent_live_without_base_seeds_and_keeps_live(repo: Path) -> None:
+    # First install over a pre-existing, divergent live file (no base yet)
+    # SEEDS the merge base from upstream non-interactively while KEEPING the
+    # local file — never silently overwritten with the tracked source. The
+    # recorded base means the next install reconciles instead of re-seeding.
     _write_tracked(repo, "tracked\n")
     config = _write_config(repo)
     live = _live()
@@ -120,6 +120,10 @@ def test_divergent_live_without_base_is_kept_not_overwritten(repo: Path) -> None
     result = _install(config)
     assert result.exit_code == 0
     assert live.read_text(encoding="utf-8") == "pre-existing local\n"
+    # The base is seeded from upstream so the edit is now a tracked local
+    # change atop it (the next install reconciles rather than re-prompts).
+    assert _base() == b"tracked\n"
+    assert "seeded the merge base" in result.output
 
 
 def test_clean_reinstall_is_idempotent(repo: Path) -> None:

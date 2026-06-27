@@ -113,6 +113,7 @@ from setforge.spans import (
     validate_spans_file_type,
 )
 from setforge.spans_overlay import SpanOrphan
+from setforge.ui.widgets import Button, Cancelled, button_bar
 
 
 def _load_validated_host_local_sections(
@@ -572,6 +573,31 @@ def _plain_reconcile_content(
     return live.decode("utf-8")
 
 
+def _seed_prompt_interactive(
+    display_path: str,
+) -> reconcile_apply.SeedChoice | Cancelled:
+    """Themed prompt to seed a divergent live file that has no merge base.
+
+    The base is recorded from the upstream either way; the choice is whether
+    live keeps its local edits (recommended — they become a local change atop
+    the base) or is replaced with the upstream version. Esc / Ctrl-C cancels
+    and aborts the file. Minimal A0 form; A6 enriches it with a divergence
+    diff/preview around this same decision.
+    """
+    return button_bar(
+        [
+            Button("Keep live", reconcile_apply.SeedChoice.KEEP_LIVE),
+            Button("Take upstream", reconcile_apply.SeedChoice.TAKE_UPSTREAM),
+        ],
+        title=f"seed merge base — {display_path}",
+        body=(
+            f"{display_path} already exists and differs from upstream, and no "
+            "merge base is recorded. Keep your local edits, or replace them "
+            "with the upstream version?"
+        ),
+    )
+
+
 def _resolve_plain_reconcile(
     profile: str,
     sub_name: str,
@@ -606,6 +632,9 @@ def _resolve_plain_reconcile(
         tracked=tracked_bytes,
         interactive=interactive,
         display_path=str(sub_dst),
+        # Only consulted on the interactive seed path; the non-interactive
+        # seed keeps live without prompting.
+        seed_prompt=_seed_prompt_interactive,
     )
     new_content = _plain_reconcile_content(outcome, live_bytes, tracked_bytes)
     if new_content is None:
@@ -1277,6 +1306,14 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
         assert isinstance(outcome.content, bytes)
         assert outcome.new_base is not None
         reconcile.record(profile, fid, base=outcome.new_base, local=outcome.content)
+        if outcome.seeded:
+            typer.secho(
+                f"warning: {record.sub_dst}: kept your local file and seeded "
+                f"the merge base from upstream — re-run interactively to adopt "
+                f"the upstream version",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
     elif outcome.kind is reconcile_apply.ReconcileKind.DEFERRED:
         typer.secho(
             f"warning: {record.sub_dst}: merge conflict kept live, base not "

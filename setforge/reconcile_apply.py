@@ -28,6 +28,7 @@ Outcomes encode the A0 guards directly:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -41,9 +42,38 @@ from setforge.reconcile import (
 )
 from setforge.reconcile.merge_model import MergeInput
 from setforge.reconcile.types import Absent
-from setforge.reconcile.wizard import CANCEL, ClaudeMergeFn, _claude_merge_unavailable
+from setforge.reconcile.wizard import (
+    CANCEL,
+    Cancelled,
+    ClaudeMergeFn,
+    _claude_merge_unavailable,
+)
 
-__all__ = ["ReconcileKind", "ReconcileOutcome", "reconcile_plain_file"]
+__all__ = [
+    "ReconcileKind",
+    "ReconcileOutcome",
+    "SeedChoice",
+    "SeedPrompt",
+    "reconcile_plain_file",
+]
+
+
+class SeedChoice(StrEnum):
+    """How to seed the merge base when a divergent live file has none.
+
+    The base is recorded as the current upstream (tracked) either way — it is
+    the natural common ancestor for future 3-way merges. The choice is only
+    what live should hold NOW: ``KEEP_LIVE`` leaves the pre-existing live
+    content in place (it becomes a local edit on top of the seeded base);
+    ``TAKE_UPSTREAM`` resets live to the tracked content.
+    """
+
+    KEEP_LIVE = "keep_live"
+    TAKE_UPSTREAM = "take_upstream"
+
+
+# Decide the seed for one divergent file; returns CANCEL to abort the file.
+type SeedPrompt = Callable[[str], SeedChoice | Cancelled]
 
 
 class ReconcileKind(StrEnum):
@@ -68,6 +98,16 @@ class ReconcileOutcome:
     kind: ReconcileKind
     content: bytes | Absent | None = None
     new_base: bytes | None = None
+    seeded: bool = False
+    """True when this WRITE seeded the base from a divergent live
+    NON-interactively (the safe default kept live) — the caller warns so the
+    user knows their pre-existing file was kept and can adopt upstream by
+    running interactively."""
+
+
+def _default_seed_prompt(_display_path: str) -> SeedChoice:
+    """Non-interactive seed default: keep live (never destroy a local file)."""
+    return SeedChoice.KEEP_LIVE
 
 
 def reconcile_plain_file(
@@ -79,6 +119,7 @@ def reconcile_plain_file(
     interactive: bool = False,
     display_path: str | None = None,
     claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
+    seed_prompt: SeedPrompt = _default_seed_prompt,
 ) -> ReconcileOutcome:
     """Decide how to reconcile one plain tracked file via the 3-way engine.
 
@@ -99,6 +140,24 @@ def reconcile_plain_file(
     must never be reached without a TTY.
     """
     base_raw = read_base(profile, fid)
+
+    # Seed: a divergent pre-existing live file with no recorded base. Without
+    # a base the 3-way would treat both sides as conflicting "adds"; instead
+    # establish the upstream as the merge base and decide what live holds now.
+    # Non-interactively keep live (never destroy a local file) and flag the
+    # seed so the caller warns; interactively prompt for keep vs replace.
+    if base_raw is None and isinstance(live, bytes) and live != tracked:
+        if not interactive:
+            return ReconcileOutcome(
+                ReconcileKind.WRITE, content=live, new_base=tracked, seeded=True
+            )
+        choice = seed_prompt(display_path or str(fid))
+        if choice is CANCEL:
+            return ReconcileOutcome(ReconcileKind.CANCELLED)
+        if choice is SeedChoice.KEEP_LIVE:
+            return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
+        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+
     base: MergeInput = ABSENT if base_raw is None else base_raw
     result: MergeResult = merge(base, live, tracked)
 
