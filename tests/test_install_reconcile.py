@@ -60,7 +60,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return target
 
 
-def _install(config: Path) -> Result:
+def _install(config: Path, *extra: str) -> Result:
     return CliRunner().invoke(
         app,
         [
@@ -70,6 +70,7 @@ def _install(config: Path) -> Result:
             "--no-secrets-scan",
             "--no-git-check",
             "--yes",
+            *extra,
         ],
     )
 
@@ -134,3 +135,38 @@ def test_clean_reinstall_is_idempotent(repo: Path) -> None:
     before = _live().read_text(encoding="utf-8")
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == before == "stable\n"
+
+
+def _setup_conflict(repo: Path) -> Path:
+    """Install v1, then diverge BOTH live and tracked → a real conflict."""
+    config = _write_config(repo)
+    _write_tracked(repo, "l1\nl2\nl3\n")
+    assert _install(config).exit_code == 0
+    _live().write_text("l1\nLOCAL\nl3\n", encoding="utf-8")
+    _write_tracked(repo, "l1\nUPSTREAM\nl3\n")
+    return config
+
+
+def test_noninteractive_conflict_exits_nonzero_and_keeps_live(repo: Path) -> None:
+    config = _setup_conflict(repo)
+    result = _install(config)
+    assert result.exit_code != 0, result.output
+    assert "deferred with unresolved conflicts" in result.output
+    assert _live().read_text(encoding="utf-8") == "l1\nLOCAL\nl3\n"
+
+
+def test_auto_use_tracked_resolves_conflict_to_upstream(repo: Path) -> None:
+    config = _setup_conflict(repo)
+    result = _install(config, "--auto=use-tracked")
+    assert result.exit_code == 0, result.output
+    assert _live().read_text(encoding="utf-8") == "l1\nUPSTREAM\nl3\n"
+    assert _base() == b"l1\nUPSTREAM\nl3\n"
+
+
+def test_auto_keep_live_resolves_conflict_to_local(repo: Path) -> None:
+    config = _setup_conflict(repo)
+    result = _install(config, "--auto=keep-live")
+    assert result.exit_code == 0, result.output
+    # ours for the conflicting line, clean lines pass through; base advances.
+    assert _live().read_text(encoding="utf-8") == "l1\nLOCAL\nl3\n"
+    assert _base() == b"l1\nUPSTREAM\nl3\n"

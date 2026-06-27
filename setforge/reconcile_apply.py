@@ -34,6 +34,7 @@ from enum import StrEnum
 
 from setforge.reconcile import (
     ABSENT,
+    Clean,
     FileId,
     MergeResult,
     merge,
@@ -50,12 +51,25 @@ from setforge.reconcile.wizard import (
 )
 
 __all__ = [
+    "AutoSide",
     "ReconcileKind",
     "ReconcileOutcome",
     "SeedChoice",
     "SeedPrompt",
     "reconcile_plain_file",
 ]
+
+
+class AutoSide(StrEnum):
+    """Non-interactive conflict resolution side (the install ``--auto`` map).
+
+    ``OURS`` keeps the live side of every conflicting region (``--auto=keep-live``);
+    ``THEIRS`` takes the tracked/upstream side (``--auto=use-tracked``). Clean
+    regions always pass through either way.
+    """
+
+    OURS = "ours"
+    THEIRS = "theirs"
 
 
 class SeedChoice(StrEnum):
@@ -110,6 +124,56 @@ def _default_seed_prompt(_display_path: str) -> SeedChoice:
     return SeedChoice.KEEP_LIVE
 
 
+def _seed_outcome(
+    fid: FileId,
+    *,
+    live: bytes,
+    tracked: bytes,
+    interactive: bool,
+    auto: AutoSide | None,
+    display_path: str | None,
+    seed_prompt: SeedPrompt,
+) -> ReconcileOutcome:
+    """Resolve the no-base seed for a divergent live file.
+
+    ``--auto`` picks the side (THEIRS → upstream, OURS → keep live); else an
+    interactive prompt (Keep live / Take upstream, Esc aborts); else the
+    non-interactive default keeps live and flags ``seeded`` so the caller
+    warns. The base is recorded from upstream either way.
+    """
+    if auto is AutoSide.THEIRS:
+        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+    if auto is AutoSide.OURS:
+        return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
+    if not interactive:
+        return ReconcileOutcome(
+            ReconcileKind.WRITE, content=live, new_base=tracked, seeded=True
+        )
+    choice = seed_prompt(display_path or str(fid))
+    if choice is CANCEL:
+        return ReconcileOutcome(ReconcileKind.CANCELLED)
+    if choice is SeedChoice.KEEP_LIVE:
+        return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
+    return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+
+
+def _take_side(result: MergeResult, side: AutoSide) -> bytes:
+    """Resolve every conflict region to one side; clean regions pass through.
+
+    The non-interactive ``--auto`` resolver: a clean (agreed) run is kept
+    verbatim, and each conflicting region collapses to its ``ours`` (live) or
+    ``theirs`` (tracked) bytes — the same per-region choice the wizard offers,
+    applied uniformly without prompting.
+    """
+    out: list[bytes] = []
+    for seg in result.segments:
+        if isinstance(seg, Clean):
+            out.append(seg.bytes_)
+        else:  # Conflict
+            out.append(seg.ours if side is AutoSide.OURS else seg.theirs)
+    return b"".join(out)
+
+
 def reconcile_plain_file(
     profile: str,
     fid: FileId,
@@ -117,6 +181,7 @@ def reconcile_plain_file(
     live: bytes | Absent,
     tracked: bytes,
     interactive: bool = False,
+    auto: AutoSide | None = None,
     display_path: str | None = None,
     claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
     seed_prompt: SeedPrompt = _default_seed_prompt,
@@ -129,34 +194,31 @@ def reconcile_plain_file(
     at tracked is a :attr:`~ReconcileKind.NOOP`; any other clean merge is a
     :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``.
 
-    A conflict is resolved interactively ONLY when ``interactive`` is set:
-    the per-region wizard (:func:`~setforge.reconcile.resolve_conflicts`)
-    runs, and a cancel / deferred (skipped) region writes nothing and does
-    NOT re-baseline. When ``interactive`` is False (a non-TTY / ``--auto`` /
-    CI install), a conflict is :attr:`~ReconcileKind.DEFERRED` without
-    prompting — keeping the local file, leaving the upstream change to
-    re-surface on the next interactive run, and letting the caller gate the
-    exit code on the deferred count. The full-screen prompt_toolkit wizard
-    must never be reached without a TTY.
+    A conflict resolves by, in order: the per-region wizard when
+    ``interactive`` (a cancel / skipped region writes nothing and does NOT
+    re-baseline); else ``--auto`` (``auto`` set) collapsing every region to
+    that side; else :attr:`~ReconcileKind.DEFERRED` — keeping the local file,
+    leaving the upstream change to re-surface, and letting the caller gate the
+    exit code. The full-screen wizard is never reached without a TTY. ``auto``
+    also drives the no-base seed (OURS keeps live, THEIRS takes upstream).
     """
     base_raw = read_base(profile, fid)
 
     # Seed: a divergent pre-existing live file with no recorded base. Without
     # a base the 3-way would treat both sides as conflicting "adds"; instead
-    # establish the upstream as the merge base and decide what live holds now.
-    # Non-interactively keep live (never destroy a local file) and flag the
-    # seed so the caller warns; interactively prompt for keep vs replace.
+    # establish the upstream as the merge base and decide what live holds now:
+    # --auto picks the side, else interactively prompt, else (non-interactive)
+    # keep live and flag the seed so the caller warns.
     if base_raw is None and isinstance(live, bytes) and live != tracked:
-        if not interactive:
-            return ReconcileOutcome(
-                ReconcileKind.WRITE, content=live, new_base=tracked, seeded=True
-            )
-        choice = seed_prompt(display_path or str(fid))
-        if choice is CANCEL:
-            return ReconcileOutcome(ReconcileKind.CANCELLED)
-        if choice is SeedChoice.KEEP_LIVE:
-            return ReconcileOutcome(ReconcileKind.WRITE, content=live, new_base=tracked)
-        return ReconcileOutcome(ReconcileKind.WRITE, content=tracked, new_base=tracked)
+        return _seed_outcome(
+            fid,
+            live=live,
+            tracked=tracked,
+            interactive=interactive,
+            auto=auto,
+            display_path=display_path,
+            seed_prompt=seed_prompt,
+        )
 
     base: MergeInput = ABSENT if base_raw is None else base_raw
     result: MergeResult = merge(base, live, tracked)
@@ -167,16 +229,21 @@ def reconcile_plain_file(
             return ReconcileOutcome(ReconcileKind.NOOP)
         return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
 
-    if not interactive:
-        return ReconcileOutcome(ReconcileKind.DEFERRED)
+    if interactive:
+        wizard = resolve_conflicts(
+            fid, result, display_path=display_path, claude_merge=claude_merge
+        )
+        if wizard is CANCEL:
+            return ReconcileOutcome(ReconcileKind.CANCELLED)
+        if wizard.deferred:
+            return ReconcileOutcome(ReconcileKind.DEFERRED)
+        return ReconcileOutcome(
+            ReconcileKind.WRITE, content=wizard.merged.merged(), new_base=tracked
+        )
 
-    wizard = resolve_conflicts(
-        fid, result, display_path=display_path, claude_merge=claude_merge
-    )
-    if wizard is CANCEL:
-        return ReconcileOutcome(ReconcileKind.CANCELLED)
-    if wizard.deferred:
-        return ReconcileOutcome(ReconcileKind.DEFERRED)
-    return ReconcileOutcome(
-        ReconcileKind.WRITE, content=wizard.merged.merged(), new_base=tracked
-    )
+    if auto is not None:
+        return ReconcileOutcome(
+            ReconcileKind.WRITE, content=_take_side(result, auto), new_base=tracked
+        )
+
+    return ReconcileOutcome(ReconcileKind.DEFERRED)

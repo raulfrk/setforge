@@ -25,6 +25,7 @@ from setforge.reconcile import (
 )
 from setforge.reconcile.wizard import CANCEL
 from setforge.reconcile_apply import (
+    AutoSide,
     ReconcileKind,
     SeedChoice,
     reconcile_plain_file,
@@ -194,3 +195,58 @@ class TestSeed:
         assert out.kind is ReconcileKind.WRITE
         assert out.seeded is False
         assert out.new_base == b"same\n"
+
+
+class TestAuto:
+    """Non-interactive --auto resolves conflicts by taking a fixed side."""
+
+    def _conflict_fid(self) -> FileId:
+        # base a/b/c; ours edits b->B, theirs edits b->X => conflict on b only.
+        fid = _fid()
+        write_base(_PROFILE, fid, b"a\nb\nc\n")
+        return fid
+
+    def test_auto_ours_keeps_live_per_region(self) -> None:
+        fid = self._conflict_fid()
+        out = reconcile_plain_file(
+            _PROFILE, fid, live=b"a\nB\nc\n", tracked=b"a\nX\nc\n", auto=AutoSide.OURS
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"a\nB\nc\n"  # ours for the conflict, clean lines kept
+        assert out.new_base == b"a\nX\nc\n"  # base advances to tracked
+
+    def test_auto_theirs_takes_tracked_per_region(self) -> None:
+        fid = self._conflict_fid()
+        out = reconcile_plain_file(
+            _PROFILE, fid, live=b"a\nB\nc\n", tracked=b"a\nX\nc\n", auto=AutoSide.THEIRS
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"a\nX\nc\n"  # theirs for the conflict
+        assert out.new_base == b"a\nX\nc\n"
+
+    def test_auto_resolves_instead_of_deferring(self) -> None:
+        # The same conflict without --auto and non-interactively defers.
+        fid = self._conflict_fid()
+        deferred = reconcile_plain_file(
+            _PROFILE, fid, live=b"a\nB\nc\n", tracked=b"a\nX\nc\n"
+        )
+        assert deferred.kind is ReconcileKind.DEFERRED
+
+    def test_auto_theirs_seeds_from_upstream(self) -> None:
+        # No base + divergent live + --auto=use-tracked => take upstream, seed.
+        out = reconcile_plain_file(
+            _PROFILE, _fid(), live=b"local\n", tracked=b"up\n", auto=AutoSide.THEIRS
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"up\n"
+        assert out.new_base == b"up\n"
+        assert out.seeded is False  # explicit auto choice, no warn
+
+    def test_auto_ours_seeds_keeping_live(self) -> None:
+        out = reconcile_plain_file(
+            _PROFILE, _fid(), live=b"local\n", tracked=b"up\n", auto=AutoSide.OURS
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"local\n"
+        assert out.new_base == b"up\n"
+        assert out.seeded is False

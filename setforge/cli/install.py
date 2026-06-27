@@ -20,6 +20,7 @@ from setforge import (
 )
 from setforge import (
     deploy,
+    disposition_merge,
     transitions,
 )
 from setforge import secrets as secrets_mod
@@ -525,6 +526,39 @@ def install(
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
         _gate_on_mcp_failures(mcp_failed)
+        _gate_on_deferred_reconcile(
+            deploy_outcome.deferred_reconcile, conflict_resolver
+        )
+
+
+def _gate_on_deferred_reconcile(
+    deferred: tuple[Path, ...],
+    conflict_resolver: disposition_merge.ConflictResolver | None,
+) -> None:
+    """Exit non-zero when a non-interactive install left reconcile conflicts.
+
+    A plain file whose conflict DEFERRED non-interactively (no TTY, no
+    ``--auto``) keeps live but leaves the upstream change unresolved. The
+    transition is already written (the partial install stays revertable); this
+    gate signals the unresolved set so CI / cron fails loudly instead of
+    silently passing over a conflict. An interactive run (``conflict_resolver``
+    set) already let the user choose Skip per region, so it does NOT gate —
+    those defers warned per file during the deploy.
+    """
+    if not deferred or conflict_resolver is not None:
+        return
+    count = len(deferred)
+    typer.secho(
+        f"error: {count} file{'s' if count != 1 else ''} deferred with "
+        "unresolved conflicts — re-run `setforge install` interactively, or "
+        "pass --auto=keep-live / --auto=use-tracked to resolve "
+        "non-interactively:",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    for path in deferred:
+        typer.secho(f"  - {path}", err=True, fg=typer.colors.RED)
+    raise typer.Exit(code=1)
 
 
 def _refuse_on_symlink_dst_conflicts(ctx: ProfileContext) -> None:

@@ -598,6 +598,20 @@ def _seed_prompt_interactive(
     )
 
 
+def _auto_side(section_auto: ReconcileAuto | None) -> reconcile_apply.AutoSide | None:
+    """Map the install ``--auto`` mode onto the reconcile resolution side.
+
+    ``keep-live`` keeps the live side (OURS); ``use-tracked`` takes the
+    upstream side (THEIRS); ``None`` (no ``--auto``) leaves conflicts to
+    defer / the wizard.
+    """
+    if section_auto is ReconcileAuto.KEEP_LIVE:
+        return reconcile_apply.AutoSide.OURS
+    if section_auto is ReconcileAuto.USE_TRACKED:
+        return reconcile_apply.AutoSide.THEIRS
+    return None
+
+
 def _resolve_plain_reconcile(
     profile: str,
     sub_name: str,
@@ -606,6 +620,7 @@ def _resolve_plain_reconcile(
     tracked_file: TrackedFile,
     *,
     interactive: bool,
+    section_auto: ReconcileAuto | None,
 ) -> _PendingDeploy | None:
     """Resolve a PLAIN tracked file through the 3-way reconcile engine.
 
@@ -615,7 +630,8 @@ def _resolve_plain_reconcile(
     function adds the final gate — both live and tracked must be UTF-8, since
     the deploy write path and the conflict wizard are text-based (a binary
     plain file stays verbatim). The merged content overrides the verbatim
-    scaffold's ``content``; the store ``record`` rides pass 2.
+    scaffold's ``content``; the store ``record`` rides pass 2. ``section_auto``
+    (``--auto``) resolves a conflict non-interactively by taking a side.
     """
     scaffold = deploy.resolve_deploy(sub_src, sub_dst, mode=tracked_file.mode)
     tracked_bytes = sub_src.read_bytes()
@@ -631,6 +647,7 @@ def _resolve_plain_reconcile(
         live=reconcile.ABSENT if live_bytes is None else live_bytes,
         tracked=tracked_bytes,
         interactive=interactive,
+        auto=_auto_side(section_auto),
         display_path=str(sub_dst),
         # Only consulted on the interactive seed path; the non-interactive
         # seed keeps live without prompting.
@@ -705,6 +722,7 @@ def _resolve_one_pending(
             sub_dst,
             tracked_file,
             interactive=conflict_resolver is not None,
+            section_auto=section_auto,
         )
         if plain is not None:
             return plain
@@ -907,10 +925,16 @@ class DeployOutcome:
     chmod the path back in lockstep with the content patch reverse. A deploy
     that touched no mode (fresh CREATE, true NOOP, mode-already-matched
     UPDATE, or a symlink record) contributes nothing.
+
+    ``deferred_reconcile`` lists the live paths of plain reconcile files whose
+    conflict was DEFERRED (kept live, base not advanced) — the caller gates a
+    non-zero exit on them for a non-interactive run, since the install left
+    real conflicts unresolved.
     """
 
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
     prior_modes: dict[Path, int]
+    deferred_reconcile: tuple[Path, ...] = ()
 
 
 def _execute_pending_deploys(
@@ -938,6 +962,7 @@ def _execute_pending_deploys(
     """
     state_snapshots = _capture_store_snapshots(profile, pending)
     prior_modes: dict[Path, int] = {}
+    deferred_reconcile: list[Path] = []
     # Files whose byte base must SURVIVE the end-of-run prune: disposition
     # files AND plain files routed through the reconcile engine (both persist
     # a base in the shared base_store, keyed by file_id). A plain file absent
@@ -981,6 +1006,8 @@ def _execute_pending_deploys(
         if record.reconcile is not None:
             base_keep_ids.add(record.sub_name)
             _advance_reconcile_store(profile, record)
+            if record.reconcile[1].kind is reconcile_apply.ReconcileKind.DEFERRED:
+                deferred_reconcile.append(record.sub_dst)
         # ADVANCE the disposition base only AFTER the live write.
         if tracked_file.disposition is not None:
             _advance_disposition_base(profile, record.sub_name, record.sub_dst, result)
@@ -996,7 +1023,11 @@ def _execute_pending_deploys(
     # disposition + plain-reconcile files, so an engine-routed plain file's
     # base survives instead of being pruned every run.
     base_store.prune(profile, base_keep_ids)
-    return DeployOutcome(state_snapshots=state_snapshots, prior_modes=prior_modes)
+    return DeployOutcome(
+        state_snapshots=state_snapshots,
+        prior_modes=prior_modes,
+        deferred_reconcile=tuple(deferred_reconcile),
+    )
 
 
 @dataclass(slots=True, frozen=True)
