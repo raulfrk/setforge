@@ -17,6 +17,7 @@ All operations:
   stderr surfaced in the message.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,36 @@ from typing import Final
 from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
+
+
+def _hardened_env() -> dict[str, str]:
+    """Non-prompting, locale-pinned environment for every git invocation.
+
+    Overlays ``os.environ`` (so ``PATH``, the SSH agent socket, and any
+    credential-helper config survive) and then locks down interactivity +
+    locale:
+
+    - ``GIT_TERMINAL_PROMPT=0`` / ``GCM_INTERACTIVE=Never`` — git and the
+      Git Credential Manager never pop a prompt, so a fetch that needs a
+      missing credential fails fast instead of blocking a background / CI
+      ``install`` on a TTY until the timeout.
+    - ``GIT_SSH_COMMAND`` gains ``-oBatchMode=yes`` so ssh fails rather
+      than prompting for a passphrase — but only when the user has NOT
+      set their own ``GIT_SSH_COMMAND`` (a custom identity file is theirs
+      to keep).
+    - ``LANG``/``LC_ALL=C`` pin the locale so ``--porcelain`` / ``rev-parse``
+      output stays parser-stable (mirrors ``cli/status.py``).
+    """
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "Never",
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+    env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    return env
+
 
 _URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(r"(?P<scheme>\w+://)[^/\s]+@")
 
@@ -84,6 +115,7 @@ def _run_git(
             text=True,
             capture_output=True,
             timeout=_GIT_TIMEOUT_SECONDS,
+            env=_hardened_env(),
         )
     except subprocess.CalledProcessError as exc:
         # check=True path; surface git's stderr in the error message.

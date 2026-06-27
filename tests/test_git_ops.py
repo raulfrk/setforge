@@ -340,3 +340,63 @@ class TestSanitizeArgs:
         with pytest.raises(GitOpError) as excinfo:
             git_clone("https://u:ghp_tok_abc@localhost:1/nope.git", dest)
         assert "ghp_tok_abc" not in str(excinfo.value)
+
+
+class TestRunGitEnvHardening:
+    """Every git invocation runs with a non-prompting, locale-pinned env.
+
+    A0 fetch must never block on a credential / SSH-passphrase / Git
+    Credential Manager prompt (it would hang a bg / CI install until the
+    timeout), and porcelain/rev-parse parsing needs a stable ``C`` locale.
+    """
+
+    def _capture_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, dict[str, str]]:
+        import setforge.git_ops as git_ops_mod
+
+        captured: dict[str, dict[str, str]] = {}
+
+        def fake_run(
+            _cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            captured["env"] = {str(k): str(v) for k, v in env.items()}
+            return subprocess.CompletedProcess(_cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(git_ops_mod.subprocess, "run", fake_run)
+        git_ops_mod.git_fetch(Path("/tmp/whatever"))
+        return captured
+
+    def test_disables_all_interactive_prompts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = self._capture_env(monkeypatch)["env"]
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert env["GCM_INTERACTIVE"] == "Never"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+    def test_pins_c_locale_for_parser_stability(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = self._capture_env(monkeypatch)["env"]
+        assert env["LC_ALL"] == "C"
+        assert env["LANG"] == "C"
+
+    def test_inherits_ambient_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The hardening overlays os.environ, never replaces it — PATH (needed
+        # to spawn ssh/credential helpers) must survive.
+        monkeypatch.setenv("SETFORGE_SENTINEL_VAR", "kept")
+        env = self._capture_env(monkeypatch)["env"]
+        assert env["SETFORGE_SENTINEL_VAR"] == "kept"
+        assert "PATH" in env
+
+    def test_respects_user_provided_ssh_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A user who set GIT_SSH_COMMAND (e.g. a custom identity file) keeps
+        # it; we only add BatchMode when they have not configured one.
+        monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/.ssh/custom_id")
+        env = self._capture_env(monkeypatch)["env"]
+        assert env["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/custom_id"
