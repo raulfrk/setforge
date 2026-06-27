@@ -10,14 +10,16 @@ per-case behavior + the base-store side effect.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import reconcile
+from setforge import base_store, reconcile
 from setforge.cli import app
+from setforge.transitions import transitions_root
 
 _PROFILE = "test-recon"
 
@@ -79,6 +81,20 @@ def _base() -> bytes | None:
     return reconcile.read_base(_PROFILE, reconcile.file_id("note"))
 
 
+def _base_mtime_ns() -> int:
+    """Mtime of the recorded reconcile base — bumps iff the base is rewritten."""
+    return (
+        base_store.base_path(_PROFILE, str(reconcile.file_id("note")))
+        .stat()
+        .st_mtime_ns
+    )
+
+
+def _transition_dirs() -> set[str]:
+    root = transitions_root()
+    return {p.name for p in root.iterdir() if p.is_dir()} if root.exists() else set()
+
+
 def test_first_install_creates_and_records_base(repo: Path) -> None:
     _write_tracked(repo, "v1\n")
     config = _write_config(repo)
@@ -128,13 +144,34 @@ def test_divergent_live_without_base_seeds_and_keeps_live(repo: Path) -> None:
 
 
 def test_clean_reinstall_is_idempotent(repo: Path) -> None:
+    # INV-4 (install∘install == install): a second identical install must not
+    # diverge. Beyond live content that means NO store churn (the recorded
+    # base is not rewritten) and the reinstall's transition carries an EMPTY
+    # file delta. install always records a (revertable) transition by design,
+    # so the bite is on that transition having no changes.patch — not on the
+    # transition being absent.
     config = _write_config(repo)
     _write_tracked(repo, "stable\n")
     assert _install(config).exit_code == 0
-    # A second identical install changes nothing on disk.
     before = _live().read_text(encoding="utf-8")
+    base_mtime_before = _base_mtime_ns()
+    live_mtime_before = _live().stat().st_mtime_ns
+    transitions_before = _transition_dirs()
+    # Sleep so a spurious rewrite of live/base would land a DIFFERENT mtime,
+    # making the stability asserts below actually bite.
+    time.sleep(0.01)
     assert _install(config).exit_code == 0
+    # Live content + the file itself untouched (byte-identical, same mtime).
     assert _live().read_text(encoding="utf-8") == before == "stable\n"
+    assert _live().stat().st_mtime_ns == live_mtime_before
+    # No store churn: the recorded merge base is not re-written.
+    assert _base_mtime_ns() == base_mtime_before
+    # Exactly one new transition, and it carries NO file delta — a
+    # changes.patch would mean the reinstall rewrote a tracked file.
+    new_transitions = _transition_dirs() - transitions_before
+    assert len(new_transitions) == 1, new_transitions
+    new_dir = transitions_root() / next(iter(new_transitions))
+    assert not (new_dir / "changes.patch").exists(), list(new_dir.iterdir())
 
 
 def _setup_conflict(repo: Path) -> Path:
@@ -195,3 +232,39 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "v1\n"
     assert _base() == b"v1\n"
+
+
+def test_claude_merge_wired_only_when_interactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D6: the plain-file wizard gets a real claude-merge fn ONLY interactively;
+    # non-interactively it stays the unavailable stub (never auto-invoked).
+    from setforge.cli import _install_helpers as ih
+    from setforge.config import TrackedFile
+    from setforge.reconcile.wizard import _claude_merge_unavailable
+    from setforge.reconcile_apply import ReconcileKind, ReconcileOutcome
+
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    src = tmp_path / "note.md"
+    src.write_text("x\n", encoding="utf-8")
+    dst = tmp_path / "live" / "note.md"
+    tf = TrackedFile.model_validate({"src": "note.md", "dst": str(dst)})
+
+    captured: dict[str, object] = {}
+    sentinel = object()
+    monkeypatch.setattr(ih, "make_claude_merge_fn", lambda *, display_path: sentinel)
+
+    def _fake_rpf(_profile: str, _fid: object, **kw: object) -> ReconcileOutcome:
+        captured["cm"] = kw["claude_merge"]
+        return ReconcileOutcome(ReconcileKind.NOOP)
+
+    monkeypatch.setattr(ih.reconcile_apply, "reconcile_plain_file", _fake_rpf)
+
+    ih._resolve_plain_reconcile(
+        "p", "note", src, dst, tf, interactive=True, section_auto=None
+    )
+    assert captured["cm"] is sentinel
+    ih._resolve_plain_reconcile(
+        "p", "note", src, dst, tf, interactive=False, section_auto=None
+    )
+    assert captured["cm"] is _claude_merge_unavailable

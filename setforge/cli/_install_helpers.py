@@ -97,6 +97,8 @@ from setforge.errors import (
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
 from setforge.reconcile import FileId
+from setforge.reconcile.claude_merge import make_claude_merge_fn
+from setforge.reconcile.wizard import _claude_merge_unavailable
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
 from setforge.sections import LiveSections, SectionSemantics, strip_shared_markers
@@ -641,6 +643,15 @@ def _resolve_plain_reconcile(
     ):
         return None
     fid = reconcile.file_id(sub_name)
+    # Claude-merge is offered (button visible) ONLY in the interactive wizard;
+    # in a non-interactive / --auto / CI run it stays the unavailable stub so
+    # it is never auto-invoked (D6). The factory returns a closure — claude is
+    # spawned only if the user presses the button.
+    claude_merge = (
+        make_claude_merge_fn(display_path=str(sub_dst))
+        if interactive
+        else _claude_merge_unavailable
+    )
     outcome = reconcile_apply.reconcile_plain_file(
         profile,
         fid,
@@ -649,6 +660,7 @@ def _resolve_plain_reconcile(
         interactive=interactive,
         auto=_auto_side(section_auto),
         display_path=str(sub_dst),
+        claude_merge=claude_merge,
         # Only consulted on the interactive seed path; the non-interactive
         # seed keeps live without prompting.
         seed_prompt=_seed_prompt_interactive,
