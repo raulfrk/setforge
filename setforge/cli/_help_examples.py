@@ -425,3 +425,15 @@ Examples:
   # Non-interactive: write the script but do not edit the rc file
   setforge completion install bash --non-interactive --no-wire
 """
+
+STAGE_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Most common: walk a file's local changes and mark each share/keep
+  setforge stage CLAUDE.md --profile=<profile>
+
+\b
+  # Read-only: per-file share/local/pending hunk counts (no prompts)
+  setforge stage --list --profile=<profile>
+"""

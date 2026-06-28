@@ -57,6 +57,7 @@ LEAF_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("upgrade",),
     ("migrate",),
     ("status",),
+    ("stage",),
     ("profile", "list"),
     ("profile", "show"),
     ("snapshot", "create"),
