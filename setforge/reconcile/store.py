@@ -236,10 +236,18 @@ def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
         obj = json.loads(text)
         if not isinstance(obj, dict):
             raise ValueError("drafts manifest top level must be an object")
-        return {
-            str(anchor): base64.b64decode(str(b64), validate=True)
-            for anchor, b64 in obj.items()
-        }
+        result: dict[str, bytes] = {}
+        for anchor, b64 in obj.items():
+            # Validate the value type rather than str()-coercing it: a non-string
+            # scalar (null/number/bool) would otherwise decode to garbage bytes
+            # instead of failing closed (the docstring's "a damaged manifest
+            # raises" contract). JSON keys are always strings, so anchor is sound.
+            if not isinstance(b64, str):
+                raise ValueError(
+                    f"drafts manifest value for {anchor!r} is not a string"
+                )
+            result[str(anchor)] = base64.b64decode(b64, validate=True)
+        return result
     except (ValueError, json.JSONDecodeError, binascii.Error) as err:
         raise ReconcileStoreError(
             f"drafts manifest for {profile}/{fid} is corrupt: {err}"
@@ -346,8 +354,13 @@ def verify(profile: str, fid: FileId | None = None) -> None:
 
     INV-2: the recorded-local bytes hash matches the index's ``local_hash``.
     INV-10: an index entry exists iff its on-disk local file/marker exists, with
-    no orphan on either side. Raises :class:`~setforge.errors.InvariantViolation`
-    naming the profile, file-id, and invariant.
+    no orphan on either side. Additionally cross-checks the drafts store (via
+    :func:`_verify_drafts`): the manifest's anchors must equal the entry's
+    ``SHARED_DRAFTED`` hunk anchors (INV-10 analog) and each draft's bytes must
+    hash to that hunk's recorded ``draft_hash`` (INV-2 analog) — so an orphan,
+    missing, or tampered draft is caught too. Raises
+    :class:`~setforge.errors.InvariantViolation` naming the profile, file-id, and
+    invariant.
     """
     index = read_index(profile)
     if fid is None:

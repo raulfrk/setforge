@@ -208,8 +208,8 @@ def reconstruct(
     ``hunks`` must be freshly extracted against this ``base``/``live`` pair (their
     spans index the current line arrays). Per region:
 
-    * a non-``changed`` ``SHARED`` hunk (incl. an *adopted* draft) takes its
-      **live** bytes (see :func:`_promotes`);
+    * a non-``changed`` ``SHARED`` hunk takes its **live** bytes (see
+      :func:`_promotes`);
     * a non-``changed`` ``SHARED_DRAFTED`` hunk takes its **draft** bytes from
       ``drafts`` keyed by the hunk's ``anchor`` — NOT live (which stays
       host-specific) and NOT base. A ``SHARED_DRAFTED`` hunk whose draft is
@@ -249,10 +249,9 @@ def reconstruct(
 def _promotes(hunk: Hunk) -> bool:
     """Whether a hunk's **live** bytes are promoted into tracked on capture.
 
-    Only an EXACT-identity ``SHARED`` hunk promotes its live bytes (an *adopted*
-    draft is recorded as plain ``SHARED`` because live was rewritten to the draft,
-    so live==tracked). A ``SHARED_DRAFTED`` hunk does NOT promote live — its draft
-    is spliced in :func:`reconstruct` directly. A ``changed`` hunk (its anchor
+    Only an EXACT-identity ``SHARED`` hunk promotes its live bytes. A
+    ``SHARED_DRAFTED`` hunk does NOT promote live — its draft is spliced in
+    :func:`reconstruct` directly. A ``changed`` hunk (its anchor
     matched a stored row but its content differs — a value edit since it was
     staged, OR an anchor collision with a different region) is NOT promoted: it is
     held at base bytes until the host re-confirms it in ``setforge stage``. This is

@@ -31,7 +31,9 @@ def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return state
 
 
-def _stage(classes: dict[str, HunkClass], drafts: dict[str, bytes] | None = None):
+def _stage(
+    classes: dict[str, HunkClass], drafts: dict[str, bytes] | None = None
+) -> list:
     """Record a reconcile-staged state for file-id 'x' over BASE/LIVE."""
     drafts = drafts or {}
     hunks = []
@@ -96,6 +98,20 @@ def test_staged_drafted_divergence_is_expected(tmp_path: Path) -> None:
 
     entry = compare_profile(config, "p", repo).entries[0]
     assert entry.drift_class is DriftClass.EXPECTED  # blessed divergence, no re-flag
+
+
+def test_drafted_tracked_missing_the_draft_is_unexpected(tmp_path: Path) -> None:
+    # Negative discriminator for the SHARED_DRAFTED branch: if tracked does NOT
+    # carry the spliced draft (here tracked == base, draft never applied), INV-8
+    # over the drafted hunk fails → real drift, not the blessed EXPECTED.
+    paths = next(
+        h for h in reconcile_hunks.extract_hunks(BASE, LIVE) if h.label == "## Paths"
+    )
+    _stage({"## Paths": HunkClass.SHARED_DRAFTED}, {paths.anchor: b"workdir: $HOME\n"})
+    config, repo = _config(tmp_path, BASE)  # tracked lacks the $HOME draft splice
+
+    entry = compare_profile(config, "p", repo).entries[0]
+    assert entry.drift_class is DriftClass.UNEXPECTED
 
 
 def test_tracked_handedit_breaks_inv8_is_unexpected(tmp_path: Path) -> None:

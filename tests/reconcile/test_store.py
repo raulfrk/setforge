@@ -128,6 +128,19 @@ def test_drafts_corrupt_manifest_raises(tmp_state: Path) -> None:
         store.read_drafts("p", fid)
 
 
+@pytest.mark.parametrize("bad_value", ["123", "null", "true"])
+def test_drafts_non_string_value_raises(tmp_state: Path, bad_value: str) -> None:
+    # a non-string scalar manifest value must fail closed, not str()-coerce into
+    # garbage bytes (a number/null/bool would otherwise base64-decode silently).
+    fid = file_id("f")
+    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store._drafts_path("p", fid).write_text(
+        f'{{"sha256:aa": {bad_value}}}', encoding="utf-8"
+    )
+    with pytest.raises(ReconcileStoreError):
+        store.read_drafts("p", fid)
+
+
 def _drafted_row(anchor: str, draft: bytes) -> dict[str, object]:
     return {
         "cls": HunkClass.SHARED_DRAFTED.value,

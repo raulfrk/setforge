@@ -45,12 +45,12 @@ class HunkClass(StrEnum):
     """Classification of an index hunk: kept-local, shared upstream, pending, or
     shared-via-draft.
 
-    ``SHARED_DRAFTED`` is the A5c "keep mine local" outcome: the host's live bytes
-    stay host-specific while a Claude-rewritten *shareable* draft is promoted into
-    tracked. Its tracked bytes come from neither base nor live but from the
-    ``drafts/`` store, so ``live != tracked`` is the *expected*, blessed state for
-    such a hunk (see :func:`setforge.reconcile.hunks.reconstruct`). An ``adopt``
-    outcome instead rewrites live to the draft and records a plain ``SHARED`` hunk.
+    ``SHARED_DRAFTED`` marks a hunk whose tracked bytes are a Claude-rewritten
+    *shareable* draft (in the ``drafts/`` store), not the host's live bytes — so
+    ``live != tracked`` is the *expected*, blessed state for such a hunk (see
+    :func:`setforge.reconcile.hunks.reconstruct`). The interactive draft flow that
+    produces these (the forthcoming ``stage`` share-draft sub-flow) is not in this
+    storage/engine layer; this layer only stores, reconstructs, and verifies them.
     """
 
     LOCAL = "local"

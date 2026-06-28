@@ -190,6 +190,12 @@ def _persist(profile: str, stage: FileStage, updated: list[Hunk]) -> None:
     the walk explicitly changed from their collect-time class — so an anchor the
     host skipped keeps whatever the concurrent writer left, while the host's
     explicit choices win. base is UNCHANGED (sync/install own it).
+
+    Caveat: "explicitly changed" is derived by diffing the walk result against the
+    collect-time class, so an explicit re-confirm to the SAME class reads as a skip
+    — in the narrow race where a concurrent writer flips that anchor meanwhile, the
+    concurrent value wins. Acceptable for a single-user CLI; the common case
+    (skip-keeps-concurrent, explicit-change-wins) is correct.
     """
     collect_cls = {h.anchor: h.cls for h in stage.hunks}
     decided = {h.anchor for h in updated if collect_cls.get(h.anchor) != h.cls}
