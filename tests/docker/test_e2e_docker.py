@@ -2072,9 +2072,10 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     Sets up a bare "remote" repo + a clone "cache" inside the
     container, advances the remote by one commit, then configures
     ``~/.config/setforge/local.yaml`` with a ``source:`` block pointing
-    at the cache. Running ``setforge install`` on a non-TTY stdin
-    without ``--no-git-check`` must surface the freshness warning AND
-    raise via the mutate-gate (dst MUST NOT land).
+    at the cache. Running ``setforge install --no-fetch`` (so the A0
+    fetch-upstream step doesn't pull the cache current) on a non-TTY
+    stdin without ``--no-git-check`` must surface the freshness warning
+    AND raise via the mutate-gate (dst MUST NOT land).
 
     Uses a minimal copy of the test-minimal fixture content inside the
     cache so install has something to deploy if the gate is bypassed.
@@ -2177,9 +2178,13 @@ def test_e2e_docker_install_git_source_cache_behind_remote_warns(
     c.write_text("/home/tester/.config/setforge/local.yaml", local_yaml)
     # Ensure dst doesn't pre-exist.
     c.exec(["rm", "-f", "/home/tester/.setforge_e2e/minimal/text.txt"], check=False)
-    # Run install WITHOUT --config (so source layer fires) on non-TTY.
+    # Run install WITHOUT --config (so source layer fires) on non-TTY, and with
+    # --no-fetch so the cache STAYS behind the remote — the default A0
+    # fetch-upstream step would otherwise pull the cache current, resolving the
+    # very staleness this test exercises. --no-fetch skips the pull but NOT the
+    # git-check, so the stale-cache freshness gate still fires.
     result = c.exec(
-        ["uv", "run", "setforge", "install", "--profile=test-minimal"],
+        ["uv", "run", "setforge", "install", "--profile=test-minimal", "--no-fetch"],
         check=False,
     )
     # Non-TTY + git-source cache behind remote: mutate-gate raises → non-zero.
