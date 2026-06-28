@@ -7,13 +7,14 @@ blessed ``live != tracked`` divergence). Sibling of
 
 Injection hardening: the hunk's live bytes are fenced as inert DATA between a
 random per-invocation token, and :class:`ClaudeSession` disables all tools — so
-nothing inside the region can act as an instruction. The accepted draft is a
-control-char + UTF-8 gated before it can reach the drafts store / tracked.
+nothing inside the region can act as an instruction. Every accepted draft (model
+output AND host edits) is control-char gated before it can reach the drafts store
+/ tracked; UTF-8 is guaranteed by the session decode + the editor read-back.
 
-Failure policy: a :class:`ClaudeSessionError` degrades to a re-prompt with the
-error inline (never an abort); ``← Back`` / Esc cancels and the stage walk leaves
-the hunk unchanged. A failed / cancelled draft returns :data:`CANCEL` and writes
-nothing.
+Failure policy: a :class:`ClaudeSessionError` (incl. a missing binary) or an
+invalid draft degrades to a re-prompt with the reason inline — never an abort.
+Only ``← Back`` / Esc returns :data:`CANCEL`, which leaves the hunk unchanged; a
+cancelled (or never-completed) draft writes nothing.
 """
 
 from __future__ import annotations
@@ -161,8 +162,10 @@ def _review_loop(
 
     Returns a :class:`DraftResult` (Keep-local / Adopt), :data:`CANCEL` (← Back),
     or :data:`_Choice.REPROMPT` (the caller fetches a fresh draft). Edit re-reviews
-    the edited bytes WITHOUT a new session turn — so edited content never
-    re-enters a prompt (no injection).
+    the edited bytes WITHOUT a new session turn — so edited content never re-enters
+    a prompt (no injection) — and the edit is re-run through :func:`_validate`, so
+    the control-char gate covers host edits too; an edit that fails the gate is
+    discarded (the prior draft is re-reviewed).
     """
     while True:
         outcome = _review(clean, style=style)
@@ -175,7 +178,9 @@ def _review_loop(
         if outcome is _Choice.EDIT:
             edited = _edit_draft(clean)
             if edited is not CANCEL:
-                clean = edited.decode("utf-8")  # re-review the edited bytes
+                revalidated = _validate(edited.decode("utf-8"))
+                if revalidated is not None:
+                    clean = revalidated  # accept the gated edit; else keep prior
             continue
         return _Choice.REPROMPT
 
@@ -183,11 +188,11 @@ def _review_loop(
 def draft_hunk(region: bytes, *, display_path: str) -> DraftResult | Cancelled:
     """Drive the full per-hunk draft sub-flow over a fresh resumable session.
 
-    Returns a :class:`DraftResult` (Keep-local or Adopt) or :data:`CANCEL`
-    (← Back / Esc / a degraded failure — the stage walk then leaves the hunk
-    unchanged). The session is created lazily on the first successful turn and
-    reused for re-prompts; a failed first turn leaves it unset so the next attempt
-    rebuilds the full prompt fresh.
+    Returns a :class:`DraftResult` (Keep-local or Adopt) or :data:`CANCEL` (only
+    ← Back / Esc — a degraded failure re-prompts, it does not cancel; the stage
+    walk leaves a cancelled hunk unchanged). The session is constructed on the
+    first turn and RETAINED only after it succeeds, then reused for re-prompts; a
+    failed first turn leaves it unset so the next attempt rebuilds the full prompt.
     """
     style = _themed_style()
     session: ClaudeSession | None = None

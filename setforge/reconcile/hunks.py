@@ -21,6 +21,7 @@ region — the host's local delta over the recorded merge base. Two principles:
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from dataclasses import dataclass
 
 from patiencediff import PatienceSequenceMatcher
@@ -151,12 +152,19 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     class but is flagged ``changed=True`` (surfaced for re-confirm, never silently
     reset). Anything unmatched stays PENDING.
 
-    A ``SHARED_DRAFTED`` row is the exception: it matches by **anchor alone**
-    (``changed=False``, live-independent). Its tracked bytes come from the draft
-    store, not live, so the live side is allowed to be anything — the host's
-    original (keep-mine-local) OR the adopted draft — without re-flagging the hunk
-    or dropping the draft. This keeps a blessed divergence stable across live edits.
+    A ``SHARED_DRAFTED`` row is the exception: a hunk whose ``anchor`` is **unique**
+    among the fresh set matches by **anchor alone** (``changed=False``,
+    live-independent). Its tracked bytes come from the draft store, not live, so the
+    live side is allowed to be anything — the host's original (keep-mine-local) OR
+    the adopted draft — without re-flagging the hunk or dropping the draft, keeping
+    a blessed divergence stable across live edits. The uniqueness guard matters:
+    on an anchor COLLISION (two fresh hunks sharing one base context) the
+    by-anchor match would splice the single draft into BOTH regions, so a colliding
+    drafted anchor instead falls through to the exact/moved logic below — which
+    fails safe (an exact ``live_hash`` match still carries it; otherwise it is held
+    at base via ``changed=True``, never duplicated).
     """
+    fresh_anchor_counts = Counter(h.anchor for h in fresh)
     drafted_by_anchor = {
         str(r["anchor"]): r
         for r in stored
@@ -167,7 +175,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     out: list[Hunk] = []
     for hunk in fresh:
         drafted = drafted_by_anchor.get(hunk.anchor)
-        if drafted is not None:
+        if drafted is not None and fresh_anchor_counts[hunk.anchor] == 1:
             out.append(
                 _with(
                     hunk,

@@ -356,3 +356,27 @@ def test_reconstruct_missing_draft_raises() -> None:
     h = _drafted("## Host paths")
     with pytest.raises(InvariantViolation, match="no draft"):
         reconstruct(BASE, LIVE, [h], {})  # dangling draft pointer → fail-closed
+
+
+def test_classify_drafted_anchor_collision_fails_safe() -> None:
+    # Two fresh hunks share one anchor; a stored SHARED_DRAFTED row for it must NOT
+    # mark BOTH as non-changed SHARED_DRAFTED (which would splice the single draft
+    # into both regions). The uniqueness guard makes a collision fall through to the
+    # safe moved-path (changed=True → held at base in reconstruct), never duplicated.
+    dup = "sha256:dup-anchor"
+    fresh = [
+        Hunk(HunkClass.PENDING, "one", "sha256:l1", dup, (0, 1), (0, 1)),
+        Hunk(HunkClass.PENDING, "two", "sha256:l2", dup, (2, 3), (2, 3)),
+    ]
+    stored: list[dict[str, object]] = [
+        {
+            "cls": HunkClass.SHARED_DRAFTED.value,
+            "label": "one",
+            "live_hash": "sha256:stale",
+            "anchor": dup,
+            "draft_hash": "sha256:d",
+        }
+    ]
+    out = classify(fresh, stored)
+    # no hunk is splice-eligible (non-changed SHARED_DRAFTED) → no duplication
+    assert not any(h.cls is HunkClass.SHARED_DRAFTED and not h.changed for h in out)

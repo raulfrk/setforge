@@ -44,6 +44,7 @@ def test_adopt_returns_draft_with_adopt(monkeypatch: pytest.MonkeyPatch) -> None
     _patch(monkeypatch, instructions=iter([""]), reviews=iter([_Choice.ADOPT]))
     res = share_draft.draft_hunk(_REGION, display_path="CLAUDE.md")
     assert isinstance(res, share_draft.DraftResult)
+    assert res.draft == b"workdir: $HOME/projects\n"
     assert res.adopt is True
 
 
@@ -77,6 +78,7 @@ def test_reprompt_then_keep(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     res = share_draft.draft_hunk(_REGION, display_path="CLAUDE.md")
     assert isinstance(res, share_draft.DraftResult)
+    assert res.adopt is False  # the terminal KEEP on the resumed session
 
 
 def test_session_error_degrades_to_reprompt(monkeypatch: pytest.MonkeyPatch) -> None:

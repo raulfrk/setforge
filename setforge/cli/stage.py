@@ -298,7 +298,8 @@ def _apply(profile: str, stage: FileStage, result: WalkResult) -> None:
     persist the classifications + drafts under the lock."""
     final_live = _adopt_live(stage, result)
     if final_live != stage.live:
-        mode = stat.S_IMODE(stage.dst.lstat().st_mode)
+        # stat() (follow) so a symlinked dst keeps its target's mode, not the link's.
+        mode = stat.S_IMODE(stage.dst.stat().st_mode)
         atomicio.atomic_write_bytes(stage.dst, final_live, mode=mode)
     _persist(profile, stage, result, final_live)
 
@@ -328,10 +329,15 @@ def _persist(
     """
     collect_cls = {h.anchor: h.cls for h in stage.hunks}
     walk_by_anchor = {h.anchor: h for h in result.hunks}
+    # "decided" = anchors the host acted on THIS walk: a class change from the
+    # collect-time class, OR a draft authored this walk. Keying the draft case on
+    # result.drafts (not a draft_hash carried forward by classify for an already-
+    # SHARED_DRAFTED hunk the host SKIPPED) keeps a skip from re-asserting a stale
+    # value over a concurrent writer.
     decided = {
         anchor
         for anchor, hunk in walk_by_anchor.items()
-        if collect_cls.get(anchor) != hunk.cls or hunk.draft_hash is not None
+        if collect_cls.get(anchor) != hunk.cls or anchor in result.drafts
     }
     with profile_lock(profile):
         entry = reconcile_store.read_index(profile).files.get(str(stage.fid))

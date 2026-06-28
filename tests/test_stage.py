@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.cli.stage import QUIT, _Quit, collect_stages, counts, walk
+from setforge.cli.stage import QUIT, FileStage, _Quit, collect_stages, counts, walk
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.reconcile.types import HunkClass, file_id
 
@@ -179,7 +179,7 @@ def test_apply_merges_concurrent_classification(
     assert classes["## Host paths"] == "local"  # concurrent sync preserved (not reset)
 
 
-def _shell_anchor(stage) -> str:
+def _shell_anchor(stage: FileStage) -> str:
     return next(h.anchor for h in stage.hunks if h.label == "## Shell")
 
 
