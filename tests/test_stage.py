@@ -127,6 +127,52 @@ def test_persist_writes_classes_and_keeps_base(
     assert store.reconstruct(profile, file_id("CLAUDE.md")) == _LIVE  # full live
 
 
+def test_persist_merges_concurrent_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lost-update guard (D6): the walk reads/classifies at collect time outside
+    # the lock; a concurrent sync that classifies a DIFFERENT hunk between collect
+    # and persist must NOT be clobbered by persist's whole-list write.
+    from dataclasses import replace
+
+    from setforge import locking
+    from setforge.cli.stage import _persist
+    from setforge.reconcile import hunks as hunks_mod
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_stages(cfg, resolved, repo, profile)  # both PENDING
+
+    # host shares "## Shell" interactively, SKIPS "## Host paths".
+    updated = walk(
+        stage.hunks,
+        lambda h, i, n: HunkClass.SHARED if h.label == "## Shell" else None,
+    )
+    # concurrent sync classifies "## Host paths" LOCAL and commits it first.
+    concurrent = [
+        replace(h, cls=HunkClass.LOCAL) if h.label == "## Host paths" else h
+        for h in stage.hunks
+    ]
+    with locking.profile_lock(profile):
+        store.record(
+            profile,
+            file_id("CLAUDE.md"),
+            base=_BASE,
+            local=_LIVE,
+            hunks=hunks_mod.serialize(concurrent),
+        )
+
+    _persist(profile, stage, updated)  # must merge, not clobber
+
+    classes = {
+        row["label"]: row["cls"]
+        for row in store.read_index(profile).files["CLAUDE.md"].hunks
+    }
+    assert classes["## Shell"] == "shared"  # host's explicit choice won
+    assert classes["## Host paths"] == "local"  # concurrent sync preserved (not reset)
+
+
 def test_counts_tallies_by_class() -> None:
     from setforge.reconcile.hunks import extract_hunks
 

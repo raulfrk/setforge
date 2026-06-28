@@ -179,15 +179,36 @@ def _interactive_choice(stage: FileStage) -> Choice:
     return choose
 
 
-def _persist(profile: str, stage: FileStage, hunks: list[Hunk]) -> None:
-    """Record the updated classifications. base is UNCHANGED (sync/install own it)."""
+def _persist(profile: str, stage: FileStage, updated: list[Hunk]) -> None:
+    """Record the walk's classifications, merging with the current index UNDER the
+    lock so a concurrent ``sync`` is not clobbered (lost-update RMW).
+
+    The walk read + classified the index at collect time, OUTSIDE the lock; a
+    naive whole-list overwrite here would drop any classification a concurrent
+    ``sync`` committed in between. Instead, re-read the index under the lock,
+    re-classify the (stable) base/live against it, and overlay ONLY the anchors
+    the walk explicitly changed from their collect-time class — so an anchor the
+    host skipped keeps whatever the concurrent writer left, while the host's
+    explicit choices win. base is UNCHANGED (sync/install own it).
+    """
+    collect_cls = {h.anchor: h.cls for h in stage.hunks}
+    decided = {h.anchor for h in updated if collect_cls.get(h.anchor) != h.cls}
+    walk_by_anchor = {h.anchor: h for h in updated}
     with profile_lock(profile):
+        entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
+        stored = entry.hunks if entry is not None else []
+        current = hunks_mod.classify(
+            hunks_mod.extract_hunks(stage.base, stage.live), stored
+        )
+        merged = [
+            walk_by_anchor[h.anchor] if h.anchor in decided else h for h in current
+        ]
         reconcile_store.record(
             profile,
             stage.fid,
             base=stage.base,
             local=stage.live,
-            hunks=hunks_mod.serialize(hunks),
+            hunks=hunks_mod.serialize(merged),
         )
 
 
