@@ -32,6 +32,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "upgrade",
     "migrate",
     "status",
+    "stage",
 )
 
 EXPECTED_SUBGROUPS: tuple[str, ...] = (

@@ -186,7 +186,7 @@ def test_staged_capture_pending_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
-    from setforge.reconcile.types import file_id
+    from setforge.reconcile.types import HunkClass, file_id
 
     repo = tmp_path / "repo"
     src = repo / "tracked" / "CLAUDE.md"
@@ -195,12 +195,15 @@ def test_staged_capture_pending_hint(
     _write(dst, _A5_LIVE.decode())
 
     fid = file_id("CLAUDE.md")
-    _stage_index("p", fid, _A5_BASE, _A5_LIVE, {})  # nothing staged → all PENDING
+    # The file IS under staging (Shell SHARED) but workdir is left PENDING.
+    _stage_index("p", fid, _A5_BASE, _A5_LIVE, {"## Shell": HunkClass.SHARED})
 
     results = capture_profile(
         _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
     )
 
-    assert src.read_bytes() == _A5_BASE  # PENDING kept local — tracked stays base
+    out = src.read_bytes()
+    assert b"## Shell" in out  # SHARED promoted
+    assert b"workdir: /home/raul" not in out  # PENDING workdir kept host-only
     (result,) = [r for r in results if r.name == "CLAUDE.md"]
     assert any("stage" in w for w in result.warnings)  # the "run setforge stage" hint

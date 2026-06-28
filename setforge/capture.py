@@ -219,6 +219,13 @@ def _capture_staged_plain(
     except UnicodeDecodeError:
         return None  # text-only staging; a binary plain file stays verbatim
     hunks = _classify_live(profile, fid, base, live)
+    # A5 staging is OPT-IN per file: until the host has classified at least one
+    # hunk (SHARED or LOCAL) via `setforge stage`, the file keeps the legacy
+    # capture behavior (sync absorbs live drift into tracked). Falling back here
+    # — rather than treating every unstaged hunk as PENDING-keep-local — avoids
+    # silently changing sync's behavior for files no one has staged.
+    if not any(hunk.cls in (HunkClass.SHARED, HunkClass.LOCAL) for hunk in hunks):
+        return None
     new_text = reconcile_hunks.reconstruct(base, live, hunks).decode("utf-8")
     if _keep_tracked_refuses(auto, src, new_text):
         return CaptureResult(
