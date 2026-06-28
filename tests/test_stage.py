@@ -82,17 +82,19 @@ def test_collect_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_walk_applies_choices_and_quits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from setforge.cli.stage import Decision
+
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
 
     # Share the first hunk, then quit before the second.
-    decisions: list[HunkClass | None | _Quit] = [HunkClass.SHARED, QUIT]
+    decisions: list[Decision | None | _Quit] = [Decision(HunkClass.SHARED), QUIT]
     scripted = iter(decisions)
-    updated = walk(stage.hunks, lambda h, i, n: next(scripted))
+    result = walk(stage.hunks, lambda h, i, n: next(scripted))
 
-    assert updated[0].cls is HunkClass.SHARED
-    assert updated[1].cls is HunkClass.PENDING  # untouched (quit before it)
+    assert result.hunks[0].cls is HunkClass.SHARED
+    assert result.hunks[1].cls is HunkClass.PENDING  # untouched (quit before it)
 
 
 def test_walk_skip_leaves_class_unchanged(
@@ -101,24 +103,28 @@ def test_walk_skip_leaves_class_unchanged(
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
-    updated = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
-    assert all(h.cls is HunkClass.PENDING for h in updated)
+    result = walk(stage.hunks, lambda h, i, n: None)  # skip every hunk
+    assert all(h.cls is HunkClass.PENDING for h in result.hunks)
 
 
-def test_persist_writes_classes_and_keeps_base(
+def test_apply_writes_classes_and_keeps_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg, repo, profile = _setup(tmp_path, monkeypatch)
-    from setforge.cli.stage import _persist
+    from setforge.cli.stage import Decision, _apply
     from setforge.reconcile import store
 
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
-    updated = walk(
+    result = walk(
         stage.hunks,
-        lambda h, i, n: HunkClass.SHARED if h.label == "## Shell" else HunkClass.LOCAL,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED)
+            if h.label == "## Shell"
+            else Decision(HunkClass.LOCAL)
+        ),
     )
-    _persist(profile, stage, updated)
+    _apply(profile, stage, result)
 
     entry = store.read_index(profile).files["CLAUDE.md"]
     classes = {row["label"]: row["cls"] for row in entry.hunks}
@@ -127,16 +133,16 @@ def test_persist_writes_classes_and_keeps_base(
     assert store.reconstruct(profile, file_id("CLAUDE.md")) == _LIVE  # full live
 
 
-def test_persist_merges_concurrent_classification(
+def test_apply_merges_concurrent_classification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Lost-update guard (D6): the walk reads/classifies at collect time outside
     # the lock; a concurrent sync that classifies a DIFFERENT hunk between collect
-    # and persist must NOT be clobbered by persist's whole-list write.
+    # and persist must NOT be clobbered by the persist write.
     from dataclasses import replace
 
     from setforge import locking
-    from setforge.cli.stage import _persist
+    from setforge.cli.stage import Decision, _apply
     from setforge.reconcile import hunks as hunks_mod
     from setforge.reconcile import store
 
@@ -145,9 +151,9 @@ def test_persist_merges_concurrent_classification(
     (stage,) = collect_stages(cfg, resolved, repo, profile)  # both PENDING
 
     # host shares "## Shell" interactively, SKIPS "## Host paths".
-    updated = walk(
+    result = walk(
         stage.hunks,
-        lambda h, i, n: HunkClass.SHARED if h.label == "## Shell" else None,
+        lambda h, i, n: Decision(HunkClass.SHARED) if h.label == "## Shell" else None,
     )
     # concurrent sync classifies "## Host paths" LOCAL and commits it first.
     concurrent = [
@@ -163,7 +169,7 @@ def test_persist_merges_concurrent_classification(
             hunks=hunks_mod.serialize(concurrent),
         )
 
-    _persist(profile, stage, updated)  # must merge, not clobber
+    _apply(profile, stage, result)  # must merge, not clobber
 
     classes = {
         row["label"]: row["cls"]
@@ -171,6 +177,73 @@ def test_persist_merges_concurrent_classification(
     }
     assert classes["## Shell"] == "shared"  # host's explicit choice won
     assert classes["## Host paths"] == "local"  # concurrent sync preserved (not reset)
+
+
+def _shell_anchor(stage) -> str:
+    return next(h.anchor for h in stage.hunks if h.label == "## Shell")
+
+
+def test_apply_keep_local_draft_stores_draft_and_keeps_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Keep-mine-local: tracked gets the shareable draft, the live file is UNCHANGED.
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_stages(cfg, resolved, repo, profile)
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    _apply(profile, stage, result)
+
+    fid = file_id("CLAUDE.md")
+    entry = store.read_index(profile).files["CLAUDE.md"]
+    classes = {row["label"]: row["cls"] for row in entry.hunks}
+    assert classes["## Shell"] == "shared_drafted"
+    assert store.read_drafts(profile, fid) == {_shell_anchor(stage): draft}
+    assert stage.dst.read_bytes() == _LIVE  # live file UNCHANGED (host keeps theirs)
+    store.verify(profile, fid)  # manifest matches the SHARED_DRAFTED hunk
+
+
+def test_apply_adopt_rewrites_live_to_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Adopt: the host's live region is rewritten to the draft (no divergence).
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import store
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_stages(cfg, resolved, repo, profile)
+    draft = b"## Shell\nPrefer a portable shell.\n\n"
+    result = walk(
+        stage.hunks,
+        lambda h, i, n: (
+            Decision(HunkClass.SHARED_DRAFTED, draft=draft, adopt=True)
+            if h.label == "## Shell"
+            else None
+        ),
+    )
+    _apply(profile, stage, result)
+
+    fid = file_id("CLAUDE.md")
+    live_now = stage.dst.read_bytes()
+    assert b"Prefer a portable shell." in live_now  # live rewritten to the draft
+    assert b"Prefer zsh." not in live_now  # the host original is gone (adopted)
+    classes = {
+        row["label"]: row["cls"]
+        for row in store.read_index(profile).files["CLAUDE.md"].hunks
+    }
+    assert classes["## Shell"] == "shared_drafted"
+    store.verify(profile, fid)  # manifest still matches
 
 
 def test_counts_tallies_by_class() -> None:

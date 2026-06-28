@@ -150,11 +150,33 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     whose ``anchor`` matches but whose ``live_hash`` changed keeps the stored
     class but is flagged ``changed=True`` (surfaced for re-confirm, never silently
     reset). Anything unmatched stays PENDING.
+
+    A ``SHARED_DRAFTED`` row is the exception: it matches by **anchor alone**
+    (``changed=False``, live-independent). Its tracked bytes come from the draft
+    store, not live, so the live side is allowed to be anything — the host's
+    original (keep-mine-local) OR the adopted draft — without re-flagging the hunk
+    or dropping the draft. This keeps a blessed divergence stable across live edits.
     """
+    drafted_by_anchor = {
+        str(r["anchor"]): r
+        for r in stored
+        if r.get("cls") == HunkClass.SHARED_DRAFTED.value
+    }
     by_identity = {(str(r["live_hash"]), str(r["anchor"])): r for r in stored}
     by_anchor = {str(r["anchor"]): r for r in stored}
     out: list[Hunk] = []
     for hunk in fresh:
+        drafted = drafted_by_anchor.get(hunk.anchor)
+        if drafted is not None:
+            out.append(
+                _with(
+                    hunk,
+                    cls=HunkClass.SHARED_DRAFTED,
+                    changed=False,
+                    draft_hash=_row_draft_hash(drafted),
+                )
+            )
+            continue
         exact = by_identity.get(identity(hunk))
         if exact is not None:
             out.append(
