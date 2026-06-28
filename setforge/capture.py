@@ -45,6 +45,9 @@ from setforge import (
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, Disposition, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
+from setforge.reconcile import hunks as reconcile_hunks
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
 
@@ -181,6 +184,77 @@ def _write_if_changed(src: Path, content: str) -> CaptureResult:
     return CaptureResult(name=src.name, action=CaptureAction.UPDATED)
 
 
+def _capture_staged_plain(
+    profile: str,
+    sub_name: str,
+    src: Path,
+    dst: Path,
+    *,
+    auto: "CaptureAuto | None",
+) -> CaptureResult | None:
+    """A5 staged capture for a plain reconcile file (RFC §9.3).
+
+    Promotes ONLY the hunks the host classified SHARED into ``tracked/`` and
+    keeps LOCAL/PENDING host-only. The tracked content is **reconstructed** from
+    ``base`` + the still-SHARED hunks (never patched), so a SHARED→LOCAL demote
+    un-captures automatically. The stored ``base`` is **left unchanged** — it
+    advances only on ``install`` when new upstream is fetched, so a SHARED hunk
+    stays a base↔live delta and therefore stays demotable; ``local`` records the
+    full live bytes (INV-2: ``reconstruct == live``).
+
+    Must run inside the caller's ``profile_lock`` (like every capture helper).
+    Returns ``None`` when the file is not staged-eligible (no recorded base, live
+    missing, or non-UTF-8) so the caller falls back to the verbatim writeback.
+    """
+    if not dst.exists():
+        return None
+    fid = file_id(sub_name)
+    base = reconcile_store.read_base(profile, fid)
+    if base is None:
+        return None  # not reconcile-managed → legacy verbatim capture
+    live = dst.read_bytes()
+    try:
+        base.decode("utf-8")
+        live.decode("utf-8")
+    except UnicodeDecodeError:
+        return None  # text-only staging; a binary plain file stays verbatim
+    hunks = _classify_live(profile, fid, base, live)
+    new_text = reconcile_hunks.reconstruct(base, live, hunks).decode("utf-8")
+    if _keep_tracked_refuses(auto, src, new_text):
+        return CaptureResult(
+            name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
+        )
+    # INV-8: the bytes we are about to write must be exactly the shared set.
+    reconcile_hunks.assert_stage_fidelity(base, live, new_text.encode("utf-8"), hunks)
+    result = _write_if_changed(src, new_text)
+    # Persist full live + classifications; base is UNCHANGED on sync (it advances
+    # only on install). Runs unconditionally w.r.t. the tracked NOOP so a
+    # classification-only change (e.g. PENDING→LOCAL) still persists.
+    reconcile_store.record(
+        profile,
+        fid,
+        base=base,
+        local=live,
+        hunks=reconcile_hunks.serialize(hunks),
+    )
+    warnings: tuple[str, ...] = ()
+    if any(hunk.cls is HunkClass.PENDING for hunk in hunks):
+        warnings = (
+            f"{src.name}: unstaged local changes kept host-only — run "
+            f"`setforge stage {src.name}` to share any of them",
+        )
+    return CaptureResult(name=sub_name, action=result.action, warnings=warnings)
+
+
+def _classify_live(
+    profile: str, fid: FileId, base: bytes, live: bytes
+) -> list[reconcile_hunks.Hunk]:
+    """Freshly extract base↔live hunks and carry stored classifications by identity."""
+    entry = reconcile_store.read_index(profile).files.get(str(fid))
+    stored = entry.hunks if entry is not None else []
+    return reconcile_hunks.classify(reconcile_hunks.extract_hunks(base, live), stored)
+
+
 def capture_profile(
     config: Config,
     profile_name: str,
@@ -276,28 +350,42 @@ def capture_profile(
                     local_config_path=local_config_path,
                 )
             else:
-                # No-disposition preserve files can still carry host-local
-                # OVERLAY spans (markerless deploy). Load the sidecar so
-                # capture can excise each markerless body by its exact recorded
-                # bytes before the tracked writeback — symmetric to the deploy
-                # inject and to the disposition path's overlay excise.
-                span_states = (
-                    spans_store.get_states(profile_name, sub_name)
-                    if tracked_file.spans
-                    else {}
+                # A5: a plain reconcile file (no spans, no host-local overlay)
+                # with a recorded base captures per-hunk — only the SHARED hunks
+                # promote into tracked/. Falls back to the verbatim writeback
+                # below when it is not staged-eligible (no base / binary).
+                staged = (
+                    _capture_staged_plain(
+                        profile_name, sub_name, sub_src, sub_dst, auto=auto
+                    )
+                    if not tracked_file.spans and not host_local_names
+                    else None
                 )
-                result = capture_tracked_file(
-                    sub_src,
-                    sub_dst,
-                    host_local_section_names=host_local_names,
-                    spans=tracked_file.spans,
-                    span_states=span_states,
-                    sub_name=sub_name,
-                    tracked_file_id=name,
-                    auto=auto,
-                    interactive=interactive,
-                    local_config_path=local_config_path,
-                )
+                if staged is not None:
+                    result = staged
+                else:
+                    # No-disposition preserve files can still carry host-local
+                    # OVERLAY spans (markerless deploy). Load the sidecar so
+                    # capture can excise each markerless body by its exact
+                    # recorded bytes before the tracked writeback — symmetric to
+                    # the deploy inject and the disposition path's overlay excise.
+                    span_states = (
+                        spans_store.get_states(profile_name, sub_name)
+                        if tracked_file.spans
+                        else {}
+                    )
+                    result = capture_tracked_file(
+                        sub_src,
+                        sub_dst,
+                        host_local_section_names=host_local_names,
+                        spans=tracked_file.spans,
+                        span_states=span_states,
+                        sub_name=sub_name,
+                        tracked_file_id=name,
+                        auto=auto,
+                        interactive=interactive,
+                        local_config_path=local_config_path,
+                    )
             results.append(
                 CaptureResult(
                     name=sub_name,
