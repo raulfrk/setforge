@@ -182,6 +182,36 @@ def test_staged_capture_demote_uncaptures(
     assert out == _A5_BASE  # tracked back to pure upstream base
 
 
+def test_unstaged_file_falls_back_to_legacy_absorb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A plain reconcile file with a recorded base but NO staged hunks (all
+    # PENDING) must keep the legacy sync behavior: live drift is absorbed into
+    # tracked. This guards the opt-in-per-file fallback (a mutant flipping the
+    # `not any(SHARED/LOCAL)` guard would let an unstaged file stop absorbing).
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, _A5_BASE.decode())
+    _write(dst, _A5_LIVE.decode())
+
+    fid = file_id("CLAUDE.md")
+    _stage_index("p", fid, _A5_BASE, _A5_LIVE, {})  # base recorded, nothing staged
+
+    capture_profile(
+        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+
+    assert src.read_bytes() == _A5_LIVE  # legacy absorb: full live → tracked
+    # the legacy plain-capture path does not touch the reconcile store — base is
+    # left as recorded; it self-heals to the absorbed content on the next install.
+    assert store.read_base("p", fid) == _A5_BASE
+
+
 def test_staged_capture_pending_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
 
 from setforge import atomicio, base_store
 from setforge.errors import (
@@ -328,7 +327,7 @@ def record(
     *,
     base: bytes,
     local: bytes | Absent,
-    hunks: list[dict[str, Any]] | None = None,
+    hunks: list[dict[str, object]] | None = None,
 ) -> None:
     """Record a base + local + index triple for ``fid``. Call inside ``profile_lock``.
 

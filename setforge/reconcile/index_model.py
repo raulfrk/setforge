@@ -143,4 +143,36 @@ def _parse_entry(fid: str, raw: object) -> FileEntry:
     hunks = raw.get("hunks", [])
     if not isinstance(hunks, list):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-list 'hunks'")
+    for row in hunks:
+        _check_hunk_row(fid, row)
     return FileEntry(present=raw["present"], local_hash=local_hash, hunks=hunks)
+
+
+#: The keys every persisted hunk row must carry (mirrors ``hunks.serialize``).
+_HUNK_ROW_KEYS: Final = ("cls", "label", "live_hash", "anchor")
+#: Valid ``cls`` values — the :class:`~setforge.reconcile.types.HunkClass` value set.
+#: Inlined (not imported) to keep this codec a leaf with no dependency on the
+#: staging layer; the values are a frozen part of the on-disk schema.
+_HUNK_CLASSES: Final = frozenset({"local", "shared", "pending"})
+
+
+def _check_hunk_row(fid: str, row: object) -> None:
+    """Fail-closed validation of one persisted hunk row.
+
+    The ``hunks`` field is now populated (the staging layer), so the codec must
+    cover it too: a hand-edited index with a malformed row must raise
+    :class:`~setforge.errors.CorruptIndexError`, never let a partial dict reach
+    the staging layer as an unwrapped ``KeyError`` / ``ValueError``.
+    """
+    if not isinstance(row, dict):
+        raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
+    for key in _HUNK_ROW_KEYS:
+        if not isinstance(row.get(key), str):
+            raise CorruptIndexError(
+                f"index entry for {fid!r} has a hunk row with a "
+                f"missing/non-string {key!r}"
+            )
+    if row["cls"] not in _HUNK_CLASSES:
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a hunk row with an unknown cls {row['cls']!r}"
+        )

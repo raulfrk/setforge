@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from patiencediff import PatienceSequenceMatcher
 
 from setforge.errors import InvariantViolation
-from setforge.reconcile.merge import _split_lines  # canonical engine line splitter
+from setforge.reconcile.merge import split_lines  # canonical engine line splitter
 from setforge.reconcile.types import HunkClass
 
 #: Base-context lines hashed on each side of a hunk to anchor its identity to
@@ -105,11 +105,11 @@ def extract_hunks(base: bytes, live: bytes) -> list[Hunk]:
     """Extract the base↔live diff hunks (each unclassified → PENDING).
 
     A 2-way line diff (``PatienceSequenceMatcher`` over the engine's
-    :func:`_split_lines`); every non-``equal`` opcode becomes one :class:`Hunk`.
+    :func:`split_lines`); every non-``equal`` opcode becomes one :class:`Hunk`.
     An empty result means live equals base (nothing to stage).
     """
-    base_lines = _split_lines(base)
-    live_lines = _split_lines(live)
+    base_lines = split_lines(base)
+    live_lines = split_lines(live)
     matcher = PatienceSequenceMatcher(None, base_lines, live_lines)
     hunks: list[Hunk] = []
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -175,28 +175,42 @@ def _with(hunk: Hunk, *, cls: HunkClass, changed: bool) -> Hunk:
 
 
 def reconstruct(base: bytes, live: bytes, hunks: list[Hunk]) -> bytes:
-    """Rebuild the tracked content: ``base`` with only SHARED hunks promoted.
+    """Rebuild the tracked content: ``base`` with only exact-identity SHARED
+    hunks promoted (see :func:`_promotes`).
 
     ``hunks`` must be freshly extracted against this ``base``/``live`` pair (their
-    spans index the current line arrays). Every SHARED region takes its live
-    bytes; every LOCAL/PENDING region keeps its base bytes. EQUAL regions (not in
-    ``hunks``) always pass through from base.
+    spans index the current line arrays). A SHARED hunk that is not ``changed``
+    takes its live bytes; every LOCAL / PENDING / ``changed`` region keeps its
+    base bytes. EQUAL regions (not in ``hunks``) always pass through from base.
     """
-    base_lines = _split_lines(base)
-    live_lines = _split_lines(live)
+    base_lines = split_lines(base)
+    live_lines = split_lines(live)
     out: list[bytes] = []
     cursor = 0
     for hunk in sorted(hunks, key=lambda h: h.base_span[0]):
         i1, i2 = hunk.base_span
         j1, j2 = hunk.live_span
         out.extend(base_lines[cursor:i1])  # unchanged region before this hunk
-        if hunk.cls is HunkClass.SHARED:
+        if _promotes(hunk):
             out.extend(live_lines[j1:j2])
         else:
             out.extend(base_lines[i1:i2])
         cursor = i2
     out.extend(base_lines[cursor:])
     return b"".join(out)
+
+
+def _promotes(hunk: Hunk) -> bool:
+    """Whether a hunk's live bytes are promoted into tracked on capture.
+
+    Only an EXACT-identity SHARED hunk promotes. A ``changed`` hunk (its anchor
+    matched a stored SHARED row but its content differs — a value edit since it
+    was staged, OR an anchor collision with a different region) is NOT promoted:
+    it is held at base bytes until the host re-confirms it in ``setforge stage``.
+    This is what stops a never-staged, anchor-colliding region from silently
+    promoting its bytes upstream.
+    """
+    return hunk.cls is HunkClass.SHARED and not hunk.changed
 
 
 def assert_stage_fidelity(

@@ -128,10 +128,10 @@ def test_persist_writes_classes_and_keeps_base(
 
 
 def test_counts_tallies_by_class() -> None:
-    cfg = None  # unused; counts is pure over hunks
-    assert cfg is None
     from setforge.reconcile.hunks import extract_hunks
 
     hunks = extract_hunks(_BASE, _LIVE)
     tally = counts(hunks)
     assert tally[HunkClass.PENDING] == 2
+    assert tally[HunkClass.SHARED] == 0
+    assert tally[HunkClass.LOCAL] == 0

@@ -65,6 +65,16 @@ def _split_lines(data: bytes) -> list[bytes]:
     return [] if not data else _LINE_RE.findall(data)
 
 
+def split_lines(data: bytes) -> list[bytes]:
+    """Public alias for the engine line splitter (terminator-keeping).
+
+    Shared by the 3-way merge here and the A5 hunk layer (:mod:`hunks`) so both
+    align on the exact same line model; exported rather than reached into as a
+    private name.
+    """
+    return _split_lines(data)
+
+
 def _whole_file_conflict(
     base: MergeInput, ours: MergeInput, theirs: MergeInput
 ) -> MergeResult:

@@ -184,6 +184,28 @@ def test_reconstruct_promotes_only_shared() -> None:
     assert b"workdir: /home/raul" not in tracked
 
 
+def test_reconstruct_does_not_promote_a_changed_shared_hunk() -> None:
+    # A SHARED hunk flagged `changed` (anchor matched but content differs — a
+    # value edit OR an anchor collision with an unstaged region) must NOT have
+    # its live bytes promoted into tracked, else a never-staged region leaks.
+    from setforge.reconcile.hunks import reconstruct
+
+    hunks = _stage(BASE, LIVE, {"## Shell": HunkClass.SHARED})
+    shell = next(h for h in hunks if h.label == "## Shell")
+    changed = [h if h.label != "## Shell" else _replace_changed(h, True) for h in hunks]
+    out = reconstruct(BASE, LIVE, changed)
+    assert b"## Shell" not in out  # changed-SHARED held at base, not promoted
+    # sanity: the same hunk without the changed flag DOES promote
+    assert b"## Shell" in reconstruct(BASE, LIVE, hunks)
+    assert shell.cls is HunkClass.SHARED  # (guards the fixture intent)
+
+
+def _replace_changed(hunk: Hunk, changed: bool) -> Hunk:
+    from dataclasses import replace
+
+    return replace(hunk, changed=changed)
+
+
 def test_reconstruct_all_pending_equals_base() -> None:
     from setforge.reconcile.hunks import reconstruct
 

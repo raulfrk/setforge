@@ -29,13 +29,14 @@ from setforge.cli import (
     app,
 )
 from setforge.cli._help_examples import STAGE_EXAMPLES
-from setforge.cli._output import render
+from setforge.cli._output import OutputContext, render
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.locking import profile_lock
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.hunks import Hunk
+from setforge.reconcile.merge import split_lines
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.ui import THEME, Button, button_bar, pt_style
 from setforge.ui.widgets import CANCEL
@@ -62,7 +63,7 @@ QUIT: Final = _Quit()
 
 #: A per-hunk choose callback: ``(hunk, index, total) -> class | None | QUIT``
 #: (``None`` = skip/leave class unchanged).
-Choice = Callable[[Hunk, int, int], "HunkClass | None | _Quit"]
+type Choice = Callable[[Hunk, int, int], HunkClass | None | _Quit]
 
 
 def collect_stages(
@@ -141,19 +142,14 @@ def walk(
 
 def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
     """A small ±diff preview of one hunk for the button-bar body."""
-    base_lines = hunk_lines(stage.base)
-    live_lines = hunk_lines(stage.live)
+    base_lines = split_lines(stage.base)
+    live_lines = split_lines(stage.live)
     i1, i2 = hunk.base_span
     j1, j2 = hunk.live_span
     removed = [b"- " + line for line in base_lines[i1:i2]]
     added = [b"+ " + line for line in live_lines[j1:j2]]
     body = b"".join(removed + added).decode("utf-8", "replace")
     return body if len(body) <= 600 else body[:599] + "…"
-
-
-def hunk_lines(data: bytes) -> list[bytes]:
-    """Split ``data`` into terminator-keeping lines (engine line model)."""
-    return hunks_mod._split_lines(data)
 
 
 def _interactive_choice(stage: FileStage) -> Choice:
@@ -254,7 +250,7 @@ def stage(
         )
 
 
-def _render_list(ctx_obj: object, stages: list[FileStage]) -> None:
+def _render_list(ctx_obj: OutputContext | None, stages: list[FileStage]) -> None:
     """Render the read-only per-file hunk-class table."""
     data = [
         {
@@ -278,4 +274,4 @@ def _render_list(ctx_obj: object, stages: list[FileStage]) -> None:
                 f"{row['pending']} pending"
             )
 
-    render(ctx_obj, "stage", data, human_fn=_human)  # type: ignore[arg-type]
+    render(ctx_obj, "stage", data, human_fn=_human)

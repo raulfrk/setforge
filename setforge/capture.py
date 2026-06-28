@@ -200,11 +200,13 @@ def _capture_staged_plain(
     un-captures automatically. The stored ``base`` is **left unchanged** — it
     advances only on ``install`` when new upstream is fetched, so a SHARED hunk
     stays a base↔live delta and therefore stays demotable; ``local`` records the
-    full live bytes (INV-2: ``reconstruct == live``).
+    full live bytes, so the store still round-trips live verbatim (INV-2).
 
     Must run inside the caller's ``profile_lock`` (like every capture helper).
-    Returns ``None`` when the file is not staged-eligible (no recorded base, live
-    missing, or non-UTF-8) so the caller falls back to the verbatim writeback.
+    Returns ``None`` (caller falls back to the verbatim writeback) when the file
+    is not staged-eligible — no recorded base, live missing, non-UTF-8, OR no hunk
+    yet classified SHARED/LOCAL (A5 staging is opt-in per file; an unstaged file
+    keeps the legacy absorb behavior).
     """
     if not dst.exists():
         return None
@@ -231,9 +233,11 @@ def _capture_staged_plain(
         return CaptureResult(
             name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
         )
-    # INV-8: the bytes we are about to write must be exactly the shared set.
-    reconcile_hunks.assert_stage_fidelity(base, live, new_text.encode("utf-8"), hunks)
     result = _write_if_changed(src, new_text)
+    # INV-8: the bytes now ON DISK in tracked/ must be exactly the shared set
+    # (base + promoted SHARED). Read back the post-write content so this verifies
+    # the actual write, not the value we just computed.
+    reconcile_hunks.assert_stage_fidelity(base, live, src.read_bytes(), hunks)
     # Persist full live + classifications; base is UNCHANGED on sync (it advances
     # only on install). Runs unconditionally w.r.t. the tracked NOOP so a
     # classification-only change (e.g. PENDING→LOCAL) still persists.

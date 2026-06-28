@@ -83,3 +83,39 @@ def test_loads_never_writes(tmp_path, monkeypatch) -> None:
     before = set(tmp_path.rglob("*"))
     loads(dumps(Index(files={"f": FileEntry(present=True, local_hash=None, hunks=[])})))
     assert set(tmp_path.rglob("*")) == before
+
+
+# --------------------------------------------------------------------------- #
+# Hunk-row shape validation (A5 populated the previously-empty hunks field)
+# --------------------------------------------------------------------------- #
+
+_VALID_HUNK = (
+    '{"cls":"shared","label":"## Shell","live_hash":"sha256:aa","anchor":"sha256:bb"}'
+)
+
+
+def test_valid_hunk_row_round_trips() -> None:
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{_VALID_HUNK}]}}}}}}'
+    )
+    entry = loads(text).files["f"]
+    assert entry.hunks[0]["cls"] == "shared"
+
+
+@pytest.mark.parametrize(
+    "bad_hunk",
+    [
+        '"not-an-object"',
+        '{"cls":"shared","label":"x","live_hash":"sha256:aa"}',  # missing anchor
+        '{"cls":"shared","label":"x","live_hash":123,"anchor":"sha256:bb"}',  # non-str
+        '{"cls":"bogus","label":"x","live_hash":"sha256:aa","anchor":"sha256:bb"}',
+    ],
+)
+def test_malformed_hunk_row_is_corrupt(bad_hunk: str) -> None:
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{bad_hunk}]}}}}}}'
+    )
+    with pytest.raises(CorruptIndexError):
+        loads(text)
