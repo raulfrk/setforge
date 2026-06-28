@@ -95,6 +95,10 @@ class DriftClass(StrEnum):
 
 _STALE_REASON = "tracked advanced since last install — install will update"
 
+_STAGED_REASON = (
+    "staged: tracked holds exactly the shared set; local edits kept host-only"
+)
+
 _CLOBBER_REASON = (
     "span edits present but no stored base — first install would "
     "overwrite; run sync first"
@@ -803,6 +807,20 @@ def _classify_drifted(
     # disposition, or drift confined to pinned/forked spans).
     if entry.drift_is_expected:
         return DriftClass.EXPECTED, None, []
+    # Slot 4b — EXPECTED: a reconcile-staged plain file (A5/A5c) whose tracked
+    # holds EXACTLY the promoted set (INV-8 over base+live+hunks+drafts). The
+    # live↔tracked diff is then the expected staging divergence — host-only
+    # LOCAL/PENDING hunks and the host-specific side of a SHARED_DRAFTED hunk —
+    # never unsynced drift. If tracked carries anything the promoted set does not
+    # explain, INV-8 fails and the file falls through to UNEXPECTED below.
+    if (
+        probe_stale
+        and profile is not None
+        and tracked_file is not None
+        and tracked_file.disposition is None
+        and _reconcile_staged_expected(profile, entry.name, src, dst)
+    ):
+        return DriftClass.EXPECTED, _STAGED_REASON, []
     # Slot 5 — UNEXPECTED: drift nothing above explains.
     return DriftClass.UNEXPECTED, None, []
 
@@ -942,6 +960,50 @@ def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
     except OSError:
         return False
     return live == base and tracked != base
+
+
+def _reconcile_staged_expected(
+    profile: str, file_id_str: str, src: Path, dst: Path
+) -> bool:
+    """True when a reconcile-staged plain file's tracked holds exactly the
+    promoted set — so its live↔tracked diff is the expected staging divergence.
+
+    Reconstructs the expected tracked content from ``base`` + the recorded
+    classifications + the drafts manifest and asserts INV-8 against the on-disk
+    tracked bytes. Returns ``False`` (→ the entry classifies as real/unexpected
+    drift) when the file is not reconcile-staged (no base, or no classified
+    hunks) OR when INV-8 fails (tracked carries something the promoted set does
+    not explain — e.g. a hand-edit of tracked). Crash-free, mirroring
+    :func:`_is_stale`: any store / filesystem / decode error degrades to
+    ``False`` so the read-only compare never raises.
+    """
+    from setforge.errors import InvariantViolation, ReconcileStoreError
+    from setforge.reconcile import hunks as reconcile_hunks
+    from setforge.reconcile import store as reconcile_store
+    from setforge.reconcile.types import file_id as make_file_id
+
+    try:
+        fid = make_file_id(file_id_str)
+        base = reconcile_store.read_base(profile, fid)
+        if base is None:
+            return False
+        entry = reconcile_store.read_index(profile).files.get(file_id_str)
+        if entry is None or not entry.hunks:
+            return False  # not A5-staged → not this slot's case
+        live = dst.read_bytes()
+        tracked = src.read_bytes()
+        base.decode("utf-8")
+        live.decode("utf-8")  # text-only staging
+        hunks = reconcile_hunks.classify(
+            reconcile_hunks.extract_hunks(base, live), entry.hunks
+        )
+        drafts = reconcile_store.read_drafts(profile, fid)
+        reconcile_hunks.assert_stage_fidelity(base, live, tracked, hunks, drafts)
+        return True
+    except InvariantViolation:
+        return False  # INV-8 failed → tracked is NOT the promoted set → real drift
+    except (ReconcileStoreError, OSError, UnicodeDecodeError, ValueError):
+        return False  # degrade like _is_stale — never raise in read-only compare
 
 
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
