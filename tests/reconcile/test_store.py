@@ -122,11 +122,18 @@ def test_read_index_corrupt_raises(tmp_state: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _record_locked(profile: str, fid, *, base: bytes, local: bytes | Absent) -> None:
+def _record_locked(
+    profile: str,
+    fid,
+    *,
+    base: bytes,
+    local: bytes | Absent,
+    hunks: list[dict[str, object]] | None = None,
+) -> None:
     from setforge import locking
 
     with locking.profile_lock(profile):
-        store.record(profile, fid, base=base, local=local)
+        store.record(profile, fid, base=base, local=local, hunks=hunks)
 
 
 def test_reconstruct_is_local(tmp_state: Path) -> None:
@@ -252,6 +259,37 @@ def test_record_and_prune_do_not_take_lock(
     store.record("p", file_id("f"), base=b"B", local=b"L")
     store.prune("p", {file_id("f")})
     assert taken == []
+
+
+_HUNK: dict[str, object] = {
+    "cls": "shared",
+    "label": "## Shell",
+    "live_hash": "sha256:aa",
+    "anchor": "sha256:bb",
+}
+
+
+def test_record_with_no_hunks_preserves_existing(tmp_state: Path) -> None:
+    # A5 staging records a classification; a later install writeback through
+    # record() (hunks=None) must NOT flatten it away.
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"L", hunks=[_HUNK])
+    assert store.read_index("p").files["f"].hunks == [_HUNK]
+    _record_locked("p", fid, base=b"B2", local=b"L2")  # install-style: no hunks
+    assert store.read_index("p").files["f"].hunks == [_HUNK]  # preserved
+
+
+def test_record_with_explicit_hunks_overwrites(tmp_state: Path) -> None:
+    fid = file_id("f")
+    _record_locked("p", fid, base=b"B", local=b"L", hunks=[_HUNK])
+    other = {**_HUNK, "cls": "local"}
+    _record_locked("p", fid, base=b"B", local=b"L", hunks=[other])
+    assert store.read_index("p").files["f"].hunks == [other]
+
+
+def test_record_first_time_seeds_empty_hunks(tmp_state: Path) -> None:
+    _record_locked("p", file_id("f"), base=b"B", local=b"L")  # no prior entry
+    assert store.read_index("p").files["f"].hunks == []
 
 
 def test_prune_removes_unlisted_keeps_listed(tmp_state: Path) -> None:

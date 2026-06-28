@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from setforge import atomicio, base_store
 from setforge.errors import (
@@ -321,11 +322,24 @@ def _on_disk_file_ids(profile: str) -> set[FileId]:
 # --------------------------------------------------------------------------- #
 
 
-def record(profile: str, fid: FileId, *, base: bytes, local: bytes | Absent) -> None:
+def record(
+    profile: str,
+    fid: FileId,
+    *,
+    base: bytes,
+    local: bytes | Absent,
+    hunks: list[dict[str, Any]] | None = None,
+) -> None:
     """Record a base + local + index triple for ``fid``. Call inside ``profile_lock``.
 
     Writes the index entry **last** so a crash leaves a prunable orphan base
     rather than an index pointing at content that was never written.
+
+    ``hunks`` is the A5 per-hunk classification list. When ``None`` (the default,
+    used by the non-staging ``install`` writeback) the existing entry's hunks are
+    **preserved** — so a re-baseline never silently flattens a host's staged
+    classifications. An explicit list overwrites them (the ``sync`` staging path
+    passes a freshly-classified set).
     """
     write_base(profile, fid, base)
     write_local(profile, fid, local)
@@ -333,7 +347,10 @@ def record(profile: str, fid: FileId, *, base: bytes, local: bytes | Absent) -> 
     local_hash = _sha(local) if isinstance(local, bytes) else None
     index = read_index(profile)
     files = dict(index.files)
-    files[str(fid)] = FileEntry(present=present, local_hash=local_hash, hunks=[])
+    if hunks is None:
+        prior = files.get(str(fid))
+        hunks = list(prior.hunks) if prior is not None else []
+    files[str(fid)] = FileEntry(present=present, local_hash=local_hash, hunks=hunks)
     write_index(profile, Index(files=files))
 
 
