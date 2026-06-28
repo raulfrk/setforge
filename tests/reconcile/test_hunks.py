@@ -7,7 +7,11 @@ shared-promotion, and the INV-8 stage-fidelity assertion.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from setforge.errors import InvariantViolation
 from setforge.reconcile.hunks import (
@@ -242,6 +246,27 @@ def test_fidelity_raises_when_local_bytes_leak_into_tracked() -> None:
     leaked = LIVE  # tracked == full live → a LOCAL hunk leaked
     with pytest.raises(InvariantViolation, match="INV-8"):
         assert_stage_fidelity(BASE, LIVE, leaked, hunks)
+
+
+# --------------------------------------------------------------------------- #
+# reconstruct — property tests (random base/live, any bytes)
+# --------------------------------------------------------------------------- #
+
+
+@given(base=st.binary(max_size=48), live=st.binary(max_size=48))
+def test_property_all_shared_reconstructs_live(base: bytes, live: bytes) -> None:
+    from setforge.reconcile.hunks import reconstruct
+
+    hunks = [replace(h, cls=HunkClass.SHARED) for h in extract_hunks(base, live)]
+    assert reconstruct(base, live, hunks) == live  # promoting every hunk == live
+
+
+@given(base=st.binary(max_size=48), live=st.binary(max_size=48))
+def test_property_all_pending_reconstructs_base(base: bytes, live: bytes) -> None:
+    from setforge.reconcile.hunks import reconstruct
+
+    hunks = extract_hunks(base, live)  # all PENDING (the extract default)
+    assert reconstruct(base, live, hunks) == base  # promoting nothing == base
 
 
 def test_serialize_drops_transient_spans() -> None:

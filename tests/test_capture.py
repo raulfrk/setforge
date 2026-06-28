@@ -212,6 +212,37 @@ def test_unstaged_file_falls_back_to_legacy_absorb(
     assert store.read_base("p", fid) == _A5_BASE
 
 
+def test_staged_capture_changed_shared_held_local_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Editing a previously-SHARED hunk's content must NOT auto-promote the drift
+    # into tracked/ (the security fix), AND must warn so the now-un-shared hunk
+    # is not a silent surprise.
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    drifted = _A5_LIVE.replace(b"Prefer zsh.", b"Prefer fish.")
+    _write(src, _A5_BASE.decode())  # tracked currently == base
+    _write(dst, drifted.decode())  # live's Shell content has drifted since staging
+
+    fid = file_id("CLAUDE.md")
+    # staged the ORIGINAL Shell content as SHARED (its live_hash != the drift's).
+    _stage_index("p", fid, _A5_BASE, _A5_LIVE, {"## Shell": HunkClass.SHARED})
+
+    results = capture_profile(
+        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+
+    out = src.read_bytes()
+    assert b"## Shell" not in out  # changed-SHARED held at base, not promoted
+    assert b"Prefer fish." not in out  # the drifted bytes never reached tracked
+    (result,) = [r for r in results if r.name == "CLAUDE.md"]
+    assert any("re-confirm" in w for w in result.warnings)
+
+
 def test_staged_capture_pending_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

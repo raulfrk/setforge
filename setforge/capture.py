@@ -248,13 +248,21 @@ def _capture_staged_plain(
         local=live,
         hunks=reconcile_hunks.serialize(hunks),
     )
-    warnings: tuple[str, ...] = ()
+    warnings: list[str] = []
     if any(hunk.cls is HunkClass.PENDING for hunk in hunks):
-        warnings = (
+        warnings.append(
             f"{src.name}: unstaged local changes kept host-only — run "
-            f"`setforge stage {src.name}` to share any of them",
+            f"`setforge stage {src.name}` to share any of them"
         )
-    return CaptureResult(name=sub_name, action=result.action, warnings=warnings)
+    # A previously-classified hunk whose content drifted is held at base (NOT
+    # auto-promoted, NOT silently kept) — tell the host so a shared hunk that
+    # just dropped out of tracked/ is not a surprise.
+    if any(hunk.changed for hunk in hunks):
+        warnings.append(
+            f"{src.name}: a previously-staged hunk changed and was kept host-only "
+            f"— re-run `setforge stage {src.name}` to re-confirm it"
+        )
+    return CaptureResult(name=sub_name, action=result.action, warnings=tuple(warnings))
 
 
 def _classify_live(
