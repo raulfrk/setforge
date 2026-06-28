@@ -181,7 +181,7 @@ def test_reconstruct_promotes_only_shared() -> None:
     hunks = _stage(
         BASE, LIVE, {"## Shell": HunkClass.SHARED, "## Host paths": HunkClass.LOCAL}
     )
-    tracked = reconstruct(BASE, LIVE, hunks)
+    tracked = reconstruct(BASE, LIVE, hunks, {})
     assert b"## Shell" in tracked  # SHARED promoted
     assert b"Prefer zsh." in tracked
     assert b"workdir: /home/generic" in tracked  # LOCAL kept base, NOT live
@@ -197,10 +197,10 @@ def test_reconstruct_does_not_promote_a_changed_shared_hunk() -> None:
     hunks = _stage(BASE, LIVE, {"## Shell": HunkClass.SHARED})
     shell = next(h for h in hunks if h.label == "## Shell")
     changed = [h if h.label != "## Shell" else _replace_changed(h, True) for h in hunks]
-    out = reconstruct(BASE, LIVE, changed)
+    out = reconstruct(BASE, LIVE, changed, {})
     assert b"## Shell" not in out  # changed-SHARED held at base, not promoted
     # sanity: the same hunk without the changed flag DOES promote
-    assert b"## Shell" in reconstruct(BASE, LIVE, hunks)
+    assert b"## Shell" in reconstruct(BASE, LIVE, hunks, {})
     assert shell.cls is HunkClass.SHARED  # (guards the fixture intent)
 
 
@@ -214,16 +214,16 @@ def test_reconstruct_all_pending_equals_base() -> None:
     from setforge.reconcile.hunks import reconstruct
 
     hunks = _stage(BASE, LIVE, {})  # all PENDING
-    assert reconstruct(BASE, LIVE, hunks) == BASE
+    assert reconstruct(BASE, LIVE, hunks, {}) == BASE
 
 
 def test_reconstruct_demote_reverts_region_to_base() -> None:
     from setforge.reconcile.hunks import reconstruct
 
     shared = _stage(BASE, LIVE, {"## Host paths": HunkClass.SHARED})
-    assert b"workdir: /home/raul" in reconstruct(BASE, LIVE, shared)
+    assert b"workdir: /home/raul" in reconstruct(BASE, LIVE, shared, {})
     demoted = _stage(BASE, LIVE, {"## Host paths": HunkClass.LOCAL})
-    out = reconstruct(BASE, LIVE, demoted)
+    out = reconstruct(BASE, LIVE, demoted, {})
     assert b"workdir: /home/raul" not in out  # demote un-captures
     assert b"workdir: /home/generic" in out
 
@@ -237,15 +237,15 @@ def test_fidelity_passes_for_correct_tracked() -> None:
     from setforge.reconcile.hunks import reconstruct
 
     hunks = _stage(BASE, LIVE, {"## Shell": HunkClass.SHARED})
-    tracked = reconstruct(BASE, LIVE, hunks)
-    assert_stage_fidelity(BASE, LIVE, tracked, hunks)  # no raise
+    tracked = reconstruct(BASE, LIVE, hunks, {})
+    assert_stage_fidelity(BASE, LIVE, tracked, hunks, {})  # no raise
 
 
 def test_fidelity_raises_when_local_bytes_leak_into_tracked() -> None:
     hunks = _stage(BASE, LIVE, {"## Host paths": HunkClass.LOCAL})
     leaked = LIVE  # tracked == full live → a LOCAL hunk leaked
     with pytest.raises(InvariantViolation, match="INV-8"):
-        assert_stage_fidelity(BASE, LIVE, leaked, hunks)
+        assert_stage_fidelity(BASE, LIVE, leaked, hunks, {})
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +258,7 @@ def test_property_all_shared_reconstructs_live(base: bytes, live: bytes) -> None
     from setforge.reconcile.hunks import reconstruct
 
     hunks = [replace(h, cls=HunkClass.SHARED) for h in extract_hunks(base, live)]
-    assert reconstruct(base, live, hunks) == live  # promoting every hunk == live
+    assert reconstruct(base, live, hunks, {}) == live  # promoting every hunk == live
 
 
 @given(base=st.binary(max_size=48), live=st.binary(max_size=48))
@@ -266,7 +266,7 @@ def test_property_all_pending_reconstructs_base(base: bytes, live: bytes) -> Non
     from setforge.reconcile.hunks import reconstruct
 
     hunks = extract_hunks(base, live)  # all PENDING (the extract default)
-    assert reconstruct(base, live, hunks) == base  # promoting nothing == base
+    assert reconstruct(base, live, hunks, {}) == base  # promoting nothing == base
 
 
 def test_serialize_drops_transient_spans() -> None:
@@ -282,3 +282,77 @@ def test_serialize_drops_transient_spans() -> None:
         for h in hunks
     ]
     assert all("base_span" not in row and "live_span" not in row for row in rows)
+    # a non-drafted hunk omits draft_hash (rows stay byte-stable).
+    assert all("draft_hash" not in row for row in rows)
+
+
+# --------------------------------------------------------------------------- #
+# A5c: SHARED_DRAFTED carries draft_hash through serialize + classify
+# --------------------------------------------------------------------------- #
+
+
+def test_serialize_emits_draft_hash_for_shared_drafted() -> None:
+    (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\nBETA\n")
+    drafted = replace(hunk, cls=HunkClass.SHARED_DRAFTED, draft_hash="sha256:dd")
+    (row,) = serialize([drafted])
+    assert row["cls"] == "shared_drafted"
+    assert row["draft_hash"] == "sha256:dd"
+
+
+def test_classify_carries_draft_hash_for_drafted_row() -> None:
+    fresh = extract_hunks(BASE, LIVE)
+    shell = _by_label(fresh)["## Shell"]
+    stored: list[dict[str, object]] = [
+        {
+            "cls": HunkClass.SHARED_DRAFTED.value,
+            "label": shell.label,
+            "live_hash": shell.live_hash,
+            "anchor": shell.anchor,
+            "draft_hash": "sha256:dd",
+        }
+    ]
+    out = _by_label(classify(fresh, stored))["## Shell"]
+    assert out.cls is HunkClass.SHARED_DRAFTED
+    assert out.draft_hash == "sha256:dd"
+
+
+def _drafted(label: str) -> Hunk:
+    h = _by_label(extract_hunks(BASE, LIVE))[label]
+    return replace(h, cls=HunkClass.SHARED_DRAFTED, draft_hash="sha256:dd")
+
+
+def test_reconstruct_splices_draft_not_live_not_base() -> None:
+    from setforge.reconcile.hunks import reconstruct
+
+    h = _drafted("## Host paths")
+    draft = b"workdir: $HOME\n"  # the shareable rewrite
+    out = reconstruct(BASE, LIVE, [h], {h.anchor: draft})
+    assert b"workdir: $HOME" in out  # the DRAFT is promoted into tracked
+    assert b"workdir: /home/raul" not in out  # NOT live (host bytes stay local)
+    assert b"workdir: /home/generic" not in out  # NOT base
+
+
+def test_reconstruct_drafted_independent_of_live_drift() -> None:
+    # The drop regression: a SHARED_DRAFTED region must reconstruct to its draft
+    # regardless of the live bytes — a later live edit cannot drop the draft.
+    from setforge.reconcile.hunks import reconstruct
+
+    draft = b"workdir: $HOME\n"
+    live2 = LIVE.replace(b"workdir: /home/raul", b"workdir: /home/somewhere-else")
+    # rebuild the hunk against the drifted live so its spans are valid
+    h2 = replace(
+        _by_label(extract_hunks(BASE, live2))["## Host paths"],
+        cls=HunkClass.SHARED_DRAFTED,
+        draft_hash="sha256:dd",
+    )
+    out = reconstruct(BASE, live2, [h2], {h2.anchor: draft})
+    assert b"workdir: $HOME" in out
+    assert b"somewhere-else" not in out
+
+
+def test_reconstruct_missing_draft_raises() -> None:
+    from setforge.reconcile.hunks import reconstruct
+
+    h = _drafted("## Host paths")
+    with pytest.raises(InvariantViolation, match="no draft"):
+        reconstruct(BASE, LIVE, [h], {})  # dangling draft pointer → fail-closed

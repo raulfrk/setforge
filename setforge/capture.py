@@ -222,25 +222,34 @@ def _capture_staged_plain(
         return None  # text-only staging; a binary plain file stays verbatim
     hunks = _classify_live(profile, fid, base, live)
     # A5 staging is OPT-IN per file: until the host has classified at least one
-    # hunk (SHARED or LOCAL) via `setforge stage`, the file keeps the legacy
-    # capture behavior (sync absorbs live drift into tracked). Falling back here
-    # — rather than treating every unstaged hunk as PENDING-keep-local — avoids
-    # silently changing sync's behavior for files no one has staged.
-    if not any(hunk.cls in (HunkClass.SHARED, HunkClass.LOCAL) for hunk in hunks):
+    # hunk (SHARED, SHARED_DRAFTED, or LOCAL) via `setforge stage`, the file keeps
+    # the legacy capture behavior (sync absorbs live drift into tracked). Falling
+    # back here — rather than treating every unstaged hunk as PENDING-keep-local —
+    # avoids silently changing sync's behavior for files no one has staged.
+    staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)
+    if not any(hunk.cls in staged for hunk in hunks):
         return None
-    new_text = reconcile_hunks.reconstruct(base, live, hunks).decode("utf-8")
+    # The shareable-draft bytes for any SHARED_DRAFTED hunk (keyed by anchor);
+    # reconstruct splices these in place of the host-specific live bytes, so
+    # tracked gets the shareable text while live stays host-specific (the blessed
+    # divergence). Authored by `stage`, never by capture — so record() below
+    # preserves the manifest (drafts=None) rather than rewriting it.
+    drafts = reconcile_store.read_drafts(profile, fid)
+    new_text = reconcile_hunks.reconstruct(base, live, hunks, drafts).decode("utf-8")
     if _keep_tracked_refuses(auto, src, new_text):
         return CaptureResult(
             name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
         )
     result = _write_if_changed(src, new_text)
-    # INV-8: the bytes now ON DISK in tracked/ must be exactly the shared set
-    # (base + promoted SHARED). Read back the post-write content so this verifies
-    # the actual write, not the value we just computed.
-    reconcile_hunks.assert_stage_fidelity(base, live, src.read_bytes(), hunks)
+    # INV-8: the bytes now ON DISK in tracked/ must be exactly the shared/drafted
+    # set (base + promoted SHARED live + spliced SHARED_DRAFTED drafts). Read back
+    # the post-write content so this verifies the actual write, not the value we
+    # just computed.
+    reconcile_hunks.assert_stage_fidelity(base, live, src.read_bytes(), hunks, drafts)
     # Persist full live + classifications; base is UNCHANGED on sync (it advances
-    # only on install). Runs unconditionally w.r.t. the tracked NOOP so a
-    # classification-only change (e.g. PENDING→LOCAL) still persists.
+    # only on install). drafts=None preserves the stage-authored manifest. Runs
+    # unconditionally w.r.t. the tracked NOOP so a classification-only change
+    # (e.g. PENDING→LOCAL) still persists.
     reconcile_store.record(
         profile,
         fid,

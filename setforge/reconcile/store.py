@@ -30,7 +30,10 @@ never a dangling index pointer.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import json
 from pathlib import Path
 
 from setforge import atomicio, base_store
@@ -43,7 +46,7 @@ from setforge.errors import (
 )
 from setforge.reconcile import index_model
 from setforge.reconcile.index_model import FileEntry, Index
-from setforge.reconcile.types import ABSENT, Absent, FileId, file_id
+from setforge.reconcile.types import ABSENT, Absent, FileId, HunkClass, file_id
 from setforge.transitions import state_root
 
 _DIR_MODE = 0o700
@@ -52,12 +55,14 @@ _FILE_MODE = 0o600
 __all__ = [
     "prune",
     "read_base",
+    "read_drafts",
     "read_index",
     "read_local",
     "reconstruct",
     "record",
     "verify",
     "write_base",
+    "write_drafts",
     "write_index",
     "write_local",
 ]
@@ -196,6 +201,83 @@ def write_local(profile: str, fid: FileId, data: bytes | Absent) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# drafts/ — A5c shareable-draft bytes (per-fid manifest: anchor → bytes)
+# --------------------------------------------------------------------------- #
+
+
+def _drafts_path(profile: str, fid: FileId) -> Path:
+    """Resolve the per-fid drafts manifest path, guarding traversal (like local/)."""
+    return _resolve(_drafts_root(), profile, str(fid))
+
+
+def _drafts_root() -> Path:
+    return state_root() / "drafts"
+
+
+def read_drafts(profile: str, fid: FileId) -> dict[str, bytes]:
+    """Return the shareable-draft bytes for ``fid``, keyed by hunk ``anchor``.
+
+    Empty dict when nothing is recorded. The on-disk manifest is a JSON object
+    mapping ``anchor`` → base64 draft bytes; each drafted hunk's ``draft_hash`` is
+    recorded in the index, but the bytes themselves live here (the index stays
+    pure metadata). Fail-closed: a damaged manifest raises rather than silently
+    dropping a blessed draft.
+    """
+    path = _drafts_path(profile, fid)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as err:
+        raise ReconcileStoreError(
+            f"failed to read drafts for {profile}/{fid}: {err}"
+        ) from err
+    try:
+        obj = json.loads(text)
+        if not isinstance(obj, dict):
+            raise ValueError("drafts manifest top level must be an object")
+        return {
+            str(anchor): base64.b64decode(str(b64), validate=True)
+            for anchor, b64 in obj.items()
+        }
+    except (ValueError, json.JSONDecodeError, binascii.Error) as err:
+        raise ReconcileStoreError(
+            f"drafts manifest for {profile}/{fid} is corrupt: {err}"
+        ) from err
+
+
+def write_drafts(profile: str, fid: FileId, drafts: dict[str, bytes]) -> None:
+    """Record ``drafts`` (anchor → bytes) for ``fid``. Call inside ``profile_lock``.
+
+    An empty mapping removes the manifest (no drafted hunks remain). Written
+    BEFORE the index in :func:`record` so a crash leaves a prunable orphan
+    manifest, never an index row pointing at a draft that was never stored.
+    """
+    path = _drafts_path(profile, fid)
+    try:
+        if not drafts:
+            path.unlink(missing_ok=True)
+            return
+        obj = {
+            anchor: base64.b64encode(data).decode("ascii")
+            for anchor, data in drafts.items()
+        }
+        _mkdir_secure(path.parent)
+        atomicio.atomic_write_text(
+            path,
+            json.dumps(
+                obj, allow_nan=False, indent=2, sort_keys=True, ensure_ascii=True
+            )
+            + "\n",
+            mode=_FILE_MODE,
+        )
+    except OSError as err:
+        raise ReconcileStoreError(
+            f"failed to write drafts for {profile}/{fid}: {err}"
+        ) from err
+
+
+# --------------------------------------------------------------------------- #
 # index/ — per-profile JSON document
 # --------------------------------------------------------------------------- #
 
@@ -285,6 +367,7 @@ def _verify_one(profile: str, fid: FileId, entry: FileEntry | None) -> None:
             raise InvariantViolation(
                 f"INV-10: {profile}/{fid} has local content with no index entry"
             )
+        _verify_drafts(profile, fid, entry)  # catch an orphan drafts manifest too
         return
     if not on_disk:
         raise InvariantViolation(
@@ -302,12 +385,45 @@ def _verify_one(profile: str, fid: FileId, entry: FileEntry | None) -> None:
             raise InvariantViolation(
                 f"INV-2: {profile}/{fid} local bytes do not match recorded hash"
             )
+    _verify_drafts(profile, fid, entry)
+
+
+def _verify_drafts(profile: str, fid: FileId, entry: FileEntry | None) -> None:
+    """INV-10/INV-2 analog for the drafts store: the manifest's anchors must equal
+    the entry's ``SHARED_DRAFTED`` hunk anchors, and each draft's bytes must hash
+    to that hunk's recorded ``draft_hash`` — so an orphan draft, a missing draft
+    for a drafted row, or a tampered draft is caught fail-closed.
+    """
+    drafted = {
+        str(row["anchor"]): str(row["draft_hash"])
+        for row in (entry.hunks if entry is not None else [])
+        if row.get("cls") == HunkClass.SHARED_DRAFTED.value
+    }
+    manifest = read_drafts(profile, fid)
+    if set(manifest) != set(drafted):
+        raise InvariantViolation(
+            f"INV-10: {profile}/{fid} drafts manifest anchors do not match the "
+            f"SHARED_DRAFTED hunk set"
+        )
+    for anchor, data in manifest.items():
+        if _sha(data) != drafted[anchor]:
+            raise InvariantViolation(
+                f"INV-2: {profile}/{fid} draft bytes for {anchor} do not match the "
+                f"recorded draft_hash"
+            )
 
 
 def _on_disk_file_ids(profile: str) -> set[FileId]:
-    """Every file-id with a recorded local content file or absence marker."""
+    """Every file-id with a recorded local content file, absence marker, or drafts
+    manifest — so :func:`verify` catches an orphan draft (manifest with no index
+    entry) too, not just an orphan local file.
+    """
     found: set[FileId] = set()
-    for root in (_local_root() / profile, _local_absent_root() / profile):
+    for root in (
+        _local_root() / profile,
+        _local_absent_root() / profile,
+        _drafts_root() / profile,
+    ):
         if not root.is_dir():
             continue
         for path in root.rglob("*"):
@@ -328,20 +444,26 @@ def record(
     base: bytes,
     local: bytes | Absent,
     hunks: list[dict[str, object]] | None = None,
+    drafts: dict[str, bytes] | None = None,
 ) -> None:
-    """Record a base + local + index triple for ``fid``. Call inside ``profile_lock``.
+    """Record a base+local+drafts+index quad for ``fid``. Call inside ``profile_lock``.
 
-    Writes the index entry **last** so a crash leaves a prunable orphan base
-    rather than an index pointing at content that was never written.
+    Writes the index entry **last** (after base, local, AND the drafts manifest)
+    so a crash leaves a prunable orphan rather than an index pointing at content
+    or a draft that was never written.
 
-    ``hunks`` is the A5 per-hunk classification list. When ``None`` (the default,
-    used by the non-staging ``install`` writeback) the existing entry's hunks are
-    **preserved** — so a re-baseline never silently flattens a host's staged
-    classifications. An explicit list overwrites them (the ``sync`` staging path
-    passes a freshly-classified set).
+    ``hunks`` is the A5 per-hunk classification list; ``drafts`` is the A5c
+    anchor→draft-bytes mapping for any ``SHARED_DRAFTED`` hunks. When either is
+    ``None`` (the default, used by the non-staging ``install`` writeback) the
+    existing entry's hunks / on-disk drafts are **preserved** — so a re-baseline
+    never silently flattens a host's staged classifications or blessed drafts. An
+    explicit ``hunks`` list overwrites them, and an explicit ``drafts`` mapping
+    (the ``sync`` staging path) rewrites the manifest (empty ⇒ removed).
     """
     write_base(profile, fid, base)
     write_local(profile, fid, local)
+    if drafts is not None:
+        write_drafts(profile, fid, drafts)
     present = local is not ABSENT
     local_hash = _sha(local) if isinstance(local, bytes) else None
     index = read_index(profile)
@@ -358,8 +480,12 @@ def prune(profile: str, live_fids: set[FileId]) -> None:
     ``profile_lock``. Never removes a listed file-id.
     """
     live_str = {str(f) for f in live_fids}
-    # local content + absence-marker trees
-    for root in (_local_root() / profile, _local_absent_root() / profile):
+    # local content + absence-marker trees + drafts manifests
+    for root in (
+        _local_root() / profile,
+        _local_absent_root() / profile,
+        _drafts_root() / profile,
+    ):
         if not root.is_dir():
             continue
         for path in root.rglob("*"):

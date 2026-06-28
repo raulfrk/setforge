@@ -119,3 +119,50 @@ def test_malformed_hunk_row_is_corrupt(bad_hunk: str) -> None:
     )
     with pytest.raises(CorruptIndexError):
         loads(text)
+
+
+# --------------------------------------------------------------------------- #
+# A5c: the shared_drafted class + its draft_hash
+# --------------------------------------------------------------------------- #
+
+_DRAFTED_HUNK = (
+    '{"cls":"shared_drafted","label":"## Worktrees","live_hash":"sha256:aa",'
+    '"anchor":"sha256:bb","draft_hash":"sha256:cc"}'
+)
+
+
+def test_shared_drafted_row_round_trips() -> None:
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{_DRAFTED_HUNK}]}}}}}}'
+    )
+    entry = loads(text).files["f"]
+    assert entry.hunks[0]["cls"] == "shared_drafted"
+    assert entry.hunks[0]["draft_hash"] == "sha256:cc"
+
+
+def test_shared_drafted_without_draft_hash_is_corrupt() -> None:
+    # a drafted row must carry the draft_hash its reconstruction keys on.
+    bad = (
+        '{"cls":"shared_drafted","label":"x","live_hash":"sha256:aa",'
+        '"anchor":"sha256:bb"}'
+    )
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{bad}]}}}}}}'
+    )
+    with pytest.raises(CorruptIndexError):
+        loads(text)
+
+
+def test_non_string_draft_hash_is_corrupt() -> None:
+    bad = (
+        '{"cls":"shared","label":"x","live_hash":"sha256:aa","anchor":"sha256:bb",'
+        '"draft_hash":123}'
+    )
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{bad}]}}}}}}'
+    )
+    with pytest.raises(CorruptIndexError):
+        loads(text)

@@ -153,7 +153,7 @@ _HUNK_ROW_KEYS: Final = ("cls", "label", "live_hash", "anchor")
 #: Valid ``cls`` values — the :class:`~setforge.reconcile.types.HunkClass` value set.
 #: Inlined (not imported) to keep this codec a leaf with no dependency on the
 #: staging layer; the values are a frozen part of the on-disk schema.
-_HUNK_CLASSES: Final = frozenset({"local", "shared", "pending"})
+_HUNK_CLASSES: Final = frozenset({"local", "shared", "pending", "shared_drafted"})
 
 
 def _check_hunk_row(fid: str, row: object) -> None:
@@ -163,6 +163,10 @@ def _check_hunk_row(fid: str, row: object) -> None:
     cover it too: a hand-edited index with a malformed row must raise
     :class:`~setforge.errors.CorruptIndexError`, never let a partial dict reach
     the staging layer as an unwrapped ``KeyError`` / ``ValueError``.
+
+    A ``shared_drafted`` row additionally carries a ``draft_hash`` (string) — the
+    identity of its shareable draft; the codec requires it so a drafted row can
+    never reach the staging layer without the key its reconstruction keys on.
     """
     if not isinstance(row, dict):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
@@ -175,4 +179,15 @@ def _check_hunk_row(fid: str, row: object) -> None:
     if row["cls"] not in _HUNK_CLASSES:
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with an unknown cls {row['cls']!r}"
+        )
+    draft_hash = row.get("draft_hash")
+    if row["cls"] == "shared_drafted":
+        if not isinstance(draft_hash, str):
+            raise CorruptIndexError(
+                f"index entry for {fid!r} has a 'shared_drafted' hunk row with a "
+                f"missing/non-string 'draft_hash'"
+            )
+    elif draft_hash is not None and not isinstance(draft_hash, str):
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a hunk row with a non-string 'draft_hash'"
         )

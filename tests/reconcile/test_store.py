@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from setforge.errors import CorruptIndexError, InvariantViolation, UnsafeFileId
+from setforge.errors import (
+    CorruptIndexError,
+    InvariantViolation,
+    ReconcileStoreError,
+    UnsafeFileId,
+)
 from setforge.reconcile import store
-from setforge.reconcile.types import ABSENT, Absent, file_id
+from setforge.reconcile.types import ABSENT, Absent, HunkClass, file_id
 
 # --------------------------------------------------------------------------- #
 # Resolver (Task 4)
@@ -72,6 +77,113 @@ def test_absent_then_content_clears_marker(tmp_state: Path) -> None:
     store.write_local("p", fid, ABSENT)
     store.write_local("p", fid, b"now here")
     assert store.read_local("p", fid) == b"now here"
+
+
+# --------------------------------------------------------------------------- #
+# drafts/ store (A5c)
+# --------------------------------------------------------------------------- #
+
+
+def test_drafts_round_trip(tmp_state: Path) -> None:
+    fid = file_id("claude/CLAUDE.md")
+    drafts = {"sha256:aa": b"Land them in ~/projects/wt/.\n", "sha256:bb": b"other"}
+    store.write_drafts("p", fid, drafts)
+    assert store.read_drafts("p", fid) == drafts
+
+
+def test_drafts_verbatim_bytes(tmp_state: Path) -> None:
+    fid = file_id("f")
+    data = (
+        b"a\r\nb\x00c"  # CRLF + NUL, no trailing newline — survives base64 round-trip
+    )
+    store.write_drafts("p", fid, {"sha256:aa": data})
+    assert store.read_drafts("p", fid)["sha256:aa"] == data
+
+
+def test_drafts_absent_is_empty(tmp_state: Path) -> None:
+    assert store.read_drafts("p", file_id("f")) == {}
+
+
+def test_drafts_empty_removes_manifest(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store.write_drafts("p", fid, {})  # demote: no drafted hunks remain
+    assert store.read_drafts("p", fid) == {}
+    assert not store._drafts_path("p", fid).exists()
+
+
+def test_drafts_perms(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    path = store._drafts_path("p", fid)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o077 == 0
+
+
+def test_drafts_corrupt_manifest_raises(tmp_state: Path) -> None:
+    fid = file_id("f")
+    store.write_drafts("p", fid, {"sha256:aa": b"x"})
+    store._drafts_path("p", fid).write_text("{not json", encoding="utf-8")
+    with pytest.raises(ReconcileStoreError):
+        store.read_drafts("p", fid)
+
+
+def _drafted_row(anchor: str, draft: bytes) -> dict[str, object]:
+    return {
+        "cls": HunkClass.SHARED_DRAFTED.value,
+        "label": "## Worktrees",
+        "live_hash": "sha256:live",
+        "anchor": anchor,
+        "draft_hash": store._sha(draft),
+    }
+
+
+def test_record_writes_drafts_and_verifies(tmp_state: Path) -> None:
+    fid = file_id("f")
+    draft = b"Land them in ~/projects/wt/.\n"
+    store.record(
+        "p",
+        fid,
+        base=b"base\n",
+        local=b"live\n",
+        hunks=[_drafted_row("sha256:aa", draft)],
+        drafts={"sha256:aa": draft},
+    )
+    assert store.read_drafts("p", fid) == {"sha256:aa": draft}
+    store.verify("p", fid)  # no raise: manifest matches the SHARED_DRAFTED hunk
+
+
+def test_verify_orphan_draft_raises(tmp_state: Path) -> None:
+    # a drafts manifest with an anchor that no SHARED_DRAFTED hunk claims.
+    fid = file_id("f")
+    store.record("p", fid, base=b"b", local=b"l", hunks=[], drafts={"sha256:aa": b"x"})
+    with pytest.raises(InvariantViolation, match="INV-10"):
+        store.verify("p", fid)
+
+
+def test_verify_missing_draft_for_drafted_row_raises(tmp_state: Path) -> None:
+    # an index SHARED_DRAFTED row with no draft blob (the torn-restore failure).
+    fid = file_id("f")
+    store.record(
+        "p",
+        fid,
+        base=b"b",
+        local=b"l",
+        hunks=[_drafted_row("sha256:aa", b"x")],
+        drafts={},
+    )
+    with pytest.raises(InvariantViolation, match="INV-10"):
+        store.verify("p", fid)
+
+
+def test_verify_draft_hash_mismatch_raises(tmp_state: Path) -> None:
+    fid = file_id("f")
+    row = _drafted_row("sha256:aa", b"correct")
+    store.record(
+        "p", fid, base=b"b", local=b"l", hunks=[row], drafts={"sha256:aa": b"TAMPERED"}
+    )
+    with pytest.raises(InvariantViolation, match="INV-2"):
+        store.verify("p", fid)
 
 
 def test_base_passthrough(tmp_state: Path) -> None:

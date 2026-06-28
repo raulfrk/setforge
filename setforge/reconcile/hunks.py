@@ -44,10 +44,14 @@ class Hunk:
     ``cls`` is the staging classification; ``label`` is the human handle shown in
     the ``stage`` walk; ``live_hash`` is the sha256 of the EOL-normalised live
     side and ``anchor`` the sha256 of the surrounding base context — together the
-    stable identity. ``changed`` is a transient display flag: an anchor-stable
-    hunk whose live bytes changed since it was classified (keeps its class but is
-    surfaced for re-confirm). ``base_span`` / ``live_span`` are transient line
-    ranges, recomputed every run and never persisted.
+    stable identity. ``draft_hash`` is the sha256 of the shareable draft bytes,
+    set **only** for a ``SHARED_DRAFTED`` hunk (the draft bytes themselves live in
+    the ``drafts/`` store, never here — the index stays pure metadata); it is the
+    identity key for a drafted hunk so a blessed ``live != tracked`` divergence is
+    not re-flagged as drift. ``changed`` is a transient display flag: an
+    anchor-stable hunk whose live bytes changed since it was classified (keeps its
+    class but is surfaced for re-confirm). ``base_span`` / ``live_span`` are
+    transient line ranges, recomputed every run and never persisted.
     """
 
     cls: HunkClass
@@ -57,6 +61,7 @@ class Hunk:
     base_span: tuple[int, int]
     live_span: tuple[int, int]
     changed: bool = False
+    draft_hash: str | None = None
 
 
 def _sha(data: bytes) -> str:
@@ -152,17 +157,37 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     for hunk in fresh:
         exact = by_identity.get(identity(hunk))
         if exact is not None:
-            out.append(_with(hunk, cls=HunkClass(str(exact["cls"])), changed=False))
+            out.append(
+                _with(
+                    hunk,
+                    cls=HunkClass(str(exact["cls"])),
+                    changed=False,
+                    draft_hash=_row_draft_hash(exact),
+                )
+            )
             continue
         moved = by_anchor.get(hunk.anchor)
         if moved is not None:
-            out.append(_with(hunk, cls=HunkClass(str(moved["cls"])), changed=True))
+            out.append(
+                _with(
+                    hunk,
+                    cls=HunkClass(str(moved["cls"])),
+                    changed=True,
+                    draft_hash=_row_draft_hash(moved),
+                )
+            )
             continue
         out.append(hunk)  # unmatched → PENDING (the extract default)
     return out
 
 
-def _with(hunk: Hunk, *, cls: HunkClass, changed: bool) -> Hunk:
+def _row_draft_hash(row: dict[str, object]) -> str | None:
+    """The row's ``draft_hash`` (set on a ``SHARED_DRAFTED`` row), else ``None``."""
+    value = row.get("draft_hash")
+    return str(value) if isinstance(value, str) else None
+
+
+def _with(hunk: Hunk, *, cls: HunkClass, changed: bool, draft_hash: str | None) -> Hunk:
     return Hunk(
         cls=cls,
         label=hunk.label,
@@ -171,17 +196,31 @@ def _with(hunk: Hunk, *, cls: HunkClass, changed: bool) -> Hunk:
         base_span=hunk.base_span,
         live_span=hunk.live_span,
         changed=changed,
+        draft_hash=draft_hash,
     )
 
 
-def reconstruct(base: bytes, live: bytes, hunks: list[Hunk]) -> bytes:
-    """Rebuild the tracked content: ``base`` with only exact-identity SHARED
-    hunks promoted (see :func:`_promotes`).
+def reconstruct(
+    base: bytes, live: bytes, hunks: list[Hunk], drafts: dict[str, bytes]
+) -> bytes:
+    """Rebuild the tracked content from ``base`` with each promoted region spliced.
 
     ``hunks`` must be freshly extracted against this ``base``/``live`` pair (their
-    spans index the current line arrays). A SHARED hunk that is not ``changed``
-    takes its live bytes; every LOCAL / PENDING / ``changed`` region keeps its
-    base bytes. EQUAL regions (not in ``hunks``) always pass through from base.
+    spans index the current line arrays). Per region:
+
+    * a non-``changed`` ``SHARED`` hunk (incl. an *adopted* draft) takes its
+      **live** bytes (see :func:`_promotes`);
+    * a non-``changed`` ``SHARED_DRAFTED`` hunk takes its **draft** bytes from
+      ``drafts`` keyed by the hunk's ``anchor`` — NOT live (which stays
+      host-specific) and NOT base. A ``SHARED_DRAFTED`` hunk whose draft is
+      missing from ``drafts`` raises :class:`~setforge.errors.InvariantViolation`
+      (fail-closed: a dangling draft pointer never silently falls back to
+      live/base, which would leak host bytes upstream or drop the shared draft);
+    * every LOCAL / PENDING / ``changed`` region keeps its **base** bytes.
+
+    EQUAL regions (not in ``hunks``) always pass through from base. ``drafts`` is
+    a required argument with no default — so no call path can vacuously skip the
+    draft splice (see :func:`assert_stage_fidelity`).
     """
     base_lines = split_lines(base)
     live_lines = split_lines(live)
@@ -191,7 +230,14 @@ def reconstruct(base: bytes, live: bytes, hunks: list[Hunk]) -> bytes:
         i1, i2 = hunk.base_span
         j1, j2 = hunk.live_span
         out.extend(base_lines[cursor:i1])  # unchanged region before this hunk
-        if _promotes(hunk):
+        if hunk.cls is HunkClass.SHARED_DRAFTED and not hunk.changed:
+            try:
+                out.append(drafts[hunk.anchor])  # shareable draft, verbatim bytes
+            except KeyError as err:
+                raise InvariantViolation(
+                    f"SHARED_DRAFTED hunk {hunk.anchor} has no draft in the store"
+                ) from err
+        elif _promotes(hunk):
             out.extend(live_lines[j1:j2])
         else:
             out.extend(base_lines[i1:i2])
@@ -201,43 +247,61 @@ def reconstruct(base: bytes, live: bytes, hunks: list[Hunk]) -> bytes:
 
 
 def _promotes(hunk: Hunk) -> bool:
-    """Whether a hunk's live bytes are promoted into tracked on capture.
+    """Whether a hunk's **live** bytes are promoted into tracked on capture.
 
-    Only an EXACT-identity SHARED hunk promotes. A ``changed`` hunk (its anchor
-    matched a stored SHARED row but its content differs — a value edit since it
-    was staged, OR an anchor collision with a different region) is NOT promoted:
-    it is held at base bytes until the host re-confirms it in ``setforge stage``.
-    This is what stops a never-staged, anchor-colliding region from silently
-    promoting its bytes upstream.
+    Only an EXACT-identity ``SHARED`` hunk promotes its live bytes (an *adopted*
+    draft is recorded as plain ``SHARED`` because live was rewritten to the draft,
+    so live==tracked). A ``SHARED_DRAFTED`` hunk does NOT promote live — its draft
+    is spliced in :func:`reconstruct` directly. A ``changed`` hunk (its anchor
+    matched a stored row but its content differs — a value edit since it was
+    staged, OR an anchor collision with a different region) is NOT promoted: it is
+    held at base bytes until the host re-confirms it in ``setforge stage``. This is
+    what stops a never-staged, anchor-colliding region from silently promoting its
+    bytes upstream.
     """
     return hunk.cls is HunkClass.SHARED and not hunk.changed
 
 
 def assert_stage_fidelity(
-    base: bytes, live: bytes, tracked: bytes, hunks: list[Hunk]
+    base: bytes,
+    live: bytes,
+    tracked: bytes,
+    hunks: list[Hunk],
+    drafts: dict[str, bytes],
 ) -> None:
-    """INV-8: the tracked bytes must equal ``base`` with only SHARED hunks promoted.
+    """INV-8: tracked must equal ``base`` with only the promoted set spliced in.
 
     Raises :class:`~setforge.errors.InvariantViolation` when ``tracked`` carries
-    any LOCAL/PENDING hunk's bytes (or is missing a SHARED one) — i.e. the
-    git-committed tree does not hold exactly the shared set.
+    any LOCAL/PENDING hunk's bytes, is missing a SHARED one, or does not carry a
+    SHARED_DRAFTED hunk's draft — i.e. the git-committed tree does not hold
+    exactly the shared/drafted set. ``drafts`` is required (no default) so this
+    assertion can never pass vacuously by forgetting the draft splice.
     """
-    expected = reconstruct(base, live, hunks)
+    expected = reconstruct(base, live, hunks, drafts)
     if tracked != expected:
         raise InvariantViolation(
             "INV-8: tracked content is not exactly the shared hunk set "
-            "(reconstruct(base, live, SHARED) != tracked)"
+            "(reconstruct(base, live, hunks, drafts) != tracked)"
         )
 
 
 def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
-    """Project hunks to their persisted index rows (class + identity, no spans)."""
-    return [
-        {
+    """Project hunks to their persisted index rows (class + identity, no spans).
+
+    A ``SHARED_DRAFTED`` hunk additionally carries its ``draft_hash`` — the
+    identity of its shareable draft (the draft *bytes* live in the ``drafts/``
+    store, never the index). Other classes omit the key so existing rows stay
+    byte-stable.
+    """
+    rows: list[dict[str, object]] = []
+    for hunk in hunks:
+        row: dict[str, object] = {
             "cls": hunk.cls.value,
             "label": hunk.label,
             "live_hash": hunk.live_hash,
             "anchor": hunk.anchor,
         }
-        for hunk in hunks
-    ]
+        if hunk.cls is HunkClass.SHARED_DRAFTED and hunk.draft_hash is not None:
+            row["draft_hash"] = hunk.draft_hash
+        rows.append(row)
+    return rows
