@@ -201,7 +201,12 @@ def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
 
 def _interactive_choice(stage: FileStage) -> Choice:
     """A button-bar-backed choose callback for the interactive walk."""
-    style = Style.from_dict(pt_style(THEME))
+    # Strip the ``class:`` prefix pt_style emits — Style.from_dict keys on bare
+    # role names (mirrors claude_merge / wizard / share_draft _themed_style;
+    # de-forking the four copies is tracked separately).
+    style = Style.from_dict(
+        {key.removeprefix("class:"): value for key, value in pt_style(THEME).items()}
+    )
 
     def choose(hunk: Hunk, index: int, total: int) -> Decision | None | _Quit:
         flag = " (changed)" if hunk.changed else ""
