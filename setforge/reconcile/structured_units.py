@@ -296,6 +296,10 @@ def reconstruct_structured(
     unit instead takes its **draft-store** value, spliced via
     :func:`~setforge.structural_merge.set_at_path` from the ``drafts`` bytes. Every
     other unit (LOCAL/PENDING, or any ``changed`` unit) keeps its base value.
+
+    Raises :class:`~setforge.errors.InvariantViolation` (fail-closed) when a
+    non-``changed`` ``SHARED_DRAFTED`` unit's ``path`` is absent from ``drafts`` (a
+    dangling draft pointer) — it never falls back to the live or base value.
     """
     base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
