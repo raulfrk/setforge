@@ -138,7 +138,10 @@ def test_apply_merges_concurrent_classification(
 ) -> None:
     # Lost-update guard (D6): the walk reads/classifies at collect time outside
     # the lock; a concurrent sync that classifies a DIFFERENT hunk between collect
-    # and persist must NOT be clobbered by the persist write.
+    # and persist must NOT be clobbered by the persist write. This is the A5c §9
+    # "race test (proves D6)": the interleaving is scripted deterministically
+    # (the concurrent writer commits between collect and the merging persist) so
+    # the lost-update window is exercised without a flaky real-thread race.
     from dataclasses import replace
 
     from setforge import locking
@@ -254,3 +257,83 @@ def test_counts_tallies_by_class() -> None:
     assert tally[HunkClass.PENDING] == 2
     assert tally[HunkClass.SHARED] == 0
     assert tally[HunkClass.LOCAL] == 0
+
+
+def test_interactive_choice_builds_themed_style(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``_interactive_choice`` must strip the ``class:`` prefix
+    ``pt_style`` emits before ``Style.from_dict`` (which keys on bare role
+    names) — otherwise the live TTY walk crashes on the very first hunk with
+    ``AssertionError: 'class:accent'``. Every unit test scripts the ``choose``
+    callback directly and so never builds the real prompt_toolkit style; only a
+    full TTY (container e2e) or this guard exercises the style construction.
+    """
+    from setforge.cli.stage import _interactive_choice
+
+    cfg, repo, profile = _setup(tmp_path, monkeypatch)
+    resolved = resolve_profile(cfg, profile)
+    (stage,) = collect_stages(cfg, resolved, repo, profile)
+    # Constructing the choose callback builds the Style — must not raise.
+    assert callable(_interactive_choice(stage))
+
+
+def test_walk_scales_to_many_hunks_no_whole_file_degrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large multi-hunk plain file stages + reconstructs per-hunk at scale.
+
+    A5/A5c §9 scale coverage. Staging is a 2-way *line* diff
+    (:func:`extract_hunks` -> :func:`classify` -> :func:`reconstruct`); it never
+    routes through the 3-way ``merge._body_merge``, so it is structurally
+    independent of that path's ``_MAX_LINES`` (100k) whole-file-conflict degrade
+    — ``extract_hunks`` carries no such ceiling. The merge-side degrade is owned
+    by ``tests/reconcile/test_merge.py::test_max_lines_degrades_to_conflict``;
+    here we pin the staging side: hundreds of independent edits decompose into
+    hundreds of hunks (never collapsed into one whole-file unit), and a full
+    share then a full demote both round-trip byte-exact.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge import locking
+    from setforge.cli.stage import Decision, _apply
+    from setforge.reconcile import hunks as hunks_mod
+    from setforge.reconcile import store
+
+    sections = 300
+    base = "".join(f"## Section {i}\nbody {i}\n\n" for i in range(sections)).encode()
+    # Edit every section's body so each becomes its own independent diff hunk.
+    live = "".join(
+        f"## Section {i}\nbody {i} EDITED\n\n" for i in range(sections)
+    ).encode()
+
+    repo = tmp_path / "repo"
+    _write(repo / "tracked" / "notes.md", base)
+    dst = tmp_path / "live" / "notes.md"
+    _write(dst, live)
+    with locking.profile_lock("p"):
+        store.record("p", file_id("notes.md"), base=base, local=live)
+    cfg = Config(
+        tracked_files={"notes.md": TrackedFile(src=Path("notes.md"), dst=str(dst))},
+        profiles={"p": Profile(tracked_files=["notes.md"])},
+    )
+    resolved = resolve_profile(cfg, "p")
+
+    def tracked_promotion() -> bytes:
+        # What `sync` would promote into tracked/: the hunk-granular reconstruct
+        # over the freshly-collected classes (NOT store.reconstruct, which is the
+        # storage identity = recorded local).
+        (st,) = collect_stages(cfg, resolved, repo, "p")
+        return hunks_mod.reconstruct(st.base, st.live, st.hunks, {})
+
+    (stage,) = collect_stages(cfg, resolved, repo, "p")
+    # Each edited section is its own hunk — NOT one whole-file conflict.
+    assert len(stage.hunks) == sections
+
+    # Share every hunk → tracked promotion takes the host's edits verbatim.
+    _apply("p", stage, walk(stage.hunks, lambda h, i, n: Decision(HunkClass.SHARED)))
+    assert tracked_promotion() == live
+
+    # Re-walk demoting every hunk to LOCAL → tracked promotion falls back to base.
+    (stage2,) = collect_stages(cfg, resolved, repo, "p")
+    _apply("p", stage2, walk(stage2.hunks, lambda h, i, n: Decision(HunkClass.LOCAL)))
+    assert tracked_promotion() == base

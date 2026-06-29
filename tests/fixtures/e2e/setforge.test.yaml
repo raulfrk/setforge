@@ -255,6 +255,14 @@ tracked_files:
         kind: pinned
         semantics: shared
 
+  # ---- stage / share-draft fixtures (A5 + A5c) --------------------------
+  # A PLAIN tracked_file (no disposition, no spans) so it rides the reconcile
+  # staging path: `setforge stage` walks its base↔live diff hunks and the host
+  # classifies each SHARED / LOCAL (A5) or drafts a shareable rewrite (A5c).
+  stage_notes:
+    src: stage/notes.md
+    dst: ~/.setforge_e2e/stage/notes.md
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -463,3 +471,10 @@ profiles:
     tracked_files:
       - override_md
       - override_yaml
+
+  # ---- stage / share-draft journey (A5 + A5c) ---------------------------
+  # One plain tracked_file driving the `setforge stage` walk: classify hunks
+  # SHARED / LOCAL (A5) and the Claude draft sub-flow (A5c).
+  test-stage:
+    tracked_files:
+      - stage_notes
