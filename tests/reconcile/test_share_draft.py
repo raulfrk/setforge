@@ -12,6 +12,7 @@ import pytest
 from setforge.claude_session import ClaudeSessionError
 from setforge.reconcile import share_draft
 from setforge.reconcile.share_draft import _Choice
+from setforge.reconcile.structured_units import StructuredFormat
 from setforge.ui.widgets import CANCEL
 
 _REGION = b"workdir: /home/raul/projects\n"
@@ -24,6 +25,17 @@ class _FakeSession:
 
     def send(self, prompt: str) -> str:
         return self.draft
+
+
+def _seq_session(drafts: list[str]) -> type:
+    """A ClaudeSession stand-in returning each draft in turn across re-prompts."""
+    it = iter(drafts)
+
+    class _Seq:
+        def send(self, prompt: str) -> str:
+            return next(it)
+
+    return _Seq
 
 
 def _patch(monkeypatch, *, instructions, reviews, session=_FakeSession) -> None:
@@ -122,3 +134,96 @@ def test_review_default_focus_is_keep_mine_local(
 )
 def test_validate_gate(draft: str, expected: str | None) -> None:
     assert share_draft._validate(draft) == expected
+
+
+# --- structured key-unit draft (SEC2-8 type-confinement) ---------------------
+
+
+def test_key_unit_keep_local_str_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A same-type (str→str) draft is accepted; Keep-local → no adopt."""
+    _patch(
+        monkeypatch,
+        instructions=iter([""]),
+        reviews=iter([_Choice.KEEP]),
+        session=_seq_session(["~/projects"]),
+    )
+    res = share_draft.draft_key_unit(
+        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert isinstance(res, share_draft.DraftResult)
+    assert res.draft == b"~/projects"
+    assert res.adopt is False
+
+
+def test_key_unit_adopt_sets_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adopt-locally returns the draft with ``adopt=True``."""
+    _patch(
+        monkeypatch,
+        instructions=iter([""]),
+        reviews=iter([_Choice.ADOPT]),
+        session=_seq_session(["~/projects"]),
+    )
+    res = share_draft.draft_key_unit(
+        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert isinstance(res, share_draft.DraftResult)
+    assert res.adopt is True
+
+
+def test_key_unit_type_change_reprompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A draft that changes the scalar TYPE (str→int) re-prompts, never accepts."""
+    _patch(
+        monkeypatch,
+        instructions=iter(["", ""]),
+        reviews=iter([_Choice.KEEP]),  # only fires once a VALID draft is produced
+        session=_seq_session(["42", "~/projects"]),  # int rejected, str accepted
+    )
+    res = share_draft.draft_key_unit(
+        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert isinstance(res, share_draft.DraftResult)
+    assert res.draft == b"~/projects"
+
+
+def test_key_unit_map_injection_reprompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A draft that parses to a MAP (sibling injection) re-prompts."""
+    _patch(
+        monkeypatch,
+        instructions=iter(["", ""]),
+        reviews=iter([_Choice.KEEP]),
+        session=_seq_session(["injected: evil", "~/projects"]),
+    )
+    res = share_draft.draft_key_unit(
+        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert isinstance(res, share_draft.DraftResult)
+    assert res.draft == b"~/projects"
+
+
+def test_key_unit_int_value_keeps_int_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An int original accepts an int draft (same type)."""
+    _patch(
+        monkeypatch,
+        instructions=iter([""]),
+        reviews=iter([_Choice.KEEP]),
+        session=_seq_session(["22"]),
+    )
+    res = share_draft.draft_key_unit(
+        8080, display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert isinstance(res, share_draft.DraftResult)
+    assert res.draft == b"22"
+
+
+def test_key_unit_back_cancels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """← Back at the review bar cancels, leaving the unit unchanged."""
+    _patch(
+        monkeypatch,
+        instructions=iter([""]),
+        reviews=iter([_Choice.BACK]),
+        session=_seq_session(["~/projects"]),
+    )
+    res = share_draft.draft_key_unit(
+        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
+    )
+    assert res is CANCEL

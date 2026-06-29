@@ -22,8 +22,9 @@ from enum import StrEnum
 from typing import Final
 
 from ruamel.yaml import YAML
+from ruamel.yaml.nodes import ScalarNode
 
-from setforge.errors import InvariantViolation
+from setforge.errors import DraftConfinementError, InvariantViolation
 from setforge.reconcile.types import HunkClass
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
@@ -36,6 +37,11 @@ from setforge.structural_merge import (
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
 _YAML_WIDTH: Final = 4096
+
+#: C0 control chars (and DEL) forbidden in a draft scalar, minus tab/newline —
+#: the same untrusted-output gate :mod:`setforge.reconcile.share_draft` applies to
+#: line drafts, here enforced on BOTH the raw draft bytes and the parsed scalar.
+_DRAFT_FORBIDDEN: Final = ({chr(c) for c in range(0x20)} - {"\t", "\n"}) | {"\x7f"}
 
 
 class StructuredFormat(StrEnum):
@@ -295,13 +301,18 @@ def reconstruct_structured(
     :func:`~setforge.structural_merge.set_node_at_path` (the comment/anchor/quote-
     preserving wrapped-node splice) and re-serialised — never text substitution, so
     an untouched unit round-trips byte-identical. A non-``changed`` ``SHARED_DRAFTED``
-    unit instead takes its **draft-store** value, spliced via
-    :func:`~setforge.structural_merge.set_at_path` from the ``drafts`` bytes. Every
-    other unit (LOCAL/PENDING, or any ``changed`` unit) keeps its base value.
+    unit instead takes its **draft-store** value, bounded-parsed into a typed scalar
+    by :func:`parse_scalar_draft` and spliced via
+    :func:`~setforge.structural_merge.set_at_path` so its type is preserved (a
+    drafted ``22`` lands as an ``int``, not the string ``"22"``). Every other unit
+    (LOCAL/PENDING, or any ``changed`` unit) keeps its base value.
 
     Raises :class:`~setforge.errors.InvariantViolation` (fail-closed) when a
     non-``changed`` ``SHARED_DRAFTED`` unit's ``path`` is absent from ``drafts`` (a
-    dangling draft pointer) — it never falls back to the live or base value.
+    dangling draft pointer), or :class:`~setforge.errors.DraftConfinementError` (a
+    subclass) when a draft-store value escapes scalar confinement at splice — a
+    corrupted/tampered store can no more inject structure than an interactive
+    draft can; it never falls back to the live or base value.
     """
     base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
@@ -313,7 +324,7 @@ def reconstruct_structured(
                 raise InvariantViolation(
                     f"SHARED_DRAFTED key-unit {unit.path!r} has no draft in the store"
                 ) from err
-            set_at_path(base_model, unit.path, draft.decode("utf-8"))
+            set_at_path(base_model, unit.path, parse_scalar_draft(draft, fmt))
         elif _promotes(unit):
             node = get_node_at_path(live_model, unit.path)
             set_node_at_path(base_model, unit.path, node)
@@ -341,6 +352,99 @@ def assert_stage_fidelity_structured(
             "INV-8: tracked content is not exactly the shared key-unit set "
             "(reconstruct_structured(...) != tracked)"
         )
+
+
+def parse_scalar_draft(draft: bytes, fmt: StructuredFormat) -> object:
+    """Bounded-parse a structured share-draft into a single typed scalar (SEC2-8).
+
+    A structured key-unit draft replaces ONE scalar leaf. This is the
+    type-confinement gate: the draft must be valid UTF-8, carry no forbidden
+    control character (raw OR in the parsed string), and parse to exactly one
+    SCALAR of the file's format — never a mapping/list (sibling/nesting
+    injection) and never a YAML anchor/alias/merge construct (``&``/``*``/``<<``).
+    The returned value keeps its parsed python type (``str``/``int``/``float``/
+    ``bool``/``None``) so the caller can enforce a same-type match and
+    :func:`reconstruct_structured` can splice the typed scalar (not a string).
+
+    Raises :class:`~setforge.errors.DraftConfinementError` (a fail-closed
+    :class:`~setforge.errors.InvariantViolation`) on any confinement breach.
+    """
+    try:
+        text = draft.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise DraftConfinementError("draft is not valid UTF-8") from err
+    if any(ch in _DRAFT_FORBIDDEN for ch in text):
+        raise DraftConfinementError("draft carries a forbidden control character")
+    value = (
+        _parse_scalar_yaml(text)
+        if fmt is StructuredFormat.YAML
+        else _parse_scalar_json(text)
+    )
+    if isinstance(value, str) and any(ch in _DRAFT_FORBIDDEN for ch in value):
+        raise DraftConfinementError(
+            "parsed draft scalar carries a forbidden control character"
+        )
+    return value
+
+
+def _parse_scalar_yaml(text: str) -> object:
+    """Bounded YAML scalar parse: reject non-scalar shapes and ``&``/``*``/``<<``.
+
+    Composes the node first so a YAML anchor on an otherwise-scalar draft
+    (``&a 0``) is caught at the structural level — safe-loading alone would
+    silently strip the anchor and hand back the bare value. A mapping (incl. a
+    ``<<`` merge key) or sequence node is not a scalar; an undefined alias
+    (``*x``) raises at compose time.
+    """
+    checker = YAML(typ="safe")
+    try:
+        node = checker.compose(text)
+    except Exception as err:
+        raise DraftConfinementError(f"draft is not parseable: {err}") from err
+    if node is None:
+        raise DraftConfinementError("draft is empty")
+    if not isinstance(node, ScalarNode):
+        raise DraftConfinementError(
+            "draft is not a single scalar (parsed as a mapping/list/merge)"
+        )
+    anchor = getattr(node, "anchor", None)
+    if getattr(anchor, "value", anchor):
+        raise DraftConfinementError("draft carries a YAML anchor/alias (& / *)")
+    try:
+        return YAML(typ="safe").load(text)
+    except Exception as err:  # pragma: no cover - compose already validated shape
+        raise DraftConfinementError(f"draft is not parseable: {err}") from err
+
+
+def _parse_scalar_json(text: str) -> object:
+    """Bounded JSON/JSONC scalar parse: reject object/array shapes.
+
+    JSON has no anchor/alias/merge constructs, so structure injection reduces to
+    a parsed ``dict`` / ``list`` — rejected here so only a bare scalar survives.
+    """
+    from json5 import loads as _json5_loads
+
+    try:
+        value = _json5_loads(text)
+    except Exception as err:
+        raise DraftConfinementError(f"draft is not parseable: {err}") from err
+    if isinstance(value, dict | list):
+        raise DraftConfinementError(
+            "draft is not a single scalar (parsed as an object/array)"
+        )
+    return value
+
+
+def value_at(data: bytes, path: str, fmt: StructuredFormat) -> object:
+    """The typed live value at dotted ``path`` (or :data:`ABSENT` when missing).
+
+    The type anchor for a structured share-draft: a key-unit draft must parse to
+    this value's exact type, so the interactive Share→Draft flow reads the live
+    scalar here before handing it to
+    :func:`~setforge.reconcile.share_draft.draft_key_unit`. Returns an unwrapped
+    plain-python scalar (never a held ruamel/json-five node).
+    """
+    return get_at_path(_load_model(data, fmt), path)
 
 
 def value_preview(data: bytes, path: str, fmt: StructuredFormat) -> str:

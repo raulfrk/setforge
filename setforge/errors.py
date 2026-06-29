@@ -461,6 +461,21 @@ class InvariantViolation(ReconcileStoreError):
     """
 
 
+class DraftConfinementError(InvariantViolation):
+    """Raised when a structured share-draft escapes scalar type-confinement (SEC2-8).
+
+    A structured key-unit draft replaces ONE scalar leaf value. The draft must
+    parse to a single scalar of the original's type — never a mapping/list
+    (sibling/nesting injection), a type change, or a YAML anchor/alias/merge
+    construct (``&``/``*``/``<<``). The interactive accept-time validator catches
+    this to re-prompt;
+    :func:`~setforge.reconcile.structured_units.reconstruct_structured`
+    lets it propagate at splice time so a corrupted draft store cannot inject
+    structure either (fail-closed). A subclass of :class:`InvariantViolation` so
+    reconstruct's "raises InvariantViolation on a bad draft" contract still holds.
+    """
+
+
 class UnsafeFileId(ReconcileStoreError):
     """Raised when a profile or file-id fails the store's path-safety check.
 

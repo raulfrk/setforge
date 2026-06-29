@@ -19,6 +19,7 @@ cancelled (or never-completed) draft writes nothing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, Literal
@@ -27,7 +28,9 @@ from uuid import uuid4
 from prompt_toolkit.styles import Style
 
 from setforge.claude_session import ClaudeSession, ClaudeSessionError
+from setforge.errors import DraftConfinementError
 from setforge.reconcile.claude_merge import _edit_draft  # shared editor helper
+from setforge.reconcile.structured_units import StructuredFormat, parse_scalar_draft
 from setforge.reconcile.wizard import _sanitize_controls
 from setforge.ui.theme import THEME, pt_style
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
@@ -157,17 +160,22 @@ def _review(clean: str, *, style: Style) -> _Choice | Cancelled:
     )
 
 
+#: A draft validator: the accepted draft text, or ``None`` to re-prompt.
+type _Validator = Callable[[str], str | None]
+
+
 def _review_loop(
-    clean: str, *, style: Style
+    clean: str, *, style: Style, validate: _Validator = _validate
 ) -> DraftResult | Cancelled | Literal[_Choice.REPROMPT]:
     """Review one draft until the host accepts, cancels, or asks to re-prompt.
 
     Returns a :class:`DraftResult` (Keep-local / Adopt), :data:`CANCEL` (← Back),
     or :data:`_Choice.REPROMPT` (the caller fetches a fresh draft). Edit re-reviews
     the edited bytes WITHOUT a new session turn — so edited content never re-enters
-    a prompt (no injection) — and the edit is re-run through :func:`_validate`, so
-    the control-char gate covers host edits too; an edit that fails the gate is
-    discarded (the prior draft is re-reviewed).
+    a prompt (no injection) — and the edit is re-run through ``validate``, so the
+    same gate (control chars for a line hunk, scalar type-confinement for a
+    key-unit) covers host edits too; an edit that fails the gate is discarded (the
+    prior draft is re-reviewed).
     """
     while True:
         outcome = _review(clean, style=style)
@@ -180,21 +188,25 @@ def _review_loop(
         if outcome is _Choice.EDIT:
             edited = _edit_draft(clean)
             if edited is not CANCEL:
-                revalidated = _validate(edited.decode("utf-8"))
+                revalidated = validate(edited.decode("utf-8"))
                 if revalidated is not None:
                     clean = revalidated  # accept the gated edit; else keep prior
             continue
         return _Choice.REPROMPT
 
 
-def draft_hunk(region: bytes, *, display_path: str) -> DraftResult | Cancelled:
-    """Drive the full per-hunk draft sub-flow over a fresh resumable session.
+def _drive_draft(
+    region: bytes, *, display_path: str, validate: _Validator
+) -> DraftResult | Cancelled:
+    """Drive a full draft sub-flow over a fresh resumable session.
 
-    Returns a :class:`DraftResult` (Keep-local or Adopt) or :data:`CANCEL` (only
-    ← Back / Esc — a degraded failure re-prompts, it does not cancel; the stage
-    walk leaves a cancelled hunk unchanged). The session is constructed on the
-    first turn and RETAINED only after it succeeds, then reused for re-prompts; a
-    failed first turn leaves it unset so the next attempt rebuilds the full prompt.
+    The shared engine behind :func:`draft_hunk` (line region, control-char gate)
+    and :func:`draft_key_unit` (scalar value, type-confinement gate) — they differ
+    ONLY in ``validate``. The session is constructed on the first turn and RETAINED
+    only after it succeeds, then reused for re-prompts; a failed first turn leaves
+    it unset so the next attempt rebuilds the full prompt. Returns a
+    :class:`DraftResult` (Keep-local / Adopt) or :data:`CANCEL` (only ← Back / Esc —
+    a degraded failure or a gate rejection re-prompts, it does not cancel).
     """
     style = _themed_style()
     session: ClaudeSession | None = None
@@ -206,7 +218,7 @@ def draft_hunk(region: bytes, *, display_path: str) -> DraftResult | Cancelled:
             style=style,
         )
         if instruction is CANCEL:
-            return CANCEL  # ← Back / Esc → leave the hunk unchanged
+            return CANCEL  # ← Back / Esc → leave the region unchanged
 
         try:
             if session is None:
@@ -220,12 +232,65 @@ def draft_hunk(region: bytes, *, display_path: str) -> DraftResult | Cancelled:
             continue
         session = pending  # retained only after a turn succeeds
 
-        clean = _validate(draft)
+        clean = validate(draft)
         if clean is None:
             note = "couldn't get a clean draft — try again"
             continue
 
-        reviewed = _review_loop(clean, style=style)
+        reviewed = _review_loop(clean, style=style, validate=validate)
         if reviewed is not _Choice.REPROMPT:
             return reviewed  # DraftResult or CANCEL
         note = ""  # Re-prompt → new instruction on the resumed session
+
+
+def draft_hunk(region: bytes, *, display_path: str) -> DraftResult | Cancelled:
+    """Drive the full per-hunk LINE draft sub-flow (control-char gate).
+
+    Returns a :class:`DraftResult` (Keep-local or Adopt) or :data:`CANCEL` (only
+    ← Back / Esc — the stage walk leaves a cancelled hunk unchanged).
+    """
+    return _drive_draft(region, display_path=display_path, validate=_validate)
+
+
+def _structured_validate(
+    draft: str, *, fmt: StructuredFormat, expected_type: type
+) -> str | None:
+    """A key-unit draft validator: scalar type-confinement (SEC2-8).
+
+    Strips a wrapping fence, rejects an empty draft, then bounds the draft to a
+    single scalar of ``expected_type`` via :func:`parse_scalar_draft` — a map/list
+    (sibling/nesting injection), a YAML anchor/alias/merge construct, a control
+    char, or a TYPE change all re-prompt. Returns the accepted scalar TEXT (the
+    bytes the draft store keeps and :func:`reconstruct_structured` re-parses).
+    """
+    clean = _strip_fence(draft)
+    if clean.strip() == "":
+        return None
+    try:
+        parsed = parse_scalar_draft(clean.encode("utf-8"), fmt)
+    except DraftConfinementError:
+        return None
+    if type(parsed) is not expected_type:
+        return None  # type change (str→int, bool→int, …) is not type-confined
+    return clean
+
+
+def draft_key_unit(
+    original: object, *, display_path: str, fmt: StructuredFormat
+) -> DraftResult | Cancelled:
+    """Drive the structured per-KEY draft sub-flow with scalar type-confinement.
+
+    The structured sibling of :func:`draft_hunk`: Claude rewrites ONE host-specific
+    scalar value into a shareable one, but every accepted draft (model output AND
+    host edits) must parse to a single scalar of ``original``'s type — never a
+    mapping/list, a ``&``/``*``/``<<`` construct, or a type change (SEC2-8). The
+    returned :class:`DraftResult` ``draft`` bytes are the scalar text, splice-ready
+    for :func:`reconstruct_structured`. Returns :data:`CANCEL` on ← Back / Esc.
+    """
+    expected_type = type(original)
+
+    def validate(draft: str) -> str | None:
+        return _structured_validate(draft, fmt=fmt, expected_type=expected_type)
+
+    region = str(original).encode("utf-8")
+    return _drive_draft(region, display_path=display_path, validate=validate)

@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import pytest
 
-from setforge.errors import InvariantViolation
+from setforge.errors import DraftConfinementError, InvariantViolation
 from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
     assert_stage_fidelity_structured,
     classify_structured,
     extract_structured_units,
+    parse_scalar_draft,
     reconstruct_structured,
     serialize_structured,
 )
@@ -236,6 +237,38 @@ def test_reconstruct_shared_drafted_splices_draft_value() -> None:
     assert out == b"path: /home/USER/x\n"
 
 
+def test_reconstruct_shared_drafted_preserves_scalar_type() -> None:
+    """A drafted value splices with its PARSED type (int stays int, not a string)."""
+    base = b"port: 8080\n"
+    live = b"port: 8080\n"
+    units = [
+        KeyUnit(
+            HunkClass.SHARED_DRAFTED, "port", "port", "sha256:v", draft_hash="sha256:d"
+        )
+    ]
+    drafts = {"port": b"22"}
+
+    out = reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)
+
+    # int 22 dumps unquoted; a string "22" would round-trip as `port: '22'`.
+    assert out == b"port: 22\n"
+
+
+def test_reconstruct_shared_drafted_rejects_structure_injection() -> None:
+    """A draft-store value that parses to a MAP is refused at splice (fail-closed)."""
+    base = b"path: /h\n"
+    live = b"path: /h\n"
+    units = [
+        KeyUnit(
+            HunkClass.SHARED_DRAFTED, "path", "path", "sha256:v", draft_hash="sha256:d"
+        )
+    ]
+    drafts = {"path": b"injected: evil"}
+
+    with pytest.raises(DraftConfinementError):
+        reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)
+
+
 def test_reconstruct_shared_drafted_missing_draft_raises() -> None:
     """A dangling draft pointer fails closed — never falls back to live/base."""
     units = [
@@ -268,6 +301,76 @@ def test_reconstruct_long_scalar_not_reflowed() -> None:
     out = reconstruct_structured(text, text, [], {}, StructuredFormat.YAML)
 
     assert out == text
+
+
+def test_parse_scalar_draft_yaml_plain_string_keeps_str_type() -> None:
+    """A generalized path draft parses to a plain ``str`` (the common case)."""
+    assert parse_scalar_draft(b"~/.config", StructuredFormat.YAML) == "~/.config"
+    assert isinstance(parse_scalar_draft(b"~/.config", StructuredFormat.YAML), str)
+
+
+def test_parse_scalar_draft_yaml_int_preserves_int_type() -> None:
+    """A numeric draft parses to ``int`` — not the string ``"8730"`` (SP type id)."""
+    value = parse_scalar_draft(b"8730", StructuredFormat.YAML)
+    assert value == 8730
+    assert isinstance(value, int)
+    assert not isinstance(value, bool)
+
+
+def test_parse_scalar_draft_yaml_bool_preserves_bool_type() -> None:
+    """``true`` parses to ``bool`` (kept distinct from int 1 by structural_merge)."""
+    value = parse_scalar_draft(b"true", StructuredFormat.YAML)
+    assert value is True
+
+
+def test_parse_scalar_draft_jsonc_int_preserves_int_type() -> None:
+    """The JSONC backend parses a numeric draft to ``int`` too."""
+    value = parse_scalar_draft(b"42", StructuredFormat.JSONC)
+    assert value == 42
+    assert isinstance(value, int)
+    assert not isinstance(value, bool)
+
+
+def test_parse_scalar_draft_rejects_mapping() -> None:
+    """A draft that parses to a MAP injects siblings/nesting → confinement error."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"a: b", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_multikey_mapping_sibling_injection() -> None:
+    """A multi-key map (sibling injection) is rejected (not a single scalar)."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"value: x\ninjected: y", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_list() -> None:
+    """A draft that parses to a LIST is not a scalar → confinement error."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"[1, 2, 3]", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_yaml_anchor() -> None:
+    """A YAML anchor (``&``) is bounded out even though it wraps a scalar."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"&a 0", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_yaml_merge_key() -> None:
+    """A ``<<`` merge key parses as a mapping with an alias → rejected."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"<<: x", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_control_char() -> None:
+    """A forbidden control char in the draft is rejected (untrusted-output gate)."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"ok\x00bad", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_jsonc_object() -> None:
+    """A JSONC object draft is structure injection → confinement error."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b'{"a": 1}', StructuredFormat.JSONC)
 
 
 def test_extract_merge_key_does_not_surface_inherited_keys_as_units() -> None:

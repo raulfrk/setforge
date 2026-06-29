@@ -6,16 +6,20 @@ from pathlib import Path
 
 import pytest
 
+from setforge.cli import stage as stage_mod
 from setforge.cli.stage import (
     Decision,
+    StructuredFileStage,
     _apply_structured,
     collect_stages,
     collect_structured_stages,
     walk_structured,
 )
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
-from setforge.reconcile.structured_units import StructuredFormat
+from setforge.reconcile import share_draft
+from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import HunkClass, file_id
+from setforge.ui.widgets import CANCEL
 
 
 def _write(path: Path, data: bytes) -> None:
@@ -108,3 +112,70 @@ def test_walk_structured_shared_records_shared(
 
     entry = store.read_index(profile).files[str(file_id("settings.yaml"))]
     assert {r["path"]: r["cls"] for r in entry.hunks} == {"fontSize": "shared"}
+
+
+# --- structured Share sub-menu (Draft button → type-confined key draft) -------
+
+
+def _value_stage() -> tuple[StructuredFileStage, KeyUnit]:
+    """A one-key structured stage whose live ``workdir`` is a host-specific path."""
+    live = b"workdir: /home/raul/projects\n"
+    unit = KeyUnit(HunkClass.PENDING, "workdir", "workdir", "sha256:v")
+    stage = StructuredFileStage(
+        sub_name="settings.yaml",
+        fid=file_id("settings.yaml"),
+        src=Path("src"),
+        dst=Path("dst"),
+        base=live,
+        live=live,
+        fmt=StructuredFormat.YAML,
+        units=[unit],
+    )
+    return stage, unit
+
+
+def test_structured_share_submenu_draft_returns_shared_drafted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Draft → key-unit draft with the LIVE typed value; yields SHARED_DRAFTED."""
+    stage, unit = _value_stage()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(stage_mod, "button_bar", lambda *a, **k: stage_mod._Menu.DRAFT)
+
+    def _fake_draft(original: object, *, display_path: str, fmt: object) -> object:
+        captured["original"] = original
+        captured["fmt"] = fmt
+        return share_draft.DraftResult(draft=b"~/projects", adopt=False)
+
+    monkeypatch.setattr(stage_mod.share_draft, "draft_key_unit", _fake_draft)
+
+    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+
+    assert decision == Decision(
+        HunkClass.SHARED_DRAFTED, draft=b"~/projects", adopt=False
+    )
+    assert captured["original"] == "/home/raul/projects"  # the typed live scalar
+    assert captured["fmt"] is StructuredFormat.YAML
+
+
+def test_structured_share_submenu_verbatim_returns_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verbatim shares the live value as-is (today's behaviour)."""
+    stage, unit = _value_stage()
+    monkeypatch.setattr(
+        stage_mod, "button_bar", lambda *a, **k: stage_mod._Menu.VERBATIM
+    )
+    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+    assert decision == Decision(HunkClass.SHARED)
+
+
+def test_structured_share_submenu_draft_cancel_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled draft leaves the key unchanged (None)."""
+    stage, unit = _value_stage()
+    monkeypatch.setattr(stage_mod, "button_bar", lambda *a, **k: stage_mod._Menu.DRAFT)
+    monkeypatch.setattr(stage_mod.share_draft, "draft_key_unit", lambda *a, **k: CANCEL)
+    decision = stage_mod._structured_share_submenu(stage, unit, style=None)  # type: ignore[arg-type]
+    assert decision is None

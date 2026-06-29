@@ -504,9 +504,50 @@ def _structured_interactive_choice(stage: StructuredFileStage) -> StructuredChoi
             return None
         if result is HunkClass.LOCAL:
             return Decision(HunkClass.LOCAL)
-        return Decision(HunkClass.SHARED)  # share verbatim (Claude-draft: follow-up)
+        return _structured_share_submenu(stage, unit, style)  # Share → how to share
 
     return choose
+
+
+def _structured_share_submenu(
+    stage: StructuredFileStage, unit: KeyUnit, style: Style
+) -> Decision | None:
+    """The structured Share sub-menu: draft (Claude rewrite) / verbatim / skip.
+
+    The key-unit sibling of :func:`_share_submenu`. Returns a SHARED_DRAFTED
+    :class:`Decision` (carrying the type-confined scalar draft + adopt flag), a
+    plain SHARED Decision (verbatim live value), or ``None`` (skip / back /
+    draft-cancelled — the unit is left unchanged). The draft is bounded to a
+    same-type scalar inside :func:`share_draft.draft_key_unit`; the live value at
+    the unit's path is read as the type anchor.
+    """
+    result = button_bar(
+        [
+            Button("Draft (Claude)", _Menu.DRAFT),
+            Button("Verbatim", _Menu.VERBATIM),
+            Button("Skip", None),
+        ],
+        title=f"share {unit.path} — rewrite host-specific value?",
+        body=(
+            "Draft: Claude rewrites this value into a shareable scalar "
+            "(same type; then adopt it locally or keep your local value).\n"
+            "Verbatim: share your live value as-is."
+        ),
+        initial=0,
+        style=style,
+    )
+    if result is CANCEL or result is None:
+        return None  # back / skip → leave unchanged
+    if result is _Menu.VERBATIM:
+        return Decision(HunkClass.SHARED)
+    # Draft: hand the live scalar to Claude for a shareable, type-confined rewrite.
+    original = su_mod.value_at(stage.live, unit.path, stage.fmt)
+    outcome = share_draft.draft_key_unit(
+        original, display_path=stage.sub_name, fmt=stage.fmt
+    )
+    if outcome is CANCEL:
+        return None  # draft cancelled → leave the unit unchanged
+    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft, adopt=outcome.adopt)
 
 
 def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
