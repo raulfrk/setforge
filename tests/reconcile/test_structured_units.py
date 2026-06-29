@@ -290,7 +290,7 @@ def test_multidoc_yaml_raises_never_silently_truncates() -> None:
 
     The guarantee at this layer is no silent single-doc truncation. ruamel's
     round-trip loader raises on a multi-document stream; the line-level fallback
-    for an unparseable structured file is the stage walk's concern (bead 4.12).
+    for an unparseable structured file is the stage walk's concern.
     """
     text = b"a: 1\n---\nb: 2\n"
 

@@ -3,7 +3,7 @@ analog of :mod:`setforge.reconcile.hunks`.
 
 Where the line model extracts base↔live diff *hunks* keyed by a content+context
 anchor, this extracts per-KEY units keyed by a **dotted leaf path** (path-only
-identity; composite identity is the follow-up bead). A unit is classified by the
+identity; composite identity is a later change). A unit is classified by the
 same :class:`~setforge.reconcile.types.HunkClass`, stored in the same index, and
 reconstructed **through the model + re-serialize** (never text substitution) so
 comments, anchors, quoting, and key order survive the round-trip.
@@ -108,7 +108,18 @@ def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
 
 
 class _Missing:
-    """Sentinel for a leaf absent on one side (distinct from a present null)."""
+    """Sentinel for a leaf absent on one side (distinct from a present null).
+
+    A fixed ``__repr__`` is mandatory: ``extract_structured_units`` hashes
+    ``repr(live_value)`` into a unit's ``value_hash`` for a deleted leaf, and that
+    hash is persisted to the on-disk index and re-read in a later process. The
+    default object repr embeds the instance's heap address (``0x...``), which
+    differs across runs, so ``classify_structured`` could never re-match a
+    deletion unit by identity. The constant marker below keeps the hash stable.
+    """
+
+    def __repr__(self) -> str:
+        return "<setforge:_Missing>"
 
 
 _MISSING: Final = _Missing()
@@ -281,8 +292,10 @@ def reconstruct_structured(
     A promoted ``SHARED`` unit takes its **live** value, set through the model via
     :func:`~setforge.structural_merge.set_node_at_path` (the comment/anchor/quote-
     preserving wrapped-node splice) and re-serialised — never text substitution, so
-    an untouched unit round-trips byte-identical. Every LOCAL/PENDING/``changed``
-    unit keeps its base value.
+    an untouched unit round-trips byte-identical. A non-``changed`` ``SHARED_DRAFTED``
+    unit instead takes its **draft-store** value, spliced via
+    :func:`~setforge.structural_merge.set_at_path` from the ``drafts`` bytes. Every
+    other unit (LOCAL/PENDING, or any ``changed`` unit) keeps its base value.
     """
     base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
