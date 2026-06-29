@@ -288,9 +288,13 @@ def test_extract_merge_key_does_not_surface_inherited_keys_as_units() -> None:
 def test_multidoc_yaml_raises_never_silently_truncates() -> None:
     """A multi-document YAML must FAIL rather than silently drop documents 2+ (SP2).
 
-    The guarantee at this layer is no silent single-doc truncation. ruamel's
-    round-trip loader raises on a multi-document stream; the line-level fallback
-    for an unparseable structured file is the stage walk's concern.
+    The guarantee at this layer is no silent single-doc truncation: multi-doc
+    *fails closed*, it does not round-trip. A byte-identical multi-doc round-trip
+    would require ``load_all``, which design smell SP2 ('multi-doc load_all')
+    explicitly forbids, so failing closed is the correct resolution rather than
+    a regression — silently parsing only document 1 would drop documents 2+.
+    ruamel's round-trip loader raises on a multi-document stream; the line-level
+    fallback for an unparseable structured file is the stage walk's concern.
     """
     text = b"a: 1\n---\nb: 2\n"
 

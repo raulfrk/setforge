@@ -182,7 +182,7 @@ def _check_hunk_row(fid: str, row: object) -> None:
     if not isinstance(row, dict):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
     kind = row.get("kind", "line")
-    if kind not in _HUNK_KINDS:
+    if not isinstance(kind, str) or kind not in _HUNK_KINDS:
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with an unknown kind {kind!r}"
         )
