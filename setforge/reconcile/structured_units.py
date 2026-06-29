@@ -151,6 +151,29 @@ def extract_structured_units(
     return units
 
 
+def serialize_structured(units: list[KeyUnit]) -> list[dict[str, object]]:
+    """Project key-units to their persisted index rows (``kind:"key"``).
+
+    A key-unit row carries ``path`` + ``value_hash`` (its identity) where a line
+    row carries ``anchor`` + ``live_hash``; the ``kind`` discriminator lets the
+    fail-closed codec validate each shape. A ``SHARED_DRAFTED`` unit additionally
+    carries its ``draft_hash`` (the draft *bytes* live in the ``drafts/`` store).
+    """
+    rows: list[dict[str, object]] = []
+    for unit in units:
+        row: dict[str, object] = {
+            "kind": "key",
+            "cls": unit.cls.value,
+            "label": unit.label,
+            "path": unit.path,
+            "value_hash": unit.value_hash,
+        }
+        if unit.cls is HunkClass.SHARED_DRAFTED and unit.draft_hash is not None:
+            row["draft_hash"] = unit.draft_hash
+        rows.append(row)
+    return rows
+
+
 def _row_draft_hash(row: dict[str, object]) -> str | None:
     """The row's ``draft_hash`` (set on a ``SHARED_DRAFTED`` row), else ``None``."""
     value = row.get("draft_hash")

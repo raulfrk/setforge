@@ -21,6 +21,75 @@ def test_round_trip() -> None:
     assert loads(dumps(idx)) == idx
 
 
+def test_key_kind_hunk_row_round_trips() -> None:
+    """A structured ``kind:'key'`` row (path + value_hash) survives dumps/loads."""
+    row = {
+        "kind": "key",
+        "cls": "shared",
+        "label": "editor.fontSize",
+        "path": "editor.fontSize",
+        "value_hash": "sha256:v",
+    }
+    idx = Index(
+        files={"s.yaml": FileEntry(present=True, local_hash="sha256:l", hunks=[row])}
+    )
+    out = loads(dumps(idx))
+    assert out.files["s.yaml"].hunks[0]["path"] == "editor.fontSize"
+
+
+def test_line_row_without_kind_still_valid() -> None:
+    """A legacy line row (no ``kind``, with anchor/live_hash) stays byte-stable."""
+    import json
+
+    text = json.dumps(
+        {
+            "schema_version": "1.0",
+            "files": {
+                "f": {
+                    "present": True,
+                    "local_hash": None,
+                    "hunks": [
+                        {
+                            "cls": "shared",
+                            "label": "x",
+                            "live_hash": "sha256:h",
+                            "anchor": "sha256:a",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    assert loads(text).files["f"].hunks[0]["cls"] == "shared"
+
+
+def test_key_row_missing_path_is_rejected() -> None:
+    """A ``kind:'key'`` row missing its ``path`` fails closed (CorruptIndexError)."""
+    import json
+
+    text = json.dumps(
+        {
+            "schema_version": "1.0",
+            "files": {
+                "f": {
+                    "present": True,
+                    "local_hash": None,
+                    "hunks": [
+                        {
+                            "kind": "key",
+                            "cls": "shared",
+                            "label": "a",
+                            "value_hash": "sha256:v",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    with pytest.raises(CorruptIndexError):
+        loads(text)
+
+
 def test_empty_round_trip() -> None:
     assert loads(dumps(Index(files={}))) == Index(files={})
 

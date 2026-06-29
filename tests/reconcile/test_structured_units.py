@@ -19,6 +19,7 @@ from setforge.reconcile.structured_units import (
     classify_structured,
     extract_structured_units,
     reconstruct_structured,
+    serialize_structured,
 )
 from setforge.reconcile.types import HunkClass
 
@@ -186,3 +187,34 @@ def test_assert_stage_fidelity_structured_raises_when_tracked_carries_local() ->
         assert_stage_fidelity_structured(
             base, live, tracked, units, {}, StructuredFormat.YAML
         )
+
+
+def test_serialize_structured_emits_key_kind_rows() -> None:
+    """A key-unit projects to a kind:'key' index row carrying its path+value_hash."""
+    units = [
+        KeyUnit(HunkClass.SHARED, "editor.fontSize", "editor.fontSize", "sha256:v")
+    ]
+
+    rows = serialize_structured(units)
+
+    assert rows == [
+        {
+            "kind": "key",
+            "cls": "shared",
+            "label": "editor.fontSize",
+            "path": "editor.fontSize",
+            "value_hash": "sha256:v",
+        }
+    ]
+
+
+def test_serialize_structured_drafted_carries_draft_hash() -> None:
+    """A SHARED_DRAFTED key-unit additionally serialises its draft_hash."""
+    units = [
+        KeyUnit(HunkClass.SHARED_DRAFTED, "k", "k", "sha256:v", draft_hash="sha256:d")
+    ]
+
+    rows = serialize_structured(units)
+
+    assert rows[0]["kind"] == "key"
+    assert rows[0]["draft_hash"] == "sha256:d"

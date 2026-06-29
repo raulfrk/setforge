@@ -148,8 +148,15 @@ def _parse_entry(fid: str, raw: object) -> FileEntry:
     return FileEntry(present=raw["present"], local_hash=local_hash, hunks=hunks)
 
 
-#: The keys every persisted hunk row must carry (mirrors ``hunks.serialize``).
-_HUNK_ROW_KEYS: Final = ("cls", "label", "live_hash", "anchor")
+#: The keys a LINE hunk row must carry (mirrors ``hunks.serialize``); the default
+#: ``kind`` so a legacy row with no ``kind`` stays valid + byte-stable.
+_HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "anchor")
+#: The keys a structured KEY-unit row must carry (mirrors
+#: ``structured_units.serialize_structured``): a dotted ``path`` + ``value_hash``
+#: identity in place of the line row's ``anchor`` + ``live_hash``.
+_HUNK_ROW_KEYS_KEY: Final = ("cls", "label", "path", "value_hash")
+#: Valid ``kind`` discriminators; an absent ``kind`` defaults to ``line``.
+_HUNK_KINDS: Final = frozenset({"line", "key"})
 #: Valid ``cls`` values — the :class:`~setforge.reconcile.types.HunkClass` value set.
 #: Inlined (not imported) to keep this codec a leaf with no dependency on the
 #: staging layer; the values are a frozen part of the on-disk schema.
@@ -164,16 +171,26 @@ def _check_hunk_row(fid: str, row: object) -> None:
     :class:`~setforge.errors.CorruptIndexError`, never let a partial dict reach
     the staging layer as an unwrapped ``KeyError`` / ``ValueError``.
 
-    A ``shared_drafted`` row additionally carries a ``draft_hash`` (string) — the
-    identity of its shareable draft; the codec requires it so a drafted row can
-    never reach the staging layer without the key its reconstruction keys on.
+    A ``kind`` discriminator selects the required identity keys: a ``line`` row
+    (the default, for markdown line-hunks) carries ``live_hash`` + ``anchor``; a
+    ``key`` row (structured key-unit) carries ``path`` + ``value_hash``. A
+    ``shared_drafted`` row of either kind additionally carries a ``draft_hash``
+    (string) — the identity of its shareable draft; the codec requires it so a
+    drafted row can never reach the staging layer without the key its
+    reconstruction keys on.
     """
     if not isinstance(row, dict):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
-    for key in _HUNK_ROW_KEYS:
+    kind = row.get("kind", "line")
+    if kind not in _HUNK_KINDS:
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a hunk row with an unknown kind {kind!r}"
+        )
+    required = _HUNK_ROW_KEYS_KEY if kind == "key" else _HUNK_ROW_KEYS_LINE
+    for key in required:
         if not isinstance(row.get(key), str):
             raise CorruptIndexError(
-                f"index entry for {fid!r} has a hunk row with a "
+                f"index entry for {fid!r} has a {kind} hunk row with a "
                 f"missing/non-string {key!r}"
             )
     if row["cls"] not in _HUNK_CLASSES:
