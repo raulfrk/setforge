@@ -24,7 +24,7 @@ import typer
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from setforge import atomicio
+from setforge import atomicio, jsonc
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -39,8 +39,10 @@ from setforge.locking import profile_lock
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import share_draft
 from setforge.reconcile import store as reconcile_store
+from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.merge import split_lines
+from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.ui import THEME, Button, button_bar, pt_style
 from setforge.ui.widgets import CANCEL
@@ -127,6 +129,8 @@ def collect_stages(
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            if _structured_format(sub_dst) is not None:
+                continue  # structured files stage per-KEY (collect_structured_stages)
             if only is not None and only not in (
                 name,
                 sub_name,
@@ -150,6 +154,89 @@ def collect_stages(
             stored = entry.hunks if entry is not None else []
             hunks = hunks_mod.classify(hunks_mod.extract_hunks(base, live), stored)
             stages.append(FileStage(sub_name, fid, sub_src, sub_dst, base, live, hunks))
+    return stages
+
+
+def _structured_format(dst: Path) -> StructuredFormat | None:
+    """The structured format of ``dst`` by suffix, or ``None`` for a plain file.
+
+    ``.yaml`` / ``.yml`` → YAML; ``.json`` / ``.jsonc`` (via
+    :func:`setforge.jsonc.is_jsonc_file`) → JSONC (both go through the json5
+    backend). A plain / unknown suffix returns ``None`` so it stays on the
+    line-hunk path.
+    """
+    if dst.suffix in (".yaml", ".yml"):
+        return StructuredFormat.YAML
+    if jsonc.is_jsonc_file(dst):
+        return StructuredFormat.JSONC
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredFileStage:
+    """One structured file's staged-capture view: base/live + classified key-units."""
+
+    sub_name: str
+    fid: FileId
+    src: Path
+    dst: Path
+    base: bytes
+    live: bytes
+    fmt: StructuredFormat
+    units: list[KeyUnit]
+
+
+def collect_structured_stages(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+    *,
+    only: str | None = None,
+) -> list[StructuredFileStage]:
+    """Classified-key-unit view for each staged-eligible structured file. READ-ONLY.
+
+    The structured analog of :func:`collect_stages`: a tracked file whose dst is a
+    structured format (yaml/json/jsonc), present live, with a recorded merge base,
+    is parsed into per-KEY units (dotted path identity) classified against the
+    stored index. An unparseable structured file is SKIPPED here (a line-level
+    fallback for unparseable content is the walk's concern). Writes nothing.
+    """
+    stages: list[StructuredFileStage] = []
+    for name in resolved.tracked_files:
+        tracked_file = cfg.tracked_files[name]
+        src = resolve_src(tracked_file, repo_root)
+        dst = resolve_dst(tracked_file)
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            fmt = _structured_format(sub_dst)
+            if fmt is None:
+                continue
+            if only is not None and only not in (
+                name,
+                sub_name,
+                str(sub_dst),
+                sub_dst.name,
+            ):
+                continue
+            if not sub_dst.exists():
+                continue
+            fid = file_id(sub_name)
+            base = reconcile_store.read_base(profile, fid)
+            if base is None:
+                continue  # not reconcile-managed (run `setforge install` first)
+            live = sub_dst.read_bytes()
+            try:
+                fresh = su_mod.extract_structured_units(base, live, fmt)
+            except Exception:
+                continue  # (line-level fallback for unparseable is tracked separately)
+            entry = reconcile_store.read_index(profile).files.get(str(fid))
+            stored = entry.hunks if entry is not None else []
+            units = su_mod.classify_structured(fresh, stored)
+            stages.append(
+                StructuredFileStage(
+                    sub_name, fid, sub_src, sub_dst, base, live, fmt, units
+                )
+            )
     return stages
 
 
