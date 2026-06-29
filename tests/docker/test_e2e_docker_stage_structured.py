@@ -180,5 +180,5 @@ def test_structured_walk_draft_type_confined_scalar(
     # NOTE: `compare` is not yet structured-staging aware (it has no
     # structured-unit slot, unlike the plain SHARED_DRAFTED `_reconcile_staged_expected`
     # path), so it still flags this blessed divergence as drift. That belongs with
-    # the structured install/sync/compare wiring; this e2e asserts only the stage +
-    # capture surface 4.12 delivers.
+    # the structured install/sync/compare wiring; this e2e asserts only the per-key
+    # stage + capture surface the structured walk delivers.
