@@ -56,12 +56,14 @@ class StructuredFormat(StrEnum):
 def structured_format(path: Path) -> StructuredFormat | None:
     """The structured format of ``path`` by suffix, or ``None`` for a plain file.
 
-    ``.yaml`` / ``.yml`` → YAML; ``.json`` / ``.jsonc`` (per
-    :func:`setforge.jsonc.is_jsonc_file`) → JSONC (the json5 backend). A plain or
-    unknown suffix returns ``None`` so the caller keeps the line-hunk path. The
-    single source of truth for "is this a per-KEY-staged file?", shared by the
-    stage walk (:mod:`setforge.cli.stage`) and capture (:mod:`setforge.capture`)
-    so the two never disagree on which files stage structurally.
+    ``.yaml`` / ``.yml`` → YAML; ``.json`` (per
+    :func:`setforge.jsonc.is_jsonc_file`, which matches ``.json`` only) → JSONC
+    via the json5 backend. Any other suffix — including ``.jsonc``, which
+    ``is_jsonc_file`` does NOT match — returns ``None`` so the caller keeps the
+    line-hunk path. The single source of truth for "is this a per-KEY-staged
+    file?", shared by the stage walk (:mod:`setforge.cli.stage`) and capture
+    (:mod:`setforge.capture`) so the two never disagree on which files stage
+    structurally.
     """
     from setforge import jsonc
 
@@ -430,9 +432,12 @@ def _parse_scalar_yaml(text: str) -> object:
     anchor = getattr(node, "anchor", None)
     if getattr(anchor, "value", anchor):
         raise DraftConfinementError("draft carries a YAML anchor/alias (& / *)")
+    # Reachable + security-relevant: a scalar-shaped but unsafe-tagged draft
+    # (``!!python/...``, ``!!timestamp notadate``) passes the ScalarNode shape
+    # check above, then the safe loader refuses the tag here — fail-closed.
     try:
         return YAML(typ="safe").load(text)
-    except Exception as err:  # pragma: no cover - compose already validated shape
+    except Exception as err:
         raise DraftConfinementError(f"draft is not parseable: {err}") from err
 
 

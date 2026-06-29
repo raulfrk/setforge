@@ -373,6 +373,18 @@ def test_parse_scalar_draft_rejects_jsonc_object() -> None:
         parse_scalar_draft(b'{"a": 1}', StructuredFormat.JSONC)
 
 
+def test_parse_scalar_draft_rejects_python_object_tag() -> None:
+    """A ``!!python/...`` tag is scalar-shaped but refused by the safe loader."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"!!python/name:os.system ''", StructuredFormat.YAML)
+
+
+def test_parse_scalar_draft_rejects_unconstructable_tag() -> None:
+    """A scalar-shaped but ill-typed tag (``!!timestamp notadate``) is refused."""
+    with pytest.raises(DraftConfinementError):
+        parse_scalar_draft(b"!!timestamp notadate", StructuredFormat.YAML)
+
+
 def test_extract_merge_key_does_not_surface_inherited_keys_as_units() -> None:
     """A ``<<`` merge key must not surface inherited keys as own units (SP4).
 

@@ -141,18 +141,28 @@ def _instr_body(note: str) -> str:
     return f"{_sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
 
 
-def _review(clean: str, *, style: Style) -> _Choice | Cancelled:
+def _review(
+    clean: str, *, style: Style, allow_adopt: bool = True
+) -> _Choice | Cancelled:
     """Show the draft + the decision bar; default focus on the non-destructive
-    Keep-mine-local (Esc / ← Back cancels, never rewrites live)."""
+    Keep-mine-local (Esc / ← Back cancels, never rewrites live).
+
+    ``allow_adopt`` gates the "Adopt locally" (live-rewrite) button: the line-hunk
+    path wires adopt via ``_adopt_live``, but the structured key-unit path does not
+    yet, so :func:`draft_key_unit` passes ``False`` to omit the button rather than
+    offer an inert choice that silently degrades to keep-local.
+    """
     body = f"shareable draft:\n{_sanitize_controls(clean)}"
+    buttons = [Button("Keep mine local", _Choice.KEEP)]
+    if allow_adopt:
+        buttons.append(Button("Adopt locally", _Choice.ADOPT))
+    buttons += [
+        Button("Re-prompt", _Choice.REPROMPT),
+        Button("Edit", _Choice.EDIT),
+        Button("← Back", _Choice.BACK),
+    ]
     return button_bar(
-        [
-            Button("Keep mine local", _Choice.KEEP),
-            Button("Adopt locally", _Choice.ADOPT),
-            Button("Re-prompt", _Choice.REPROMPT),
-            Button("Edit", _Choice.EDIT),
-            Button("← Back", _Choice.BACK),
-        ],
+        buttons,
         title="share-draft — review",
         body=body,
         initial=0,  # Keep mine local — never silently rewrites the live file
@@ -165,7 +175,11 @@ type _Validator = Callable[[str], str | None]
 
 
 def _review_loop(
-    clean: str, *, style: Style, validate: _Validator = _validate
+    clean: str,
+    *,
+    style: Style,
+    validate: _Validator = _validate,
+    allow_adopt: bool = True,
 ) -> DraftResult | Cancelled | Literal[_Choice.REPROMPT]:
     """Review one draft until the host accepts, cancels, or asks to re-prompt.
 
@@ -178,7 +192,7 @@ def _review_loop(
     prior draft is re-reviewed).
     """
     while True:
-        outcome = _review(clean, style=style)
+        outcome = _review(clean, style=style, allow_adopt=allow_adopt)
         if outcome is CANCEL or outcome is _Choice.BACK:
             return CANCEL
         if outcome is _Choice.KEEP:
@@ -196,7 +210,11 @@ def _review_loop(
 
 
 def _drive_draft(
-    region: bytes, *, display_path: str, validate: _Validator
+    region: bytes,
+    *,
+    display_path: str,
+    validate: _Validator,
+    allow_adopt: bool = True,
 ) -> DraftResult | Cancelled:
     """Drive a full draft sub-flow over a fresh resumable session.
 
@@ -237,7 +255,9 @@ def _drive_draft(
             note = "couldn't get a clean draft — try again"
             continue
 
-        reviewed = _review_loop(clean, style=style, validate=validate)
+        reviewed = _review_loop(
+            clean, style=style, validate=validate, allow_adopt=allow_adopt
+        )
         if reviewed is not _Choice.REPROMPT:
             return reviewed  # DraftResult or CANCEL
         note = ""  # Re-prompt → new instruction on the resumed session
@@ -286,6 +306,11 @@ def draft_key_unit(
     mapping/list, a ``&``/``*``/``<<`` construct, or a type change (SEC2-8). The
     returned :class:`DraftResult` ``draft`` bytes are the scalar text, splice-ready
     for :func:`reconstruct_structured`. Returns :data:`CANCEL` on ← Back / Esc.
+
+    ``allow_adopt=False``: the structured persist path does not yet rewrite live to
+    the draft, so the review bar omits "Adopt locally" rather than offer an inert
+    choice — the key-unit draft is keep-local only (tracked gets the shareable
+    scalar; live keeps the host value).
     """
     expected_type = type(original)
 
@@ -293,4 +318,6 @@ def draft_key_unit(
         return _structured_validate(draft, fmt=fmt, expected_type=expected_type)
 
     region = str(original).encode("utf-8")
-    return _drive_draft(region, display_path=display_path, validate=validate)
+    return _drive_draft(
+        region, display_path=display_path, validate=validate, allow_adopt=False
+    )

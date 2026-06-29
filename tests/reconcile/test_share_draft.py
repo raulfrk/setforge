@@ -41,7 +41,9 @@ def _seq_session(drafts: list[str]) -> type:
 def _patch(monkeypatch, *, instructions, reviews, session=_FakeSession) -> None:
     monkeypatch.setattr(share_draft, "ClaudeSession", session)
     monkeypatch.setattr(share_draft, "text_prompt", lambda **_: next(instructions))
-    monkeypatch.setattr(share_draft, "_review", lambda clean, *, style: next(reviews))
+    monkeypatch.setattr(
+        share_draft, "_review", lambda clean, *, style, allow_adopt=True: next(reviews)
+    )
 
 
 def test_keep_local_returns_draft_no_adopt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,19 +157,30 @@ def test_key_unit_keep_local_str_draft(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res.adopt is False
 
 
-def test_key_unit_adopt_sets_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Adopt-locally returns the draft with ``adopt=True``."""
-    _patch(
-        monkeypatch,
-        instructions=iter([""]),
-        reviews=iter([_Choice.ADOPT]),
-        session=_seq_session(["~/projects"]),
-    )
-    res = share_draft.draft_key_unit(
-        "/home/raul/projects", display_path="settings.yaml", fmt=StructuredFormat.YAML
-    )
-    assert isinstance(res, share_draft.DraftResult)
-    assert res.adopt is True
+def _review_labels(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> list[str]:
+    """The button labels the review bar would render, with ``button_bar`` stubbed."""
+    labels: list[str] = []
+
+    def _fake_bar(buttons: list, **_: object) -> _Choice:
+        labels.extend(b.label for b in buttons)
+        return _Choice.KEEP
+
+    monkeypatch.setattr(share_draft, "button_bar", _fake_bar)
+    share_draft._review("a draft", style=None, **kwargs)  # type: ignore[arg-type]
+    return labels
+
+
+def test_key_unit_review_omits_adopt_button(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The structured draft review bar omits "Adopt locally" (not yet wired), so a
+    host can never pick the inert choice — keep-local is the only accept."""
+    labels = _review_labels(monkeypatch, allow_adopt=False)
+    assert "Adopt locally" not in labels
+    assert "Keep mine local" in labels  # keep-local always offered
+
+
+def test_line_review_keeps_adopt_button(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The line-hunk draft review (allow_adopt default True) still offers Adopt."""
+    assert "Adopt locally" in _review_labels(monkeypatch)
 
 
 def test_key_unit_type_change_reprompts(monkeypatch: pytest.MonkeyPatch) -> None:

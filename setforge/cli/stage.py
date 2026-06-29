@@ -44,6 +44,7 @@ from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
 from setforge.reconcile.types import FileId, HunkClass, file_id
+from setforge.scalar_merge import ABSENT
 from setforge.ui import THEME, Button, button_bar, pt_style
 from setforge.ui.widgets import CANCEL
 
@@ -182,10 +183,11 @@ def collect_structured_stages(
     """Classified-key-unit view for each staged-eligible structured file. READ-ONLY.
 
     The structured analog of :func:`collect_stages`: a tracked file whose dst is a
-    structured format (yaml/json/jsonc), present live, with a recorded merge base,
-    is parsed into per-KEY units (dotted path identity) classified against the
-    stored index. An unparseable structured file is SKIPPED here (a line-level
-    fallback for unparseable content is the walk's concern). Writes nothing.
+    structured format (yaml/json), present live, with a recorded merge base, is
+    parsed into per-KEY units (dotted path identity) classified against the stored
+    index. An unparseable structured file is SKIPPED — it gets no interactive
+    staging on either path (the line walk skips structured suffixes too); capture
+    writes such a file back verbatim. Writes nothing.
     """
     stages: list[StructuredFileStage] = []
     for name in resolved.tracked_files:
@@ -213,7 +215,7 @@ def collect_structured_stages(
             try:
                 fresh = su_mod.extract_structured_units(base, live, fmt)
             except Exception:
-                continue  # (line-level fallback for unparseable is tracked separately)
+                continue  # unparseable → no interactive staging; capture is verbatim
             entry = reconcile_store.read_index(profile).files.get(str(fid))
             stored = entry.hunks if entry is not None else []
             units = su_mod.classify_structured(fresh, stored)
@@ -472,7 +474,7 @@ def _structured_interactive_choice(stage: StructuredFileStage) -> StructuredChoi
         flag = " (changed)" if unit.changed else ""
         result = button_bar(
             [
-                Button("Share", HunkClass.SHARED),
+                Button("Share", _Menu.SHARE),
                 Button("Keep local", HunkClass.LOCAL),
                 Button("Skip", None),
                 Button("Quit", QUIT),
@@ -489,7 +491,7 @@ def _structured_interactive_choice(stage: StructuredFileStage) -> StructuredChoi
             return None
         if result is HunkClass.LOCAL:
             return Decision(HunkClass.LOCAL)
-        return _structured_share_submenu(stage, unit, style)  # Share → how to share
+        return _structured_share_submenu(stage, unit, style)  # _Menu.SHARE → how
 
     return choose
 
@@ -514,8 +516,8 @@ def _structured_share_submenu(
         ],
         title=f"share {unit.path} — rewrite host-specific value?",
         body=(
-            "Draft: Claude rewrites this value into a shareable scalar "
-            "(same type; then adopt it locally or keep your local value).\n"
+            "Draft: Claude rewrites this value into a shareable scalar (same type); "
+            "your local value stays — only the shareable scalar is promoted.\n"
             "Verbatim: share your live value as-is."
         ),
         initial=0,
@@ -527,12 +529,18 @@ def _structured_share_submenu(
         return Decision(HunkClass.SHARED)
     # Draft: hand the live scalar to Claude for a shareable, type-confined rewrite.
     original = su_mod.value_at(stage.live, unit.path, stage.fmt)
+    if original is ABSENT:
+        # The host deleted this leaf live — there is no scalar to generalise, and
+        # an absent type-anchor would re-prompt forever. Leave the unit unchanged.
+        return None
+    # Adopt-locally is not wired for structured drafts (live-rewrite is a follow-up),
+    # so the key-unit draft is keep-local only — never advertise or return adopt.
     outcome = share_draft.draft_key_unit(
         original, display_path=stage.sub_name, fmt=stage.fmt
     )
     if outcome is CANCEL:
         return None  # draft cancelled → leave the unit unchanged
-    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft, adopt=outcome.adopt)
+    return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft)
 
 
 def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
