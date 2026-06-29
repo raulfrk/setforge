@@ -709,9 +709,11 @@ def stage(
         )
         _apply_structured(profile, struct_item, sresult)
         stally = _struct_counts(sresult.units)
+        sdrafted = stally[HunkClass.SHARED_DRAFTED]
+        sdrafted_note = f"  {sdrafted} drafted" if sdrafted else ""
         console.print(
             f"{struct_item.sub_name}: "
-            f"{stally[HunkClass.SHARED]} shared  "
+            f"{stally[HunkClass.SHARED]} shared{sdrafted_note}  "
             f"{stally[HunkClass.LOCAL]} local  "
             f"{stally[HunkClass.PENDING]} pending"
         )
