@@ -114,13 +114,30 @@ class _Missing:
 _MISSING: Final = _Missing()
 
 
+def _own_items(node: Mapping[object, object]) -> Iterator[tuple[object, object]]:
+    """Yield only a mapping's OWN (physically-present) items.
+
+    For a ruamel ``CommentedMap`` this uses ``non_merged_items()`` so a YAML
+    ``<<`` merge key does NOT surface inherited keys as if they were the
+    mapping's own — surfacing an inherited key would mint a phantom unit and a
+    reconstruct that writes it would break the merge reference (smell SP4). A
+    json-five ``JSONObject`` / plain ``dict`` has no merge keys, so ``.items()``.
+    """
+    non_merged = getattr(node, "non_merged_items", None)
+    if callable(non_merged):
+        yield from non_merged()
+    else:
+        yield from node.items()
+
+
 def _walk_leaves(node: object, prefix: str = "") -> Iterator[tuple[str, object]]:
     """Yield ``(dotted_path, plain_value)`` for every LEAF under ``node``.
 
-    A leaf is any non-mapping value. Mapping keys extend the dotted prefix.
+    A leaf is any non-mapping value. Mapping keys extend the dotted prefix; only
+    a mapping's OWN keys are walked (see :func:`_own_items`).
     """
     if isinstance(node, Mapping):
-        for key, value in node.items():
+        for key, value in _own_items(node):
             path = f"{prefix}.{key}" if prefix else str(key)
             yield from _walk_leaves(value, path)
     else:

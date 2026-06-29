@@ -258,3 +258,41 @@ def test_extract_mapping_key_reorder_mints_no_phantom_unit() -> None:
     units = extract_structured_units(base, live, StructuredFormat.YAML)
 
     assert units == []
+
+
+def test_reconstruct_long_scalar_not_reflowed() -> None:
+    """A >80-column scalar round-trips without a width-wrap phantom diff (SP5)."""
+    long_val = "x" * 120
+    text = f"url: {long_val}\n".encode()
+
+    out = reconstruct_structured(text, text, [], {}, StructuredFormat.YAML)
+
+    assert out == text
+
+
+def test_extract_merge_key_does_not_surface_inherited_keys_as_units() -> None:
+    """A ``<<`` merge key must not surface inherited keys as own units (SP4).
+
+    Changing the anchored ``defaults.x`` also changes ``child``'s INHERITED view
+    of ``x``; only ``defaults.x`` is a real own leaf, so a phantom ``child.x``
+    unit must NOT appear.
+    """
+    base = b"defaults: &d\n  x: 1\nchild:\n  <<: *d\n  y: 2\n"
+    live = b"defaults: &d\n  x: 9\nchild:\n  <<: *d\n  y: 2\n"
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    assert [u.path for u in units] == ["defaults.x"]
+
+
+def test_multidoc_yaml_raises_never_silently_truncates() -> None:
+    """A multi-document YAML must FAIL rather than silently drop documents 2+ (SP2).
+
+    The guarantee at this layer is no silent single-doc truncation. ruamel's
+    round-trip loader raises on a multi-document stream; the line-level fallback
+    for an unparseable structured file is the stage walk's concern (bead 4.12).
+    """
+    text = b"a: 1\n---\nb: 2\n"
+
+    with pytest.raises(Exception):  # noqa: B017,PT011 — any load failure beats truncation
+        reconstruct_structured(text, text, [], {}, StructuredFormat.YAML)
