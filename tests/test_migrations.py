@@ -47,17 +47,18 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_two_zero() -> None:
-    """The build now expects schema 2.0 after the breaking contract bump."""
-    assert current_expected_schema_version == "2.0"
+def test_current_expected_schema_version_is_two_one() -> None:
+    """The build now expects schema 2.1 after the marker-retire bump."""
+    assert current_expected_schema_version == "2.1"
 
 
 def test_migrations_registry_has_the_version_stamp_chain() -> None:
-    """The registry ships the 1.0 → 1.1 → 1.2 → 2.0 chain, in order."""
-    assert len(MIGRATIONS) == 3
+    """The registry ships the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain, in order."""
+    assert len(MIGRATIONS) == 4
     assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
     assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
     assert (MIGRATIONS[2].from_version, MIGRATIONS[2].to_version) == ("1.2", "2.0")
+    assert (MIGRATIONS[3].from_version, MIGRATIONS[3].to_version) == ("2.0", "2.1")
     # Appended in from_version order so the forward walk never has to sort.
     assert isinstance(MIGRATIONS[1], RestampMigration)
 
@@ -781,7 +782,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "2.0" in captured.err
+    assert "2.1" in captured.err
 
 
 # ---------------------------------------------------------------------------

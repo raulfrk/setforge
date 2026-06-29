@@ -108,6 +108,7 @@ __all__ = [
     "Contract20Migration",
     "ManifestEntry",
     "ManifestType",
+    "MarkerRetireMigration",
     "Migration",
     "MigrationRoots",
     "RestampMigration",
@@ -116,13 +117,14 @@ __all__ = [
     "detect_current_schema",
     "find_migration_path",
     "known_versions",
+    "marker_retire_schema_version",
     "markerless_conversion_schema_version",
     "parse_schema_version",
     "preserve_contract_schema_version",
 ]
 
 
-current_expected_schema_version: Final[str] = "2.0"
+current_expected_schema_version: Final[str] = "2.1"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -172,6 +174,25 @@ advancing). The ``migrate --finalize`` gate permits the irreversible
 tracked-marker strip only when the operator-declared ``minimum_version`` is at
 or above this constant; tying it to the live expected version would silently
 move that gate on every future schema bump.
+"""
+
+
+marker_retire_schema_version: Final[str] = "2.1"
+"""Schema version at which the user-section MARKER mechanism is fully retired.
+
+The 2.0 -> 2.1 :class:`~setforge.migrations._marker_retire.MarkerRetireMigration`
+strips every ``setforge:user-section`` marker from tracked + live files (shared
+bodies stay inline; host-local bodies move to ``local.yaml`` overlay spans). An
+engine supporting schema ``>= 2.1`` no longer emits or parses markers; an older
+one would re-inject marker hashes a 2.1 host has stripped.
+
+This value is FROZEN: it records a historical fact and must NEVER be aliased to —
+or bumped alongside — :data:`current_expected_schema_version` (which keeps
+advancing). The ``migrate --finalize`` gate permits the irreversible marker strip
+only when the operator-declared ``minimum_version`` is at or above this constant;
+tying it to the live expected version would silently move that gate on every
+future schema bump (the same footgun :data:`markerless_conversion_schema_version`
+guards against).
 """
 
 
@@ -515,15 +536,17 @@ class RestampMigration:
 
 
 # Imported here (after every name it depends on is defined) to avoid a
-# circular import: _contract_2_0 imports ManifestEntry / MigrationRoots /
-# _meets_floor / parse_schema_version / preserve_contract_schema_version from
-# this package, all defined above this point.
+# circular import: _contract_2_0 / _marker_retire import ManifestEntry /
+# ManifestType / MigrationRoots (and friends) from this package, all defined
+# above this point.
 from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
+from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
 
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     VersionStampMigration(),
     RestampMigration(from_version="1.1", to_version="1.2"),
     Contract20Migration(),
+    MarkerRetireMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 

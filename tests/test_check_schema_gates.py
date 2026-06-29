@@ -235,11 +235,11 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_two_zero() -> None:
-    """The build now expects schema 2.0 after the contract bump."""
+def test_current_expected_is_two_one() -> None:
+    """The build now expects schema 2.1 after the marker-retire bump."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "2.0"
+    assert current_expected_schema_version == "2.1"
 
 
 def test_schema_major_is_two() -> None:
