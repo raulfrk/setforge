@@ -25,7 +25,9 @@ from ruamel.yaml import YAML
 
 from setforge.errors import InvariantViolation
 from setforge.reconcile.types import HunkClass
+from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
+    get_at_path,
     get_node_at_path,
     set_at_path,
     set_node_at_path,
@@ -339,3 +341,19 @@ def assert_stage_fidelity_structured(
             "INV-8: tracked content is not exactly the shared key-unit set "
             "(reconstruct_structured(...) != tracked)"
         )
+
+
+def value_preview(data: bytes, path: str, fmt: StructuredFormat) -> str:
+    """A short one-line string of the value at dotted ``path``, for a UI preview.
+
+    Returns ``(absent)`` when the path is missing and ``(unparseable)`` on a parse
+    failure — never raises, since a preview must not crash the interactive walk.
+    """
+    try:
+        value = get_at_path(_load_model(data, fmt), path)
+    except Exception:
+        return "(unparseable)"
+    if value is ABSENT:
+        return "(absent)"
+    text = repr(value)
+    return text if len(text) <= 200 else text[:199] + "…"

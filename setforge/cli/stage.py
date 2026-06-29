@@ -464,6 +464,51 @@ def _share_submenu(stage: FileStage, hunk: Hunk, style: Style) -> Decision | Non
     return Decision(HunkClass.SHARED_DRAFTED, draft=outcome.draft, adopt=outcome.adopt)
 
 
+def _struct_counts(units: list[KeyUnit]) -> Counter[HunkClass]:
+    """Tally key-units by class (SHARED / LOCAL / PENDING)."""
+    return Counter(unit.cls for unit in units)
+
+
+def _unit_preview(stage: StructuredFileStage, unit: KeyUnit) -> str:
+    """A small base→live value preview of one key-unit for the button-bar body."""
+    base_val = su_mod.value_preview(stage.base, unit.path, stage.fmt)
+    live_val = su_mod.value_preview(stage.live, unit.path, stage.fmt)
+    body = f"  {unit.path}:\n- {base_val}\n+ {live_val}"
+    return body if len(body) <= 600 else body[:599] + "…"
+
+
+def _structured_interactive_choice(stage: StructuredFileStage) -> StructuredChoice:
+    """A button-bar-backed choose callback for the interactive structured walk."""
+    style = Style.from_dict(
+        {key.removeprefix("class:"): value for key, value in pt_style(THEME).items()}
+    )
+
+    def choose(unit: KeyUnit, index: int, total: int) -> Decision | None | _Quit:
+        flag = " (changed)" if unit.changed else ""
+        result = button_bar(
+            [
+                Button("Share", HunkClass.SHARED),
+                Button("Keep local", HunkClass.LOCAL),
+                Button("Skip", None),
+                Button("Quit", QUIT),
+            ],
+            title=f"stage {stage.sub_name} — key {index + 1}/{total}: "
+            f"{unit.path}{flag}",
+            body=f"{_unit_preview(stage, unit)}\n[currently {unit.cls.value}]",
+            initial=0 if unit.cls is not HunkClass.LOCAL else 1,
+            style=style,
+        )
+        if result is CANCEL or isinstance(result, _Quit):
+            return QUIT
+        if result is None:
+            return None
+        if result is HunkClass.LOCAL:
+            return Decision(HunkClass.LOCAL)
+        return Decision(HunkClass.SHARED)  # share verbatim (Claude-draft: follow-up)
+
+    return choose
+
+
 def _adopt_live(stage: FileStage, result: WalkResult) -> bytes:
     """Splice each adopted hunk's draft into the live bytes (the Adopt rewrite).
 
@@ -589,7 +634,8 @@ def stage(
 
     if list_only:
         stages = collect_stages(cfg, resolved, repo_root, profile)
-        _render_list(ctx.obj, stages)
+        struct = collect_structured_stages(cfg, resolved, repo_root, profile)
+        _render_list(ctx.obj, stages, struct)
         return
 
     if file is None:
@@ -604,7 +650,8 @@ def stage(
         raise typer.Exit(code=2)
 
     stages = collect_stages(cfg, resolved, repo_root, profile, only=file)
-    if not stages:
+    struct = collect_structured_stages(cfg, resolved, repo_root, profile, only=file)
+    if not stages and not struct:
         typer.secho(
             f"{file}: nothing to stage — no local changes over a recorded base "
             f"(run `setforge install --profile={profile}` first if it is new)",
@@ -628,10 +675,28 @@ def stage(
             f"{tally[HunkClass.LOCAL]} local  "
             f"{tally[HunkClass.PENDING]} pending"
         )
+    for struct_item in struct:
+        if not struct_item.units:
+            continue
+        sresult = walk_structured(
+            struct_item.units, _structured_interactive_choice(struct_item)
+        )
+        _apply_structured(profile, struct_item, sresult)
+        stally = _struct_counts(sresult.units)
+        console.print(
+            f"{struct_item.sub_name}: "
+            f"{stally[HunkClass.SHARED]} shared  "
+            f"{stally[HunkClass.LOCAL]} local  "
+            f"{stally[HunkClass.PENDING]} pending"
+        )
 
 
-def _render_list(ctx_obj: OutputContext | None, stages: list[FileStage]) -> None:
-    """Render the read-only per-file hunk-class table."""
+def _render_list(
+    ctx_obj: OutputContext | None,
+    stages: list[FileStage],
+    struct: list[StructuredFileStage] | None = None,
+) -> None:
+    """Render the read-only per-file class table (line hunks + structured keys)."""
     data = [
         {
             "name": stage.sub_name,
@@ -641,11 +706,20 @@ def _render_list(ctx_obj: OutputContext | None, stages: list[FileStage]) -> None
         }
         for stage in stages
     ]
+    data += [
+        {
+            "name": s.sub_name,
+            "shared": _struct_counts(s.units)[HunkClass.SHARED],
+            "local": _struct_counts(s.units)[HunkClass.LOCAL],
+            "pending": _struct_counts(s.units)[HunkClass.PENDING],
+        }
+        for s in (struct or [])
+    ]
 
     def _human() -> None:
         console = Console()
         if not data:
-            console.print("no staged-eligible plain files with local changes")
+            console.print("no staged-eligible files with local changes")
             return
         for row in data:
             console.print(
