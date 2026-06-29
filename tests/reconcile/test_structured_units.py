@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import pytest
 
+from setforge.errors import InvariantViolation
 from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
+    assert_stage_fidelity_structured,
+    classify_structured,
     extract_structured_units,
     reconstruct_structured,
 )
@@ -117,3 +120,69 @@ def test_reconstruct_jsonc_roundtrip_byte_identical_no_promotion(text: bytes) ->
     """JSONC comments + trailing commas survive a no-promotion round-trip (SP7)."""
     out = reconstruct_structured(text, text, [], {}, StructuredFormat.JSONC)
     assert out == text
+
+
+def _row(cls: str, path: str, value_hash: str) -> dict[str, object]:
+    return {
+        "kind": "key",
+        "cls": cls,
+        "label": path,
+        "path": path,
+        "value_hash": value_hash,
+    }
+
+
+def test_classify_carries_stored_class_by_path() -> None:
+    """A fresh unit whose path+value_hash match a stored row inherits its class."""
+    fresh = [KeyUnit(HunkClass.PENDING, "fontSize", "fontSize", "sha256:v16")]
+    stored = [_row("shared", "fontSize", "sha256:v16")]
+
+    out = classify_structured(fresh, stored)
+
+    assert out[0].cls is HunkClass.SHARED
+    assert out[0].changed is False
+
+
+def test_classify_value_edit_keeps_class_but_flags_changed() -> None:
+    """A path match with a CHANGED value keeps the class, flagged for re-confirm."""
+    fresh = [KeyUnit(HunkClass.PENDING, "fontSize", "fontSize", "sha256:v18")]
+    stored = [_row("shared", "fontSize", "sha256:v16")]
+
+    out = classify_structured(fresh, stored)
+
+    assert out[0].cls is HunkClass.SHARED
+    assert out[0].changed is True
+
+
+def test_classify_unmatched_path_stays_pending() -> None:
+    """A path with no stored row stays PENDING (the extract default)."""
+    fresh = [KeyUnit(HunkClass.PENDING, "newKey", "newKey", "sha256:x")]
+
+    out = classify_structured(fresh, [])
+
+    assert out[0].cls is HunkClass.PENDING
+
+
+def test_assert_stage_fidelity_structured_passes_when_tracked_matches() -> None:
+    """INV-8 holds: tracked == reconstruct of the promoted set."""
+    base = b"a: 1\nb: 2\n"
+    live = b"a: 9\nb: 2\n"
+    units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x")]
+    tracked = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert_stage_fidelity_structured(
+        base, live, tracked, units, {}, StructuredFormat.YAML
+    )
+
+
+def test_assert_stage_fidelity_structured_raises_when_tracked_carries_local() -> None:
+    """INV-8 violated: tracked holds a LOCAL key's live value → raise."""
+    base = b"a: 1\nb: 2\n"
+    live = b"a: 9\nb: 2\n"
+    units = [KeyUnit(HunkClass.LOCAL, "a", "a", "sha256:x")]
+    tracked = b"a: 9\nb: 2\n"  # carries the host-local edit it must NOT
+
+    with pytest.raises(InvariantViolation):
+        assert_stage_fidelity_structured(
+            base, live, tracked, units, {}, StructuredFormat.YAML
+        )

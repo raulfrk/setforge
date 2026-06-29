@@ -17,12 +17,13 @@ from __future__ import annotations
 import hashlib
 import io
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Final
 
 from ruamel.yaml import YAML
 
+from setforge.errors import InvariantViolation
 from setforge.reconcile.types import HunkClass
 from setforge.structural_merge import get_node_at_path, set_node_at_path
 
@@ -150,6 +151,71 @@ def extract_structured_units(
     return units
 
 
+def _row_draft_hash(row: dict[str, object]) -> str | None:
+    """The row's ``draft_hash`` (set on a ``SHARED_DRAFTED`` row), else ``None``."""
+    value = row.get("draft_hash")
+    return value if isinstance(value, str) else None
+
+
+def classify_structured(
+    fresh: list[KeyUnit], stored: list[dict[str, object]]
+) -> list[KeyUnit]:
+    """Carry stored classifications onto freshly-extracted units by PATH.
+
+    A unit whose ``(path, value_hash)`` matches a stored row inherits its class. A
+    unit whose ``path`` matches but whose ``value_hash`` changed keeps the stored
+    class, flagged ``changed=True`` (surfaced for re-confirm, never silently
+    reset). A ``SHARED_DRAFTED`` row matches by ``path`` alone (its tracked bytes
+    come from the draft store, so the live value may be anything). Paths are
+    unique within a file, so no anchor-collision guard is needed. Anything
+    unmatched stays PENDING.
+    """
+    drafted_by_path = {
+        str(r["path"]): r
+        for r in stored
+        if r.get("cls") == HunkClass.SHARED_DRAFTED.value
+    }
+    by_identity = {(str(r["path"]), str(r["value_hash"])): r for r in stored}
+    by_path = {str(r["path"]): r for r in stored}
+    out: list[KeyUnit] = []
+    for unit in fresh:
+        drafted = drafted_by_path.get(unit.path)
+        if drafted is not None:
+            out.append(
+                replace(
+                    unit,
+                    cls=HunkClass.SHARED_DRAFTED,
+                    changed=False,
+                    draft_hash=_row_draft_hash(drafted),
+                )
+            )
+            continue
+        exact = by_identity.get((unit.path, unit.value_hash))
+        if exact is not None:
+            out.append(
+                replace(
+                    unit,
+                    cls=HunkClass(str(exact["cls"])),
+                    changed=False,
+                    draft_hash=_row_draft_hash(exact),
+                )
+            )
+            continue
+        moved = by_path.get(unit.path)
+        if moved is not None:
+            out.append(
+                replace(
+                    unit,
+                    cls=HunkClass(str(moved["cls"])),
+                    changed=True,
+                    draft_hash=_row_draft_hash(moved),
+                )
+            )
+            continue
+        out.append(unit)  # unmatched → PENDING (the extract default)
+    return out
+
+
 def _promotes(unit: KeyUnit) -> bool:
     """Whether a unit's **live** value is promoted into tracked on reconstruct.
 
@@ -181,3 +247,26 @@ def reconstruct_structured(
             node = get_node_at_path(live_model, unit.path)
             set_node_at_path(base_model, unit.path, node)
     return _dump_model(base_model, fmt)
+
+
+def assert_stage_fidelity_structured(
+    base: bytes,
+    live: bytes,
+    tracked: bytes,
+    units: list[KeyUnit],
+    drafts: dict[str, bytes],
+    fmt: StructuredFormat,
+) -> None:
+    """INV-8: ``tracked`` must equal the reconstruct of exactly the promoted set.
+
+    Raises :class:`~setforge.errors.InvariantViolation` when ``tracked`` carries a
+    LOCAL/PENDING key's live value, is missing a SHARED one, or lacks a
+    SHARED_DRAFTED key's draft — i.e. the committed tree is not exactly the
+    shared/drafted set.
+    """
+    expected = reconstruct_structured(base, live, units, drafts, fmt)
+    if tracked != expected:
+        raise InvariantViolation(
+            "INV-8: tracked content is not exactly the shared key-unit set "
+            "(reconstruct_structured(...) != tracked)"
+        )
