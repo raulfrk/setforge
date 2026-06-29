@@ -24,6 +24,7 @@ from typing import Final
 from ruamel.yaml import YAML
 
 from setforge.reconcile.types import HunkClass
+from setforge.structural_merge import get_node_at_path, set_node_at_path
 
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
@@ -66,18 +67,39 @@ def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def _yaml() -> YAML:
+    """A ruamel round-trip YAML configured for byte-faithful preserve.
+
+    ``preserve_quotes`` keeps a scalar's quote style; ``width`` is set high so a
+    long scalar is never reflowed onto a new line (smell SP5).
+    """
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
+    yaml.width = _YAML_WIDTH
+    return yaml
+
+
 def _load_model(data: bytes, fmt: StructuredFormat) -> object:
     """Parse ``data`` into a fresh comment-preserving model for ``fmt``."""
     text = data.decode("utf-8")
     if fmt is StructuredFormat.YAML:
-        yaml = YAML(typ="rt")
-        yaml.preserve_quotes = True
-        yaml.width = _YAML_WIDTH
-        return yaml.load(io.StringIO(text))
+        return _yaml().load(io.StringIO(text))
     from json5 import loads as _json5_loads
     from json5.loader import ModelLoader
 
     return _json5_loads(text, loader=ModelLoader())
+
+
+def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
+    """Serialise ``model`` back to byte-faithful text for ``fmt``."""
+    if fmt is StructuredFormat.YAML:
+        buf = io.StringIO()
+        _yaml().dump(model, buf)
+        return buf.getvalue().encode("utf-8")
+    from json5.dumper import ModelDumper
+    from json5.dumper import dumps as _json5_dumps
+
+    return _json5_dumps(model, dumper=ModelDumper()).encode("utf-8")
 
 
 class _Missing:
@@ -126,3 +148,36 @@ def extract_structured_units(
             )
         )
     return units
+
+
+def _promotes(unit: KeyUnit) -> bool:
+    """Whether a unit's **live** value is promoted into tracked on reconstruct.
+
+    Only an exact-identity ``SHARED`` unit promotes its live value; a ``changed``
+    unit (value edited since it was staged) is held at base until re-confirmed.
+    """
+    return unit.cls is HunkClass.SHARED and not unit.changed
+
+
+def reconstruct_structured(
+    base: bytes,
+    live: bytes,
+    units: list[KeyUnit],
+    drafts: dict[str, bytes],
+    fmt: StructuredFormat,
+) -> bytes:
+    """Rebuild tracked content as ``base`` with each promoted key's value spliced.
+
+    A promoted ``SHARED`` unit takes its **live** value, set through the model via
+    :func:`~setforge.structural_merge.set_node_at_path` (the comment/anchor/quote-
+    preserving wrapped-node splice) and re-serialised — never text substitution, so
+    an untouched unit round-trips byte-identical. Every LOCAL/PENDING/``changed``
+    unit keeps its base value.
+    """
+    base_model = _load_model(base, fmt)
+    live_model = _load_model(live, fmt)
+    for unit in units:
+        if _promotes(unit):
+            node = get_node_at_path(live_model, unit.path)
+            set_node_at_path(base_model, unit.path, node)
+    return _dump_model(base_model, fmt)
