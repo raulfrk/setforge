@@ -259,22 +259,35 @@ def test_counts_tallies_by_class() -> None:
     assert tally[HunkClass.LOCAL] == 0
 
 
-def test_interactive_choice_builds_themed_style(
+def test_interactive_choice_strips_class_prefix_for_style(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression: ``_interactive_choice`` must strip the ``class:`` prefix
-    ``pt_style`` emits before ``Style.from_dict`` (which keys on bare role
-    names) — otherwise the live TTY walk crashes on the very first hunk with
-    ``AssertionError: 'class:accent'``. Every unit test scripts the ``choose``
-    callback directly and so never builds the real prompt_toolkit style; only a
-    full TTY (container e2e) or this guard exercises the style construction.
-    """
-    from setforge.cli.stage import _interactive_choice
+    """``_interactive_choice`` must strip the ``class:`` prefix ``pt_style``
+    emits before ``Style.from_dict`` (which keys on bare role names).
 
+    The guard is explicit in two halves: the raw ``pt_style`` mapping is
+    ``class:``-prefixed and ``Style.from_dict`` rejects it outright, so the
+    walk's style construction MUST strip the prefix or it raises
+    ``AssertionError: 'class:accent'``. Every other unit test scripts the
+    ``choose`` callback directly and never builds the real prompt_toolkit style,
+    so without this guard only a full TTY (container e2e) covers it.
+    """
+    from prompt_toolkit.styles import Style
+
+    from setforge.cli.stage import _interactive_choice
+    from setforge.ui import THEME, pt_style
+
+    # pt_style emits class:-prefixed keys, which Style.from_dict rejects.
+    raw = pt_style(THEME)
+    assert all(key.startswith("class:") for key in raw)
+    with pytest.raises(AssertionError):
+        Style.from_dict(raw)
+
+    # So _interactive_choice must strip them — building the choose callback
+    # constructs the Style eagerly and must NOT raise.
     cfg, repo, profile = _setup(tmp_path, monkeypatch)
     resolved = resolve_profile(cfg, profile)
     (stage,) = collect_stages(cfg, resolved, repo, profile)
-    # Constructing the choose callback builds the Style — must not raise.
     assert callable(_interactive_choice(stage))
 
 
