@@ -47,6 +47,7 @@ from setforge.config import Config, Disposition, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
+from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
@@ -285,6 +286,92 @@ def _classify_live(
     return reconcile_hunks.classify(reconcile_hunks.extract_hunks(base, live), stored)
 
 
+def _classify_live_structured(
+    profile: str, fid: FileId, fresh: list[su_mod.KeyUnit]
+) -> list[su_mod.KeyUnit]:
+    """Carry stored KEY-unit classifications onto freshly-extracted units by path."""
+    entry = reconcile_store.read_index(profile).files.get(str(fid))
+    stored = entry.hunks if entry is not None else []
+    return su_mod.classify_structured(fresh, stored)
+
+
+def _capture_staged_structured(
+    profile: str,
+    sub_name: str,
+    src: Path,
+    dst: Path,
+    fmt: su_mod.StructuredFormat,
+    *,
+    auto: "CaptureAuto | None",
+) -> CaptureResult | None:
+    """A5b staged capture for a structured (YAML/JSON/JSONC) reconcile file.
+
+    The per-KEY analog of :func:`_capture_staged_plain`: promotes ONLY the keys the
+    host classified SHARED (live value) or SHARED_DRAFTED (shareable draft value)
+    into ``tracked/`` and keeps LOCAL/PENDING host-only. tracked is
+    **reconstructed** through the model from ``base`` + the surviving promoted set
+    (never text-patched), so a SHARED→LOCAL demote drops the key's value from
+    tracked automatically (INV-8). The stored ``base`` is **left unchanged** (it
+    advances only on ``install``); ``local`` records the full live bytes, so the
+    store still round-trips live verbatim (INV-2).
+
+    Must run inside the caller's ``profile_lock``. Returns ``None`` (caller falls
+    back to the verbatim writeback) when not staged-eligible — no recorded base,
+    live missing, unparseable structured content, OR no key yet classified
+    SHARED/SHARED_DRAFTED/LOCAL (per-file opt-in, like the plain path).
+    """
+    if not dst.exists():
+        return None
+    fid = file_id(sub_name)
+    base = reconcile_store.read_base(profile, fid)
+    if base is None:
+        return None  # not reconcile-managed → legacy verbatim capture
+    live = dst.read_bytes()
+    try:
+        fresh = su_mod.extract_structured_units(base, live, fmt)
+    except Exception:
+        return None  # unparseable structured live → verbatim fallback
+    units = _classify_live_structured(profile, fid, fresh)
+    # A5 staging is OPT-IN per file (mirrors the plain path): until at least one
+    # key is classified, the file keeps the legacy absorb behavior.
+    staged = (HunkClass.SHARED, HunkClass.SHARED_DRAFTED, HunkClass.LOCAL)
+    if not any(unit.cls in staged for unit in units):
+        return None
+    drafts = reconcile_store.read_drafts(profile, fid)
+    new_text = su_mod.reconstruct_structured(base, live, units, drafts, fmt).decode(
+        "utf-8"
+    )
+    if _keep_tracked_refuses(auto, src, new_text):
+        return CaptureResult(
+            name=sub_name, action=CaptureAction.SKIPPED, reason="keep-tracked"
+        )
+    result = _write_if_changed(src, new_text)
+    # INV-8: the bytes now ON DISK must be exactly the promoted set; read back the
+    # post-write content so this verifies the actual write.
+    su_mod.assert_stage_fidelity_structured(
+        base, live, src.read_bytes(), units, drafts, fmt
+    )
+    reconcile_store.record(
+        profile,
+        fid,
+        base=base,
+        local=live,
+        hunks=su_mod.serialize_structured(units),
+    )
+    warnings: list[str] = []
+    if any(unit.cls is HunkClass.PENDING for unit in units):
+        warnings.append(
+            f"{src.name}: unstaged local changes kept host-only — run "
+            f"`setforge stage {src.name}` to share any of them"
+        )
+    if any(unit.changed for unit in units):
+        warnings.append(
+            f"{src.name}: a previously-staged key changed and was kept host-only "
+            f"— re-run `setforge stage {src.name}` to re-confirm it"
+        )
+    return CaptureResult(name=sub_name, action=result.action, warnings=tuple(warnings))
+
+
 def capture_profile(
     config: Config,
     profile_name: str,
@@ -382,15 +469,21 @@ def capture_profile(
             else:
                 # A5: a plain reconcile file (no spans, no host-local overlay)
                 # with a recorded base captures per-hunk — only the SHARED hunks
-                # promote into tracked/. Falls back to the verbatim writeback
-                # below when it is not staged-eligible (no base / binary).
-                staged = (
-                    _capture_staged_plain(
-                        profile_name, sub_name, sub_src, sub_dst, auto=auto
-                    )
-                    if not tracked_file.spans and not host_local_names
-                    else None
-                )
+                # promote into tracked/. A structured (YAML/JSON/JSONC) file takes
+                # the per-KEY analog instead (line-diffing a structured file would
+                # mis-stage it). Both fall back to the verbatim writeback below
+                # when not staged-eligible (no base / binary / unparseable).
+                staged: CaptureResult | None = None
+                if not tracked_file.spans and not host_local_names:
+                    fmt = su_mod.structured_format(sub_dst)
+                    if fmt is not None:
+                        staged = _capture_staged_structured(
+                            profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
+                        )
+                    else:
+                        staged = _capture_staged_plain(
+                            profile_name, sub_name, sub_src, sub_dst, auto=auto
+                        )
                 if staged is not None:
                     result = staged
                 else:

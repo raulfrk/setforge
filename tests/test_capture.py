@@ -268,3 +268,103 @@ def test_staged_capture_pending_hint(
     assert b"workdir: /home/raul" not in out  # PENDING workdir kept host-only
     (result,) = [r for r in results if r.name == "CLAUDE.md"]
     assert any("stage" in w for w in result.warnings)  # the "run setforge stage" hint
+
+
+# --------------------------------------------------------------------------- #
+# A5b staged STRUCTURED (YAML/JSON) capture — only SHARED keys promote (INV-8)
+# --------------------------------------------------------------------------- #
+
+_SY_BASE = b"theme: dark\nworkdir: /home/generic\n"
+_SY_LIVE = b"theme: light\nworkdir: /home/raul\n"
+
+
+def _stage_structured_index(
+    profile: str, fid, base: bytes, live: bytes, classes: dict
+) -> None:
+    """Seed the reconcile base + a staged KEY-unit index (simulate install + stage)."""
+    from dataclasses import replace
+
+    from setforge import locking
+    from setforge.reconcile import store
+    from setforge.reconcile import structured_units as su
+    from setforge.reconcile.types import HunkClass
+
+    fresh = su.extract_structured_units(base, live, su.StructuredFormat.YAML)
+    staged = [replace(u, cls=classes.get(u.path, HunkClass.PENDING)) for u in fresh]
+    with locking.profile_lock(profile):
+        store.record(
+            profile, fid, base=base, local=live, hunks=su.serialize_structured(staged)
+        )
+
+
+def _sy_config(dst: Path) -> Config:
+    return Config(
+        tracked_files={
+            "settings.yaml": TrackedFile(src=Path("settings.yaml"), dst=str(dst))
+        },
+        profiles={"p": Profile(tracked_files=["settings.yaml"])},
+    )
+
+
+def test_staged_capture_structured_promotes_only_shared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a SHARED key promotes into tracked/; a LOCAL key stays at base value."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile import store
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    _write(src, _SY_BASE.decode())  # tracked == upstream base
+    _write(dst, _SY_LIVE.decode())  # live carries host edits
+
+    fid = file_id("settings.yaml")
+    _stage_structured_index(
+        "p",
+        fid,
+        _SY_BASE,
+        _SY_LIVE,
+        {"theme": HunkClass.SHARED, "workdir": HunkClass.LOCAL},
+    )
+
+    capture_profile(
+        _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+
+    out = src.read_bytes()
+    assert b"theme: light" in out  # SHARED key promoted
+    assert b"workdir: /home/generic" in out  # LOCAL key kept base value
+    assert b"/home/raul" not in out  # LOCAL host value not leaked to tracked
+    assert store.read_base("p", fid) == _SY_BASE  # base UNCHANGED on sync
+    assert store.reconstruct("p", fid) == _SY_LIVE  # local holds full live (INV-2)
+    store.verify("p")
+
+
+def test_staged_capture_structured_demote_uncaptures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """INV-8: a SHARED→LOCAL demote removes the key's value from tracked/."""
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "settings.yaml"
+    dst = tmp_path / "live" / "settings.yaml"
+    # tracked already carries the shared theme (from a prior sync).
+    _write(src, b"theme: light\nworkdir: /home/generic\n".decode())
+    _write(dst, _SY_LIVE.decode())
+
+    fid = file_id("settings.yaml")
+    # host demotes theme SHARED -> LOCAL; base still carries the upstream value.
+    _stage_structured_index("p", fid, _SY_BASE, _SY_LIVE, {"theme": HunkClass.LOCAL})
+
+    capture_profile(
+        _sy_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+
+    out = src.read_bytes()
+    assert b"theme: dark" in out  # demote restored the base value in tracked/
+    assert b"theme: light" not in out  # the host's shared value is gone
+    assert out == _SY_BASE  # tracked back to pure upstream base

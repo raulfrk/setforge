@@ -19,6 +19,7 @@ import io
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 from ruamel.yaml import YAML
@@ -50,6 +51,25 @@ class StructuredFormat(StrEnum):
     YAML = "yaml"
     JSON = "json"
     JSONC = "jsonc"
+
+
+def structured_format(path: Path) -> StructuredFormat | None:
+    """The structured format of ``path`` by suffix, or ``None`` for a plain file.
+
+    ``.yaml`` / ``.yml`` → YAML; ``.json`` / ``.jsonc`` (per
+    :func:`setforge.jsonc.is_jsonc_file`) → JSONC (the json5 backend). A plain or
+    unknown suffix returns ``None`` so the caller keeps the line-hunk path. The
+    single source of truth for "is this a per-KEY-staged file?", shared by the
+    stage walk (:mod:`setforge.cli.stage`) and capture (:mod:`setforge.capture`)
+    so the two never disagree on which files stage structurally.
+    """
+    from setforge import jsonc
+
+    if path.suffix in (".yaml", ".yml"):
+        return StructuredFormat.YAML
+    if jsonc.is_jsonc_file(path):
+        return StructuredFormat.JSONC
+    return None
 
 
 @dataclass(frozen=True, slots=True)

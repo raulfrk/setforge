@@ -24,7 +24,7 @@ import typer
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from setforge import atomicio, jsonc
+from setforge import atomicio
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -129,7 +129,7 @@ def collect_stages(
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            if _structured_format(sub_dst) is not None:
+            if su_mod.structured_format(sub_dst) is not None:
                 continue  # structured files stage per-KEY (collect_structured_stages)
             if only is not None and only not in (
                 name,
@@ -155,21 +155,6 @@ def collect_stages(
             hunks = hunks_mod.classify(hunks_mod.extract_hunks(base, live), stored)
             stages.append(FileStage(sub_name, fid, sub_src, sub_dst, base, live, hunks))
     return stages
-
-
-def _structured_format(dst: Path) -> StructuredFormat | None:
-    """The structured format of ``dst`` by suffix, or ``None`` for a plain file.
-
-    ``.yaml`` / ``.yml`` → YAML; ``.json`` / ``.jsonc`` (via
-    :func:`setforge.jsonc.is_jsonc_file`) → JSONC (both go through the json5
-    backend). A plain / unknown suffix returns ``None`` so it stays on the
-    line-hunk path.
-    """
-    if dst.suffix in (".yaml", ".yml"):
-        return StructuredFormat.YAML
-    if jsonc.is_jsonc_file(dst):
-        return StructuredFormat.JSONC
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +193,7 @@ def collect_structured_stages(
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            fmt = _structured_format(sub_dst)
+            fmt = su_mod.structured_format(sub_dst)
             if fmt is None:
                 continue
             if only is not None and only not in (
