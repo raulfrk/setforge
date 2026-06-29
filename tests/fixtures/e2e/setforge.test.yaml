@@ -263,6 +263,13 @@ tracked_files:
     src: stage/notes.md
     dst: ~/.setforge_e2e/stage/notes.md
 
+  # A STRUCTURED (YAML) tracked_file so `setforge stage` walks it per-KEY
+  # (dotted-path units) rather than per-line, exercising the A5b structured
+  # share / keep / draft path and the per-key INV-8 capture on sync.
+  stage_settings:
+    src: stage/settings.yaml
+    dst: ~/.setforge_e2e/stage/settings.yaml
+
 # ----------------------------------------------------------------------
 # Marketplaces — referenced only by test-comprehensive. Test-comprehensive
 # uses a well-known stable plugin (superpowers from claude-plugins-official)
@@ -478,3 +485,7 @@ profiles:
   test-stage:
     tracked_files:
       - stage_notes
+
+  test-stage-structured:
+    tracked_files:
+      - stage_settings

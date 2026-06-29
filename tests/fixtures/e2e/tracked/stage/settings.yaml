@@ -1,0 +1,3 @@
+# editor settings (structured per-key staging e2e fixture)
+theme: dark
+workdir: /home/generic
