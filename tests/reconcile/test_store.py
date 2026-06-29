@@ -360,6 +360,7 @@ def test_record_writes_index_last(
     calls: list[str] = []
     monkeypatch.setattr(store, "write_base", lambda *a, **k: calls.append("base"))
     monkeypatch.setattr(store, "write_local", lambda *a, **k: calls.append("local"))
+    monkeypatch.setattr(store, "write_drafts", lambda *a, **k: calls.append("drafts"))
     monkeypatch.setattr(store, "write_index", lambda *a, **k: calls.append("index"))
     monkeypatch.setattr(
         store,
@@ -368,8 +369,11 @@ def test_record_writes_index_last(
             "setforge.reconcile.index_model", fromlist=["Index"]
         ).Index(files={}),
     )
-    store.record("p", file_id("f"), base=b"B", local=b"L")
-    assert calls == ["base", "local", "index"]
+    store.record("p", file_id("f"), base=b"B", local=b"L", drafts={"sha256:a": b"d"})
+    # The drafts manifest is written BEFORE the index too — so a crash leaves a
+    # prunable orphan manifest, never an index row pointing at an unwritten draft.
+    assert calls == ["base", "local", "drafts", "index"]
+    assert calls.index("drafts") < calls.index("index")
 
 
 def test_record_and_prune_do_not_take_lock(

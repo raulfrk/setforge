@@ -93,6 +93,24 @@ def test_session_error_degrades_to_reprompt(monkeypatch: pytest.MonkeyPatch) -> 
     assert share_draft.draft_hunk(_REGION, display_path="CLAUDE.md") is CANCEL
 
 
+def test_review_default_focus_is_keep_mine_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Safety property: the accept bar's default focus (Enter/Esc) must land on the
+    # non-destructive Keep-mine-local, so a mis-press never silently rewrites live.
+    captured: dict[str, object] = {}
+
+    def _fake_bar(buttons: list, **kwargs: object) -> _Choice:
+        idx = kwargs.get("initial", 0)
+        assert isinstance(idx, int)
+        captured["default_value"] = buttons[idx].value
+        return _Choice.KEEP
+
+    monkeypatch.setattr(share_draft, "button_bar", _fake_bar)
+    share_draft._review("a draft", style=None)  # type: ignore[arg-type]
+    assert captured["default_value"] is _Choice.KEEP
+
+
 @pytest.mark.parametrize(
     ("draft", "expected"),
     [
