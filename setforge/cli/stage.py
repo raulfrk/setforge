@@ -240,6 +240,112 @@ def collect_structured_stages(
     return stages
 
 
+#: A per-key-unit choose callback, mirroring :data:`Choice` for key-units.
+type StructuredChoice = Callable[[KeyUnit, int, int], Decision | None | _Quit]
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredWalkResult:
+    """The structured walk's outcome: updated units + per-PATH drafts + adopt set."""
+
+    units: list[KeyUnit]
+    drafts: dict[str, bytes]
+    adopt_paths: set[str]
+
+
+def walk_structured(
+    units: list[KeyUnit], choose: StructuredChoice
+) -> StructuredWalkResult:
+    """Apply one :class:`Decision` per key-unit, keyed by the unit's PATH.
+
+    The structured analog of :func:`walk`: identical control flow, but a unit's
+    identity is its dotted ``path`` (not a line ``anchor``), so drafts and the
+    adopt set are keyed by path.
+    """
+    out = list(units)
+    drafts: dict[str, bytes] = {}
+    adopt_paths: set[str] = set()
+    for index, unit in enumerate(units):
+        decision = choose(unit, index, len(units))
+        if isinstance(decision, _Quit):
+            break
+        if decision is None:
+            continue
+        draft_hash = (
+            hunks_mod._sha(decision.draft) if decision.draft is not None else None
+        )
+        out[index] = replace(unit, cls=decision.cls, draft_hash=draft_hash)
+        if decision.draft is not None:
+            drafts[unit.path] = decision.draft
+        if decision.adopt:
+            adopt_paths.add(unit.path)
+    return StructuredWalkResult(units=out, drafts=drafts, adopt_paths=adopt_paths)
+
+
+def _apply_structured(
+    profile: str, stage: StructuredFileStage, result: StructuredWalkResult
+) -> None:
+    """Persist a structured walk's classifications + drafts.
+
+    Adopt-locally (rewriting host live to a structured draft) is a follow-up; this
+    persists classifications against the unchanged live bytes.
+    """
+    _persist_structured(profile, stage, result, stage.live)
+
+
+def _persist_structured(
+    profile: str,
+    stage: StructuredFileStage,
+    result: StructuredWalkResult,
+    final_live: bytes,
+) -> None:
+    """Record the structured walk's key-unit classifications + drafts under the lock.
+
+    The structured analog of :func:`_persist`: same lost-update RMW (re-read +
+    re-extract under the lock, overlay ONLY the paths the host explicitly decided),
+    keyed by dotted ``path`` instead of line ``anchor``, using the structured
+    extract/classify/serialize. base is UNCHANGED (sync/install own it); the drafts
+    manifest is reconciled to exactly the surviving SHARED_DRAFTED set.
+    """
+    collect_cls = {u.path: u.cls for u in stage.units}
+    walk_by_path = {u.path: u for u in result.units}
+    decided = {
+        path
+        for path, unit in walk_by_path.items()
+        if collect_cls.get(path) != unit.cls or path in result.drafts
+    }
+    with profile_lock(profile):
+        entry = reconcile_store.read_index(profile).files.get(str(stage.fid))
+        stored = entry.hunks if entry is not None else []
+        current = su_mod.classify_structured(
+            su_mod.extract_structured_units(stage.base, final_live, stage.fmt), stored
+        )
+        merged = [
+            replace(
+                u,
+                cls=walk_by_path[u.path].cls,
+                draft_hash=walk_by_path[u.path].draft_hash,
+            )
+            if u.path in decided
+            else u
+            for u in current
+        ]
+        pool = {**reconcile_store.read_drafts(profile, stage.fid), **result.drafts}
+        drafts = {
+            u.path: pool[u.path]
+            for u in merged
+            if u.cls is HunkClass.SHARED_DRAFTED and u.path in pool
+        }
+        reconcile_store.record(
+            profile,
+            stage.fid,
+            base=stage.base,
+            local=final_live,
+            hunks=su_mod.serialize_structured(merged),
+            drafts=drafts,
+        )
+
+
 def counts(hunks: list[Hunk]) -> Counter[HunkClass]:
     """Tally hunks by class (SHARED / LOCAL / PENDING)."""
     return Counter(hunk.cls for hunk in hunks)
