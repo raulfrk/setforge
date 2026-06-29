@@ -977,6 +977,8 @@ def _reconcile_staged_expected(
     :func:`_is_stale`: any store / filesystem / decode error degrades to
     ``False`` so the read-only compare never raises.
     """
+    # Imported lazily (matching transitions._snapshot_target) to keep the module
+    # graph acyclic — the reconcile package imports compare-adjacent helpers.
     from setforge.errors import InvariantViolation, ReconcileStoreError
     from setforge.reconcile import hunks as reconcile_hunks
     from setforge.reconcile import store as reconcile_store

@@ -48,8 +48,10 @@ class Hunk:
     stable identity. ``draft_hash`` is the sha256 of the shareable draft bytes,
     set **only** for a ``SHARED_DRAFTED`` hunk (the draft bytes themselves live in
     the ``drafts/`` store, never here — the index stays pure metadata); it is the
-    identity key for a drafted hunk so a blessed ``live != tracked`` divergence is
-    not re-flagged as drift. ``changed`` is a transient display flag: an
+    draft's content identity, consulted by :func:`serialize` / ``store.verify``.
+    (A blessed ``live != tracked`` divergence avoids re-flagging because
+    :func:`classify` matches a drafted hunk by ``anchor`` with ``changed=False``,
+    not via ``draft_hash``.) ``changed`` is a transient display flag: an
     anchor-stable hunk whose live bytes changed since it was classified (keeps its
     class but is surfaced for re-confirm). ``base_span`` / ``live_span`` are
     transient line ranges, recomputed every run and never persisted.

@@ -345,7 +345,7 @@ def test_manifest_payload_file_shape() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Reconcile store (A5/A5c): local + drafts + index snapshot/restore (Task 8)
+# Reconcile store (A5/A5c): local + drafts + index snapshot/restore
 # --------------------------------------------------------------------------- #
 
 

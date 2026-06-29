@@ -48,9 +48,9 @@ class HunkClass(StrEnum):
     ``SHARED_DRAFTED`` marks a hunk whose tracked bytes are a Claude-rewritten
     *shareable* draft (in the ``drafts/`` store), not the host's live bytes — so
     ``live != tracked`` is the *expected*, blessed state for such a hunk (see
-    :func:`setforge.reconcile.hunks.reconstruct`). The interactive draft flow that
-    produces these (the forthcoming ``stage`` share-draft sub-flow) is not in this
-    storage/engine layer; this layer only stores, reconstructs, and verifies them.
+    :func:`setforge.reconcile.hunks.reconstruct`). The interactive ``stage``
+    share-draft sub-flow produces these; this storage/engine layer only stores,
+    reconstructs, and verifies them.
     """
 
     LOCAL = "local"

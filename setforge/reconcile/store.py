@@ -206,8 +206,8 @@ def write_local(profile: str, fid: FileId, data: bytes | Absent) -> None:
 
 
 def _drafts_path(profile: str, fid: FileId) -> Path:
-    """Resolve the per-fid drafts manifest path, guarding traversal (like local/)."""
-    return _resolve(_drafts_root(), profile, str(fid))
+    """Typed (FileId) wrapper over :func:`drafts_manifest_path` for in-module use."""
+    return drafts_manifest_path(profile, str(fid))
 
 
 # --------------------------------------------------------------------------- #
