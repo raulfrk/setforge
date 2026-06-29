@@ -342,3 +342,76 @@ def test_manifest_payload_file_shape() -> None:
     )
     files = [e["payload_file"] for e in raw["entries"]]
     assert files == ["0.payload", None, "1.payload"]
+
+
+# --------------------------------------------------------------------------- #
+# Reconcile store (A5/A5c): local + drafts + index snapshot/restore (Task 8)
+# --------------------------------------------------------------------------- #
+
+
+def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
+    # An install/sync that advances the reconcile store must be byte-exactly
+    # restorable: local content + drafts manifest + per-profile index + base.
+    from setforge.reconcile import store
+    from setforge.reconcile.types import file_id
+    from setforge.transitions import reconcile_file_snapshots
+
+    fid = file_id("claude/CLAUDE.md")
+    draft = b"workdir: $HOME\n"
+    row: dict[str, object] = {
+        "cls": "shared_drafted",
+        "label": "## Paths",
+        "live_hash": store._sha(b"host"),
+        "anchor": "sha256:a",
+        "draft_hash": store._sha(draft),
+    }
+    store.record(
+        _PROFILE,
+        fid,
+        base=b"base\n",
+        local=b"host live\n",
+        hunks=[row],
+        drafts={"sha256:a": draft},
+    )
+    store.verify(_PROFILE, fid)
+
+    snaps = [
+        snapshot_store_state(SnapshotStore.BASE, _PROFILE, "claude/CLAUDE.md"),
+        *reconcile_file_snapshots(_PROFILE, "claude/CLAUDE.md"),
+        snapshot_store_state(SnapshotStore.INDEX, _PROFILE, _PROFILE),
+    ]
+    # simulate a later install/sync advancing the whole store
+    store.record(
+        _PROFILE, fid, base=b"base2\n", local=b"changed\n", hunks=[], drafts={}
+    )
+    assert store.read_drafts(_PROFILE, fid) == {}
+
+    restore_state_snapshots(snaps)
+
+    assert store.read_base(_PROFILE, fid) == b"base\n"
+    assert store.read_local(_PROFILE, fid) == b"host live\n"
+    assert store.read_drafts(_PROFILE, fid) == {"sha256:a": draft}
+    store.verify(_PROFILE, fid)  # the restored store is self-consistent
+
+
+def test_reconcile_absent_marker_round_trip(state_dir: Path) -> None:
+    # The composite LOCAL legs (content + absent-marker) restore as one unit: a
+    # file recorded ABSENT, then written by the command, reverts back to ABSENT.
+    from setforge.reconcile import store
+    from setforge.reconcile.types import ABSENT, file_id
+    from setforge.transitions import reconcile_file_snapshots
+
+    fid = file_id("f")
+    store.record(_PROFILE, fid, base=b"b", local=ABSENT)
+    assert store.read_local(_PROFILE, fid) is ABSENT
+
+    snaps = reconcile_file_snapshots(
+        _PROFILE, "f"
+    )  # content=None, absent=b"", drafts=None
+    store.write_local(_PROFILE, fid, b"now present")  # the command writes content
+    assert store.read_local(_PROFILE, fid) == b"now present"
+
+    restore_state_snapshots(snaps)
+    assert (
+        store.read_local(_PROFILE, fid) is ABSENT
+    )  # marker restored, content unlinked

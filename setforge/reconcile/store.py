@@ -210,6 +210,33 @@ def _drafts_path(profile: str, fid: FileId) -> Path:
     return _resolve(_drafts_root(), profile, str(fid))
 
 
+# --------------------------------------------------------------------------- #
+# Public path accessors — for the snapshot/revert layer (transitions.py), which
+# captures + restores each store file by path. Take a string ``key`` (the
+# tracked-file id / ``expand_tracked_file`` sub_name), mirroring base_store.base_path.
+# --------------------------------------------------------------------------- #
+
+
+def local_content_path(profile: str, key: str) -> Path:
+    """The local keep-content file path for ``key`` (one leg of the local store)."""
+    return _resolve(_local_root(), profile, key)
+
+
+def local_absent_path(profile: str, key: str) -> Path:
+    """The local absence-marker file path for ``key`` (the other local leg)."""
+    return _resolve(_local_absent_root(), profile, key)
+
+
+def drafts_manifest_path(profile: str, key: str) -> Path:
+    """The per-fid drafts manifest path for ``key``."""
+    return _resolve(_drafts_root(), profile, key)
+
+
+def index_manifest_path(profile: str) -> Path:
+    """The per-profile index document path (profile-scoped, key-independent)."""
+    return _index_path(profile)
+
+
 def _drafts_root() -> Path:
     return state_root() / "drafts"
 

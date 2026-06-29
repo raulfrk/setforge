@@ -70,6 +70,8 @@ from setforge.errors import (
     SourceNotCloned,
 )
 from setforge.locking import profile_lock
+from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.types import file_id
 from setforge.source import (
     LOCAL_CONFIG_PATH,
     get_resolved_source,
@@ -324,6 +326,7 @@ def _capture_sync_store_snapshots(
     Must run BEFORE :func:`_run_capture`, before any re-baseline write.
     """
     entries: list[transitions.StateSnapshotEntry] = []
+    saw_reconcile = False
     for tracked_file, sub_name, _sub_src, _sub_dst in _iter_all_tracked_files(ctx):
         if tracked_file.symlink is not None:
             continue
@@ -338,12 +341,33 @@ def _capture_sync_store_snapshots(
                     transitions.SnapshotStore.SCALAR_BASE, ctx.profile, sub_name
                 )
             )
+        # A plain reconcile file (no disposition, no spans, with a recorded base):
+        # sync's staged capture re-baselines local + index (+ preserves drafts), so
+        # revert must restore the whole reconcile store, not just live. Snapshot
+        # BASE + the local/drafts legs; INDEX once per profile, below.
+        elif (
+            not tracked_file.spans
+            and reconcile_store.read_base(ctx.profile, file_id(sub_name)) is not None
+        ):
+            saw_reconcile = True
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE, ctx.profile, sub_name
+                )
+            )
+            entries.extend(transitions.reconcile_file_snapshots(ctx.profile, sub_name))
         if tracked_file.spans:
             entries.append(
                 transitions.snapshot_store_state(
                     transitions.SnapshotStore.SPANS, ctx.profile, sub_name
                 )
             )
+    if saw_reconcile:
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.INDEX, ctx.profile, ctx.profile
+            )
+        )
     return tuple(entries)
 
 

@@ -921,10 +921,16 @@ def _capture_store_snapshots(
         # advanced, and the next install would treat the reverted-away file as a
         # deliberate deletion (theirs == base) instead of re-deploying it.
         elif record.reconcile is not None:
+            # A plain reconcile file's install advances base AND local + index
+            # (reconcile.record), so revert must restore all of them. BASE +
+            # the local/drafts legs here; the per-profile INDEX once, below.
             entries.append(
                 transitions.snapshot_store_state(
                     transitions.SnapshotStore.BASE, profile, record.sub_name
                 )
+            )
+            entries.extend(
+                transitions.reconcile_file_snapshots(profile, record.sub_name)
             )
         if record.file_spans:
             entries.append(
@@ -932,6 +938,15 @@ def _capture_store_snapshots(
                     transitions.SnapshotStore.SPANS, profile, record.sub_name
                 )
             )
+    # The reconcile index is one doc per profile — snapshot it ONCE, LAST (so a
+    # torn restore leaves a prunable orphan, never an index pointing at unwritten
+    # local/draft bytes — parity with reconcile.record's index-last ordering).
+    if any(record.reconcile is not None for record in pending):
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.INDEX, profile, profile
+            )
+        )
     return tuple(entries)
 
 

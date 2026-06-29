@@ -801,6 +801,14 @@ class SnapshotStore(StrEnum):
     BASE = "base"
     SPANS = "spans"
     SCALAR_BASE = "scalar-base"
+    # Reconcile store (A5/A5c): local keep-content + its absence marker (two legs
+    # of one logical entry), the per-fid drafts manifest, and the per-profile
+    # classification index. Without these, a revert of an install/sync that wrote
+    # the reconcile store left local/index/drafts AHEAD of the reverted tracked src.
+    LOCAL_CONTENT = "local"
+    LOCAL_ABSENT = "local-absent"
+    DRAFTS = "drafts"
+    INDEX = "index"
 
 
 @dataclass(frozen=True, slots=True)
@@ -837,6 +845,7 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     time to keep the module graph acyclic.
     """
     from setforge import base_store, scalar_base_store, spans_store
+    from setforge.reconcile import store as reconcile_store
 
     match store:
         case SnapshotStore.BASE:
@@ -845,6 +854,15 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
             return spans_store.manifest_path(profile, key)
         case SnapshotStore.SCALAR_BASE:
             return scalar_base_store.manifest_path(profile, key)
+        case SnapshotStore.LOCAL_CONTENT:
+            return reconcile_store.local_content_path(profile, key)
+        case SnapshotStore.LOCAL_ABSENT:
+            return reconcile_store.local_absent_path(profile, key)
+        case SnapshotStore.DRAFTS:
+            return reconcile_store.drafts_manifest_path(profile, key)
+        case SnapshotStore.INDEX:
+            # Profile-scoped: one index doc per profile, key-independent.
+            return reconcile_store.index_manifest_path(profile)
 
 
 def snapshot_store_state(
@@ -863,6 +881,25 @@ def snapshot_store_state(
     except FileNotFoundError:
         payload = None
     return StateSnapshotEntry(store=store, profile=profile, key=key, payload=payload)
+
+
+def reconcile_file_snapshots(profile: str, key: str) -> list[StateSnapshotEntry]:
+    """The reconcile-store leg snapshots for ONE file: local content, its absence
+    marker, and the drafts manifest.
+
+    Captures all three legs as one unit so a restore puts the local trichotomy
+    (content / absent-marker / neither) + drafts back consistently. The BASE leg
+    (shared with ``base_store``) and the per-profile INDEX are captured separately
+    by the caller — BASE via :data:`SnapshotStore.BASE`, INDEX once per profile.
+    """
+    return [
+        snapshot_store_state(store, profile, key)
+        for store in (
+            SnapshotStore.LOCAL_CONTENT,
+            SnapshotStore.LOCAL_ABSENT,
+            SnapshotStore.DRAFTS,
+        )
+    ]
 
 
 def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
