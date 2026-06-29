@@ -218,3 +218,43 @@ def test_serialize_structured_drafted_carries_draft_hash() -> None:
 
     assert rows[0]["kind"] == "key"
     assert rows[0]["draft_hash"] == "sha256:d"
+
+
+def test_reconstruct_shared_drafted_splices_draft_value() -> None:
+    """A SHARED_DRAFTED unit takes its DRAFT value (not live, not base)."""
+    base = b"path: /home/alice/x\n"
+    live = b"path: /home/alice/x\n"
+    units = [
+        KeyUnit(
+            HunkClass.SHARED_DRAFTED, "path", "path", "sha256:v", draft_hash="sha256:d"
+        )
+    ]
+    drafts = {"path": b"/home/USER/x"}
+
+    out = reconstruct_structured(base, live, units, drafts, StructuredFormat.YAML)
+
+    assert out == b"path: /home/USER/x\n"
+
+
+def test_reconstruct_shared_drafted_missing_draft_raises() -> None:
+    """A dangling draft pointer fails closed — never falls back to live/base."""
+    units = [
+        KeyUnit(
+            HunkClass.SHARED_DRAFTED, "path", "path", "sha256:v", draft_hash="sha256:d"
+        )
+    ]
+
+    with pytest.raises(InvariantViolation):
+        reconstruct_structured(
+            b"path: /h\n", b"path: /h\n", units, {}, StructuredFormat.YAML
+        )
+
+
+def test_extract_mapping_key_reorder_mints_no_phantom_unit() -> None:
+    """A pure key reorder changes no leaf path → zero units (path-by-name id)."""
+    base = b"a: 1\nb: 2\nc: 3\n"
+    live = b"c: 3\na: 1\nb: 2\n"
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    assert units == []

@@ -25,7 +25,11 @@ from ruamel.yaml import YAML
 
 from setforge.errors import InvariantViolation
 from setforge.reconcile.types import HunkClass
-from setforge.structural_merge import get_node_at_path, set_node_at_path
+from setforge.structural_merge import (
+    get_node_at_path,
+    set_at_path,
+    set_node_at_path,
+)
 
 #: YAML dump width set high so a long scalar is never reflowed onto a new line —
 #: a reflow would mint a phantom diff on an untouched unit (smell SP5).
@@ -266,7 +270,15 @@ def reconstruct_structured(
     base_model = _load_model(base, fmt)
     live_model = _load_model(live, fmt)
     for unit in units:
-        if _promotes(unit):
+        if unit.cls is HunkClass.SHARED_DRAFTED and not unit.changed:
+            try:
+                draft = drafts[unit.path]
+            except KeyError as err:
+                raise InvariantViolation(
+                    f"SHARED_DRAFTED key-unit {unit.path!r} has no draft in the store"
+                ) from err
+            set_at_path(base_model, unit.path, draft.decode("utf-8"))
+        elif _promotes(unit):
             node = get_node_at_path(live_model, unit.path)
             set_node_at_path(base_model, unit.path, node)
     return _dump_model(base_model, fmt)
