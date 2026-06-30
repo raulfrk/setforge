@@ -1,6 +1,6 @@
 """Guard that end-marker semantics-mismatch validation still raises.
 
-The semantics comparison in :func:`setforge.sections._handle_end_marker`
+The semantics comparison in :func:`setforge._legacy_markers._handle_end_marker`
 moved from ``is not`` to ``!=`` (value equality, per the style rule reserving
 ``is`` for None/True/False/sentinels). This must not weaken the check: a
 mismatched-semantics end marker must still raise :class:`MarkerError`, and a
@@ -15,9 +15,9 @@ import textwrap
 
 import pytest
 
-from setforge import sections
+from setforge import _legacy_markers as sections
+from setforge._legacy_markers import extract_sections
 from setforge.errors import MarkerError
-from setforge.sections import extract_sections
 
 _HASH = "hash=" + "a" * 64
 

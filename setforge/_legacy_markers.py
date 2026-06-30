@@ -1,4 +1,20 @@
-"""User-section marker parsing and merging.
+"""Frozen legacy user-section marker reader.
+
+User-section markers are RETIRED at schema 2.1: no live path emits them and
+``setforge migrate`` strips them. This module is the frozen home for the
+marker-READING machinery that must outlive retirement:
+
+* the migration chain — ``migrations/_contract_2_0`` (1.2->2.0) and
+  ``host_local_marker_migration`` (1.1->1.2) — parses legacy markers when a
+  fresh host walks the chain forward (``allow_legacy=True``);
+* ``host_local_inject`` resolves ``after-section`` anchors against markers;
+* ``capture`` / ``cli.migrate`` / ``cli.validate`` strip markers;
+* the refuse-guards keep the strict, fail-closed parse contract.
+
+Treat this module as frozen: do not extend it. The marker EMIT/HASH helpers
+(``merge_sections`` / ``hash_sections`` / ``extract_marker_hashes`` /
+``set_marker_hashes`` / ``strip_section_content``) are transitional here only
+until ``section_reconcile`` — their sole consumer — is deleted.
 
 Marker syntax (HTML comments only)::
 

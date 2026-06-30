@@ -15,8 +15,14 @@ from pathlib import Path
 
 import typer
 
+from setforge import _legacy_markers as sections_mod
 from setforge import section_reconcile, section_wizard
-from setforge import sections as sections_mod
+from setforge._legacy_markers import (
+    SectionSemantics,
+    detect_duplicate_section_names,
+    detect_legacy_markers,
+    detect_legacy_namespace_markers,
+)
 from setforge.capture import CaptureAuto
 from setforge.compare import (
     CompareReport,
@@ -30,12 +36,6 @@ from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
 from setforge.section_reconcile import SectionDrift, SectionDriftState
 from setforge.section_wizard import ReconcileAuto, SectionAction
-from setforge.sections import (
-    SectionSemantics,
-    detect_duplicate_section_names,
-    detect_legacy_markers,
-    detect_legacy_namespace_markers,
-)
 
 
 @dataclass(slots=True, frozen=True)
@@ -208,7 +208,7 @@ def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
 
     Walks every tracked_file in ``resolved`` whose tracked entry has
     ``preserve_user_sections=True`` and runs
-    :func:`setforge.sections.detect_legacy_markers` on the live file (when
+    :func:`setforge._legacy_markers.detect_legacy_markers` on the live file (when
     it exists). The strict parser would otherwise raise
     :class:`setforge.errors.MarkerError` partway through the read-only /
     capture flow with an opaque ``line N: missing required keyword``
@@ -260,7 +260,7 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
     pair, but that surfaces partway through a strict parse as an opaque
     ``line N: duplicate user-section name 'NAME'`` message.
 
-    This pre-check runs :func:`setforge.sections.detect_duplicate_section_names`
+    This pre-check runs :func:`setforge._legacy_markers.detect_duplicate_section_names`
     (regex-only; no strict parse) on every line-based tracked_file's tracked
     SRC and live DST, raising a single user-actionable error naming the
     duplicated section BEFORE any strict parse happens. Structural files

@@ -6,13 +6,14 @@ local bodies are captured into the markerless ``local.yaml`` overlay first), the
 the parser/reconcile/wizard modules are deleted in the same change.
 
 This module embeds a **frozen, self-contained marker reader** (the grammar copied
-verbatim from :mod:`setforge.sections` at author time) so the migration keeps
+verbatim from :mod:`setforge._legacy_markers` at author time) so the migration keeps
 working AFTER ``sections.py`` is deleted — a fresh host that still carries legacy
 markers must be able to migrate. The reader is STRICT and fail-closed: a marker
 missing its ``host-local|shared`` keyword, or a pre-rename ``my-setup:`` namespace
 marker, is REFUSED with :class:`~setforge.errors.MarkerError` rather than silently
 defaulted to SHARED — defaulting a host-local body to shared would leak it into the
-shared repo (the lenient-parse trap in :mod:`setforge.sections` this must not inherit).
+shared repo (the lenient-parse trap in :mod:`setforge._legacy_markers` this must
+not inherit).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 #: grammar). Kept as the regex alternation the marker line must carry.
 _SEMANTICS_KEYWORDS: Final = "host-local|shared"
 
-# Grammar frozen from setforge.sections at author time — see that module's
+# Grammar frozen from setforge._legacy_markers at author time — see that module's
 # docstring for the canonical marker syntax. Kept self-contained so the migration
 # survives the deletion of sections.py.
 _MARKER_RE: Final = re.compile(
@@ -61,7 +62,8 @@ class ParsedSection:
     """One marker-delimited section parsed by the migration's frozen reader.
 
     ``name`` is the canonical key (the start-marker name, or the 0-based string
-    index for an unnamed section, matching :func:`setforge.sections.extract_sections`).
+    index for an unnamed section, matching
+    :func:`setforge._legacy_markers.extract_sections`).
     ``semantics`` is the ``host-local``/``shared`` keyword value. ``body`` is the
     verbatim text between the markers (newlines preserved; ``""`` for an empty
     section). ``embedded_hash`` is the end marker's ``hash=`` baseline, or ``None``.
@@ -86,7 +88,7 @@ class _Open:
 def parse_markers(text: str) -> list[ParsedSection]:
     """STRICT, self-contained parse of ``text`` into its marker sections.
 
-    Byte-equivalent to :func:`setforge.sections.extract_sections` /
+    Byte-equivalent to :func:`setforge._legacy_markers.extract_sections` /
     ``section_semantics`` / ``extract_marker_hashes`` for VALID input. Fail-closed:
     raises :class:`~setforge.errors.MarkerError` on a marker missing its
     ``host-local|shared`` keyword, a malformed marker, a ``my-setup:`` legacy
@@ -197,7 +199,7 @@ def _body_hash(body: str) -> str:
     """sha256-hex of a section body — byte-equivalent to ``sections.hash_sections``.
 
     Frozen so the migration can recognise a ``hash=`` baseline without importing
-    the retired :mod:`setforge.sections`.
+    the retired :mod:`setforge._legacy_markers`.
     """
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 

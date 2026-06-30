@@ -33,12 +33,14 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from setforge import (
+    _legacy_markers as sections,
+)
+from setforge import (
     atomicio,
     base_store,
     disposition_merge,
     jsonc,
     overlay_deploy,
-    sections,
     spans_overlay,
     spans_store,
 )

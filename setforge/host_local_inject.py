@@ -37,11 +37,11 @@ from __future__ import annotations
 import re
 from typing import Final, assert_never
 
-from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
-from setforge.sections import (
+from setforge._legacy_markers import (
     _EndMarker,
     _walk_markers,
 )
+from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.source import (
     Anchor,
     AnchorAfterHeading,
@@ -166,7 +166,7 @@ def _find_after_section_offsets(text: str, name: str) -> list[int]:
     """Return every 0-indexed line offset immediately after a user-section
     end marker whose key equals ``name``.
 
-    Routes through :func:`setforge.sections._walk_markers` so the scan
+    Routes through :func:`setforge._legacy_markers._walk_markers` so the scan
     inherits the strict parser's validation (nested sections,
     end-without-start, etc.). End-marker key matching uses the
     canonical ``key`` (named sections by name; unnamed by string index).

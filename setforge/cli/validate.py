@@ -21,6 +21,7 @@ from ruamel.yaml.error import YAMLError
 
 from setforge import jsonc
 from setforge import source as source_mod
+from setforge._legacy_markers import SectionSemantics, section_semantics
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import FETCH_EXAMPLES, VALIDATE_EXAMPLES
@@ -62,7 +63,6 @@ from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.markdown_spans import bound_span
 from setforge.migrations._local_yaml import guard_local_yaml_schema
 from setforge.paths import template_context
-from setforge.sections import SectionSemantics, section_semantics
 from setforge.source import (
     ExtensionOverlay,
     HostLocalSection,

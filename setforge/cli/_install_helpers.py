@@ -58,6 +58,11 @@ from setforge import config as config_mod
 from setforge import (
     vscode_extensions as vscode_extensions_mod,
 )
+from setforge._legacy_markers import (
+    LiveSections,
+    SectionSemantics,
+    strip_shared_markers,
+)
 from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
@@ -101,7 +106,6 @@ from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.wizard import _claude_merge_unavailable
 from setforge.section_reconcile import SectionDriftState
 from setforge.section_wizard import ReconcileAuto
-from setforge.sections import LiveSections, SectionSemantics, strip_shared_markers
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -1195,7 +1199,7 @@ def _plan_shared_marker_migration(sub_dst: Path) -> str | None:
     The EXPAND half of the section→disposition migration, called only when
     ``sub_dst``'s stored base is ABSENT (a file entering the disposition
     world for the first time). Computes the stripped-live text IN MEMORY via
-    :func:`setforge.sections.strip_shared_markers` (which parses the WHOLE
+    :func:`setforge._legacy_markers.strip_shared_markers` (which parses the WHOLE
     file via the marker state machine first, so a malformed file raises
     :class:`~setforge.errors.MarkerError` before the install writes anything
     — no partial output, no half-migrated file).

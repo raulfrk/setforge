@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.errors import MarkerError
-from setforge.sections import (
+from setforge._legacy_markers import (
     SectionSemantics,
     detect_legacy_markers,
     extract_marker_hashes,
@@ -17,6 +16,7 @@ from setforge.sections import (
     section_semantics,
     set_marker_hashes,
 )
+from setforge.errors import MarkerError
 
 
 def test_no_markers_passthrough() -> None:
@@ -908,14 +908,14 @@ def test_detect_legacy_markers_flags_malformed_end_hash() -> None:
 
 def test_detect_legacy_namespace_markers_returns_true_for_old_start() -> None:
     text = "<!-- my-setup:user-section start shared workflow -->\n"
-    from setforge.sections import detect_legacy_namespace_markers
+    from setforge._legacy_markers import detect_legacy_namespace_markers
 
     assert detect_legacy_namespace_markers(text) is True
 
 
 def test_detect_legacy_namespace_markers_returns_true_for_old_end() -> None:
     text = f"<!-- my-setup:user-section end shared workflow hash={_HASH_HEX_64} -->\n"
-    from setforge.sections import detect_legacy_namespace_markers
+    from setforge._legacy_markers import detect_legacy_namespace_markers
 
     assert detect_legacy_namespace_markers(text) is True
 
@@ -926,13 +926,13 @@ def test_detect_legacy_namespace_markers_returns_false_for_new_namespace() -> No
         "body\n"
         f"<!-- setforge:user-section end shared workflow hash={_HASH_HEX_64} -->\n"
     )
-    from setforge.sections import detect_legacy_namespace_markers
+    from setforge._legacy_markers import detect_legacy_namespace_markers
 
     assert detect_legacy_namespace_markers(text) is False
 
 
 def test_detect_legacy_namespace_markers_returns_false_for_no_markers() -> None:
-    from setforge.sections import detect_legacy_namespace_markers
+    from setforge._legacy_markers import detect_legacy_namespace_markers
 
     assert detect_legacy_namespace_markers("plain text\nno markers\n") is False
 
@@ -947,7 +947,7 @@ def test_detect_legacy_namespace_markers_flags_mixed_namespaces() -> None:
         "body2\n"
         f"<!-- my-setup:user-section end shared b hash={_HASH_HEX_64} -->\n"
     )
-    from setforge.sections import detect_legacy_namespace_markers
+    from setforge._legacy_markers import detect_legacy_namespace_markers
 
     assert detect_legacy_namespace_markers(text) is True
 
@@ -1103,7 +1103,7 @@ _STRIP_FIXTURES = [
 
 def test_strip_shared_markers_drops_marker_lines_keeps_body() -> None:
     """SHARED marker lines vanish; body + outside text byte-survive."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_MULTILINE)
     assert out == "before\nrule one\nrule two\nafter\n"
@@ -1111,7 +1111,7 @@ def test_strip_shared_markers_drops_marker_lines_keeps_body() -> None:
 
 def test_strip_shared_markers_keeps_code_fence_body() -> None:
     """A code fence inside a SHARED section is preserved verbatim."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_IN_CODE_FENCE)
     assert out == "intro\n```python\nx = 1  # not a marker\n```\noutro\n"
@@ -1119,7 +1119,7 @@ def test_strip_shared_markers_keeps_code_fence_body() -> None:
 
 def test_strip_shared_markers_leaves_host_local_intact() -> None:
     """host-local marker pairs survive untouched; only SHARED markers strip."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_MIXED_HOST_LOCAL_AND_SHARED)
     assert out == (
@@ -1132,7 +1132,7 @@ def test_strip_shared_markers_leaves_host_local_intact() -> None:
 
 def test_strip_shared_markers_no_trailing_newline_preserved() -> None:
     """A body with no final newline keeps its no-final-newline shape."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_NO_TRAILING_NEWLINE)
     assert out == "body line\n"
@@ -1140,7 +1140,7 @@ def test_strip_shared_markers_no_trailing_newline_preserved() -> None:
 
 def test_strip_shared_markers_crlf_preserved() -> None:
     """CRLF line endings survive byte-for-byte on non-marker lines."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_CRLF)
     assert out == "before\r\nwin body\r\nafter\r\n"
@@ -1148,7 +1148,7 @@ def test_strip_shared_markers_crlf_preserved() -> None:
 
 def test_strip_shared_markers_bom_preserved() -> None:
     """A leading BOM is preserved (it rides the first outside line)."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_BOM)
     assert out == "﻿head line\nbom body\n"
@@ -1156,7 +1156,7 @@ def test_strip_shared_markers_bom_preserved() -> None:
 
 def test_strip_shared_markers_duplicate_names() -> None:
     """Two SHARED sections sharing a name both strip; both bodies kept."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     out = strip_shared_markers(_SHARED_DUP_NAMES)
     assert out == "first\nmid\nsecond\n"
@@ -1164,7 +1164,7 @@ def test_strip_shared_markers_duplicate_names() -> None:
 
 def test_strip_host_local_markers_drops_pair_and_body() -> None:
     """A host-local pair (markers + body) vanishes; outside text survives."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "before\n"
@@ -1178,7 +1178,7 @@ def test_strip_host_local_markers_drops_pair_and_body() -> None:
 
 def test_strip_host_local_markers_keeps_shared_intact() -> None:
     """SHARED pairs pass through; only host-local pairs are removed."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "<!-- setforge:user-section start host-local HL -->\n"
@@ -1197,7 +1197,7 @@ def test_strip_host_local_markers_keeps_shared_intact() -> None:
 
 def test_strip_host_local_markers_removes_every_pair() -> None:
     """Every host-local pair is removed regardless of name."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "<!-- setforge:user-section start host-local A -->\n"
@@ -1213,7 +1213,7 @@ def test_strip_host_local_markers_removes_every_pair() -> None:
 
 def test_strip_host_local_markers_empty_region_removed() -> None:
     """An empty host-local placeholder (markers around a blank body) is gone."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "head\n"
@@ -1227,7 +1227,7 @@ def test_strip_host_local_markers_empty_region_removed() -> None:
 
 def test_strip_host_local_markers_idempotent() -> None:
     """A second pass over already-stripped text is a no-op."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "x\n"
@@ -1241,7 +1241,7 @@ def test_strip_host_local_markers_idempotent() -> None:
 
 def test_strip_host_local_markers_crlf_outside_preserved() -> None:
     """CRLF endings on kept outside lines survive byte-for-byte."""
-    from setforge.sections import strip_host_local_markers
+    from setforge._legacy_markers import strip_host_local_markers
 
     text = (
         "before\r\n"
@@ -1257,7 +1257,7 @@ def test_strip_host_local_markers_malformed_raises() -> None:
     """An unclosed host-local start marker raises rather than partial-stripping."""
     import pytest
 
-    from setforge.sections import MarkerError, strip_host_local_markers
+    from setforge._legacy_markers import MarkerError, strip_host_local_markers
 
     text = "<!-- setforge:user-section start host-local HL -->\nbody\n"
     with pytest.raises(MarkerError):
@@ -1267,7 +1267,7 @@ def test_strip_host_local_markers_malformed_raises() -> None:
 @pytest.mark.parametrize("fixture", _STRIP_FIXTURES)
 def test_strip_shared_markers_idempotent(fixture: str) -> None:
     """Data-loss invariant: strip(strip(x)) == strip(x) over every fixture."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     once = strip_shared_markers(fixture)
     twice = strip_shared_markers(once)
@@ -1276,7 +1276,7 @@ def test_strip_shared_markers_idempotent(fixture: str) -> None:
 
 def test_strip_shared_markers_no_markers_passthrough() -> None:
     """Text with no markers passes through byte-for-byte."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     text = "just\nplain\ntext\n"
     assert strip_shared_markers(text) == text
@@ -1284,7 +1284,7 @@ def test_strip_shared_markers_no_markers_passthrough() -> None:
 
 def test_strip_shared_markers_malformed_raises_no_partial_output() -> None:
     """A malformed marker raises MarkerError, validating the whole file first."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     text = (
         "<!-- setforge:user-section start shared OPEN -->\nbody\n"
@@ -1296,7 +1296,7 @@ def test_strip_shared_markers_malformed_raises_no_partial_output() -> None:
 
 def test_strip_shared_markers_legacy_untagged_treated_shared() -> None:
     """Untagged (pre-keyword) markers parse as SHARED under allow_legacy and strip."""
-    from setforge.sections import strip_shared_markers
+    from setforge._legacy_markers import strip_shared_markers
 
     text = (
         "head\n"

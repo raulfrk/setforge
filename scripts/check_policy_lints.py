@@ -67,6 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # module importing any of these (by leaf module name) is a violation.
 LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
     {
+        "_legacy_markers",  # frozen legacy marker reader (was sections.py)
         "disposition_merge",
         "sections",
         "section_detect",

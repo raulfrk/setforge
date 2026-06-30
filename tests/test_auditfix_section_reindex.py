@@ -16,11 +16,11 @@ identity and stay classifiable across structural divergence.
 
 import hashlib
 
+from setforge._legacy_markers import SectionSemantics
 from setforge.section_reconcile import (
     SectionDriftState,
     classify_section_drift,
 )
-from setforge.sections import SectionSemantics
 
 
 def _sha256(s: str) -> str:

@@ -3,7 +3,7 @@
 The self-contained marker parser the migration embeds so it keeps working AFTER
 ``sections.py`` is deleted. Its correctness is data-loss-critical (it decides
 host-local vs shared, which gates what reaches the shared repo), so it is
-**differential-tested** against the trusted :mod:`setforge.sections` parser for
+**differential-tested** against the trusted :mod:`setforge._legacy_markers` parser for
 valid input + pinned on the security-critical strict-refuse cases.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from setforge import sections
+from setforge import _legacy_markers as sections
 from setforge.errors import MarkerError
 from setforge.migrations._marker_retire import ParsedSection, parse_markers
 

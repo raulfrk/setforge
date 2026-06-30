@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from setforge._legacy_markers import (
+    SectionSemantics,
+    extract_marker_hashes,
+    hash_sections,
+    set_marker_hashes,
+)
 from setforge.errors import MarkerError
 from setforge.section_reconcile import (
     SectionDrift,
@@ -14,12 +20,6 @@ from setforge.section_reconcile import (
     has_shared_drift,
     maintain_marker_hashes,
     stamp_tracked_baseline,
-)
-from setforge.sections import (
-    SectionSemantics,
-    extract_marker_hashes,
-    hash_sections,
-    set_marker_hashes,
 )
 
 

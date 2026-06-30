@@ -331,7 +331,7 @@ class TestValidateSourceDir:
         """Legacy ``my_setup.yaml`` triggers a ``git mv`` migration hint.
 
         Mirrors the legacy-namespace detector pattern in
-        :func:`setforge.sections.detect_legacy_namespace_markers`: when
+        :func:`setforge._legacy_markers.detect_legacy_namespace_markers`: when
         the parser would otherwise raise a generic "not found" error,
         recognize the old name and emit an actionable migration recipe
         instead.

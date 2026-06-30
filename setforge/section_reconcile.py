@@ -10,8 +10,8 @@ fold without surprising the user on bare ``setforge install`` runs.
 
 The classifier is pure: given (tracked text, live text), it returns a
 deterministic state per shared section, derived from
-:func:`setforge.sections.hash_sections` (actual body) and
-:func:`setforge.sections.extract_marker_hashes` (recorded baseline).
+:func:`setforge._legacy_markers.hash_sections` (actual body) and
+:func:`setforge._legacy_markers.extract_marker_hashes` (recorded baseline).
 The CLI consumes that classification to decide warn / prompt / silent.
 
 Host-local sections always silently keep the live body, regardless of
@@ -27,8 +27,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from setforge import atomicio
-from setforge.errors import MarkerError
-from setforge.sections import (
+from setforge._legacy_markers import (
     SectionSemantics,
     extract_marker_hashes,
     extract_sections,
@@ -36,6 +35,7 @@ from setforge.sections import (
     section_semantics,
     set_marker_hashes,
 )
+from setforge.errors import MarkerError
 
 __all__ = [
     "SectionDrift",
@@ -108,13 +108,13 @@ def classify_section_drift(
     order — deterministic across runs, the contract the wizard relies on
     when it asks "next section?". Sections that exist in tracked but not
     in live (or vice versa) are silently skipped here; the deploy path
-    handles those via :func:`setforge.sections.merge_sections`'s
+    handles those via :func:`setforge._legacy_markers.merge_sections`'s
     placeholder behaviour. ``set_marker_hashes`` callers are likewise
     expected to operate on the post-merge content.
 
     UNNAMED sections are keyed positionally (``"0"``, ``"1"``, ... in
     order of appearance among unnamed sections, per
-    :func:`setforge.sections.extract_sections`). That key is only a
+    :func:`setforge._legacy_markers.extract_sections`). That key is only a
     stable section identity when the tracked and live marker structures
     line up: deleting or reordering an unnamed section on one side shifts
     every later unnamed key, so a naive ``tracked["0"]`` vs ``live["0"]``
@@ -174,7 +174,7 @@ def classify_section_drift(
 def _unnamed_section_keys(bodies: Mapping[str, str]) -> set[str]:
     """Return the positional keys that came from UNNAMED sections.
 
-    :func:`setforge.sections.extract_sections` keys unnamed sections by
+    :func:`setforge._legacy_markers.extract_sections` keys unnamed sections by
     their 0-based ordinal among unnamed sections (``"0"``, ``"1"``, ...),
     assigned in order of appearance. Because the dict preserves that
     insertion order, an unnamed key is exactly one whose value equals the
@@ -277,8 +277,8 @@ def _classify_one(
 def maintain_marker_hashes(text: str) -> str:
     """Rewrite every end-marker's ``hash=<...>`` to match its body content.
 
-    Composition of :func:`setforge.sections.hash_sections` and
-    :func:`setforge.sections.set_marker_hashes`. Idempotent: applying it
+    Composition of :func:`setforge._legacy_markers.hash_sections` and
+    :func:`setforge._legacy_markers.set_marker_hashes`. Idempotent: applying it
     twice yields the same output as applying it once (set_marker_hashes
     is byte-preserving outside the end-marker line, and the body it
     hashes is unchanged).

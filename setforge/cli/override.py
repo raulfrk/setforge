@@ -53,6 +53,7 @@ from ruamel.yaml import YAML
 from setforge import compare as compare_mod
 from setforge import disposition_merge, transitions
 from setforge import source as source_mod
+from setforge._legacy_markers import _MARKER_RE
 from setforge.atomicio import atomic_write_text
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -80,7 +81,6 @@ from setforge.errors import (
 )
 from setforge.markdown_spans import bound_span
 from setforge.scalar_merge import ABSENT
-from setforge.sections import _MARKER_RE
 from setforge.source import PathSource, Source, SpanEntry
 from setforge.spans import (
     SpanKind,

@@ -17,9 +17,7 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge.cli import app
-from setforge.errors import MarkerError, SetforgeError
-from setforge.sections import (
+from setforge._legacy_markers import (
     detect_duplicate_section_names,
     extract_marker_hashes,
     extract_sections,
@@ -28,6 +26,8 @@ from setforge.sections import (
     section_semantics,
     set_marker_hashes,
 )
+from setforge.cli import app
+from setforge.errors import MarkerError, SetforgeError
 
 _HASH_64 = "0" * 64
 

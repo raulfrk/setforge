@@ -36,11 +36,11 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from setforge._editor import run_editor
+from setforge._legacy_markers import SectionSemantics
 from setforge.section_reconcile import (
     SectionDrift,
     SectionDriftState,
 )
-from setforge.sections import SectionSemantics
 from setforge.wizard import read_one_choice
 
 __all__ = [

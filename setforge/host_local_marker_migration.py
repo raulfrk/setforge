@@ -19,16 +19,16 @@ from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from setforge.errors import MarkerError
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-from setforge.overlay_inject import canonical_body
-from setforge.sections import (
+from setforge._legacy_markers import (
     SectionSemantics,
     _BodyLine,
     _EndMarker,
     _StartMarker,
     _walk_markers,
 )
+from setforge.errors import MarkerError
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.overlay_inject import canonical_body
 
 
 def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
@@ -36,12 +36,12 @@ def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
 
     Body is the exact bytes between the markers (trailing newline included, up
     to but not including the end-marker line), matching
-    :func:`setforge.sections.extract_sections`. Shared regions are ignored.
+    :func:`setforge._legacy_markers.extract_sections`. Shared regions are ignored.
 
     Raises :class:`~setforge.errors.MarkerError` on a duplicate host-local name
     (silently dropping one — the dict last-wins of ``extract_sections`` — would
     lose a per-host body before it could be captured) AND, via
-    :func:`setforge.sections._walk_markers`, on any malformed / unclosed /
+    :func:`setforge._legacy_markers._walk_markers`, on any malformed / unclosed /
     nested / name-mismatched marker in ``text``. ``MarkerError`` is a
     :class:`~setforge.errors.SetforgeError`, so the CLI surfaces it as a clean
     ``error: ...`` exit rather than a traceback.

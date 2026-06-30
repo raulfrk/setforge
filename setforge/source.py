@@ -153,7 +153,7 @@ A ``HostLocalSectionName`` MUST originate from a key in the local.yaml
 injection module so callers cannot accidentally substitute a tracked-side
 shared-section name (which has different drift semantics — shared
 sections participate in section-reconcile; host-local sections do
-not). Mirrors the :data:`setforge.sections.LiveSections` /
+not). Mirrors the :data:`setforge._legacy_markers.LiveSections` /
 :data:`setforge.transitions.TransitionDir` pattern: a name-only
 NewType wrapping ``str`` so call sites stay backwards-compatible at
 runtime while the static type carries the provenance constraint.
@@ -865,7 +865,7 @@ def validate_source_dir(source: Source) -> Path:
         return config_path
     # Friendly migration error for the my_setup.yaml -> setforge.yaml
     # rename. Mirrors the legacy-namespace detector
-    # pattern in setforge.sections.detect_legacy_namespace_markers.
+    # pattern in setforge._legacy_markers.detect_legacy_namespace_markers.
     legacy_path = source_dir / _LEGACY_CONFIG_FILENAME
     if legacy_path.exists():
         quoted_dir = shlex.quote(str(source_dir))

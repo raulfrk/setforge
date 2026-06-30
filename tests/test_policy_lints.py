@@ -69,14 +69,16 @@ def test_legacy_api_fires_in_enforced_pkg() -> None:
 
 def test_legacy_api_not_enforced_outside_enforced_pkgs() -> None:
     # A current consumer outside the new-engine packages is NOT flagged.
-    vs = check_source("from setforge.sections import X\n", "setforge/cli/override.py")
+    vs = check_source(
+        "from setforge._legacy_markers import X\n", "setforge/cli/override.py"
+    )
     assert _ids(vs, "SAFE-2") == []
 
 
 def test_legacy_api_import_variants() -> None:
     for src in (
-        "import setforge.sections as s\n",
-        "from setforge import sections\n",
+        "import setforge._legacy_markers as s\n",
+        "from setforge import _legacy_markers\n",
         "from setforge.spans_overlay import apply\n",
         "from setforge.section_wizard import run\n",
     ):

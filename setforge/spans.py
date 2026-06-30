@@ -112,7 +112,7 @@ class SpanSemantics(StrEnum):
     per-machine. ``shared`` — intent lives in the tracked ``setforge.yaml``
     and propagates across hosts (tracked-side updates surface in the
     reconcile flow). Mirrors
-    :class:`setforge.sections.SectionSemantics`.
+    :class:`setforge._legacy_markers.SectionSemantics`.
     """
 
     HOST_LOCAL = "host-local"
