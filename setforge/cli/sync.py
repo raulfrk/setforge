@@ -15,7 +15,6 @@ import typer
 
 from setforge import (
     atomicio,
-    section_wizard,
     transitions,
     vscode_extensions,
 )
@@ -64,17 +63,12 @@ from setforge.config import (
 )
 from setforge.errors import (
     CaptureRequiresInteractive,
-    ConfigError,
     ExtensionToolMissing,
-    NoSourceConfigured,
-    SourceNotCloned,
 )
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import file_id
 from setforge.source import (
-    LOCAL_CONFIG_PATH,
-    get_resolved_source,
     load_local_host_local_sections,
 )
 
@@ -224,12 +218,6 @@ def sync(
             transitions.ensure_state_dir_writable()
 
         _run_capture_confirm_gate(ctx, auto_enum=auto_enum, yes=yes)
-
-        _run_promote_wizard(
-            ctx,
-            auto_enum=auto_enum,
-            no_transition=no_transition,
-        )
 
         src_paths = _sync_snapshot_paths(ctx, config)
         file_pre = transitions.snapshot_paths(src_paths)
@@ -447,104 +435,6 @@ def _sync_snapshot_paths(
     # path capture actually mutates.
     paths.append(source_mod.LOCAL_CONFIG_PATH.resolve())
     return paths
-
-
-def _run_promote_wizard(
-    ctx: ProfileContext,
-    *,
-    auto_enum: capture_mod.CaptureAuto | None,
-    no_transition: bool,
-) -> list[section_wizard.PromoteOutcome]:
-    """Walk host-local promotables; prompt + dispatch promote per spec auto-promote.
-
-    Skipped when ``--auto`` is set (sync's non-interactive paths cannot
-    drive the radiolist confirm dialog) or when no overlays are
-    declared. Each successful promote is recorded as a standalone
-    ``TransitionCommand.PROMOTE`` transition so ``setforge revert``
-    rolls the multi-file mutation back independently of the surrounding
-    SYNC transition.
-    """
-    overlays = load_local_host_local_sections()
-    if not overlays:
-        return []
-    if auto_enum is not None:
-        # Non-interactive sync: keep all promotables host-local
-        # silently. The wizard's prompt requires a TTY.
-        return []
-
-    if not no_transition:
-        transitions.ensure_state_dir_writable()
-    snapshot_base = transitions.state_root() / "snapshots"
-    snapshot_base.mkdir(parents=True, exist_ok=True)
-
-    # Narrow the source-resolution failure modes that legitimately
-    # short-circuit promote (no source configured, source clone missing,
-    # malformed local.yaml). Anything else propagates — silently skipping
-    # `check_source_clean` for an unknown error would nullify the
-    # anti-smell 13 safety gate. When we DO catch one of the expected
-    # cases, warn the user so the dirty-checkout skip is visible.
-    try:
-        source = get_resolved_source()
-    except (NoSourceConfigured, SourceNotCloned, ConfigError) as exc:
-        typer.secho(
-            f"warning: source unresolved ({exc.__class__.__name__}); "
-            "skipping check_source_clean. Promote will not detect a "
-            "dirty source-repo checkout.",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-        source = None
-
-    tracked_files = _iter_promotable_tracked_files(ctx)
-    if not tracked_files:
-        return []
-
-    outcomes = section_wizard.run_host_local_promote_wizard(
-        tracked_files=tracked_files,
-        overlays=overlays,
-        local_yaml_path=LOCAL_CONFIG_PATH,
-        profile=ctx.profile,
-        snapshot_base=snapshot_base,
-        source=source,
-        interactive=sys.stdin.isatty(),
-    )
-
-    if no_transition:
-        return outcomes
-    for outcome in outcomes:
-        if outcome.action is not section_wizard.SectionAction.PROMOTE:
-            continue
-        assert outcome.file_pre is not None
-        assert outcome.file_post is not None
-        target = transitions.write_transition(
-            transitions.make_meta(
-                transitions.TransitionCommand.PROMOTE,
-                ctx.profile,
-                end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
-                command_line=redact_argv(sys.argv[1:]),
-            ),
-            outcome.file_pre,
-            outcome.file_post,
-            None,
-        )
-        typer.echo(f"promote transition: {target}")
-    return outcomes
-
-
-def _iter_promotable_tracked_files(
-    ctx: ProfileContext,
-) -> list[tuple[str, Path, Path]]:
-    """Yield ``(tracked_file_id, tracked_path, live_path)`` per profile entry.
-
-    Built from ``ctx.resolved.tracked_files`` so the iteration order
-    matches the user-visible profile order. Symlink-deployed
-    tracked_files use the symlink path as ``live_path`` — the wizard's
-    promote dispatch reads/writes through it identically.
-    """
-    # The legacy preserve_user_sections section-reconcile model was retired at
-    # schema 2.0, so no tracked_file is "section-bearing" any more — this list
-    # is always empty (the section-promote wizard is inert).
-    return []
 
 
 def _capture_extensions(config: Path, profile: str) -> None:

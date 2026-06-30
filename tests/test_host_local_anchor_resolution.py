@@ -10,20 +10,13 @@ from __future__ import annotations
 import pytest
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
-from setforge.host_local_inject import (
-    inject_all,
-    inject_host_local_section,
-    resolve_anchor,
-)
-from setforge.sections import extract_marker_hashes, hash_sections
+from setforge.host_local_inject import resolve_anchor
 from setforge.source import (
     AnchorAfterHeading,
     AnchorAfterSection,
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
-    HostLocalSection,
-    HostLocalSectionName,
 )
 
 
@@ -167,73 +160,3 @@ class TestAfterSectionAnchor:
         )
         offset = resolve_anchor(text, AnchorAfterSection(name="notes"))
         assert offset == 3
-
-
-class TestInjectHostLocalSection:
-    """End-to-end splice preserves the post-install hash invariant."""
-
-    def test_inject_preserves_hash_invariant(self) -> None:
-        text = "# Title\n\n## Workflow\n\nbody\n"
-        out = inject_host_local_section(
-            text,
-            HostLocalSectionName("work-overrides"),
-            AnchorAfterHeading(value="Workflow"),
-            "INJECTED",
-        )
-        assert extract_marker_hashes(out) == hash_sections(out)
-
-    def test_inject_uses_host_local_semantics_keyword(self) -> None:
-        text = "# Title\n\n## Workflow\n\n"
-        out = inject_host_local_section(
-            text,
-            HostLocalSectionName("w"),
-            AnchorAfterHeading(value="Workflow"),
-            "x",
-        )
-        assert "start host-local w" in out
-        assert "end host-local w" in out
-
-    def test_inject_rejects_duplicate_section_name(self) -> None:
-        """Defensive guard: re-injection of an existing name raises.
-
-        Direct callers of ``inject_host_local_section`` that bypass the
-        body-replace path in ``inject_all`` would otherwise produce a
-        malformed file with two pairs sharing one name. The guard catches
-        this at the splice boundary.
-        """
-        dup_name = HostLocalSectionName("dup")
-        once = inject_host_local_section(
-            "# T\n", dup_name, AnchorAtEndOfFile(), "first"
-        )
-        with pytest.raises(AnchorAmbiguousError):
-            inject_host_local_section(once, dup_name, AnchorAtEndOfFile(), "second")
-
-
-class TestInjectAllIdempotency:
-    """``inject_all`` updates existing sections in place — no duplicate pair."""
-
-    def test_re_inject_updates_body_does_not_duplicate(self) -> None:
-        sections = {
-            HostLocalSectionName("s"): HostLocalSection(
-                anchor=AnchorAtEndOfFile(), body="first body"
-            )
-        }
-        once = inject_all("# T\n", sections)
-        sections2 = {
-            HostLocalSectionName("s"): HostLocalSection(
-                anchor=AnchorAtEndOfFile(), body="updated body"
-            )
-        }
-        twice = inject_all(once, sections2)
-        assert twice.count("start host-local s") == 1
-        assert "updated body" in twice
-        assert "first body" not in twice
-
-    def test_hash_invariant_holds_after_re_inject(self) -> None:
-        sections = {
-            HostLocalSectionName("s"): HostLocalSection(
-                anchor=AnchorAtEndOfFile(), body="initial"
-            )
-        }
-        out = inject_all(inject_all("# T\n", sections), sections)
-        assert extract_marker_hashes(out) == hash_sections(out)

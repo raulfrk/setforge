@@ -26,14 +26,11 @@ from pathlib import Path
 from setforge import (
     atomicio,
     disposition_merge,
-    host_local_inject,
     overlay_deploy,
-    sections,
 )
 from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
-from setforge.section_reconcile import maintain_marker_hashes
 from setforge.section_wizard import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
@@ -103,34 +100,6 @@ class ResolvedDeploy:
     merge_conflicts: list[LineConflict | PathConflict]
     new_span_states: dict[str, SpanState] | None
     span_orphans: list[SpanOrphan]
-
-
-def _legacy_only_host_local(
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
-    spans: list[SpanEntry] | None,
-) -> dict[HostLocalSectionName, HostLocalSection] | None:
-    """Drop host-local entries whose name is a host-local OVERLAY span anchor.
-
-    The loader projects migrated OVERLAY spans back INTO the host-local map
-    (:func:`setforge.source._host_local_sections_for_overlay`) so capture /
-    compare / promote keep seeing the migrated bodies. On the deploy preserve
-    path those names are injected MARKERLESS via
-    :func:`setforge.overlay_deploy.inject_overlay_bodies`, so they must NOT also
-    reach :func:`setforge.host_local_inject.inject_all` (which injects WITH
-    markers — the double-injection trap). Returns the map unchanged when there
-    are no overlay spans, so files with no overlay spans stay byte-for-byte
-    untouched.
-    """
-    if not host_local_sections or not spans:
-        return host_local_sections
-    overlay_names = {s.anchor for s in overlay_deploy.overlay_spans(spans)}
-    if not overlay_names:
-        return host_local_sections
-    return {
-        name: section
-        for name, section in host_local_sections.items()
-        if name not in overlay_names
-    }
 
 
 def copy_atomic(
@@ -245,11 +214,10 @@ def resolve_deploy(
     ``disposition=None`` branch (a host-local-only file), where the content
     is otherwise tracked verbatim.
 
-    ``host_local_sections`` is the legacy local.yaml ``host_local_sections``
-    overlay (marker-injected via :func:`setforge.host_local_inject.inject_all`),
-    a back-compat shim for hosts not yet rewritten to OVERLAY spans; names
-    that are already OVERLAY span anchors are excluded here (injected
-    markerless instead) to avoid double-injection.
+    ``host_local_sections`` is a vestigial parameter: host-local content is now
+    markerless OVERLAY-span only (the marker-injection path was retired with the
+    user-section markers). It is retained on the signature for caller symmetry
+    and threaded inertly; the OVERLAY spans alone carry every host-local body.
 
     ``mode`` is the POSIX file-mode bits to apply to ``dst`` via
     ``os.fchmod`` on the temp fd BEFORE ``os.replace`` (closes the
@@ -290,9 +258,7 @@ def resolve_deploy(
             )
         )
     else:
-        content, new_span_states = _verbatim_with_overlay(
-            src, host_local_sections, spans, span_states
-        )
+        content, new_span_states = _verbatim_with_overlay(src, spans, span_states)
         new_base = None
         merge_conflicts = []
         span_orphans = []
@@ -454,31 +420,25 @@ def _resolve_disposition_content(
 
 def _verbatim_with_overlay(
     src: Path,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None,
     spans: list[SpanEntry] | None,
     span_states: dict[str, SpanState] | None,
 ) -> tuple[str, dict[str, SpanState] | None]:
     """Render a ``disposition=None`` file: tracked verbatim + host-local overlays.
 
     Returns ``(content, new_span_states)``. Host-local OVERLAY spans carry the
-    per-host body markerless in local.yaml; the loader PROJECTS those into
-    ``host_local_sections`` (for capture/compare/promote), so they are excluded
-    from :func:`host_local_inject.inject_all` here (which injects WITH markers)
-    and injected markerless below — else each body lands twice.
+    per-host body markerless in local.yaml and are spliced in once at their
+    anchors below; a file with no host-local overlay stays byte-for-byte the
+    tracked source.
     """
     content = src.read_text(encoding="utf-8")
     new_span_states: dict[str, SpanState] | None = None
     md_overlay_spans = overlay_deploy.overlay_spans(spans) if spans else []
-    legacy_host_local = _legacy_only_host_local(host_local_sections, spans)
-    if legacy_host_local:
-        content = host_local_inject.inject_all(content, legacy_host_local)
-        content = maintain_marker_hashes(content)
-    # De-marker + markerless inject: strip EVERY tracked-authored
-    # host-local marker pair from the content, then splice each overlay body in
-    # once. Runs only when host-local overlay spans are present, so files with
-    # no host-local overlay stay byte-for-byte the tracked source.
+    # Markerless inject: splice each host-local OVERLAY body in once at its
+    # anchor. Host-local content is overlay-only after the marker-retire
+    # migration (schema 2.1) — there are no tracked-authored marker pairs left
+    # to strip or hash. Runs only when host-local overlay spans are present, so
+    # files with no host-local overlay stay byte-for-byte the tracked source.
     if md_overlay_spans:
-        content = sections.strip_host_local_markers(content)
         content, new_span_states = overlay_deploy.inject_overlay_bodies(
             content, md_overlay_spans, span_states or {}
         )
@@ -710,7 +670,6 @@ def deploy_symlinked_file(
         target,
         tracked_file,
         backup=backup,
-        host_local_sections=host_local_sections,
     )
     action = _replace_symlink_atomic(dst, tracked_file.symlink)
     return DeployResult(dst=dst, action=action, backup_path=None)
@@ -722,20 +681,16 @@ def _deploy_target_content(
     tracked_file: TrackedFile,
     *,
     backup: bool,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> None:
-    """Write ``src`` content to ``target`` via :func:`_atomic_write`.
+    """Write ``src`` content verbatim to ``target`` via :func:`_atomic_write`.
 
-    The tracked content is written verbatim; the legacy
-    ``host_local_sections`` overlay (marker-injected) still composes for
-    symlink-deployed tracked_files via :func:`host_local_inject.inject_all`.
-    ``mode`` rides through unchanged.
+    Symlink-deployed tracked_files carry no host-local overlay after the
+    marker-retire migration (host-local content is markerless overlay-only, and
+    symlink targets do not yet route through the overlay injector — a future
+    enhancement). ``mode`` rides through unchanged.
     """
     target_existed = target.exists()
     content = src.read_text(encoding="utf-8")
-    if host_local_sections:
-        content = host_local_inject.inject_all(content, host_local_sections)
-        content = maintain_marker_hashes(content)
     _atomic_write(content, src, target, target_existed, backup, tracked_file.mode)
 
 

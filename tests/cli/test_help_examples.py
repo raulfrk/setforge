@@ -51,8 +51,6 @@ LEAF_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("marketplace", "update"),
     ("validate",),
     ("fetch",),
-    ("section", "emit"),
-    ("section", "add"),
     ("init",),
     ("upgrade",),
     ("migrate",),

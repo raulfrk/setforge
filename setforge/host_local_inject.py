@@ -1,12 +1,11 @@
-"""Host-local user-section injection for markdown tracked_files.
+"""Anchor resolution for markdown tracked_files.
 
-Resolves a :data:`setforge.source.Anchor` against rendered markdown text
-and splices a host-local user-section marker pair + body at the resolved
-line offset. The injection routes every marker construction through
-:func:`setforge.cli.section._format_marker_pair_unstamped` +
-:func:`setforge.cli.section._stamp_section_hashes` so the post-install
-hash invariant (``extract_marker_hashes(text) == hash_sections(text)``)
-holds.
+Resolves a :data:`setforge.source.Anchor` against rendered markdown text to a
+line offset — the shared splice-point primitive the markerless overlay engine
+(:mod:`setforge.overlay_deploy` / :mod:`setforge.overlay_inject`) uses to place
+each host-local body. (The legacy marker-pair injection that once lived here was
+retired with the user-section markers; only the resolvers + EOL/fence helpers
+remain.)
 
 Anchor grammar:
 
@@ -40,7 +39,6 @@ from typing import Final, assert_never
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.sections import (
-    SectionSemantics,
     _EndMarker,
     _walk_markers,
 )
@@ -53,7 +51,6 @@ from setforge.source import (
     AnchorBeforeHeading,
     AnchorInSection,
     HostLocalSection,
-    HostLocalSectionName,
 )
 
 # Provenance tag emitted by every install / install --dry-run / compare
@@ -318,132 +315,3 @@ def _read_body(section: HostLocalSection) -> str:
     if not body.strip():
         raise ValueError(f"HostLocalSection `body_file` {section.body_file} is empty")
     return body
-
-
-def inject_host_local_section(
-    text: str,
-    name: HostLocalSectionName,
-    anchor: Anchor,
-    body: str,
-) -> str:
-    """Splice a marker pair + body into ``text`` at the resolved anchor.
-
-    ``name`` is :data:`HostLocalSectionName` — a provenance-marked
-    NewType that MUST come from the local.yaml parse path
-    (:func:`setforge.source.load_local_host_local_sections`). A static
-    type-checker rejects bare ``str`` here so a caller cannot
-    accidentally pass a tracked-side shared-section name (different
-    drift semantics).
-
-    EOL-normalises ``text`` first (anti-smell item 11 — CRLF live, LF
-    tracked). Builds the marker pair via
-    :func:`setforge.cli.section._format_marker_pair_unstamped` so the
-    canonical layout is owned by ONE module, then routes the whole
-    result through :func:`setforge.cli.section._stamp_section_hashes`
-    to satisfy the post-install hash invariant. The section semantics
-    keyword is always ``host-local`` (anti-smell item 8).
-
-    Idempotency check (anti-smell item 15): if a section named ``name``
-    already exists in ``text``, raise :class:`AnchorAmbiguousError` —
-    the caller must NOT re-inject. The install path is responsible for
-    pre-flighting against the LIVE file's section name set so a re-run
-    of ``setforge install`` updates the body in place rather than
-    appending a duplicate pair (handled in :func:`inject_all`).
-    """
-    # Lazy import: setforge.cli.section -> setforge.compare ->
-    # setforge.host_local_inject would form a module-import cycle if
-    # this hoist were at the top. The cli.section module is imported on
-    # first call (after compare's import-time graph has settled). Mirrors
-    # the cycle-breaking pattern at setforge/config.py:587
-    # (apply_preserve_user_keys_overlay).
-    from setforge.cli.section import (
-        _format_marker_pair_unstamped,
-        _stamp_section_hashes,
-    )
-    from setforge.sections import extract_sections
-
-    # Normalise once at the splice boundary; the inner ``_resolve_anchor_lf``
-    # consumes the already-normalised text without re-running the EOL
-    # collapse (deduped per Phase 6 minor #9).
-    normalised = _normalise_eol(text)
-    # Defensive duplicate-pair check (anti-smell item 15). The caller
-    # of record is :func:`inject_all`, which routes existing names
-    # through the body-replace path and never re-enters this function
-    # for them; this guard catches direct callers (e.g. ad-hoc scripts)
-    # that bypass ``inject_all`` and would otherwise produce a malformed
-    # file with two pairs sharing one name.
-    if name in extract_sections(normalised, allow_legacy=True):
-        raise AnchorAmbiguousError(
-            f"section {name!r} already exists in target text; the caller "
-            "must route through inject_all (body-replace path) instead "
-            "of re-injecting a duplicate pair"
-        )
-    line_offset = _resolve_anchor_lf(normalised, anchor)
-    pair = _format_marker_pair_unstamped(
-        semantics=SectionSemantics.HOST_LOCAL.value, name=name, body=body
-    )
-    lines = normalised.splitlines(keepends=True)
-    head = "".join(lines[:line_offset])
-    tail = "".join(lines[line_offset:])
-    # Ensure the head ends in a newline so the marker pair lands on its
-    # own line. The only way head can lack a trailing newline is when
-    # the splice point is at_end_of_file on a file that does not end
-    # with "\n"; in that case we add the newline so the marker pair is
-    # well-formed.
-    if head and not head.endswith("\n"):
-        head += "\n"
-    return _stamp_section_hashes(head + pair + tail)
-
-
-def inject_all(
-    text: str,
-    sections: dict[HostLocalSectionName, HostLocalSection],
-) -> str:
-    """Inject every section in ``sections`` into ``text`` in declaration order.
-
-    ``sections`` is keyed by :data:`HostLocalSectionName` — the
-    provenance-marked NewType the load path
-    (:func:`setforge.source.load_local_host_local_sections`) constructs.
-    A static type-checker rejects a plain ``dict[str, HostLocalSection]``
-    so callers cannot pass a tracked-side section map by accident.
-
-    Idempotency: when ``text`` already contains a user-section whose
-    name matches a key in ``sections``, the existing section's BODY
-    is replaced in place (no new marker pair is spliced). Anchors are
-    only consulted for first-injection (when the section is absent
-    from ``text``).
-
-    The whole returned text is finally routed through
-    :func:`_stamp_section_hashes` so every end marker carries the
-    canonical ``hash=<sha256-hex>`` segment for both newly-spliced and
-    body-replaced sections.
-
-    Routes through :func:`setforge.sections.extract_sections` for the
-    presence check so the install path sees the same section-name set
-    the rest of the engine reads from the file. Raises every error
-    :func:`inject_host_local_section` raises (anchor not found, anchor
-    ambiguous).
-    """
-    # Lazy import: same cycle-break rationale as inject_host_local_section
-    # (cli.section -> compare -> host_local_inject); _stamp_section_hashes
-    # is the proximate dependency.
-    from setforge.cli.section import _stamp_section_hashes
-    from setforge.sections import extract_sections, merge_sections
-
-    result = _normalise_eol(text)
-    existing = extract_sections(result, allow_legacy=True)
-    new_bodies: dict[str, str] = {}
-    for section_name, section in sections.items():
-        body = _read_body(section)
-        if section_name in existing:
-            new_bodies[section_name] = body
-            continue
-        result = inject_host_local_section(result, section_name, section.anchor, body)
-    if new_bodies:
-        # Re-extract because inject_host_local_section may have added
-        # new pairs that are not present in the original ``existing``.
-        all_sections = extract_sections(result, allow_legacy=True)
-        all_sections.update(new_bodies)
-        result = merge_sections(result, all_sections)
-        result = _stamp_section_hashes(result)
-    return result

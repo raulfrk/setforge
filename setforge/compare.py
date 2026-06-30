@@ -40,9 +40,7 @@ from ruamel.yaml.error import YAMLError
 
 from setforge import (
     base_store,
-    host_local_inject,
     jsonc,
-    section_reconcile,
     spans_overlay,
 )
 from setforge.binaries import LOCAL_CONFIG_PATH
@@ -56,6 +54,7 @@ from setforge.config import (
 from setforge.errors import BaseStoreError, ConfigError, MergeTypeMismatch
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.spans import SpanEntry
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -505,24 +504,35 @@ def diff_file(
     src: Path,
     dst: Path,
     *,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
+    overlay_spans: list[SpanEntry] | None = None,
 ) -> str:
     """Return the unified diff between ``src`` (tracked) and ``dst`` (live).
 
     For a ``disposition=None`` tracked_file the deployed content is ``src``
-    verbatim, so the comparison is a plain unified diff. When
-    ``host_local_sections`` is non-empty the rendered ``src`` is augmented with
-    the same legacy host-local marker injection deploy performs, so a live file
-    that already received its host-local sections does NOT show as drift.
+    verbatim, so the comparison is a plain unified diff. ``overlay_spans`` are the
+    host-local OVERLAY spans the file carries: their markerless bodies are excised
+    from the live side first (by their exact recorded bytes), so a live file that
+    already received its host-local overlay does NOT show as phantom drift against
+    the markerless tracked source — the symmetric read of deploy's inject. The
+    canonical body is the needle (compare is offline / state-free); a body
+    hand-edited away from canonical falls through as real drift.
     """
     if not dst.exists():
         return ""
 
+    import contextlib
+
+    from setforge import overlay_deploy
+    from setforge.overlay_inject import OverlayAmbiguousError
+
     dst_text = dst.read_text(encoding="utf-8")
     rendered_src = src.read_text(encoding="utf-8")
-    if host_local_sections:
-        rendered_src = host_local_inject.inject_all(rendered_src, host_local_sections)
-        rendered_src = section_reconcile.maintain_marker_hashes(rendered_src)
+    if overlay_spans:
+        # Ambiguous needle — leave the body in; it surfaces as drift.
+        with contextlib.suppress(OverlayAmbiguousError):
+            dst_text, _ = overlay_deploy.excise_overlay_bodies(
+                dst_text, overlay_spans, {}
+            )
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),
@@ -652,6 +662,8 @@ def _compare_one(
     profile: str | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
+    from setforge import overlay_deploy
+
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
     # False on a dangling symlink, which would otherwise misclassify the
     # case as MISSING. ``_compare_symlinked`` probes ``is_symlink()`` first
@@ -683,7 +695,7 @@ def _compare_one(
     diff = diff_file(
         src,
         dst,
-        host_local_sections=host_local_sections,
+        overlay_spans=overlay_deploy.overlay_spans(tracked_file.spans),
     )
 
     mode_drift = False
@@ -1146,11 +1158,9 @@ def _compare_symlinked(
     # mypy sees a clean ``str`` argument to ``Path(...)`` rather than
     # the still-Optional ``tracked_file.symlink``.
     target_path = Path(expected).expanduser()
-    target_diff = diff_file(
-        src,
-        target_path,
-        host_local_sections=host_local_sections,
-    )
+    # Symlinked targets deploy verbatim (no host-local overlay injection), so a
+    # plain diff against the tracked source is correct.
+    target_diff = diff_file(src, target_path)
     if target_diff:
         entry = FileCompare(
             name=name,

@@ -32,12 +32,6 @@ _LIVE_WITH_MARKERS = (
 )
 _STRIPPED = "intro\nbody\noutro\n"
 
-_HL_HASH = "a" * 64  # any well-formed sha256-hex parses; rewritten before strip.
-_PLACEHOLDER_PY = (
-    "<!-- setforge:user-section start host-local python -->\n"
-    f"<!-- setforge:user-section end host-local python hash={_HL_HASH} -->\n"
-)
-
 
 def test_install_helpers_module_imports() -> None:
     """The three public-to-install helpers are exported and callable."""
@@ -254,9 +248,9 @@ def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
     tracked_root = repo_root / "tracked"
     tracked_root.mkdir(parents=True)
     body = "## Python\n\nuse uv\n"
-    (tracked_root / "CLAUDE.md").write_text(
-        "# Title\n\n" + _PLACEHOLDER_PY, encoding="utf-8"
-    )
+    # Tracked is markerless after the marker-retire migration — the host-local
+    # OVERLAY span alone drives the markerless inject.
+    (tracked_root / "CLAUDE.md").write_text("# Title\n", encoding="utf-8")
     dst = tmp_path / "live" / "CLAUDE.md"
     dst.parent.mkdir()
     dst.write_text("# Title\n", encoding="utf-8")  # markerless live (post-install)

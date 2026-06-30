@@ -283,32 +283,6 @@ Examples:
   setforge fetch
 """
 
-SECTION_EMIT_EXAMPLES: str = """\
-Examples:
-
-\b
-  # Most common: print a paste-ready shared marker pair
-  setforge section emit shared my-section
-
-\b
-  # Host-local marker pair (always preserved-live)
-  setforge section emit host-local my-section
-"""
-
-SECTION_ADD_EXAMPLES: str = """\
-Examples:
-
-\b
-  # Most common: interactively insert a marker pair via the wizard
-  setforge section add --profile=<profile>
-
-\b
-  # Non-interactive: every field pre-supplied via flags
-  setforge section add --profile=<profile> --tracked-file=claude_md \\
-      --semantics=shared --name=my-section --anchor-line=42 \\
-      --body-source=empty --yes
-"""
-
 INIT_EXAMPLES: str = """\
 Examples:
 

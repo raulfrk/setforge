@@ -131,8 +131,8 @@ def test_theme_hardcode_issue_number_in_prose_is_safe() -> None:
 # --------------------------------------------------------------------------- #
 def test_allowlist_boundary_is_exact_not_prefix() -> None:
     src = "x = read_one_choice('a/b', set())\n"
-    # section_promote.py is NOT allowlisted (only section_wizard.py is) → flagged
-    assert _ids(check_source(src, "setforge/section_promote.py"), "UX-1")
+    # deploy.py is NOT allowlisted (only section_wizard.py is) → flagged
+    assert _ids(check_source(src, "setforge/deploy.py"), "UX-1")
     # the allowlisted file itself is exempt
     assert _ids(check_source(src, "setforge/section_wizard.py"), "UX-1") == []
 
