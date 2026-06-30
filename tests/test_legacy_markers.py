@@ -12,14 +12,12 @@ marker EMIT/HASH machinery did NOT move here — it is deleted with
 import pytest
 
 from setforge._legacy_markers import (
-    LiveSections,
     SectionSemantics,
     _EndMarker,
     _walk_markers,
     detect_duplicate_section_names,
     detect_legacy_markers,
     detect_legacy_namespace_markers,
-    extract_live_sections,
     extract_sections,
     section_semantics,
     strip_host_local_markers,
@@ -51,12 +49,6 @@ def test_extract_sections_reads_marker_body() -> None:
 def test_section_semantics_classifies() -> None:
     assert section_semantics(_HOST_LOCAL_DOC) == {"NAME": SectionSemantics.HOST_LOCAL}
     assert section_semantics(_SHARED_DOC) == {"S": SectionSemantics.SHARED}
-
-
-def test_extract_live_sections_returns_live_sections() -> None:
-    live = extract_live_sections(_HOST_LOCAL_DOC)
-    assert isinstance(live, dict)
-    assert live == LiveSections({"NAME": "live body\n"})
 
 
 def test_strip_shared_markers_keeps_body_drops_lines() -> None:

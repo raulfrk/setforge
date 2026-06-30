@@ -11,10 +11,12 @@ marker-READING machinery that must outlive retirement:
 * ``capture`` / ``cli.migrate`` / ``cli.validate`` strip markers;
 * the refuse-guards keep the strict, fail-closed parse contract.
 
-Treat this module as frozen: do not extend it. The marker EMIT/HASH helpers
+Treat this module as frozen: do not extend it. The marker hash/merge helpers
 (``merge_sections`` / ``hash_sections`` / ``extract_marker_hashes`` /
-``set_marker_hashes`` / ``strip_section_content``) are transitional here only
-until ``section_reconcile`` — their sole consumer — is deleted.
+``set_marker_hashes``) have no live caller — they are retained as the
+byte-for-byte differential reference the migration's frozen parser
+(``migrations/_marker_retire``) is tested against, and they exercise the
+fail-closed duplicate-name guard that protects the strip + refuse paths.
 
 Marker syntax (HTML comments only)::
 
@@ -56,20 +58,11 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import NewType, assert_never
+from typing import assert_never
 
 from setforge.errors import MarkerError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
-
-LiveSections = NewType("LiveSections", dict[str, str])
-"""Section bodies parsed from a live file with ``allow_legacy=True``.
-
-Construct via :func:`extract_live_sections`; the install path's pre-hash
-migration tolerance lives in that factory so consumer call sites (deploy,
-cli) cannot accidentally pass a strict-extract result that would refuse
-legacy markers a live file may still carry.
-"""
 
 
 class SectionSemantics(StrEnum):
@@ -535,18 +528,6 @@ def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]
     return sections
 
 
-def extract_live_sections(text: str) -> LiveSections:
-    """Parse ``text`` into a :class:`LiveSections` using ``allow_legacy=True``.
-
-    The single legitimate constructor for :class:`LiveSections`. Install is
-    the verb that re-tags and stamps pre-hash markers in place, so the
-    install path's live-side parsing opts into the migration-only legacy
-    tolerance here; compare / sync remain strict by routing through
-    :func:`extract_sections` directly.
-    """
-    return LiveSections(extract_sections(text, allow_legacy=True))
-
-
 def merge_sections(tracked_text: str, live_sections: dict[str, str]) -> str:
     """Splice ``live_sections`` content into the tracked-file marker regions.
 
@@ -863,40 +844,6 @@ def strip_shared_markers(text: str, *, allow_legacy: bool = True) -> str:
             case (
                 _BodyLine(line=line)
                 | _OutsideLine(line=line)
-                | _StartMarker(line=line)
-                | _EndMarker(line=line)
-            ):
-                out_lines.append(line)
-            case _ as never:
-                assert_never(never)
-    return "".join(out_lines)
-
-
-def strip_section_content(text: str, *, allow_legacy: bool = True) -> str:
-    """Return ``text`` with content between every user-section marker pair
-    removed. Markers themselves are kept so the file remains a valid
-    template for re-merging on a future deploy.
-
-    ``allow_legacy`` defaults to ``True`` because the historical callers
-    (compare's drift gate, capture's strip path) both consume live-side
-    text that may contain pre-hash markers. Pass ``allow_legacy=False``
-    explicitly where canonical-form input is guaranteed and you want
-    strict parsing to surface malformed input. Symmetric comparisons
-    across (tracked, live) — e.g. ``compare.diff_file``'s strip-template
-    gate at ``strip_section_content(src) == strip_section_content(dst)``
-    — pass ``allow_legacy=True`` on the tracked side too because the
-    live side may carry pre-hash markers; mixing regimes is safe only
-    when each side independently satisfies its own regime (cf. the
-    sibling ``hash_sections`` call at the same gate, which mixes
-    strict-tracked + lenient-live successfully).
-    """
-    out_lines: list[str] = []
-    for event in _walk_markers(text, allow_legacy=allow_legacy):
-        match event:
-            case _BodyLine():
-                pass
-            case (
-                _OutsideLine(line=line)
                 | _StartMarker(line=line)
                 | _EndMarker(line=line)
             ):

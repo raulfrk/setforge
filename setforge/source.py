@@ -153,10 +153,9 @@ A ``HostLocalSectionName`` MUST originate from a key in the local.yaml
 injection module so callers cannot accidentally substitute a tracked-side
 shared-section name (which has different drift semantics — shared
 sections participate in section-reconcile; host-local sections do
-not). Mirrors the :data:`setforge._legacy_markers.LiveSections` /
-:data:`setforge.transitions.TransitionDir` pattern: a name-only
-NewType wrapping ``str`` so call sites stay backwards-compatible at
-runtime while the static type carries the provenance constraint.
+not). Mirrors the :data:`setforge.transitions.TransitionDir` pattern: a
+name-only NewType wrapping ``str`` so call sites stay backwards-compatible
+at runtime while the static type carries the provenance constraint.
 """
 
 
