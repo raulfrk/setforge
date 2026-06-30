@@ -90,6 +90,28 @@ def test_validate_all_clean_exits_0(tmp_path: Path) -> None:
     assert "ok" in result.output
 
 
+def test_validate_rejects_residual_user_section_markers(tmp_path: Path) -> None:
+    """A tracked src still carrying user-section markers fails validate.
+
+    Markers are retired at schema 2.1: ``setforge migrate`` strips them. A
+    tracked file that still contains a ``setforge:user-section`` marker line
+    has not been migrated, so the offline ``validate`` gate refuses it and
+    points at ``setforge migrate``.
+    """
+    cfg = _write_config(tmp_path, _CLEAN_YAML, create_src=False)
+    (tmp_path / "tracked" / "tracked_file.txt").write_text(
+        "before\n"
+        "<!-- setforge:user-section start host-local NAME -->\n"
+        "kept\n"
+        "<!-- setforge:user-section end host-local NAME -->\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["validate", "--all", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "user-section marker" in result.output
+    assert "migrate" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Test 2: Pydantic schema error
 # ---------------------------------------------------------------------------
@@ -1348,88 +1370,3 @@ profiles:
     # did-you-mean fires on the near-miss template name (Levenshtein 1).
     assert "did you mean" in result.output.lower()
     assert "py-conv" in result.output
-
-
-def test_validate_section_slots_clean_exits_0(tmp_path: Path) -> None:
-    """A slot whose name matches a declared host-local marker validates clean."""
-    yaml = """\
-version: 1
-tracked_files:
-  d:
-    src: claude.md
-    dst: ~/.claude.md
-section_templates:
-  py-conv:
-    src: py-conv.md
-profiles:
-  p:
-    tracked_files: [d]
-    section_slots:
-      python-conventions: py-conv
-"""
-    cfg = _write_config(tmp_path, yaml, create_src=False)
-    (tmp_path / "tracked" / "claude.md").write_text(
-        "# C\n"
-        "<!-- setforge:user-section start host-local python-conventions -->\n"
-        "<!-- setforge:user-section end host-local python-conventions hash="
-        + "a" * 64
-        + " -->\n",
-        encoding="utf-8",
-    )
-    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output
-    assert "ok" in result.output
-
-
-def test_validate_section_slot_no_marker_warns_but_exit_0(tmp_path: Path) -> None:
-    """A slot whose name matches no host-local marker → non-fatal warning, exit 0."""
-    yaml = """\
-version: 1
-tracked_files:
-  d:
-    src: claude.md
-    dst: ~/.claude.md
-section_templates:
-  py-conv:
-    src: py-conv.md
-profiles:
-  p:
-    tracked_files: [d]
-    section_slots:
-      python-conventions: py-conv
-"""
-    cfg = _write_config(tmp_path, yaml, create_src=False)
-    (tmp_path / "tracked" / "claude.md").write_text("# C\n", encoding="utf-8")
-    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output
-    assert "python-conventions" in result.output
-    assert "no declared host-local section marker" in result.output
-
-
-def test_validate_section_slot_malformed_marker_exit_0(tmp_path: Path) -> None:
-    """A malformed marker in a tracked source must not abort the advisory slot
-    check: it is skipped and validate still exits 0 (not a crash)."""
-    yaml = """\
-version: 1
-tracked_files:
-  d:
-    src: claude.md
-    dst: ~/.claude.md
-section_templates:
-  py-conv:
-    src: py-conv.md
-profiles:
-  p:
-    tracked_files: [d]
-    section_slots:
-      python-conventions: py-conv
-"""
-    cfg = _write_config(tmp_path, yaml, create_src=False)
-    # An end marker with no matching start is a MarkerError; the advisory
-    # slot check must swallow it rather than abort validate nonzero.
-    (tmp_path / "tracked" / "claude.md").write_text(
-        "# C\n<!-- setforge:user-section end host-local python-conventions -->\n",
-        encoding="utf-8",
-    )
-    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output

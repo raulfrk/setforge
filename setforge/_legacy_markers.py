@@ -433,6 +433,20 @@ def detect_legacy_namespace_markers(text: str) -> bool:
     return any(_LEGACY_NAMESPACE_RE.match(line) for line in text.splitlines())
 
 
+def contains_user_section_marker(text: str) -> bool:
+    """Return ``True`` if ``text`` contains any ``setforge:user-section`` marker line.
+
+    Regex-only scan over the broad marker-prefix detector — matches a start
+    OR end marker line regardless of whether it is well-formed, pre-hash, or
+    otherwise malformed. A prose MENTION of the marker syntax (text that is
+    not itself a complete ``<!-- ... -->`` marker line) does not match.
+
+    Used by ``setforge validate`` to enforce that tracked sources carry no
+    residual markers after the schema-2.1 retirement migration.
+    """
+    return any(_MARKER_PREFIX_RE.match(line) for line in text.splitlines())
+
+
 def detect_legacy_markers(text: str) -> bool:
     """Return ``True`` if ``text`` contains any pre-hash-form marker.
 

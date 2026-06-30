@@ -15,6 +15,7 @@ from setforge._legacy_markers import (
     SectionSemantics,
     _EndMarker,
     _walk_markers,
+    contains_user_section_marker,
     detect_duplicate_section_names,
     detect_legacy_markers,
     detect_legacy_namespace_markers,
@@ -105,6 +106,22 @@ def test_detect_legacy_markers_flags_missing_hash() -> None:
 def test_detect_duplicate_section_names_reports_repeat() -> None:
     dup = _SHARED_DOC + _SHARED_DOC
     assert detect_duplicate_section_names(dup) == "S"
+
+
+def test_contains_user_section_marker_detects_start_and_end() -> None:
+    assert contains_user_section_marker(_HOST_LOCAL_DOC)
+    assert contains_user_section_marker(
+        "<!-- setforge:user-section start shared S -->\n"
+    )
+    # An end marker alone (even unpaired / malformed) still counts as a marker.
+    assert contains_user_section_marker("<!-- setforge:user-section end -->\n")
+
+
+def test_contains_user_section_marker_ignores_prose_mention() -> None:
+    # A doc that merely NAMES the marker syntax in prose is not a marker.
+    prose = "The `setforge:user-section` marker pairs preserve host edits.\n"
+    assert not contains_user_section_marker(prose)
+    assert not contains_user_section_marker("plain content\nno markers here\n")
 
 
 def test_walk_markers_yields_end_marker_event() -> None:
