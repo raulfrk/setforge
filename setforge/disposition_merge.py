@@ -7,7 +7,7 @@ engines (:mod:`setforge.structural_merge`, :mod:`setforge.markdown_merge`)
 into a concrete file outcome, free of any interactive prompting.
 
 Orientation: ``ours = live``, ``theirs = tracked/upstream``. The two
-``auto`` modes (reusing :class:`setforge.section_wizard.ReconcileAuto`) read
+``auto`` modes (reusing :class:`setforge.section_mode.ReconcileAuto`) read
 as ``keep-live = keep ours`` and ``use-tracked = take theirs``.
 
 Three policy axes:
@@ -68,7 +68,7 @@ from setforge.markdown_merge import (
     resolve_segments,
 )
 from setforge.scalar_merge import ABSENT, ScalarConflict
-from setforge.section_wizard import ReconcileAuto
+from setforge.section_mode import ReconcileAuto
 from setforge.spans import SpanEntry, SpanKind
 from setforge.structural_merge import (
     PathConflict,

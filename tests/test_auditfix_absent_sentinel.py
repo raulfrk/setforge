@@ -27,7 +27,7 @@ from setforge.disposition_merge import (
 )
 from setforge.markdown_merge import LineConflict
 from setforge.scalar_merge import ABSENT, ScalarConflict
-from setforge.section_wizard import ReconcileAuto
+from setforge.section_mode import ReconcileAuto
 from setforge.structural_merge import PathConflict
 
 

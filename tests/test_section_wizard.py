@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 from setforge._legacy_markers import SectionSemantics
+from setforge.section_mode import ReconcileAuto
 from setforge.section_reconcile import SectionDrift, SectionDriftState
 from setforge.section_wizard import (
-    ReconcileAuto,
     SectionAction,
     format_drift_summary,
     reconcile_sections,

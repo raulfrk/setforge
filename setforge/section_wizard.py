@@ -37,6 +37,7 @@ from rich.syntax import Syntax
 
 from setforge._editor import run_editor
 from setforge._legacy_markers import SectionSemantics
+from setforge.section_mode import ReconcileAuto
 from setforge.section_reconcile import (
     SectionDrift,
     SectionDriftState,
@@ -44,19 +45,11 @@ from setforge.section_reconcile import (
 from setforge.wizard import read_one_choice
 
 __all__ = [
-    "ReconcileAuto",
     "SectionAction",
     "SectionDecision",
     "reconcile_sections",
     "state_label",
 ]
-
-
-class ReconcileAuto(StrEnum):
-    """Closed set of non-interactive resolutions for install reconcile."""
-
-    USE_TRACKED = "use-tracked"
-    KEEP_LIVE = "keep-live"
 
 
 class SectionAction(StrEnum):

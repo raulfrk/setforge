@@ -34,8 +34,9 @@ from setforge.compare import (
 )
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
+from setforge.section_mode import ReconcileAuto
 from setforge.section_reconcile import SectionDrift, SectionDriftState
-from setforge.section_wizard import ReconcileAuto, SectionAction
+from setforge.section_wizard import SectionAction
 
 
 @dataclass(slots=True, frozen=True)

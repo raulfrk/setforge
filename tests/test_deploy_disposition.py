@@ -11,7 +11,7 @@ from pathlib import Path
 
 from setforge.config import Disposition
 from setforge.deploy import DeployAction, copy_atomic
-from setforge.section_wizard import ReconcileAuto
+from setforge.section_mode import ReconcileAuto
 
 
 def test_disposition_shared_clean_merge_writes_merged_and_advances(

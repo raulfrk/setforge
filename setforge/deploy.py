@@ -31,7 +31,7 @@ from setforge import (
 from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
-from setforge.section_wizard import ReconcileAuto
+from setforge.section_mode import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.spans import SpanEntry, SpanKind
 from setforge.spans_overlay import SpanOrphan, apply_spans

@@ -104,8 +104,8 @@ from setforge.overlay_migration import migrate_local_yaml_overlay_spans
 from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.wizard import _claude_merge_unavailable
+from setforge.section_mode import ReconcileAuto
 from setforge.section_reconcile import SectionDriftState
-from setforge.section_wizard import ReconcileAuto
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,

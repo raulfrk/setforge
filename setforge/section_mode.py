@@ -12,7 +12,19 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["SectionMode"]
+__all__ = ["ReconcileAuto", "SectionMode"]
+
+
+class ReconcileAuto(StrEnum):
+    """Closed set of non-interactive resolutions for install reconcile.
+
+    Relocated here (a leaf enum module) from the retired ``section_wizard`` so
+    the disposition / deploy / span-reconcile engine can dispatch on it without
+    reaching into a legacy marker module.
+    """
+
+    USE_TRACKED = "use-tracked"
+    KEEP_LIVE = "keep-live"
 
 
 class SectionMode(StrEnum):

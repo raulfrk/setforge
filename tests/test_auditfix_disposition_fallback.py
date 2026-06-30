@@ -26,7 +26,7 @@ from setforge.disposition_merge import (
     resolve_file,
 )
 from setforge.markdown_merge import LineConflict
-from setforge.section_wizard import ReconcileAuto
+from setforge.section_mode import ReconcileAuto
 from setforge.spans import SpanEntry
 from setforge.structural_merge import get_at_path
 
