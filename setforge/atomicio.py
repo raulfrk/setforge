@@ -1,10 +1,8 @@
 """Shared atomic-write primitive: crash-safe file replacement.
 
 Consumers — the per-host stored-base store (:mod:`setforge.base_store`),
-the tracked-side hash-maintenance writer
-(:func:`setforge.section_reconcile._atomic_write_text`), the live-side
-deploy path (:func:`setforge.deploy._atomic_write`), and the migration
-YAML writer (:func:`setforge.migrations._yaml_ops.atomic_write_yaml`) —
+the live-side deploy path (:func:`setforge.deploy._atomic_write`), and the
+migration YAML writer (:func:`setforge.migrations._yaml_ops.atomic_write_yaml`) —
 need the same durability guarantee: a SIGTERM, power loss, or disk-full
 mid-write must never leave the destination truncated or half-written.
 The recipe is the standard write-temp-then-rename dance:

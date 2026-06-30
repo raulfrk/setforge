@@ -1,11 +1,9 @@
 """Unit tests for ``setforge install --dry-run``.
 
-Eight tests, one per acceptance criterion from SPEC 4:
+One test per acceptance criterion from SPEC 4:
 
 - ``test_no_write_transition`` — dry-run never calls
   :func:`transitions.write_transition`.
-- ``test_no_stamp_baseline`` — dry-run never calls
-  :func:`section_reconcile.stamp_tracked_baseline`.
 - ``test_no_allowlist_mutation`` — dry-run never calls
   :func:`secrets.append_to_allowlist` (the secrets scan path is
   unreachable under dry-run).
@@ -145,26 +143,6 @@ def test_no_write_transition(
 
     monkeypatch.setattr("setforge.transitions.write_transition", tripwire)
     _invoke_dry_run(fixture_repo)
-    assert calls == []
-
-
-def test_no_stamp_baseline(
-    fixture_repo: Path,
-    sandboxed_home: Path,
-    no_external_bins: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``--dry-run`` never calls :func:`section_reconcile.stamp_tracked_baseline`."""
-    calls: list[Path] = []
-
-    def tripwire(path: Path) -> None:
-        calls.append(path)
-        raise AssertionError(
-            f"stamp_tracked_baseline called under --dry-run: path={path}"
-        )
-
-    monkeypatch.setattr("setforge.section_reconcile.stamp_tracked_baseline", tripwire)
-    _invoke_dry_run(fixture_repo, profile="test-text-sections")
     assert calls == []
 
 

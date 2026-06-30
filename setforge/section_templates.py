@@ -21,9 +21,8 @@ survival path:
   only when the section is absent on the host, so a populated section is
   left untouched on every subsequent install.
 
-This module never touches the shared-section reconciler
-(:mod:`setforge.section_reconcile`); seeding is a pre-merge fill into the
-host-owned overlay layer, not a drift reconcile.
+This module never touches drift reconciliation; seeding is a pre-merge fill
+into the host-owned overlay layer, not a drift reconcile.
 """
 
 from __future__ import annotations

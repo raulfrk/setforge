@@ -2,8 +2,7 @@
 
 Builds the :data:`~setforge.disposition_merge.ConflictResolver` an interactive
 install injects into :func:`setforge.disposition_merge.resolve_file` so each
-conflicting hunk / path is resolved one at a time at the keyboard, mirroring the
-UX of the shared user-section wizard (:mod:`setforge.section_wizard`).
+conflicting hunk / path is resolved one at a time at the keyboard.
 
 The factory :func:`make_wizard_resolver` returns the callable; per conflict it
 renders the two diverging sides (``ours = live`` vs ``theirs = tracked``),
@@ -302,7 +301,7 @@ def _load_value(text: str) -> object:
 
 
 def _render_choices(console: Console) -> None:
-    """Print the ``[k]/[t]/[e]/[s]`` menu (mirrors section_wizard styling)."""
+    """Print the ``[k]/[t]/[e]/[s]`` menu."""
     console.print("")
     console.print(
         "   [bold][[k]][/bold] keep ours (live)    [dim](preserve the live side)[/dim]"

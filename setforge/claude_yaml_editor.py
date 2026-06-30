@@ -57,7 +57,7 @@ def _atomic_yaml_dump(yaml: YAML, doc: CommentedMap, config_path: Path) -> None:
     ``open("w")`` truncates in place — a crash mid-dump corrupts the
     config. Writing to a sibling temp file and renaming makes the swap
     atomic: a SIGTERM leaves the original intact. Mirrors
-    :func:`setforge.section_reconcile._atomic_write_text`.
+    :func:`setforge.deploy._atomic_write`.
     """
     # Resolve symlinks first: os.replace swaps the link itself for a
     # regular file, whereas the prior open("w") wrote THROUGH the link.

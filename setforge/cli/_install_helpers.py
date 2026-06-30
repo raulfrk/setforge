@@ -1868,12 +1868,9 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     """Emit the ``=== would-be host-local section inject ===`` block.
 
     Per SPEC 1's mockup, each ``WOULD inject`` line carries
-    a ``HOST_LOCAL_PROVENANCE_TAG`` so users can
-    distinguish host-local injections from shared section reconcile
-    operations (which produce their own WOULD lines via
-    :func:`_dry_run_emit_section_reconcile`). No-op when local.yaml is
-    absent or declares no host-local sections for tracked_files in
-    this profile.
+    a ``HOST_LOCAL_PROVENANCE_TAG`` so users can identify host-local
+    injections in the dry-run output. No-op when local.yaml is absent or
+    declares no host-local sections for tracked_files in this profile.
     """
     typer.echo("=== would-be host-local section inject ===")
     overlay = load_local_host_local_sections()

@@ -282,15 +282,13 @@ class TestInstall:
         no_code_bin: None,
         no_claude_bin: None,
     ) -> None:
-        """No pre-existing live file → live equals tracked with hashes maintained.
+        """No pre-existing live file → live is a byte-for-byte copy of tracked.
 
-        Post-hash, install always rewrites end-marker ``hash=<...>``
-        segments so the embedded hash matches the body actually written;
-        the post-install live byte-matches ``maintain_marker_hashes``
-        applied to tracked, not the raw tracked bytes.
+        With user-section markers retired (schema 2.1), deploy no longer
+        rewrites end-marker ``hash=<...>`` segments — it byte-copies the
+        tracked source, so a first install of a marker-bearing tracked file
+        lands the tracked bytes verbatim.
         """
-        from setforge.section_reconcile import maintain_marker_hashes
-
         result = _invoke(
             [
                 "install",
@@ -301,7 +299,7 @@ class TestInstall:
         assert result.exit_code == 0, result.output
         live = sandboxed_home / ".setforge_e2e" / "sections" / "marked.md"
         tracked = fixture_repo.parent / "tracked" / "sections" / "marked.md"
-        assert live.read_text() == maintain_marker_hashes(tracked.read_text())
+        assert live.read_text() == tracked.read_text()
 
     def test_json_byte_copy(
         self,
