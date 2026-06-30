@@ -49,7 +49,6 @@ from setforge.cli._helpers import (
     _iter_all_tracked_files,
     _parse_capture_auto,
     _refuse_duplicate_section_names,
-    _refuse_legacy_live_markers,
     _resolve_drift_paths,
 )
 from setforge.cli._install_helpers import (
@@ -210,7 +209,6 @@ def sync(
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    _refuse_legacy_live_markers(ctx, command="sync")
     _refuse_duplicate_section_names(ctx, command="sync")
 
     with profile_lock(profile):

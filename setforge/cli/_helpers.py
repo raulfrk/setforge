@@ -1,28 +1,18 @@
 """Section-marker helpers shared by install / compare / sync subcommands.
 
 No ``app`` import and no ``@app.command()`` decorator registrations.
-Two flavors of I/O run through this module: (1) the live-file reads
-the legacy-marker-refuse / section-decisions / live-sections-extract
-flow performs, and (2) the directory walks ``expand_tracked_file`` runs
-for tracked entries whose ``src`` is a directory — both helpers below
-that delegate to ``expand_tracked_file`` (``_iter_section_tracked_files``,
-``_iter_all_tracked_files``) inherit that walk cost.
+The directory walks ``expand_tracked_file`` runs for tracked entries whose
+``src`` is a directory feed ``_iter_all_tracked_files`` below, which inherits
+that walk cost.
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import typer
 
-from setforge import _legacy_markers as sections_mod
-from setforge import section_reconcile, section_wizard
-from setforge._legacy_markers import (
-    SectionSemantics,
-    detect_duplicate_section_names,
-    detect_legacy_markers,
-    detect_legacy_namespace_markers,
-)
+from setforge._legacy_markers import detect_duplicate_section_names
 from setforge.capture import CaptureAuto
 from setforge.compare import (
     CompareReport,
@@ -35,8 +25,6 @@ from setforge.compare import (
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
 from setforge.section_mode import ReconcileAuto
-from setforge.section_reconcile import SectionDrift, SectionDriftState
-from setforge.section_wizard import SectionAction
 
 
 @dataclass(slots=True, frozen=True)
@@ -112,40 +100,12 @@ def _parse_section_auto(
         raise typer.Exit(2) from None
 
 
-def _iter_section_tracked_files(
-    ctx: ProfileContext,
-) -> Iterator[tuple[Path, Path]]:
-    """Yield ``(sub_src, sub_dst)`` for every section-bearing tracked_file.
-
-    Encapsulates the resolve_src / resolve_dst / expand_tracked_file /
-    ``preserve_user_sections`` filter chain that
-    :func:`_resolve_section_decisions`, :func:`_refuse_legacy_live_markers`,
-    and :func:`_extract_live_sections_map` all duplicate today.
-    ``expand_tracked_file`` runs ``Path.rglob`` for directory-shaped
-    tracked entries (a per-call filesystem walk); for plain-file entries
-    the helper is allocation-only. Callers that need the live or tracked
-    text read it themselves so the generator's iteration cost stays
-    O(N) in the tracked-file count regardless of file sizes.
-
-    Callers that only need ``sub_dst`` destructure as ``_, sub_dst``.
-    """
-    # The legacy preserve_user_sections section-reconcile model was retired at
-    # schema 2.0 (shared sections now ride disposition: shared + section spans).
-    # No tracked_file carries the legacy flag any more, so this iterator yields
-    # nothing — the section-reconcile callers become inert. The bare ``yield``
-    # after ``return`` keeps the function a generator (so callers can iterate it)
-    # while emitting no items.
-    return
-    yield  # type: ignore[unreachable]
-
-
 def _iter_all_tracked_files(
     ctx: ProfileContext,
 ) -> Iterator[tuple[TrackedFile, str, Path, Path]]:
     """Yield ``(tracked_file, sub_name, sub_src, sub_dst)`` per resolved entry.
 
-    Sibling of :func:`_iter_section_tracked_files` without the
-    ``preserve_user_sections`` filter; consolidates the unfiltered
+    Consolidates the unfiltered
     resolve_src / resolve_dst / expand_tracked_file walks that ``install``
     (transition snapshot + copy_atomic loop) and ``sync`` (transition
     snapshot) all duplicate today. Yields ``tracked_file`` alongside the
@@ -203,50 +163,6 @@ def _resolve_drift_paths(
     return resolved_entries
 
 
-def _refuse_legacy_live_markers(ctx: ProfileContext, *, command: str) -> None:
-    """Raise :class:`SetforgeError` if any live ``preserve_user_sections``
-    file carries pre-hash markers.
-
-    Walks every tracked_file in ``resolved`` whose tracked entry has
-    ``preserve_user_sections=True`` and runs
-    :func:`setforge._legacy_markers.detect_legacy_markers` on the live file (when
-    it exists). The strict parser would otherwise raise
-    :class:`setforge.errors.MarkerError` partway through the read-only /
-    capture flow with an opaque ``line N: missing required keyword``
-    message; this surfaces a single actionable error before any strict
-    parse happens, pointing the user at ``setforge install`` to migrate.
-
-    ``command`` is the user-facing command name (``compare`` / ``sync`` /
-    ``merge``) used in the error message so the user sees which entry
-    point refused. Install must NOT call this — install's job is to
-    migrate.
-    """
-    for _, sub_dst in _iter_section_tracked_files(ctx):
-        try:
-            live_text = sub_dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        if detect_legacy_namespace_markers(live_text):
-            raise SetforgeError(
-                f"{sub_dst}: legacy 'my-setup:user-section' marker namespace "
-                f"detected (pre-rename). The post-rename "
-                f"parser does not recognize these markers, so 'setforge "
-                f"{command}' would silently drop host-local section bodies. "
-                f"Migrate the file in place with:\n"
-                f"  sed -i 's/my-setup:user-section/setforge:user-section/g' "
-                f"{sub_dst}"
-            )
-        if detect_legacy_markers(live_text):
-            raise SetforgeError(
-                f"{sub_dst}: legacy user-section marker format detected "
-                f"(pre-hash markers without 'host-local'/'shared' keyword "
-                f"or 'hash=<sha256>' segment). 'setforge {command}' is "
-                f"strict on live-side markers. Run "
-                f"'uv run setforge install --profile=<name>' first to "
-                f"migrate the file in place."
-            )
-
-
 def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> None:
     """Raise :class:`SetforgeError` when a tracked/live markdown file repeats
     a user-section name across two start markers.
@@ -269,7 +185,7 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
 
     ``command`` is the user-facing command name (``compare`` / ``sync`` /
     ``install``) used in the error message so the user sees which entry point
-    refused. Mirrors :func:`_refuse_legacy_live_markers`.
+    refused.
     """
     from setforge import disposition_merge
 
@@ -292,120 +208,3 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
                 f"and corrupt its end-marker hash. Rename one of the two "
                 f"sections so every user-section name is unique."
             )
-
-
-def _warn_shared_drift(sub_dst: Path, drifts: Mapping[str, SectionDrift]) -> None:
-    """Emit the bare-install drift warning for one tracked_file.
-
-    Routes by worst state present across the file's ``shared`` sections:
-
-    - any :attr:`SectionDriftState.CONFLICT` present → loud
-      ``WARNING: ... CONFLICT — ...`` line in RED + bold (genuine three-way
-      divergence; user attention warranted before the next install).
-    - otherwise, at least one non-:attr:`NO_DRIFT` shared section
-      (``PENDING_TRACKED`` / ``LIVE_EDITED`` / ``LEGACY`` / ``INCONSISTENT``)
-      → regular ``warning: ...`` line in YELLOW (today's behaviour, kept
-      for the non-CONFLICT states).
-    - no shared drift → silent (host-local-only drift never warns).
-    """
-    shared_drifts = [
-        d
-        for d in drifts.values()
-        if d.semantics is SectionSemantics.SHARED
-        and d.state is not SectionDriftState.NO_DRIFT
-    ]
-    if not shared_drifts:
-        return
-    tail = "(re-run with --reconcile-user-sections or --auto=use-tracked)"
-    conflict_drifts = [
-        d for d in shared_drifts if d.state is SectionDriftState.CONFLICT
-    ]
-    if conflict_drifts:
-        summary = section_wizard.format_drift_summary(conflict_drifts)
-        typer.secho(
-            f"WARNING: {sub_dst}: CONFLICT — {summary} {tail}",
-            err=True,
-            fg=typer.colors.RED,
-            bold=True,
-        )
-    else:
-        non_conflict_drifts = [
-            d for d in shared_drifts if d.state is not SectionDriftState.CONFLICT
-        ]
-        summary = section_wizard.format_drift_summary(non_conflict_drifts)
-        typer.secho(
-            f"warning: {sub_dst}: {summary} {tail}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-
-
-def _resolve_section_decisions(
-    ctx: ProfileContext,
-    *,
-    section_auto: ReconcileAuto | None,
-    interactive: bool,
-) -> dict[Path, dict[str, str]]:
-    """Walk every tracked_file with ``preserve_user_sections=True`` and run the
-    section reconcile wizard, returning a ``{dst_path: {section_name: body}}``
-    map the install loop forwards to :func:`deploy.copy_atomic`.
-
-    Renders one bare-install warning per tracked_file that has any shared
-    drift; surfacing the warnings here keeps the deploy loop a thin
-    orchestrator. Tracked files without ``preserve_user_sections`` are
-    silently skipped; their copy_atomic call gets an empty override.
-    """
-    decisions: dict[Path, dict[str, str]] = {}
-    for sub_src, sub_dst in _iter_section_tracked_files(ctx):
-        try:
-            live_text = sub_dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            # First install for this file — no live to reconcile.
-            continue
-        tracked_text = sub_src.read_text(encoding="utf-8")
-        drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-        if not drifts:
-            continue
-        if section_auto is None and not interactive:
-            _warn_shared_drift(sub_dst, drifts)
-        outcomes = section_wizard.reconcile_sections(
-            drifts, auto=section_auto, interactive=interactive
-        )
-        sparse = {
-            n: d.body
-            for n, d in outcomes.items()
-            if d.action in (SectionAction.TAKE_TRACKED, SectionAction.EDIT)
-        }
-        if sparse:
-            decisions[sub_dst] = sparse
-    return decisions
-
-
-def _extract_live_sections_map(
-    ctx: ProfileContext,
-) -> dict[Path, sections_mod.LiveSections]:
-    """Pre-extract live user-section bodies for every section-bearing tracked_file.
-
-    Walks ``resolved.tracked_files``, and for each entry whose tracked_file has
-    ``preserve_user_sections=True`` AND whose live file already exists,
-    reads the live file once and stores the
-    :class:`~sections_mod.LiveSections` produced by
-    :func:`sections_mod.extract_live_sections` keyed by the live
-    ``sub_dst`` path.
-
-    The install loop passes the matching entry to ``deploy.copy_atomic``
-    via ``precomputed_live_sections`` so ``_compute_content`` does not
-    re-read + re-parse the same live file a second time. The factory
-    routes through ``allow_legacy=True`` so pre-hash live files (untagged
-    markers, no end-marker hash) flow through install's migration path;
-    install is the verb that re-tags + stamps. Compare / sync use the
-    strict parser and refuse legacy via :func:`_refuse_legacy_live_markers`.
-    """
-    live_sections: dict[Path, sections_mod.LiveSections] = {}
-    for _, sub_dst in _iter_section_tracked_files(ctx):
-        try:
-            live_text = sub_dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        live_sections[sub_dst] = sections_mod.extract_live_sections(live_text)
-    return live_sections

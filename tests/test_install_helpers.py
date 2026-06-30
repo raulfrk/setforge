@@ -82,7 +82,7 @@ def test_dry_run_drift_gate_counts_diff_only_unexpected_entry(
         ],
         has_unexpected_drift=True,
     )
-    _install_helpers._dry_run_emit_drift_gate(report, live_sections_map={})
+    _install_helpers._dry_run_emit_drift_gate(report)
     out = capsys.readouterr().out
     assert "unexpected drift in 1 file(s)" in out
 
@@ -274,8 +274,6 @@ def test_deploy_preserve_overlay_loads_spans_and_advances_sidecar(
 
     _install_helpers._deploy_all_tracked_files(
         ctx,
-        section_decisions={},
-        live_sections_map={},
         host_local_sections_map={
             "claude_md": {
                 # The PROJECTION already carries the overlay name (eb070aa).

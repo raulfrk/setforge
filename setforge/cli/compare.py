@@ -20,7 +20,6 @@ from setforge.cli._help_examples import COMPARE_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
     _refuse_duplicate_section_names,
-    _refuse_legacy_live_markers,
 )
 from setforge.cli._install_helpers import _load_validated_host_local_sections
 from setforge.cli._output import render
@@ -85,7 +84,6 @@ def compare(
     profile_ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
-    _refuse_legacy_live_markers(profile_ctx, command="compare")
     _refuse_duplicate_section_names(profile_ctx, command="compare")
 
     with profile_lock(profile):

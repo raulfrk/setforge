@@ -1,7 +1,7 @@
 """install subcommand — orchestrates tracked-file deploy + extension/plugin reconcile.
 
-Wires section-marker reconcile, deploy.copy_atomic, extension/plugin
-reconcile, and the transition snapshot. Imports ``app`` from
+Wires deploy.copy_atomic, extension/plugin reconcile, and the transition
+snapshot. Imports ``app`` from
 :mod:`setforge.cli` so the ``@app.command()`` registration fires at
 module import time; ``setforge/cli/__init__.py`` imports this module at
 the bottom for the side effect.
@@ -39,10 +39,8 @@ from setforge.cli._git_check import (
 from setforge.cli._help_examples import INSTALL_EXAMPLES
 from setforge.cli._helpers import (
     ProfileContext,
-    _extract_live_sections_map,
     _iter_all_tracked_files,
     _parse_section_auto,
-    _resolve_section_decisions,
 )
 from setforge.cli._install_helpers import (
     _build_conflict_resolver,
@@ -315,7 +313,7 @@ def install(
             inventory = build_welcome_inventory(ctx)
 
             def _welcome_dry_run() -> None:
-                _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
+                _dry_run_pipeline(ctx=ctx)
 
             welcome_choice = prompt_welcome(
                 inventory=inventory,
@@ -346,15 +344,14 @@ def install(
 
     # Boundary-not-leaf dispatch. When `--dry-run` is set,
     # route through `_dry_run_pipeline` which calls only the read-only
-    # shared helpers (compare_profile, _extract_live_sections_map,
-    # _resolve_section_decisions, vscode_extensions.reconcile(dry_run=True),
+    # shared helpers (compare_profile, vscode_extensions.reconcile(dry_run=True),
     # claude_plugins.reconcile(dry_run=True)). The real pipeline below is
     # provably unreachable: zero mutating subprocess calls, zero file
     # writes, zero transition record. The boolean is NOT threaded into
     # deploy / transitions / compare / merge — those modules stay
     # leaf-pure and the dry-run path bypasses them entirely.
     if dry_run:
-        _dry_run_pipeline(ctx=ctx, section_auto=section_auto)
+        _dry_run_pipeline(ctx=ctx)
         return
 
     with profile_lock(profile):
@@ -388,7 +385,6 @@ def install(
             ctx=ctx,
             auto_accept_tracked=auto_accept_tracked,
             auto_accept_live=auto_accept_live,
-            section_auto=section_auto,
             yes=yes,
         )
 
@@ -412,20 +408,6 @@ def install(
                 "install aborted by secrets scan", err=True, fg=typer.colors.RED
             )
             raise typer.Exit(code=1)
-
-        # Resolve user-section drift (shared sections) into per-tracked_file
-        # decisions BEFORE the deploy loop so wizard prompts and the
-        # bare-install warning fire once, deterministically.
-        section_decisions = _resolve_section_decisions(
-            ctx,
-            section_auto=section_auto,
-            interactive=reconcile_user_sections,
-        )
-
-        # Pre-extract live user-sections for every section-bearing tracked_file
-        # so deploy.copy_atomic can skip its own re-read + re-parse pass.
-        # See `precomputed_live_sections` on copy_atomic.
-        live_sections_map = _extract_live_sections_map(ctx)
 
         # For symlink-deployed tracked_files the recorded "touched path" is
         # the symlink's TARGET (where bytes actually land), not the link
@@ -486,8 +468,6 @@ def install(
 
         deploy_outcome = _deploy_all_tracked_files(
             ctx,
-            section_decisions=section_decisions,
-            live_sections_map=live_sections_map,
             host_local_sections_map=host_local_sections_map,
             section_auto=section_auto,
             conflict_resolver=conflict_resolver,

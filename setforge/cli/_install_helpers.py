@@ -11,13 +11,9 @@ Helpers extracted from ``install()`` body:
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
-- :func:`_confirm_legacy_drift_or_exit` /
-  :func:`_confirm_section_reconcile_or_exit`: auto-confirm confirm-or-exit
-  wrappers that pair a plan-builder with
+- :func:`_confirm_legacy_drift_or_exit`: auto-confirm confirm-or-exit
+  wrapper that pairs :func:`_build_unexpected_drift_plan` with
   :func:`setforge.cli._confirm.confirm_auto_operation`.
-- :func:`_build_unexpected_drift_plan` /
-  :func:`_build_shared_section_plan`: AutoPlan builders used by the
-  confirm-or-exit helpers above.
 
 NO ``@app.command`` decorators; NO ``app`` import — this module is
 internal-only and stays out of typer's command surface.
@@ -44,7 +40,6 @@ from setforge import (
     disposition_merge,
     reconcile,
     reconcile_apply,
-    section_reconcile,
     spans_store,
     transitions,
 )
@@ -58,26 +53,18 @@ from setforge import config as config_mod
 from setforge import (
     vscode_extensions as vscode_extensions_mod,
 )
-from setforge._legacy_markers import (
-    LiveSections,
-    SectionSemantics,
-    strip_shared_markers,
-)
+from setforge._legacy_markers import strip_shared_markers
 from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
     AutoPlan,
-    FileChange,
     confirm_auto_operation,
 )
 from setforge.cli._helpers import (
     ProfileContext,
-    _extract_live_sections_map,
     _iter_all_tracked_files,
-    _iter_section_tracked_files,
     _refuse_duplicate_section_names,
     _resolve_drift_paths,
-    _resolve_section_decisions,
 )
 from setforge.cli._validate_errors import suggest_close_match
 from setforge.compare import (
@@ -105,7 +92,6 @@ from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.wizard import _claude_merge_unavailable
 from setforge.section_mode import ReconcileAuto
-from setforge.section_reconcile import SectionDriftState
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -462,8 +448,6 @@ def _build_conflict_resolver(
 def _deploy_all_tracked_files(
     ctx: ProfileContext,
     *,
-    section_decisions: Mapping[Path, dict[str, str]],
-    live_sections_map: Mapping[Path, LiveSections],
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
     section_auto: ReconcileAuto | None = None,
     conflict_resolver: disposition_merge.ConflictResolver | None = None,
@@ -1574,59 +1558,6 @@ def _build_unexpected_drift_plan(
     )
 
 
-def _build_shared_section_plan(*, ctx: ProfileContext) -> AutoPlan:
-    """Build an AutoPlan from shared-section drift across tracked markdown files.
-
-    Walks ``_iter_section_tracked_files`` and runs
-    ``classify_section_drift`` on each pair, collecting tracked_files where
-    any ``shared`` section has a non-``NO_DRIFT`` state. The plan's
-    ``changed`` column counts drifted shared sections per file.
-    """
-    file_changes: list[FileChange] = []
-    for sub_src, sub_dst in _iter_section_tracked_files(ctx):
-        try:
-            live_text = sub_dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        tracked_text = sub_src.read_text(encoding="utf-8")
-        drifts = section_reconcile.classify_section_drift(tracked_text, live_text)
-        shared_drifted = [
-            d
-            for d in drifts.values()
-            if d.semantics is SectionSemantics.SHARED
-            and d.state is not SectionDriftState.NO_DRIFT
-        ]
-        if not shared_drifted:
-            continue
-        file_changes.append(
-            FileChange(
-                source=sub_src,
-                dest=sub_dst,
-                changed=len(shared_drifted),
-            ),
-        )
-    if not file_changes:
-        return AutoPlan(
-            direction=AutoDirection.TRACKED_TO_LIVE,
-            file_changes=(),
-            risks=(),
-            revert_command=f"setforge revert --profile={ctx.profile}",
-        )
-    return AutoPlan(
-        direction=AutoDirection.TRACKED_TO_LIVE,
-        file_changes=tuple(file_changes),
-        risks=(
-            f"shared user-section bodies on {len(file_changes)} file(s) "
-            "will be overwritten with tracked-side content",
-            # The gate only surfaces ``shared`` sections; ``host-local``
-            # sections never participate in section reconcile and stay
-            # untouched regardless of --auto* flag.
-            "host-local sections are not affected",
-        ),
-        revert_command=f"setforge revert --profile={ctx.profile}",
-    )
-
-
 def _confirm_legacy_drift_or_exit(
     *,
     drift_report: compare_mod.CompareReport,
@@ -1662,49 +1593,23 @@ def _confirm_legacy_drift_or_exit(
         raise typer.Exit(0)
 
 
-def _confirm_section_reconcile_or_exit(
-    *,
-    ctx: ProfileContext,
-    section_auto: ReconcileAuto | None,
-    yes: bool,
-) -> None:
-    """Render the section-reconcile confirm wizard; ``typer.Exit(0)`` on decline.
-
-    Wraps the ``install --auto=use-tracked`` confirm block. No-op
-    unless ``section_auto`` is ``USE_TRACKED`` (the only mutating
-    section-reconcile mode).
-    """
-    if section_auto is not ReconcileAuto.USE_TRACKED:
-        return
-    plan = _build_shared_section_plan(ctx=ctx)
-    if not confirm_auto_operation(
-        command="install --auto=use-tracked",
-        profile=ctx.profile,
-        plan=plan,
-        yes=yes,
-    ):
-        raise typer.Exit(0)
-
-
 def _run_predeploy_gates(
     *,
     drift_report: compare_mod.CompareReport,
     ctx: ProfileContext,
     auto_accept_tracked: bool,
     auto_accept_live: bool,
-    section_auto: ReconcileAuto | None,
     yes: bool,
 ) -> None:
-    """Run the three pre-deploy confirm/reject gates in their fixed order.
+    """Run the pre-deploy confirm/reject gates in their fixed order.
 
-    Bundles the unexpected-drift confirm (``--auto-accept-{tracked,live}``)
-    + the bare-install unexpected-drift reject + the section-reconcile
-    confirm (``--auto=use-tracked``) into one orchestrator so
-    :func:`install` reads as a high-level pipeline rather than 50+ LoC
-    of three nearly-identical confirm shells. Each gate is independent
-    and short-circuits when its triggering flag is unset; the order
-    matches the pre-extraction body verbatim so flag interactions stay
-    unchanged.
+    Bundles the duplicate-section-name refusal + the unexpected-drift
+    confirm (``--auto-accept-{tracked,live}``) + the bare-install
+    unexpected-drift reject into one orchestrator so :func:`install`
+    reads as a high-level pipeline rather than three nearly-identical
+    confirm shells. Each gate is independent and short-circuits when its
+    triggering flag is unset; the order matches the pre-extraction body
+    verbatim so flag interactions stay unchanged.
 
     A duplicate user-section name is structural corruption (NOT a
     migratable legacy-marker artifact, so install does not silently fix it
@@ -1726,11 +1631,6 @@ def _run_predeploy_gates(
         ctx,
         auto_accept_tracked=auto_accept_tracked,
         auto_accept_live=auto_accept_live,
-    )
-    _confirm_section_reconcile_or_exit(
-        ctx=ctx,
-        section_auto=section_auto,
-        yes=yes,
     )
 
 
@@ -1786,7 +1686,6 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 # ``_dry_run_pipeline`` is the orchestrator-level branch entered when
 # ``setforge install --dry-run`` is invoked. It reuses every read-only
 # helper the real pipeline calls (``compare_mod.compare_profile``,
-# ``_extract_live_sections_map``, ``_resolve_section_decisions``,
 # ``claude_plugins.reconcile(dry_run=True)``,
 # ``vscode_extensions.reconcile(dry_run=True)``) and emits ``WOULD ``-
 # prefixed lines for every mutating verb the real pipeline would invoke.
@@ -1798,8 +1697,8 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 #   NOT threaded into ``deploy`` / ``transitions`` / ``compare`` /
 #   ``merge`` — the dry-run path bypasses those modules entirely
 #   (``deploy.bootstrap_local`` / ``transitions.ensure_state_dir_writable`` /
-#   ``transitions.write_transition`` / ``secrets_mod.append_to_allowlist`` /
-#   ``section_reconcile.stamp_tracked_baseline`` are all unreachable).
+#   ``transitions.write_transition`` / ``secrets_mod.append_to_allowlist``
+#   are all unreachable).
 # - No new ``_simulate_*`` / ``_dry_*`` diff-or-merge function: every
 #   compute step here delegates to the same shared helpers the real
 #   pipeline uses, so a future change to the diff algorithm reflects
@@ -1807,9 +1706,8 @@ def revert_symlink_deployment(dst: Path, expected_target: str) -> bool:
 # - WOULD only on mutating verbs (``deploy`` / ``inject`` / ``install`` /
 #   ``uninstall`` / ``enable`` / ``disable``); section headers and read
 #   counts go unprefixed.
-# - No ``confirm_auto_operation`` call from the dry-run path: the two
-#   call sites in :func:`_confirm_legacy_drift_or_exit` /
-#   :func:`_confirm_section_reconcile_or_exit` are inside
+# - No ``confirm_auto_operation`` call from the dry-run path: the call
+#   site in :func:`_confirm_legacy_drift_or_exit` is inside
 #   :func:`_run_predeploy_gates`, which the dry-run pipeline never
 #   invokes — even under ``--auto=*`` + ``--dry-run``.
 # ---------------------------------------------------------------------------
@@ -1827,19 +1725,18 @@ updating the spec + every consumer."""
 def _dry_run_pipeline(
     *,
     ctx: ProfileContext,
-    section_auto: ReconcileAuto | None,
 ) -> None:
     """Simulate every install phase without mutating filesystem or state.
 
     Called from :func:`setforge.cli.install.install` when ``--dry-run``
-    is set. Walks the same 8 phases the real pipeline performs (profile
-    resolve, host overlay, drift gate, file deploys, section reconcile,
-    plugin reconcile, extension reconcile, transition record) and prints
-    a ``WOULD ``-prefixed action line per mutating verb. Calls only
-    read-only helpers; never writes files, never touches the transition
-    state dir, never invokes the auto-confirm confirm wizard, never runs git
-    fetch (the source-layer git check runs BEFORE this function but is
-    itself read-only).
+    is set. Walks the install phases the real pipeline performs (profile
+    resolve, host overlay, drift gate, file deploys, plugin reconcile,
+    extension reconcile, transition record) and prints a ``WOULD
+    ``-prefixed action line per mutating verb. Calls only read-only
+    helpers; never writes files, never touches the transition state dir,
+    never invokes the auto-confirm confirm wizard, never runs git fetch
+    (the source-layer git check runs BEFORE this function but is itself
+    read-only).
     """
     typer.echo(_DRY_RUN_HEADER)
     _dry_run_emit_profile_summary(ctx)
@@ -1861,18 +1758,9 @@ def _dry_run_pipeline(
         ctx.repo_root,
         host_local_sections=host_local_sections_map,
     )
-    # Pre-extract live user-sections via the SAME helper the real
-    # pipeline calls (anti-pattern check #3 — no parallel compute).
-    # In dry-run the map is informational (a count surface); the real
-    # pipeline forwards it to ``deploy.copy_atomic`` for the
-    # ``precomputed_live_sections`` fast path. Calling it here keeps
-    # the dry-run output's section-aware tracked_file count consistent
-    # with what the real pipeline observes on this profile.
-    live_sections_map = _extract_live_sections_map(ctx)
-    _dry_run_emit_drift_gate(drift_report, live_sections_map=live_sections_map)
+    _dry_run_emit_drift_gate(drift_report)
     _dry_run_emit_deploys(ctx, drift_report)
     _dry_run_emit_host_local_inject(ctx)
-    _dry_run_emit_section_reconcile(ctx, section_auto=section_auto)
     _dry_run_emit_plugin_reconcile(ctx)
     _dry_run_emit_extension_reconcile(ctx)
     _dry_run_emit_transition_path(ctx)
@@ -1907,8 +1795,6 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
 
 def _dry_run_emit_drift_gate(
     drift_report: compare_mod.CompareReport,
-    *,
-    live_sections_map: Mapping[Path, LiveSections],
 ) -> None:
     """Emit the ``=== would-be drift gate ===`` block.
 
@@ -1919,11 +1805,9 @@ def _dry_run_emit_drift_gate(
     :class:`~setforge.compare.DriftClass`); the live install gate
     (:func:`_check_unexpected_drift`) trips only on permission-mode
     drift (``mode_drift``), so this count can include diff-only drift
-    that a real install does not reject. The dry-run path
-    never invokes the auto-confirm wizard (short-circuiting before the
-    confirm is a hard requirement per spec). ``live_sections_map`` is
-    the read-only output of :func:`_extract_live_sections_map`; the
-    count is informational.
+    that a real install does not reject. The dry-run path never invokes
+    the auto-confirm wizard (short-circuiting before the confirm is a
+    hard requirement per spec).
     """
     typer.echo("=== would-be drift gate ===")
     unexpected = sum(
@@ -1932,9 +1816,6 @@ def _dry_run_emit_drift_gate(
         if e.drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
     )
     typer.echo(f"unexpected drift in {unexpected} file(s)")
-    typer.echo(
-        f"section-aware tracked_files with live present: {len(live_sections_map)}"
-    )
 
 
 def _dry_run_emit_deploys(
@@ -2012,37 +1893,6 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
             f"  WOULD inject  '{section_name}' into {dst} "
             f"{HOST_LOCAL_PROVENANCE_TAG} (tracked_file {tf_id!r})"
         )
-
-
-def _dry_run_emit_section_reconcile(
-    ctx: ProfileContext, *, section_auto: ReconcileAuto | None
-) -> None:
-    """Emit the ``=== would-be section reconcile ===`` block.
-
-    Reuses the read-only :func:`_resolve_section_decisions` helper from
-    the shared CLI surface so the dry-run output draws on the SAME
-    classifier the real pipeline uses (anti-pattern check #3). When
-    ``section_auto`` is :data:`ReconcileAuto.USE_TRACKED`, surface every
-    shared-drifted section that WOULD be overwritten by the tracked
-    body; under ``KEEP_LIVE`` and ``None``, no shared section would
-    change (the bare-install default keeps live silently).
-    """
-    typer.echo("=== would-be section reconcile ===")
-    # ``interactive=False`` keeps the section wizard quiet under
-    # dry-run; the helper still emits the bare-install warning per
-    # section-drifted file when ``section_auto`` is None, which is
-    # informational stderr output, not a mutation.
-    decisions = _resolve_section_decisions(
-        ctx, section_auto=section_auto, interactive=False
-    )
-    if not decisions:
-        typer.echo("  no shared-section drift to reconcile")
-        return
-    for dst_path, body_map in decisions.items():
-        for section_name in body_map:
-            typer.echo(
-                f"  WOULD inject  '{section_name}' into {dst_path} (tracked body)"
-            )
 
 
 def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
