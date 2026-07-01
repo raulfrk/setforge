@@ -135,6 +135,41 @@ zero spurious delta. It differs from the schema class on two axes:
   pre-install state with no stranded base for the next install to mis-merge
   against.
 
+## User-section marker retirement — a one-way contract step
+
+The `2.0 → 2.1` migration retires **user-section markers** — the HTML-comment
+`<!-- setforge:user-section ... -->` pairs older markdown tracked files used to
+delimit shared and host-local regions. It is the **contract** step of the
+markerless overlay/span model introduced (as the *expand* shape) in the
+preceding release: shared regions become ordinary tracked content and host-local
+bodies move to `local.yaml` overlays, so the markers are no longer needed and
+are stripped.
+
+This step is the concrete instance of the *Stated limit* above: the retired
+marker **syntax is deleted structure**, and a stateless reverse migration cannot
+reconstruct it. The `2.0 → 2.1` bump therefore registers a reverse migration —
+satisfying the *both ways* rule — but that reverse **refuses cleanly** rather
+than emitting broken output. `setforge migrate --to=<2.0-or-lower>` across the
+boundary exits non-zero with an explicit message, never a silent marker-less
+config an older engine would misread — consistent with *clean refusal, never a
+crash*.
+
+Recovery has a **bounded window**, gated by `--finalize`:
+
+- **Pre-finalize — reversible via `migrate --revert`.** The forward migration
+  records a transition capturing the pre-migration bytes. Within that window,
+  `setforge migrate --revert` byte-restores the original marker-bearing sources
+  (and the seeded overlay / base legs) in lockstep — the reversible path a
+  stateless down-migration cannot provide.
+- **`--finalize` — the documented irreversibility boundary.** `setforge migrate
+  --finalize` strips the remaining vestigial marker syntax from the tracked
+  sources permanently. It is floor-gated: it refuses unless the config's
+  `minimum_version` has reached the frozen marker-retire schema version, so a
+  host that might still need the pre-finalize window cannot cross it by accident.
+  After finalize the marker bytes are gone from tracked and the reversible window
+  is closed — the one point in the lifecycle where marker content is
+  irrecoverable by design.
+
 ## `validate` orphan-overlay diagnostics
 
 `local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /
