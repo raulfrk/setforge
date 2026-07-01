@@ -257,8 +257,7 @@ def commit_carves(
 
     The ``local.yaml`` writes for one detect run sit inside a single
     :class:`Snapshot`; any exception restores ``local.yaml`` to its pre-commit
-    bytes (no half-created span), mirroring
-    :func:`setforge.section_promote.execute_promote_to_shared`. The overlay
+    bytes (no half-created span). The overlay
     sidecar reseed (``set_states``) is the terminal mutation before
     ``discard()`` — it is not file-snapshotted, but it runs last, so a failure
     anywhere still leaves ``local.yaml`` consistent.

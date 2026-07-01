@@ -24,19 +24,16 @@ Marker syntax (HTML comments only)::
     ... preserved content ...
     <!-- setforge:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
 
-The ``host-local|shared`` keyword is REQUIRED on both start and end
-markers. ``host-local`` sections are preserved
-unconditionally from live on install; ``shared`` sections participate in
-a three-way merge that can surface tracked-side updates via the
-``--reconcile-user-sections`` wizard. End markers carry a mandatory
-``hash=<64-char-lowercase-hex>`` segment recording the sha256 of the
-section body — install rewrites these on every write to keep them
-aligned with the body actually written.
-
-Tracked files contain marker pairs (with optional placeholder content between
-them); on deploy, content from the live file at the corresponding markers is
-spliced in. ``merge_sections`` is the splice; ``extract_sections`` is the
-inverse used by ``capture`` and by ``compare`` to render a comparable view.
+The ``host-local|shared`` keyword was REQUIRED on both start and end markers,
+and end markers carried a mandatory ``hash=<64-char-lowercase-hex>`` segment
+recording the sha256 of the section body. Under the now-retired mechanism
+``host-local`` sections were preserved from live on install, ``shared`` sections
+went through a three-way reconcile, and install rewrote the hashes on every
+write — all GONE as of the 2.1 retirement. Those deploy / reconcile / hash flows
+no longer exist; this module survives only so the migration chain's frozen parser
+can still read pre-2.1 marker bytes. ``extract_sections`` renders a comparable
+view for that parser's tests; ``merge_sections`` / ``set_marker_hashes`` have no
+live caller (see above).
 
 The strict parser (``allow_legacy=False``, the default) raises
 :class:`MarkerError` for any marker missing the semantics keyword, any
