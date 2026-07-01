@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from setforge.config import Disposition
-from setforge.migrations._disposition_retire import _classify_fid, _FidLegacy
+from setforge.migrations._disposition_retire import (
+    _classify_fid,
+    _FidLegacy,
+    _SpanSpec,
+)
 from setforge.reconcile import file_id
 from setforge.reconcile.types import ABSENT
-from setforge.spans import SpanEntry, SpanKind, SpanSemantics
 
 _YAML_BASE = b"editor:\n  fontSize: 12\n"
 _YAML_LIVE = b"editor:\n  fontSize: 18\n"
@@ -24,8 +26,8 @@ _YAML_LIVE = b"editor:\n  fontSize: 18\n"
 def _rec(
     *,
     dst: str,
-    disposition: Disposition | None = None,
-    spans: tuple[SpanEntry, ...] = (),
+    disposition: str | None = None,
+    spans: tuple[_SpanSpec, ...] = (),
     tracked: bytes = _YAML_BASE,
     live: bytes = _YAML_LIVE,
     dst_exists: bool = True,
@@ -46,24 +48,19 @@ def _rec(
     )
 
 
-def _span(anchor: str, *, deep: bool = False) -> SpanEntry:
-    return SpanEntry(
-        anchor=anchor,
-        kind=SpanKind.PINNED,
-        semantics=SpanSemantics.HOST_LOCAL,
-        deep=deep,
-    )
+def _span(anchor: str, *, deep: bool = False) -> _SpanSpec:
+    return _SpanSpec(anchor=anchor, deep=deep, kind="pinned", semantics="host-local")
 
 
 def test_shared_structured_no_span_is_lazy() -> None:
-    plan = _classify_fid(_rec(dst="c.yaml", disposition=Disposition.SHARED))
+    plan = _classify_fid(_rec(dst="c.yaml", disposition="shared"))
     assert plan.hunks is None
     assert plan.base == _YAML_BASE  # DL1: verbatim tracked bytes
     assert plan.local == _YAML_LIVE
 
 
 def test_forked_structured_all_units_local() -> None:
-    plan = _classify_fid(_rec(dst="c.yaml", disposition=Disposition.FORKED))
+    plan = _classify_fid(_rec(dst="c.yaml", disposition="forked"))
     assert plan.hunks is not None
     assert [r["cls"] for r in plan.hunks] == ["local"]
     row = plan.hunks[0]
@@ -72,7 +69,7 @@ def test_forked_structured_all_units_local() -> None:
 
 
 def test_pinned_structured_all_units_local() -> None:
-    plan = _classify_fid(_rec(dst="c.yaml", disposition=Disposition.PINNED))
+    plan = _classify_fid(_rec(dst="c.yaml", disposition="pinned"))
     assert [r["cls"] for r in plan.hunks or []] == ["local"]
 
 
@@ -80,7 +77,7 @@ def test_shared_structured_exact_span_only_covers_that_key() -> None:
     plan = _classify_fid(
         _rec(
             dst="c.yaml",
-            disposition=Disposition.SHARED,
+            disposition="shared",
             spans=(_span("editor.fontSize"),),
         )
     )
@@ -93,7 +90,7 @@ def test_shared_structured_deep_span_covers_subtree() -> None:
     plan = _classify_fid(
         _rec(
             dst="c.yaml",
-            disposition=Disposition.SHARED,
+            disposition="shared",
             spans=(_span("editor", deep=True),),
         )
     )
@@ -105,7 +102,7 @@ def test_shared_structured_nonmatching_span_is_lazy() -> None:
     plan = _classify_fid(
         _rec(
             dst="c.yaml",
-            disposition=Disposition.SHARED,
+            disposition="shared",
             spans=(_span("other.key"),),
         )
     )
@@ -116,7 +113,7 @@ def test_forked_markdown_all_hunks_local() -> None:
     plan = _classify_fid(
         _rec(
             dst="NOTES.md",
-            disposition=Disposition.FORKED,
+            disposition="forked",
             tracked=b"# t\nalpha\n",
             live=b"# t\nbeta\n",
             is_structured=False,
@@ -133,7 +130,7 @@ def test_shared_markdown_is_lazy() -> None:
     plan = _classify_fid(
         _rec(
             dst="NOTES.md",
-            disposition=Disposition.SHARED,
+            disposition="shared",
             tracked=b"# t\nalpha\n",
             live=b"# t\nbeta\n",
             is_structured=False,
@@ -143,9 +140,7 @@ def test_shared_markdown_is_lazy() -> None:
 
 
 def test_undeployed_dst_seeds_absent_local_and_no_hunks() -> None:
-    plan = _classify_fid(
-        _rec(dst="c.yaml", disposition=Disposition.FORKED, dst_exists=False)
-    )
+    plan = _classify_fid(_rec(dst="c.yaml", disposition="forked", dst_exists=False))
     assert plan.local is ABSENT
     assert plan.hunks is None
     assert plan.base == _YAML_BASE
@@ -157,12 +152,12 @@ def test_present_null_and_absent_do_not_collapse() -> None:
     null_plan = _classify_fid(
         _rec(
             dst="c.yaml",
-            disposition=Disposition.FORKED,
+            disposition="forked",
             live=b"editor:\n  fontSize: null\n",
         )
     )
     absent_plan = _classify_fid(
-        _rec(dst="c.yaml", disposition=Disposition.FORKED, live=b"editor: {}\n")
+        _rec(dst="c.yaml", disposition="forked", live=b"editor: {}\n")
     )
     assert null_plan.hunks is not None
     null_hash = null_plan.hunks[0]["value_hash"]

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from setforge.config import Disposition
 from setforge.migrations import MigrationRoots
 from setforge.migrations._disposition_retire import _build_legacy_records
 
@@ -59,14 +58,14 @@ def test_reader_enumerates_disposition_and_bytes(tmp_path) -> None:
 
     notes = by["notes"]
     assert notes.profile == "default"
-    assert notes.disposition is Disposition.SHARED
+    assert notes.disposition == "shared"
     assert notes.is_structured is False
     assert notes.tracked_bytes == b"# tracked notes\n"
     assert notes.live_bytes == b"# live notes\n"
     assert notes.dst_exists is True
 
     conf = by["conf"]
-    assert conf.disposition is Disposition.FORKED
+    assert conf.disposition == "forked"
     assert conf.is_structured is True
     assert conf.tracked_bytes == b"editor:\n  fontSize: 12\n"
     assert conf.live_bytes == b"editor:\n  fontSize: 18\n"
@@ -81,9 +80,9 @@ def test_reader_folds_host_local_disposition_override(tmp_path) -> None:
         "tracked_files:\n  conf:\n    disposition: pinned\n", encoding="utf-8"
     )
     by = _by_name(_build_legacy_records(roots))
-    assert by["conf"].disposition is Disposition.PINNED
+    assert by["conf"].disposition == "pinned"
     # An un-overridden file keeps its shared-config disposition.
-    assert by["notes"].disposition is Disposition.SHARED
+    assert by["notes"].disposition == "shared"
 
 
 def test_reader_flags_undeployed_dst_without_crash(tmp_path) -> None:

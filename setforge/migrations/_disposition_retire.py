@@ -27,10 +27,16 @@ from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from setforge.config import Disposition
     from setforge.reconcile import FileId
-    from setforge.spans import SpanEntry
+    from setforge.reconcile.types import Absent
     from setforge.transitions import StateSnapshotEntry, TransitionDir
+
+#: Disposition string values (frozen here — the ``Disposition`` enum is removed
+#: by this cutover, so the migration must not import it).
+_FORKED: Final = "forked"
+_PINNED: Final = "pinned"
+#: Dispositions whose whole-file divergence classifies every unit LOCAL.
+_LOCAL_DISPOSITIONS: Final = frozenset({_FORKED, _PINNED})
 
 #: ``local.yaml`` relpath under ``roots.home`` (host-local overlay source),
 #: copied from the marker-retire migration so this module stays self-contained
@@ -87,13 +93,114 @@ class DispositionRetireMigration:
         )
 
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
-        raise NotImplementedError  # built in a later cutover wave
+        """Read-only ``--check`` inventory: the schema stamp + a per-file NOTE.
+
+        Enumerates the legacy records (read-only) so ``--check`` reports what the
+        cutover will migrate without mutating anything.
+        """
+        entries: list[ManifestEntry] = [
+            ManifestEntry(
+                type=ManifestType.EDIT,
+                description=f"stamp schema_version {self.to_version!r}",
+                affected_path=roots.cfg_path,
+            )
+        ]
+        for rec in _build_legacy_records(roots):
+            entries.append(
+                ManifestEntry(
+                    type=ManifestType.NOTE,
+                    description=(
+                        f"migrate {rec.profile}/{rec.name} "
+                        f"(disposition={rec.disposition or 'none'}) "
+                        "into the unified per-unit store"
+                    ),
+                    affected_path=rec.dst,
+                )
+            )
+        return tuple(entries)
 
     def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
-        raise NotImplementedError  # built in a later cutover wave
+        """Every path the cutover reads/writes/deletes (drives backup + rollback).
+
+        setforge.yaml + each ``(profile, fid)``'s reconcile legs (base/local/
+        local-absent/index) and legacy spans/scalar-base manifests. Existence is
+        NOT filtered here (a missing path snapshots as absent and restores by
+        deletion); the union is deduped preserving order.
+        """
+        from setforge import base_store, scalar_base_store, spans_store
+        from setforge.reconcile import store as reconcile_store
+
+        seen: dict[Path, None] = {roots.cfg_path: None}
+        records = _build_legacy_records(roots)
+        for rec in records:
+            key = str(rec.fid)
+            for path in (
+                base_store.base_path(rec.profile, key),
+                reconcile_store.local_content_path(rec.profile, key),
+                reconcile_store.local_absent_path(rec.profile, key),
+                reconcile_store.drafts_manifest_path(rec.profile, key),
+                spans_store.manifest_path(rec.profile, key),
+                scalar_base_store.manifest_path(rec.profile, key),
+            ):
+                seen.setdefault(path, None)
+        for profile in {rec.profile for rec in records}:
+            seen.setdefault(reconcile_store.index_manifest_path(profile), None)
+        return tuple(seen)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        raise NotImplementedError  # built in a later cutover wave
+        """Run the cutover: validate -> seed -> stamp -> commit -> delete (see §2).
+
+        Pass 1 enumerates + pre-flight-validates every structured base (D4 —
+        raises here, before any mutation). Pass 2 holds ALL profile locks across
+        one arc: capture pre-state snapshots, seed the unified store for
+        not-yet-seeded fids (already-seeded fids are preserved, never clobbered),
+        stamp schema 3.0, COMMIT the one durable transition (state_snapshots +
+        setforge.yaml), then delete the legacy stores (after the commit — MS1).
+        Idempotent: a re-run skips already-unified fids and no-ops the deletes.
+        """
+        import contextlib
+
+        from setforge import locking, reconcile
+
+        records = _build_legacy_records(roots)  # pass 1: enumerate (read-only)
+        _validate_bases(records)  # D4 pre-flight abort — raises before any write
+
+        if not records:
+            # Fresh / all-symlink / no tracked files: nothing to migrate, just
+            # advance the schema so the config reaches 3.0.
+            _stamp_schema_version(roots.cfg_path, self.to_version)
+            return
+
+        profiles = sorted({rec.profile for rec in records})
+        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+
+        with contextlib.ExitStack() as locks:
+            for profile in profiles:
+                locks.enter_context(locking.profile_lock(profile))
+
+            snapshots = _capture_cutover_snapshots(records, profiles)
+
+            for rec in records:
+                if reconcile.read_base(rec.profile, rec.fid) is not None:
+                    continue  # already in the unified store — preserve, never re-seed
+                plan = _classify_fid(rec)
+                reconcile.record(
+                    rec.profile,
+                    rec.fid,
+                    base=plan.base,
+                    local=plan.local,
+                    hunks=plan.hunks,
+                )
+
+            _stamp_schema_version(roots.cfg_path, self.to_version)
+            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
+
+            _write_cutover_transition(
+                file_pre={roots.cfg_path: cfg_pre},
+                file_post={roots.cfg_path: cfg_post},
+                state_snapshots=snapshots,
+            )
+            _delete_legacy_stores(records, profiles)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,17 +255,43 @@ class _DispositionRetireReverse:
 
 
 @dataclass(frozen=True, slots=True)
+class _SpanSpec:
+    """A frozen, self-contained projection of one legacy span.
+
+    The ``spans`` model is removed by this cutover, so the migration reads spans
+    from the raw YAML and keeps only what the per-unit classifier needs:
+    ``anchor`` (dotted-path / heading identity), ``deep`` (subtree coverage), and
+    the ``kind`` / ``semantics`` strings that decide whether the span is a
+    host-keep region (-> its units become LOCAL). ``host_keep`` is precomputed:
+    a ``host-local`` semantics OR a ``pinned`` / ``overlay`` kind — a
+    ``shared``-semantics forked span is NOT host-keep (its region stays shared).
+    """
+
+    anchor: str
+    deep: bool
+    kind: str
+    semantics: str
+
+    @property
+    def host_keep(self) -> bool:
+        return self.semantics == "host-local" or self.kind in ("pinned", "overlay")
+
+
+@dataclass(frozen=True, slots=True)
 class _FidLegacy:
     """One ``(profile, tracked-file)`` legacy record the cutover migrates.
 
     Per ``(profile, fid)`` because the reconcile / base / scalar-base stores are
     profile-scoped, even though the disposition + span INTENT is file-level
-    (folded from the shared config + the host-local overlay). ``tracked_bytes``
-    (=the DL1 base seed, verbatim tracked/upstream bytes) and ``live_bytes``
-    (=the local overlay) are the whole-file byte pair the per-unit classifier
-    diffs; the legacy ``scalar_base_store`` ancestor is intentionally NOT read —
-    base is reseeded from tracked bytes (DL1), and present-null vs absent is
-    ground-truth-derivable from ``live_bytes`` itself.
+    (folded from the shared config + the host-local overlay). Read fully from the
+    raw YAML (Contract20 pattern) so the migration survives the removal of the
+    ``Disposition`` enum + ``spans`` model — ``disposition`` is the raw string,
+    ``spans`` a tuple of :class:`_SpanSpec`. ``tracked_bytes`` (=the DL1 base
+    seed, verbatim tracked/upstream bytes) and ``live_bytes`` (=the local
+    overlay) are the whole-file byte pair the classifier diffs; the legacy
+    ``scalar_base_store`` ancestor is intentionally NOT read — base is reseeded
+    from tracked bytes (DL1), and present-null vs absent is ground-truth-
+    derivable from ``live_bytes`` itself.
     """
 
     profile: str
@@ -166,8 +299,8 @@ class _FidLegacy:
     fid: FileId
     src: Path
     dst: Path
-    disposition: Disposition | None
-    spans: tuple[SpanEntry, ...]
+    disposition: str | None
+    spans: tuple[_SpanSpec, ...]
     tracked_bytes: bytes
     live_bytes: bytes
     dst_exists: bool
@@ -189,21 +322,22 @@ class _SeedPlan:
     profile: str
     fid: FileId
     base: bytes
-    local: object  # bytes | Absent
+    local: bytes | Absent
     hunks: list[dict[str, object]] | None
 
 
-def _structured_span_covered(path: str, spans: tuple[SpanEntry, ...]) -> bool:
+def _structured_span_covered(path: str, spans: tuple[_SpanSpec, ...]) -> bool:
     """Whether a structured leaf ``path`` is covered by a host-keep span.
 
-    A span whose dotted anchor equals ``path`` covers it; a ``deep`` span covers
-    the whole subtree under its anchor. (Line/heading-anchored markdown spans are
-    handled at the file level, not here.)
+    Only host-keep spans (see :attr:`_SpanSpec.host_keep`) force a key LOCAL; a
+    shared-semantics span leaves its region shared. A span whose dotted anchor
+    equals ``path`` covers it; a ``deep`` span covers the whole subtree under its
+    anchor. (Line/heading-anchored markdown spans are handled at the file level.)
     """
     for span in spans:
-        if path == span.anchor:
-            return True
-        if span.deep and path.startswith(span.anchor + "."):
+        if not span.host_keep:
+            continue
+        if path == span.anchor or (span.deep and path.startswith(span.anchor + ".")):
             return True
     return False
 
@@ -220,7 +354,6 @@ def _classified_hunks(rec: _FidLegacy) -> list[dict[str, object]] | None:
     """
     from dataclasses import replace
 
-    from setforge.config import Disposition
     from setforge.reconcile import hunks as line_hunks
     from setforge.reconcile import structured_units
     from setforge.reconcile.types import HunkClass
@@ -228,7 +361,7 @@ def _classified_hunks(rec: _FidLegacy) -> list[dict[str, object]] | None:
     if not rec.dst_exists:
         return None  # local is ABSENT — no divergence to classify
 
-    local_disp = rec.disposition in (Disposition.FORKED, Disposition.PINNED)
+    local_disp = rec.disposition in _LOCAL_DISPOSITIONS
 
     if rec.is_structured:
         fmt = structured_units.structured_format(rec.dst)
@@ -339,29 +472,187 @@ def _classify_fid(rec: _FidLegacy) -> _SeedPlan:
     )
 
 
+def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
+    """Rewrite ``schema_version: <to_version>`` in setforge.yaml (comment-safe).
+
+    Copied from the marker-retire migration so the cutover stays self-contained.
+    Overwrite-in-place preserves the key position + comments; the single atomic
+    write is crash-safe. Raises :class:`ConfigError` on a non-mapping root.
+    """
+    from setforge.migrations import _require_mapping_root
+    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+    yaml = yaml_rt()
+    with cfg_path.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    data = _require_mapping_root(data, cfg_path)
+    data["schema_version"] = to_version
+    atomic_write_yaml(cfg_path, data)
+
+
+def _capture_cutover_snapshots(
+    records: list[_FidLegacy], profiles: list[str]
+) -> tuple[StateSnapshotEntry, ...]:
+    """Snapshot every store the cutover mutates, BEFORE any mutation (MS1/MS5).
+
+    Per ``(profile, fid)``: the byte BASE (shared with the unified store — a
+    not-yet-seeded fid captures ``payload=None`` so revert deletes the seed) and
+    the legacy SPANS + SCALAR_BASE manifests (captured so revert restores them
+    after the cutover deletes them), plus the reconcile local/absent/drafts legs.
+    The per-profile INDEX is captured ONCE, outside the fid loop, so a 2nd+ fid
+    never records post-mutation index state.
+    """
+    from setforge import transitions
+
+    entries: list[StateSnapshotEntry] = []
+    for rec in records:
+        key = str(rec.fid)
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.BASE, rec.profile, key
+            )
+        )
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.SPANS, rec.profile, key
+            )
+        )
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.SCALAR_BASE, rec.profile, key
+            )
+        )
+        entries.extend(transitions.reconcile_file_snapshots(rec.profile, key))
+    for profile in profiles:
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.INDEX, profile, profile
+            )
+        )
+    return tuple(entries)
+
+
+def _delete_legacy_stores(records: list[_FidLegacy], profiles: list[str]) -> None:
+    """Delete the legacy-only stores AFTER the transition is committed (idempotent).
+
+    Removes each ``(profile, fid)``'s spans + scalar-base manifests, and each
+    profile's scalar-base format-version sidecar. The byte BASE store is NOT
+    touched — it is now the unified store's base. Every unlink is ``missing_ok``
+    so a re-run (or a resumed post-crash run) is a clean no-op.
+    """
+    from setforge import scalar_base_store, spans_store
+    from setforge.base_store_format import SIDECAR_NAME
+
+    for rec in records:
+        key = str(rec.fid)
+        spans_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
+        scalar_base_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
+    for profile in profiles:
+        # The profile root is the manifest's parent dir; drop its dangling
+        # scalar-base format-version sidecar so no reader points at a format
+        # whose store is gone.
+        root = scalar_base_store.manifest_path(profile, "_fmt_probe_").parent
+        (root / SIDECAR_NAME).unlink(missing_ok=True)
+
+
+def _span_specs_from_raw(raw_spans: object) -> tuple[_SpanSpec, ...]:
+    """Project a raw YAML ``spans:`` list into frozen :class:`_SpanSpec`.
+
+    Missing / non-list / malformed entries are skipped (a span with no string
+    anchor cannot be matched). Defaults mirror the retired ``SpanEntry`` model:
+    ``kind`` -> ``pinned``, ``semantics`` -> ``host-local`` (so a bare-anchor span
+    is host-keep, exactly as the model defaulted).
+    """
+    if not isinstance(raw_spans, list):
+        return ()
+    specs: list[_SpanSpec] = []
+    for entry in raw_spans:
+        if not isinstance(entry, dict):
+            continue
+        anchor = entry.get("anchor")
+        if not isinstance(anchor, str):
+            continue
+        specs.append(
+            _SpanSpec(
+                anchor=anchor,
+                deep=bool(entry.get("deep", False)),
+                kind=str(entry.get("kind", "pinned")),
+                semantics=str(entry.get("semantics", "host-local")),
+            )
+        )
+    return tuple(specs)
+
+
+def _raw_legacy_by_id(
+    tracked_files: object,
+) -> dict[str, tuple[str | None, tuple[_SpanSpec, ...]]]:
+    """Extract ``(disposition, spans)`` per tracked-file id from a raw map.
+
+    Reads the removed fields straight from the ruamel document (Contract20
+    pattern), so it works after the ``Disposition`` enum + ``spans`` model are
+    gone. A non-mapping ``tracked_files`` yields an empty map.
+    """
+    out: dict[str, tuple[str | None, tuple[_SpanSpec, ...]]] = {}
+    if not isinstance(tracked_files, dict):
+        return out
+    for tf_id, tf in tracked_files.items():
+        if not isinstance(tf, dict):
+            continue
+        disp = tf.get("disposition")
+        out[str(tf_id)] = (
+            disp if isinstance(disp, str) else None,
+            _span_specs_from_raw(tf.get("spans")),
+        )
+    return out
+
+
 def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
     """Enumerate every ``(profile, tracked-file)`` with its effective legacy state.
 
-    Read-only. Loads the config, folds the host-local overlay so ``disposition``
-    / ``spans`` are effective (shared config + ``local.yaml`` override), then per
-    profile x resolved tracked file records the disposition, spans, and the
-    tracked (base seed) + live (local) bytes. Symlink tracked files carry no
-    reconcile/disposition state and are skipped. A missing src/dst reads as empty
-    bytes with ``dst_exists`` flagged, so a fresh / undeployed host is a clean
-    no-op downstream rather than a crash.
+    Read-only, and SELF-CONTAINED (Contract20 pattern): ``disposition`` / ``spans``
+    are read from the RAW ruamel YAML (setforge.yaml + the ``local.yaml`` overlay)
+    so the migration survives their removal from the strict config model. Those
+    keys are then STRIPPED from an in-memory copy and the rest is model-validated,
+    reusing real profile-inheritance + src/dst resolution (which never depended on
+    the removed fields). The overlay's disposition OVERRIDES and its spans EXTEND
+    the shared config. Symlink tracked files are skipped; a missing src/dst reads
+    as empty bytes with ``dst_exists`` flagged (a fresh host is a clean no-op).
+
+    Note: an overlay dst/mode/symlink override is NOT folded here (only
+    disposition/spans) — an already-deployed such file is normally already in the
+    unified store and takes the preserve branch, so this is a documented, benign
+    limitation for the rare not-yet-seeded case.
     """
+    import copy
+
     from setforge.compare import resolve_dst, resolve_src
-    from setforge.config import (
-        apply_host_local_tracked_file_overrides,
-        load_config,
-        resolve_profile,
-    )
+    from setforge.config import Config, resolve_profile
+    from setforge.migrations._yaml_ops import yaml_rt
     from setforge.reconcile import file_id
 
-    config = load_config(roots.cfg_path)
-    apply_host_local_tracked_file_overrides(
-        config, local_config_path=_local_yaml_path(roots)
-    )
+    yaml = yaml_rt()
+    with roots.cfg_path.open("r", encoding="utf-8") as fh:
+        raw = yaml.load(fh)
+    if not isinstance(raw, dict):
+        return []
+    shared_legacy = _raw_legacy_by_id(raw.get("tracked_files"))
+
+    overlay_legacy: dict[str, tuple[str | None, tuple[_SpanSpec, ...]]] = {}
+    local_yaml = _local_yaml_path(roots)
+    if local_yaml.exists():
+        with local_yaml.open("r", encoding="utf-8") as fh:
+            raw_local = yaml.load(fh)
+        if isinstance(raw_local, dict):
+            overlay_legacy = _raw_legacy_by_id(raw_local.get("tracked_files"))
+
+    stripped = copy.deepcopy(raw)
+    stripped_tf = stripped.get("tracked_files")
+    if isinstance(stripped_tf, dict):
+        for tf in stripped_tf.values():
+            if isinstance(tf, dict):
+                tf.pop("disposition", None)
+                tf.pop("spans", None)
+    config = Config.model_validate(stripped)
 
     records: list[_FidLegacy] = []
     for profile_name in config.profiles:
@@ -369,6 +660,8 @@ def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
             tracked_file = config.tracked_files[name]
             if tracked_file.symlink is not None:
                 continue
+            sh_disp, sh_spans = shared_legacy.get(name, (None, ()))
+            ov_disp, ov_spans = overlay_legacy.get(name, (None, ()))
             src = resolve_src(tracked_file, roots.repo_root)
             dst = resolve_dst(tracked_file)
             dst_exists = dst.exists()
@@ -379,8 +672,8 @@ def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
                     fid=file_id(name),
                     src=src,
                     dst=dst,
-                    disposition=tracked_file.disposition,
-                    spans=tuple(tracked_file.spans),
+                    disposition=ov_disp or sh_disp,
+                    spans=sh_spans + ov_spans,
                     tracked_bytes=src.read_bytes() if src.exists() else b"",
                     live_bytes=dst.read_bytes() if dst_exists else b"",
                     dst_exists=dst_exists,
