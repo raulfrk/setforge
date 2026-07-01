@@ -237,6 +237,39 @@ def _classified_hunks(rec: _FidLegacy) -> list[dict[str, object]] | None:
     return rows or None
 
 
+def _validate_bases(records: list[_FidLegacy]) -> None:
+    """Pre-flight (D4): every structured base must parse + round-trip, or abort.
+
+    Part of plan-building, BEFORE any mutation — a single malformed structured
+    base raises here listing every offender, so the cutover mutates nothing and a
+    profile is never left half-migrated (fully-legacy XOR fully-unified). Validates
+    the tracked-byte base seed each not-yet-seeded structured file will carry; the
+    apply pass additionally re-validates an already-seeded fid's existing reconcile
+    base under the profile lock.
+    """
+    from setforge.reconcile import structured_units
+
+    bad: list[str] = []
+    for rec in records:
+        if not rec.is_structured:
+            continue
+        fmt = structured_units.structured_format(rec.dst)
+        if fmt is None:
+            continue
+        try:
+            model = structured_units._load_model(rec.tracked_bytes, fmt)
+            structured_units._dump_model(model, fmt)
+        except Exception as err:
+            bad.append(f"  {rec.profile}/{rec.name} ({rec.dst}): {err}")
+    if bad:
+        raise ConfigError(
+            "cannot migrate to schema 3.0: "
+            f"{len(bad)} structured base(s) failed parse/round-trip validation. "
+            "The cutover refuses rather than migrate a corrupt base (nothing was "
+            "changed). Fix or remove these files, then re-run:\n" + "\n".join(bad)
+        )
+
+
 def _classify_fid(rec: _FidLegacy) -> _SeedPlan:
     """Map one legacy record to its unified-store seed (base + local + hunks).
 
