@@ -154,21 +154,20 @@ boundary exits non-zero with an explicit message, never a silent marker-less
 config an older engine would misread — consistent with *clean refusal, never a
 crash*.
 
-Recovery has a **bounded window**, gated by `--finalize`:
+Recovery is **transition-based, not schema-reverse-based.** The forward migration
+records a revertible transition capturing the pre-migration bytes — the stripped
+tracked + live sources and the seeded overlay / base store legs. While that
+transition is retained, `setforge revert --profile=migrate` byte-restores the
+original marker-bearing sources in lockstep — the recovery path a stateless
+reverse migration cannot provide. This is the same `setforge revert` affordance
+every install / migrate transition carries; there is no distinct irreversibility
+cutover for user-section markers.
 
-- **Pre-finalize — reversible via `migrate --revert`.** The forward migration
-  records a transition capturing the pre-migration bytes. Within that window,
-  `setforge migrate --revert` byte-restores the original marker-bearing sources
-  (and the seeded overlay / base legs) in lockstep — the reversible path a
-  stateless down-migration cannot provide.
-- **`--finalize` — the documented irreversibility boundary.** `setforge migrate
-  --finalize` strips the remaining vestigial marker syntax from the tracked
-  sources permanently. It is floor-gated: it refuses unless the config's
-  `minimum_version` has reached the frozen marker-retire schema version, so a
-  host that might still need the pre-finalize window cannot cross it by accident.
-  After finalize the marker bytes are gone from tracked and the reversible window
-  is closed — the one point in the lifecycle where marker content is
-  irrecoverable by design.
+(The separate `migrate --finalize` command strips *vestigial host-local* markers
+left by the earlier `1.1 → 1.2` conversion — floor-gated on
+`markerless_conversion_schema_version` and likewise revertible via `setforge
+revert --profile=migrate`. It is unrelated to the `2.0 → 2.1` user-section
+retirement above.)
 
 ## `validate` orphan-overlay diagnostics
 
