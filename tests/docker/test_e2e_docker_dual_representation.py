@@ -1,15 +1,16 @@
-"""Docker e2e: two ``disposition: shared`` markdown files coexist in one config.
+"""Docker e2e: a host-local OVERLAY file and a ``disposition: shared`` file
+coexist in one install.
 
-Proves end-to-end that a single profile carrying two shared-disposition
-markdown files — one whose tracked src carries a shared user-section, one
-plain — installs in one run with each file's behavior intact and no
-cross-file interference: the run-global keep-set prune retains each
-disposition base, and the distinct ``dst`` paths keep the per-host bases from
-ever crossing. Under the 2.0 contract both files reconcile through the same
-shared 3-way merge (there is no longer a separate file-preservation model),
-so a live edit to one file's shared section and a live edit to the other's
-footer must both survive a re-install — the proof the two bases ran
-independently.
+Proves end-to-end that a single profile carrying BOTH 2.0 reconciliation
+models — a markerless host-local OVERLAY (``host_local_md``, driven by
+local.yaml ``host_local_sections``) and a ``disposition: shared`` file
+(``disposition_shared_md``, 3-way merged against a per-host stored base) —
+installs in one run with each model's behavior intact and no cross-file
+interference: the overlay body is (re-)injected markerless on every install
+while the disposition file's live footer edit survives through its own
+independent stored base. The distinct ``dst`` paths keep the per-host base
+from ever crossing, and the run-global keep-set prune retains the disposition
+base despite the overlay file in the same run.
 """
 
 from __future__ import annotations
@@ -28,7 +29,19 @@ _LIVE_HOST_LOCAL = "/home/tester/.setforge_e2e/host-local/host.md"
 _LIVE_DISPOSITION = "/home/tester/.setforge_e2e/disposition/shared.md"
 _BASE_DIR = "/home/tester/.local/state/setforge/base/test-dual-representation"
 _DISPOSITION_BASE = f"{_BASE_DIR}/disposition_shared_md"
-_HOST_LOCAL_BASE = f"{_BASE_DIR}/host_local_md"
+_HOME_LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
+
+# The host-local overlay the dual-representation profile injects markerless
+# into ``host_local_md`` (anchored below the fixture's ``## Workflow`` heading).
+_OVERLAY = (
+    "tracked_files:\n"
+    "  host_local_md:\n"
+    "    host_local_sections:\n"
+    "      coexist:\n"
+    "        anchor: {kind: after-heading, value: Workflow}\n"
+    "        body: |\n"
+    "          OVERLAY COEXIST BODY\n"
+)
 
 
 def _setforge(
@@ -50,32 +63,34 @@ def _install(c: ContainerHandle) -> tuple[int, str, str]:
 def test_dual_representation_single_install(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Both shared files install in one run; their bases stay independent.
+    """Overlay + disposition coexist in one install; neither model interferes.
 
-    First install: each file seeds its own stored base from tracked and lands
-    its content. Then edit the live shared user-section in one file AND the
-    live footer in the other (disjoint hunks → clean 3-way each) and
-    re-install: the shared-section edit survives and the footer edit survives —
-    proving the two files reconciled through independent per-host bases in the
-    same install. Both bases existing after the first run proves the run-global
-    keep-set prune did not drop either.
+    First install: the host-local overlay injects its body MARKERLESS into
+    ``host_local_md`` while ``disposition_shared_md`` seeds its own per-host
+    stored base from tracked. Then edit the disposition live footer (disjoint
+    from the overlay file) and re-install: the disposition file's 3-way merge
+    keeps the live footer AND the overlay body re-injects — proving the two
+    models ran independently in the same install. The disposition base
+    carrying the disposition fixture (not the host-local file) proves the
+    per-host bases never crossed.
     """
     c = docker_container()
+    c.write_text(_HOME_LOCAL_YAML, _OVERLAY)
 
     rc, _out, err = _install(c)
     assert rc == 0, err
-    # Independence guard: the run-global keep-set prune retained BOTH bases.
-    assert c.read_text(_DISPOSITION_BASE), "disposition base missing"
-    assert c.read_text(_HOST_LOCAL_BASE), "host-local base missing"
-    # The shared-section file deployed with its user-section markers intact.
+    # The disposition file seeded its own per-host base; the run-global keep-set
+    # prune retained it despite the overlay file processed in the same run, and
+    # the base carries the DISPOSITION fixture body (bases never crossed).
+    disposition_base = c.read_text(_DISPOSITION_BASE)
+    assert "Disposition fixture" in disposition_base, disposition_base
+    # The host-local overlay body injected MARKERLESS (no user-section marker).
     host_live = c.read_text(_LIVE_HOST_LOCAL)
-    assert "setforge:user-section start shared notes" in host_live, host_live
+    assert "OVERLAY COEXIST BODY" in host_live, host_live
+    assert "setforge:user-section" not in host_live, host_live
 
-    # Edit the live shared user-section body in one file and the live
-    # disposition footer in the other (disjoint hunks), then re-install.
-    edited = host_live.replace("default notes (tracked side)", "MY HOST EDIT")
-    assert edited != host_live, host_live
-    c.write_text(_LIVE_HOST_LOCAL, edited)
+    # Edit the disposition live footer (disjoint from the overlay file), then
+    # re-install.
     c.write_text(
         _LIVE_DISPOSITION,
         "# Disposition fixture\n\nintro line\nmiddle line\nfooter-LIVE\n",
@@ -83,10 +98,12 @@ def test_dual_representation_single_install(
     rc2, _out2, err2 = _install(c)
     assert rc2 == 0, err2
 
-    # First file's shared 3-way merge kept the live section edit.
-    assert "MY HOST EDIT" in c.read_text(_LIVE_HOST_LOCAL)
-    # Second file's shared 3-way merge kept the live footer.
+    # Disposition 3-way merge kept the live footer; the overlay body re-injected
+    # markerless — the two models did not interfere across the run.
     assert "footer-LIVE" in c.read_text(_LIVE_DISPOSITION)
+    host_live2 = c.read_text(_LIVE_HOST_LOCAL)
+    assert "OVERLAY COEXIST BODY" in host_live2, host_live2
+    assert "setforge:user-section" not in host_live2, host_live2
 
     # compare sees BOTH files in one profile without error.
     rc3, stdout, err3 = _setforge(

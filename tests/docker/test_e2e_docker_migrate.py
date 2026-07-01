@@ -86,10 +86,11 @@ def _seed_floored_config(c: ContainerHandle) -> None:
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 chain.
+    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain.
 
     The listing never gates on the contract floor, so a floorless frozen 1.0
-    config still shows all three steps (including the 1.2 → 2.0 contract).
+    config still shows all four steps (including the 1.2 → 2.0 contract and the
+    2.0 → 2.1 marker-retire step).
     """
     c = docker_container()
     _seed_frozen_config(c)
@@ -99,17 +100,18 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "3 migration(s) available" in combined, combined
+    assert "4 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
     assert "1.1 → 1.2" in combined, combined
     assert "1.2 → 2.0" in combined, combined
+    assert "2.0 → 2.1" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '2.0'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '2.1'`` + writes a backup."""
     c = docker_container()
     _seed_floored_config(c)
     result = c.exec(
@@ -126,11 +128,10 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
-    assert "schema_version" in after, after
-    # A frozen-1.0 apply runs the full chain to the build's expected version.
-    assert "2.0" in after, after
+    # A frozen-1.0 apply runs the full chain to the build's expected version (2.1).
+    assert "schema_version: '2.1'" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-2.0.bak")
+    backup = c.read_text(f"{_CFG_PATH}.pre-2.1.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -199,7 +200,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '2.0'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -266,12 +267,16 @@ def _seed_cfg(c: ContainerHandle, body: str) -> None:
 def test_migrate_to_downgrade_round_trip(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """1.0 -> apply (chain to 2.0) -> migrate --to=1.0 walks back to the 1.0 baseline.
+    """1.0 -> apply (--to=2.0) -> migrate --to=1.0 walks back to the 1.0 baseline.
 
-    The downgrade is a real reverse walk: 2.0 -> 1.2 (the contract reverse)
-    then 1.2 -> 1.1 (RestampMigration restamps the older version) then
-    1.1 -> 1.0 (VersionStampMigration's reverse strips the key), leaving the
-    key-absent 1.0 baseline.
+    The forward hop targets 2.0 explicitly: the 2.0 → 2.1 marker-retire step is
+    ONE-WAY (a stateless ``--to`` reverse cannot regenerate the retired
+    user-section marker syntax — only ``migrate --revert`` byte-restores it), so
+    the reversible round-trip is exercised on the 1.0 ↔ 2.0 chain. The downgrade
+    is a real reverse walk: 2.0 -> 1.2 (the contract reverse) then 1.2 -> 1.1
+    (RestampMigration restamps the older version) then 1.1 -> 1.0
+    (VersionStampMigration's reverse strips the key), leaving the key-absent 1.0
+    baseline.
     """
     c = docker_container()
     _seed_floored_config(c)
@@ -281,6 +286,7 @@ def test_migrate_to_downgrade_round_trip(
             "run",
             "setforge",
             "migrate",
+            "--to=2.0",
             "--apply",
             "--yes",
             f"--config={_CFG_PATH}",
@@ -310,6 +316,56 @@ def test_migrate_to_downgrade_round_trip(
         check=False,
     )
     assert "1.0" in (check.stdout + check.stderr)
+
+
+def test_downgrade_across_marker_retire_refuses(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A ``--to`` downgrade across the 2.0 → 2.1 marker-retire step refuses (KQ5).
+
+    The marker-retire migration is ONE-WAY: a stateless reverse cannot
+    regenerate the retired user-section marker syntax. Applying forward to the
+    build's current 2.1 then requesting ``--to=2.0`` must refuse with the
+    irreversibility message and roll back, leaving the config at 2.1 — the
+    pre-finalize reversible window is served by ``migrate --revert``
+    (byte-restore), not by a stateless reverse migration.
+    """
+    c = docker_container()
+    _seed_floored_config(c)
+    up = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert up.returncode == 0, up.stdout + up.stderr
+    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
+
+    down = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--to=2.0",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert down.returncode != 0, down.stdout + down.stderr
+    combined = down.stdout + down.stderr
+    assert "cannot down-migrate from schema 2.1 to 2.0" in combined, combined
+    assert "markers were retired" in combined, combined
+    # The refused downgrade rolled back: the config is still at 2.1.
+    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
 
 
 def test_install_cross_major_config_refuses_clean(
@@ -441,7 +497,10 @@ def test_finalize_permitted_above_floor_strips_markers(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert c.read_text(f"{_CFG_DIR}/tracked/foo.md") == _HL_MD_STRIPPED
+    stripped = c.read_text(f"{_CFG_DIR}/tracked/foo.md")
+    assert stripped == _HL_MD_STRIPPED
+    # Acceptance #7: NO setforge user-section markers survive --finalize.
+    assert "setforge:user-section" not in stripped, stripped
 
 
 def test_finalize_round_trip_revert_restores_markers(

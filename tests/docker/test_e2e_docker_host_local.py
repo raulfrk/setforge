@@ -3,7 +3,8 @@
 Exercises the full host-local surface end-to-end against a fresh Debian
 container with the actual installed ``setforge`` CLI:
 
-- install with each of the 5 anchor kinds.
+- install with each of the 4 markerless anchor kinds (after-section is
+  marker-only and retired from the e2e surface — see the note below).
 - error cases: anchor-not-found aborts install, empty body rejected at
   validate, non-markdown tracked_files rejected at validate.
 - idempotency: re-running install does not duplicate marker pairs.
@@ -59,7 +60,7 @@ def _install_host_local(
 
 
 # ---------------------------------------------------------------------------
-# Happy path — one test per anchor kind (5 tests).
+# Happy path — one test per markerless anchor kind (4 tests).
 # ---------------------------------------------------------------------------
 
 
@@ -158,30 +159,13 @@ def test_install_host_local_at_end_of_file(
     assert live.index("## Trailing") < live.index("TAIL BODY")
 
 
-def test_install_host_local_after_section_anchor(
-    docker_container: Callable[..., ContainerHandle],
-) -> None:
-    """after-section anchor splices after a named existing user-section."""
-    c = docker_container()
-    _write_local_yaml(
-        c,
-        "tracked_files:\n"
-        "  host_local_md:\n"
-        "    host_local_sections:\n"
-        "      after-notes:\n"
-        "        anchor: {kind: after-section, name: notes}\n"
-        "        body: |\n"
-        "          AFTER-NOTES BODY\n",
-    )
-    rc, _stdout, stderr = _install_host_local(c)
-    assert rc == 0, stderr
-    live = c.exec(["cat", _HOST_LIVE]).stdout
-    assert "AFTER-NOTES BODY" in live
-    # The 2.0 OVERLAY model injects the body MARKERLESS, spliced after the
-    # named existing section's end marker (no host-local marker wraps it).
-    assert "setforge:user-section start host-local" not in live, live
-    end_marker_idx = live.index("end shared notes")
-    assert end_marker_idx < live.index("AFTER-NOTES BODY")
+# NOTE: the ``after-section`` anchor kind is intentionally NOT exercised here.
+# Post-4.15.4 it resolves only against a user-section MARKER in the deployed
+# file (host_local_inject._find_after_section_offsets routes through
+# _legacy_markers._walk_markers), and markers are retired from tracked files —
+# so no fresh markerless config can satisfy it. The resolver stays covered by
+# the unit suite (test_host_local_anchor_resolution::TestAfterSectionAnchor),
+# which feeds marker-bearing input inline.
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +347,16 @@ def test_install_idempotent_re_run_no_duplication(
 def test_install_symlink_deployed_tracked_file(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """When tracked_file declares ``symlink:``, host-local injection lands on
-    the TARGET file (where bytes actually reside)."""
+    """A ``symlink:`` tracked_file writes VERBATIM tracked bytes to the TARGET;
+    the symlink itself is preserved.
+
+    Post-4.15.4 host-local content is markerless-overlay-only, and symlink
+    targets do NOT yet route through the overlay injector (see
+    ``deploy._deploy_target_content`` — a deferred follow-up). So a
+    ``host_local_sections`` overlay declared against a symlink-deployed file
+    is silently NOT injected: the target receives the tracked source verbatim
+    and install still exits 0.
+    """
     c = docker_container()
     _write_local_yaml(
         c,
@@ -379,8 +371,10 @@ def test_install_symlink_deployed_tracked_file(
     rc, _stdout, stderr = _install_host_local(c, profile="test-host-local-symlink")
     assert rc == 0, stderr
     target = c.exec(["cat", _HOST_LINK_TARGET]).stdout
-    assert "SYMLINK BODY" in target
-    # The link path resolves to the target.
+    # Overlay injection is NOT (yet) applied on symlink targets — verbatim deploy.
+    assert "SYMLINK BODY" not in target, target
+    assert "# host-local fixture" in target, target
+    # The link path resolves to the target (the symlink is preserved).
     link = c.exec(["readlink", _HOST_LINK_LIVE]).stdout.strip()
     assert link == "~/.setforge_e2e/host-local/host_link_target.md"
 

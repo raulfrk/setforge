@@ -29,7 +29,6 @@ See ``tests/docker/conftest.py`` for the ``docker_image``,
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import textwrap
 from collections.abc import Callable
@@ -139,22 +138,22 @@ def test_install_minimal_floor(
 def test_install_text_sections_no_live(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """C: disposition: shared markdown, no live content → dst equals tracked.
+    """C: markerless markdown tracked_file, no live content → dst equals tracked.
 
-    install rewrites end markers with an embedded ``hash=<sha256>``
-    segment (post-hashed-marker: tracked is also stamped). The body is the
-    load-bearing assertion; the end marker may carry the new hash
-    segment or be the legacy untagged form.
+    ``sections_md`` carries no disposition and no user-section markers
+    (markers are retired post-4.15.4), so install is a plain byte-copy: the
+    deployed file equals the tracked source verbatim, with no marker residue.
     """
     c = docker_container()
     _install(c, "test-text-sections")
     live = _read_live(c, ".setforge_e2e/sections/marked.md")
-    assert "<!-- setforge:user-section start host-local notes -->" in live
-    assert "default notes (tracked side)" in live
-    assert re.search(
-        r"<!-- setforge:user-section end host-local notes( hash=[0-9a-f]{64})? -->",
-        live,
+    assert live == (
+        "# test-text-sections fixture\n\n"
+        "Global text that lives in tracked and overwrites the live copy on "
+        "every install.\n\n"
+        "Trailing tracked content.\n"
     )
+    assert "setforge:user-section" not in live, live
 
 
 # --- Variant E ------------------------------------------------------------
@@ -1741,16 +1740,16 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (2.0)
+    A config already pinned to the build's current expected schema (2.1)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
-    surface the 1.0 → 1.1 → 1.2 → 2.0 chain) is covered in
+    surface the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain) is covered in
     ``test_e2e_docker_migrate.py``.
     """
     c = docker_container()
     c.write_text(
         "/tmp/at-current/setforge.yaml",
-        "schema_version: '2.0'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+        "schema_version: '2.1'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
     )
     result = c.exec(
         [

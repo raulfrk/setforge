@@ -25,16 +25,15 @@ tracked_files:
     src: minimal/text.txt
     dst: ~/.setforge_e2e/minimal/text.txt
 
-  # Text tracked file with a tracked-authored HOST-LOCAL user-section marker.
-  # Host-local-only sections take the markerless OVERLAY conversion path:
-  # NO file-level disposition — the marker body is captured into a
-  # local.yaml overlay span and the deployed file is rendered markerless.
+  # Plain markerless markdown — NO file-level disposition, so install is a
+  # byte-copy that overwrites the live copy on every run (markers are retired
+  # post-4.15.4). Drives the ``test-text-sections`` dry-run + install floor.
   sections_md:
     src: sections/marked.md
     dst: ~/.setforge_e2e/sections/marked.md
 
-  # Shared-semantics user-section markers — exercises the three-way
-  # reconcile wizard.
+  # ``disposition: shared`` markdown — exercises the three-way reconcile of a
+  # shared file against its per-host stored base.
   sections_shared_md:
     src: sections/shared.md
     dst: ~/.setforge_e2e/sections/shared.md
@@ -134,9 +133,9 @@ tracked_files:
     src: claude/workflows/example-impl.js
     dst: ~/.claude/workflows/example-impl.js
 
-  # Host-local sections fixture. Plain markdown tracked
-  # file with declared user-section markers AND with headings that anchor
-  # injections from local.yaml's host_local_sections block.
+  # Host-local sections fixture. Plain markerless markdown tracked
+  # file whose headings anchor markerless overlay injections from
+  # local.yaml's host_local_sections block.
   host_local_md:
     src: host-local/host.md
     dst: ~/.setforge_e2e/host-local/host.md
@@ -152,9 +151,9 @@ tracked_files:
     dst: ~/.setforge_e2e/host-local/settings.json
 
   # ---- Seed-once section-template fixture -----------------------------
-  # A tracked markdown file declaring a host-local marker named after the
-  # profile's section_slots key; first install seeds the empty slot from
-  # the section_templates library body.
+  # A plain markerless tracked markdown file; first install seeds the
+  # profile's section_slots body from the section_templates library as a
+  # markerless host-local overlay at end-of-file.
   section_seed_doc:
     src: section-templates/seed-doc.md
     dst: ~/.setforge_e2e/section-templates/seed-doc.md

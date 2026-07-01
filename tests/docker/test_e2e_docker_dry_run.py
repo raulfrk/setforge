@@ -34,8 +34,8 @@ pytestmark = pytest.mark.e2e_docker
 #
 # - ``test-minimal`` — plain text byte-copy, no extensions / plugins.
 # - ``test-comprehensive`` — extensions + plugins + multi-file + bootstrap.
-# - ``test-text-sections`` — section-aware tracked_file (preserve_user_sections).
-# - ``test-reconcile-sections`` — shared-section reconcile surface.
+# - ``test-text-sections`` — markerless markdown tracked_file (byte-copy).
+# - ``test-reconcile-sections`` — ``disposition: shared`` 3-way reconcile surface.
 _PROFILE_MINIMAL: str = "test-minimal"
 _PROFILE_COMPREHENSIVE: str = "test-comprehensive"
 _PROFILE_TEXT_SECTIONS: str = "test-text-sections"
@@ -55,7 +55,7 @@ _EXPECTED_HEADERS: tuple[str, ...] = (
     "=== resolving profile + host overlay ===",
     "=== would-be drift gate ===",
     "=== would-be deploy ===",
-    "=== would-be section reconcile ===",
+    "=== would-be host-local section inject ===",
     "=== would-be plugin reconcile ===",
     "=== would-be extension reconcile ===",
     "=== would-be transition record ===",
@@ -221,7 +221,7 @@ def test_dry_run_covers_all_phases(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """All 8 phases appear in dry-run stdout (profile / overlay / drift
-    gate / file deploys / section reconcile / plugin reconcile / ext
+    gate / file deploys / host-local section inject / plugin reconcile / ext
     reconcile / transition path) plus header + final-line marker.
 
     Anchors the ``_EXPECTED_HEADERS`` tuple verbatim against the
