@@ -90,6 +90,7 @@ from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
 from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
+from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import _claude_merge_unavailable
 from setforge.section_mode import ReconcileAuto
 from setforge.source import (
@@ -668,6 +669,72 @@ def _resolve_plain_reconcile(
     )
 
 
+def _resolve_structured_reconcile(
+    profile: str,
+    sub_name: str,
+    sub_src: Path,
+    sub_dst: Path,
+    tracked_file: TrackedFile,
+    *,
+    interactive: bool,
+    section_auto: ReconcileAuto | None,
+) -> _PendingDeploy | None:
+    """Resolve a STRUCTURED (yaml/json/jsonc) tracked file via the key-aware engine.
+
+    Sibling of :func:`_resolve_plain_reconcile` for a file whose ``dst`` is a
+    structured format: it merges at key granularity
+    (:func:`~setforge.reconcile_apply.reconcile_structured_file`), so an
+    independent-key upstream change does not false-conflict with a host edit the
+    way the line 3-way would. Returns ``None`` (the caller falls back to the line
+    path, then to verbatim) when ``dst`` is not a structured format or either side
+    is not UTF-8. Eligibility (no disposition/spans/host-local overlay) is the
+    caller's; a genuine same-key collision is handled inside the engine (it
+    delegates to the line wizard / ``--auto`` / DEFERRED).
+    """
+    fmt = structured_format(sub_dst)
+    if fmt is None:
+        return None
+    scaffold = deploy.resolve_deploy(sub_src, sub_dst, mode=tracked_file.mode)
+    tracked_bytes = sub_src.read_bytes()
+    live_bytes = scaffold.real_dst.read_bytes() if scaffold.dst_existed else None
+    if not _is_utf8(tracked_bytes) or (
+        live_bytes is not None and not _is_utf8(live_bytes)
+    ):
+        return None
+    fid = reconcile.file_id(sub_name)
+    claude_merge = (
+        make_claude_merge_fn(display_path=str(sub_dst))
+        if interactive
+        else _claude_merge_unavailable
+    )
+    outcome = reconcile_apply.reconcile_structured_file(
+        profile,
+        fid,
+        live=reconcile.ABSENT if live_bytes is None else live_bytes,
+        tracked=tracked_bytes,
+        fmt=fmt,
+        interactive=interactive,
+        auto=_auto_side(section_auto),
+        display_path=str(sub_dst),
+        claude_merge=claude_merge,
+        seed_prompt=_seed_prompt_interactive,
+    )
+    new_content = _plain_reconcile_content(outcome, live_bytes)
+    if new_content is None:
+        return None
+    return _PendingDeploy(
+        sub_name=sub_name,
+        sub_src=sub_src,
+        sub_dst=sub_dst,
+        tracked_file=tracked_file,
+        host_local=None,
+        file_spans=[],
+        resolved=replace(scaffold, content=new_content),
+        base_plan=None,
+        reconcile=(fid, outcome),
+    )
+
+
 def _resolve_one_pending(
     profile: str,
     sub_name: str,
@@ -714,7 +781,15 @@ def _resolve_one_pending(
         and not tracked_file.spans
         and host_local is None
     ):
-        plain = _resolve_plain_reconcile(
+        reconciled = _resolve_structured_reconcile(
+            profile,
+            sub_name,
+            sub_src,
+            sub_dst,
+            tracked_file,
+            interactive=conflict_resolver is not None,
+            section_auto=section_auto,
+        ) or _resolve_plain_reconcile(
             profile,
             sub_name,
             sub_src,
@@ -723,8 +798,8 @@ def _resolve_one_pending(
             interactive=conflict_resolver is not None,
             section_auto=section_auto,
         )
-        if plain is not None:
-            return plain
+        if reconciled is not None:
+            return reconciled
     # Stored-base 3-way path is gated on a declared disposition.
     # PLAN the base (a pure read): it is the merge ancestor the
     # driver diffs live/tracked against. Deferred migration writes
