@@ -157,6 +157,103 @@ class _FidLegacy:
     is_structured: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _SeedPlan:
+    """The unified-store seed for one NOT-yet-seeded ``(profile, fid)``.
+
+    ``base`` is the DL1 tracked-byte seed; ``local`` is the live bytes (or
+    ``ABSENT`` when the file is undeployed). ``hunks`` is the pre-classified
+    index row list (``kind:key`` / line rows with ``cls=local``), or ``None`` to
+    leave the index entry's hunks empty so the staging layer classifies the
+    divergence lazily (PENDING) at the next install/compare — the ``shared``
+    behaviour.
+    """
+
+    profile: str
+    fid: FileId
+    base: bytes
+    local: object  # bytes | Absent
+    hunks: list[dict[str, object]] | None
+
+
+def _structured_span_covered(path: str, spans: tuple[SpanEntry, ...]) -> bool:
+    """Whether a structured leaf ``path`` is covered by a host-keep span.
+
+    A span whose dotted anchor equals ``path`` covers it; a ``deep`` span covers
+    the whole subtree under its anchor. (Line/heading-anchored markdown spans are
+    handled at the file level, not here.)
+    """
+    for span in spans:
+        if path == span.anchor:
+            return True
+        if span.deep and path.startswith(span.anchor + "."):
+            return True
+    return False
+
+
+def _classified_hunks(rec: _FidLegacy) -> list[dict[str, object]] | None:
+    """Pre-classified index rows for ``rec``'s divergence, or ``None`` for lazy.
+
+    ``forked`` / ``pinned`` -> every divergent unit is ``LOCAL`` (the host copy
+    wins, never re-prompted). ``shared`` structured file -> only span-covered
+    key-units are ``LOCAL``; the rest stay lazy (PENDING). ``shared`` markdown ->
+    lazy (``None``): a partial host-local markdown region on a NOT-yet-seeded file
+    is left PENDING for a one-time re-classify (data-safe; such files normally
+    arrive already-seeded and take the preserve branch instead).
+    """
+    from dataclasses import replace
+
+    from setforge.config import Disposition
+    from setforge.reconcile import hunks as line_hunks
+    from setforge.reconcile import structured_units
+    from setforge.reconcile.types import HunkClass
+
+    if not rec.dst_exists:
+        return None  # local is ABSENT — no divergence to classify
+
+    local_disp = rec.disposition in (Disposition.FORKED, Disposition.PINNED)
+
+    if rec.is_structured:
+        fmt = structured_units.structured_format(rec.dst)
+        if fmt is None:  # defensive: is_structured said yes, format says no
+            return None
+        units = structured_units.extract_structured_units(
+            rec.tracked_bytes, rec.live_bytes, fmt
+        )
+        if local_disp:
+            picked = units
+        else:  # shared: only span-covered key-units become LOCAL
+            picked = [u for u in units if _structured_span_covered(u.path, rec.spans)]
+        rows = structured_units.serialize_structured(
+            [replace(u, cls=HunkClass.LOCAL) for u in picked]
+        )
+        return rows or None
+
+    # Markdown / line-based file.
+    if not local_disp:
+        return None  # shared markdown -> lazy PENDING (see docstring)
+    hunks = line_hunks.extract_hunks(rec.tracked_bytes, rec.live_bytes)
+    rows = line_hunks.serialize([replace(h, cls=HunkClass.LOCAL) for h in hunks])
+    return rows or None
+
+
+def _classify_fid(rec: _FidLegacy) -> _SeedPlan:
+    """Map one legacy record to its unified-store seed (base + local + hunks).
+
+    Base is the verbatim tracked bytes (DL1 — never live, never a merge result);
+    local is the live bytes, or ``ABSENT`` when the file is undeployed.
+    """
+    from setforge.reconcile.types import ABSENT
+
+    return _SeedPlan(
+        profile=rec.profile,
+        fid=rec.fid,
+        base=rec.tracked_bytes,
+        local=rec.live_bytes if rec.dst_exists else ABSENT,
+        hunks=_classified_hunks(rec),
+    )
+
+
 def _build_legacy_records(roots: MigrationRoots) -> list[_FidLegacy]:
     """Enumerate every ``(profile, tracked-file)`` with its effective legacy state.
 
