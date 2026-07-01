@@ -117,7 +117,6 @@ __all__ = [
     "detect_current_schema",
     "find_migration_path",
     "known_versions",
-    "marker_retire_schema_version",
     "markerless_conversion_schema_version",
     "parse_schema_version",
     "preserve_contract_schema_version",
@@ -174,25 +173,6 @@ advancing). The ``migrate --finalize`` gate permits the irreversible
 tracked-marker strip only when the operator-declared ``minimum_version`` is at
 or above this constant; tying it to the live expected version would silently
 move that gate on every future schema bump.
-"""
-
-
-marker_retire_schema_version: Final[str] = "2.1"
-"""Schema version at which the user-section MARKER mechanism is fully retired.
-
-The 2.0 -> 2.1 :class:`~setforge.migrations._marker_retire.MarkerRetireMigration`
-strips every ``setforge:user-section`` marker from tracked + live files (shared
-bodies stay inline; host-local bodies move to ``local.yaml`` overlay spans). An
-engine supporting schema ``>= 2.1`` no longer emits or parses markers; an older
-one would re-inject marker hashes a 2.1 host has stripped.
-
-This value is FROZEN: it records a historical fact and must NEVER be aliased to —
-or bumped alongside — :data:`current_expected_schema_version` (which keeps
-advancing). The ``migrate --finalize`` gate permits the irreversible marker strip
-only when the operator-declared ``minimum_version`` is at or above this constant;
-tying it to the live expected version would silently move that gate on every
-future schema bump (the same footgun :data:`markerless_conversion_schema_version`
-guards against).
 """
 
 
