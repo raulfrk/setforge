@@ -1,10 +1,12 @@
-"""Apply the 3-way reconcile engine to a single plain tracked file.
+"""Apply the 3-way reconcile engine to a single tracked file.
 
-The install-side glue that activates the (otherwise dormant) reconcile
-engine for **plain** tracked files — those with no ``disposition`` and no
-``spans`` (files that the legacy path would deploy verbatim). Files that
-carry a disposition or spans stay on the legacy ``deploy`` path until
-they are migrated onto the engine (a separate follow-up).
+The install-side glue that activates the reconcile engine per file:
+:func:`reconcile_plain_file` for **line** (text) files, and
+:func:`reconcile_structured_file` for **structured** (yaml/json/jsonc) files —
+the latter a key-aware sibling that merges independent-key upstream changes
+clean where a line merge would false-conflict, falling back to the line path
+for a genuine same-key collision. The disposition/spans cutover migrates every
+deployed file onto this engine and removes the legacy ``deploy`` path.
 
 :func:`reconcile_plain_file` does not MUTATE the filesystem: it reads the
 recorded base from the store, runs :func:`setforge.reconcile.merge` against
@@ -42,6 +44,11 @@ from setforge.reconcile import (
     resolve_conflicts,
 )
 from setforge.reconcile.merge_model import MergeInput
+from setforge.reconcile.structured_units import (
+    StructuredFormat,
+    _dump_model,
+    _load_model,
+)
 from setforge.reconcile.types import Absent
 from setforge.reconcile.wizard import (
     CANCEL,
@@ -49,6 +56,7 @@ from setforge.reconcile.wizard import (
     ClaudeMergeFn,
     _claude_merge_unavailable,
 )
+from setforge.structural_merge import merge_structural
 
 __all__ = [
     "AutoSide",
@@ -57,6 +65,7 @@ __all__ = [
     "SeedChoice",
     "SeedPrompt",
     "reconcile_plain_file",
+    "reconcile_structured_file",
 ]
 
 
@@ -247,3 +256,74 @@ def reconcile_plain_file(
         )
 
     return ReconcileOutcome(ReconcileKind.DEFERRED)
+
+
+def reconcile_structured_file(
+    profile: str,
+    fid: FileId,
+    *,
+    live: bytes | Absent,
+    tracked: bytes,
+    fmt: StructuredFormat,
+    interactive: bool = False,
+    auto: AutoSide | None = None,
+    display_path: str | None = None,
+    claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
+    seed_prompt: SeedPrompt = _default_seed_prompt,
+) -> ReconcileOutcome:
+    """Decide how to reconcile one STRUCTURED (yaml/json/jsonc) tracked file.
+
+    The key-aware sibling of :func:`reconcile_plain_file`. An independent-key
+    upstream change merges CLEAN against a host edit where the line 3-way would
+    false-conflict, via :func:`~setforge.structural_merge.merge_structural` over
+    comment-preserving models. The base-absent seed is byte-identical to the plain
+    path. A GENUINE same-key collision (``merge_structural`` reports conflicts) is
+    delegated to :func:`reconcile_plain_file`, so the one proven wizard / ``--auto``
+    / DEFERRED tail resolves it — no separate structured conflict UI is introduced.
+
+    ``fmt`` is the caller-detected :class:`StructuredFormat`. Each side is parsed
+    FRESH because ``merge_structural`` mutates ``ours`` (live) in place.
+    """
+    base_raw = read_base(profile, fid)
+
+    # Seed a divergent pre-existing live file with no recorded base — identical to
+    # the plain path (base := upstream; live decides what it holds now).
+    if base_raw is None and isinstance(live, bytes) and live != tracked:
+        return _seed_outcome(
+            fid,
+            live=live,
+            tracked=tracked,
+            interactive=interactive,
+            auto=auto,
+            display_path=display_path,
+            seed_prompt=seed_prompt,
+        )
+
+    # Clean-fast-path: a key-aware 3-way over comment-preserving models.
+    if base_raw is not None and isinstance(live, bytes):
+        result = merge_structural(
+            _load_model(base_raw, fmt),
+            _load_model(live, fmt),
+            _load_model(tracked, fmt),
+        )
+        if result.clean:
+            merged = _dump_model(result.merged_model, fmt)
+            if merged == live and base_raw == tracked:
+                return ReconcileOutcome(ReconcileKind.NOOP)
+            return ReconcileOutcome(
+                ReconcileKind.WRITE, content=merged, new_base=tracked
+            )
+
+    # A genuine same-key collision (or an absent / edge live) falls back to the
+    # proven line path — its wizard / --auto / DEFERRED resolves the conflict.
+    return reconcile_plain_file(
+        profile,
+        fid,
+        live=live,
+        tracked=tracked,
+        interactive=interactive,
+        auto=auto,
+        display_path=display_path,
+        claude_merge=claude_merge,
+        seed_prompt=seed_prompt,
+    )
