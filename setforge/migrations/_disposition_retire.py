@@ -25,9 +25,12 @@ from setforge.errors import ConfigError
 from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from setforge.config import Disposition
     from setforge.reconcile import FileId
     from setforge.spans import SpanEntry
+    from setforge.transitions import StateSnapshotEntry, TransitionDir
 
 #: ``local.yaml`` relpath under ``roots.home`` (host-local overlay source),
 #: copied from the marker-retire migration so this module stays self-contained
@@ -61,6 +64,20 @@ class DispositionRetireMigration:
 
     from_version: str = "2.1"
     to_version: str = "3.0"
+
+    @property
+    def writes_own_transition(self) -> bool:
+        """This migration records its OWN durable transition inside ``apply``.
+
+        The cutover captures binary ``state_snapshots`` of every mutated store +
+        the setforge.yaml text and commits ONE transition BEFORE any legacy
+        delete (MS1 commit-before-unlink) — something the migrate driver's
+        after-apply, text-only transition cannot express. So the driver must NOT
+        also write its transition for any chain containing this migration;
+        ``cli.migrate`` keys that skip off this flag. See
+        :func:`setforge.cli.migrate._chain_owns_transition`.
+        """
+        return True
 
     @property
     def reverse(self) -> _DispositionRetireReverse:
@@ -268,6 +285,41 @@ def _validate_bases(records: list[_FidLegacy]) -> None:
             "The cutover refuses rather than migrate a corrupt base (nothing was "
             "changed). Fix or remove these files, then re-run:\n" + "\n".join(bad)
         )
+
+
+def _write_cutover_transition(
+    *,
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+    state_snapshots: tuple[StateSnapshotEntry, ...],
+) -> TransitionDir:
+    """Record the cutover's single durable transition (MS1 commit-before-unlink).
+
+    A ``MIGRATE``-labelled transition carrying BOTH a text patch for
+    ``setforge.yaml`` (``file_pre`` -> ``file_post``; the schema_version flip,
+    reversed by ``patch -R``) AND the binary ``state_snapshots`` of every mutated
+    store (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls
+    this AFTER capturing the pre-state + writing the additive unified store, but
+    BEFORE unlinking any legacy artifact — so a crash or ``setforge revert`` after
+    the commit restores the pre-cutover state exactly. Returns the transition dir.
+    """
+    import sys
+
+    from setforge import transitions
+    from setforge._redact import redact_argv
+
+    return transitions.write_transition(
+        transitions.make_meta(
+            transitions.TransitionCommand.MIGRATE,
+            transitions.MIGRATE_TRANSITION_PROFILE,
+            end_timestamp=transitions.now_utc().isoformat(),
+            command_line=redact_argv(sys.argv[1:]),
+        ),
+        file_pre,
+        file_post,
+        None,
+        state_snapshots=state_snapshots,
+    )
 
 
 def _classify_fid(rec: _FidLegacy) -> _SeedPlan:

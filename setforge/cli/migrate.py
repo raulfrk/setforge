@@ -234,6 +234,22 @@ def _dispatch_check(
         typer.echo("specify --check, --apply, or --pin=X.Y.")
 
 
+def _chain_owns_transition(chain: Sequence[Migration]) -> bool:
+    """Whether a chain migration records its OWN durable transition.
+
+    A migration flagged ``writes_own_transition`` (the cutover) commits a binary
+    ``state_snapshots`` transition inside ``apply`` — before any legacy delete —
+    which the driver's after-apply, text-only transition cannot express. When any
+    step owns its transition the driver must NOT also write one, or ``revert``
+    would see two overlapping records for the same setforge.yaml edit. A rare
+    multi-step chain that reaches the cutover from an older schema therefore
+    reverts to the pre-cutover schema (the cutover's own transition captures
+    setforge.yaml as it stood when the cutover ran), not the chain's origin — a
+    coherent partial undo, and moot for the common single-step 2.1->3.0 path.
+    """
+    return any(getattr(m, "writes_own_transition", False) for m in chain)
+
+
 def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) -> None:
     """Handle the ``--apply`` branch.
 
@@ -269,8 +285,14 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # it just gates here so a transition is only recorded for a valid result.)
     # ``_execute_chain`` raises ``typer.Exit`` on any failure, so reaching here
     # means success.
-    file_post = transitions.snapshot_paths(affected)
-    _write_migrate_transition(file_pre=file_pre, file_post=file_post)
+    #
+    # Skip the driver's text-only transition when a chain step owns its own
+    # durable transition (the cutover, committed before its legacy delete) —
+    # writing a second, overlapping record would break the LIFO revert of the
+    # shared setforge.yaml edit. See :func:`_chain_owns_transition`.
+    if not _chain_owns_transition(chain):
+        file_post = transitions.snapshot_paths(affected)
+        _write_migrate_transition(file_pre=file_pre, file_post=file_post)
     _print_completion_report(cfg_path=cfg_path, chain=chain, roots=roots, choice=choice)
 
 
