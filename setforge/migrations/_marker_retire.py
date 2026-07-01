@@ -341,9 +341,9 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
 def _store_legs(profile: str, fid: FileId) -> tuple[Path, ...]:
     """The reconcile-store paths a seed for ``(profile, fid)`` writes.
 
-    Listed in :meth:`MarkerRetireMigration.affected_paths` so ``migrate --revert``
-    snapshots + restores them (the seed is NOT re-derivable once the markers are
-    stripped — pitfall MP-1/5).
+    Listed in :meth:`MarkerRetireMigration.affected_paths` so
+    ``setforge revert --profile=migrate`` snapshots + restores them (the seed is
+    NOT re-derivable once the markers are stripped — pitfall MP-1/5).
     """
     from setforge.transitions import state_root
 
@@ -460,8 +460,9 @@ class MarkerRetireMigration:
     def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
         """setforge.yaml + local.yaml + every stripped file + the seeded store legs.
 
-        The store legs are listed so ``migrate --revert`` snapshots them: a seeded
-        base is NOT re-derivable once markers are stripped (MP-1/5).
+        The store legs are listed so ``setforge revert --profile=migrate``
+        snapshots them: a seeded base is NOT re-derivable once markers are
+        stripped (MP-1/5).
         """
         paths: list[Path] = [roots.cfg_path, _local_yaml_path(roots)]
         for plan in _file_plans(roots):
@@ -547,7 +548,7 @@ class _MarkerRetireReverse:
     the down-migration CANNOT regenerate the markers. ``apply`` refuses with a
     clear :class:`~setforge.errors.ConfigError` rather than restamping to 2.0 and
     leaving the files markerless under an older schema (pitfall MP-2). The
-    pre-finalize reversible window is the transition-based ``migrate --revert``
+    reversible path is the transition-based ``setforge revert --profile=migrate``
     (which restores the snapshotted bytes), not this schema-chain reverse.
     """
 
@@ -581,6 +582,7 @@ class _MarkerRetireReverse:
         """Refuse: stripped markers cannot be regenerated."""
         raise ConfigError(
             "cannot down-migrate from schema 2.1 to 2.0: user-section markers were "
-            "retired and their syntax cannot be regenerated. Use 'setforge migrate "
-            "--revert' within the pre-finalize window to restore the marker bytes."
+            "retired and their syntax cannot be regenerated. Use 'setforge revert "
+            "--profile=migrate' to restore the marker bytes from the recorded "
+            "transition."
         )
