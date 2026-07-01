@@ -1,12 +1,12 @@
 """Docker e2e tests for ``setforge migrate`` — the schema version-stamp chain.
 
-Exercises the 1.0 → 1.1 → 1.2 → 2.0 migration chain end-to-end against a
+Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 migration chain end-to-end against a
 real Debian 12 container + the installed ``setforge`` binary:
 
-- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 chain on a frozen
-  1.0 config (the listing never gates, so it shows all three steps).
-- ``migrate --apply --yes`` walks the chain to ``schema_version: '2.0'`` (the
-  build's current expected) and writes a ``.pre-2.0.bak`` backup sibling. The
+- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain on a
+  frozen 1.0 config (the listing never gates, so it shows all four steps).
+- ``migrate --apply --yes`` walks the chain to ``schema_version: '2.1'`` (the
+  build's current expected) and writes a ``.pre-2.1.bak`` backup sibling. The
   destructive 1.2 → 2.0 contract step is gated on an operator-declared
   ``minimum_version >= 2.0``, so the apply-family configs carry that floor.
 - ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
@@ -161,7 +161,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "2.0" in c.read_text(_CFG_PATH)
+    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -271,8 +271,9 @@ def test_migrate_to_downgrade_round_trip(
 
     The forward hop targets 2.0 explicitly: the 2.0 → 2.1 marker-retire step is
     ONE-WAY (a stateless ``--to`` reverse cannot regenerate the retired
-    user-section marker syntax — only ``migrate --revert`` byte-restores it), so
-    the reversible round-trip is exercised on the 1.0 ↔ 2.0 chain. The downgrade
+    user-section marker syntax — only ``setforge revert --profile=migrate``
+    byte-restores it), so the reversible round-trip is exercised on the
+    1.0 ↔ 2.0 chain. The downgrade
     is a real reverse walk: 2.0 -> 1.2 (the contract reverse) then 1.2 -> 1.1
     (RestampMigration restamps the older version) then 1.1 -> 1.0
     (VersionStampMigration's reverse strips the key), leaving the key-absent 1.0
@@ -327,7 +328,7 @@ def test_downgrade_across_marker_retire_refuses(
     regenerate the retired user-section marker syntax. Applying forward to the
     build's current 2.1 then requesting ``--to=2.0`` must refuse with the
     irreversibility message and roll back, leaving the config at 2.1 — the
-    pre-finalize reversible window is served by ``migrate --revert``
+    reversible window is served by ``setforge revert --profile=migrate``
     (byte-restore), not by a stateless reverse migration.
     """
     c = docker_container()

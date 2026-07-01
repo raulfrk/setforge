@@ -160,7 +160,7 @@ def test_install_host_local_at_end_of_file(
 
 
 # NOTE: the ``after-section`` anchor kind is intentionally NOT exercised here.
-# Post-4.15.4 it resolves only against a user-section MARKER in the deployed
+# Post-retirement it resolves only against a user-section MARKER in the deployed
 # file (host_local_inject._find_after_section_offsets routes through
 # _legacy_markers._walk_markers), and markers are retired from tracked files —
 # so no fresh markerless config can satisfy it. The resolver stays covered by
@@ -350,7 +350,7 @@ def test_install_symlink_deployed_tracked_file(
     """A ``symlink:`` tracked_file writes VERBATIM tracked bytes to the TARGET;
     the symlink itself is preserved.
 
-    Post-4.15.4 host-local content is markerless-overlay-only, and symlink
+    Post-retirement host-local content is markerless-overlay-only, and symlink
     targets do NOT yet route through the overlay injector (see
     ``deploy._deploy_target_content`` — a deferred follow-up). So a
     ``host_local_sections`` overlay declared against a symlink-deployed file

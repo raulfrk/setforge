@@ -26,8 +26,8 @@ tracked_files:
     dst: ~/.setforge_e2e/minimal/text.txt
 
   # Plain markerless markdown — NO file-level disposition, so install is a
-  # byte-copy that overwrites the live copy on every run (markers are retired
-  # post-4.15.4). Drives the ``test-text-sections`` dry-run + install floor.
+  # byte-copy that overwrites the live copy on every run (markers are retired).
+  # Drives the ``test-text-sections`` dry-run + install floor.
   sections_md:
     src: sections/marked.md
     dst: ~/.setforge_e2e/sections/marked.md

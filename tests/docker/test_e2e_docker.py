@@ -141,7 +141,7 @@ def test_install_text_sections_no_live(
     """C: markerless markdown tracked_file, no live content → dst equals tracked.
 
     ``sections_md`` carries no disposition and no user-section markers
-    (markers are retired post-4.15.4), so install is a plain byte-copy: the
+    (markers are retired), so install is a plain byte-copy: the
     deployed file equals the tracked source verbatim, with no marker residue.
     """
     c = docker_container()
