@@ -27,9 +27,8 @@ from dataclasses import dataclass, field
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
 from setforge.markdown_spans import bound_span, heading_level
-from setforge.span_types import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind, SpanState
 from setforge.spans_relocation import RelocationStatus, relocate_span
-from setforge.spans_store import SpanState
 
 __all__ = [
     "SpanOrphan",

@@ -22,8 +22,7 @@ from setforge.overlay_inject import (
     inject_body_at_anchor,
 )
 from setforge.source import AnchorAfterHeading
-from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
-from setforge.spans_store import SpanState
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanState
 
 _PROFILE = "p"
 _SUB_NAME = "notes/CLAUDE.md"

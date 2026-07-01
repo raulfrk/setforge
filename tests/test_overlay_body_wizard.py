@@ -23,8 +23,7 @@ from setforge.overlay_body_wizard import (
 )
 from setforge.overlay_inject import canonical_body, inject_body_at_anchor
 from setforge.source import AnchorAfterHeading
-from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
-from setforge.spans_store import SpanState
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanState
 
 _TRACKED = "# Title\n\n## Notes\n\nshared body\n"
 

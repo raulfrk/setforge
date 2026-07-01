@@ -13,8 +13,8 @@ Invariant I8: ambiguity orphans, never picks-first.
 import hashlib
 
 from setforge.markdown_spans import bound_span
+from setforge.span_types import SpanState
 from setforge.spans_relocation import RelocationStatus, relocate_span
-from setforge.spans_store import SpanState
 
 
 def _state_for(doc: str, anchor: str) -> SpanState:

@@ -55,8 +55,13 @@ from setforge.section_detect import (
     propose_anchor,
 )
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
-from setforge.spans_store import SpanState
+from setforge.span_types import (
+    OverlaySpanPayload,
+    SpanEntry,
+    SpanKind,
+    SpanSemantics,
+    SpanState,
+)
 from setforge.wizard import Snapshot
 
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})

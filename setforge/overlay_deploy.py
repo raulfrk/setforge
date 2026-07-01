@@ -32,8 +32,7 @@ from setforge.overlay_inject import (
     excise_unique_needle,
     inject_body_at_anchor,
 )
-from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
-from setforge.spans_store import SpanState
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanState
 
 __all__ = [
     "canonical_overlay_body",

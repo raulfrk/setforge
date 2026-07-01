@@ -39,7 +39,7 @@ from setforge.markdown_spans import (
     bound_span,
     heading_level,
 )
-from setforge.spans_store import SpanState
+from setforge.span_types import SpanState
 
 __all__ = [
     "RelocationResult",

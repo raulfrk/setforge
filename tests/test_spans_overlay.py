@@ -9,9 +9,8 @@ re-baseline to exactly what landed on disk (Invariant I1).
 import hashlib
 
 from setforge.markdown_spans import bound_span
-from setforge.span_types import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind, SpanState
 from setforge.spans_overlay import apply_spans, exclude_spans_for_capture
-from setforge.spans_store import SpanState
 
 
 def _state_for(doc: str, anchor: str) -> SpanState:

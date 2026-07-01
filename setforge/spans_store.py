@@ -42,11 +42,11 @@ transition record alongside the live files.
 """
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from setforge import atomicio
 from setforge.errors import BaseStoreError, BaseStoreIOError
+from setforge.span_types import SpanState
 from setforge.transitions import state_root
 
 __all__ = [
@@ -57,54 +57,6 @@ __all__ = [
     "set_states",
     "spans_root",
 ]
-
-
-@dataclass(slots=True, frozen=True)
-class SpanState:
-    """Derived relocation + baseline state for one span.
-
-    ``anchor`` is the span's Layer-1 identity (manifest key, repeated in
-    the record for round-trip self-description). ``fingerprint`` is the
-    sha256 hex digest of the span's resolved body. ``prefix`` / ``suffix``
-    are the lines of context above / below the span (for the fuzzy
-    relocation stage). ``position_hint_start_line`` /
-    ``position_hint_n_lines`` are the advisory last-known offsets (a
-    search-start hint only). ``heading_level`` is the markdown ATX level
-    of the span's anchor heading (1-6).
-
-    ``last_deployed_body`` is the exact canonical body bytes an OVERLAY
-    span last injected into the live file (``None`` for pinned / forked
-    spans, which carry no body). It is the deploy / capture excise needle —
-    the body's identity is these recorded bytes, never a re-derived
-    anchor / offset. Anchor-keyed like every field on this record (a
-    name-keyed body would contradict the manifest's anchor-key invariant).
-    """
-
-    anchor: str
-    fingerprint: str
-    prefix: list[str]
-    suffix: list[str]
-    position_hint_start_line: int
-    position_hint_n_lines: int
-    heading_level: int
-    last_deployed_body: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        """Return the JSON-serializable record for this state."""
-        record: dict[str, object] = {
-            "anchor": self.anchor,
-            "fingerprint": self.fingerprint,
-            "prefix": list(self.prefix),
-            "suffix": list(self.suffix),
-            "position_hint_start_line": self.position_hint_start_line,
-            "position_hint_n_lines": self.position_hint_n_lines,
-            "heading_level": self.heading_level,
-        }
-        # Omit when absent so pinned/forked manifests stay byte-identical to
-        # their pre-OVERLAY shape (no spurious key churn on re-serialize).
-        if self.last_deployed_body is not None:
-            record["last_deployed_body"] = self.last_deployed_body
-        return record
 
 
 type _Manifest = dict[str, SpanState]

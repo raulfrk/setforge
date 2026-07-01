@@ -21,8 +21,7 @@ from setforge.overlay_inject import (
     inject_body_at_anchor,
 )
 from setforge.source import AnchorAfterHeading, AnchorAtEndOfFile
-from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
-from setforge.spans_store import SpanState
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanState
 
 
 def _overlay(anchor_id: str, value: str, body: str) -> SpanEntry:

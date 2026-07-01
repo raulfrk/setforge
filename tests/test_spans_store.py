@@ -14,7 +14,7 @@ import pytest
 
 from setforge import spans_store
 from setforge.errors import BaseStoreError
-from setforge.spans_store import SpanState
+from setforge.span_types import SpanState
 
 _PROFILE = "debian-vm"
 _FILE_ID = "claude/CLAUDE.md"
