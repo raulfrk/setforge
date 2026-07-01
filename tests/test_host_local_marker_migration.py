@@ -19,7 +19,7 @@ from setforge.host_local_marker_migration import (
 )
 from setforge.overlay_inject import canonical_body
 from setforge.source import load_local_tracked_file_overlays
-from setforge.spans import SpanKind
+from setforge.span_types import SpanKind
 
 _H = "a" * 64
 

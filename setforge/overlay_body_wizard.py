@@ -42,7 +42,7 @@ from setforge.markdown_spans import bound_span
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.overlay_deploy import canonical_overlay_body
 from setforge.overlay_inject import canonical_body
-from setforge.spans import SpanEntry
+from setforge.span_types import SpanEntry
 from setforge.spans_relocation import _fuzzy_relocate
 from setforge.spans_store import SpanState
 

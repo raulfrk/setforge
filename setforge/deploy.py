@@ -33,7 +33,7 @@ from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
 from setforge.section_mode import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 from setforge.spans_overlay import SpanOrphan, apply_spans
 from setforge.spans_store import SpanState
 from setforge.structural_merge import PathConflict

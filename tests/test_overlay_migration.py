@@ -21,7 +21,7 @@ from setforge.source import (
     load_local_host_local_sections,
     load_local_tracked_file_overlays,
 )
-from setforge.spans import SpanKind, SpanSemantics
+from setforge.span_types import SpanKind, SpanSemantics
 
 # A representative local.yaml carrying comments, a quoted scalar, and a
 # pre-existing (non-overlay) span the migration must leave intact.

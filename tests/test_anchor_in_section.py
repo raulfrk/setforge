@@ -24,7 +24,7 @@ from setforge.section_detect import (
     compute_detect_regions,
     propose_anchor,
 )
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 
 def _only_region(live: str, expected: str) -> DetectRegion:

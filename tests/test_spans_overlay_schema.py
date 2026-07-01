@@ -1,6 +1,6 @@
 """Schema tests for the markerless OVERLAY span kind + body payload.
 
-An OVERLAY :class:`~setforge.spans.SpanEntry` carries a structured
+An OVERLAY :class:`~setforge.span_types.SpanEntry` carries a structured
 :data:`~setforge.anchors.Anchor` splice point plus exactly one of ``body``
 (inline) / ``body_file`` (path). The payload is present iff
 ``kind == overlay``; a pinned/forked span MUST NOT carry it, and an OVERLAY
@@ -15,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from setforge.errors import ConfigError
-from setforge.spans import (
+from setforge.span_types import (
     SpanEntry,
     SpanKind,
     SpanSemantics,

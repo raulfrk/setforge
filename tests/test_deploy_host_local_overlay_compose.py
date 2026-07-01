@@ -19,7 +19,7 @@ from pathlib import Path
 
 from setforge import capture, deploy
 from setforge.source import AnchorAtEndOfFile, HostLocalSection, HostLocalSectionName
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 
 def _overlay_span(identity: str, body: str) -> SpanEntry:

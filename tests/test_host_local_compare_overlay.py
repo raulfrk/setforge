@@ -13,7 +13,7 @@ from pathlib import Path
 from setforge.compare import diff_file
 from setforge.deploy import copy_atomic
 from setforge.source import AnchorAfterHeading
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 
 def _write_src(tmp_path: Path, content: str) -> Path:

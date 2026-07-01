@@ -19,7 +19,7 @@ from pathlib import Path
 
 from setforge.config import Disposition
 from setforge.disposition_merge import resolve_file
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 
 
 def _resolve(dst: str, base: str, live: str, tracked: str, span: SpanEntry):

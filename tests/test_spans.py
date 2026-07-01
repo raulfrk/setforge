@@ -1,6 +1,6 @@
 """Tests for the file-type-dispatched span anchor validator.
 
-:func:`setforge.spans.validate_spans_file_type` routes each declared span's
+:func:`setforge.span_types.validate_spans_file_type` routes each declared span's
 anchor through a grammar check chosen by the source's file type: markdown
 sources permit only heading-shaped anchors; structural (yaml/json/jsonc)
 sources permit only dotted-path anchors. A wrong-grammar anchor raises
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from setforge.errors import ConfigError
-from setforge.spans import (
+from setforge.span_types import (
     SpanEntry,
     is_heading_anchor,
     validate_spans_file_type,

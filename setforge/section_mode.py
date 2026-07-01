@@ -1,9 +1,10 @@
 """The :class:`SectionMode` closed set — a leaf module with no heavy imports.
 
 ``SectionMode`` lives here (rather than in :mod:`setforge.config`) so
-:mod:`setforge.spans` can carry it on :attr:`~setforge.spans.SpanEntry.capture_mode`
-WITHOUT the import cycle a ``spans → config → spans`` edge would create
-(:mod:`setforge.config` already imports :class:`~setforge.spans.SpanEntry`).
+:mod:`setforge.span_types` can carry it on
+:attr:`~setforge.span_types.SpanEntry.capture_mode` WITHOUT the import
+cycle a ``spans → config → spans`` edge would create
+(:mod:`setforge.config` already imports :class:`~setforge.span_types.SpanEntry`).
 :mod:`setforge.config` re-exports the name for back-compat, so existing
 ``from setforge.config import SectionMode`` call sites stay valid.
 """
@@ -42,7 +43,7 @@ class SectionMode(StrEnum):
 
     Historically this drove the legacy ``preserve_user_sections_mode``
     field; at schema 2.0 it is carried by
-    :attr:`setforge.spans.SpanEntry.capture_mode` on section spans.
+    :attr:`setforge.span_types.SpanEntry.capture_mode` on section spans.
     """
 
     KEEP_DEFAULTS = "keep_defaults"

@@ -12,7 +12,7 @@ from pathlib import Path
 from setforge.config import Disposition
 from setforge.deploy import copy_atomic
 from setforge.markdown_spans import bound_span
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 from setforge.spans_store import SpanState
 
 _BASE = """\

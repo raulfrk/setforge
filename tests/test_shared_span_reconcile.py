@@ -34,7 +34,7 @@ from setforge.config import (
     load_config,
 )
 from setforge.errors import SharedSpanReconcileRequiresInteractive
-from setforge.spans import SpanEntry, SpanKind, SpanSemantics
+from setforge.span_types import SpanEntry, SpanKind, SpanSemantics
 
 # --------------------------------------------------------------------------- #
 # setforge.yaml builders                                                       #

@@ -1,8 +1,8 @@
 """Schema-layer tests for the sub-file span model.
 
-Covers the :class:`setforge.spans.SpanEntry` value object (kind +
-semantics + anchor), the :data:`setforge.spans.SpanKind` /
-:data:`setforge.spans.SpanSemantics` closed sets, the per-file-type
+Covers the :class:`setforge.span_types.SpanEntry` value object (kind +
+semantics + anchor), the :data:`setforge.span_types.SpanKind` /
+:data:`setforge.span_types.SpanSemantics` closed sets, the per-file-type
 anchor validator, and the ``spans:`` field on both
 :class:`setforge.source._LocalTrackedFileOverlay` (host-local intent)
 and :class:`setforge.config.TrackedFile` (shared intent).
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from setforge.config import TrackedFile
 from setforge.errors import ConfigError
 from setforge.source import _LocalTrackedFileOverlay
-from setforge.spans import (
+from setforge.span_types import (
     SpanEntry,
     SpanKind,
     SpanSemantics,

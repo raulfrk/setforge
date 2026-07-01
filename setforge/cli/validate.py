@@ -71,7 +71,7 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
-from setforge.spans import (
+from setforge.span_types import (
     SpanEntry,
     SpanKind,
     is_heading_anchor,
@@ -379,7 +379,7 @@ def _check_spans_file_types(
     then abort install; surfacing them here keeps the offline gate complete.
 
     Routes every :class:`~setforge.errors.ConfigError` from
-    :func:`setforge.spans.validate_spans_file_type` /
+    :func:`setforge.span_types.validate_spans_file_type` /
     :func:`setforge.disposition_merge.validate_structural_spans` to a string
     failure (existing UX). No-op for tracked_files without spans.
 
@@ -519,7 +519,7 @@ def _overlay_folded_spans(
     performs at install time would double-apply on the second profile.
     Reuses :func:`setforge.config._fold_overlay_spans` (host-local wins
     each anchor) and re-validates the merged dicts through
-    :class:`~setforge.spans.SpanEntry`, like the install-time fold (which
+    :class:`~setforge.span_types.SpanEntry`, like the install-time fold (which
     revalidates at the whole-:class:`TrackedFile` level instead). Each
     merged dict is the dump of an already-validated span, so the
     revalidation is a guard, not an expected failure path.

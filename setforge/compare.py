@@ -54,7 +54,7 @@ from setforge.config import (
 from setforge.errors import BaseStoreError, ConfigError, MergeTypeMismatch
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import SpanEntry
+from setforge.span_types import SpanEntry
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -869,7 +869,7 @@ def _forked_scalar_conflicts(
     slots instead of crashing the read-only compare.
     """
     from setforge import disposition_merge
-    from setforge.spans import SpanKind
+    from setforge.span_types import SpanKind
     from setforge.structural_merge import PathConflict
 
     disposition = tracked_file.disposition
@@ -1036,7 +1036,7 @@ def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
     """
     from setforge import disposition_merge, overlay_deploy
     from setforge.overlay_inject import OverlayAmbiguousError
-    from setforge.spans import SpanKind
+    from setforge.span_types import SpanKind
 
     if not tracked_file.spans:
         return False

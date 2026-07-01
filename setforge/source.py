@@ -58,7 +58,7 @@ from setforge.errors import (
     SourceNotCloned,
 )
 from setforge.migrations import _local_yaml
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 
 if TYPE_CHECKING:
     from setforge.section_templates import SeedPlanEntry
@@ -299,7 +299,7 @@ class _LocalTrackedFileOverlay(BaseModel):
     spans: list[SpanEntry] = []
     """Host-local sub-file span intents (pinned / forked regions).
 
-    Each :class:`~setforge.spans.SpanEntry` freezes (``pinned``) or
+    Each :class:`~setforge.span_types.SpanEntry` freezes (``pinned``) or
     host-isolates (``forked``) a sub-file region identified by a markdown
     heading-text anchor, with no in-file marker. Host-local intent lives
     here in ``local.yaml``; shared intent lives on the tracked-side
@@ -307,7 +307,7 @@ class _LocalTrackedFileOverlay(BaseModel):
     baseline bytes are derived state in the spans sidecar
     (:mod:`setforge.spans_store`), never duplicated into this intent
     (Invariant I12). Anchor file-type legality is enforced by
-    :func:`setforge.spans.validate_spans_file_type` at install time.
+    :func:`setforge.span_types.validate_spans_file_type` at install time.
     """
 
     disposition: Disposition | None = None

@@ -14,7 +14,7 @@ from setforge.config import Disposition
 from setforge.deploy import DeployAction, copy_atomic
 from setforge.overlay_inject import canonical_body
 from setforge.source import AnchorAfterHeading
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 _TRACKED = "# Title\n\n## Notes\n\nshared body\n"
 

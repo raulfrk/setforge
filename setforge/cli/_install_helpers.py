@@ -98,7 +98,7 @@ from setforge.source import (
     load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
-from setforge.spans import (
+from setforge.span_types import (
     SpanEntry,
     SpanKind,
     validate_span_disposition,
@@ -247,7 +247,7 @@ def _validate_span_file_types(
     Iterates every tracked_file in the resolved profile (whose ``spans``
     list already folds in the host-local overlay via
     :func:`setforge.config.apply_host_local_tracked_file_overrides`) and
-    routes it through :func:`setforge.spans.validate_spans_file_type`, so a
+    routes it through :func:`setforge.span_types.validate_spans_file_type`, so a
     heading-text span anchor on a yaml/json file aborts the install
     cleanly instead of failing as a confusing runtime relocation miss.
     """

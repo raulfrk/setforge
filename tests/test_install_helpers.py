@@ -21,7 +21,7 @@ from setforge.cli._helpers import ProfileContext, _resolve_drift_paths
 from setforge.compare import CompareReport, CompareStatus, DriftClass, FileCompare
 from setforge.config import Config, Profile, ResolvedProfile, TrackedFile
 from setforge.source import AnchorAtEndOfFile, HostLocalSection, HostLocalSectionName
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 _LIVE_WITH_MARKERS = (
     "intro\n"

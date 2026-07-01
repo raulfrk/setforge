@@ -35,7 +35,7 @@ from setforge.config import (
     SectionTemplateRef,
     TrackedFile,
 )
-from setforge.spans import SpanEntry
+from setforge.span_types import SpanEntry
 
 SCHEMA_MAJOR: int = 2
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
@@ -115,7 +115,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "mode": "int | None",
         "symlink": "str | None",
         "disposition": "setforge.config.Disposition | None",
-        "spans": "list[setforge.spans.SpanEntry]",
+        "spans": "list[setforge.span_types.SpanEntry]",
     },
     "Extensions": {
         "include": "list[str]",
@@ -148,7 +148,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "anchor": "<class 'str'>",
         "kind": "<enum 'SpanKind'>",
         "semantics": "<enum 'SpanSemantics'>",
-        "overlay": "setforge.spans.OverlaySpanPayload | None",
+        "overlay": "setforge.span_types.OverlaySpanPayload | None",
         "deep": "<class 'bool'>",
         "capture_mode": "<enum 'SectionMode'>",
     },

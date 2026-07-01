@@ -8,7 +8,7 @@ case-fold) by the inject engine (:mod:`setforge.host_local_inject`).
 
 This module is a LEAF: it imports nothing from setforge beyond the Pydantic
 primitives, so both :mod:`setforge.source` (the host-local overlay loader)
-and :mod:`setforge.spans` (the OVERLAY span payload) can import the same
+and :mod:`setforge.span_types` (the OVERLAY span payload) can import the same
 :data:`Anchor` union without forming an import cycle. :mod:`setforge.source`
 re-exports these names for backward compatibility.
 """

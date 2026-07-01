@@ -175,7 +175,7 @@ def test_build_overlay_span() -> None:
     from setforge.anchors import AnchorAfterHeading
     from setforge.cli import _detect_helpers as dh
     from setforge.overlay_inject import canonical_body
-    from setforge.spans import SpanKind, SpanSemantics
+    from setforge.span_types import SpanKind, SpanSemantics
 
     plan = dh.CarvePlan(
         kind="overlay",
@@ -195,7 +195,7 @@ def test_build_overlay_span() -> None:
 
 def test_build_pinned_span() -> None:
     from setforge.cli import _detect_helpers as dh
-    from setforge.spans import SpanKind
+    from setforge.span_types import SpanKind
 
     plan = dh.CarvePlan(
         kind="pinned",
@@ -394,7 +394,7 @@ def test_wizard_propagates_anchor_refusal(monkeypatch: pytest.MonkeyPatch) -> No
 def test_covered_by_span_subtracts_carved_pinned() -> None:
     from setforge.cli import _detect_helpers as dh
     from setforge.config import Disposition, TrackedFile
-    from setforge.spans import SpanEntry, SpanKind, SpanSemantics
+    from setforge.span_types import SpanEntry, SpanKind, SpanSemantics
 
     tf = TrackedFile(
         src=Path("x.md"),

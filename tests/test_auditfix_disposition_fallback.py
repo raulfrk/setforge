@@ -27,7 +27,7 @@ from setforge.disposition_merge import (
 )
 from setforge.markdown_merge import LineConflict
 from setforge.section_mode import ReconcileAuto
-from setforge.spans import SpanEntry
+from setforge.span_types import SpanEntry
 from setforge.structural_merge import get_at_path
 
 # A file whose ``clash`` key is a MAP on live/base but a SCALAR on tracked —

@@ -52,7 +52,7 @@ from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 
 if TYPE_CHECKING:
     from setforge.overlay_body_wizard import OverlayBodyEdit, OverlayEditChoice

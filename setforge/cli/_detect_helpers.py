@@ -55,7 +55,7 @@ from setforge.section_detect import (
     propose_anchor,
 )
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind, SpanSemantics
 from setforge.spans_store import SpanState
 from setforge.wizard import Snapshot
 
@@ -139,7 +139,7 @@ def allowed_kinds(region: DetectRegion, target: DetectTarget) -> list[str]:
     content is absent from tracked). DIVERGENCE → ``pinned``/``forked``, but
     ONLY when the tracked_file declares a file-level ``disposition``: a
     pinned/forked span is consumed on the disposition merge path, and
-    :func:`setforge.spans.validate_span_disposition` rejects one on a
+    :func:`setforge.span_types.validate_span_disposition` rejects one on a
     ``disposition=None`` file. A divergence on such a file yields ``[]`` (the
     wizard refuses that range with a reason).
     """

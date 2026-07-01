@@ -1,6 +1,6 @@
 """Tests for the 2.0 span-model expansion: ``deep`` + ``capture_mode``.
 
-The full-parity contract adds two attributes to :class:`setforge.spans.SpanEntry`
+The full-parity contract adds two attributes to :class:`setforge.span_types.SpanEntry`
 so the legacy ``preserve_user_keys_deep`` (deep-recursive merge) and
 ``preserve_user_sections_mode`` (re-splice vs strip) forms translate losslessly:
 
@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from setforge.anchors import AnchorAfterHeading
 from setforge.disposition_merge import resolve_file
 from setforge.section_mode import SectionMode
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 
 # ---------------------------------------------------------------------------
 # SectionMode leaf-module + back-compat re-export (cycle resolution).

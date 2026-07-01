@@ -2,7 +2,7 @@
 
 The user-facing surface over the stored-base disposition model
 (:class:`setforge.config.Disposition`) and the sub-file span model
-(:class:`setforge.spans.SpanEntry`). Seven verbs:
+(:class:`setforge.span_types.SpanEntry`). Seven verbs:
 
 - ``fork`` / ``pin`` ``<file> [anchor] [--shared]`` — without an anchor,
   set the tracked_file's *file-level* disposition; with an anchor, append a
@@ -82,7 +82,7 @@ from setforge.errors import (
 from setforge.markdown_spans import bound_span
 from setforge.scalar_merge import ABSENT
 from setforge.source import PathSource, Source, SpanEntry
-from setforge.spans import (
+from setforge.span_types import (
     SpanKind,
     SpanSemantics,
     is_heading_anchor,
@@ -136,7 +136,7 @@ def _tracked_file_or_fail(cfg_path: Path, file_id: str) -> tuple[TrackedFile, Pa
 def _validate_anchor_for_file(anchor: str, src: Path, file_id: str) -> None:
     """Reject an anchor whose grammar is wrong for ``src``'s file type.
 
-    Wraps :func:`setforge.spans.validate_spans_file_type` so the file-type
+    Wraps :func:`setforge.span_types.validate_spans_file_type` so the file-type
     dispatch (heading -> markdown, dotted -> structural) surfaces as an
     early :class:`typer.BadParameter` rather than a deferred
     :class:`ConfigError` at install / validate time.

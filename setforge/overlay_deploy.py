@@ -32,7 +32,7 @@ from setforge.overlay_inject import (
     excise_unique_needle,
     inject_body_at_anchor,
 )
-from setforge.spans import OverlaySpanPayload, SpanEntry, SpanKind
+from setforge.span_types import OverlaySpanPayload, SpanEntry, SpanKind
 from setforge.spans_store import SpanState
 
 __all__ = [
@@ -158,7 +158,7 @@ def inject_overlay_bodies(
 
     Runs AFTER the whole-file merge (and after pinned/forked re-overlay) on
     body-free text. Each canonical body is spliced at its
-    :attr:`~setforge.spans.OverlaySpanPayload.anchor`; multi-section injects
+    :attr:`~setforge.span_types.OverlaySpanPayload.anchor`; multi-section injects
     apply bottom-up by the resolved anchor line so an earlier splice never
     shifts a later anchor. Returns ``(injected_text, new_states)`` where
     ``new_states`` maps each overlay anchor to its recomputed

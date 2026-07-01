@@ -40,7 +40,7 @@ from setforge.migrations import (
     parse_schema_version,
 )
 from setforge.section_mode import SectionMode as SectionMode
-from setforge.spans import SpanEntry, SpanSemantics
+from setforge.span_types import SpanEntry, SpanSemantics
 
 if TYPE_CHECKING:
     from setforge.source import (
@@ -123,7 +123,7 @@ class McpScope(StrEnum):
 
 
 # SectionMode now lives in the leaf module setforge.section_mode so
-# setforge.spans (imported by config below) can carry it on
+# setforge.span_types (imported by config below) can carry it on
 # SpanEntry.capture_mode without a spans → config → spans import cycle.
 # Re-exported here for back-compat: ``from setforge.config import SectionMode``
 # stays valid for every existing call site.
@@ -235,7 +235,7 @@ class TrackedFile(BaseModel):
     :attr:`setforge.source._LocalTrackedFileOverlay.spans`. Carries
     ``semantics: shared`` span intents that propagate across hosts;
     host-local span intents live in ``local.yaml`` instead. Each entry is
-    a :class:`~setforge.spans.SpanEntry` (markdown heading-text anchor +
+    a :class:`~setforge.span_types.SpanEntry` (markdown heading-text anchor +
     kind + semantics). Resolved offsets and baseline bytes are derived
     state in the spans sidecar, never duplicated here (Invariant I12).
     """
@@ -1042,7 +1042,7 @@ def _fold_overlay_spans(
 
     Returns the merged spans as plain dicts (``model_dump``) so the
     ``TrackedFile.model_validate`` revalidation re-runs the
-    :class:`~setforge.spans.SpanEntry` validators against the combined
+    :class:`~setforge.span_types.SpanEntry` validators against the combined
     shape.
     """
     merged_spans = {span.anchor: span for span in tracked_spans}
@@ -1082,7 +1082,7 @@ def apply_host_local_tracked_file_overrides(
       :attr:`TrackedFile.disposition`. The merged shape is re-validated
       via the dump-and-revalidate path, so every ``TrackedFile``
       invariant re-runs against the overridden disposition.
-    - ``spans`` (list of :class:`~setforge.spans.SpanEntry`) are folded
+    - ``spans`` (list of :class:`~setforge.span_types.SpanEntry`) are folded
       over :attr:`TrackedFile.spans` per anchor by
       :func:`_fold_overlay_spans`. Host-local spans win each shared anchor
       by default (the silent host-local-wins fold); host-local-only

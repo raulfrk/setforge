@@ -1,4 +1,4 @@
-"""Unit tests for :func:`setforge.spans.validate_span_disposition`.
+"""Unit tests for :func:`setforge.span_types.validate_span_disposition`.
 
 A ``pinned``/``forked`` span is consumed only on the disposition merge path;
 on a ``disposition: None`` file it is silently ignored on deploy and not
@@ -14,7 +14,7 @@ import pytest
 from setforge.config import Disposition
 from setforge.errors import ConfigError
 from setforge.source import AnchorAfterHeading
-from setforge.spans import (
+from setforge.span_types import (
     OverlaySpanPayload,
     SpanEntry,
     SpanKind,

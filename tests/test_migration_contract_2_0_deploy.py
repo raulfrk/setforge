@@ -22,7 +22,7 @@ from setforge import deploy
 from setforge.config import Disposition
 from setforge.migrations import MigrationRoots
 from setforge.migrations._contract_2_0 import Contract20Migration
-from setforge.spans import SpanEntry
+from setforge.span_types import SpanEntry
 
 _FLOOR = 'minimum_version: "2.0"\n'
 

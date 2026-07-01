@@ -69,7 +69,7 @@ from setforge.markdown_merge import (
 )
 from setforge.scalar_merge import ABSENT, ScalarConflict
 from setforge.section_mode import ReconcileAuto
-from setforge.spans import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry, SpanKind
 from setforge.structural_merge import (
     PathConflict,
     deep_merge_into_node,
@@ -177,7 +177,7 @@ class StructuralSpanOrphan:
     """One structural span pin that could not be re-asserted onto the merge.
 
     ``anchor`` is the dotted path; ``kind`` records the span kind and is
-    currently always :data:`~setforge.spans.SpanKind.PINNED` — only pinned spans
+    currently always :data:`~setforge.span_types.SpanKind.PINNED` — only pinned spans
     re-assert, so only a pinned re-assert can orphan (forked spans never
     re-assert; their capture exclusion is silent). ``reason`` is the seam that
     failed. An orphan is
