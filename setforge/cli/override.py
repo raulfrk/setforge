@@ -67,7 +67,6 @@ from setforge.compare import (
     resolve_src,
 )
 from setforge.config import (
-    Disposition,
     TrackedFile,
     apply_host_local_tracked_file_overrides,
     load_config,
@@ -104,10 +103,18 @@ _RT_YAML = YAML(typ="rt")
 # A pin verb maps to PINNED, a fork verb to FORKED, at both file-level and
 # span granularity. A pin "upgrades" a fork; a fork must NOT silently
 # "downgrade" a pin (enforced by the transition guards below).
-_DISPOSITION_OF_KIND: dict[SpanKind, Disposition] = {
-    SpanKind.FORKED: Disposition.FORKED,
-    SpanKind.PINNED: Disposition.PINNED,
+# The retired ``Disposition`` string values, keyed by span kind. Kept as plain
+# strings: the ``local.yaml`` overlay ``disposition:`` field is now a free-form
+# (inert) string after the file-level disposition model was retired.
+_DISPOSITION_OF_KIND: dict[SpanKind, str] = {
+    SpanKind.FORKED: "forked",
+    SpanKind.PINNED: "pinned",
 }
+
+# Tracked-side spans were retired: a ``TrackedFile`` no longer carries a
+# ``spans`` list, so the ``override show`` span-inspection views iterate this
+# empty constant (they now render nothing for the tracked side).
+_NO_TRACKED_SPANS: list[SpanEntry] = []
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +295,11 @@ def _guard_disposition_transition(
     no-op (already at the target). Raises :class:`typer.BadParameter` on a
     fork-over-pin downgrade.
     """
-    target_value = _DISPOSITION_OF_KIND[target].value
+    target_value = _DISPOSITION_OF_KIND[target]
     if current == target_value:
         console.print(f"already {target_value}")
         return False
-    if current == Disposition.PINNED.value and target is SpanKind.FORKED:
+    if current == "pinned" and target is SpanKind.FORKED:
         raise typer.BadParameter(
             "refusing to downgrade a pinned file to forked; re-issue "
             "explicitly via the removal verbs (out of scope this release)."
@@ -327,7 +334,7 @@ def _guard_span_transition(
 def _set_disposition_host_local(file_id: str, kind: SpanKind) -> None:
     data = _load_local_data()
     block = _local_tf_block(data, file_id)
-    block["disposition"] = _DISPOSITION_OF_KIND[kind].value
+    block["disposition"] = _DISPOSITION_OF_KIND[kind]
     _dump_local_data(data)
 
 
@@ -433,7 +440,7 @@ def _shared_apply(
     data = _RT_YAML.load(cfg_path.read_text(encoding="utf-8"))
     entry = data["tracked_files"][file_id]
     if disposition is not None:
-        entry["disposition"] = _DISPOSITION_OF_KIND[disposition].value
+        entry["disposition"] = _DISPOSITION_OF_KIND[disposition]
     if span is not None:
         raw = entry.get("spans")
         spans: list[object] = list(raw) if isinstance(raw, list) else []
@@ -519,9 +526,7 @@ def _apply_file_level(
     else:
         _set_disposition_host_local(file_id, kind)
     scope = "shared" if shared else "host-local"
-    console.print(
-        f"set {file_id} disposition={_DISPOSITION_OF_KIND[kind].value} ({scope})"
-    )
+    console.print(f"set {file_id} disposition={_DISPOSITION_OF_KIND[kind]} ({scope})")
 
 
 def _apply_span(
@@ -716,9 +721,7 @@ def _apply_removal_to_block(
         # File-level disposition stores the Disposition value; resolve through
         # _DISPOSITION_OF_KIND like the write path rather than assuming SpanKind
         # and Disposition share string values.
-        return _remove_disposition_in_block(
-            block, _DISPOSITION_OF_KIND[target_kind].value
-        )
+        return _remove_disposition_in_block(block, _DISPOSITION_OF_KIND[target_kind])
     # Spans store the SpanKind value verbatim.
     return _remove_span_in_block(block, anchor, target_kind.value)
 
@@ -937,8 +940,8 @@ def override_list(
     cfg_path = _resolve_config_arg(config)
     cfg = load_config(cfg_path)
     repo_root = cfg_path.resolve().parent
-    # Fold host-local disposition + spans over the shared base so the listing
-    # reflects what THIS host would deploy.
+    # Fold host-local mode/dst/symlink overrides over the shared base so the
+    # listing reflects what THIS host would deploy.
     apply_host_local_tracked_file_overrides(cfg)
     report = compare_mod.compare_profile(
         cfg,
@@ -950,20 +953,11 @@ def override_list(
 
     table = Table(title="Overrides", show_header=True, header_style="bold")
     table.add_column("file")
-    table.add_column("disposition")
-    table.add_column("spans", justify="right")
     table.add_column("state")
 
     by_name = {e.name: e for e in report.entries}
     resolved = resolve_profile(cfg, profile)
     for name in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[name]
-        disposition = (
-            tracked_file.disposition.value
-            if tracked_file.disposition is not None
-            else "-"
-        )
-        span_count = len(tracked_file.spans)
         entry = by_name.get(name)
         if entry is None:
             state = "-"
@@ -973,7 +967,7 @@ def override_list(
             state = "expected drift"
         else:
             state = "unexpected drift"
-        table.add_row(name, disposition, str(span_count), state)
+        table.add_row(name, state)
 
     console.print(table)
 
@@ -1018,7 +1012,7 @@ def override_show(
     src = resolve_src(tracked_file, repo_root)
 
     if not spans:
-        console.print(f"{file_id}: {len(tracked_file.spans)} span(s) declared")
+        console.print(f"{file_id}: 0 span(s) declared (tracked-side spans retired)")
         return
 
     text = src.read_text(encoding="utf-8")
@@ -1053,7 +1047,7 @@ def _render_span_table(
     table.add_column("kind")
     table.add_column("semantics")
     table.add_column("ORPHANED")
-    for span in tracked_file.spans:
+    for span in _NO_TRACKED_SPANS:
         orphaned = "yes" if _span_orphaned(span, src, text) else "no"
         table.add_row(span.anchor, span.kind.value, span.semantics.value, orphaned)
     console.print(table)
@@ -1071,7 +1065,7 @@ def _annotate_markdown(tracked_file: TrackedFile, text: str) -> str:
     lines = text.splitlines(keepends=True)
     # Map span-start line -> comment, resolving each anchor once.
     inserts: dict[int, list[str]] = {}
-    for span in tracked_file.spans:
+    for span in _NO_TRACKED_SPANS:
         if not is_heading_anchor(span.anchor):
             continue
         try:
@@ -1102,7 +1096,7 @@ def _annotate_structural(tracked_file: TrackedFile, src: Path, text: str) -> str
         "//" if (jsonc.is_jsonc_file(src) or src.suffix.lower() == ".json") else "#"
     )
     footer_lines = [f"{prefix} virtual span annotations (not written):"]
-    for span in tracked_file.spans:
+    for span in _NO_TRACKED_SPANS:
         if is_heading_anchor(span.anchor):
             continue
         footer_lines.append(f"{prefix} {span.kind.value}:{span.anchor} (virtual)")

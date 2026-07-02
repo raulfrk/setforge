@@ -18,7 +18,6 @@ from pathlib import Path
 from json5.loader import loads as _json5_loads
 from ruamel.yaml import YAML
 
-from setforge.config import Disposition
 from setforge.disposition_merge import (
     ConflictChoice,
     ConflictResolution,
@@ -60,7 +59,6 @@ _JSONC_DELETED = ('{"k": "x"}\n', '{"k": "y"}\n', "{}\n")
 def test_shared_yaml_conflict_use_tracked_theirs_deleted() -> None:
     base, live, tracked = _YAML_DELETED
     res = resolve_file(
-        Disposition.SHARED,
         Path("c.yaml"),
         base=base,
         live=live,
@@ -75,7 +73,6 @@ def test_shared_yaml_conflict_use_tracked_theirs_deleted() -> None:
 def test_shared_jsonc_conflict_use_tracked_theirs_deleted() -> None:
     base, live, tracked = _JSONC_DELETED
     res = resolve_file(
-        Disposition.SHARED,
         Path("s.json"),
         base=base,
         live=live,
@@ -95,7 +92,6 @@ def test_shared_jsonc_conflict_use_tracked_theirs_deleted() -> None:
 def test_resolver_take_theirs_yaml_theirs_deleted() -> None:
     base, live, tracked = _YAML_DELETED
     res = resolve_file(
-        Disposition.SHARED,
         Path("c.yaml"),
         base=base,
         live=live,
@@ -110,7 +106,6 @@ def test_resolver_take_theirs_yaml_theirs_deleted() -> None:
 def test_resolver_take_theirs_jsonc_theirs_deleted() -> None:
     base, live, tracked = _JSONC_DELETED
     res = resolve_file(
-        Disposition.SHARED,
         Path("s.json"),
         base=base,
         live=live,
@@ -131,7 +126,6 @@ def test_resolver_edit_absent_value_yaml_deletes_key() -> None:
     base, live, tracked = _YAML_DELETED
     edit = ConflictResolution(ConflictChoice.EDIT, edited_value=ABSENT)
     res = resolve_file(
-        Disposition.SHARED,
         Path("c.yaml"),
         base=base,
         live=live,

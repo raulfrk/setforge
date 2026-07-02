@@ -123,16 +123,11 @@ def expected_deploy_text(
     section.
     """
     tf = target.tracked_file
-    file_spans = tf.spans or []
-    states = spans_store.get_states(profile, target.name) if file_spans else {}
     resolved = deploy.resolve_deploy(
         target.src,
         target.dst,
         host_local_sections=host_local,
         mode=tf.mode,
-        disposition=None,  # forced: pristine tracked render, not the live merge
-        spans=file_spans or None,
-        span_states=states or None,
     )
     return resolved.content
 
@@ -141,18 +136,14 @@ def allowed_kinds(region: DetectRegion, target: DetectTarget) -> list[str]:
     """KINDs the wizard may offer for ``region`` on ``target`` (plan P3).
 
     NEW_CONTENT → ``overlay`` only (a pinned/forked anchor would orphan — the
-    content is absent from tracked). DIVERGENCE → ``pinned``/``forked``, but
-    ONLY when the tracked_file declares a file-level ``disposition``: a
-    pinned/forked span is consumed on the disposition merge path, and
-    :func:`setforge.span_types.validate_span_disposition` rejects one on a
-    ``disposition=None`` file. A divergence on such a file yields ``[]`` (the
-    wizard refuses that range with a reason).
+    content is absent from tracked). DIVERGENCE → ``[]``: pinned/forked spans
+    were consumed on the retired file-level disposition merge path, so a
+    divergence can no longer be carved (only markerless ``overlay`` host-local
+    bodies on NEW_CONTENT regions remain).
     """
     if region.kind is RegionKind.NEW_CONTENT:
         return ["overlay"]
-    if target.tracked_file.disposition is None:
-        return []
-    return ["pinned", "forked"]
+    return []
 
 
 def _enclosing_heading(live_n: str, live_start: int) -> tuple[int, str] | None:
@@ -447,25 +438,12 @@ def carve_wizard(
 def covered_by_span(region: DetectRegion, live: str, tf: TrackedFile) -> bool:
     """True when ``region`` is already protected by a pinned/forked span.
 
-    A divergence whose enclosing heading anchor matches an existing
-    pinned/forked span's anchor is already carved — the pristine baseline shows
-    it as drift (the span is not applied there), so it must be subtracted to
-    keep re-detect idempotent (plan P2; spec §2b step 3). Overlay-covered
-    regions need no subtraction: their body is injected into the baseline, so
-    they already match live.
+    Always ``False`` after the disposition/spans retirement: tracked-side
+    pinned/forked spans no longer exist, so no divergence is pre-carved and
+    every region flows through to the wizard. Overlay-covered regions never
+    needed subtraction (their body already matches the baseline).
     """
-    pinned_forked = {
-        s.anchor
-        for s in (tf.spans or [])
-        if s.kind in (SpanKind.PINNED, SpanKind.FORKED)
-    }
-    if not pinned_forked:
-        return False
-    try:
-        anchor = pinned_anchor_string(region, live)
-    except ValueError:
-        return False
-    return anchor in pinned_forked
+    return False
 
 
 def _overlay_body_needle(span: SpanEntry, states: dict[str, SpanState]) -> str:
@@ -638,7 +616,7 @@ def _detect_one_target(
         return False
     render_diff(target, regions, live, console)
 
-    spans = target.tracked_file.spans or []
+    spans: list[SpanEntry] = []
     states = spans_store.get_states(profile, target.name)
     recaptures, fresh = _split_regions(regions, live, expected, spans, states)
 
@@ -674,10 +652,9 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
     cfg = load_config(config_path)
     repo_root = config_path.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    # Fold local.yaml host-local overlay spans onto tracked_file.spans so the
-    # expected-deploy computation injects them markerless exactly as install
-    # does (mirrors compare; without this an already-carved overlay would
-    # re-surface as drift on every re-detect).
+    # Apply the local.yaml host-local mode/dst/symlink overrides (mirrors
+    # compare/install). Tracked-side spans were retired, so there is no longer a
+    # span fold here.
     apply_host_local_tracked_file_overrides(cfg)
     overlay_map = _load_validated_host_local_sections(cfg, resolved, repo_root)
     console = Console()

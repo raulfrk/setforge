@@ -246,14 +246,14 @@ def test_pin_span_structural_shared(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_shows_md_disposition_and_span(tmp_path: Path) -> None:
-    """list renders the markdown file's disposition + span state."""
+def test_list_shows_md_file_row(tmp_path: Path) -> None:
+    """list renders a row for the markdown tracked_file (disposition/span
+    columns retired with the cutover — only file + state remain)."""
     cfg = _make_repo(tmp_path)
     _invoke(cfg, "override", "pin", "doc", "## Mine", "--shared")
     result = _invoke(cfg, "override", "list")
     assert result.exit_code == 0, result.output
     assert "doc" in result.output
-    assert "pinned" in result.output or "shared" in result.output
 
 
 def test_list_shows_structural_disposition_and_span(tmp_path: Path) -> None:
@@ -279,12 +279,12 @@ def test_show_spans_md_stdout_only_file_unchanged(tmp_path: Path) -> None:
     result = _invoke(cfg, "override", "show", "doc", "--spans")
     assert result.exit_code == 0, result.output
     assert src.read_bytes() == before
-    assert "(virtual)" in result.output
-    assert "ORPHANED" in result.output
+    # The virtual (never-written) annotated body still renders to stdout.
+    assert "annotated body" in result.output
 
 
 def test_show_spans_structural_stdout_only_file_unchanged(tmp_path: Path) -> None:
-    """show <yaml> --spans renders structural virtual comments; file unchanged."""
+    """show <yaml> --spans renders the virtual annotated body; file unchanged."""
     cfg = _make_repo(tmp_path)
     _invoke(cfg, "override", "pin", "conf", "editor.fontSize", "--shared")
     src = tmp_path / "tracked" / "conf.yaml"
@@ -292,21 +292,7 @@ def test_show_spans_structural_stdout_only_file_unchanged(tmp_path: Path) -> Non
     result = _invoke(cfg, "override", "show", "conf", "--spans")
     assert result.exit_code == 0, result.output
     assert src.read_bytes() == before
-    assert "editor.fontSize" in result.output
-    assert "ORPHANED" in result.output
-
-
-def test_show_spans_orphaned_column_marks_missing_anchor(tmp_path: Path) -> None:
-    """A span whose anchor no longer resolves renders ORPHANED = yes."""
-    cfg = _make_repo(tmp_path)
-    _invoke(cfg, "override", "pin", "conf", "editor.fontSize", "--shared")
-    # Remove the anchored key from the tracked source so the span orphans.
-    (tmp_path / "tracked" / "conf.yaml").write_text(
-        "shared:\n  theme: dark\n", encoding="utf-8"
-    )
-    result = _invoke(cfg, "override", "show", "conf", "--spans")
-    assert result.exit_code == 0, result.output
-    assert "yes" in result.output.lower()
+    assert "annotated body" in result.output
 
 
 # ---------------------------------------------------------------------------

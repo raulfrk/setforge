@@ -28,8 +28,8 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 
 def test_cross_major_newer_refuses_clean(tmp_path: Path) -> None:
-    """A major-3 config on the major-2 engine refuses cleanly."""
-    cfg = _write(tmp_path, _AT.format(ver='"3.0"'))
+    """A major-4 config on the major-3 engine refuses cleanly."""
+    cfg = _write(tmp_path, _AT.format(ver='"4.0"'))
     with pytest.raises(ConfigError, match="upgrade setforge"):
         load_config(cfg)
 
@@ -92,8 +92,8 @@ def test_minimum_version_field_accepted(tmp_path: Path) -> None:
 
 
 def test_minimum_version_above_engine_same_major_refuses(tmp_path: Path) -> None:
-    """Floor 2.5 on a 2.0 engine refuses — inside the same-major-tolerant window."""
-    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"2.0"', floor='"2.5"'))
+    """Floor 3.5 on a 3.0 engine refuses — inside the same-major-tolerant window."""
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"3.0"', floor='"3.5"'))
     with pytest.raises(ConfigError, match="minimum_version") as exc:
         load_config(cfg)
     assert "upgrade setforge" in str(exc.value)
@@ -129,7 +129,7 @@ def test_minimum_version_refuses_before_unknown_key_validation(tmp_path: Path) -
     validated Config attribute that the forward-tolerant strip would eat.
     """
     body = (
-        'version: 1\nschema_version: "2.0"\nminimum_version: "2.5"\n'
+        'version: 1\nschema_version: "3.0"\nminimum_version: "3.5"\n'
         "tracked_files: {}\nprofiles:\n  default: {}\nstray_typo: 1\n"
     )
     cfg = _write(tmp_path, body)

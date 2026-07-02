@@ -9,7 +9,7 @@ Covers:
 - torn base-store reads degrade to UNEXPECTED instead of crashing
 - drift_class is None off the DRIFTED status
 - --json schema: new fields present, dead key arrays gone
-- summary table renders File | Disposition | Class | Why
+- summary table renders File | Class | Why
 """
 
 import io
@@ -55,21 +55,17 @@ def _make_config(
 
 
 def _shared_file(tmp_path: Path, *, tracked: str, live: str) -> tuple[Config, Path]:
-    """Build a one-file shared-disposition config; returns (config, repo_root)."""
+    """Build a one-file plain-tracked config; returns (config, repo_root)."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x", tracked)
     dst = tmp_path / "live" / "x"
     _write(dst, live)
-    config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x", "dst": str(dst), "disposition": "shared"}
-        )
-    )
+    config = _make_config(TrackedFile.model_validate({"src": "x", "dst": str(dst)}))
     return config, repo
 
 
 def _write_cli_config(tmp_path: Path, *, tracked: str, live: str) -> Path:
-    """Write a one-file shared-disposition setforge.yaml; returns its path."""
+    """Write a one-file plain-tracked setforge.yaml; returns its path."""
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x", tracked)
     dst = tmp_path / "live" / "x"
@@ -77,7 +73,7 @@ def _write_cli_config(tmp_path: Path, *, tracked: str, live: str) -> Path:
     cfg_path = repo / "setforge.yaml"
     cfg_path.write_text(
         f"version: 1\ntracked_files:\n  x:\n    src: x\n    dst: {dst}\n"
-        "    disposition: shared\nprofiles:\n  p:\n    tracked_files: [x]\n",
+        "profiles:\n  p:\n    tracked_files: [x]\n",
         encoding="utf-8",
     )
     return cfg_path
@@ -165,7 +161,7 @@ def test_no_base_falls_through_to_unexpected(tmp_path: Path) -> None:
 def test_torn_base_store_does_not_crash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A base-store read error degrades the stale probe to False, no crash."""
+    """A base-store read error degrades the drift probes to False, no crash."""
 
     def _boom(profile: str, file_id: str) -> bytes | None:
         raise BaseStoreError("torn state")
@@ -185,26 +181,6 @@ def test_torn_base_store_does_not_crash(
 # ---------------------------------------------------------------------------
 
 
-def test_forked_disposition_classified_expected(tmp_path: Path) -> None:
-    """Forked drift lands in the EXPECTED slot with no reason."""
-    repo = tmp_path / "repo"
-    _write(repo / "tracked" / "x", "tracked\n")
-    dst = tmp_path / "live" / "x"
-    _write(dst, "live\n")
-    config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x", "dst": str(dst), "disposition": "forked"}
-        )
-    )
-
-    report = compare_profile(config, "p", repo)
-    entry = report.entries[0]
-
-    assert entry.drift_class is DriftClass.EXPECTED
-    assert entry.reason is None
-    assert report.has_unexpected_drift is False
-
-
 def test_mode_only_drift_not_stale(tmp_path: Path) -> None:
     """Mode-only drift (content == base == tracked) must NOT classify STALE —
     tracked has not advanced; the perms drifted."""
@@ -214,9 +190,7 @@ def test_mode_only_drift_not_stale(tmp_path: Path) -> None:
     _write(dst, "same\n")
     dst.chmod(0o600)
     config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x", "dst": str(dst), "disposition": "shared", "mode": 0o755}
-        )
+        TrackedFile.model_validate({"src": "x", "dst": str(dst), "mode": 0o755})
     )
     base_store.write_base("p", "x", b"same\n")
 
@@ -234,11 +208,7 @@ def test_drift_class_none_for_unchanged_and_missing(tmp_path: Path) -> None:
     _write(repo / "tracked" / "x", "same\n")
     dst = tmp_path / "live" / "x"
     _write(dst, "same\n")
-    config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x", "dst": str(dst), "disposition": "shared"}
-        )
-    )
+    config = _make_config(TrackedFile.model_validate({"src": "x", "dst": str(dst)}))
     report = compare_profile(config, "p", repo)
     assert report.entries[0].status is CompareStatus.UNCHANGED
     assert report.entries[0].drift_class is None
@@ -255,11 +225,7 @@ def test_missing_still_sets_has_unexpected_drift(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write(repo / "tracked" / "x", "data\n")
     dst = tmp_path / "live" / "x"
-    config = _make_config(
-        TrackedFile.model_validate(
-            {"src": "x", "dst": str(dst), "disposition": "shared"}
-        )
-    )
+    config = _make_config(TrackedFile.model_validate({"src": "x", "dst": str(dst)}))
 
     report = compare_profile(config, "p", repo)
 
@@ -284,7 +250,6 @@ def test_json_required_keys_subset(tmp_path: Path) -> None:
     required = {
         "name",
         "status",
-        "disposition",
         "drift_class",
         "reason",
         "span_only_drift",
@@ -292,6 +257,7 @@ def test_json_required_keys_subset(tmp_path: Path) -> None:
         "drift_is_expected",
     }
     assert required <= entry_json.keys()
+    assert "disposition" not in entry_json
     assert "expected_drift_keys" not in entry_json
     assert "unexpected_drift_keys" not in entry_json
     assert entry_json["drift_class"] == "stale"
@@ -307,7 +273,7 @@ def test_json_required_keys_subset(tmp_path: Path) -> None:
 
 
 def test_summary_table_columns(tmp_path: Path) -> None:
-    """Table renders File | Disposition | Class | Why with the stale reason."""
+    """Table renders File | Class | Why with the stale reason."""
     config, repo = _shared_file(tmp_path, tracked="tracked v2\n", live="tracked v1\n")
     base_store.write_base("p", "x", b"tracked v1\n")
 
@@ -318,8 +284,7 @@ def test_summary_table_columns(tmp_path: Path) -> None:
     console.print(table)
     output = buf.getvalue()
 
-    for header in ("File", "Disposition", "Class", "Why"):
+    for header in ("File", "Class", "Why"):
         assert header in output, output
     assert "stale" in output, output
-    assert "shared" in output, output
     assert "install will update" in output, output

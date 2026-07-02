@@ -37,7 +37,7 @@ from setforge.config import (
 )
 from setforge.span_types import SpanEntry
 
-SCHEMA_MAJOR: int = 2
+SCHEMA_MAJOR: int = 3
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
 
 _MODELS: tuple[type[BaseModel], ...] = (
@@ -114,8 +114,6 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "template": "<class 'bool'>",
         "mode": "int | None",
         "symlink": "str | None",
-        "disposition": "setforge.config.Disposition | None",
-        "spans": "list[setforge.span_types.SpanEntry]",
     },
     "Extensions": {
         "include": "list[str]",

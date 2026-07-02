@@ -25,7 +25,7 @@ hint.
 import stat
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,22 +37,18 @@ from setforge import (
 )
 from setforge import (
     atomicio,
-    base_store,
-    disposition_merge,
-    jsonc,
     overlay_deploy,
-    spans_overlay,
     spans_store,
 )
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
-from setforge.config import Config, Disposition, resolve_profile
+from setforge.config import Config, resolve_profile
 from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import SpanEntry, SpanKind
+from setforge.span_types import SpanEntry
 
 if TYPE_CHECKING:
     from setforge.overlay_body_wizard import OverlayBodyEdit, OverlayEditChoice
@@ -455,62 +451,38 @@ def capture_profile(
         # directly in tracked carries through unchanged.
         host_local_names = frozenset(overlay.get(name, {}))
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
-            if tracked_file.disposition is not None:
-                result = _capture_disposition_file(
-                    sub_name,
+            # A5: a plain reconcile file (no host-local overlay) with a recorded
+            # base captures per-hunk — only the SHARED hunks promote into
+            # tracked/. A structured (YAML/JSON/JSONC) file takes the per-KEY
+            # analog instead (line-diffing a structured file would mis-stage it).
+            # Both fall back to the verbatim writeback below when not
+            # staged-eligible (no base / binary / unparseable).
+            staged: CaptureResult | None = None
+            if not host_local_names:
+                fmt = su_mod.structured_format(sub_dst)
+                if fmt is not None:
+                    staged = _capture_staged_structured(
+                        profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
+                    )
+                else:
+                    staged = _capture_staged_plain(
+                        profile_name, sub_name, sub_src, sub_dst, auto=auto
+                    )
+            if staged is not None:
+                result = staged
+            else:
+                result = capture_tracked_file(
                     sub_src,
                     sub_dst,
-                    disposition=tracked_file.disposition,
-                    profile=profile_name,
-                    spans=tracked_file.spans,
+                    host_local_section_names=host_local_names,
+                    spans=[],
+                    span_states={},
+                    sub_name=sub_name,
                     tracked_file_id=name,
                     auto=auto,
                     interactive=interactive,
                     local_config_path=local_config_path,
                 )
-            else:
-                # A5: a plain reconcile file (no spans, no host-local overlay)
-                # with a recorded base captures per-hunk — only the SHARED hunks
-                # promote into tracked/. A structured (YAML/JSON/JSONC) file takes
-                # the per-KEY analog instead (line-diffing a structured file would
-                # mis-stage it). Both fall back to the verbatim writeback below
-                # when not staged-eligible (no base / binary / unparseable).
-                staged: CaptureResult | None = None
-                if not tracked_file.spans and not host_local_names:
-                    fmt = su_mod.structured_format(sub_dst)
-                    if fmt is not None:
-                        staged = _capture_staged_structured(
-                            profile_name, sub_name, sub_src, sub_dst, fmt, auto=auto
-                        )
-                    else:
-                        staged = _capture_staged_plain(
-                            profile_name, sub_name, sub_src, sub_dst, auto=auto
-                        )
-                if staged is not None:
-                    result = staged
-                else:
-                    # No-disposition preserve files can still carry host-local
-                    # OVERLAY spans (markerless deploy). Load the sidecar so
-                    # capture can excise each markerless body by its exact
-                    # recorded bytes before the tracked writeback — symmetric to
-                    # the deploy inject and the disposition path's overlay excise.
-                    span_states = (
-                        spans_store.get_states(profile_name, sub_name)
-                        if tracked_file.spans
-                        else {}
-                    )
-                    result = capture_tracked_file(
-                        sub_src,
-                        sub_dst,
-                        host_local_section_names=host_local_names,
-                        spans=tracked_file.spans,
-                        span_states=span_states,
-                        sub_name=sub_name,
-                        tracked_file_id=name,
-                        auto=auto,
-                        interactive=interactive,
-                        local_config_path=local_config_path,
-                    )
             results.append(
                 CaptureResult(
                     name=sub_name,
@@ -636,112 +608,3 @@ def _prompt_overlay_edit(
         "d": overlay_body_wizard.OverlayEditChoice.DISCARD,
         "s": overlay_body_wizard.OverlayEditChoice.SKIP,
     }[choice]
-
-
-def _capture_disposition_file(
-    sub_name: str,
-    src: Path,
-    dst: Path,
-    *,
-    disposition: Disposition,
-    profile: str,
-    spans: list[SpanEntry] | None = None,
-    tracked_file_id: str = "",
-    auto: "CaptureAuto | None" = None,
-    interactive: bool = False,
-    local_config_path: Path | None = None,
-) -> CaptureResult:
-    """Capture one disposition-bearing tracked (sub-)file under the 3-way model.
-
-    ``PINNED`` / ``FORKED`` never capture: tracked content stays as-is and
-    the stored base is left untouched (a :class:`CaptureAction.SKIPPED`
-    result carries the disposition as the skip reason).
-
-    ``SHARED`` writes the live file's bytes to ``src`` and — ONLY after the
-    tracked write returns cleanly — re-baselines the stored base to the
-    same bytes via :func:`setforge.base_store.write_base`, converging
-    ``base == tracked == live``. A base-write failure propagates; base
-    lagging live is the safe failure direction.
-
-    When ``spans`` is non-empty the SHARED writeback is NOT a verbatim
-    live copy: every span region (BOTH pinned AND forked) is excluded
-    (Invariant I2) — the existing TRACKED bytes are kept for those regions
-    while the rest of the live file captures normally. This blocks a
-    host-local span body from baking into the shared config repo, and
-    governs the ``sync --auto=use-live`` drift-absorption path too (the
-    same verbatim writeback this function performs). The re-baselined base
-    is the SAME span-excluded bytes so the next merge has a consistent
-    ancestor.
-
-    ``sub_name`` is the ``expand_tracked_file`` synthetic id (the same
-    stable per-profile ``file_id`` the install loop keys the base by), so
-    install and sync share one base per file.
-    """
-    if disposition in (Disposition.PINNED, Disposition.FORKED):
-        return CaptureResult(
-            name=src.name,
-            action=CaptureAction.SKIPPED,
-            reason=f"disposition={disposition.value}",
-        )
-    # SHARED: capture live → tracked, then re-baseline the base.
-    if not dst.exists():
-        return CaptureResult(
-            name=src.name, action=CaptureAction.SKIPPED, reason="live missing"
-        )
-    live_text = dst.read_text(encoding="utf-8")
-    capture_text = live_text
-    span_warnings: list[str] = []
-    if spans:
-        # Capture exclusion is TOTAL: keep tracked over live inside every
-        # span region (Invariant I2). The existing tracked content is the
-        # source of the kept-region bytes. Structural (yaml/json/jsonc) spans
-        # restore tracked's VALUE at each dotted path; markdown spans splice
-        # tracked's heading region — dispatch by file type so each flavor
-        # takes its own exclusion path (B-S5).
-        tracked_text = src.read_text(encoding="utf-8") if src.exists() else ""
-        if disposition_merge.is_structural(dst):
-            capture_text, span_warnings = (
-                disposition_merge.exclude_structural_spans_for_capture(
-                    live_text, tracked_text, spans, jsonc.is_jsonc_file(dst)
-                )
-            )
-        else:
-            span_states = spans_store.get_states(profile, sub_name)
-            # OVERLAY (markerless host-local body) spans OWN their excise:
-            # strip the body by its exact recorded bytes BEFORE any tracked
-            # write, never via the leaky exclude_spans_for_capture
-            # tracked_loc-is-None pass-through. A body that was hand-edited
-            # (no exact needle hit) routes to the overlay-body wizard
-            # upstream; an ambiguous (>1) occurrence REFUSES the whole file.
-            md_overlay = overlay_deploy.overlay_spans(spans)
-            if md_overlay:
-                capture_text = _capture_overlay_bodies(
-                    capture_text,
-                    md_overlay,
-                    span_states,
-                    sub_name=sub_name,
-                    tracked_file_id=tracked_file_id,
-                    auto=auto,
-                    interactive=interactive,
-                    local_config_path=local_config_path,
-                )
-            pinned_forked = [s for s in spans if s.kind is not SpanKind.OVERLAY]
-            if pinned_forked:
-                capture_text = spans_overlay.exclude_spans_for_capture(
-                    capture_text, tracked_text, pinned_forked, span_states
-                )
-    if _keep_tracked_refuses(auto, src, capture_text):
-        # keep-tracked refuses the drift: leave tracked AND the stored base
-        # untouched. Skipping the re-baseline is essential — re-baselining to
-        # the live bytes would silently absorb the very drift we refused.
-        return CaptureResult(
-            name=src.name, action=CaptureAction.SKIPPED, reason="keep-tracked"
-        )
-    result = _write_if_changed(src, capture_text)
-    # Re-baseline AFTER the tracked write succeeded: write tracked first,
-    # then base, so a base-write failure leaves base lagging (safe) rather
-    # than ahead of tracked (corruption). Failure propagates.
-    base_store.write_base(profile, sub_name, capture_text.encode("utf-8"))
-    if span_warnings:
-        return replace(result, warnings=tuple(span_warnings))
-    return result

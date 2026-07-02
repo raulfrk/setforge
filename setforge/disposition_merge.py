@@ -1,25 +1,19 @@
-"""Non-interactive disposition merge driver.
+"""Non-interactive stored-base 3-way merge driver.
 
-Central resolution policy that maps a ``(disposition, auto, base-presence)``
-triple to the bytes deployed at a live destination plus a re-baseline
-decision. It is the single seam install uses to turn the stored-base 3-way
-engines (:mod:`setforge.structural_merge`, :mod:`setforge.markdown_merge`)
-into a concrete file outcome, free of any interactive prompting.
+Central resolution policy that maps an ``(auto, base-presence)`` pair to the
+bytes deployed at a live destination plus a re-baseline decision. It is the
+single seam install/compare use to turn the stored-base 3-way engines
+(:mod:`setforge.structural_merge`, :mod:`setforge.markdown_merge`) into a
+concrete file outcome, free of any interactive prompting.
 
 Orientation: ``ours = live``, ``theirs = tracked/upstream``. The two
 ``auto`` modes (reusing :class:`setforge.section_mode.ReconcileAuto`) read
 as ``keep-live = keep ours`` and ``use-tracked = take theirs``.
 
-Three policy axes:
+Two policy axes:
 
-* **disposition** — :data:`~setforge.config.Disposition.PINNED` short-circuits
-  to live verbatim (live is authoritative, base untouched);
-  ``SHARED`` / ``FORKED`` both run the 3-way merge (the SHARED-vs-FORKED
-  difference — whether live edits are captured back to tracked — is the
-  caller's concern, not this driver's).
-* **base presence** — a ``None`` base is a first run: a disposition file has
-  no preserve config, so the fallback is to deploy ``tracked`` verbatim and
-  seed the stored base to it.
+* **base presence** — a ``None`` base is a first run: the fallback is to
+  deploy ``tracked`` verbatim and seed the stored base to it.
 * **auto + conflict** — a conflicting merge under a set ``auto`` resolves
   every conflict that way and re-baselines; under bare (``auto is None``) the
   conflict is left at ours (keep-live) and re-baselining is DEFERRED so the
@@ -59,7 +53,6 @@ from json5.loader import loads as _json5_loads
 from ruamel.yaml import YAML
 
 from setforge import jsonc
-from setforge.config import Disposition
 from setforge.errors import ConfigError, MergeTypeMismatch
 from setforge.markdown_merge import (
     LineConflict,
@@ -227,7 +220,6 @@ class FileResolution:
 
 
 def resolve_file(
-    disposition: Disposition,
     dst: Path,
     base: str | None,
     live: str,
@@ -235,8 +227,6 @@ def resolve_file(
     auto: ReconcileAuto | None,
     resolver: ConflictResolver | None = None,
     structural_spans: list[SpanEntry] | None = None,
-    *,
-    live_absent: bool = False,
 ) -> FileResolution:
     """Resolve one file to deployed text + a re-baseline decision.
 
@@ -251,8 +241,8 @@ def resolve_file(
     payload (:class:`ConflictResolution`) selects ours / theirs / an edited
     value / a skip. Re-baselining advances only when NO conflict was skipped
     (any :data:`ConflictChoice.SKIP` defers, so the file re-detects the still-
-    pending divergence next run). ``resolver`` is irrelevant on the PINNED and
-    base-absent paths (no merge runs there).
+    pending divergence next run). ``resolver`` is irrelevant on the
+    base-absent path (no merge runs there).
 
     ``structural_spans`` are the STRUCTURAL (dotted-path) span pins for this
     file. They are honored only on the structural merge path: each PINNED span's
@@ -260,26 +250,8 @@ def resolve_file(
     merged model AFTER it (so an upstream-changed-but-live-unchanged ``P`` is
     not silently taken toward tracked); the re-baseline dump is taken AFTER the
     re-assert (B-S6). FORKED spans are not re-asserted (capture exclusion only).
-    Spans are ignored on the PINNED / base-absent / line-based paths.
-
-    ``live_absent`` is True when the destination file did not exist — the
-    caller passes ``live=""`` as a placeholder in that case. Consumed ONLY
-    by the PINNED branch (the first install deploys tracked instead of the
-    empty placeholder); every other path already handles first-run state
-    via ``base is None``.
+    Spans are ignored on the base-absent / line-based paths.
     """
-    if disposition is Disposition.PINNED:
-        if live_absent:
-            # Fresh host: there is no live file for "never overwrite live"
-            # to keep, so the FIRST install deploys the tracked bytes;
-            # every later run sees a live file and returns it untouched.
-            return FileResolution(
-                text=tracked, conflicts=[], advance_base=False, base_absent=False
-            )
-        return FileResolution(
-            text=live, conflicts=[], advance_base=False, base_absent=False
-        )
-
     if base is None:
         # First run: a disposition file has no preserve config, so the 2-way
         # fallback deploys tracked verbatim and seeds base = text = tracked.

@@ -31,18 +31,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from setforge.anchors import Anchor
 from setforge.errors import ConfigError
 from setforge.section_mode import SectionMode
-
-if TYPE_CHECKING:
-    # Type-only: importing Disposition at runtime would cycle
-    # (setforge.config imports SpanEntry from this module).
-    from setforge.config import Disposition
 
 __all__ = [
     "OverlaySpanPayload",
@@ -261,7 +256,7 @@ class SpanEntry(BaseModel):
 def validate_span_disposition(
     tracked_file_id: str,
     spans: Sequence[SpanEntry],
-    disposition: "Disposition | None",
+    disposition: str | None,
 ) -> None:
     """Raise :class:`ConfigError` if a PINNED/FORKED span has no disposition.
 

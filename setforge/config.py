@@ -11,7 +11,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Self
 
 from pydantic import (
     BaseModel,
@@ -40,7 +40,6 @@ from setforge.migrations import (
     parse_schema_version,
 )
 from setforge.section_mode import SectionMode as SectionMode
-from setforge.span_types import SpanEntry, SpanSemantics
 
 if TYPE_CHECKING:
     from setforge.source import (
@@ -91,21 +90,6 @@ class ClaudeInstallMode(StrEnum):
 
     REGULAR = "regular"
     LOCAL_CLONE = "local-clone"
-
-
-class Disposition(StrEnum):
-    """How a tracked file is reconciled under the stored-base 3-way model.
-
-    ``shared`` 3-way merges and captures live edits back to tracked;
-    ``forked`` 3-way merges but never captures back; ``pinned`` is never
-    merged or captured (the live copy is authoritative — today's
-    "host-local", renamed). ``None`` on a tracked file keeps the legacy
-    2-way preserve behavior unchanged.
-    """
-
-    SHARED = "shared"
-    FORKED = "forked"
-    PINNED = "pinned"
 
 
 class McpScope(StrEnum):
@@ -218,26 +202,6 @@ class TrackedFile(BaseModel):
     The model validator refuses a self-loop where the (expanded)
     target equals the (expanded) ``dst`` — config-time guard against
     a tracked_file pointing at itself.
-    """
-    disposition: Disposition | None = None
-    """File-level reconciliation policy (opt-in).
-
-    ``None`` ⇒ the file is deployed from tracked verbatim (no stored-base
-    merge). When set, the file is reconciled by the stored-base 3-way
-    merge per :class:`Disposition`. Sub-file preservation is expressed via
-    :attr:`spans` (the schema-2.0 unified span model that superseded the
-    legacy ``preserve_*`` family).
-    """
-    spans: list[SpanEntry] = []
-    """Shared (tracked-side) sub-file span intents (pinned / forked regions).
-
-    The tracked-side counterpart of
-    :attr:`setforge.source._LocalTrackedFileOverlay.spans`. Carries
-    ``semantics: shared`` span intents that propagate across hosts;
-    host-local span intents live in ``local.yaml`` instead. Each entry is
-    a :class:`~setforge.span_types.SpanEntry` (markdown heading-text anchor +
-    kind + semantics). Resolved offsets and baseline bytes are derived
-    state in the spans sidecar, never duplicated here (Invariant I12).
     """
 
     @model_validator(mode="after")
@@ -614,87 +578,6 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     return config
 
 
-_RECONCILIATION_DIRECTIVE_KEYS: Final[tuple[str, ...]] = (
-    "disposition",
-    "spans",
-)
-
-
-def _has_reconciliation_directive(mapping: Mapping[str, object]) -> bool:
-    """Return whether a raw tracked-file mapping declares a reconciliation directive.
-
-    True when ``disposition`` or ``spans`` is present with a truthy value, so a
-    falsy / empty value does not count. Dropping an unknown field BESIDE such a
-    directive is the riskier case (it may carry merge semantics this engine does
-    not implement), so the forward-tolerant strip surfaces a louder warning.
-    """
-    return any(bool(mapping.get(key)) for key in _RECONCILIATION_DIRECTIVE_KEYS)
-
-
-def _tracked_file_mapping_for_loc(
-    data: object, loc: tuple[object, ...]
-) -> Mapping[str, object] | None:
-    """Return the ``tracked_files.<id>`` mapping a loc points into, or None.
-
-    A loc shaped ``("tracked_files", <id>, <key>)`` resolves to the ``<id>``
-    tracked-file mapping; any other shape or a missing path returns None, so the
-    caller treats it as an ordinary unknown key.
-    """
-    if len(loc) != 3 or loc[0] != "tracked_files":
-        return None
-    if not isinstance(data, Mapping):
-        return None
-    tracked = data.get("tracked_files")
-    if not isinstance(tracked, Mapping):
-        return None
-    entry = tracked.get(loc[1])
-    return entry if isinstance(entry, Mapping) else None
-
-
-def _partition_reconciliation_adjacent(
-    data: object, locs: Sequence[tuple[object, ...]]
-) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
-    """Split stripped ``extra_forbidden`` locs into reconciliation-adjacent vs ordinary.
-
-    A loc is reconciliation-adjacent when it removes a key from a
-    ``tracked_files.<id>`` mapping that itself declares a reconciliation directive
-    (:func:`_has_reconciliation_directive`); dropping an unknown field beside such
-    a directive may silently discard merge semantics, so it earns the escalated
-    warning. Everything else is an ordinary unknown key.
-    """
-    adjacent: list[tuple[object, ...]] = []
-    ordinary: list[tuple[object, ...]] = []
-    for loc in locs:
-        tf_mapping = _tracked_file_mapping_for_loc(data, loc)
-        if tf_mapping is not None and _has_reconciliation_directive(tf_mapping):
-            adjacent.append(loc)
-        else:
-            ordinary.append(loc)
-    return adjacent, ordinary
-
-
-def _warn_reconciliation_adjacent_strip(fields: list[str]) -> None:
-    """Warn (one line per field) when a reconciliation-adjacent unknown key is stripped.
-
-    Louder than :func:`_warn_unknown_keys`: the dropped key sits on a tracked
-    file that declares a reconciliation directive, so it may carry merge
-    semantics this engine does not implement. Text is always written; only the
-    color is TTY-gated, so the warning survives CliRunner / Docker e2e capture.
-    """
-    import sys
-
-    color = sys.stderr.isatty()
-    prefix = "\033[33mwarning:\033[0m" if color else "warning:"
-    for field_path in fields:
-        sys.stderr.write(
-            f"{prefix} dropping unrecognized key {field_path!r} from a tracked "
-            f"file that declares a reconciliation directive "
-            f"(disposition/spans); it may carry merge semantics this "
-            f"setforge does not implement, so this file's reconciliation may be "
-            f"INCOMPLETE on this engine — upgrade setforge to act on it\n"
-        )
-
-
 def _validate_tolerant(data: object) -> Config:
     """Validate ``data`` forward-tolerantly: ignore (warn about) unknown keys
     AND unknown enum values on existing fields.
@@ -708,9 +591,9 @@ def _validate_tolerant(data: object) -> Config:
     - ``extra_forbidden`` — a newer-version field or a typo. Strip exactly
       those locations, warn, and retry.
     - ``enum`` — a newer minor added a VALUE to an existing field (e.g. a
-      future ``disposition: layered``). Per COMPATIBILITY.md the schema may
-      grow enum members within a major, so an older engine must not crash on
-      one. Strip the offending key so the field reverts to its default, warn,
+      future ``reconcile_policy: layered``). Per COMPATIBILITY.md the schema
+      may grow enum members within a major, so an older engine must not crash
+      on one. Strip the offending key so the field reverts to its default, warn,
       and retry. If stripping does not clear the error (a *required* enum
       field with no default, or an enum nested in a list entry that this
       reader cannot safely default), refuse cleanly via :class:`ConfigError`
@@ -729,11 +612,8 @@ def _validate_tolerant(data: object) -> Config:
             extra_locs or enum_locs
         ):
             raise  # mixed with real errors (or none tolerable) — a genuine failure
-        adjacent, ordinary = _partition_reconciliation_adjacent(data, extra_locs)
-        if ordinary:
-            _warn_unknown_keys([_format_loc(loc) for loc in ordinary])
-        if adjacent:
-            _warn_reconciliation_adjacent_strip([_format_loc(loc) for loc in adjacent])
+        if extra_locs:
+            _warn_unknown_keys([_format_loc(loc) for loc in extra_locs])
         if enum_locs:
             _warn_unknown_enum_values([_format_loc(loc) for loc in enum_locs])
         stripped = _strip_extra_locs(data, [*extra_locs, *enum_locs])
@@ -940,11 +820,11 @@ class HostLocalTrackedFileOverride:
 
     Carried by the mapping returned from
     :func:`apply_host_local_tracked_file_overrides` so compare's
-    provenance-tag renderer can read which of the four fields were
+    provenance-tag renderer can read which of the three fields were
     actually overridden host-locally without re-loading local.yaml.
 
     ``None`` on a field means "no override; the profile-side value
-    wins". The mapping never contains an entry where all four are
+    wins". The mapping never contains an entry where all three are
     ``None`` (the resolver short-circuits the empty-overlay case so
     callers can treat presence as "at least one override applied").
     """
@@ -952,115 +832,15 @@ class HostLocalTrackedFileOverride:
     mode: int | None
     dst: Path | None
     symlink_target: Path | None
-    disposition: Disposition | None
-
-
-@dataclass(frozen=True, slots=True)
-class SharedSpanCollision:
-    """One same-anchor host-local-vs-shared span intent collision.
-
-    A *shared* span carries pure intent (anchor/kind/semantics) on the
-    tracked-side :attr:`TrackedFile.spans`; a host-local span on the SAME
-    anchor (declared in ``local.yaml``) shadows it silently in the
-    :func:`apply_host_local_tracked_file_overrides` fold. This record is
-    what :func:`detect_shared_span_collisions` returns so the install path
-    can surface the collision under ``--reconcile-user-sections`` (rather
-    than dropping the shared intent silently). ``anchor`` is the markdown
-    heading-text OR structural dotted-path string the two spans share —
-    the detector is file-type-agnostic (it compares anchors verbatim).
-    """
-
-    tracked_file_id: str
-    anchor: str
-
-
-def detect_shared_span_collisions(
-    config: Config,
-    *,
-    local_config_path: Path | None = None,
-) -> list[SharedSpanCollision]:
-    """Return same-anchor host-local↔shared span collisions per tracked_file.
-
-    A collision exists when a tracked_file declares a ``shared`` span on an
-    anchor AND ``local.yaml`` declares a host-local span on the SAME anchor
-    for the same tracked_file. The host-local span would silently win the
-    per-anchor fold in :func:`apply_host_local_tracked_file_overrides`,
-    dropping the shared intent without a trace — this detector is the
-    surface the install path consults so the drop is opt-in-visible under
-    ``--reconcile-user-sections``.
-
-    Only ``shared``-semantics tracked-side spans participate: a host-local
-    span shadowing a host-local tracked-side span is a plain config dup,
-    not a cross-repo intent collision, and is excluded. Host-local-only
-    spans (no shared counterpart) are likewise never reported.
-
-    Deterministic order: tracked_files are walked in ``config.tracked_files``
-    insertion order, anchors within a file in the tracked-side span order.
-    Pure + read-only — reads ``local.yaml`` but mutates nothing. No-op
-    (empty list) when ``local.yaml`` is absent or declares no overlapping
-    span. Lazy-imports :mod:`setforge.source` to dodge the config ↔ source
-    cycle.
-    """
-    from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
-
-    path = local_config_path if local_config_path is not None else LOCAL_CONFIG_PATH
-    overlays = load_local_tracked_file_overlays(path)
-    collisions: list[SharedSpanCollision] = []
-    for tf_id, tracked_file in config.tracked_files.items():
-        overlay = overlays.get(tf_id)
-        if overlay is None or not overlay.spans:
-            continue
-        host_local_anchors = {span.anchor for span in overlay.spans}
-        for span in tracked_file.spans:
-            if (
-                span.semantics is SpanSemantics.SHARED
-                and span.anchor in host_local_anchors
-            ):
-                collisions.append(
-                    SharedSpanCollision(tracked_file_id=tf_id, anchor=span.anchor)
-                )
-    return collisions
-
-
-def _fold_overlay_spans(
-    *,
-    tf_id: str,
-    tracked_spans: list[SpanEntry],
-    overlay_spans: list[SpanEntry],
-    prefer_shared_anchors: frozenset[tuple[str, str]],
-) -> list[dict[str, object]]:
-    """Fold host-local overlay spans over tracked-side shared spans per anchor.
-
-    Host-local (``local.yaml``) spans win each anchor by default — the
-    silent host-local-wins fold. ``prefer_shared_anchors`` flips the winner
-    for the listed ``(tf_id, anchor)`` pairs: the tracked-side SHARED span
-    keeps that anchor instead, i.e. the ``--auto=use-tracked`` / interactive
-    "adopt the shared intent" resolution for a detected same-anchor
-    collision (see :func:`detect_shared_span_collisions`). Anchors NOT in
-    the set keep the host-local default; host-local-only anchors (no shared
-    counterpart) are always added.
-
-    Returns the merged spans as plain dicts (``model_dump``) so the
-    ``TrackedFile.model_validate`` revalidation re-runs the
-    :class:`~setforge.span_types.SpanEntry` validators against the combined
-    shape.
-    """
-    merged_spans = {span.anchor: span for span in tracked_spans}
-    for span in overlay_spans:
-        if (tf_id, span.anchor) in prefer_shared_anchors:
-            continue
-        merged_spans[span.anchor] = span
-    return [span.model_dump() for span in merged_spans.values()]
 
 
 def apply_host_local_tracked_file_overrides(
     config: Config,
     *,
     local_config_path: Path | None = None,
-    prefer_shared_anchors: frozenset[tuple[str, str]] = frozenset(),
 ) -> dict[str, HostLocalTrackedFileOverride]:
-    """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target`` /
-    ``disposition`` / ``spans`` overlay.
+    """Apply the local.yaml host-local ``mode`` / ``dst`` / ``symlink_target``
+    overlay.
 
     For every entry in ``local.yaml``'s ``tracked_files.<id>`` overlay
     block that declares one of the overlay fields, rebuild the
@@ -1078,30 +858,12 @@ def apply_host_local_tracked_file_overrides(
       override transparently and writes a symlink at the resolved
       dst pointing at the raw user string (cross-host portability
       invariant preserved).
-    - ``disposition`` (:class:`Disposition`) overrides
-      :attr:`TrackedFile.disposition`. The merged shape is re-validated
-      via the dump-and-revalidate path, so every ``TrackedFile``
-      invariant re-runs against the overridden disposition.
-    - ``spans`` (list of :class:`~setforge.span_types.SpanEntry`) are folded
-      over :attr:`TrackedFile.spans` per anchor by
-      :func:`_fold_overlay_spans`. Host-local spans win each shared anchor
-      by default (the silent host-local-wins fold); host-local-only
-      anchors (no shared counterpart) are always added. ``prefer_shared_anchors``
-      (below) flips the winner for selected anchors.
-
-    ``prefer_shared_anchors`` is the set of ``(tracked_file_id, anchor)``
-    pairs whose tracked-side SHARED span must keep the anchor instead of
-    the host-local default — the ``--auto=use-tracked`` / interactive
-    "adopt the shared intent" resolution for a same-anchor host-local↔shared
-    collision (see :func:`detect_shared_span_collisions`). The empty default
-    preserves today's silent host-local-wins for every anchor; only the
-    reconcile path passes a non-empty set.
 
     Returns a mapping ``{tracked_file_id: HostLocalTrackedFileOverride}``
     of which overrides actually applied — used by compare to render
     ``[host-local mode=...]`` / ``[host-local dst=...]`` /
-    ``[host-local symlink → ...]`` / ``[host-local disposition=...]``
-    provenance tags without re-loading local.yaml.
+    ``[host-local symlink → ...]`` provenance tags without re-loading
+    local.yaml.
 
     No-op (empty mapping) when ``local.yaml`` is absent or no
     tracked_file declares any overlay field — preserves
@@ -1114,12 +876,10 @@ def apply_host_local_tracked_file_overrides(
     violates a TrackedFile invariant — e.g. an overlay whose
     ``symlink_target`` equals the tracked-side ``dst`` after
     :func:`Path.expanduser` (the ``_symlink_no_self_loop``
-    model_validator fires on the merged model), or a ``disposition``
-    override on a file that already declares a ``preserve_*`` field.
-    Parse-time invariants on the overlay itself (mutual-exclusion, mode
-    bounds, ``$VAR`` in dst, invalid disposition value) surface earlier
-    in :func:`setforge.source.load_local_tracked_file_overlays`,
-    not here.
+    model_validator fires on the merged model). Parse-time invariants on
+    the overlay itself (mutual-exclusion, mode bounds, ``$VAR`` in dst)
+    surface earlier in
+    :func:`setforge.source.load_local_tracked_file_overlays`, not here.
     """
     from setforge.source import LOCAL_CONFIG_PATH, load_local_tracked_file_overlays
 
@@ -1131,8 +891,6 @@ def apply_host_local_tracked_file_overrides(
             overlay.mode is None
             and overlay.dst is None
             and overlay.symlink_target is None
-            and overlay.disposition is None
-            and not overlay.spans
         ):
             continue
         if tf_id not in config.tracked_files:
@@ -1150,15 +908,6 @@ def apply_host_local_tracked_file_overrides(
             updates["dst"] = str(overlay.dst)
         if overlay.symlink_target is not None:
             updates["symlink"] = str(overlay.symlink_target)
-        if overlay.disposition is not None:
-            updates["disposition"] = overlay.disposition.value
-        if overlay.spans:
-            updates["spans"] = _fold_overlay_spans(
-                tf_id=tf_id,
-                tracked_spans=tracked_file.spans,
-                overlay_spans=overlay.spans,
-                prefer_shared_anchors=prefer_shared_anchors,
-            )
         # Build a fresh model via model_validate(dump | updates) rather
         # than model_copy(update=...) — model_copy bypasses field +
         # model validators, which would let a hostile overlay set
@@ -1173,7 +922,6 @@ def apply_host_local_tracked_file_overrides(
             mode=overlay.mode,
             dst=overlay.dst,
             symlink_target=overlay.symlink_target,
-            disposition=overlay.disposition,
         )
     return applied
 

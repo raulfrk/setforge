@@ -123,7 +123,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "2.1"
+current_expected_schema_version: Final[str] = "3.0"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -520,6 +520,9 @@ class RestampMigration:
 # ManifestType / MigrationRoots (and friends) from this package, all defined
 # above this point.
 from setforge.migrations._contract_2_0 import Contract20Migration  # noqa: E402
+from setforge.migrations._disposition_retire import (  # noqa: E402
+    DispositionRetireMigration,
+)
 from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
 
 MIGRATIONS: Final[tuple[Migration, ...]] = (
@@ -527,6 +530,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     RestampMigration(from_version="1.1", to_version="1.2"),
     Contract20Migration(),
     MarkerRetireMigration(),
+    DispositionRetireMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 

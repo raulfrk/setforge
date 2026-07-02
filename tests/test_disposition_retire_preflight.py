@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from setforge.config import Disposition
 from setforge.errors import ConfigError
 from setforge.migrations._disposition_retire import _FidLegacy, _validate_bases
 from setforge.reconcile import file_id
@@ -24,7 +23,7 @@ def _rec(name: str, dst: str, tracked: bytes, *, is_structured: bool) -> _FidLeg
         fid=file_id(name),
         src=Path(f"/repo/tracked/{name}"),
         dst=Path(dst),
-        disposition=Disposition.FORKED,
+        disposition="forked",
         spans=(),
         tracked_bytes=tracked,
         live_bytes=tracked,

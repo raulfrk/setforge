@@ -21,11 +21,8 @@ internal-only and stays out of typer's command surface.
 
 from __future__ import annotations
 
-import contextlib
 import os
-import stat
 import sys
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC
@@ -40,7 +37,6 @@ from setforge import (
     disposition_merge,
     reconcile,
     reconcile_apply,
-    spans_store,
     transitions,
 )
 from setforge import (
@@ -49,11 +45,9 @@ from setforge import (
 from setforge import (
     compare as compare_mod,
 )
-from setforge import config as config_mod
 from setforge import (
     vscode_extensions as vscode_extensions_mod,
 )
-from setforge._legacy_markers import strip_shared_markers
 from setforge._redact import redact_argv
 from setforge.cli._confirm import (
     AutoDirection,
@@ -77,14 +71,12 @@ from setforge.compare import (
 from setforge.config import (
     Config,
     ResolvedProfile,
-    SharedSpanCollision,
     TrackedFile,
 )
 from setforge.errors import (
     ExtensionToolMissing,
     PluginToolMissing,
     SetforgeError,
-    SharedSpanReconcileRequiresInteractive,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
@@ -102,8 +94,6 @@ from setforge.source import (
 from setforge.span_types import (
     SpanEntry,
     SpanKind,
-    validate_span_disposition,
-    validate_spans_file_type,
 )
 from setforge.spans_overlay import SpanOrphan
 from setforge.ui.widgets import Button, Cancelled, button_bar
@@ -238,142 +228,6 @@ def seed_overlay_migration_snapshot(
     if migration.path not in dst_paths:
         dst_paths.append(migration.path)
     file_pre[migration.path] = migration.pre_text
-
-
-def _validate_span_file_types(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
-) -> None:
-    """Reject spans declared on non-markdown tracked_files BEFORE deploy.
-
-    Iterates every tracked_file in the resolved profile (whose ``spans``
-    list already folds in the host-local overlay via
-    :func:`setforge.config.apply_host_local_tracked_file_overrides`) and
-    routes it through :func:`setforge.span_types.validate_spans_file_type`, so a
-    heading-text span anchor on a yaml/json file aborts the install
-    cleanly instead of failing as a confusing runtime relocation miss.
-    """
-    for tf_id in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[tf_id]
-        if not tracked_file.spans:
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        validate_spans_file_type(tf_id, tracked_file.spans, src)
-        # ``tracked_file`` here is the host-local-folded model (disposition +
-        # spans already merged via apply_host_local_tracked_file_overrides).
-        validate_span_disposition(tf_id, tracked_file.spans, tracked_file.disposition)
-
-
-def _reconcile_shared_spans(
-    cfg: Config,
-    *,
-    profile: str,
-    reconcile_user_sections: bool,
-    section_auto: ReconcileAuto | None,
-) -> frozenset[tuple[str, str]]:
-    """Resolve host-local↔shared span intent collisions before the overlay fold.
-
-    Returns the set of ``(tracked_file_id, anchor)`` pairs whose SHARED
-    span should win the per-anchor fold — i.e. the collisions the user
-    chose to resolve toward the tracked-side (shared) intent. The caller
-    threads the result into
-    :func:`setforge.config.apply_host_local_tracked_file_overrides` as
-    ``prefer_shared_anchors``; an empty set leaves every collision at the
-    silent host-local-wins default.
-
-    Routing (mirrors the shared user-section reconcile surface):
-
-    - **No collisions** → empty set, no output (the shared span just
-      applies; nothing to reconcile).
-    - **Bare install** (``reconcile_user_sections`` False, ``section_auto``
-      None) → empty set, NO warning. An intentional host-local shadow must
-      not nag; the silent host-local-wins matches shared
-      user-sections.
-    - ``--auto=use-tracked`` → every collision resolves to the shared
-      intent AND an explicit "host-local span X overwritten" risk line is
-      printed per collision — never a silent host-local drop.
-    - ``--auto=keep-live`` → empty set, no risk line (the host-local
-      override is the protected side).
-    - ``--reconcile-user-sections`` (no ``--auto``):
-      - non-tty → raise :class:`SharedSpanReconcileRequiresInteractive`
-        rather than a silent keep-live that buries the collision.
-      - tty → per-collision arrow-key prompt; each prompt's outcome adds
-        (or omits) the pair from the prefer-shared set.
-
-    ``section_auto`` and ``reconcile_user_sections`` are already mutually
-    exclusive at the CLI (:func:`_parse_section_auto`), so at most one of
-    the auto / interactive branches fires.
-    """
-    collisions = config_mod.detect_shared_span_collisions(cfg)
-    if not collisions:
-        return frozenset()
-
-    if section_auto is ReconcileAuto.USE_TRACKED:
-        for collision in collisions:
-            typer.secho(
-                f"shared-span reconcile: host-local span {collision.anchor!r} "
-                f"on tracked_file {collision.tracked_file_id!r} overwritten by "
-                "the shared intent (--auto=use-tracked)",
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-        return frozenset((c.tracked_file_id, c.anchor) for c in collisions)
-    if section_auto is ReconcileAuto.KEEP_LIVE:
-        # Protected side: keep every host-local override, no risk line.
-        return frozenset()
-    if section_auto is not None:
-        assert_never(section_auto)
-
-    if not reconcile_user_sections:
-        # Bare install: silent host-local-wins, no nag.
-        return frozenset()
-
-    # Interactive reconcile requested.
-    if not sys.stdout.isatty():
-        raise SharedSpanReconcileRequiresInteractive(
-            "setforge install --reconcile-user-sections detected "
-            f"{len(collisions)} host-local/shared span collision(s) but stdout "
-            "is not a TTY. Re-run with --auto=use-tracked (adopt the shared "
-            "intent) or --auto=keep-live (keep the host-local override)."
-        )
-    return _prompt_shared_span_collisions(collisions, profile=profile)
-
-
-def _prompt_shared_span_collisions(
-    collisions: list[SharedSpanCollision],
-    *,
-    profile: str,
-) -> frozenset[tuple[str, str]]:
-    """Per-collision arrow-key prompt; return the adopt-shared pairs.
-
-    Reuses the :func:`setforge.cli._confirm.confirm_auto_operation` gate
-    one collision at a time: a "yes" adopts the shared intent for that
-    anchor (the pair joins the prefer-shared set), a "no" keeps the
-    host-local override. Only reached on the interactive (tty) path; the
-    non-tty *stdout* branch (``sys.stdout.isatty()`` False) raises in
-    :func:`_reconcile_shared_spans` before here, so the inner
-    ``confirm_auto_operation`` ``sys.stdin.isatty()`` gate sees a tty stdin
-    on every reachable call.
-    """
-    prefer: set[tuple[str, str]] = set()
-    for collision in collisions:
-        plan = AutoPlan(
-            direction=AutoDirection.TRACKED_TO_LIVE,
-            file_changes=(),
-            risks=(
-                f"host-local span {collision.anchor!r} on tracked_file "
-                f"{collision.tracked_file_id!r} will be overwritten by the "
-                "shared intent",
-            ),
-            revert_command=f"setforge revert --profile={profile}",
-        )
-        if confirm_auto_operation(
-            command="install --reconcile-user-sections",
-            profile=profile,
-            plan=plan,
-            yes=False,
-        ):
-            prefer.add((collision.tracked_file_id, collision.anchor))
-    return frozenset(prefer)
 
 
 def _check_unexpected_drift(
@@ -664,7 +518,6 @@ def _resolve_plain_reconcile(
         host_local=None,
         file_spans=[],
         resolved=replace(scaffold, content=new_content),
-        base_plan=None,
         reconcile=(fid, outcome),
     )
 
@@ -730,7 +583,6 @@ def _resolve_structured_reconcile(
         host_local=None,
         file_spans=[],
         resolved=replace(scaffold, content=new_content),
-        base_plan=None,
         reconcile=(fid, outcome),
     )
 
@@ -749,17 +601,17 @@ def _resolve_one_pending(
     """Resolve one sub-entry's pass-1 record (read-only; no writes).
 
     The per-``sub_name`` body of :func:`_deploy_all_tracked_files`'s pass-1
-    loop: defer a symlink-declared tracked_file wholesale, otherwise plan
-    the disposition base, read the spans sidecar, and compute the merge +
-    span overlay in memory via :func:`deploy.resolve_deploy`.
+    loop: defer a symlink-declared tracked_file wholesale, otherwise route the
+    file through the unified per-unit reconcile engine (structured, then plain).
+    A binary / non-utf8 / deletion-edge file the reconcile engine cannot
+    classify falls back to a verbatim tracked deploy.
     """
     if tracked_file.symlink is not None:
         # Symlink-deployed: deferred wholesale to pass 2
         # (resolved=None). The link lands at ``sub_dst`` and the
         # tracked content lands at
-        # ``Path(tracked_file.symlink).expanduser()``. The host-local
-        # overlay still composes; the stored base lifecycle is
-        # regular-file-only — never wired here.
+        # ``Path(tracked_file.symlink).expanduser()``. The stored base
+        # lifecycle is regular-file-only — never wired here.
         return _PendingDeploy(
             sub_name=sub_name,
             sub_src=sub_src,
@@ -768,73 +620,41 @@ def _resolve_one_pending(
             host_local=host_local,
             file_spans=[],
             resolved=None,
-            base_plan=None,
         )
-    # A0: a PLAIN tracked file (no disposition, no spans, no host-local
-    # overlay) is routed through the new 3-way reconcile engine instead of a
-    # verbatim copy, so a local edit is merged against the recorded base
-    # rather than silently overwritten. Disposition / span / host-local
-    # files keep the legacy path below (their engine migration is deferred);
-    # a binary or deletion-edge plain file falls back to verbatim (None).
-    if (
-        tracked_file.disposition is None
-        and not tracked_file.spans
-        and host_local is None
-    ):
-        reconciled = _resolve_structured_reconcile(
-            profile,
-            sub_name,
-            sub_src,
-            sub_dst,
-            tracked_file,
-            interactive=conflict_resolver is not None,
-            section_auto=section_auto,
-        ) or _resolve_plain_reconcile(
-            profile,
-            sub_name,
-            sub_src,
-            sub_dst,
-            tracked_file,
-            interactive=conflict_resolver is not None,
-            section_auto=section_auto,
-        )
-        if reconciled is not None:
-            return reconciled
-    # Stored-base 3-way path is gated on a declared disposition.
-    # PLAN the base (a pure read): it is the merge ancestor the
-    # driver diffs live/tracked against. Deferred migration writes
-    # (base seed / live marker strip) are applied in pass 2; when a
-    # live strip is pending, the stripped text overrides the on-disk
-    # live as the merge input (``live_text``).
-    base_plan: DispositionBasePlan | None = None
-    base_text: str | None = None
-    live_override: str | None = None
-    if tracked_file.disposition is not None:
-        base_plan = _plan_disposition_base(profile, sub_name, sub_dst)
-        base_text = base_plan.base_text
-        live_override = base_plan.deferred_live_strip
-    # Span re-overlay path: READ the spans sidecar so the relocation
-    # ladder has its derived state. Spans ride the disposition 3-way
-    # path AND the disposition=None markerless host-local overlay
-    # inject, so load them whenever the tracked_file declares any
-    # span, not only on the disposition path.
-    file_spans = tracked_file.spans or []
-    span_states = spans_store.get_states(profile, sub_name) if file_spans else {}
-    # resolve_deploy returns structural-span orphans already classified
-    # with a reason (including upstream renames/deletes detected against
-    # the stored base) and any tracked-sibling did-you-mean candidates.
+    # Every non-symlink file flows through the unified 3-way reconcile engine
+    # (a local edit merges against the recorded base rather than being silently
+    # overwritten). Structured (YAML/JSON/JSONC) first, then plain (line/
+    # markdown); a binary / non-utf8 / deletion-edge file returns None from both
+    # and falls back to the verbatim tracked deploy below. Host-local *section*
+    # seeding/injection was retired with the disposition/spans overlay model, so
+    # a file carrying host_local sections is reconciled like any other (its
+    # existing live content is preserved by the 3-way; no section is injected).
+    reconciled = _resolve_structured_reconcile(
+        profile,
+        sub_name,
+        sub_src,
+        sub_dst,
+        tracked_file,
+        interactive=conflict_resolver is not None,
+        section_auto=section_auto,
+    ) or _resolve_plain_reconcile(
+        profile,
+        sub_name,
+        sub_src,
+        sub_dst,
+        tracked_file,
+        interactive=conflict_resolver is not None,
+        section_auto=section_auto,
+    )
+    if reconciled is not None:
+        return reconciled
+    # Binary / non-utf8 / deletion-edge: the reconcile engine cannot diff it,
+    # so deploy the tracked bytes verbatim.
     resolved = deploy.resolve_deploy(
         sub_src,
         sub_dst,
         host_local_sections=host_local,
         mode=tracked_file.mode,
-        disposition=tracked_file.disposition,
-        base_text=base_text,
-        merge_auto=section_auto,
-        conflict_resolver=conflict_resolver,
-        spans=file_spans or None,
-        span_states=span_states or None,
-        live_text=live_override,
     )
     return _PendingDeploy(
         sub_name=sub_name,
@@ -842,9 +662,8 @@ def _resolve_one_pending(
         sub_dst=sub_dst,
         tracked_file=tracked_file,
         host_local=host_local,
-        file_spans=file_spans,
+        file_spans=[],
         resolved=resolved,
-        base_plan=base_plan,
     )
 
 
@@ -855,9 +674,7 @@ class _PendingDeploy:
     ``resolved`` is the in-memory :class:`deploy.ResolvedDeploy` for a
     regular-file deploy, or ``None`` for a symlink-declared tracked_file
     (deferred wholesale — pass 2 runs :func:`deploy.deploy_symlinked_file`
-    end to end). ``base_plan`` carries the disposition base plus its deferred
-    migration writes (``None`` when the tracked_file has no disposition or
-    deploys via symlink).
+    end to end).
     """
 
     sub_name: str
@@ -867,7 +684,6 @@ class _PendingDeploy:
     host_local: dict[HostLocalSectionName, HostLocalSection] | None
     file_spans: list[SpanEntry]
     resolved: deploy.ResolvedDeploy | None
-    base_plan: DispositionBasePlan | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
 
 
@@ -967,24 +783,13 @@ def _capture_store_snapshots(
         tracked_file = record.tracked_file
         if tracked_file.symlink is not None:
             continue
-        if tracked_file.disposition is not None:
-            entries.append(
-                transitions.snapshot_store_state(
-                    transitions.SnapshotStore.BASE, profile, record.sub_name
-                )
-            )
-            entries.append(
-                transitions.snapshot_store_state(
-                    transitions.SnapshotStore.SCALAR_BASE, profile, record.sub_name
-                )
-            )
-        # A plain reconcile file records its merge base in the SAME base_store
+        # A reconcile file records its merge base in the base_store
         # (SnapshotStore.BASE) — snapshot it so revert restores the pre-install
         # base. Without this, a revert undoes the live file but leaves the base
         # advanced, and the next install would treat the reverted-away file as a
         # deliberate deletion (theirs == base) instead of re-deploying it.
-        elif record.reconcile is not None:
-            # A plain reconcile file's install advances base AND local + index
+        if record.reconcile is not None:
+            # A reconcile file's install advances base AND local + index
             # (reconcile.record), so revert must restore all of them. BASE +
             # the local/drafts legs here; the per-profile INDEX once, below.
             entries.append(
@@ -994,12 +799,6 @@ def _capture_store_snapshots(
             )
             entries.extend(
                 transitions.reconcile_file_snapshots(profile, record.sub_name)
-            )
-        if record.file_spans:
-            entries.append(
-                transitions.snapshot_store_state(
-                    transitions.SnapshotStore.SPANS, profile, record.sub_name
-                )
             )
     # The reconcile index is one doc per profile — snapshot it ONCE, LAST (so a
     # torn restore leaves a prunable orphan, never an index pointing at unwritten
@@ -1087,11 +886,6 @@ def _execute_pending_deploys(
                 f"pending deploy for {record.sub_name!r} has no resolution "
                 "and no symlink declaration"
             )
-        if record.base_plan is not None:
-            base_keep_ids.add(record.sub_name)
-            _apply_deferred_base_migration(
-                profile, record.sub_name, record.sub_dst, record.base_plan
-            )
         result = deploy.write_resolved_deploy(record.resolved)
         if result.prior_mode is not None:
             # ``result.dst`` is the symlink-resolved real_dst — the SAME
@@ -1108,15 +902,6 @@ def _execute_pending_deploys(
             _advance_reconcile_store(profile, record)
             if record.reconcile[1].kind is reconcile_apply.ReconcileKind.DEFERRED:
                 deferred_reconcile.append(record.sub_dst)
-        # ADVANCE the disposition base only AFTER the live write.
-        if tracked_file.disposition is not None:
-            _advance_disposition_base(profile, record.sub_name, record.sub_dst, result)
-        # ADVANCE the spans sidecar + warn on orphans AFTER the live write,
-        # in lockstep with the byte base.
-        if record.file_spans:
-            _advance_span_states(
-                profile, record.sub_name, record.sub_dst, result, record.file_spans
-            )
     # PRUNE after the whole loop: bases whose file_id is not in this run's
     # keep-set (a file left the profile, lost its disposition, or stopped
     # being a reconcile-eligible plain file) are removed. The keep-set spans
@@ -1127,297 +912,6 @@ def _execute_pending_deploys(
         state_snapshots=state_snapshots,
         prior_modes=prior_modes,
         deferred_reconcile=tuple(deferred_reconcile),
-    )
-
-
-@dataclass(slots=True, frozen=True)
-class DispositionBasePlan:
-    """Read-only plan for a disposition file's merge-ancestor base.
-
-    Produced by :func:`_plan_disposition_base` WITHOUT touching the
-    filesystem; the deferred writes are applied later by
-    :func:`_apply_deferred_base_migration` (immediately before the file's
-    deploy write), so a refusal between planning and writing leaves zero
-    footprint.
-
-    ``base_text`` is the text the caller threads into
-    :func:`deploy.resolve_deploy` as ``base_text`` (``None`` keeps the
-    ordinary base-absent, deploy-tracked-verbatim path). ``migrated`` is
-    ``True`` ONLY when this install plans an auto-migration (seeding a
-    per-host base from the live file, stripping legacy shared-section markers
-    where present) — the one-time install warning fires on that signal at
-    apply time. A steady-state read (base already present, no markers) and a
-    crash-resume completion (base present, live re-stripped without
-    re-seeding) both report ``migrated=False`` so the warning fires exactly
-    once across the whole migration, never on a resumed or already-migrated
-    install.
-
-    ``deferred_seed`` is the byte payload :func:`base_store.write_base` must
-    receive (``None`` when no seed is pending); ``deferred_live_strip`` is
-    the stripped text the LIVE file must be rewritten to (``None`` when no
-    strip is pending). When a strip is pending, disk live ≠ the live the
-    merge must see, so the caller threads ``deferred_live_strip`` into
-    :func:`deploy.resolve_deploy` as the ``live_text`` override.
-    """
-
-    base_text: str | None
-    migrated: bool
-    deferred_seed: bytes | None = None
-    deferred_live_strip: str | None = None
-
-
-def _plan_disposition_base(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-) -> DispositionBasePlan:
-    """Plan the disposition merge-ancestor base WITHOUT writing anything.
-
-    Reads the stored base for ``file_id`` under ``profile`` and routes:
-
-    * **Base present, live has NO legacy markers** — steady state. The stored
-      base is returned verbatim (``migrated=False``, nothing deferred).
-    * **Base present, live STILL carries legacy markers** (markdown /
-      line-based files only — structured files have no inline markers) —
-      routed by :func:`_plan_resume_marker_strip`. When the base is still the
-      markerless SEED (``strip_shared_markers(live) == base``) this is the
-      crash-resume state (a kill landed AFTER the seed-first base write but
-      BEFORE the live strip): the strip is planned as ``deferred_live_strip``
-      WITHOUT re-seeding. When the base has been ADVANCED past the seed (a
-      ``disposition: shared`` file whose tracked content legitimately carries
-      an in-content shared marker — re-installs always re-deploy that marker
-      into live and the advance re-baselines to the marker-bearing form), the
-      resume stands down: it is steady state, not an interrupted migration.
-      Either way the seeded/advanced base is returned (``migrated=False`` —
-      the seed ran on a prior install, so no warning fires this run).
-    * **Base ABSENT** — a file entering the disposition world for the first
-      time, routed by format:
-
-      - **Structured (JSON / JSONC / YAML)** files have no inline markers, so
-        the plan seeds the base from the current LIVE text as read by
-        :meth:`~pathlib.Path.read_text` (universal-newline) — the EXACT view
-        :func:`deploy.resolve_deploy` reads as ``ours``, so base == live ==
-        ours at the level the merge parses (CRLF / CR collapse to LF on both
-        sides). ``migrated=True`` when a live file existed to seed from; the
-        live file itself is never rewritten (no markers to strip).
-      - **Markdown / line-based** files plan the SHARED-marker strip via
-        :func:`_plan_shared_marker_migration` (``migrated=True`` when a
-        marker-bearing live file is to be migrated): ``deferred_seed`` and
-        ``deferred_live_strip`` both carry the stripped text, so after apply
-        base == stripped == live and the first 3-way merge has zero spurious
-        delta (the data-loss invariant).
-
-    The base-absent format paths fall through to ``base_text=None`` /
-    ``migrated=False`` — the ordinary base-absent (deploy-tracked-verbatim)
-    path — when there is no live file to seed from (and, for markdown, no
-    SHARED markers to strip).
-
-    Raises :class:`~setforge.errors.MarkerError` on a malformed marker file
-    (via the strip), propagated from the leaf helpers rather than swallowed
-    here — BEFORE any write, so a malformed file aborts a still-clean
-    install.
-    """
-    raw = base_store.read_base(profile, file_id)
-    if raw is not None:
-        base_text = raw.decode("utf-8")
-        deferred_live_strip: str | None = None
-        if not disposition_merge.is_structural(sub_dst):
-            # Base present: plan the completion of an interrupted strip if
-            # live still carries legacy markers (crash-resume). No re-seed —
-            # the base is the truth.
-            deferred_live_strip = _plan_resume_marker_strip(sub_dst, base_text)
-        return DispositionBasePlan(
-            base_text=base_text,
-            migrated=False,
-            deferred_live_strip=deferred_live_strip,
-        )
-    if disposition_merge.is_structural(sub_dst):
-        try:
-            live_text = sub_dst.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return DispositionBasePlan(base_text=None, migrated=False)
-        return DispositionBasePlan(
-            base_text=live_text,
-            migrated=True,
-            deferred_seed=live_text.encode("utf-8"),
-        )
-    stripped = _plan_shared_marker_migration(sub_dst)
-    if stripped is None:
-        return DispositionBasePlan(base_text=None, migrated=False)
-    return DispositionBasePlan(
-        base_text=stripped,
-        migrated=True,
-        deferred_seed=stripped.encode("utf-8"),
-        deferred_live_strip=stripped,
-    )
-
-
-def _plan_shared_marker_migration(sub_dst: Path) -> str | None:
-    """Compute the SHARED-marker strip for a base-absent markdown file (no writes).
-
-    The EXPAND half of the section→disposition migration, called only when
-    ``sub_dst``'s stored base is ABSENT (a file entering the disposition
-    world for the first time). Computes the stripped-live text IN MEMORY via
-    :func:`setforge._legacy_markers.strip_shared_markers` (which parses the WHOLE
-    file via the marker state machine first, so a malformed file raises
-    :class:`~setforge.errors.MarkerError` before the install writes anything
-    — no partial output, no half-migrated file).
-
-    Returns the stripped text when the live file exists AND still carries
-    legacy ``shared`` user-section markers; returns ``None`` — leaving the
-    caller on the ordinary base-absent (deploy-tracked-verbatim) path — when
-    the live file is absent OR carries no SHARED markers. Host-local markers
-    and tracked-side markers are NOT touched. The gate is strict on the
-    ``(base absent, shared markers present)`` pair (base-absence is the
-    caller's precondition; shared-marker presence is ``stripped !=
-    live_text``), so a second install — where the base now exists OR the
-    markers are already stripped — never re-plans the migration.
-    """
-    try:
-        live_text = sub_dst.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    stripped = strip_shared_markers(live_text)
-    if stripped == live_text:
-        # No SHARED markers to strip: fall through to the ordinary
-        # base-absent path (deploy tracked verbatim, seed base == tracked).
-        return None
-    return stripped
-
-
-def _plan_resume_marker_strip(sub_dst: Path, base_text: str) -> str | None:
-    """Plan the completion of an interrupted SHARED-marker strip (no writes).
-
-    Targets the crash-resume state: the seed-first base write landed but a
-    kill hit BEFORE the live strip, so the stored base is PRESENT yet live
-    still carries legacy SHARED markers. In that window the base is the SEED
-    — i.e. ``base_text == strip_shared_markers(live)`` — because live is
-    byte-unchanged since the seed. Re-stripping the unchanged marker-bearing
-    live therefore reproduces the seeded base byte-for-byte, so the plan
-    rewrites live to the stripped form to reach base == live == stripped
-    WITHOUT touching the base (no re-seed; the seeded base is the truth).
-
-    Two states return ``None`` (nothing to resume):
-
-    * **Steady state, no markers** — a live file with NO SHARED markers
-      leaves ``stripped == live_text``.
-    * **Steady state, base advanced PAST the seed** — a ``disposition:
-      shared`` file whose TRACKED content legitimately carries an in-content
-      shared marker deploys that marker into live on every install, and the
-      post-deploy advance re-baselines the stored base to the merged,
-      marker-BEARING form. On the next install live still carries the marker,
-      but the base is no longer the markerless seed, so
-      ``strip_shared_markers(live) != base_text``. This is NOT an interrupted
-      migration — the strip already ran and was advanced over — so there is
-      nothing to resume; the stored byte-base is the merge ancestor
-      :func:`deploy.resolve_deploy`'s 3-way driver owns from here.
-      Re-stripping live would diverge from the advanced base and corrupt the
-      ancestor, so the resume must stand down.
-
-    The resume thus fires ONLY in its genuine window
-    (``stripped == base_text``); any other ``(base present, live
-    marker-bearing)`` shape is steady state and untouched.
-    """
-    try:
-        live_text = sub_dst.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    stripped = strip_shared_markers(live_text)
-    if stripped == live_text:
-        # Steady state: no markers left to strip, nothing to resume.
-        return None
-    if stripped != base_text:
-        # Base advanced past the markerless seed (steady-state re-install of a
-        # disposition:shared file whose tracked content retains its shared
-        # marker): not an interrupted migration. Leave live and the advanced
-        # base alone — the 3-way merge driver is the ancestor's owner now.
-        return None
-    return stripped
-
-
-def _apply_deferred_base_migration(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-    plan: DispositionBasePlan,
-) -> None:
-    """Apply a plan's deferred base-migration writes in the crash-safe order.
-
-    No-op for a steady-state plan (nothing deferred). Otherwise:
-
-    1. Seed the stored base from ``deferred_seed`` FIRST.
-    2. THEN rewrite live to ``deferred_live_strip``, preserving the file's
-       EXISTING mode (0600 stays 0600) via the fchmod-before-replace pattern
-       (no symlink-follow, no mode widening).
-    3. Fire the one-time :func:`_warn_auto_migration` when the plan is a
-       genuine auto-migration (``migrated`` True) — never on a crash-resume
-       completion or a steady-state read.
-
-    **Crash-safe ordering (never base-absent-after-strip).** Seeding the base
-    before the live strip means a kill between the two leaves base-PRESENT +
-    live-still-marker-bearing — a state the next install's
-    :func:`_plan_resume_marker_strip` completes WITHOUT re-seeding. The
-    inverted order (strip first) would, on a kill, leave
-    base-absent-after-strip: a re-run would see the markers already stripped,
-    fall through to the base-absent verbatim-deploy path, and skip the clean
-    migration — the loss this ordering prevents.
-    """
-    if plan.deferred_seed is not None:
-        base_store.write_base(profile, file_id, plan.deferred_seed)
-    if plan.deferred_live_strip is not None:
-        existing_mode = stat.S_IMODE(sub_dst.stat().st_mode)
-        _atomic_rewrite_preserving_mode(
-            sub_dst, plan.deferred_live_strip, existing_mode
-        )
-    if plan.migrated:
-        _warn_auto_migration(sub_dst, profile)
-
-
-def _atomic_rewrite_preserving_mode(path: Path, content: str, mode: int) -> None:
-    """Atomically write ``content`` to ``path`` at ``mode`` (fchmod-before-replace).
-
-    Mirrors :func:`setforge.deploy._atomic_write`'s safety contract for a
-    live rewrite that is NOT a tracked-source deploy: a same-directory temp
-    file gets ``content`` and ``mode`` applied to its fd via
-    :func:`os.fchmod` BEFORE :func:`os.replace`, so the final mode lands in
-    the same FS object (closing the TOCTOU symlink-swap window a path-based
-    chmod would open) and a pre-existing ``path`` symlink is REPLACED rather
-    than followed. ``mode`` is the file's existing mode, so 0600 stays 0600
-    — the rewrite never widens permissions.
-    """
-    tmp_fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-            fh.flush()
-            os.fchmod(fh.fileno(), mode)
-        os.replace(tmp_path, path)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink(missing_ok=True)
-
-
-def _warn_auto_migration(sub_dst: Path, profile: str) -> None:
-    """Emit the one-time actionable warning for an auto-on-install migration.
-
-    Fired only when an auto-migration actually ran this install
-    (``DispositionBasePlan.migrated`` True) — never on a steady-state or
-    crash-resumed install. States WHAT changed (a per-host base was seeded from
-    the current live file; any legacy SHARED-section markers were stripped —
-    host-local markers are left in place, and structured files have none) and
-    HOW to undo it (``setforge revert``), so the silent strip + seed surfaces a
-    visible, reversible footprint to the user.
-    """
-    typer.secho(
-        f"{sub_dst}: first install under a stored-base disposition: seeded a "
-        "per-host base from your current live file; any legacy shared-section "
-        "markers were stripped. To restore the pre-migration state, run "
-        f"`setforge revert --profile={profile}`.",
-        err=True,
-        fg=typer.colors.YELLOW,
     )
 
 
@@ -1450,61 +944,6 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
             f"warning: {record.sub_dst}: merge conflict kept live, base not "
             f"advanced — conflict re-surfaces next install (re-run "
             f"interactively to resolve)",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-
-
-def _advance_disposition_base(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-    result: deploy.DeployResult,
-) -> None:
-    """Advance the disposition byte-base AFTER a clean live write, or warn.
-
-    ADVANCE to ``result.new_base`` when the driver signalled re-baselining; a
-    :func:`base_store.write_base` failure PROPAGATES (no suppress) — base
-    lagging live is the safe failure direction, base ahead of live is
-    corruption. A deferred conflict (``new_base is None`` with non-empty
-    ``merge_conflicts``) keeps live and WARNs so the user knows it re-surfaces
-    next install.
-    """
-    if result.new_base is not None:
-        base_store.write_base(profile, file_id, result.new_base.encode("utf-8"))
-    elif result.merge_conflicts:
-        typer.secho(
-            f"warning: {sub_dst}: merge conflict kept live, base not advanced "
-            f"— conflict re-surfaces next install (re-run with "
-            f"--auto=use-tracked to resolve)",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-
-
-def _advance_span_states(
-    profile: str,
-    file_id: str,
-    sub_dst: Path,
-    result: deploy.DeployResult,
-    file_spans: list[SpanEntry],
-) -> None:
-    """Advance the spans sidecar, prune left spans, and warn on orphans.
-
-    Writes every recomputed :class:`~setforge.spans_store.SpanState` from
-    the deploy AND prunes any anchor no longer in the file's intent — both
-    in LOCKSTEP with the byte base just advanced (Invariant I5). Each
-    orphan emits a loud per-span warning; an orphan NEVER aborts the
-    default install (Invariant I6). The ``--strict-spans`` escalation lives
-    in :func:`_refuse_on_pinned_orphans`, which fires BEFORE any write —
-    a pinned orphan under strict mode never reaches this advance.
-    """
-    if result.new_span_states is not None:
-        spans_store.set_states(profile, file_id, result.new_span_states)
-    spans_store.prune(profile, file_id, {span.anchor for span in file_spans})
-    for orphan in result.span_orphans:
-        typer.secho(
-            _span_orphan_warning(sub_dst, orphan),
             err=True,
             fg=typer.colors.YELLOW,
         )

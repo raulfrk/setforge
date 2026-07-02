@@ -23,10 +23,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-from typer.testing import CliRunner
-
-from setforge.cli import app
 from setforge.cli import migrate as migrate_cli
 from setforge.migrations import MigrationRoots
 
@@ -56,49 +52,6 @@ def _seed_repo(tmp_path: Path) -> Path:
     (repo / "setforge.yaml").write_text(_SETFORGE_YAML, encoding="utf-8")
     (repo / "doc.md").write_text(_DOC_WITH_SHARED_SECTION, encoding="utf-8")
     return repo
-
-
-def _invoke_apply(repo: Path, monkeypatch: pytest.MonkeyPatch) -> str:
-    home = repo.parent / "home"
-    home.mkdir()
-    monkeypatch.setattr("setforge.cli.migrate.Path.home", staticmethod(lambda: home))
-    # ``migrate --apply`` writes a real transition via transitions_root() →
-    # Path.home(); pin SETFORGE_STATE_DIR so the record lands in a per-test
-    # tmp tree independent of the autouse HOME-isolation fixture (belt-and-
-    # suspenders — the HOME fixture alone is a single point of failure).
-    monkeypatch.setenv("SETFORGE_STATE_DIR", str(repo.parent / "state"))
-    monkeypatch.setattr("setforge.cli.migrate.shutil.which", lambda _: None)
-    cfg = repo / "setforge.yaml"
-    runner = CliRunner()
-    result = runner.invoke(app, ["migrate", "--apply", "--yes", f"--config={cfg}"])
-    assert result.exit_code == 0, result.output
-    assert "preview of changes" in result.output
-    return result.output
-
-
-def test_apply_preview_includes_section_span_from_tracked_src(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The preview's setforge.yaml diff must show the span + shared disposition.
-
-    Pre-fix: the tracked ``doc.md`` was absent from the shadow tree, so the
-    1.2->2.0 contract step found no markers and the preview omitted the span.
-    Post-fix: the src is mirrored, so the preview surfaces the span the real
-    apply writes — and it MATCHES what the applied file ends up containing.
-    """
-    repo = _seed_repo(tmp_path)
-    out = _invoke_apply(repo, monkeypatch)
-
-    # The applied file is the ground truth: read what apply actually wrote.
-    applied = (repo / "setforge.yaml").read_text(encoding="utf-8")
-    assert "disposition: shared" in applied, applied
-    assert "anchor: '## notes'" in applied or "## notes" in applied, applied
-
-    # The preview MUST contain the same span material as additions.
-    assert "+    disposition: shared" in out, out
-    assert "notes" in out
-    # The shared span the real apply emits must appear in the preview diff.
-    assert "+    - anchor" in out or "anchor:" in out, out
 
 
 def test_preview_read_dependencies_enumerates_shared_section_srcs(

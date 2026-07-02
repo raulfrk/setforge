@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from setforge.config import (
     ClaudePluginRef,
     Config,
-    Disposition,
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
@@ -28,8 +27,6 @@ def test_load_sample_config() -> None:
     cfg = load_config(FIXTURES / "sample_config.yaml")
     assert cfg.version == 1
     assert set(cfg.tracked_files) == {"claude_md", "vscode_settings"}
-    assert cfg.tracked_files["claude_md"].disposition is Disposition.SHARED
-    assert cfg.tracked_files["vscode_settings"].disposition is Disposition.FORKED
     assert cfg.tracked_files["vscode_settings"].template is True
     assert set(cfg.profiles) == {"base", "child"}
     assert cfg.profiles["child"].extends == "base"
@@ -147,8 +144,6 @@ profiles:
 def test_tracked_file_defaults() -> None:
     df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
-    assert df.disposition is None
-    assert df.spans == []
 
 
 def test_tracked_file_rejects_tab_in_src() -> None:
@@ -415,4 +410,4 @@ def test_local_tracked_files_overlay_accepts_disposition() -> None:
         {"tracked_files": {"vscode": {"disposition": "forked"}}}
     )
     overlay = cfg.tracked_files["vscode"]
-    assert overlay.disposition is Disposition.FORKED
+    assert overlay.disposition == "forked"

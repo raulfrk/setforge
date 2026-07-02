@@ -2,19 +2,16 @@
 
 Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
 
-- ``expected`` — intentional host divergence: ``forked``/``pinned``
-  disposition, or drift confined to pinned/forked spans (Invariant I13).
+- ``expected`` — intentional host divergence: a reconcile-staged file whose
+  tracked side holds exactly the shared set while local edits are kept
+  host-only.
 - ``stale`` — live still equals the stored base while tracked advanced;
   the next install fast-forwards live. Not flagged by ``compare --check``.
 - ``unexpected`` — drift nothing above explains: what ``compare --check``
   flags for CI and what the install drift gate (``--auto-accept-*``)
-  resolves. Also covers the clobber shape — span-only drift with NO
-  stored byte base, where a first install would deploy tracked verbatim
-  over the live span edits (run ``sync`` first).
-- ``conflicted`` — a forked-scalar conflict: the stored base differs
-  from BOTH live and tracked at the same scalar path, so the next
-  interactive install would prompt (see :func:`_forked_scalar_conflicts`).
-  Flagged by ``compare --check`` alongside ``unexpected``.
+  resolves.
+- ``conflicted`` — retired with the file-level disposition model; no file
+  produces this class anymore (see :func:`_forked_scalar_conflicts`).
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously
@@ -36,22 +33,18 @@ from typing import TYPE_CHECKING
 from jinja2 import Template
 from rich.table import Table
 from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
 
 from setforge import (
     base_store,
-    jsonc,
-    spans_overlay,
 )
 from setforge.binaries import LOCAL_CONFIG_PATH
 from setforge.config import (
     Config,
-    Disposition,
     ResolvedProfile,
     TrackedFile,
     resolve_profile,
 )
-from setforge.errors import BaseStoreError, ConfigError, MergeTypeMismatch
+from setforge.errors import BaseStoreError
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.span_types import SpanEntry
@@ -108,12 +101,10 @@ _CLOBBER_REASON = (
 class FileCompare:
     """Per-file drift result from :func:`compare_profile`.
 
-    ``disposition`` carries the tracked_file's :class:`~setforge.config.Disposition`
-    value (``None`` for legacy preserve-based files). The derived property
-    ``drift_is_expected`` is ``True`` when drift is classified as intentional
-    host divergence — i.e., disposition is ``FORKED`` or ``PINNED`` AND the
-    file is ``DRIFTED``. ``SHARED`` drift and all non-disposition-file drift
-    is *not* expected (needs attention).
+    The derived property ``drift_is_expected`` is ``True`` when drift is
+    classified as intentional host divergence (today: only via the reconcile
+    engine's per-unit staging). All other drift is *not* expected (needs
+    attention).
     """
 
     name: str
@@ -137,16 +128,10 @@ class FileCompare:
     The mode the live file is reset to on deploy; paired with
     :attr:`live_mode` for the confirm-plan transition line.
     """
-    disposition: Disposition | None = None
-    """The :class:`~setforge.config.Disposition` of the source tracked_file,
-    or ``None`` for files without a disposition (legacy preserve-* model).
-    """
     span_only_drift: bool = False
-    """True when this file carries sub-file spans AND every drifting region
-    is confined to a pinned/forked span (Invariant I13). A SHARED file whose
-    ONLY divergence lives inside its spans is intentional host divergence,
-    not unsynced shared drift — so it must NOT render identically to a real
-    shared-drift case. Always False for files without spans.
+    """Vestigial after the spans retirement — always ``False`` (no tracked-side
+    spans remain to confine drift to). Retained on the record so downstream
+    consumers keep a stable shape.
     """
     drift_class: DriftClass | None = None
     """Why the file drifted, per :func:`_classify_drifted`. ``None`` unless
@@ -172,18 +157,12 @@ class FileCompare:
     def drift_is_expected(self) -> bool:
         """True when the file's drift is classified as intentionally expected.
 
-        Drift is expected when the tracked_file's disposition is ``FORKED``
-        or ``PINNED`` AND the file is ``DRIFTED``, OR when the file is
-        ``DRIFTED`` but every diverging region is confined to a pinned/forked
-        span (``span_only_drift``, Invariant I13). A ``SHARED`` file's
-        non-span drift always needs attention; a ``None``-disposition file
-        never uses this axis (returns False regardless of drift status).
+        After the disposition/spans retirement this axis is no longer driven by
+        a file-level disposition; the reconcile engine classifies expected
+        (staged) drift directly in :func:`_classify_drifted`, so this property
+        stays ``False`` for every file.
         """
-        if self.status is not CompareStatus.DRIFTED:
-            return False
-        if self.disposition in (Disposition.FORKED, Disposition.PINNED):
-            return True
-        return self.span_only_drift
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -662,7 +641,6 @@ def _compare_one(
     profile: str | None = None,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> tuple[FileCompare, bool]:
-    from setforge import overlay_deploy
 
     # Symlink-aware tracked_files dispatch FIRST: ``Path.exists()`` returns
     # False on a dangling symlink, which would otherwise misclassify the
@@ -679,24 +657,17 @@ def _compare_one(
             host_local_sections=host_local_sections,
         )
 
-    disposition = tracked_file.disposition
-
     if not dst.exists():
         return (
             FileCompare(
                 name=name,
                 status=CompareStatus.MISSING,
                 diff="",
-                disposition=disposition,
             ),
             True,
         )
 
-    diff = diff_file(
-        src,
-        dst,
-        overlay_spans=overlay_deploy.overlay_spans(tracked_file.spans),
-    )
+    diff = diff_file(src, dst)
 
     mode_drift = False
     live_mode: int | None = None
@@ -712,8 +683,6 @@ def _compare_one(
     is_drifted = bool(diff) or mode_drift
     status = CompareStatus.DRIFTED if is_drifted else CompareStatus.UNCHANGED
 
-    span_only_drift = _span_only_drift(src, dst, tracked_file) if diff else False
-
     entry = FileCompare(
         name=name,
         status=status,
@@ -721,8 +690,6 @@ def _compare_one(
         mode_drift=mode_drift,
         live_mode=live_mode,
         tracked_mode=tracked_mode,
-        disposition=disposition,
-        span_only_drift=span_only_drift,
     )
     return _classify_entry(
         entry, profile=profile, src=src, dst=dst, tracked_file=tracked_file
@@ -794,31 +761,10 @@ def _classify_drifted(
         )
         if conflicts:
             return DriftClass.CONFLICTED, "\n".join(conflicts), conflicts
-    # Slot 2 — UNEXPECTED (clobber): SHARED span-only drift with no
-    # stored byte base. The base-absent install path deploys tracked
-    # verbatim (disposition_merge's first-run branch) and does not honor
-    # every span override, so the live span edits are at clobber risk
-    # until a sync stores a base. Only SHARED dispositions are at risk:
-    # FORKED/PINNED install never overwrites the live file (slot 4
-    # classifies them EXPECTED), and a None disposition (legacy
-    # preserve-* / host-local-overlay file) never takes the
-    # disposition-merge deploy-tracked-verbatim path at all.
-    if (
-        probe_stale
-        and profile is not None
-        and entry.span_only_drift
-        and entry.disposition is Disposition.SHARED
-        and _base_absent(profile, entry.name)
-    ):
-        return DriftClass.UNEXPECTED, _CLOBBER_REASON, []
     # Slot 3 — STALE: live still equals the stored base while tracked
     # advanced; the next install fast-forwards live.
     if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
         return DriftClass.STALE, _STALE_REASON, []
-    # Slot 4 — EXPECTED: intentional host divergence (forked/pinned
-    # disposition, or drift confined to pinned/forked spans).
-    if entry.drift_is_expected:
-        return DriftClass.EXPECTED, None, []
     # Slot 4b — EXPECTED: a reconcile-staged plain file (A5/A5c) whose tracked
     # holds EXACTLY the promoted set (INV-8 over base+live+hunks+drafts). The
     # live↔tracked diff is then the expected staging divergence — host-only
@@ -829,7 +775,6 @@ def _classify_drifted(
         probe_stale
         and profile is not None
         and tracked_file is not None
-        and tracked_file.disposition is None
         and _reconcile_staged_expected(profile, entry.name, src, dst)
     ):
         return DriftClass.EXPECTED, _STAGED_REASON, []
@@ -844,78 +789,15 @@ def _forked_scalar_conflicts(
     dst: Path,
     tracked_file: TrackedFile,
 ) -> list[str]:
-    """Pre-rendered ``path: base → tracked | live`` lines for the entry's
-    forked-scalar conflicts (tracked = upstream, live = yours).
+    """Always ``[]`` after the disposition/spans retirement.
 
-    Mirrors the install merge: parse the stored byte base + live + tracked
-    and run the same 3-way driver install runs
-    (:func:`setforge.disposition_merge.resolve_file`, bare ``auto`` — the
-    conflicts list is computed before any auto policy applies), then keep
-    the :class:`~setforge.structural_merge.PathConflict`\\ s on the FORKED
-    scalar surface: every path of a ``disposition: forked`` file, or
-    exactly the FORKED span anchors of any other disposition. A surviving
-    conflict is ``base ≠ live AND base ≠ tracked`` (with the two sides
-    also disagreeing) at one path —
-    the shape the next interactive install would prompt on; rows where
-    base equals one side auto-resolve inside the merge and never surface.
-    Pinned-span conflicts are already suppressed by the driver
-    (deterministic live-wins), and a shape-clashed structural file falls
-    back to line-based :class:`~setforge.markdown_merge.LineConflict`\\ s,
-    which are not a scalar surface — both degrade to no-conflict here.
-
-    State-aware but crash-free, mirroring :func:`_is_stale`: a torn or
-    unreadable base store and an unparsable live/tracked side all degrade
-    to ``[]`` so the entry classifies deterministically via the later
-    slots instead of crashing the read-only compare.
+    Forked-scalar conflicts were a property of the retired file-level
+    ``disposition: forked`` merge surface; no file carries a disposition or
+    tracked-side spans anymore, so the compare probe never has a forked-scalar
+    surface to render. Retained (returning ``[]``) so the CONFLICTED slot and
+    the JSON/table shape stay stable.
     """
-    from setforge import disposition_merge
-    from setforge.span_types import SpanKind
-    from setforge.structural_merge import PathConflict
-
-    disposition = tracked_file.disposition
-    if disposition is None or disposition is Disposition.PINNED:
-        # PINNED never merges (live verbatim); None-disposition files
-        # never take the stored-base 3-way path at all.
-        return []
-    if not disposition_merge.is_structural(dst):
-        return []
-    spans = tracked_file.spans or []
-    forked_anchors = {s.anchor for s in spans if s.kind is SpanKind.FORKED}
-    if disposition is not Disposition.FORKED and not forked_anchors:
-        # No forked scalar surface on this entry.
-        return []
-    try:
-        base = base_store.read_base(profile, file_id)
-        if base is None:
-            return []
-        merge_spans = [s for s in spans if s.kind is not SpanKind.OVERLAY]
-        resolution = disposition_merge.resolve_file(
-            disposition,
-            dst,
-            base.decode("utf-8"),
-            dst.read_text(encoding="utf-8"),
-            src.read_text(encoding="utf-8"),
-            None,
-            structural_spans=merge_spans or None,
-        )
-    except (
-        BaseStoreError,
-        OSError,
-        ConfigError,
-        MergeTypeMismatch,
-        ValueError,
-        YAMLError,
-    ):
-        # ValueError covers UnicodeDecodeError plus the json-five parse
-        # errors; YAMLError covers an unparsable ruamel side.
-        return []
-    return [
-        f"{c.path}: {_format_conflict_operand(c.base)} → "
-        f"{_format_conflict_operand(c.theirs)} | {_format_conflict_operand(c.ours)}"
-        for c in resolution.conflicts
-        if isinstance(c, PathConflict)
-        and (disposition is Disposition.FORKED or c.path in forked_anchors)
-    ]
+    return []
 
 
 def _format_conflict_operand(value: object) -> str:
@@ -1016,66 +898,24 @@ def _reconcile_staged_expected(
         return True
     except InvariantViolation:
         return False  # INV-8 failed → tracked is NOT the promoted set → real drift
-    except (ReconcileStoreError, OSError, UnicodeDecodeError, ValueError):
+    except (
+        BaseStoreError,
+        ReconcileStoreError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
         return False  # degrade like _is_stale — never raise in read-only compare
 
 
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:
-    """True when the live↔tracked drift is confined to pinned/forked spans.
+    """Always ``False`` after the disposition/spans retirement.
 
-    Replaces every span region in the live bytes with the tracked bytes and,
-    if the result equals tracked, the only divergence lived inside spans —
-    intentional host divergence, not unsynced shared drift (Invariant I13).
-    Dispatches by file type so each span flavor mirrors its own capture
-    exclusion path: markdown heading spans via
-    :func:`setforge.spans_overlay.exclude_spans_for_capture`; structural
-    (yaml/json/jsonc dotted-path) spans via
-    :func:`setforge.disposition_merge.exclude_structural_spans_for_capture`.
-    False when the file declares no spans, is neither markdown nor structural,
-    or has drift outside a span.
+    Tracked-side spans were retired, so no drift can be confined to a span; the
+    reconcile engine now owns per-unit host-divergence classification. Retained
+    (returning ``False``) so callers keep a stable shape.
     """
-    from setforge import disposition_merge, overlay_deploy
-    from setforge.overlay_inject import OverlayAmbiguousError
-    from setforge.span_types import SpanKind
-
-    if not tracked_file.spans:
-        return False
-    try:
-        tracked_text = src.read_text(encoding="utf-8")
-        live_text = dst.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    if disposition_merge.is_structural(src):
-        # Warnings are a capture-surface concern; compare only needs the
-        # excluded text for the equality probe.
-        excluded, _ = disposition_merge.exclude_structural_spans_for_capture(
-            live_text, tracked_text, tracked_file.spans, jsonc.is_jsonc_file(src)
-        )
-    elif src.suffix.lower() in {".md", ".markdown"}:
-        # Excise the markerless OVERLAY bodies first (by their exact recorded
-        # bytes) so a host-local body present in live but absent from tracked
-        # is treated as expected span-confined drift, not spurious DRIFTED.
-        # The canonical body is the needle; no per-host state is consulted
-        # here (compare is offline / state-free), so a body that was
-        # hand-edited away from canonical falls through to non-span drift.
-        md_overlay = overlay_deploy.overlay_spans(tracked_file.spans)
-        body_free_live = live_text
-        if md_overlay:
-            try:
-                body_free_live, _ = overlay_deploy.excise_overlay_bodies(
-                    live_text, md_overlay, {}
-                )
-            except OverlayAmbiguousError:
-                return False
-        pinned_forked = [
-            s for s in tracked_file.spans if s.kind is not SpanKind.OVERLAY
-        ]
-        excluded = spans_overlay.exclude_spans_for_capture(
-            body_free_live, tracked_text, pinned_forked, {}
-        )
-    else:
-        return False
-    return excluded == tracked_text
+    return False
 
 
 def _compare_symlinked(
@@ -1117,14 +957,12 @@ def _compare_symlinked(
         raise AssertionError(
             "_compare_symlinked called with tracked_file.symlink == None"
         )
-    disposition = tracked_file.disposition
     if not dst.is_symlink():
         if dst.exists():
             entry = FileCompare(
                 name=name,
                 status=CompareStatus.DRIFTED,
                 diff=(f"expected symlink to {expected!r}, found regular file at {dst}"),
-                disposition=disposition,
             )
             return _classify_entry(
                 entry, profile=profile, src=src, dst=dst, probe_stale=False
@@ -1134,7 +972,6 @@ def _compare_symlinked(
                 name=name,
                 status=CompareStatus.MISSING,
                 diff="",
-                disposition=disposition,
             ),
             True,
         )
@@ -1144,7 +981,6 @@ def _compare_symlinked(
             name=name,
             status=CompareStatus.DRIFTED,
             diff=(f"symlink target drift at {dst}: {actual!r} != {expected!r}"),
-            disposition=disposition,
         )
         return _classify_entry(
             entry, profile=profile, src=src, dst=dst, probe_stale=False
@@ -1166,7 +1002,6 @@ def _compare_symlinked(
             name=name,
             status=CompareStatus.DRIFTED,
             diff=target_diff,
-            disposition=disposition,
         )
         return _classify_entry(
             entry, profile=profile, src=src, dst=dst, probe_stale=False
@@ -1177,7 +1012,6 @@ def _compare_symlinked(
             name=name,
             status=CompareStatus.UNCHANGED,
             diff="",
-            disposition=disposition,
         ),
         False,
     )
@@ -1377,26 +1211,24 @@ _DRIFT_CLASS_STYLES: dict[DriftClass, str] = {
 def compare_summary_table(report: CompareReport) -> Table:
     """Build a rich :class:`~rich.table.Table` summarising the compare report.
 
-    One row per ``DRIFTED`` entry with columns ``File`` / ``Disposition`` /
-    ``Class`` / ``Why``. ``Class`` is the entry's :class:`DriftClass`
-    (expected in dim cyan, stale in yellow, unexpected/conflicted in bold
-    red); ``Why`` carries the class's reason note when it has one.
+    One row per ``DRIFTED`` entry with columns ``File`` / ``Class`` / ``Why``.
+    ``Class`` is the entry's :class:`DriftClass` (expected in dim cyan, stale in
+    yellow, unexpected/conflicted in bold red); ``Why`` carries the class's
+    reason note when it has one.
     """
     table = Table(title="Drift Summary", show_header=True, header_style="bold")
     table.add_column("File")
-    table.add_column("Disposition")
     table.add_column("Class")
     table.add_column("Why")
 
     for entry in report.entries:
         if entry.status != CompareStatus.DRIFTED:
             continue
-        disposition = entry.disposition.value if entry.disposition is not None else ""
         if entry.drift_class is not None:
             style = _DRIFT_CLASS_STYLES[entry.drift_class]
             class_str = f"[{style}]{entry.drift_class.value}[/{style}]"
         else:
             class_str = ""
-        table.add_row(entry.name, disposition, class_str, entry.reason or "")
+        table.add_row(entry.name, class_str, entry.reason or "")
 
     return table

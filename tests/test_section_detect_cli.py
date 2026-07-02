@@ -78,9 +78,9 @@ def test_expected_matches_deploy_then_edit_surfaces() -> None:
     assert "Hand-written host note" in regions[0].live_text
 
 
-def test_disposition_file_expected_matches_deploy() -> None:
-    """For a disposition file, expected is the deploy output (plan P1/P3 — the
-    pinned-carve target); a divergence from it surfaces as a region."""
+def test_host_local_file_expected_matches_deploy() -> None:
+    """expected is the deploy output (plan P1/P3); an in-place edit of it
+    surfaces as a DIVERGENCE region (the replace path, not append)."""
     from setforge.cli import _detect_helpers as dh
     from setforge.config import load_config
     from setforge.section_detect import compute_detect_regions
@@ -89,7 +89,6 @@ def test_disposition_file_expected_matches_deploy() -> None:
     cfg = load_config(cfg_path)
     repo_root = cfg_path.resolve().parent
     target = dh._markdown_targets(cfg, "test-host-local", repo_root, "host_local_md")[0]
-    assert target.tracked_file.disposition is not None
 
     expected = dh.expected_deploy_text("test-host-local", target, None)
     assert expected.strip()
@@ -148,15 +147,6 @@ def test_allowed_kinds_new_content_overlay_only() -> None:
     from setforge.cli import _detect_helpers as dh
 
     assert dh.allowed_kinds(_new_content_region(), _target("none")) == ["overlay"]
-
-
-def test_allowed_kinds_divergence_needs_disposition() -> None:
-    from setforge.cli import _detect_helpers as dh
-
-    div = _divergence_region()
-    assert dh.allowed_kinds(div, _target("shared")) == ["pinned", "forked"]
-    # DIVERGENCE on a disposition=None file → no valid kind (refused; plan P3).
-    assert dh.allowed_kinds(div, _target("none")) == []
 
 
 def test_pinned_anchor_reconstructs_hashes() -> None:
@@ -389,32 +379,6 @@ def test_wizard_propagates_anchor_refusal(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # --- Task 7 follow-up: subtract span-covered regions (idempotency) ------------
-
-
-def test_covered_by_span_subtracts_carved_pinned() -> None:
-    from setforge.cli import _detect_helpers as dh
-    from setforge.config import Disposition, TrackedFile
-    from setforge.span_types import SpanEntry, SpanKind, SpanSemantics
-
-    tf = TrackedFile(
-        src=Path("x.md"),
-        dst="~/x.md",
-        disposition=Disposition.SHARED,
-        spans=[
-            SpanEntry(
-                anchor="## Workflow",
-                kind=SpanKind.PINNED,
-                semantics=SpanSemantics.HOST_LOCAL,
-            )
-        ],
-    )
-    live = "## Workflow\n\nmy edited body\n"
-    region = _divergence_region(live_start=2, live_end=3)
-    assert dh.covered_by_span(region, live, tf) is True
-
-    other = "## Other\n\nmy edit\n"
-    region2 = _divergence_region(live_start=2, live_end=3)
-    assert dh.covered_by_span(region2, other, tf) is False
 
 
 def test_covered_by_span_false_without_spans() -> None:

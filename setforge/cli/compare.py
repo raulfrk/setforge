@@ -175,9 +175,6 @@ def _compare_json_data(
         {
             "name": entry.name,
             "status": entry.status.value,
-            "disposition": entry.disposition.value
-            if entry.disposition is not None
-            else None,
             "drift_class": entry.drift_class.value
             if entry.drift_class is not None
             else None,

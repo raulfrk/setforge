@@ -1,17 +1,17 @@
-"""Regression: ``sync`` must record state_snapshots so revert restores the base.
+"""Regression: ``sync`` records state_snapshots so revert restores in lockstep.
 
-``capture`` re-baselines a SHARED disposition file's byte base
-(``base_store.write_base``) on every sync that absorbs a live edit. Before
-the fix, ``sync`` wrote a transition with ONLY file_pre/file_post and NO
-state_snapshots, so ``setforge revert`` after such a sync reversed the
-tracked src via ``patch -R`` but left the base store advanced to the
-post-sync bytes — base AHEAD of tracked, the corruption direction the
-codebase repeatedly guards against ("base ahead of live is corruption").
+A ``sync --auto=use-live`` that absorbs a live edit rewrites the tracked src.
+For a reconcile-managed file it also records the pre-sync per-host store state
+(BASE + the reconcile local/absent/drafts legs) into the sync transition's
+``state_snapshots/`` payload, so ``setforge revert`` after such a sync restores
+BOTH the tracked src AND the byte base to their pre-sync state instead of
+leaving the store advanced past the reverted tracked src.
 
-This test drives a real install → live-edit → ``sync --auto=use-live`` →
-``revert`` cycle and asserts BOTH the tracked src AND the byte base are
-restored to their pre-sync state. The base assertion is the one that
-failed against the old behavior.
+Note the base invariant under the unified reconcile model: sync **does not**
+advance the byte base — it advances only on ``install`` when new upstream is
+fetched (see :func:`setforge.capture._capture_reconcile_plain`). So the base is
+unchanged across the sync AND the revert; the state_snapshot mechanism still
+round-trips it (a no-op restore here, but the wiring is what this pins).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ _DOC = """\
 Shared body original.
 """
 
-# Live edit absorbed by sync --auto=use-live: re-baselines tracked + base.
+# Live edit absorbed by sync --auto=use-live: re-baselines tracked.
 _DOC_LIVE_EDIT = _DOC.replace("Shared body original.", "MY LIVE EDIT.")
 
 
@@ -46,7 +46,6 @@ def _write_config(repo: Path) -> Path:
         "  doc:\n"
         "    src: doc.md\n"
         "    dst: ~/.setforge_syncbase/doc.md\n"
-        "    disposition: shared\n"
         "profiles:\n"
         f"  {_PROFILE}:\n"
         "    tracked_files:\n"
@@ -109,37 +108,32 @@ def _revert(config: Path) -> Result:
     return CliRunner().invoke(app, args)
 
 
-def test_sync_revert_restores_base_in_lockstep_with_tracked(repo: Path) -> None:
-    """sync absorbs a live edit (re-baselining tracked + base); revert
-    must restore BOTH the tracked src AND the byte base to pre-sync state.
+def test_sync_revert_restores_tracked_and_base_in_lockstep(repo: Path) -> None:
+    """sync absorbs a live edit into tracked; revert restores the tracked src.
 
-    Before the fix, revert restored the tracked src but left the base
-    advanced to the post-sync (live-edit) bytes — base AHEAD of tracked.
+    The byte base is untouched by BOTH sync and revert (it advances only on
+    install), and the sync transition still records the reconcile store's
+    pre-sync state so revert round-trips it in lockstep with the tracked src.
     """
     _write_tracked(repo, _DOC)
     config = _write_config(repo)
 
-    # Install seeds live + the SHARED disposition base from tracked.
+    # Install seeds live + the reconcile byte base from tracked.
     assert _install(config).exit_code == 0
     pre_sync_tracked = _tracked_src(repo).read_bytes()
     pre_sync_base = base_store.read_base(_PROFILE, _MD_ID)
     assert pre_sync_base is not None
 
-    # Edit live, then sync --auto=use-live: tracked + base re-baseline to
-    # the live bytes.
+    # Edit live, then sync --auto=use-live: tracked re-baselines to the live
+    # bytes; the byte base is left for the next install to advance.
     _live_md().write_text(_DOC_LIVE_EDIT, encoding="utf-8")
     result = _sync(config)
     assert result.exit_code == 0, result.output
     assert _tracked_src(repo).read_bytes() != pre_sync_tracked
-    base_after_sync = base_store.read_base(_PROFILE, _MD_ID)
-    assert base_after_sync is not None
-    assert base_after_sync != pre_sync_base  # re-baselined to live
+    assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base  # base unchanged
 
-    # Revert must restore tracked AND the base in lockstep.
+    # Revert must restore the tracked src; the base stays put (round-trip no-op).
     result = _revert(config)
     assert result.exit_code == 0, result.output
     assert _tracked_src(repo).read_bytes() == pre_sync_tracked
-    # The base assertion is the one that failed against the old behavior:
-    # without state_snapshots on the SYNC transition the base stayed at
-    # base_after_sync (AHEAD of the reverted tracked src).
     assert base_store.read_base(_PROFILE, _MD_ID) == pre_sync_base

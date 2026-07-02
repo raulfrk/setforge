@@ -169,6 +169,41 @@ left by the earlier `1.1 → 1.2` conversion — floor-gated on
 revert --profile=migrate`. It is unrelated to the `2.0 → 2.1` user-section
 retirement above.)
 
+## Disposition / spans retirement — a one-way contract step
+
+The `2.1 → 3.0` migration retires the legacy per-file reconciliation model — the
+file-level `Disposition` (`shared` / `forked` / `pinned`), the sub-file `spans`
+overlay, and the `scalar_base_store` — folding every deployed file into the
+unified per-unit `SHARED` / `LOCAL` reconcile store introduced (as the *expand*
+shape) across the preceding `4.15.x` releases. It is the **contract** step of
+that model: `pinned` and host-local spans become ordinary `LOCAL` units,
+`forked` files become all-`LOCAL`, and the legacy `Disposition`/`spans` config
+fields and their stores are removed.
+
+This is a **MAJOR** bump (`2 → 3`), so it is the concrete instance of the
+*forward compatibility* limit above: an older (`2.x`) engine reading a `3.0`
+config **refuses cleanly** (non-zero, no traceback) via the cross-major
+`schema_version` guard, rather than silently misreading a config whose fields it
+no longer understands.
+
+The forward migration is **data-preserving**: it maps real deployed
+`forked`/`pinned`/`spans`/`scalar-base` state onto the unified store, seeding
+each unit's base from the tracked/upstream bytes (never a live or merge result).
+But the collapse is **lossy in the reverse direction** — `pinned`/`forked`
+distinctions dissolve into the binary `SHARED`/`LOCAL` classification — so, per
+the *Stated limit*, the `3.0 → 2.1` schema reverse **refuses cleanly** rather
+than emitting a config it cannot faithfully reconstruct. The bump still registers
+that reverse (satisfying the *both ways* rule); it exits non-zero naming the
+recovery path.
+
+Recovery is **transition-based, not schema-reverse-based.** The forward migration
+commits a revertible transition capturing the pre-migration bytes of every
+mutated store (base / spans / scalar-base / reconcile legs) **before** any legacy
+store is unlinked. While that transition is retained,
+`setforge revert --profile=migrate` byte-restores the original legacy stores in
+lockstep — the recovery a stateless reverse migration cannot provide, and the
+**only** downgrade across this major boundary.
+
 ## `validate` orphan-overlay diagnostics
 
 `local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /

@@ -117,16 +117,14 @@ def collect_stages(
 ) -> list[FileStage]:
     """Classified-hunk view for each staged-eligible plain file. READ-ONLY.
 
-    Eligibility mirrors the install reconcile gate: a plain tracked file (no
-    disposition, no spans), present live, a recorded merge base, and UTF-8 on
-    both sides. ``only`` filters to a single file by tracked-file name, sub-name,
-    live path, or live basename. Writes nothing — safe for ``--list``.
+    Eligibility mirrors the install reconcile gate: a plain tracked file,
+    present live, a recorded merge base, and UTF-8 on both sides. ``only``
+    filters to a single file by tracked-file name, sub-name, live path, or live
+    basename. Writes nothing — safe for ``--list``.
     """
     stages: list[FileStage] = []
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
-        if tracked_file.disposition is not None or tracked_file.spans:
-            continue
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):

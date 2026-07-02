@@ -47,9 +47,7 @@ from setforge.cli._install_helpers import (
     _deploy_all_tracked_files,
     _dry_run_pipeline,
     _load_validated_host_local_sections,
-    _reconcile_shared_spans,
     _run_predeploy_gates,
-    _validate_span_file_types,
     _write_install_transition,
     migrate_local_overlay_spans_on_install,
     seed_overlay_migration_snapshot,
@@ -255,26 +253,11 @@ def install(
     # untouched. On --dry-run seed_plan is empty, so the context
     # manager is a no-op.
     with source_mod.injected_seed(seed_plan):
-        # Resolve host-local↔shared span intent collisions BEFORE the overlay
-        # fold so the chosen winner per collided anchor flows into the fold.
-        # Bare install stays silent host-local-wins; --auto routes the
-        # adopt-shared / keep-host-local decision; a non-tty
-        # --reconcile-user-sections raises rather than burying the collision.
-        # Returns the (tf_id, anchor) pairs whose SHARED span should
-        # win the fold.
-        prefer_shared_anchors = _reconcile_shared_spans(
-            cfg,
-            profile=profile,
-            reconcile_user_sections=reconcile_user_sections,
-            section_auto=section_auto,
-        )
         # Apply local.yaml host-local mode/dst/symlink_target overlay
         # — also AFTER profile resolution. Rebuilds each TrackedFile with the
         # overlay-fields overrides applied so downstream resolve_dst / deploy /
         # deploy_symlinked_file consume the override transparently.
-        apply_host_local_tracked_file_overrides(
-            cfg, prefer_shared_anchors=prefer_shared_anchors
-        )
+        apply_host_local_tracked_file_overrides(cfg)
         # Load + validate the local.yaml host_local_sections overlay
         # (host-local). Validation is file-type only at this layer: anchors /
         # bodies are resolved during deploy._compute_content. Empty mapping
@@ -282,10 +265,6 @@ def install(
         host_local_sections_map = _load_validated_host_local_sections(
             cfg, resolved, repo_root
         )
-        # Reject spans on non-markdown tracked_files BEFORE any file is
-        # written (the host-local overlay has already folded host-local spans
-        # into each TrackedFile.spans above).
-        _validate_span_file_types(cfg, resolved, repo_root)
         # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
         # — also AFTER profile resolution. Mutates resolved
         # and cfg in place so the existing reconcile path consumes the

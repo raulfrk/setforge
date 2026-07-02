@@ -112,7 +112,7 @@ def test_compare_profile_missing_dst(tmp_path: Path) -> None:
 
 def test_compare_summary_table_renders_headers(tmp_path: Path) -> None:
     """compare_summary_table returns a Table whose columns include 'File',
-    'Disposition', 'Class', and 'Why'."""
+    'Class', and 'Why'."""
     repo = tmp_path / "repo"
     src = repo / "tracked" / "x"
     _write(src, "a\n")
@@ -130,7 +130,7 @@ def test_compare_summary_table_renders_headers(tmp_path: Path) -> None:
     console = Console(file=buf, highlight=False, markup=False, no_color=True)
     console.print(table)
     output = buf.getvalue()
-    for header in ("File", "Disposition", "Class", "Why"):
+    for header in ("File", "Class", "Why"):
         assert header in output, output
 
 

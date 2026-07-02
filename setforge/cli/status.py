@@ -266,23 +266,15 @@ def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
     """
     report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
     unexpected = 0
-    user_section = 0
     for entry in report.entries:
         if entry.status is not CompareStatus.DRIFTED:
             continue
-        tracked_file = ctx.cfg.tracked_files.get(entry.name.split("/", 1)[0])
-        # A file under the unified reconcile model (a disposition or any span)
-        # has managed sub-file drift — the closest analog to the retired
-        # preserve_user_sections "section-bearing" categorization.
-        section_bearing = bool(
-            tracked_file
-            and (tracked_file.disposition is not None or tracked_file.spans)
-        )
-        if entry.diff and section_bearing:
-            user_section += 1
-        else:
-            unexpected += 1
-    return _DriftCounts(unexpected=unexpected, user_section=user_section, expected=0)
+        # The disposition/spans "section-bearing" categorization was retired
+        # with the file-level disposition model; status now reports every
+        # DRIFTED entry as unexpected. Use ``setforge compare`` for the
+        # authoritative per-unit reconcile drift state.
+        unexpected += 1
+    return _DriftCounts(unexpected=unexpected, user_section=0, expected=0)
 
 
 def _read_overlay_counts(local_yaml: Path) -> dict[str, int]:

@@ -235,18 +235,18 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_two_one() -> None:
-    """The build now expects schema 2.1 after the marker-retire bump."""
+def test_current_expected_is_three_zero() -> None:
+    """The build now expects schema 3.0 after the disposition-retire bump."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "2.1"
+    assert current_expected_schema_version == "3.0"
 
 
-def test_schema_major_is_two() -> None:
-    """The frozen manifest now describes major 2."""
+def test_schema_major_is_three() -> None:
+    """The frozen manifest now describes major 3."""
     from setforge.schema_manifest import SCHEMA_MAJOR
 
-    assert SCHEMA_MAJOR == 2
+    assert SCHEMA_MAJOR == 3
 
 
 def test_coverage_reaches_two_zero_real_tree() -> None:

@@ -5,12 +5,6 @@ transitions) against a temp config repo with a sandboxed ``$HOME`` +
 ``$SETFORGE_STATE_DIR`` and assert the revert side of the snapshot
 mechanism:
 
-- the headline recovery promise: a base-absent first install clobbers a
-  structural span edit and seeds base + sidecar; revert restores live AND
-  deletes the seeded stores, so a re-install repeats the first run
-  verbatim (deploy-tracked-verbatim) instead of 3-way-merging against a
-  stranded base — which would silently keep the live value and diverge
-  from the first run
 - pre-snapshot transitions (no ``state_snapshots/`` dir) revert exactly
   as before — stores untouched, no crash
 - revert→revert acts as redo: store state round-trips both ways
@@ -28,12 +22,11 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import base_store, spans_store, transitions
+from setforge import base_store, transitions
 from setforge.cli import app
 
 _PROFILE = "test-snapshots"
 _MD_ID = "doc"
-_YAML_ID = "settings"
 
 _DOC = """\
 # Title
@@ -47,18 +40,7 @@ Forked body original.
 Shared body original.
 """
 
-# Live markdown with edits confined to the FORKED span. A forked span
-# merges upstream with NO post-merge override, so the base-absent
-# deploy-tracked-verbatim path clobbers this edit — the clobber shape the
-# recovery promise must round-trip.
-_DOC_FORK_EDITED = _DOC.replace("Forked body original.", "MY FORKED EDIT.")
-
 _YAML_DOC = "editor:\n  fontSize: 12\n  tabSize: 4\nshared:\n  theme: dark\n"
-
-# Live YAML with the pinned dotted-path span edited. The base-absent
-# structural path seeds the base FROM live (the auto-on-install
-# migration) — a seeded entry revert must DELETE.
-_YAML_SPAN_EDITED = _YAML_DOC.replace("fontSize: 12", "fontSize: 20")
 
 
 def _write_config(repo: Path) -> Path:
@@ -69,19 +51,9 @@ def _write_config(repo: Path) -> Path:
         "  doc:\n"
         "    src: doc.md\n"
         "    dst: ~/.setforge_snap/doc.md\n"
-        "    disposition: shared\n"
-        "    spans:\n"
-        '      - anchor: "## Forked"\n'
-        "        kind: forked\n"
-        "        semantics: shared\n"
         "  settings:\n"
         "    src: doc.yaml\n"
         "    dst: ~/.setforge_snap/doc.yaml\n"
-        "    disposition: shared\n"
-        "    spans:\n"
-        '      - anchor: "editor.fontSize"\n'
-        "        kind: pinned\n"
-        "        semantics: shared\n"
         "profiles:\n"
         f"  {_PROFILE}:\n"
         "    tracked_files:\n"
@@ -114,10 +86,6 @@ def _live_md() -> Path:
     return Path.home() / ".setforge_snap" / "doc.md"
 
 
-def _live_yaml() -> Path:
-    return Path.home() / ".setforge_snap" / "doc.yaml"
-
-
 def _install(config: Path) -> Result:
     """Run a transition-RECORDING install (no --no-transition)."""
     args = [
@@ -142,68 +110,6 @@ def _latest_dirname() -> str:
     latest = transitions.load_latest(_PROFILE)
     assert latest is not None
     return latest.name
-
-
-# ---------------------------------------------------------------------------
-# the headline recovery promise
-# ---------------------------------------------------------------------------
-
-
-def test_revert_deletes_seeded_stores_and_reinstall_repeats_first_run(
-    repo: Path,
-) -> None:
-    """seed-install → revert deletes the stores → re-install verbatim.
-
-    Both live files carry span edits with NO stored base. The first
-    install clobbers the FORKED markdown span edit (forked spans get no
-    post-merge override, so the base-absent path deploys tracked
-    verbatim over it) and seeds base + sidecar state for both files;
-    the structural YAML file additionally seeds its base FROM live (the
-    auto-on-install migration). Revert must restore live AND delete
-    every seeded store entry, so the re-install repeats the first run
-    verbatim: it clobbers AGAIN. A stranded markdown base (the bug this
-    pins) would route the re-install through the 3-way merge instead —
-    live differs from base, tracked does not, so the merge would KEEP
-    the live edit and silently diverge from the first run.
-    """
-    _write_tracked(repo, _DOC)
-    config = _write_config(repo)
-    live_yaml = _live_yaml()
-    live_yaml.parent.mkdir(parents=True, exist_ok=True)
-    live_yaml.write_text(_YAML_SPAN_EDITED, encoding="utf-8")
-    _live_md().write_text(_DOC_FORK_EDITED, encoding="utf-8")
-
-    assert _install(config).exit_code == 0
-    # The base-absent path deployed tracked VERBATIM over the forked edit.
-    assert _live_md().read_text(encoding="utf-8") == _DOC
-    yaml_after_first = live_yaml.read_bytes()
-    yaml_base_after_first = base_store.read_base(_PROFILE, _YAML_ID)
-    md_base_after_first = base_store.read_base(_PROFILE, _MD_ID)
-    sidecar_after_first = spans_store.get_states(_PROFILE, _MD_ID)
-    assert yaml_base_after_first is not None  # migration-seeded from live
-    assert md_base_after_first is not None
-    assert sidecar_after_first  # seeded
-
-    result = _revert(config)
-    assert result.exit_code == 0, result.output
-    # Live is back to the span-edited pre-install content...
-    assert _live_md().read_text(encoding="utf-8") == _DOC_FORK_EDITED
-    assert live_yaml.read_text(encoding="utf-8") == _YAML_SPAN_EDITED
-    # ...and every seeded store entry is DELETED, not stranded.
-    assert base_store.read_base(_PROFILE, _MD_ID) is None
-    assert base_store.read_base(_PROFILE, _YAML_ID) is None
-    assert spans_store.get_states(_PROFILE, _MD_ID) == {}
-    assert not spans_store.manifest_path(_PROFILE, _MD_ID).exists()
-
-    # Re-install repeats the first run verbatim: the forked edit is
-    # clobbered AGAIN (base-absent path, not a live-preserving 3-way
-    # against a stale ancestor), and the stores re-seed identically.
-    assert _install(config).exit_code == 0
-    assert _live_md().read_text(encoding="utf-8") == _DOC
-    assert live_yaml.read_bytes() == yaml_after_first
-    assert base_store.read_base(_PROFILE, _MD_ID) == md_base_after_first
-    assert base_store.read_base(_PROFILE, _YAML_ID) == yaml_base_after_first
-    assert spans_store.get_states(_PROFILE, _MD_ID) == sidecar_after_first
 
 
 # ---------------------------------------------------------------------------

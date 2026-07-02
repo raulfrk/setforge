@@ -47,7 +47,6 @@ from setforge.anchors import (
     AnchorKind,
 )
 from setforge.config import (
-    Disposition,
     MarketplaceSourceKind,
     _check_yaml_octal_mode,
 )
@@ -310,20 +309,15 @@ class _LocalTrackedFileOverlay(BaseModel):
     :func:`setforge.span_types.validate_spans_file_type` at install time.
     """
 
-    disposition: Disposition | None = None
-    """Host-local override for the tracked_file's merge disposition.
+    disposition: str | None = None
+    """Vestigial host-local override for the tracked_file's merge disposition.
 
-    Use case: a tracked file is declared without a disposition in the
-    shared ``setforge.yaml`` but a specific host needs to opt it into
-    the ``forked`` or ``pinned`` behaviour (e.g. a host that should
-    never contribute live edits back to the shared base). The override
-    lives in ``local.yaml`` so the profile remains portable.
-
-    Accepts exactly the StrEnum member values ``"shared"``, ``"forked"``,
-    ``"pinned"``; any other casing or value is rejected at parse time
-    (:class:`pydantic.ValidationError`). The merged result is re-validated
-    by :func:`setforge.config.TrackedFile.model_validate`, so every
-    ``TrackedFile`` invariant re-runs against the overridden disposition.
+    Retired with the file-level ``Disposition`` model: kept on the overlay
+    model (as a free-form string) so a pre-cutover ``local.yaml`` that still
+    declares ``disposition:`` continues to parse, but the value is no longer
+    consumed on deploy — every file now flows through the unified per-unit
+    reconcile store, and the disposition-retire migration folds any legacy
+    host-local disposition/spans intent into it.
     """
 
     @field_validator("mode", mode="before")

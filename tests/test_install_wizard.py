@@ -14,26 +14,22 @@ so no real tty is needed. Assert:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import base_store
+from setforge import base_store, reconcile_apply
 from setforge.cli import app
 from setforge.cli import install as install_mod
-from setforge.disposition_merge import (
-    ConflictChoice,
-    ConflictResolution,
-    ConflictResolver,
-)
-from setforge.markdown_merge import LineConflict
-from setforge.scalar_merge import ScalarConflict
-from setforge.structural_merge import PathConflict
+from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
+from setforge.reconcile.wizard import WizardResult
 
 _PROFILE = "test-wizard"
 _FILE_ID = "shared_text"
+_TRACKED_CONFLICT = b"one\ntwo-TRACKED\nthree\n"
 
 
 def _write_config(repo: Path) -> Path:
@@ -45,7 +41,6 @@ def _write_config(repo: Path) -> Path:
         "  shared_text:\n"
         "    src: text/note.txt\n"
         "    dst: ~/.setforge_wiz/note.txt\n"
-        "    disposition: shared\n"
         "  anchor:\n"
         "    src: text/anchor.txt\n"
         "    dst: ~/.setforge_wiz/anchor.txt\n"
@@ -100,47 +95,57 @@ def _install(config: Path, *, extra: list[str] | None = None) -> Result:
     return CliRunner().invoke(app, args)
 
 
-def _inject_resolver(
-    monkeypatch: pytest.MonkeyPatch, resolver: ConflictResolver
-) -> list[LineConflict | PathConflict | ScalarConflict]:
-    """Force ``install`` to use ``resolver`` regardless of tty; record conflicts.
+def _script_wizard(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    choose: Callable[[Conflict], tuple[bytes, bool]],
+) -> list[Conflict]:
+    """Script the reconcile conflict wizard regardless of tty; record regions.
 
-    Patches the ``_build_conflict_resolver`` seam so the wizard gate (tty +
-    interactive) is bypassed for the test. Returns a list the wrapped resolver
-    appends each seen conflict to, so a test can assert the resolver was (or was
-    not) invoked.
+    Under the unified reconcile model the plain-file 3-way merge resolves a
+    conflict through :func:`setforge.reconcile.wizard.resolve_conflicts` (not
+    the legacy ``ConflictResolver`` callback). Two seams are patched: install's
+    ``_build_conflict_resolver`` returns a non-``None`` sentinel so the deploy
+    routes the file interactively (still honoring the ``--auto`` short-circuit),
+    and ``reconcile_apply.resolve_conflicts`` is replaced with a scripted
+    resolver that maps each conflict region to ``(chosen_bytes, was_skip)`` via
+    ``choose``. Returns a list every seen conflict region is appended to, so a
+    test can assert the wizard was (or was not) invoked.
     """
-    seen: list[LineConflict | PathConflict | ScalarConflict] = []
+    seen: list[Conflict] = []
 
-    def _wrapped(
-        conflict: LineConflict | PathConflict | ScalarConflict,
-    ) -> ConflictResolution:
-        seen.append(conflict)
-        return resolver(conflict)
+    def _fake_resolve(
+        file_id: object,
+        result: MergeResult,
+        *,
+        display_path: str | None = None,
+        claude_merge: object = None,
+    ) -> WizardResult:
+        out: list[Segment] = []
+        deferred = False
+        for seg in result.segments:
+            if isinstance(seg, Clean):
+                out.append(seg)
+                continue
+            seen.append(seg)
+            chosen, was_skip = choose(seg)
+            out.append(Clean(chosen))
+            deferred = deferred or was_skip
+        return WizardResult(MergeResult(tuple(out), absent=result.absent), deferred)
 
     def _fake_build(
         *, reconcile_user_sections: bool, section_auto: object
-    ) -> ConflictResolver | None:
+    ) -> object | None:
         # Honor the --auto short-circuit: when an auto mode is set, install
         # never builds a resolver (auto wins). Mirror that here so the
         # auto-path test exercises the real gate.
         if section_auto is not None:
             return None
-        return _wrapped
+        return _fake_resolve
 
     monkeypatch.setattr(install_mod, "_build_conflict_resolver", _fake_build)
+    monkeypatch.setattr(reconcile_apply, "resolve_conflicts", _fake_resolve)
     return seen
-
-
-def _const_resolver(res: ConflictResolution) -> ConflictResolver:
-    """A resolver returning ``res`` for every conflict."""
-
-    def _resolve(
-        _conflict: LineConflict | PathConflict | ScalarConflict,
-    ) -> ConflictResolution:
-        return res
-
-    return _resolve
 
 
 def _seed_conflict(repo: Path) -> Path:
@@ -156,43 +161,40 @@ def _seed_conflict(repo: Path) -> Path:
 def test_wizard_keep_ours_keeps_live_and_advances(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scripted KEEP_OURS: live kept, base advances (no skip)."""
+    """Scripted keep-ours: live kept, base advances (no skip)."""
     config = _seed_conflict(repo)
-    seen = _inject_resolver(
-        monkeypatch, _const_resolver(ConflictResolution(ConflictChoice.KEEP_OURS))
-    )
+    seen = _script_wizard(monkeypatch, choose=lambda c: (c.ours, False))
     result = _install(config)
     assert result.exit_code == 0, result.output
-    assert seen, "resolver was not invoked"
+    assert seen, "wizard was not invoked"
     live = _live_path().read_text(encoding="utf-8")
     assert "two-LIVE" in live
-    # KEEP_OURS is not a skip → base advances to the merged (live) text.
-    assert base_store.read_base(_PROFILE, _FILE_ID) == live.encode("utf-8")
+    # Not a skip → the reconcile base advances to the tracked (upstream) side;
+    # the deployed live rides the reconcile store's local leg, not the base.
+    assert base_store.read_base(_PROFILE, _FILE_ID) == _TRACKED_CONFLICT
 
 
 def test_wizard_take_theirs_writes_tracked(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scripted TAKE_THEIRS: live takes the tracked side; base advances."""
+    """Scripted take-theirs: live takes the tracked side; base advances."""
     config = _seed_conflict(repo)
-    _inject_resolver(
-        monkeypatch, _const_resolver(ConflictResolution(ConflictChoice.TAKE_THEIRS))
-    )
+    _script_wizard(monkeypatch, choose=lambda c: (c.theirs, False))
     result = _install(config)
     assert result.exit_code == 0, result.output
     live = _live_path().read_text(encoding="utf-8")
     assert "two-TRACKED" in live
     assert "two-LIVE" not in live
+    # Live now equals tracked, and the base advances to tracked too.
     assert base_store.read_base(_PROFILE, _FILE_ID) == live.encode("utf-8")
 
 
 def test_wizard_edit_splices_edited_lines(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scripted EDIT: the edited lines land in the live file."""
+    """Scripted edit: the edited region lands in the live file."""
     config = _seed_conflict(repo)
-    edit = ConflictResolution(ConflictChoice.EDIT, edited_lines=["two-EDITED\n"])
-    _inject_resolver(monkeypatch, _const_resolver(edit))
+    _script_wizard(monkeypatch, choose=lambda c: (b"two-EDITED\n", False))
     result = _install(config)
     assert result.exit_code == 0, result.output
     live = _live_path().read_text(encoding="utf-8")
@@ -204,12 +206,14 @@ def test_wizard_edit_splices_edited_lines(
 def test_wizard_skip_keeps_live_and_defers_base(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scripted SKIP: live kept, base NOT advanced — conflict re-detects."""
+    """Scripted skip: live kept, base NOT advanced — conflict re-detects.
+
+    An interactive skip (the wizard was offered) keeps live and does NOT gate
+    the exit code — only a NON-interactive deferral gates.
+    """
     config = _seed_conflict(repo)
     base_before = base_store.read_base(_PROFILE, _FILE_ID)
-    _inject_resolver(
-        monkeypatch, _const_resolver(ConflictResolution(ConflictChoice.SKIP))
-    )
+    _script_wizard(monkeypatch, choose=lambda c: (c.ours, True))
     result = _install(config)
     assert result.exit_code == 0, result.output
     assert "two-LIVE" in _live_path().read_text(encoding="utf-8")
@@ -220,14 +224,12 @@ def test_wizard_skip_keeps_live_and_defers_base(
 def test_auto_use_tracked_does_not_invoke_wizard(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under --auto=use-tracked the resolver is never built/invoked (auto wins)."""
+    """Under --auto=use-tracked the wizard is never built/invoked (auto wins)."""
     config = _seed_conflict(repo)
-    seen = _inject_resolver(
-        monkeypatch, _const_resolver(ConflictResolution(ConflictChoice.KEEP_OURS))
-    )
+    seen = _script_wizard(monkeypatch, choose=lambda c: (c.ours, False))
     result = _install(config, extra=["--auto=use-tracked"])
     assert result.exit_code == 0, result.output
-    # Resolver never saw a conflict — the auto path resolved it.
+    # The wizard never saw a conflict — the auto path resolved it.
     assert seen == []
     live = _live_path().read_text(encoding="utf-8")
     assert "two-TRACKED" in live
@@ -235,11 +237,16 @@ def test_auto_use_tracked_does_not_invoke_wizard(
 
 
 def test_bare_noninteractive_install_warns_and_defers(repo: Path) -> None:
-    """No resolver injected (bare, non-tty CliRunner): warn + defer path."""
+    """No wizard (bare, non-tty CliRunner): a deferred conflict gates non-zero.
+
+    Under the unified reconcile model a non-interactive conflict DEFERS (keeps
+    live, base not advanced) and the install gates a non-zero exit so CI / cron
+    fails loudly on the unresolved change.
+    """
     config = _seed_conflict(repo)
     base_before = base_store.read_base(_PROFILE, _FILE_ID)
     result = _install(config)
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
     assert "two-LIVE" in _live_path().read_text(encoding="utf-8")
     assert "conflict" in result.output.lower()
     assert base_store.read_base(_PROFILE, _FILE_ID) == base_before

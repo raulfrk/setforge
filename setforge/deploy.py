@@ -1,18 +1,11 @@
-"""Atomic file deploy primitive with disposition merge + span preservation.
+"""Atomic file deploy primitive.
 
 The deploy primitive is dotdrop's role reimplemented in stdlib + ruamel.yaml.
 It writes a tracked file's content to its live destination atomically (via
-``os.replace``), keeps a single ``.bak`` rotation per file, and reconciles
-sub-file preservation through the unified model:
-
-- ``disposition`` + ``base_text``: the stored-base 3-way merge driver
-  (:mod:`setforge.disposition_merge`).
-- ``spans``: PINNED / FORKED structural & markdown span re-overlay, and
-  markerless host-local OVERLAY bodies (:mod:`setforge.overlay_deploy`).
-
-The legacy ``preserve_user_sections`` / ``preserve_user_keys`` 2-way paths were
-retired at schema 2.0 in favor of the above (see the contract migration
-:mod:`setforge.migrations._contract_2_0`).
+``os.replace``) and keeps a single ``.bak`` rotation per file. Sub-file
+reconciliation is owned by the unified per-unit reconcile engine
+(:mod:`setforge.reconcile`); this primitive deploys tracked content verbatim
+and the reconcile layer overrides the resolved content before the write.
 """
 
 import contextlib
@@ -23,18 +16,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from setforge import (
-    atomicio,
-    disposition_merge,
-    overlay_deploy,
-)
-from setforge.config import Config, Disposition, ResolvedProfile, TrackedFile
+from setforge import atomicio
+from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
-from setforge.section_mode import ReconcileAuto
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import SpanEntry, SpanKind, SpanState
-from setforge.spans_overlay import SpanOrphan, apply_spans
+from setforge.span_types import SpanState
+from setforge.spans_overlay import SpanOrphan
 from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -108,20 +96,12 @@ def copy_atomic(
     backup: bool = True,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
-    disposition: Disposition | None = None,
-    base_text: str | None = None,
-    merge_auto: ReconcileAuto | None = None,
-    conflict_resolver: disposition_merge.ConflictResolver | None = None,
-    spans: list[SpanEntry] | None = None,
-    span_states: dict[str, SpanState] | None = None,
 ) -> DeployResult:
-    """Atomically deploy ``src`` to ``dst``.
+    """Atomically deploy ``src`` to ``dst`` verbatim.
 
-    Composes :func:`resolve_deploy` (the pure read: merge + span overlay
-    computed in memory) with :func:`write_resolved_deploy` (the only write
-    step). See :func:`resolve_deploy` for the full parameter contract; the
-    two-step seam exists so an orchestrator can resolve every file before
-    writing any.
+    Composes :func:`resolve_deploy` (the pure read) with
+    :func:`write_resolved_deploy` (the only write step). The two-step seam
+    exists so an orchestrator can resolve every file before writing any.
 
     When ``dst`` is a symlink the operation resolves to its target so the
     symlink itself is preserved (matches the legacy Makefile's behavior
@@ -135,12 +115,6 @@ def copy_atomic(
         dst,
         host_local_sections=host_local_sections,
         mode=mode,
-        disposition=disposition,
-        base_text=base_text,
-        merge_auto=merge_auto,
-        conflict_resolver=conflict_resolver,
-        spans=spans,
-        span_states=span_states,
     )
     return write_resolved_deploy(resolved, backup=backup)
 
@@ -151,72 +125,25 @@ def resolve_deploy(
     *,
     host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
-    disposition: Disposition | None = None,
-    base_text: str | None = None,
-    merge_auto: ReconcileAuto | None = None,
-    conflict_resolver: disposition_merge.ConflictResolver | None = None,
-    spans: list[SpanEntry] | None = None,
-    span_states: dict[str, SpanState] | None = None,
-    live_text: str | None = None,
 ) -> ResolvedDeploy:
-    """Compute a deploy's content + state advances WITHOUT writing anything.
+    """Compute a verbatim deploy's content WITHOUT writing anything.
 
     The read half of :func:`copy_atomic`: resolves ``dst`` through any
-    pre-existing symlink, probes existence and effective mode, and runs the
-    merge / span machinery entirely in memory. No directory is created and
-    no file is touched — the returned :class:`ResolvedDeploy` is handed to
+    pre-existing symlink, probes existence and effective mode, and reads the
+    tracked source verbatim into memory. No directory is created and no file
+    is touched — the returned :class:`ResolvedDeploy` is handed to
     :func:`write_resolved_deploy` when (and if) the caller decides to write.
 
-    ``live_text``, when not ``None``, OVERRIDES the on-disk live content as
-    the merge input. The caller uses this when a deferred live rewrite is
-    pending (e.g. the disposition-base migration's SHARED-marker strip is
-    computed in a read-only pass and applied later), so disk live ≠ the
-    live the merge must see. ``dst_existed`` still reflects the disk probe.
-
-    When ``disposition`` is not None the file is resolved via the
-    stored-base 3-way merge driver
-    (:func:`setforge.disposition_merge.resolve_file`): live (``dst``'s
-    current bytes, ``""`` when absent), tracked (``src``'s bytes) and the
-    stored ``base_text`` (the previously deployed base, ``None`` on first
-    run) are merged under ``disposition`` + ``merge_auto`` (the install
-    ``--auto``, threaded to the driver). The merged text becomes the
-    resolution's ``content`` (the write step applies the NOOP/CREATED/UPDATED
-    detection + :func:`_atomic_write` to it). The returned
-    :class:`ResolvedDeploy` carries ``new_base`` (the bytes the caller should
-    write to the stored base, or ``None`` to defer re-baselining) and
-    ``merge_conflicts`` (every conflicting hunk/path, for the caller to
-    warn — non-empty even when ``merge_auto`` resolved them). ``new_base``
-    is computed from the driver resolution INDEPENDENTLY of the eventual
-    write action: a clean merge whose result equals live is a NOOP write but
-    still re-baselines (``new_base`` set). When ``disposition`` is None the
-    file is deployed from ``src`` verbatim and ``new_base`` /
-    ``merge_conflicts`` stay inert (``None`` / ``[]``). Symlinked
-    tracked_files (deployed via the separate
-    :func:`deploy_symlinked_file`, not this function) ignore ``disposition``
-    for now.
-
-    ``conflict_resolver`` is an OPTIONAL per-conflict resolver (a
-    :data:`setforge.disposition_merge.ConflictResolver`) threaded into the
-    disposition driver. When supplied AND a conflict arises (and
-    ``merge_auto`` is None), each conflict is resolved by the resolver
-    instead of the blanket policy — the interactive install builds a
-    keyboard wizard here. ``merge_auto`` (``--auto``) takes precedence, so
-    a non-``None`` auto resolves every conflict without consulting the
-    resolver.
-
-    ``spans`` are the file's sub-file span intents. Structural
-    (yaml/json/jsonc) PINNED/FORKED spans are re-asserted inside the merge
-    driver; markdown PINNED/FORKED spans use the text-splice re-overlay
-    (:mod:`setforge.spans_overlay`); markerless host-local OVERLAY spans
-    are excised before / injected after the merge
-    (:mod:`setforge.overlay_deploy`). The OVERLAY path also runs on the
-    ``disposition=None`` branch (a host-local-only file), where the content
-    is otherwise tracked verbatim.
+    Sub-file reconciliation is owned by the per-unit reconcile engine
+    (:mod:`setforge.reconcile`): the caller overrides
+    :attr:`ResolvedDeploy.content` with the reconciled bytes before the write,
+    so this function deploys ``src`` verbatim and leaves ``new_base`` /
+    ``merge_conflicts`` / ``new_span_states`` / ``span_orphans`` inert.
 
     ``host_local_sections`` is a vestigial parameter: host-local content is now
-    markerless OVERLAY-span only (the marker-injection path was retired with the
-    user-section markers). It is retained on the signature for caller symmetry
-    and threaded inertly; the OVERLAY spans alone carry every host-local body.
+    owned by the reconcile engine (the marker-injection path was retired with
+    the user-section markers). It is retained on the signature for caller
+    symmetry and threaded inertly.
 
     ``mode`` is the POSIX file-mode bits to apply to ``dst`` via
     ``os.fchmod`` on the temp fd BEFORE ``os.replace`` (closes the
@@ -233,45 +160,18 @@ def resolve_deploy(
     real_dst = _resolve_for_copy(dst)
     dst_existed = real_dst.exists()
 
-    # Effective write mode. ``mode`` (config ``mode:``) wins when set. On the
-    # disposition path a re-baselined rewrite must NOT widen the existing live
-    # mode toward the tracked source's (a live 0600 staying 0600), so when no
-    # explicit mode is configured and a live file already exists, preserve its
-    # mode rather than letting ``_atomic_write`` fall back to the source's mode.
-    effective_mode = mode
-    if effective_mode is None and disposition is not None and dst_existed:
-        effective_mode = stat.S_IMODE(real_dst.stat().st_mode)
-    if disposition is not None:
-        content, new_base, merge_conflicts, new_span_states, span_orphans = (
-            _resolve_disposition_content(
-                src,
-                real_dst,
-                dst_existed,
-                disposition,
-                base_text,
-                merge_auto,
-                conflict_resolver,
-                spans,
-                span_states,
-                live_text=live_text,
-            )
-        )
-    else:
-        content, new_span_states = _verbatim_with_overlay(src, spans, span_states)
-        new_base = None
-        merge_conflicts = []
-        span_orphans = []
+    content = src.read_text(encoding="utf-8")
 
     return ResolvedDeploy(
         src=src,
         real_dst=real_dst,
         dst_existed=dst_existed,
-        effective_mode=effective_mode,
+        effective_mode=mode,
         content=content,
-        new_base=new_base,
-        merge_conflicts=merge_conflicts,
-        new_span_states=new_span_states,
-        span_orphans=span_orphans,
+        new_base=None,
+        merge_conflicts=[],
+        new_span_states=None,
+        span_orphans=[],
     )
 
 
@@ -307,141 +207,6 @@ def write_resolved_deploy(
         new_span_states=resolved.new_span_states,
         span_orphans=resolved.span_orphans,
     )
-
-
-def _resolve_disposition_content(
-    src: Path,
-    real_dst: Path,
-    dst_existed: bool,
-    disposition: Disposition,
-    base_text: str | None,
-    merge_auto: ReconcileAuto | None,
-    conflict_resolver: disposition_merge.ConflictResolver | None,
-    spans: list[SpanEntry] | None,
-    span_states: dict[str, SpanState] | None,
-    *,
-    live_text: str | None = None,
-) -> tuple[
-    str,
-    str | None,
-    list[LineConflict | PathConflict],
-    dict[str, SpanState] | None,
-    list[SpanOrphan],
-]:
-    """Run the stored-base 3-way merge + span re-overlay for a disposition file.
-
-    Returns ``(content, new_base, merge_conflicts, new_span_states,
-    span_orphans)``. Structural (yaml/json/jsonc) spans are re-asserted INSIDE
-    the merge driver (the pin snapshot is taken from the FRESH live parse before
-    the in-place merge); markdown PINNED/FORKED spans use the text-splice
-    re-overlay; markerless host-local OVERLAY spans are excised BEFORE the merge
-    and injected AFTER it (the body never enters base or tracked — leak gate).
-
-    ``live_text`` overrides the on-disk live read when not ``None`` (see
-    :func:`resolve_deploy`); every consumer of live content below — the merge
-    driver, the OVERLAY excise, and the pinned-span re-overlay — sees the
-    override.
-    """
-    if live_text is not None:
-        live = live_text
-    else:
-        live = real_dst.read_text(encoding="utf-8") if dst_existed else ""
-    tracked = src.read_text(encoding="utf-8")
-    structural = disposition_merge.is_structural(real_dst)
-    md_overlay_spans = (
-        overlay_deploy.overlay_spans(spans) if (spans and not structural) else []
-    )
-    merge_spans = (
-        [s for s in spans if s.kind is not SpanKind.OVERLAY] if spans else None
-    )
-    structural_spans = merge_spans if (merge_spans and structural) else None
-    if md_overlay_spans:
-        live, _ = overlay_deploy.excise_overlay_bodies(
-            live, md_overlay_spans, span_states or {}
-        )
-    resolution = disposition_merge.resolve_file(
-        disposition,
-        real_dst,
-        base_text,
-        live,
-        tracked,
-        merge_auto,
-        conflict_resolver,
-        structural_spans=structural_spans,
-        live_absent=not dst_existed,
-    )
-    content = resolution.text
-    # new_base rides the resolution's advance decision, NOT the write action:
-    # a clean merge whose result equals live is a NOOP write that still
-    # re-baselines the stored base.
-    new_base = resolution.text if resolution.advance_base else None
-    merge_conflicts: list[LineConflict | PathConflict] = resolution.conflicts
-    new_span_states: dict[str, SpanState] | None = None
-    span_orphans: list[SpanOrphan] = []
-    if resolution.structural_span_orphans:
-        # Structural pins re-asserted inside the merge; the re-baseline already
-        # used the post-reassert dump (B-S6). Surface any orphan through the
-        # same warn machinery as markdown (anchor + kind), carrying the
-        # structural-only classification so the warning can attribute an
-        # upstream rename/delete and render a did-you-mean.
-        span_orphans = [
-            SpanOrphan(
-                anchor=o.anchor,
-                kind=o.kind,
-                reason=o.reason.value,
-                tracked_siblings=o.tracked_siblings,
-            )
-            for o in resolution.structural_span_orphans
-        ]
-    # Markdown span re-overlay (NEVER threaded into merge internals): splice
-    # live bytes over each PINNED heading span AFTER the whole-file merge, then
-    # re-baseline the byte base to the POST-splice bytes (Invariant I1). Forked
-    # spans get no override but still recompute derived state for capture
-    # exclusion. Skipped for structural files (handled inside the driver).
-    if merge_spans and not structural:
-        overlay = apply_spans(content, live, merge_spans, span_states or {})
-        content = overlay.text
-        new_span_states = overlay.new_states
-        span_orphans = overlay.orphans
-        if new_base is not None:
-            new_base = content
-    # OVERLAY inject runs LAST, on the body-free merged + pinned/forked content.
-    # The base is re-baselined from the PRE-inject bytes (``new_base`` already
-    # set), so the stored base stays body-free.
-    if md_overlay_spans:
-        injected, overlay_states = overlay_deploy.inject_overlay_bodies(
-            content, md_overlay_spans, span_states or {}
-        )
-        content = injected
-        new_span_states = {**(new_span_states or {}), **overlay_states}
-    return content, new_base, merge_conflicts, new_span_states, span_orphans
-
-
-def _verbatim_with_overlay(
-    src: Path,
-    spans: list[SpanEntry] | None,
-    span_states: dict[str, SpanState] | None,
-) -> tuple[str, dict[str, SpanState] | None]:
-    """Render a ``disposition=None`` file: tracked verbatim + host-local overlays.
-
-    Returns ``(content, new_span_states)``. Host-local OVERLAY spans carry the
-    per-host body markerless in local.yaml and are spliced in once at their
-    anchors below; a file with no host-local overlay stays byte-for-byte the
-    tracked source.
-    """
-    content = src.read_text(encoding="utf-8")
-    new_span_states: dict[str, SpanState] | None = None
-    md_overlay_spans = overlay_deploy.overlay_spans(spans) if spans else []
-    # Markerless inject: splice each host-local OVERLAY body in once at its
-    # anchor. Host-local content is overlay-only after the marker-retire
-    # migration (schema 2.1) — there are no tracked-authored marker pairs left
-    # to strip or hash. Runs only when host-local overlay spans are present, so
-    # files with no host-local overlay stay byte-for-byte the tracked source.
-    if md_overlay_spans:
-        content, new_span_states = overlay_deploy.inject_overlay_bodies(
-            content, md_overlay_spans, span_states or {}
-        )
-    return content, new_span_states
 
 
 def _write_resolved_content(

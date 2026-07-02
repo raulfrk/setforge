@@ -38,7 +38,6 @@ from setforge.config import (
     Profile,
     ResolvedProfile,
     TrackedFile,
-    _fold_overlay_spans,
     apply_local_overlay,
     collect_orphan_overlays,
     load_config,
@@ -75,7 +74,6 @@ from setforge.span_types import (
     SpanEntry,
     SpanKind,
     is_heading_anchor,
-    validate_span_disposition,
     validate_spans_file_type,
 )
 from setforge.structural_merge import (
@@ -407,17 +405,8 @@ def _check_spans_file_types(
         if not spans:
             continue
         src = resolve_src(tracked_file, repo_root)
-        # Fold the local.yaml disposition override the same way the spans are
-        # folded (cfg is not mutated here — validate --all reuses one Config).
-        overlay = overlays.get(tf_id)
-        disposition = (
-            overlay.disposition
-            if overlay is not None and overlay.disposition is not None
-            else tracked_file.disposition
-        )
         try:
             validate_spans_file_type(tf_id, spans, src)
-            validate_span_disposition(tf_id, spans, disposition)
             if is_structural(src):
                 validate_structural_spans(list(spans))
         except ConfigError as exc:
@@ -513,27 +502,16 @@ def _overlay_folded_spans(
 ) -> list[SpanEntry]:
     """Return ``tracked_file.spans`` with the local.yaml overlay folded.
 
-    The fold lands on a LOCAL list, never mutating ``cfg`` —
-    ``validate --all`` iterates profiles over ONE loaded :class:`Config`,
-    so the in-place fold :func:`setforge.config.apply_host_local_tracked_file_overrides`
-    performs at install time would double-apply on the second profile.
-    Reuses :func:`setforge.config._fold_overlay_spans` (host-local wins
-    each anchor) and re-validates the merged dicts through
-    :class:`~setforge.span_types.SpanEntry`, like the install-time fold (which
-    revalidates at the whole-:class:`TrackedFile` level instead). Each
-    merged dict is the dump of an already-validated span, so the
-    revalidation is a guard, not an expected failure path.
+    Tracked-side spans were retired, so this returns only the local.yaml
+    host-local overlay spans (already validated :class:`SpanEntry` objects) —
+    the sole remaining span surface, checked here for file-type legality.
     """
     overlay = overlays.get(tf_id)
     if overlay is None or not overlay.spans:
-        return list(tracked_file.spans)
-    merged = _fold_overlay_spans(
-        tf_id=tf_id,
-        tracked_spans=tracked_file.spans,
-        overlay_spans=overlay.spans,
-        prefer_shared_anchors=frozenset(),
-    )
-    return [SpanEntry.model_validate(d) for d in merged]
+        return []
+    # Tracked-side spans were retired, so only the local.yaml host-local overlay
+    # spans remain to validate for file-type legality.
+    return list(overlay.spans)
 
 
 def _check_markdown_span_anchors(

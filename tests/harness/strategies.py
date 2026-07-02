@@ -10,7 +10,6 @@ Composition map (leaf → aggregate):
     identifiers()            tracked-file ids / profile names / package names
     rel_src_paths()          tracked/<src> source paths
     dst_templates()          ~-rooted dst path templates
-    dispositions()           Disposition | None
     tracked_files()          dict[str, TrackedFile]
     profiles()               dict[str, Profile] (refs only declared ids)
     configs()                Config (the aggregate the state machine uses)
@@ -32,7 +31,6 @@ from hypothesis import strategies as st
 
 from setforge.config import (
     Config,
-    Disposition,
     Profile,
     TrackedFile,
 )
@@ -60,11 +58,6 @@ def dst_templates() -> st.SearchStrategy[str]:
     return st.lists(_IDENT, min_size=1, max_size=3).map(
         lambda parts: "~/" + "/".join(parts)
     )
-
-
-def dispositions() -> st.SearchStrategy[Disposition | None]:
-    """A file-level reconciliation policy, or ``None`` (verbatim deploy)."""
-    return st.sampled_from([None, *list(Disposition)])
 
 
 def tracked_file_contents() -> st.SearchStrategy[str]:
@@ -103,7 +96,6 @@ def tracked_files(draw: st.DrawFn) -> dict[str, TrackedFile]:
         registry[tf_id] = TrackedFile(
             src=draw(rel_src_paths()),
             dst=dst,
-            disposition=draw(dispositions()),
         )
     return registry
 
