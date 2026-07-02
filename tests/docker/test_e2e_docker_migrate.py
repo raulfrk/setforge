@@ -129,7 +129,7 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
-    # A frozen-1.0 apply runs the full chain to the build's expected version (2.1).
+    # A frozen-1.0 apply runs the full chain to the build's expected version (3.0).
     assert "schema_version: '3.0'" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
     backup = c.read_text(f"{_CFG_PATH}.pre-3.0.bak")
