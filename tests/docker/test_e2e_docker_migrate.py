@@ -139,15 +139,21 @@ def test_migrate_apply_stamps_schema_version_with_backup(
 def test_migrate_apply_is_revertible(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A migrate --apply is revertible: revert restores the pre-migration config.
+    """A migrate --apply's final cutover step is revertible.
 
-    The frozen 1.0 config (no schema_version) is stamped through the chain to
-    2.0, then ``setforge revert --profile=migrate`` reverses the recorded
-    transition, restoring the byte-exact pre-migration setforge.yaml.
+    The frozen 1.0 config (no schema_version) is stamped through the full chain
+    to 3.0. That apply records TWO transitions: the framework chain (1.0 → 2.1)
+    and the disposition/spans cutover's own commit-before-unlink transition
+    (2.1 → 3.0). ``setforge revert --profile=migrate`` reverses the most-recent
+    (2.1 → 3.0) transition, walking the config back to a valid schema-2.1 state.
+
+    (A single plain revert undoes only the last transition; a second plain
+    revert is a redo — see the module CLAUDE.md revert/redo contract — so the
+    frozen-1.0 baseline restore across the framework chain is served by
+    ``revert --to-before=<id>``, not by repeated plain reverts.)
     """
     c = docker_container()
     _seed_floored_config(c)
-    before = c.read_text(_CFG_PATH)
 
     apply_res = c.exec(
         [
@@ -177,12 +183,13 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert revert_res.returncode == 0, revert_res.stdout + revert_res.stderr
-    # The pre-migration config is restored byte-for-byte (schema_version gone).
-    assert c.read_text(_CFG_PATH) == before, c.read_text(_CFG_PATH)
+    # The disposition/spans cutover (2.1 → 3.0) is reversed: back to a valid 2.1.
+    assert "schema_version: '3.0'" not in c.read_text(_CFG_PATH), c.read_text(_CFG_PATH)
+    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH), c.read_text(_CFG_PATH)
 
 
 _CFG_2_1_DISPOSITION_YAML: str = (
-    'schema_version: "2.1"\n'
+    "schema_version: '2.1'\n"
     "version: 1\n"
     "tracked_files:\n"
     "  foo:\n"
@@ -401,12 +408,14 @@ def test_migrate_to_downgrade_round_trip(
 def test_downgrade_across_marker_retire_refuses(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A ``--to`` downgrade across the 2.0 → 2.1 marker-retire step refuses (KQ5).
+    """A ``--to`` downgrade across the 3.0 → 2.1 disposition/spans cutover refuses.
 
-    The marker-retire migration is ONE-WAY: a stateless reverse cannot
-    regenerate the retired user-section marker syntax. Applying forward to the
-    build's current 2.1 then requesting ``--to=2.0`` must refuse with the
-    irreversibility message and roll back, leaving the config at 2.1 — the
+    The 3.0 disposition/spans retirement is ONE-WAY: a stateless reverse cannot
+    regenerate the retired per-unit SHARED/LOCAL store from the collapsed 2.1
+    disposition/spans model. Applying forward to the build's current 3.0 then
+    requesting ``--to=2.0`` hits that irreversible reverse step FIRST (3.0 → 2.1,
+    before ever reaching the 2.0 → 2.1 marker boundary), so it must refuse with
+    the irreversibility message and roll back, leaving the config at 3.0 — the
     reversible window is served by ``setforge revert --profile=migrate``
     (byte-restore), not by a stateless reverse migration.
     """
@@ -442,18 +451,19 @@ def test_downgrade_across_marker_retire_refuses(
     )
     assert down.returncode != 0, down.stdout + down.stderr
     combined = down.stdout + down.stderr
-    assert "cannot down-migrate from schema 2.1 to 2.0" in combined, combined
-    assert "markers were retired" in combined, combined
-    # The refused downgrade rolled back: the config is still at 2.1.
+    assert "cannot down-migrate from schema 3.0 to 2.1" in combined, combined
+    assert "cannot be regenerated" in combined, combined
+    assert "Traceback (most recent call last)" not in combined, combined
+    # The refused downgrade rolled back: the config is still at 3.0.
     assert "schema_version: '3.0'" in c.read_text(_CFG_PATH)
 
 
 def test_install_cross_major_config_refuses_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A 3.0 config on this (2.x) engine refuses cleanly — no traceback."""
+    """A 4.0 config on this (3.x) engine refuses cleanly — no traceback."""
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "3.0"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "4.0"\n'))
     result = c.exec(
         ["uv", "run", "setforge", "install", "--profile=base"],
         check=False,
@@ -508,12 +518,12 @@ def test_sub_floor_engine_refuses_all_config_verbs(
 ) -> None:
     """A floor above this build's schema refuses every config-reading verb.
 
-    minimum_version 3.0 puts this (schema-2.0) engine below the floor, so the
+    minimum_version 4.0 puts this (schema-3.0) engine below the floor, so the
     floor fires and refuses every config-reading verb. ``--version`` (no config
     read) stays usable.
     """
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "3.0"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "4.0"\n'))
     for verb in (
         ["install", "--profile=base"],
         ["compare", "--profile=base"],
