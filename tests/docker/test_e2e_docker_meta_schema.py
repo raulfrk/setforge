@@ -95,8 +95,7 @@ def test_install_writes_new_meta_fields(
 ) -> None:
     """E2E #1: install records end_timestamp + command_line.
 
-    Uses ``test-jsonc-shallow`` (now ``disposition: forked`` after the
-    schema-2.0 contract migration). The legacy
+    Uses ``test-jsonc-shallow`` (a plain JSONC reconcile file). The legacy
     ``preserve_user_keys_applied`` overlay flag is no longer produced by
     the install path — it stays absent (omit-when-None). The field
     remains in the meta schema only for backward-compat deserialization
@@ -118,8 +117,8 @@ def test_sync_writes_new_meta_fields(
 ) -> None:
     """E2E #2: sync records end_timestamp + command_line.
 
-    Uses ``test-disposition-shared`` (``disposition: shared``) so a live
-    edit is captured back into tracked on sync — that mutation is what
+    Uses ``test-disposition-shared`` (a plain markdown reconcile file) so a
+    live edit is captured back into tracked on sync — that mutation is what
     causes ``sync`` to write a transition record at all. The sync path no
     longer produces the legacy ``preserve_user_keys_applied`` flag (the
     preserve overlay engine was retired at schema 2.0) — it stays absent
@@ -127,13 +126,13 @@ def test_sync_writes_new_meta_fields(
     """
     c = docker_container()
     _run_install(c, "test-disposition-shared")
-    # Edit live so the shared-disposition sync has a change to capture
-    # back into tracked (a no-drift sync writes no transition).
+    # Edit live so the sync has a change to capture back into tracked (a
+    # no-drift sync writes no transition).
     c.write_text(
         "/home/tester/.setforge_e2e/disposition/shared.md",
         "# Disposition fixture\n\nintro line\nmiddle-CAPTURED\nfooter line\n",
     )
-    # Trigger a tracked-side sync.
+    # Trigger a tracked-side sync (non-interactive absorb of the drift).
     sync = c.exec(
         [
             "uv",
@@ -142,6 +141,8 @@ def test_sync_writes_new_meta_fields(
             "sync",
             "--profile=test-disposition-shared",
             f"--config={CONFIG_FIXTURE}",
+            "--auto=use-live",
+            "--yes",
         ],
         check=False,
     )
@@ -199,7 +200,7 @@ def test_wizard_writes_new_meta_fields(
     """
     c = docker_container()
     _run_install(c, "test-yaml-deep")
-    # Seed drift into the live YAML deep (forked) subtree.
+    # Seed drift into the live YAML deep subtree.
     c.write_text(
         "/home/tester/.setforge_e2e/yaml/deep.yaml",
         textwrap.dedent(

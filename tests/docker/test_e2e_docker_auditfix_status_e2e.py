@@ -51,7 +51,7 @@ def _bootstrap_git_source(c: ContainerHandle) -> None:
 
     A single-file ``base`` profile (plain byte-copy tracked file) is the
     floor case — it isolates ``status``'s git / meta / drift logic from
-    any disposition or overlay machinery. The repo is a real git working
+    any overlay machinery. The repo is a real git working
     tree with one commit so ``status``'s ``git`` subprocess parsing runs
     against true output (HEAD short sha, ``rev-list --count`` since the
     install sha, ``rev-parse --verify origin/main``).
@@ -59,7 +59,7 @@ def _bootstrap_git_source(c: ContainerHandle) -> None:
     c.write_text(
         _SRC_YAML,
         "version: 1\n"
-        "schema_version: '1.0'\n"
+        "schema_version: '3.0'\n"
         "tracked_files:\n"
         "  status_text:\n"
         "    src: status/text.txt\n"

@@ -11,13 +11,15 @@
 #   tests/fixtures/e2e/tracked/<area>/<file>
 # Live dst paths are intentionally placed under $HOME so docker
 # variants and tmp-path CliRunner variants both work cleanly.
-schema_version: '2.0'
+schema_version: '3.0'
 version: 1
 
 # ----------------------------------------------------------------------
 # Tracked files. Each entry pairs a tracked src with a live dst plus optional
 # preserve / template / section directives. Keys are stable identifiers
-# referenced by profile.tracked_files lists below.
+# referenced by profile.tracked_files lists below. Every tracked_file is a
+# plain reconcile file under the unified engine (schema 3.0 retired the
+# per-file disposition/spans model).
 # ----------------------------------------------------------------------
 tracked_files:
   # Plain text — floor case, no overlays, byte copy.
@@ -25,50 +27,44 @@ tracked_files:
     src: minimal/text.txt
     dst: ~/.setforge_e2e/minimal/text.txt
 
-  # Plain markerless markdown — NO file-level disposition, so install is a
-  # byte-copy that overwrites the live copy on every run (markers are retired).
-  # Drives the ``test-text-sections`` dry-run + install floor.
+  # Plain markerless markdown — install is a byte-copy that overwrites the
+  # live copy on every run (markers are retired). Drives the
+  # ``test-text-sections`` dry-run + install floor.
   sections_md:
     src: sections/marked.md
     dst: ~/.setforge_e2e/sections/marked.md
 
-  # ``disposition: shared`` markdown — exercises the three-way reconcile of a
-  # shared file against its per-host stored base.
+  # Markdown reconciled through the unified engine against its per-host base.
   sections_shared_md:
     src: sections/shared.md
     dst: ~/.setforge_e2e/sections/shared.md
-    disposition: shared
 
   # JSON tracked file — byte copy, no preserve mechanism.
   json_settings:
     src: json/settings.json
     dst: ~/.setforge_e2e/json/settings.json
 
-  # Forked JSONC (host divergence kept on merge).
+  # JSONC reconcile file (host divergence merged by jsonc.py).
   # NOTE: extension is `.json` because setforge/jsonc.py:is_jsonc_file
   # treats every `.json` as JSONC-capable (matches VSCode semantics).
   jsonc_shallow:
     src: jsonc/shallow.json
     dst: ~/.setforge_e2e/jsonc/shallow.json
-    disposition: forked
 
-  # Forked JSONC — drives the disposition merge wizard variants.
+  # JSONC reconcile file — drives the structured merge variants.
   jsonc_deep:
     src: jsonc/deep.json
     dst: ~/.setforge_e2e/jsonc/deep.json
-    disposition: forked
 
   # YAML shallow — proves yaml_merge.py shallow parity with jsonc.py.
   yaml_shallow:
     src: yaml/shallow.yaml
     dst: ~/.setforge_e2e/yaml/shallow.yaml
-    disposition: forked
 
-  # YAML deep — proves yaml_merge.py deep parity; drives YAML wizard variant.
+  # YAML deep — proves yaml_merge.py deep parity.
   yaml_deep:
     src: yaml/deep.yaml
     dst: ~/.setforge_e2e/yaml/deep.yaml
-    disposition: forked
 
   # Directory tree — recursive copy.
   directory_tree:
@@ -103,7 +99,6 @@ tracked_files:
   comprehensive_jsonc:
     src: comprehensive/preserve-settings.json
     dst: ~/.setforge_e2e/comprehensive/preserve-settings.json
-    disposition: forked
   comprehensive_yaml:
     src: comprehensive/config.yaml
     dst: ~/.setforge_e2e/comprehensive/config.yaml
@@ -139,12 +134,10 @@ tracked_files:
   host_local_md:
     src: host-local/host.md
     dst: ~/.setforge_e2e/host-local/host.md
-    disposition: shared
   host_local_md_symlink:
     src: host-local/host.md
     dst: ~/.setforge_e2e/host-local/host_link.md
     symlink: ~/.setforge_e2e/host-local/host_link_target.md
-    disposition: shared
   # Non-markdown tracked_file used to test host-local's file-type rejection.
   host_local_json_reject:
     src: host-local/settings.json
@@ -158,106 +151,71 @@ tracked_files:
     src: section-templates/seed-doc.md
     dst: ~/.setforge_e2e/section-templates/seed-doc.md
 
-  # ---- Disposition fixtures (shared / forked / pinned) -----------------
-  # Each disposition gets its own dst (and thus file_id) so the per-host
-  # stored base is independent across the three policies. The markdown src
-  # routes through the line-based 3-way merge engine; the YAML src routes
-  # through the comment-preserving structural engine.
+  # ---- Reconcile fixtures (formerly disposition shared/forked/pinned) ---
+  # Each gets its own dst (and thus file_id) so the per-host stored base is
+  # independent. The markdown src routes through the line-based 3-way merge
+  # engine; the YAML src routes through the comment-preserving structural
+  # engine.
   disposition_shared_md:
     src: disposition/note.md
     dst: ~/.setforge_e2e/disposition/shared.md
-    disposition: shared
   disposition_forked_md:
     src: disposition/note.md
     dst: ~/.setforge_e2e/disposition/forked.md
-    disposition: forked
   disposition_pinned_md:
     src: disposition/note.md
     dst: ~/.setforge_e2e/disposition/pinned.md
-    disposition: pinned
   disposition_forked_yaml:
     src: disposition/config.yaml
     dst: ~/.setforge_e2e/disposition/forked.yaml
-    disposition: forked
 
   # ---- override CLI fixtures --------------------------------------------
-  # Clean shared md + yaml tracked_files with NO pre-declared spans so the
-  # ``override pin`` user-journey adds a fresh host-local (or --shared) span
-  # at runtime, then install / compare exercise the new override end-to-end.
+  # Clean md + yaml reconcile tracked_files that the ``override`` user-journey
+  # exercises through install / compare end-to-end.
   override_md:
     src: disposition/note.md
     dst: ~/.setforge_e2e/override/note.md
-    disposition: shared
   override_yaml:
     src: disposition/config.yaml
     dst: ~/.setforge_e2e/override/config.yaml
-    disposition: shared
 
-  # ---- Sub-file span fixtures (pinned / forked markdown spans) ----------
-  # Spans require a disposition (the span engine rides the stored-base
-  # 3-way merge path). Each span scenario gets its own dst (and thus
-  # file_id) so its per-host byte-base AND spans sidecar never cross.
-  # All share src spans/note.md — editing it (per fresh container)
-  # simulates an upstream change ELSEWHERE in the file.
+  # ---- Sub-file reconcile fixtures (markdown) ---------------------------
+  # Each scenario gets its own dst (and thus file_id) so its per-host
+  # byte-base never crosses. All share src spans/note.md — editing it
+  # (per fresh container) simulates an upstream change ELSEWHERE in the file.
   spans_pinned_md:
     src: spans/note.md
     dst: ~/.setforge_e2e/spans/pinned.md
-    disposition: shared
-    spans:
-      - anchor: "## Pinned Section"
-        kind: pinned
-        semantics: shared
   spans_forked_md:
     src: spans/note.md
     dst: ~/.setforge_e2e/spans/forked.md
-    disposition: shared
-    spans:
-      - anchor: "## Forked Section"
-        kind: forked
-        semantics: shared
-  # A SHARED markdown tracked_file the host-local OVERLAY span attaches to.
-  # The overlay span itself (markerless host-local body) is declared in
-  # local.yaml at test time; the body must NEVER bake into the tracked src
-  # nor the stored base (the canonical leak gate).
+  # A markdown tracked_file the host-local OVERLAY attaches to. The overlay
+  # body (markerless host-local) is declared in local.yaml at test time; it
+  # must NEVER bake into the tracked src nor the stored base (the leak gate).
   spans_overlay_md:
     src: spans/note.md
     dst: ~/.setforge_e2e/spans/overlay.md
-    disposition: shared
-  # Multi-section markdown (no disposition → markerless OVERLAY path) used to
-  # prove an in-section overlay body re-deploys at its TYPED position, not just
-  # under the enclosing heading (the anchor-positioning regression).
+  # Multi-section markdown (markerless OVERLAY path) used to prove an
+  # in-section overlay body re-deploys at its TYPED position, not just under
+  # the enclosing heading (the anchor-positioning regression).
   section_position_md:
     src: section-position/multi.md
     dst: ~/.setforge_e2e/section-position/multi.md
-  # ---- Structural (yaml dotted-path) span fixtures -----------------------
-  # A yaml tracked_file whose span anchors are DOTTED PATHS (mapping leaves),
-  # not headings. The pinned path is re-asserted to live post-merge; the
-  # forked path merges upstream; both are excluded from capture. Editing the
-  # shared src per fresh container simulates an upstream change at the path.
+  # ---- Structural (yaml) reconcile fixtures -----------------------------
+  # YAML tracked_files reconciled through the comment-preserving structural
+  # engine. Editing the shared src per fresh container simulates an upstream
+  # change at a mapping leaf.
   spans_structural_yaml:
     src: spans/structural.yaml
     dst: ~/.setforge_e2e/spans/structural.yaml
-    disposition: shared
-    spans:
-      - anchor: editor.fontSize
-        kind: pinned
-        semantics: shared
-      - anchor: telemetry.level
-        kind: forked
-        semantics: shared
   spans_structural_subtree_yaml:
     src: spans/structural_subtree.yaml
     dst: ~/.setforge_e2e/spans/structural_subtree.yaml
-    disposition: shared
-    spans:
-      - anchor: pinned
-        kind: pinned
-        semantics: shared
 
   # ---- stage / share-draft fixtures (A5 + A5c) --------------------------
-  # A PLAIN tracked_file (no disposition, no spans) so it rides the reconcile
-  # staging path: `setforge stage` walks its base↔live diff hunks and the host
-  # classifies each SHARED / LOCAL (A5) or drafts a shareable rewrite (A5c).
+  # A PLAIN tracked_file so it rides the reconcile staging path: `setforge
+  # stage` walks its base↔live diff hunks and the host classifies each
+  # SHARED / LOCAL (A5) or drafts a shareable rewrite (A5c).
   stage_notes:
     src: stage/notes.md
     dst: ~/.setforge_e2e/stage/notes.md
@@ -414,11 +372,11 @@ profiles:
     section_slots:
       python-conventions: python-conventions
 
-  # ---- Disposition (shared / forked / pinned) --------------------------
-  # One profile per disposition so each test installs/syncs/compares a
-  # single file in isolation and the stored-base lifecycle never crosses
-  # policies. The forked-yaml profile drives the structural-engine and
-  # compare-expected-drift surfaces.
+  # ---- Reconcile (formerly shared / forked / pinned) -------------------
+  # One profile per fixture so each test installs/syncs/compares a single
+  # file in isolation and the stored-base lifecycle never crosses. The
+  # forked-yaml profile drives the structural-engine and compare-drift
+  # surfaces.
   test-disposition-shared:
     tracked_files:
       - disposition_shared_md
@@ -433,21 +391,20 @@ profiles:
       - disposition_forked_yaml
 
   # ---- Dual representation ----------------------------------------------
-  # One profile carrying BOTH 2.0 reconciliation models: a host-local
-  # OVERLAY-injection file (host_local_md, driven by local.yaml
-  # host_local_sections) AND a disposition: shared file. Exercises that the
-  # two coexist in a single install run without interference (distinct dst
-  # => distinct file_id => per-host base never crosses; the run-global
-  # keep-set prune retains the disposition base).
+  # One profile carrying a host-local OVERLAY-injection file (host_local_md,
+  # driven by local.yaml host_local_sections) AND a second reconcile file.
+  # Exercises that the two coexist in a single install run without
+  # interference (distinct dst => distinct file_id => per-host base never
+  # crosses; the run-global keep-set prune retains both bases).
   test-dual-representation:
     tracked_files:
       - host_local_md
       - disposition_shared_md
 
-  # ---- Sub-file spans (pinned / forked markdown spans) ------------------
-  # One profile per span scenario so each test installs / syncs / compares /
-  # reverts a single span-bearing file in isolation and the per-host base +
-  # spans sidecar lifecycle never crosses scenarios.
+  # ---- Sub-file reconcile scenarios (markdown) -------------------------
+  # One profile per scenario so each test installs / syncs / compares /
+  # reverts a single file in isolation and the per-host base lifecycle
+  # never crosses scenarios.
   test-spans-pinned:
     tracked_files:
       - spans_pinned_md
@@ -471,8 +428,8 @@ profiles:
       - section_position_md
 
   # ---- override CLI journey ---------------------------------------------
-  # A markdown + a yaml shared tracked_file, each with no declared spans, so
-  # the override pin/show/install/compare round-trip starts from a clean slate.
+  # A markdown + a yaml reconcile tracked_file the override show/install/
+  # compare round-trip starts from a clean slate.
   test-override:
     tracked_files:
       - override_md

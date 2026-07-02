@@ -75,6 +75,22 @@ def test_apply_seeds_unified_stamps_and_deletes_legacy(tmp_path) -> None:
     assert not scalar_base_store.manifest_path("default", "conf").exists()
 
 
+def test_apply_strips_disposition_spans_keys_from_config(tmp_path) -> None:
+    """A migrated setforge.yaml is a clean 3.0 doc: the retired disposition/spans
+    tracked-file keys are removed so ``validate`` accepts it (the 3.0 model only
+    warn-and-ignores them, and ``validate`` rejects unknown keys)."""
+    from setforge.config import load_config
+
+    roots = _setup(tmp_path)
+    DispositionRetireMigration().apply(roots=roots)
+
+    text = roots.cfg_path.read_text(encoding="utf-8")
+    assert "disposition" not in text
+    assert "spans" not in text
+    # Loads clean under the strict 3.0 model (no unknown-key warning to reject).
+    load_config(roots.cfg_path)
+
+
 def test_apply_is_idempotent(tmp_path) -> None:
     roots = _setup(tmp_path)
     DispositionRetireMigration().apply(roots=roots)

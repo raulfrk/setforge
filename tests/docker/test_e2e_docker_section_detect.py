@@ -6,9 +6,9 @@ interactive carve wizard is driven through the pyte PTY harness. Per the
 approved plan these isolate each KIND in its own detect run (the two-file
 scenario):
 
-- OVERLAY carve on ``comprehensive_text`` (a clean ``disposition: None``
-  markdown file with no legacy host-local markers).
-- PINNED carve on ``host_local_md`` (``disposition: shared``).
+- OVERLAY carve on ``comprehensive_text`` (a clean markdown reconcile file
+  with no legacy host-local markers).
+- PINNED carve on ``host_local_md`` (a markdown reconcile file).
 
 Each round-trips through ``install`` and re-runs ``detect`` to prove idempotency;
 a separate abort case proves the carve is atomic (Ctrl-C leaves no span).
@@ -29,13 +29,13 @@ pytestmark = pytest.mark.e2e_docker
 _LOCAL_YAML = "/home/tester/.config/setforge/local.yaml"
 _SOURCE_BLOCK = "source:\n  kind: path\n  path: /workspace/tests/fixtures/e2e\n"
 
-# OVERLAY target — a clean disposition=None markdown file (no legacy markers).
+# OVERLAY target — a clean markdown reconcile file (no legacy markers).
 _OVERLAY_PROFILE = "test-comprehensive"
 _OVERLAY_TF = "comprehensive_text"
 _OVERLAY_LIVE = "/home/tester/.setforge_e2e/comprehensive/notes.md"
 _OVERLAY_TRACKED = "/workspace/tests/fixtures/e2e/tracked/comprehensive/notes.md"
 
-# PINNED target — a disposition=shared file.
+# PINNED target — a markdown reconcile file.
 _PINNED_PROFILE = "test-host-local"
 _PINNED_TF = "host_local_md"
 _PINNED_LIVE = "/home/tester/.setforge_e2e/host-local/host.md"

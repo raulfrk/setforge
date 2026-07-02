@@ -140,7 +140,7 @@ def test_install_text_sections_no_live(
 ) -> None:
     """C: markerless markdown tracked_file, no live content → dst equals tracked.
 
-    ``sections_md`` carries no disposition and no user-section markers
+    ``sections_md`` carries no user-section markers
     (markers are retired), so install is a plain byte-copy: the
     deployed file equals the tracked source verbatim, with no marker residue.
     """
@@ -197,17 +197,17 @@ def test_install_jsonc_shallow_no_live(
 def test_install_jsonc_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """G: forked JSONC 3-way merge keeps live edits to the keys.
+    """G: JSONC 3-way reconcile keeps live edits to the keys.
 
-    ``jsonc_shallow`` is ``disposition: forked``: install 3-way-merges
+    ``jsonc_shallow`` is a plain JSONC reconcile file: install 3-way-merges
     {base, live, tracked}. A live-only edit to a key survives while
     tracked-only keys keep their tracked value (no conflict). The base
-    is seeded from live on the first post-seed install.
+    is seeded from the first install.
     """
     c = docker_container()
     # First install to produce baseline.
     _install(c, "test-jsonc-shallow")
-    # Mutate ONLY preserve_user_keys entries on the live side.
+    # Mutate the user-owned keys on the live side.
     live_path = "/home/tester/.setforge_e2e/jsonc/shallow.json"
     c.write_text(
         live_path,
@@ -239,9 +239,9 @@ def test_install_jsonc_shallow_preserve_overlay(
 def test_install_jsonc_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H: forked JSONC deep 3-way merge keeps live sub-key edits.
+    """H: JSONC deep 3-way reconcile keeps live sub-key edits.
 
-    ``jsonc_deep`` is ``disposition: forked``: the structural 3-way merge
+    ``jsonc_deep`` is a plain JSONC reconcile file: the structural 3-way merge
     keeps a live edit to a nested sub-key while tracked-only sub-keys keep
     their tracked value (parent-first union, live wins on overlap).
     """
@@ -280,9 +280,9 @@ def test_install_jsonc_deep_preserve_overlay(
 def test_install_yaml_shallow_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H1: forked YAML 3-way merge — yaml_merge.py parity with jsonc.py.
+    """H1: YAML 3-way reconcile — yaml_merge.py parity with jsonc.py.
 
-    ``yaml_shallow`` is ``disposition: forked``: a live-only edit to a key
+    ``yaml_shallow`` is a plain YAML reconcile file: a live-only edit to a key
     survives the merge while tracked-only keys keep their tracked value.
     """
     c = docker_container()
@@ -312,9 +312,9 @@ def test_install_yaml_shallow_preserve_overlay(
 def test_install_yaml_deep_preserve_overlay(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """H2: forked YAML deep 3-way merge — yaml_merge.py deep-merge parity.
+    """H2: YAML deep 3-way reconcile — yaml_merge.py deep-merge parity.
 
-    ``yaml_deep`` is ``disposition: forked``: a live edit to a nested
+    ``yaml_deep`` is a plain YAML reconcile file: a live edit to a nested
     sub-key survives while tracked-only sub-keys keep their tracked value.
     """
     c = docker_container()
@@ -1740,16 +1740,16 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (2.1)
+    A config already pinned to the build's current expected schema (3.0)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
-    surface the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain) is covered in
+    surface the full 1.0 → … → 3.0 chain) is covered in
     ``test_e2e_docker_migrate.py``.
     """
     c = docker_container()
     c.write_text(
         "/tmp/at-current/setforge.yaml",
-        "schema_version: '2.1'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+        "schema_version: '3.0'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
     )
     result = c.exec(
         [

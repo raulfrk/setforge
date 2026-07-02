@@ -3,10 +3,10 @@
 Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 migration chain end-to-end against a
 real Debian 12 container + the installed ``setforge`` binary:
 
-- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain on a
+- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 chain on a
   frozen 1.0 config (the listing never gates, so it shows all four steps).
-- ``migrate --apply --yes`` walks the chain to ``schema_version: '2.1'`` (the
-  build's current expected) and writes a ``.pre-2.1.bak`` backup sibling. The
+- ``migrate --apply --yes`` walks the chain to ``schema_version: '3.0'`` (the
+  build's current expected) and writes a ``.pre-3.0.bak`` backup sibling. The
   destructive 1.2 → 2.0 contract step is gated on an operator-declared
   ``minimum_version >= 2.0``, so the apply-family configs carry that floor.
 - ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
@@ -86,7 +86,7 @@ def _seed_floored_config(c: ContainerHandle) -> None:
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 chain.
+    """``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 chain.
 
     The listing never gates on the contract floor, so a floorless frozen 1.0
     config still shows all four steps (including the 1.2 → 2.0 contract and the
@@ -100,18 +100,19 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "4 migration(s) available" in combined, combined
+    assert "5 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
     assert "1.1 → 1.2" in combined, combined
     assert "1.2 → 2.0" in combined, combined
     assert "2.0 → 2.1" in combined, combined
+    assert "2.1 → 3.0" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '2.1'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '3.0'`` + writes a backup."""
     c = docker_container()
     _seed_floored_config(c)
     result = c.exec(
@@ -129,9 +130,9 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
     # A frozen-1.0 apply runs the full chain to the build's expected version (2.1).
-    assert "schema_version: '2.1'" in after, after
+    assert "schema_version: '3.0'" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-2.1.bak")
+    backup = c.read_text(f"{_CFG_PATH}.pre-3.0.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -161,7 +162,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '3.0'" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -177,6 +178,84 @@ def test_migrate_apply_is_revertible(
     )
     assert revert_res.returncode == 0, revert_res.stdout + revert_res.stderr
     # The pre-migration config is restored byte-for-byte (schema_version gone).
+    assert c.read_text(_CFG_PATH) == before, c.read_text(_CFG_PATH)
+
+
+_CFG_2_1_DISPOSITION_YAML: str = (
+    'schema_version: "2.1"\n'
+    "version: 1\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md\n"
+    "    dst: ~/.foo.md\n"
+    "    disposition: forked\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def test_migrate_2_1_to_3_0_strips_disposition_and_reverts(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """The 2.1 -> 3.0 disposition/spans cutover yields a clean, valid 3.0 config
+    and is revertible.
+
+    A 2.1 config declaring ``disposition:`` is migrated to 3.0: the retired
+    ``disposition`` key is stripped so ``validate`` accepts the result, then
+    ``setforge revert --profile=migrate`` byte-restores the pre-migration 2.1
+    config (disposition key back).
+    """
+    c = docker_container()
+    c.exec(["mkdir", "-p", f"{_CFG_DIR}/tracked"])
+    c.write_text(_CFG_PATH, _CFG_2_1_DISPOSITION_YAML)
+    c.write_text(f"{_CFG_DIR}/tracked/foo.md", "hello\n")
+    before = c.read_text(_CFG_PATH)
+
+    apply_res = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "migrate",
+            "--apply",
+            "--yes",
+            f"--config={_CFG_PATH}",
+        ],
+        check=False,
+    )
+    assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
+    after = c.read_text(_CFG_PATH)
+    assert "schema_version: '3.0'" in after, after
+    assert "disposition" not in after, after
+
+    validate_res = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "validate",
+            f"--config={_CFG_PATH}",
+            "--profile=base",
+        ],
+        check=False,
+    )
+    assert validate_res.returncode == 0, validate_res.stdout + validate_res.stderr
+
+    revert_res = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=migrate",
+            f"--config={_CFG_PATH}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert revert_res.returncode == 0, revert_res.stdout + revert_res.stderr
     assert c.read_text(_CFG_PATH) == before, c.read_text(_CFG_PATH)
 
 
@@ -200,7 +279,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '3.0'" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -211,7 +290,7 @@ def test_migrate_pin_round_trips_to_from_version(
     assert "schema_version" in after, after
     assert "1.0" in after, after
     # The pin overwrote the applied 2.0 stamp in place.
-    assert "schema_version: '2.0'" not in after, after
+    assert "schema_version: '3.0'" not in after, after
 
 
 def test_frozen_pre_bump_config_still_installs(
@@ -346,7 +425,7 @@ def test_downgrade_across_marker_retire_refuses(
         check=False,
     )
     assert up.returncode == 0, up.stdout + up.stderr
-    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '3.0'" in c.read_text(_CFG_PATH)
 
     down = c.exec(
         [
@@ -366,7 +445,7 @@ def test_downgrade_across_marker_retire_refuses(
     assert "cannot down-migrate from schema 2.1 to 2.0" in combined, combined
     assert "markers were retired" in combined, combined
     # The refused downgrade rolled back: the config is still at 2.1.
-    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '3.0'" in c.read_text(_CFG_PATH)
 
 
 def test_install_cross_major_config_refuses_clean(

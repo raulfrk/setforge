@@ -473,12 +473,19 @@ def _classify_fid(rec: _FidLegacy) -> _SeedPlan:
 
 
 def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
-    """Rewrite ``schema_version: <to_version>`` in setforge.yaml (comment-safe).
+    """Stamp ``schema_version`` AND strip the retired ``disposition``/``spans``
+    tracked-file keys from setforge.yaml (comment-safe).
 
-    Copied from the marker-retire migration so the cutover stays self-contained.
-    Overwrite-in-place preserves the key position + comments; the single atomic
-    write is crash-safe. Raises :class:`ConfigError` on a non-mapping root.
+    Rewrites ``schema_version: <to_version>`` and removes every tracked_file's
+    now-retired ``disposition:`` / ``spans:`` keys, so a migrated config is a
+    clean 3.0 document that ``validate`` accepts (the 3.0 model would otherwise
+    warn-and-ignore the leftover keys, and ``validate`` rejects them). Overwrite-
+    in-place preserves surviving key positions + comments; the single atomic
+    write is crash-safe and captured in the cutover transition for byte-exact
+    revert. Raises :class:`ConfigError` on a non-mapping root.
     """
+    from collections.abc import MutableMapping as _MutMap
+
     from setforge.migrations import _require_mapping_root
     from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
@@ -487,6 +494,12 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
         data = yaml.load(fh)
     data = _require_mapping_root(data, cfg_path)
     data["schema_version"] = to_version
+    tracked_files = data.get("tracked_files")
+    if isinstance(tracked_files, _MutMap):
+        for entry in tracked_files.values():
+            if isinstance(entry, _MutMap):
+                entry.pop("disposition", None)
+                entry.pop("spans", None)
     atomic_write_yaml(cfg_path, data)
 
 

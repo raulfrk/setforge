@@ -35,7 +35,7 @@ pytestmark = pytest.mark.e2e_docker
 # - ``test-minimal`` — plain text byte-copy, no extensions / plugins.
 # - ``test-comprehensive`` — extensions + plugins + multi-file + bootstrap.
 # - ``test-text-sections`` — markerless markdown tracked_file (byte-copy).
-# - ``test-reconcile-sections`` — ``disposition: shared`` 3-way reconcile surface.
+# - ``test-reconcile-sections`` — shared user-section 3-way reconcile surface.
 _PROFILE_MINIMAL: str = "test-minimal"
 _PROFILE_COMPREHENSIVE: str = "test-comprehensive"
 _PROFILE_TEXT_SECTIONS: str = "test-text-sections"
