@@ -159,7 +159,7 @@ class _OwnTransitionStep:
         data["schema_version"] = self.to_version
         atomic_write_yaml(roots.cfg_path, data)
 
-        pre = getattr(roots, "pre_chain_snapshot", None)
+        pre = roots.pre_chain_snapshot
         file_pre: dict[Path, str | None] = (
             dict(pre) if pre is not None else {roots.cfg_path: cfg_pre}
         )
@@ -207,7 +207,7 @@ def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
         app, ["migrate", "--config", str(cfg), "--to", "3.0", "--apply", "--yes"]
     )
     assert result.exit_code == 0, result.output
-    assert 'schema_version: "3.0"' in cfg.read_text() or "3.0" in cfg.read_text()
+    assert "3.0" in cfg.read_text()  # forward chain applied
 
     revert = runner.invoke(
         app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]

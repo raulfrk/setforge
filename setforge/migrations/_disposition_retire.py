@@ -212,6 +212,15 @@ class DispositionRetireMigration:
                 file_pre = {roots.cfg_path: cfg_pre}
                 file_post = {roots.cfg_path: cfg_post}
 
+            # INV-5 here rests on a NON-OVERLAP between the two reverse
+            # mechanisms: no path in the text patch's pre-chain image is also a
+            # state_snapshot. On revert the text patch reverses FIRST, then
+            # restore_state_snapshots runs — so for any shared path the snapshot
+            # (a pre-CUTOVER image) would win and restore it to the intermediate
+            # schema, not the origin. Holds today: the framework steps mutate
+            # only cfg_path, never a snapshotted store. A future pre-cutover step
+            # that edits a state-snapshotted store must extend the snapshot set
+            # back to the chain origin, or revert would stop short of it.
             _write_cutover_transition(
                 file_pre=file_pre,
                 file_post=file_post,
