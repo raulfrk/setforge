@@ -66,7 +66,6 @@ __all__ = [
     "delete_at_path",
     "get_at_path",
     "get_node_at_path",
-    "is_mapping_node",
     "is_structural",
     "list_keys_at_path",
     "merge_structural",
@@ -202,16 +201,6 @@ def _plain_eq(a: object, b: object) -> bool:
 def _is_mapping_node(node: object) -> bool:
     """Whether ``node`` is a mapping in any supported backend."""
     return isinstance(node, JSONObject | Mapping)
-
-
-def is_mapping_node(node: object) -> bool:
-    """Public alias of :func:`_is_mapping_node` for cross-module span callers.
-
-    The deep-pin re-assert (:func:`deep_merge_into_node`) gates on whether the
-    WRAPPED merged subtree is a mapping (both backends) before deep-merging
-    live over it; expose the predicate without reaching into the private name.
-    """
-    return _is_mapping_node(node)
 
 
 def _is_list_node(node: object) -> bool:
@@ -1185,7 +1174,7 @@ def _load_structural(text: str, is_jsonc: bool) -> object:
     JSONC goes through json-five's :class:`~json5.loader.ModelLoader`
     (comments / formatting on ``.wsc_before`` / ``.wsc_after``); YAML through
     ruamel ``YAML(typ="rt")`` round-trip mode (comments / anchors / quotes
-    preserved), matching :func:`setforge.deploy._render_with_preserve_keys`.
+    preserved).
     """
     if is_jsonc:
         return _json5_loads(text, loader=ModelLoader())

@@ -70,7 +70,7 @@ def test_legacy_api_fires_in_enforced_pkg() -> None:
 def test_legacy_api_not_enforced_outside_enforced_pkgs() -> None:
     # A current consumer outside the new-engine packages is NOT flagged.
     vs = check_source(
-        "from setforge._legacy_markers import X\n", "setforge/cli/override.py"
+        "from setforge._legacy_markers import X\n", "setforge/cli/install.py"
     )
     assert _ids(vs, "SAFE-2") == []
 

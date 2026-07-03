@@ -67,7 +67,7 @@ from setforge.wizard import Snapshot
 
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
 
-_RT_YAML = YAML(typ="rt")
+_RT_YAML: YAML = YAML(typ="rt")
 
 
 # ---------------------------------------------------------------------------

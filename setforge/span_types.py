@@ -438,6 +438,13 @@ class SpanState:
 class StructuralSpanOrphanReason(StrEnum):
     """Why a structural span pin could not be re-asserted / located.
 
+    Currently DORMANT: the re-assert pipeline that set these reasons has been
+    retired, so no live code constructs a reason-carrying ``SpanOrphan`` today
+    (orphans are built reason-less, and the install warning's did-you-mean
+    branch never fires). The enum + that branch are retained for the pending
+    span-surface retirement, which will rewire or remove them. Member meanings,
+    for that future work:
+
     ``ABSENT_IN_LIVE`` — the pinned path is gone from the fresh live parse (the
     user deleted ``P`` locally); there is nothing to re-impose.
     ``MISSING_PARENT`` — an intermediate parent on the path is gone from the
