@@ -69,8 +69,8 @@ class ScalarConflict:
     Mirrors :class:`setforge.structural_merge.PathConflict` for the SCALAR
     overlay: ``base`` / ``ours`` (live) / ``theirs`` (tracked) are plain-python
     scalars (or the :data:`ABSENT` sentinel for a side where the key is
-    missing), so the record is comparable and printable when a conflicting
-    path is surfaced to the user per region with ``--auto`` unset.
+    missing), so the record is comparable and printable. It is surfaced to the
+    user per region when ``--auto`` is unset.
     """
 
     path: str

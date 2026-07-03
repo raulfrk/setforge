@@ -1,14 +1,14 @@
 """Integration tests for the interactive conflict wizard wired into install.
 
-Drive the real ``setforge install`` CLI over a conflicting ``disposition:
-shared`` file with a SCRIPTED resolver injected through the
-``_build_conflict_resolver`` seam (monkeypatched in :mod:`setforge.cli.install`),
-so no real tty is needed. Assert:
+Drive the real ``setforge install`` CLI over a plain tracked file with a 3-way
+conflict, forcing the interactive path by monkeypatching
+``_want_interactive_reconcile`` (→ ``True``) and scripting
+``reconcile_apply.resolve_conflicts``, so no real tty is needed. Assert:
 
 - the deployed live file reflects the scripted per-conflict choice
   (KEEP_OURS / TAKE_THEIRS / EDIT);
 - a SKIP keeps live and does NOT advance the base (conflict re-detects);
-- under ``--auto=use-tracked`` the wizard resolver is NEVER invoked (auto wins);
+- under ``--auto=use-tracked`` the wizard is NEVER invoked (auto wins);
 - a bare non-interactive install still warns + defers (non-interactive path).
 """
 
@@ -33,7 +33,7 @@ _TRACKED_CONFLICT = b"one\ntwo-TRACKED\nthree\n"
 
 
 def _write_config(repo: Path) -> Path:
-    """Write a setforge.yaml with a shared disposition file; return its path."""
+    """Write a setforge.yaml with a shared tracked file; return its path."""
     config = repo / "setforge.yaml"
     config.write_text(
         "version: 1\n"
