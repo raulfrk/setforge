@@ -43,11 +43,6 @@ from setforge.config import (
     load_config,
     resolve_profile,
 )
-from setforge.disposition_merge import (
-    _load_structural,
-    is_structural,
-    validate_structural_spans,
-)
 from setforge.errors import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
@@ -75,9 +70,12 @@ from setforge.span_types import (
     SpanKind,
     is_heading_anchor,
     validate_spans_file_type,
+    validate_structural_spans,
 )
 from setforge.structural_merge import (
+    _load_structural,
     get_at_path,
+    is_structural,
     list_keys_at_path,
     resolve_path_prefix,
 )
@@ -369,7 +367,7 @@ def _check_spans_file_types(
     relocation / re-assert miss.
 
     For STRUCTURAL tracked_files it additionally runs the structural-span
-    integrity guards (:func:`setforge.disposition_merge.validate_structural_spans`
+    integrity guards (:func:`setforge.span_types.validate_structural_spans`
     — list-index rejection per Invariant I10 + overlap/nesting rejection per
     Invariant I11). These otherwise fire only at merge / install time
     (a :class:`~setforge.errors.ConfigError` mid-install), so a config with an
@@ -378,7 +376,7 @@ def _check_spans_file_types(
 
     Routes every :class:`~setforge.errors.ConfigError` from
     :func:`setforge.span_types.validate_spans_file_type` /
-    :func:`setforge.disposition_merge.validate_structural_spans` to a string
+    :func:`setforge.span_types.validate_structural_spans` to a string
     failure (existing UX). No-op for tracked_files without spans.
 
     Like :func:`_check_spans_path_existence`, the validated span list is the
@@ -388,7 +386,7 @@ def _check_spans_file_types(
     I11) would pass this offline gate yet abort ``install`` mid-deploy, because
     :func:`setforge.config.apply_host_local_tracked_file_overrides` folds both
     scopes into one overlapping set before
-    :func:`~setforge.disposition_merge.validate_structural_spans` runs at merge
+    :func:`~setforge.span_types.validate_structural_spans` runs at merge
     time.
     """
     try:
@@ -455,7 +453,7 @@ def _check_spans_path_existence(
     * Unparseable structural src → exactly ONE failure row for the file,
       then continue with the remaining tracked_files (report-all contract).
     * List-suffix anchors (``[*]`` / ``[]``) → skip;
-      :func:`~setforge.disposition_merge.validate_structural_spans` already
+      :func:`~setforge.span_types.validate_structural_spans` already
       rejects them (Invariant I10) in :func:`_check_spans_file_types`.
     """
     try:

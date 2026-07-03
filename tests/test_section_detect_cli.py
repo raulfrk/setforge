@@ -212,7 +212,6 @@ def test_seed_overlay_state_has_canonical_last_deployed_body() -> None:
 
 def test_commit_writes_spans(tmp_path: Path) -> None:
     from setforge.cli import _detect_helpers as dh
-    from setforge.cli import override
 
     plans = [
         dh.CarvePlan(
@@ -220,7 +219,7 @@ def test_commit_writes_spans(tmp_path: Path) -> None:
         )
     ]
     dh.commit_carves("p", "sections_md", plans, snapshot_base=tmp_path)
-    data = override._load_local_data()
+    data = dh._load_local_data()
     spans = data["tracked_files"]["sections_md"]["spans"]  # type: ignore[index]
     assert any(s["anchor"] == "## A" for s in spans)
 
@@ -229,10 +228,9 @@ def test_commit_rolls_back_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from setforge.cli import _detect_helpers as dh
-    from setforge.cli import override
 
     # Pre-seed local.yaml so we have a known baseline to restore to.
-    override._append_span_host_local(
+    dh._append_span_host_local(
         "sections_md",
         dh.build_span(
             dh.CarvePlan(
@@ -244,9 +242,9 @@ def test_commit_rolls_back_on_failure(
             )
         ),
     )
-    before = override._local_config_path().read_text(encoding="utf-8")
+    before = dh._local_config_path().read_text(encoding="utf-8")
 
-    real = override._append_span_host_local
+    real = dh._append_span_host_local
     calls = {"n": 0}
 
     def flaky(file_id: str, span: object) -> None:
@@ -255,7 +253,7 @@ def test_commit_rolls_back_on_failure(
             raise RuntimeError("boom")
         real(file_id, span)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(dh.override, "_append_span_host_local", flaky)
+    monkeypatch.setattr(dh, "_append_span_host_local", flaky)
     plans = [
         dh.CarvePlan(
             kind="pinned", name="x", anchor="## X", body=None, semantics="host-local"
@@ -267,7 +265,7 @@ def test_commit_rolls_back_on_failure(
     with pytest.raises(RuntimeError):
         dh.commit_carves("p", "sections_md", plans, snapshot_base=tmp_path)
 
-    after = override._local_config_path().read_text(encoding="utf-8")
+    after = dh._local_config_path().read_text(encoding="utf-8")
     assert after == before  # snapshot restored — no half-created span
 
 
@@ -409,7 +407,6 @@ def test_extract_live_body_full_multiline() -> None:
 def test_recapture_updates_overlay_body(tmp_path: Path) -> None:
     from setforge.anchors import AnchorAfterHeading
     from setforge.cli import _detect_helpers as dh
-    from setforge.cli import override
     from setforge.overlay_inject import canonical_body
 
     # Seed an overlay span 'vmnotes' with the OLD body.
@@ -421,7 +418,7 @@ def test_recapture_updates_overlay_body(tmp_path: Path) -> None:
         semantics="host-local",
         seed_state=None,
     )
-    override._append_span_host_local("comprehensive_text", dh.build_span(plan))
+    dh._append_span_host_local("comprehensive_text", dh.build_span(plan))
 
     dh.recapture_overlay(
         "p",
@@ -431,7 +428,7 @@ def test_recapture_updates_overlay_body(tmp_path: Path) -> None:
         snapshot_base=tmp_path,
     )
 
-    data = override._load_local_data()
+    data = dh._load_local_data()
     spans = data["tracked_files"]["comprehensive_text"]["spans"]  # type: ignore[index]
     overlay = next(s for s in spans if s["anchor"] == "vmnotes")
     assert overlay["overlay"]["body"] == canonical_body("new body\n")

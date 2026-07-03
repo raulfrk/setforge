@@ -55,9 +55,10 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
 def _is_structured(dst: Path) -> bool:
     """Whether ``dst`` is a structured (YAML/JSON/JSONC) file.
 
-    Copied from the retiring ``disposition_merge.is_structural`` so the cutover
-    still picks the key-unit vs line-hunk extractor after that module's routing
-    is removed. Structured units diff per key; everything else per line.
+    A deliberate self-contained copy of the retired file-level disposition
+    merge's structural-file dispatch, so the cutover still picks the key-unit
+    vs line-hunk extractor after that routing is removed. Structured units diff
+    per key; everything else per line.
     """
     from setforge import jsonc
 

@@ -187,10 +187,10 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
     ``install``) used in the error message so the user sees which entry point
     refused.
     """
-    from setforge import disposition_merge
+    from setforge import structural_merge
 
     for _tracked_file, _sub_name, sub_src, sub_dst in _iter_all_tracked_files(ctx):
-        if disposition_merge.is_structural(sub_dst):
+        if structural_merge.is_structural(sub_dst):
             continue
         for role, path in (("tracked", sub_src), ("live", sub_dst)):
             try:

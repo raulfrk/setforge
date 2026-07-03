@@ -34,7 +34,6 @@ import typer
 from setforge import (
     base_store,
     deploy,
-    disposition_merge,
     reconcile,
     reconcile_apply,
     transitions,
@@ -94,6 +93,7 @@ from setforge.source import (
 from setforge.span_types import (
     SpanEntry,
     SpanKind,
+    StructuralSpanOrphanReason,
 )
 from setforge.spans_overlay import SpanOrphan
 from setforge.ui.widgets import Button, Cancelled, button_bar
@@ -694,9 +694,7 @@ def _span_orphan_warning(sub_dst: Path, orphan: SpanOrphan) -> str:
     the merge driver must not import from ``cli``); every other orphan
     keeps the generic could-not-be-relocated wording.
     """
-    upstream_reason = (
-        disposition_merge.StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED
-    )
+    upstream_reason = StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED
     if orphan.reason != upstream_reason:
         return (
             f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
@@ -1319,9 +1317,7 @@ def _dry_run_emit_drift_gate(
     """
     typer.echo("=== would-be drift gate ===")
     unexpected = sum(
-        1
-        for e in drift_report.entries
-        if e.drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
+        1 for e in drift_report.entries if e.drift_class is DriftClass.UNEXPECTED
     )
     typer.echo(f"unexpected drift in {unexpected} file(s)")
 

@@ -22,7 +22,6 @@ is file-type-dispatched at install / validate time by
 → dotted-path anchor only), so an ``anchor: str`` that is shaped for the
 wrong file type is rejected up front rather than failing as a confusing
 runtime relocation error. Resolution of structural dotted paths lives in
-:mod:`setforge.disposition_merge` (the 3-way merge re-assert) and
 :mod:`setforge.structural_merge` (:func:`~setforge.structural_merge.set_at_path`
 / :func:`~setforge.structural_merge.get_at_path`).
 """
@@ -45,9 +44,12 @@ __all__ = [
     "SpanKind",
     "SpanSemantics",
     "SpanState",
+    "StructuralSpanOrphanReason",
     "is_heading_anchor",
     "validate_span_disposition",
     "validate_spans_file_type",
+    "validate_structural_span_overlap",
+    "validate_structural_spans",
 ]
 
 _STRICT = ConfigDict(extra="forbid")
@@ -59,7 +61,7 @@ _MARKDOWN_SUFFIXES: Final[frozenset[str]] = frozenset({".md", ".markdown"})
 
 # Structural (comment-preserving tree) suffixes a dotted-path span anchor is
 # permitted on. Mirrors the dispatch in
-# :func:`setforge.disposition_merge.is_structural` (kept independent so this
+# :func:`setforge.structural_merge.is_structural` (kept independent so this
 # leaf module imports nothing heavy).
 _STRUCTURAL_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".yaml", ".yml", ".json", ".jsonc"}
@@ -261,8 +263,8 @@ def validate_span_disposition(
     """Raise :class:`ConfigError` if a PINNED/FORKED span has no disposition.
 
     A ``pinned``/``forked`` span is consumed only on the disposition merge
-    path (:func:`setforge.disposition_merge.resolve_file` → span re-overlay).
-    On a ``disposition: None`` file the verbatim deploy
+    path (the stored-base 3-way merge → span re-overlay). On a
+    ``disposition: None`` file the verbatim deploy
     (:func:`setforge.deploy._verbatim_with_overlay`) processes ONLY ``overlay``
     spans, so a pinned/forked span is silently ignored on deploy AND its region
     is never excluded from capture — host-local content can then leak into
@@ -431,3 +433,99 @@ class SpanState:
         if self.last_deployed_body is not None:
             record["last_deployed_body"] = self.last_deployed_body
         return record
+
+
+class StructuralSpanOrphanReason(StrEnum):
+    """Why a structural span pin could not be re-asserted / located.
+
+    ``ABSENT_IN_LIVE`` — the pinned path is gone from the fresh live parse (the
+    user deleted ``P`` locally); there is nothing to re-impose.
+    ``MISSING_PARENT`` — an intermediate parent on the path is gone from the
+    merged model, so the leaf cannot be addressed by key.
+    ``PARENT_NOT_MAPPING`` — the resolved parent is a scalar/list, not a
+    mapping, so the leaf cannot be addressed by key.
+    ``UPSTREAM_RENAMED_OR_DELETED`` — refines ``ABSENT_IN_LIVE``: the path is
+    gone from live AND the stored base HAD a value at ``P`` while tracked no
+    longer does, so the loss is attributed to an upstream rename/delete rather
+    than a local edit; the orphan carries the tracked-side sibling keys at
+    ``P``'s parent so the warning can render a did-you-mean.
+    ``STRUCTURAL_FALLBACK`` — a shape clash between sides forced the whole file
+    off the structural engine onto the raw line-based merge; the pin could not
+    be re-asserted onto the line-merged text, so the merged value is PRESERVED
+    and warned rather than silently dropped.
+    """
+
+    ABSENT_IN_LIVE = "absent-in-live"
+    MISSING_PARENT = "missing-parent"
+    PARENT_NOT_MAPPING = "parent-not-mapping"
+    UPSTREAM_RENAMED_OR_DELETED = "upstream-renamed-or-deleted"
+    STRUCTURAL_FALLBACK = "structural-fallback"
+
+
+def validate_structural_spans(spans: list[SpanEntry]) -> None:
+    """Run the structural-span integrity checks (list-index + overlap).
+
+    The single offline-validate seam over a tracked_file's STRUCTURAL spans:
+    rejects a list-index anchor (Invariant I10) and any overlapping / nested
+    pins (Invariant I11). Surfacing them in ``setforge validate`` (the offline
+    CI gate) catches a malformed structural span declaration BEFORE install
+    would abort mid-deploy with a :class:`~setforge.errors.ConfigError`.
+    """
+    _reject_list_index_anchors(spans)
+    validate_structural_span_overlap(spans)
+
+
+def _reject_list_index_anchors(spans: list[SpanEntry]) -> None:
+    """Reject any list-suffix span anchor at pin time (Invariant I10).
+
+    :func:`~setforge.structural_merge.set_at_path` addresses MAPPING leaves
+    only; a list-element-by-index pin (``a[*]`` / ``a[]``) has no stable key
+    identity across an upstream reorder, so it is refused up front with a clear
+    :class:`~setforge.errors.ConfigError` rather than failing opaquely at the
+    get / set seam.
+    """
+    for span in spans:
+        if "[*]" in span.anchor or "[]" in span.anchor:
+            raise ConfigError(
+                f"structural span anchor {span.anchor!r} uses a list suffix; "
+                "list-element pins are not supported (anchors must address a "
+                "mapping leaf or whole subtree by key)."
+            )
+
+
+def validate_structural_span_overlap(spans: list[SpanEntry]) -> None:
+    """Reject overlapping / nested structural span pins (Invariant I11, B-S7).
+
+    Two dotted-path anchors overlap when one is a prefix of the other (so a
+    whole-subtree :func:`~setforge.structural_merge.set_at_path` at the ancestor
+    would clobber the descendant pin's value, a last-writer-wins hazard). The
+    ONLY legal nesting in the file+span model is a pinned subtree containing a
+    forked leaf; that is out of scope for the dotted-path engine, so any prefix
+    overlap (including duplicate anchors) is refused with :class:`ConfigError`.
+    """
+    seen: list[str] = []
+    for span in spans:
+        anchor = span.anchor
+        for other in seen:
+            if _paths_overlap(anchor, other):
+                raise ConfigError(
+                    "overlapping / nested structural span anchors are not "
+                    f"allowed: {other!r} and {anchor!r} (one is a prefix of the "
+                    "other). Pin disjoint paths, or pin the common ancestor only."
+                )
+        seen.append(anchor)
+
+
+def _paths_overlap(a: str, b: str) -> bool:
+    """Whether dotted paths ``a`` / ``b`` are equal or one prefixes the other.
+
+    Prefix is matched at SEGMENT granularity (``a`` prefixes ``a.b`` but ``a``
+    does NOT prefix ``ab``), so sibling keys sharing a string prefix do not
+    spuriously collide.
+    """
+    if a == b:
+        return True
+    sa = a.split(".")
+    sb = b.split(".")
+    shorter, longer = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    return longer[: len(shorter)] == shorter

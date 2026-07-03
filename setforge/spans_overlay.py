@@ -1,7 +1,7 @@
 """Span merge re-overlay (Stage 5 of the span engine).
 
-Runs AFTER the whole-file merge (:func:`setforge.disposition_merge.resolve_file`),
-never threaded into the merge internals. For each PINNED span it splices
+Runs AFTER the whole-file merge, never threaded into the merge internals.
+For each PINNED span it splices
 the live bytes over the merged region (live wins, Invariant I3 — applied
 unconditionally as a post-merge override). FORKED spans get NO merge
 override (the merge result is kept) but are still recomputed so capture
@@ -49,10 +49,10 @@ class SpanOrphan:
     preserved + warned, never dropped (Invariant I7).
 
     ``reason`` and ``tracked_siblings`` ride along ONLY for STRUCTURAL
-    orphans (the deploy seam copies them from
-    ``setforge.disposition_merge.StructuralSpanOrphan`` — ``reason`` holds
-    that enum's value as a plain string so this markdown-side module never
-    imports the merge driver). The warning render site uses them to
+    orphans (the deploy seam copies them from the structural span re-assert —
+    ``reason`` holds :class:`setforge.span_types.StructuralSpanOrphanReason`'s
+    value as a plain string so this markdown-side module never imports the
+    merge engine). The warning render site uses them to
     attribute an upstream rename/delete and offer a did-you-mean over the
     tracked sibling keys. Markdown orphans leave both at their defaults.
     """

@@ -253,16 +253,15 @@ def test_json_required_keys_subset(tmp_path: Path) -> None:
         "drift_class",
         "reason",
         "span_only_drift",
-        "forked_scalar_conflicts",
         "drift_is_expected",
     }
     assert required <= entry_json.keys()
     assert "disposition" not in entry_json
     assert "expected_drift_keys" not in entry_json
     assert "unexpected_drift_keys" not in entry_json
+    assert "forked_scalar_conflicts" not in entry_json
     assert entry_json["drift_class"] == "stale"
     assert "install will update" in entry_json["reason"]
-    assert entry_json["forked_scalar_conflicts"] == []
     # round-trips through json.dumps without custom encoders
     json.dumps(data)
 

@@ -10,8 +10,6 @@ Every ``DRIFTED`` file carries a :class:`DriftClass` explaining the drift:
 - ``unexpected`` — drift nothing above explains: what ``compare --check``
   flags for CI and what the install drift gate (``--auto-accept-*``)
   resolves.
-- ``conflicted`` — retired with the file-level disposition model; no file
-  produces this class anymore (see :func:`_forked_scalar_conflicts`).
 
 Orphan detection (:func:`detect_orphans`, :class:`OrphanEntry`) is a
 separate axis surfaced alongside drift: live files setforge previously
@@ -82,18 +80,12 @@ class DriftClass(StrEnum):
     EXPECTED = "expected"
     UNEXPECTED = "unexpected"
     STALE = "stale"
-    CONFLICTED = "conflicted"
 
 
 _STALE_REASON = "tracked advanced since last install — install will update"
 
 _STAGED_REASON = (
     "staged: tracked holds exactly the shared set; local edits kept host-only"
-)
-
-_CLOBBER_REASON = (
-    "span edits present but no stored base — first install would "
-    "overwrite; run sync first"
 )
 
 
@@ -140,17 +132,6 @@ class FileCompare:
     reason: str | None = None
     """Human-readable note for the drift class (the summary table's ``Why``
     column). ``None`` when the class needs no elaboration.
-    """
-    forked_scalar_conflicts: list[str] = field(default_factory=list)
-    """Forked-scalar span conflicts (``base ≠ live AND base ≠ tracked``).
-
-    Each element is a PRE-RENDERED ``path: base → tracked | live`` line
-    (tracked = upstream, live = yours) — plain strings rather than a
-    structured record, because every consumer (the summary table's Why
-    column, the ``--json`` payload) renders the same one-line form and
-    nothing downstream needs the operands separately. Non-empty iff
-    :attr:`drift_class` is ``CONFLICTED``; see
-    :func:`_forked_scalar_conflicts` for the detection.
     """
 
     @property
@@ -711,13 +692,13 @@ def _classify_entry(
     Non-``DRIFTED`` entries pass through with ``drift_class=None`` and an
     unexpected flag of ``False`` (a MISSING entry never reaches here — its
     caller returns the existing ``True`` contract directly).
-    ``tracked_file`` feeds the forked-scalar conflict probe (slot 1);
+    ``tracked_file`` feeds the reconcile-staged expected probe (slot 4b);
     ``None`` skips it — symlink-deployed files never carry a stored base
     (the base lifecycle is regular-file-only), so their callers omit it.
     """
     if entry.status is not CompareStatus.DRIFTED:
         return entry, False
-    drift_class, reason, conflicts = _classify_drifted(
+    drift_class, reason = _classify_drifted(
         entry,
         profile=profile,
         src=src,
@@ -725,10 +706,8 @@ def _classify_entry(
         tracked_file=tracked_file,
         probe_stale=probe_stale,
     )
-    entry = replace(
-        entry, drift_class=drift_class, reason=reason, forked_scalar_conflicts=conflicts
-    )
-    is_unexpected = drift_class in (DriftClass.UNEXPECTED, DriftClass.CONFLICTED)
+    entry = replace(entry, drift_class=drift_class, reason=reason)
+    is_unexpected = drift_class is DriftClass.UNEXPECTED
     return entry, is_unexpected
 
 
@@ -740,31 +719,21 @@ def _classify_drifted(
     dst: Path,
     tracked_file: TrackedFile | None = None,
     probe_stale: bool = True,
-) -> tuple[DriftClass, str | None, list[str]]:
+) -> tuple[DriftClass, str | None]:
     """Classify a ``DRIFTED`` entry; first matching slot wins.
 
-    Returns ``(drift_class, reason, forked_scalar_conflicts)`` — the
-    conflicts list is non-empty only for the CONFLICTED slot, whose reason
-    is the same lines newline-joined (the summary table's Why column).
+    Returns ``(drift_class, reason)`` — the reason is the summary table's Why
+    column note, ``None`` when the class needs no elaboration.
 
-    ``probe_stale=False`` skips the base-store reads (slots 1-3) for
+    ``probe_stale=False`` skips the base-store reads (slots 3-4b) for
     entries whose ``src``/``dst`` byte comparison is meaningless (symlink
     metadata drift). ``profile=None`` (direct unit-scope calls) also
     skips them — the stored base is keyed by profile.
     """
-    # Slot 1 — CONFLICTED: a forked-scalar path where base ≠ live AND
-    # base ≠ tracked (the shape the next interactive install would
-    # prompt on). See _forked_scalar_conflicts for the merge mirror.
-    if probe_stale and profile is not None and tracked_file is not None:
-        conflicts = _forked_scalar_conflicts(
-            profile, entry.name, src, dst, tracked_file
-        )
-        if conflicts:
-            return DriftClass.CONFLICTED, "\n".join(conflicts), conflicts
     # Slot 3 — STALE: live still equals the stored base while tracked
     # advanced; the next install fast-forwards live.
     if probe_stale and profile is not None and _is_stale(profile, entry.name, src, dst):
-        return DriftClass.STALE, _STALE_REASON, []
+        return DriftClass.STALE, _STALE_REASON
     # Slot 4b — EXPECTED: a reconcile-staged plain file (A5/A5c) whose tracked
     # holds EXACTLY the promoted set (INV-8 over base+live+hunks+drafts). The
     # live↔tracked diff is then the expected staging divergence — host-only
@@ -777,59 +746,9 @@ def _classify_drifted(
         and tracked_file is not None
         and _reconcile_staged_expected(profile, entry.name, src, dst)
     ):
-        return DriftClass.EXPECTED, _STAGED_REASON, []
+        return DriftClass.EXPECTED, _STAGED_REASON
     # Slot 5 — UNEXPECTED: drift nothing above explains.
-    return DriftClass.UNEXPECTED, None, []
-
-
-def _forked_scalar_conflicts(
-    profile: str,
-    file_id: str,
-    src: Path,
-    dst: Path,
-    tracked_file: TrackedFile,
-) -> list[str]:
-    """Always ``[]`` after the disposition/spans retirement.
-
-    Forked-scalar conflicts were a property of the retired file-level
-    ``disposition: forked`` merge surface; no file carries a disposition or
-    tracked-side spans anymore, so the compare probe never has a forked-scalar
-    surface to render. Retained (returning ``[]``) so the CONFLICTED slot and
-    the JSON/table shape stay stable.
-    """
-    return []
-
-
-def _format_conflict_operand(value: object) -> str:
-    """Render one conflict operand for the ``path: base → tracked | live`` line.
-
-    The ABSENT sentinel renders ``(absent)``; strings render bare (the
-    common scalar, quoting would only add noise to the Why column); every
-    other plain value renders as its JSON token (``1`` / ``true`` /
-    ``null`` / compact containers) — total via ``default=str``, so a
-    formatting surprise can never crash the probe.
-    """
-    from setforge.scalar_merge import ABSENT
-
-    if value is ABSENT:
-        return "(absent)"
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, default=str)
-
-
-def _base_absent(profile: str, file_id: str) -> bool:
-    """True when NO byte base is stored for ``(profile, file_id)``.
-
-    State-aware but crash-free, mirroring :func:`_is_stale`: a torn or
-    failing base-store read is NOT absence — it degrades to ``False`` so
-    the entry classifies deterministically via the later slots instead of
-    over-reporting clobber risk on a transient read error.
-    """
-    try:
-        return base_store.read_base(profile, file_id) is None
-    except (BaseStoreError, OSError):
-        return False
+    return DriftClass.UNEXPECTED, None
 
 
 def _is_stale(profile: str, file_id: str, src: Path, dst: Path) -> bool:
@@ -1204,7 +1123,6 @@ _DRIFT_CLASS_STYLES: dict[DriftClass, str] = {
     DriftClass.EXPECTED: "dim cyan",
     DriftClass.STALE: "yellow",
     DriftClass.UNEXPECTED: "bold red",
-    DriftClass.CONFLICTED: "bold red",
 }
 
 
@@ -1213,7 +1131,7 @@ def compare_summary_table(report: CompareReport) -> Table:
 
     One row per ``DRIFTED`` entry with columns ``File`` / ``Class`` / ``Why``.
     ``Class`` is the entry's :class:`DriftClass` (expected in dim cyan, stale in
-    yellow, unexpected/conflicted in bold red); ``Why`` carries the class's
+    yellow, unexpected in bold red); ``Why`` carries the class's
     reason note when it has one.
     """
     table = Table(title="Drift Summary", show_header=True, header_style="bold")

@@ -2,19 +2,16 @@
 cutover.
 
 The CONFLICTED drift-class slot was a property of the retired file-level
-``disposition: forked`` merge surface: it rendered ``base ≠ live AND
-base ≠ tracked`` forked-scalar conflicts. No file carries a disposition or
-tracked-side spans anymore, so ``_forked_scalar_conflicts`` always returns
-``[]`` and no file classifies CONFLICTED — the whole forked-conflict test
-surface is retired.
+``disposition: forked`` merge surface. No file carries a disposition or
+tracked-side spans anymore, so the whole forked-conflict class is retired.
 
 What remains here are the two scenarios from that surface that map onto
 retained, unified-model behavior for a plain structural (YAML) file:
 
 - a byte base present, live == base, tracked advanced → STALE (auto
-  fast-forward on the next install; ``forked_scalar_conflicts`` stays empty)
+  fast-forward on the next install)
 - a byte base present but BOTH live and tracked diverged from it → UNEXPECTED
-  (nothing above explains the drift; still empty conflicts)
+  (nothing above explains the drift)
 """
 
 from pathlib import Path
@@ -83,7 +80,6 @@ def test_tracked_advance_only_classifies_stale(tmp_path: Path) -> None:
     entry = report.entries[0]
 
     assert entry.drift_class is DriftClass.STALE
-    assert entry.forked_scalar_conflicts == []
     assert report.has_unexpected_drift is False
 
 
@@ -101,5 +97,4 @@ def test_both_sides_diverged_stays_unexpected(tmp_path: Path) -> None:
 
     assert entry.status is CompareStatus.DRIFTED
     assert entry.drift_class is DriftClass.UNEXPECTED
-    assert entry.forked_scalar_conflicts == []
     assert report.has_unexpected_drift is True

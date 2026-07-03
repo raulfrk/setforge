@@ -68,7 +68,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
     {
         "_legacy_markers",  # frozen legacy marker reader (was sections.py)
-        "disposition_merge",
         "sections",
         "section_detect",
         "section_mode",

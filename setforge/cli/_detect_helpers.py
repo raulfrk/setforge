@@ -22,10 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
+from ruamel.yaml import YAML
 
 from setforge import deploy, spans_store, transitions
+from setforge import source as source_mod
 from setforge.anchors import Anchor
-from setforge.cli import override
 from setforge.cli._install_helpers import _load_validated_host_local_sections
 from setforge.compare import resolve_dst, resolve_src
 from setforge.config import (
@@ -65,6 +66,66 @@ from setforge.span_types import (
 from setforge.wizard import Snapshot
 
 _MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
+
+_RT_YAML = YAML(typ="rt")
+
+
+# ---------------------------------------------------------------------------
+# Host-local (local.yaml) round-trip writes.
+# ---------------------------------------------------------------------------
+
+
+def _local_config_path() -> Path:
+    """Return the live ``local.yaml`` path (read through the source module).
+
+    Looked up via the module attribute (not a load-time-bound import) so the
+    test suite's :func:`conftest._isolated_local_config` redirect of
+    ``setforge.source.LOCAL_CONFIG_PATH`` takes effect — the same discipline
+    :mod:`setforge.cli.orphans` follows.
+    """
+    return source_mod.LOCAL_CONFIG_PATH
+
+
+def _load_local_data() -> dict[str, object]:
+    """Load ``local.yaml`` as a round-trip mapping (empty dict when absent)."""
+    path = _local_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = _RT_YAML.load(path.read_text(encoding="utf-8")) if path.exists() else None
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _dump_local_data(data: dict[str, object]) -> None:
+    """Write ``data`` back to ``local.yaml`` via the ruamel round-trip."""
+    with _local_config_path().open("w", encoding="utf-8") as fh:
+        _RT_YAML.dump(data, fh)
+
+
+def _local_tf_block(data: dict[str, object], file_id: str) -> dict[str, object]:
+    """Return the (created-if-absent) ``tracked_files.<id>`` overlay block."""
+    tracked = data.get("tracked_files")
+    if not isinstance(tracked, dict):
+        tracked = {}
+        data["tracked_files"] = tracked
+    block = tracked.get(file_id)
+    if not isinstance(block, dict):
+        block = {}
+        tracked[file_id] = block
+    return block
+
+
+def _append_span_host_local(file_id: str, span: SpanEntry) -> None:
+    data = _load_local_data()
+    block = _local_tf_block(data, file_id)
+    raw = block.get("spans")
+    spans: list[object] = list(raw) if isinstance(raw, list) else []
+    spans = [
+        s for s in spans if not (isinstance(s, dict) and s.get("anchor") == span.anchor)
+    ]
+    spans.append(span.model_dump(mode="json"))
+    block["spans"] = spans
+    _dump_local_data(data)
 
 
 @dataclass(slots=True, frozen=True)
@@ -258,13 +319,13 @@ def commit_carves(
     ``discard()`` — it is not file-snapshotted, but it runs last, so a failure
     anywhere still leaves ``local.yaml`` consistent.
     """
-    local_yaml = override._local_config_path()
+    local_yaml = _local_config_path()
     snap = Snapshot(files=[local_yaml], snapshot_base=snapshot_base)
     with snap:
         try:
             overlay_states: dict[str, SpanState] = {}
             for plan in plans:
-                override._append_span_host_local(file_id, build_span(plan))
+                _append_span_host_local(file_id, build_span(plan))
                 if plan.kind == "overlay" and plan.seed_state is not None:
                     overlay_states[plan.name] = plan.seed_state
             if overlay_states:
@@ -541,12 +602,12 @@ def recapture_overlay(
     exists.
     """
     canonical = canonical_body(new_body)
-    local_yaml = override._local_config_path()
+    local_yaml = _local_config_path()
     snap = Snapshot(files=[local_yaml], snapshot_base=snapshot_base)
     with snap:
         try:
-            data = override._load_local_data()
-            block = override._local_tf_block(data, file_id)
+            data = _load_local_data()
+            block = _local_tf_block(data, file_id)
             raw = block.get("spans")
             spans = list(raw) if isinstance(raw, list) else []
             found = False
@@ -562,7 +623,7 @@ def recapture_overlay(
             if not found:
                 raise KeyError(f"no overlay span named {span_name!r} for {file_id}")
             block["spans"] = spans
-            override._dump_local_data(data)
+            _dump_local_data(data)
             states = spans_store.get_states(profile, file_id)
             new_state = _reseeded_state(states.get(span_name), span_name, canonical)
             spans_store.set_states(profile, file_id, {span_name: new_state})
