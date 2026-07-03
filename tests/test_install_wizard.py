@@ -103,14 +103,14 @@ def _script_wizard(
     """Script the reconcile conflict wizard regardless of tty; record regions.
 
     Under the unified reconcile model the plain-file 3-way merge resolves a
-    conflict through :func:`setforge.reconcile.wizard.resolve_conflicts` (not
-    the legacy ``ConflictResolver`` callback). Two seams are patched: install's
-    ``_build_conflict_resolver`` returns a non-``None`` sentinel so the deploy
-    routes the file interactively (still honoring the ``--auto`` short-circuit),
-    and ``reconcile_apply.resolve_conflicts`` is replaced with a scripted
-    resolver that maps each conflict region to ``(chosen_bytes, was_skip)`` via
-    ``choose``. Returns a list every seen conflict region is appended to, so a
-    test can assert the wizard was (or was not) invoked.
+    conflict through :func:`setforge.reconcile.wizard.resolve_conflicts`. Two
+    seams are patched: install's ``_want_interactive_reconcile`` returns
+    ``True`` so the deploy routes the file interactively (still honoring the
+    ``--auto`` short-circuit), and ``reconcile_apply.resolve_conflicts`` is
+    replaced with a scripted resolver that maps each conflict region to
+    ``(chosen_bytes, was_skip)`` via ``choose``. Returns a list every seen
+    conflict region is appended to, so a test can assert the wizard was (or was
+    not) invoked.
     """
     seen: list[Conflict] = []
 
@@ -133,17 +133,17 @@ def _script_wizard(
             deferred = deferred or was_skip
         return WizardResult(MergeResult(tuple(out), absent=result.absent), deferred)
 
-    def _fake_build(
+    def _fake_want_interactive(
         *, reconcile_user_sections: bool, section_auto: object
-    ) -> object | None:
+    ) -> bool:
         # Honor the --auto short-circuit: when an auto mode is set, install
-        # never builds a resolver (auto wins). Mirror that here so the
-        # auto-path test exercises the real gate.
-        if section_auto is not None:
-            return None
-        return _fake_resolve
+        # never offers the interactive wizard (auto wins). Mirror that here so
+        # the auto-path test exercises the real gate.
+        return section_auto is None
 
-    monkeypatch.setattr(install_mod, "_build_conflict_resolver", _fake_build)
+    monkeypatch.setattr(
+        install_mod, "_want_interactive_reconcile", _fake_want_interactive
+    )
     monkeypatch.setattr(reconcile_apply, "resolve_conflicts", _fake_resolve)
     return seen
 

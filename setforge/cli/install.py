@@ -20,7 +20,6 @@ from setforge import (
 )
 from setforge import (
     deploy,
-    disposition_merge,
     transitions,
 )
 from setforge import secrets as secrets_mod
@@ -43,11 +42,11 @@ from setforge.cli._helpers import (
     _parse_section_auto,
 )
 from setforge.cli._install_helpers import (
-    _build_conflict_resolver,
     _deploy_all_tracked_files,
     _dry_run_pipeline,
     _load_validated_host_local_sections,
     _run_predeploy_gates,
+    _want_interactive_reconcile,
     _write_install_transition,
     migrate_local_overlay_spans_on_install,
     seed_overlay_migration_snapshot,
@@ -436,11 +435,12 @@ def install(
             file_pre=file_pre,
         )
 
-        # Interactive disposition conflict wizard: built ONLY when this install
-        # is in interactive-reconcile mode AND stdout is a tty (the same gate
-        # the shared user-section wizard uses). Non-tty / --auto ⇒ None, so the
+        # Interactive reconcile: resolve conflicts through the reconcile
+        # engine's per-region wizard ONLY when this install is in
+        # interactive-reconcile mode AND stdout is a tty (the same gate the
+        # shared user-section wizard uses). Non-tty / --auto ⇒ False, so the
         # driver keeps the bare warn-and-defer / auto behavior.
-        conflict_resolver = _build_conflict_resolver(
+        interactive = _want_interactive_reconcile(
             reconcile_user_sections=reconcile_user_sections,
             section_auto=section_auto,
         )
@@ -449,7 +449,7 @@ def install(
             ctx,
             host_local_sections_map=host_local_sections_map,
             section_auto=section_auto,
-            conflict_resolver=conflict_resolver,
+            interactive=interactive,
             strict_spans=strict_spans,
         )
 
@@ -485,14 +485,12 @@ def install(
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
         _gate_on_mcp_failures(mcp_failed)
-        _gate_on_deferred_reconcile(
-            deploy_outcome.deferred_reconcile, conflict_resolver
-        )
+        _gate_on_deferred_reconcile(deploy_outcome.deferred_reconcile, interactive)
 
 
 def _gate_on_deferred_reconcile(
     deferred: tuple[Path, ...],
-    conflict_resolver: disposition_merge.ConflictResolver | None,
+    interactive: bool,
 ) -> None:
     """Exit non-zero when a non-interactive install left reconcile conflicts.
 
@@ -500,11 +498,11 @@ def _gate_on_deferred_reconcile(
     ``--auto``) keeps live but leaves the upstream change unresolved. The
     transition is already written (the partial install stays revertable); this
     gate signals the unresolved set so CI / cron fails loudly instead of
-    silently passing over a conflict. An interactive run (``conflict_resolver``
-    set) already let the user choose Skip per region, so it does NOT gate —
-    those defers warned per file during the deploy.
+    silently passing over a conflict. An interactive run (``interactive`` True)
+    already let the user choose Skip per region, so it does NOT gate — those
+    defers warned per file during the deploy.
     """
-    if not deferred or conflict_resolver is not None:
+    if not deferred or interactive:
         return
     count = len(deferred)
     typer.secho(

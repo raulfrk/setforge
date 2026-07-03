@@ -101,7 +101,6 @@ ENFORCED_PKGS: tuple[str, ...] = ("setforge/reconcile/", "setforge/provision/")
 LEGACY_MODULES: frozenset[str] = frozenset(
     {
         "setforge/config.py",  # UX-3: hardcoded \033[ warning prefixes
-        "setforge/conflict_wizard.py",  # UX-1: read_one_choice letter menu
         "setforge/capture.py",  # UX-1: read_one_choice
         "setforge/wizard.py",  # UX-1: defines + uses read_one_choice
     }

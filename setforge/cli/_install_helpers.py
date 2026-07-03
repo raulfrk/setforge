@@ -268,36 +268,29 @@ def _check_unexpected_drift(
         raise typer.Exit(1)
 
 
-def _build_conflict_resolver(
+def _want_interactive_reconcile(
     *,
     reconcile_user_sections: bool,
     section_auto: ReconcileAuto | None,
-) -> disposition_merge.ConflictResolver | None:
-    """Build the interactive disposition conflict resolver, or ``None``.
+) -> bool:
+    """Whether install should resolve reconcile conflicts interactively.
 
-    Returns a keyboard wizard (:func:`setforge.conflict_wizard.make_wizard_resolver`)
-    ONLY when the install is in the interactive-reconcile mode AND stdout is a
-    tty — the SAME gate the shared user-section wizard uses
+    True ONLY when the install is in the interactive-reconcile mode AND stdout
+    is a tty — the SAME gate the shared user-section wizard uses
     (``reconcile_user_sections`` is the interactive switch; ``section_auto`` and
     ``reconcile_user_sections`` are already mutually exclusive at the CLI). When
     ``section_auto`` is set the auto policy resolves every conflict
-    (``merge_auto`` in the driver), so no resolver is built; a non-tty install
-    (piped / scripted) likewise gets ``None`` so the bare warn-and-defer path
-    is unchanged.
+    (``merge_auto`` in the driver), so no prompt is offered; a non-tty install
+    (piped / scripted) is likewise non-interactive, so the bare warn-and-defer
+    path is unchanged. The interactive resolution itself runs in the reconcile
+    engine (:func:`setforge.reconcile.wizard.resolve_conflicts`); this predicate
+    only decides whether to offer it.
 
     The tty check is the seam that keeps a non-interactive ``setforge install``
-    (CliRunner, CI) from ever prompting: tests inject a scripted resolver by
-    monkeypatching this function so no real tty is needed.
+    (CliRunner, CI) from ever prompting: tests force the interactive path by
+    monkeypatching this function to return ``True`` so no real tty is needed.
     """
-    if not reconcile_user_sections or section_auto is not None:
-        return None
-    if not sys.stdout.isatty():
-        return None
-    # Local import: pulls rich Console + the wizard machinery only on the
-    # interactive path (validate / dry-run cold-start budget).
-    from setforge import conflict_wizard
-
-    return conflict_wizard.make_wizard_resolver()
+    return reconcile_user_sections and section_auto is None and sys.stdout.isatty()
 
 
 def _deploy_all_tracked_files(
@@ -305,7 +298,7 @@ def _deploy_all_tracked_files(
     *,
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
     section_auto: ReconcileAuto | None = None,
-    conflict_resolver: disposition_merge.ConflictResolver | None = None,
+    interactive: bool = False,
     strict_spans: bool = False,
 ) -> DeployOutcome:
     """Deploy every tracked_file in two passes: resolve all, THEN write all.
@@ -355,11 +348,12 @@ def _deploy_all_tracked_files(
     ``relative_to`` the src dir), so it satisfies ``base_store``'s
     traversal guard (:func:`setforge.base_store._resolve_target`).
 
-    ``conflict_resolver`` is the OPTIONAL interactive disposition conflict
-    resolver (built by :func:`_build_conflict_resolver`), threaded into every
-    disposition :func:`deploy.resolve_deploy` call (its prompts fire during
-    pass 1, before any write). ``None`` (non-interactive / non-tty /
-    ``--auto``) leaves the bare warn-and-defer behavior unchanged.
+    ``interactive`` is True when reconcile conflicts should be resolved through
+    the reconcile engine's per-region wizard (see
+    :func:`_want_interactive_reconcile`); it is threaded to each reconcile call
+    as the ``interactive`` flag, so its prompts fire during pass 1, before any
+    write. False (non-interactive / non-tty / ``--auto``) leaves the bare
+    warn-and-defer behavior unchanged.
     """
     profile = ctx.profile
     pending: list[_PendingDeploy] = []
@@ -378,7 +372,7 @@ def _deploy_all_tracked_files(
                     tracked_file,
                     host_local=host_local,
                     section_auto=section_auto,
-                    conflict_resolver=conflict_resolver,
+                    interactive=interactive,
                 )
             )
     if strict_spans:
@@ -596,7 +590,7 @@ def _resolve_one_pending(
     *,
     host_local: dict[HostLocalSectionName, HostLocalSection] | None,
     section_auto: ReconcileAuto | None,
-    conflict_resolver: disposition_merge.ConflictResolver | None,
+    interactive: bool,
 ) -> _PendingDeploy:
     """Resolve one sub-entry's pass-1 record (read-only; no writes).
 
@@ -635,7 +629,7 @@ def _resolve_one_pending(
         sub_src,
         sub_dst,
         tracked_file,
-        interactive=conflict_resolver is not None,
+        interactive=interactive,
         section_auto=section_auto,
     ) or _resolve_plain_reconcile(
         profile,
@@ -643,7 +637,7 @@ def _resolve_one_pending(
         sub_src,
         sub_dst,
         tracked_file,
-        interactive=conflict_resolver is not None,
+        interactive=interactive,
         section_auto=section_auto,
     )
     if reconciled is not None:

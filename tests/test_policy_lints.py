@@ -133,10 +133,10 @@ def test_theme_hardcode_issue_number_in_prose_is_safe() -> None:
 # --------------------------------------------------------------------------- #
 def test_allowlist_boundary_is_exact_not_prefix() -> None:
     src = "x = read_one_choice('a/b', set())\n"
-    # deploy.py is NOT allowlisted (only conflict_wizard.py is) → flagged
+    # deploy.py is NOT allowlisted (capture.py is) → flagged
     assert _ids(check_source(src, "setforge/deploy.py"), "UX-1")
     # the allowlisted file itself is exempt
-    assert _ids(check_source(src, "setforge/conflict_wizard.py"), "UX-1") == []
+    assert _ids(check_source(src, "setforge/capture.py"), "UX-1") == []
 
 
 def test_legacy_modules_allowlist_is_pinned() -> None:
@@ -144,7 +144,6 @@ def test_legacy_modules_allowlist_is_pinned() -> None:
     # downward) when a grandfathered module is replaced.
     expected = {
         "setforge/config.py",
-        "setforge/conflict_wizard.py",
         "setforge/capture.py",
         "setforge/wizard.py",
     }

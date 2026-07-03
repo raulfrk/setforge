@@ -8,9 +8,10 @@ the project's :func:`~setforge.ui.widgets.button_bar` (navigable buttons, no
 letter menu — UX-1) and folds the choices back into a fully-``Clean``
 ``MergeResult`` so :meth:`MergeResult.merged` reproduces the merged file.
 
-This module is **pure + dormant**: it returns a resolution and writes nothing —
-no store updates, no ``install`` wiring. The C-migration epic wires it in and
-deletes the legacy :mod:`setforge.conflict_wizard`.
+This module is **pure**: it returns a resolution and writes nothing — no store
+updates. It is wired into the live install/sync reconcile path via
+``reconcile_apply`` and supersedes the legacy conflict wizard, removed in the
+disposition/spans retirement.
 
 Per region the wizard shows ``Ours · Theirs · [Edit] · Claude-merge · Skip``:
 
