@@ -118,9 +118,104 @@ class _SidecarStep:
         sidecar.write_text("migrated body\n", encoding="utf-8")
 
 
+@dataclass(slots=True, frozen=True)
+class _OwnTransitionStep:
+    """A step that records its OWN transition — mimics the disposition cutover.
+
+    Like ``DispositionRetireMigration`` it declares ``writes_own_transition`` and
+    commits its transition inside ``apply``, so the migrate driver must NOT also
+    write one. When the driver threads a pre-chain snapshot via
+    ``roots.pre_chain_snapshot`` this step records the FULL reverse delta to the
+    chain's origin; without it, only its own pre-step state (the bug).
+    """
+
+    from_version: str = "2.1"
+    to_version: str = "3.0"
+    writes_own_transition: bool = True
+
+    @property
+    def reverse(self) -> _OwnTransitionStep:
+        return _OwnTransitionStep(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        return (
+            ManifestEntry(
+                type=ManifestType.EDIT,
+                description="own-transition stamp",
+                affected_path=roots.cfg_path,
+            ),
+        )
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        data = yaml_rt().load(cfg_pre)
+        data["schema_version"] = self.to_version
+        atomic_write_yaml(roots.cfg_path, data)
+
+        pre = getattr(roots, "pre_chain_snapshot", None)
+        file_pre: dict[Path, str | None] = (
+            dict(pre) if pre is not None else {roots.cfg_path: cfg_pre}
+        )
+        file_post = transitions.snapshot_paths(tuple(file_pre))
+        transitions.write_transition(
+            transitions.make_meta(
+                transitions.TransitionCommand.MIGRATE,
+                transitions.MIGRATE_TRANSITION_PROFILE,
+                end_timestamp=transitions.now_utc().isoformat(),
+                command_line=None,
+            ),
+            file_pre,
+            file_post,
+            None,
+        )
+
+
 def _latest_migrate() -> transitions.TransitionDir | None:
     return transitions.load_latest(
         "migrate", command=transitions.TransitionCommand.MIGRATE
+    )
+
+
+def test_frozen_1_0_migrate_through_own_transition_reverts_to_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state_dir: Path,
+) -> None:
+    """A frozen-1.0 -> 3.0 chain that ends in a writes_own_transition step is
+    revertible to the byte-exact frozen-1.0 origin in ONE ``revert`` (INV-5).
+
+    Regression for the multi-step-through-cutover gap: the driver must thread its
+    pre-chain frozen-1.0 snapshot into the own-transition step so the single
+    recorded transition carries the full 1.0->3.0 reverse delta, not just the
+    step's pre-step (2.1) state.
+    """
+    cfg = _write_cfg(tmp_path, _AT_1_0)
+    pre_bytes = cfg.read_bytes()
+    monkeypatch.setattr(
+        "setforge.migrations.MIGRATIONS",
+        (_StampStep(from_version="1.0", to_version="2.1"), _OwnTransitionStep()),
+    )
+
+    result = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "3.0", "--apply", "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    assert 'schema_version: "3.0"' in cfg.read_text() or "3.0" in cfg.read_text()
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+    # ONE revert must reach the frozen-1.0 origin, not the intermediate 2.1.
+    assert cfg.read_bytes() == pre_bytes, (
+        f"expected byte-exact frozen-1.0 origin, got:\n{cfg.read_text()}"
     )
 
 

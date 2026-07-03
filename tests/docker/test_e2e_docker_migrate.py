@@ -139,21 +139,19 @@ def test_migrate_apply_stamps_schema_version_with_backup(
 def test_migrate_apply_is_revertible(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A migrate --apply's final cutover step is revertible.
+    """A frozen-1.0 migrate --apply reverts to the byte-exact origin (INV-5).
 
     The frozen 1.0 config (no schema_version) is stamped through the full chain
-    to 3.0. That apply records TWO transitions: the framework chain (1.0 → 2.1)
-    and the disposition/spans cutover's own commit-before-unlink transition
-    (2.1 → 3.0). ``setforge revert --profile=migrate`` reverses the most-recent
-    (2.1 → 3.0) transition, walking the config back to a valid schema-2.1 state.
-
-    (A single plain revert undoes only the last transition; a second plain
-    revert is a redo — see the module CLAUDE.md revert/redo contract — so the
-    frozen-1.0 baseline restore across the framework chain is served by
-    ``revert --to-before=<id>``, not by repeated plain reverts.)
+    to 3.0. The chain ends in the disposition/spans cutover, which records the
+    single durable transition (commit-before-unlink); the migrate driver threads
+    its pre-chain frozen image into that transition, so ONE ``setforge revert
+    --profile=migrate`` walks the config all the way back to the frozen-1.0
+    origin — not merely the intermediate schema-2.1 state.
     """
     c = docker_container()
     _seed_floored_config(c)
+    pre = c.read_text(_CFG_PATH)
+    assert "schema_version" not in pre, pre  # frozen 1.0 baseline
 
     apply_res = c.exec(
         [
@@ -183,9 +181,8 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert revert_res.returncode == 0, revert_res.stdout + revert_res.stderr
-    # The disposition/spans cutover (2.1 → 3.0) is reversed: back to a valid 2.1.
-    assert "schema_version: '3.0'" not in c.read_text(_CFG_PATH), c.read_text(_CFG_PATH)
-    assert "schema_version: '2.1'" in c.read_text(_CFG_PATH), c.read_text(_CFG_PATH)
+    # ONE revert restores the frozen-1.0 origin byte-exact (INV-5) — not 2.1.
+    assert c.read_text(_CFG_PATH) == pre, c.read_text(_CFG_PATH)
 
 
 _CFG_2_1_DISPOSITION_YAML: str = (

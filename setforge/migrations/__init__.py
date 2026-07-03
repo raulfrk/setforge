@@ -26,6 +26,7 @@ Future migrations are appended in ``from_version`` order so
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -239,11 +240,19 @@ class MigrationRoots:
         home: ``Path.home()`` — for ``~/.config/setforge/``,
             ``~/.local/share/setforge/``, ``~/.claude/``, and any
             other host-local state a migration touches.
+        pre_chain_snapshot: the pre-chain frozen file image (every
+            affected path, captured before the first step ran), set by
+            the migrate driver. A chain step that records its OWN
+            transition (``writes_own_transition``) uses this as its
+            transition's ``file_pre`` so ONE revert reaches the chain's
+            byte-exact origin, not merely the step's pre-step state.
+            ``None`` when a migration is applied outside the driver.
     """
 
     cfg_path: Path
     repo_root: Path
     home: Path
+    pre_chain_snapshot: Mapping[Path, str | None] | None = None
 
 
 @runtime_checkable

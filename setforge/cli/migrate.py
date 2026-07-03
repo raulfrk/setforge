@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, MutableMapping, Sequence
+from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
@@ -241,11 +242,11 @@ def _chain_owns_transition(chain: Sequence[Migration]) -> bool:
     ``state_snapshots`` transition inside ``apply`` — before any legacy delete —
     which the driver's after-apply, text-only transition cannot express. When any
     step owns its transition the driver must NOT also write one, or ``revert``
-    would see two overlapping records for the same setforge.yaml edit. A rare
-    multi-step chain that reaches the cutover from an older schema therefore
-    reverts to the pre-cutover schema (the cutover's own transition captures
-    setforge.yaml as it stood when the cutover ran), not the chain's origin — a
-    coherent partial undo, and moot for the common single-step 2.1->3.0 path.
+    would see two overlapping records for the same setforge.yaml edit. The driver
+    still threads its pre-chain frozen image into ``roots.pre_chain_snapshot``
+    (see :func:`_dispatch_apply`), so even a multi-step chain reaching the cutover
+    from an older schema records the FULL reverse delta — one ``revert`` restores
+    the chain's byte-exact origin (INV-5), not just the pre-cutover schema.
     """
     return any(getattr(m, "writes_own_transition", False) for m in chain)
 
@@ -272,6 +273,11 @@ def _dispatch_apply(*, cfg_path: Path, chain: Sequence[Migration], yes: bool) ->
     # ``revert`` restores to. Captured here (not aliased to file_post) so the
     # recorded patch reverses to the exact pre-migration state.
     file_pre = transitions.snapshot_paths(affected)
+    # Thread the pre-chain frozen image to a step that records its OWN
+    # transition (the cutover). Without it, such a step captures only its
+    # pre-step state, so a multi-step chain reverts to the intermediate schema
+    # rather than the chain's origin (INV-5). See _chain_owns_transition.
+    roots = replace(roots, pre_chain_snapshot=file_pre)
 
     _print_multi_file_diff_preview(chain=chain, roots=roots)
     choice = _confirm_migrate(chain=chain, roots=roots, yes=yes)

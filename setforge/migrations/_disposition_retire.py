@@ -161,7 +161,7 @@ class DispositionRetireMigration:
         """
         import contextlib
 
-        from setforge import locking, reconcile
+        from setforge import locking, reconcile, transitions
 
         records = _build_legacy_records(roots)  # pass 1: enumerate (read-only)
         _validate_bases(records)  # D4 pre-flight abort — raises before any write
@@ -196,9 +196,25 @@ class DispositionRetireMigration:
             _stamp_schema_version(roots.cfg_path, self.to_version)
             cfg_post = roots.cfg_path.read_text(encoding="utf-8")
 
+            # When the migrate driver threads its pre-chain frozen image, use it
+            # as file_pre so this single transition carries the FULL reverse
+            # delta to the chain's ORIGIN (INV-5) — not just the pre-cutover
+            # (e.g. 2.1) state. file_post re-snapshots the SAME paths now (schema
+            # stamped, before the legacy delete = the 3.0 image). Applied outside
+            # the driver (pre_chain_snapshot is None) keeps the prior behavior.
+            pre = roots.pre_chain_snapshot
+            file_pre: dict[Path, str | None]
+            file_post: dict[Path, str | None]
+            if pre is not None:
+                file_pre = dict(pre)
+                file_post = dict(transitions.snapshot_paths(tuple(pre)))
+            else:
+                file_pre = {roots.cfg_path: cfg_pre}
+                file_post = {roots.cfg_path: cfg_post}
+
             _write_cutover_transition(
-                file_pre={roots.cfg_path: cfg_pre},
-                file_post={roots.cfg_path: cfg_post},
+                file_pre=file_pre,
+                file_post=file_post,
                 state_snapshots=snapshots,
             )
             _delete_legacy_stores(records, profiles)
