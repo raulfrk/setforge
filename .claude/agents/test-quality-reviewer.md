@@ -100,6 +100,11 @@ diff touches an owning component, a test must assert its invariant — ordinaril
   mirrors `docs/RULES.md` Part 2(b) — that file is its source of truth; re-read it
   if the diff touches a component not in the table.
 - Severity: a touched owner with no test asserting its invariant is **CRITICAL**.
+- Exemption — relocation/deletion-only: a touched owner whose diff is provably a
+  pure code MOVE or REMOVAL (the invariant's behavior is unchanged) owes NO new
+  invariant test; do not raise a CRITICAL for a missing `@invariant` on a
+  component the diff only relocated or deleted code from. Confirm the move is
+  faithful (behavior identical vs BASE) before applying the exemption.
 
 ## Severity summary
 
