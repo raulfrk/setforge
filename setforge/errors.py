@@ -482,9 +482,10 @@ class StructuredParseError(ReconcileStoreError):
     The trigger is malformed, multi-document, or non-UTF-8 structured content:
     ruamel's round-trip loader raises a ``YAMLError`` (a ``ComposerError`` for a
     multi-document stream) and json5 raises its own parse error, while non-UTF-8
-    bytes raise ``UnicodeDecodeError`` at decode. :func:`~setforge.reconcile.
-    structured_units._load_model` wraps all of these into this single typed
-    error so callers never catch a raw parser exception. The recovery is to fix
+    bytes raise ``UnicodeDecodeError`` at decode.
+    :func:`~setforge.reconcile.structured_units._load_model` wraps all of these
+    into this single typed error so callers never catch a raw parser exception.
+    The recovery is to fix
     the source file or fall back to line-level staging (the stage walk skips an
     unparseable structured file onto the line-hunk path).
     """

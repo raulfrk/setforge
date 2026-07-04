@@ -129,12 +129,14 @@ def _load_model(data: bytes, fmt: StructuredFormat) -> object:
         raise StructuredParseError(
             f"structured input is not valid UTF-8: {err}"
         ) from err
+    # Hoisted above the try so a missing-dependency ImportError propagates as
+    # itself, not mislabelled as an unparseable-input StructuredParseError.
+    from json5 import loads as _json5_loads
+    from json5.loader import ModelLoader
+
     try:
         if fmt is StructuredFormat.YAML:
             return _yaml().load(io.StringIO(text))
-        from json5 import loads as _json5_loads
-        from json5.loader import ModelLoader
-
         return _json5_loads(text, loader=ModelLoader())
     except Exception as err:
         raise StructuredParseError(f"structured input is not parseable: {err}") from err
