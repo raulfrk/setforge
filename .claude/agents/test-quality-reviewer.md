@@ -79,6 +79,11 @@ Judge **statically** whether the assertions actually bite.
   reason about it.
 - Severity: an assertion-free or over-mocked test on the merge / reconcile / store
   core is **CRITICAL** (the exact shape that hid the silent-loss bugs).
+- Use-sites, not just isolation: when the diff changes a codec/helper, check it is
+  exercised at each of its **use-sites**, not only in an isolated unit test — an
+  isolated helper test can pass while a revert of the use-site call survives every
+  test. A use-site with no behavioral test over it is a coverage gap worth an
+  **IMPORTANT** finding.
 
 ## Aspect D — Invariant → owning-component cross-check
 

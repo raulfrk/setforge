@@ -111,7 +111,11 @@ Your remit is the judgment the lints cannot make, not a second pass over them.
 **Out-of-surface diffs.** When `changed_files` touches none of your owned surfaces (no
 wizard / TUI / theme / provisioner / cleanup code — e.g. a pure config / docs / lockfile
 diff), confirm there is no incidental data-flow impact on SAFE-9 / PROV-5, then PASS quickly.
-Do not manufacture an N/A annotation for every rule.
+Do not manufacture an N/A annotation for every rule. But if the dispatch poses explicit
+verification questions outside your owned rule-set (e.g. a dead-code / invariant-preservation
+check), **answer them** — naming the owning blocking gate (the Hypothesis `@invariant` machine /
+the unit suite) as the enforcement layer — rather than short-circuiting to a fast PASS. Honor the
+fast-PASS path AND the dispatcher's actual ask.
 
 Output format (strictly):
 
