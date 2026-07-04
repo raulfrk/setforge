@@ -55,6 +55,10 @@ class Hunk:
     anchor-stable hunk whose live bytes changed since it was classified (keeps its
     class but is surfaced for re-confirm). ``base_span`` / ``live_span`` are
     transient line ranges, recomputed every run and never persisted.
+    ``reloc_anchor`` is an optional markdown heading identity (e.g. ``"## My
+    Tweaks"``) that pins a host-local additive region's classification across an
+    upstream restructure; set only where relocation-tracking is wanted, omitted
+    (``None``) otherwise so legacy rows stay byte-stable.
     """
 
     cls: HunkClass
@@ -65,6 +69,7 @@ class Hunk:
     live_span: tuple[int, int]
     changed: bool = False
     draft_hash: str | None = None
+    reloc_anchor: str | None = None
 
 
 def _sha(data: bytes) -> str:
@@ -229,6 +234,7 @@ def _with(hunk: Hunk, *, cls: HunkClass, changed: bool, draft_hash: str | None) 
         live_span=hunk.live_span,
         changed=changed,
         draft_hash=draft_hash,
+        reloc_anchor=hunk.reloc_anchor,
     )
 
 
@@ -322,7 +328,8 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
     A ``SHARED_DRAFTED`` hunk additionally carries its ``draft_hash`` — the
     identity of its shareable draft (the draft *bytes* live in the ``drafts/``
     store, never the index). Other classes omit the key so existing rows stay
-    byte-stable.
+    byte-stable. Independently, any hunk carrying a ``reloc_anchor`` (its markdown
+    heading identity) emits it; hunks without one omit the key.
     """
     rows: list[dict[str, object]] = []
     for hunk in hunks:
@@ -334,5 +341,7 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
         }
         if hunk.cls is HunkClass.SHARED_DRAFTED and hunk.draft_hash is not None:
             row["draft_hash"] = hunk.draft_hash
+        if hunk.reloc_anchor is not None:
+            row["reloc_anchor"] = hunk.reloc_anchor
         rows.append(row)
     return rows

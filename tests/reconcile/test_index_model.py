@@ -235,3 +235,45 @@ def test_non_string_draft_hash_is_corrupt() -> None:
     )
     with pytest.raises(CorruptIndexError):
         loads(text)
+
+
+# --------------------------------------------------------------------------- #
+# the optional reloc_anchor line-hunk field
+# --------------------------------------------------------------------------- #
+
+
+def test_line_row_with_reloc_anchor_round_trips() -> None:
+    row = (
+        '{"cls":"local","label":"## My Tweaks","live_hash":"sha256:aa",'
+        '"anchor":"sha256:bb","reloc_anchor":"## My Tweaks"}'
+    )
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{row}]}}}}}}'
+    )
+    entry = loads(text).files["f"]
+    assert entry.hunks[0]["reloc_anchor"] == "## My Tweaks"
+
+
+def test_non_string_reloc_anchor_is_corrupt() -> None:
+    bad = (
+        '{"cls":"local","label":"x","live_hash":"sha256:aa","anchor":"sha256:bb",'
+        '"reloc_anchor":123}'
+    )
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{bad}]}}}}}}'
+    )
+    with pytest.raises(CorruptIndexError):
+        loads(text)
+
+
+def test_line_row_without_reloc_anchor_is_valid() -> None:
+    # a legacy row carrying no reloc_anchor stays valid (optional, never required).
+    row = '{"cls":"local","label":"x","live_hash":"sha256:aa","anchor":"sha256:bb"}'
+    text = (
+        '{"schema_version":"1.0","files":{"f":'
+        f'{{"present":true,"local_hash":"sha256:00","hunks":[{row}]}}}}}}'
+    )
+    entry = loads(text).files["f"]
+    assert "reloc_anchor" not in entry.hunks[0]

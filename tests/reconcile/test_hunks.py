@@ -299,6 +299,20 @@ def test_serialize_emits_draft_hash_for_shared_drafted() -> None:
     assert row["draft_hash"] == "sha256:dd"
 
 
+def test_serialize_emits_reloc_anchor_when_set() -> None:
+    (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\nBETA\n")
+    relocatable = replace(hunk, reloc_anchor="## Foo")
+    (row,) = serialize([relocatable])
+    assert row["reloc_anchor"] == "## Foo"
+
+
+def test_serialize_omits_reloc_anchor_when_absent() -> None:
+    # omit-when-None so legacy rows stay byte-stable (mirrors draft_hash).
+    (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\nBETA\n")
+    (row,) = serialize([hunk])
+    assert "reloc_anchor" not in row
+
+
 def test_classify_carries_draft_hash_for_drafted_row() -> None:
     fresh = extract_hunks(BASE, LIVE)
     shell = _by_label(fresh)["## Shell"]

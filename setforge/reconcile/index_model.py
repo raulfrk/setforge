@@ -183,7 +183,9 @@ def _check_hunk_row(fid: str, row: object) -> None:
     ``shared_drafted`` row of either kind additionally carries a ``draft_hash``
     (string) — the identity of its shareable draft; the codec requires it so a
     drafted row can never reach the staging layer without the key its
-    reconstruction keys on.
+    reconstruction keys on. An optional ``reloc_anchor`` (heading identity) may
+    appear on any row; when present it must be a string, else it is never
+    required.
     """
     if not isinstance(row, dict):
         raise CorruptIndexError(f"index entry for {fid!r} has a non-object hunk row")
@@ -213,4 +215,9 @@ def _check_hunk_row(fid: str, row: object) -> None:
     elif draft_hash is not None and not isinstance(draft_hash, str):
         raise CorruptIndexError(
             f"index entry for {fid!r} has a hunk row with a non-string 'draft_hash'"
+        )
+    reloc_anchor = row.get("reloc_anchor")
+    if reloc_anchor is not None and not isinstance(reloc_anchor, str):
+        raise CorruptIndexError(
+            f"index entry for {fid!r} has a hunk row with a non-string 'reloc_anchor'"
         )
