@@ -21,11 +21,15 @@ from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
     PathConflict,
     StructuralMergeResult,
+    append_key_segment,
+    encode_key_segment,
     get_at_path,
+    join_key_segments,
     list_keys_at_path,
     merge_structural,
     resolve_path_prefix,
     set_at_path,
+    split_key_path,
 )
 
 # --------------------------------------------------------------------------
@@ -608,3 +612,68 @@ def test_list_keys_at_path_list_suffix_raises() -> None:
     model = _yload("alpha: [1]\n")
     with pytest.raises(ValueError, match="list suffix"):
         list_keys_at_path(model, "alpha.[*]")
+
+
+# --------------------------------------------------------------------------
+# Injective dotted-key-path codec.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        ["a", "b", "c"],  # plain nested path
+        ["a.b"],  # a single key carrying a literal dot
+        ["a\\b"],  # a single key carrying a backslash
+        [""],  # an empty segment
+        ["a", "", "c"],  # an empty middle segment
+        ["ключ", "café"],  # unicode keys
+        ["a.b", "c.d"],  # two dotted keys
+        ["weird\\.key", "x"],  # backslash AND dot in one segment
+    ],
+)
+def test_codec_round_trips_via_append(segments: list[str]) -> None:
+    """A path built segment-by-segment via ``append_key_segment`` splits back
+    to the exact original segment list, for dots / backslashes / empties /
+    unicode."""
+    path = ""
+    for seg in segments:
+        path = append_key_segment(path, seg)
+    assert split_key_path(path) == segments
+
+
+def test_split_matches_str_split_for_escape_free_path() -> None:
+    """Byte-compat: for any path with no backslash the codec split equals the
+    old ``path.split(".")`` — so existing persisted rows keep matching."""
+    assert split_key_path("a.b.c") == ["a", "b", "c"]
+    # Intentional str.split comparison: the whole point is byte-for-byte parity
+    # with the pre-fix path.split(".") for any escape-free path.
+    assert split_key_path("a.b.c") == "a.b.c".split(".")  # noqa: SIM905
+    assert split_key_path("alpha") == ["alpha"]
+
+
+def test_encode_identity_for_ordinary_key() -> None:
+    """A key with neither ``.`` nor ``\\`` encodes to itself (identity), and
+    ``append_key_segment`` reproduces the old bare join byte-for-byte."""
+    assert encode_key_segment("plainKey") == "plainKey"
+    assert append_key_segment("", "plainKey") == "plainKey"
+    assert append_key_segment("a.b", "c") == "a.b.c"
+
+
+def test_flat_dotted_key_distinct_from_nested_path() -> None:
+    """The flat key ``"a.b"`` encodes distinctly from the nested path
+    ``a -> b``, and each round-trips to its own segment list."""
+    flat = append_key_segment("", "a.b")
+    nested = append_key_segment(append_key_segment("", "a"), "b")
+    assert flat != nested
+    assert flat == "a\\.b"
+    assert nested == "a.b"
+    assert split_key_path(flat) == ["a.b"]
+    assert split_key_path(nested) == ["a", "b"]
+
+
+def test_join_key_segments_reencodes_dotted_segments() -> None:
+    """``join_key_segments`` re-escapes so a decoded dotted segment round-trips
+    and equals a bare join only when no segment carries ``.``/``\\``."""
+    assert join_key_segments(["a", "b", "c"]) == "a.b.c"
+    assert split_key_path(join_key_segments(["a.b", "c"])) == ["a.b", "c"]

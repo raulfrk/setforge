@@ -62,16 +62,20 @@ from setforge.scalar_path import _delete_jsonc_leaf, _set_jsonc_leaf
 __all__ = [
     "PathConflict",
     "StructuralMergeResult",
+    "append_key_segment",
     "deep_merge_into_node",
     "delete_at_path",
+    "encode_key_segment",
     "get_at_path",
     "get_node_at_path",
     "is_structural",
+    "join_key_segments",
     "list_keys_at_path",
     "merge_structural",
     "resolve_path_prefix",
     "set_at_path",
     "set_node_at_path",
+    "split_key_path",
 ]
 
 
@@ -104,6 +108,89 @@ class StructuralMergeResult:
     clean: bool
     merged_model: object
     conflicts: list[PathConflict] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Injective dotted-key-path codec.
+# ---------------------------------------------------------------------------
+#
+# A structured key-unit's identity is a dotted path built from mapping-key
+# segments. A bare ``.``-join is NOT injective: a mapping with BOTH a literal
+# flat key named ``"a.b"`` AND a nested ``a: {b: …}`` produces the SAME dotted
+# path ``"a.b"`` for two physically-distinct leaves, and the ``dict(...)`` the
+# extractor builds silently collapses them — a data-loss collision. Escaping the
+# separator character inside each segment makes the encoding injective.
+#
+# Backward-compat property: a key containing NEITHER ``.`` NOR ``\`` encodes to
+# ITSELF (identity), so ``append_key_segment`` matches the old ``f"{prefix}.{key}"``
+# byte-for-byte and ``split_key_path`` matches ``path.split(".")`` for any
+# escape-free path. Existing persisted index rows for ordinary keys keep matching
+# with no re-mint and no index-version bump; only a key with a literal ``.`` (the
+# previously-colliding case) or a ``\`` (vanishingly rare) changes encoding.
+
+
+def encode_key_segment(key: str) -> str:
+    """Escape one mapping-key segment for the dotted-path codec.
+
+    Escapes ``\\`` → ``\\\\`` first (so a pre-existing backslash cannot be
+    confused with an escape introduced here), then ``.`` → ``\\.`` (so a literal
+    dot in a key is not mistaken for a segment separator). A key with neither
+    character is returned UNCHANGED (identity) — the byte-compat guarantee.
+    """
+    return key.replace("\\", "\\\\").replace(".", "\\.")
+
+
+def append_key_segment(prefix: str, key: str) -> str:
+    """Extend a dotted path ``prefix`` with one more (encoded) ``key`` segment.
+
+    The injective replacement for the old ``f"{prefix}.{key}"`` join. When
+    ``prefix`` is empty the encoded key stands alone (a root segment); otherwise
+    it is appended after a literal ``.`` separator. For an escape-free ``key``
+    the result is byte-identical to the bare join.
+    """
+    encoded = encode_key_segment(key)
+    return encoded if not prefix else f"{prefix}.{encoded}"
+
+
+def split_key_path(path: str) -> list[str]:
+    """Split a dotted ``path`` on UNESCAPED ``.`` and unescape each segment.
+
+    The inverse of :func:`append_key_segment` / :func:`join_key_segments`: a
+    ``\\`` escapes the following character (a ``\\.`` is a literal dot, a ``\\\\``
+    a literal backslash), while an UNescaped ``.`` is a segment separator. For a
+    ``path`` with no ``\\`` the result equals ``path.split(".")`` exactly — the
+    byte-compat guarantee for every ordinary persisted path.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    i = 0
+    n = len(path)
+    while i < n:
+        ch = path[i]
+        if ch == "\\" and i + 1 < n:
+            current.append(path[i + 1])
+            i += 2
+            continue
+        if ch == ".":
+            segments.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return segments
+
+
+def join_key_segments(segments: list[str]) -> str:
+    """Join DECODED ``segments`` back into an encoded dotted path.
+
+    The reconstruction seam for a display / partial path built from already-split
+    segments (each segment is re-escaped so a segment carrying a literal ``.`` or
+    ``\\`` round-trips). Equals a bare ``".".join(segments)`` when no segment
+    carries either character.
+    """
+    return ".".join(encode_key_segment(s) for s in segments)
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +622,7 @@ def _merge_key(
     conflicts: list[PathConflict],
 ) -> None:
     """Resolve a single key across the three sides."""
-    path = f"{prefix}.{key}" if prefix else key
+    path = append_key_segment(prefix, key)
     b_present = backend.has("base", key)
     o_present = backend.has("ours", key)
     t_present = backend.has("theirs", key)
@@ -740,7 +827,7 @@ def set_at_path(model: object, path: str, value: object) -> None:
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for set-at-path: {path!r}")
-    segments = path.split(".")
+    segments = split_key_path(path)
     parent = _descend_set_parent(_json5_inner(model), segments, path)
     leaf = segments[-1]
     _set_leaf(parent, leaf, value, path)
@@ -785,7 +872,7 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for set-node-at-path: {path!r}")
-    segments = path.split(".")
+    segments = split_key_path(path)
     inner = _json5_inner(model)
     parent = _descend_set_parent(inner, segments, path)
     leaf = segments[-1]
@@ -820,7 +907,7 @@ def deep_merge_into_node(target: object, live: Mapping, path: str) -> None:
     in place and the caller splices the result back via :func:`set_node_at_path`.
     """
     for key, live_value in live.items():
-        sub_path = f"{path}.{key}"
+        sub_path = append_key_segment(path, key)
         child = _child_node(target, key)
         if child is ABSENT:
             _set_leaf(target, key, live_value, sub_path)
@@ -862,7 +949,7 @@ def delete_at_path(model: object, path: str) -> None:
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for delete-at-path: {path!r}")
-    segments = path.split(".")
+    segments = split_key_path(path)
     node = _json5_inner(model)
     for seg in segments[:-1]:
         if not _is_mapping_node(node):
@@ -896,7 +983,7 @@ def get_at_path(model: object, path: str) -> object:
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for get-at-path: {path!r}")
     node = _json5_inner(model)
-    for seg in path.split("."):
+    for seg in split_key_path(path):
         if not _is_mapping_node(node):
             return ABSENT
         child = _child_node(node, seg)
@@ -925,7 +1012,7 @@ def get_node_at_path(model: object, path: str) -> object:
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for get-node-at-path: {path!r}")
     node = _json5_inner(model)
-    for seg in path.split("."):
+    for seg in split_key_path(path):
         if not _is_mapping_node(node):
             return ABSENT
         child = _child_node(node, seg)
@@ -959,13 +1046,13 @@ def resolve_path_prefix(model: object, path: str) -> tuple[str, str | None]:
     """
     if "[*]" in path or "[]" in path:
         raise ValueError(f"list suffix not allowed for resolve-path-prefix: {path!r}")
-    segments = path.split(".")
+    segments = split_key_path(path)
     node = _json5_inner(model)
     for depth, seg in enumerate(segments):
         child = _child_node(node, seg) if _is_mapping_node(node) else ABSENT
         if child is ABSENT:
-            resolved = ".".join(segments[:depth])
-            missing = ".".join(segments[: depth + 1])
+            resolved = join_key_segments(segments[:depth])
+            missing = join_key_segments(segments[: depth + 1])
             return (resolved, missing)
         node = child
     return (path, None)
@@ -987,7 +1074,7 @@ def list_keys_at_path(model: object, path: str) -> list[str]:
         raise ValueError(f"list suffix not allowed for list-keys-at-path: {path!r}")
     node = _json5_inner(model)
     if path:
-        for seg in path.split("."):
+        for seg in split_key_path(path):
             if not _is_mapping_node(node):
                 return []
             node = _child_node(node, seg)
@@ -1009,7 +1096,7 @@ def _descend_set_parent(node: object, segments: list[str], path: str) -> object:
     for depth, seg in enumerate(segments[:-1]):
         child = _child_node(node, seg)
         if child is ABSENT:
-            prefix = ".".join(segments[: depth + 1])
+            prefix = join_key_segments(segments[: depth + 1])
             raise KeyError(f"missing parent on path {path!r}: {prefix!r} is absent")
         node = child
     return node

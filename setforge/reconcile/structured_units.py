@@ -34,6 +34,7 @@ from setforge.reconcile.index_model import KIND_KEY
 from setforge.reconcile.types import HunkClass
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
+    append_key_segment,
     get_at_path,
     get_node_at_path,
     set_at_path,
@@ -191,12 +192,16 @@ def _own_items(node: Mapping[object, object]) -> Iterator[tuple[object, object]]
 def _walk_leaves(node: object, prefix: str = "") -> Iterator[tuple[str, object]]:
     """Yield ``(dotted_path, plain_value)`` for every LEAF under ``node``.
 
-    A leaf is any non-mapping value. Mapping keys extend the dotted prefix; only
-    a mapping's OWN keys are walked (see :func:`_own_items`).
+    A leaf is any non-mapping value. Mapping keys extend the dotted prefix via
+    :func:`~setforge.structural_merge.append_key_segment`, whose injective
+    encoding escapes a literal ``.`` (or ``\\``) inside a key — so a flat key
+    named ``"a.b"`` and a nested ``a: {b: …}`` yield DISTINCT paths instead of
+    colliding on ``"a.b"``. Only a mapping's OWN keys are walked (see
+    :func:`_own_items`).
     """
     if isinstance(node, Mapping):
         for key, value in _own_items(node):
-            path = f"{prefix}.{key}" if prefix else str(key)
+            path = append_key_segment(prefix, str(key))
             yield from _walk_leaves(value, path)
     else:
         yield (prefix, node)

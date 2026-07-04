@@ -9,6 +9,10 @@ through the model (never text substitution) so comments/anchors/quoting survive.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
+from typing import cast
+
 import pytest
 
 from setforge.errors import (
@@ -19,6 +23,7 @@ from setforge.errors import (
 from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
+    _load_model,
     assert_stage_fidelity_structured,
     classify_structured,
     extract_structured_units,
@@ -509,3 +514,66 @@ def test_classify_shared_drafted_matches_by_path_ignoring_value_hash() -> None:
     assert out[0].cls is HunkClass.SHARED_DRAFTED
     assert out[0].changed is False
     assert out[0].draft_hash == "sha256:d"
+
+
+# --- dotted-key collision (injective path encoding) ----------------------------
+
+
+def test_flat_dotted_key_distinct_from_nested_key() -> None:
+    """A literal flat key ``a.b`` mints a unit DISTINCT from nested ``a -> b``.
+
+    Regression for the path-collision bug: ``_walk_leaves`` joined segments with a
+    bare ``.``, so a flat key literally named ``"a.b"`` and a nested ``a: {b: …}``
+    both produced the dotted path ``"a.b"`` and ``dict(_walk_leaves(...))`` silently
+    collapsed the two physically-distinct leaves to one unit. An injective encoding
+    keeps them separate.
+    """
+    base = b'"a.b": 0\na:\n  b: 0\n'
+    live = b'"a.b": 9\na:\n  b: 5\n'
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    assert len(units) == 2
+    assert len({u.path for u in units}) == 2
+
+
+def test_reconstruct_promotes_flat_dotted_key_to_flat_slot() -> None:
+    """A promoted flat ``a.b`` unit round-trips to the FLAT key, not nested ``a -> b``.
+
+    The injective encoding must survive the reconstruct round-trip: ``set_node_at_path``
+    has to place the promoted value at the literal ``"a.b"`` key, not descend into a
+    phantom ``a -> b`` nesting.
+    """
+    base = b'"a.b": 0\n'
+    live = b'"a.b": 9\n'
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+    assert len(units) == 1
+
+    promoted = [replace(u, cls=HunkClass.SHARED) for u in units]
+    out = reconstruct_structured(base, live, promoted, {}, StructuredFormat.YAML)
+
+    model = cast("Mapping[str, object]", _load_model(out, StructuredFormat.YAML))
+    assert model["a.b"] == 9
+    assert "a" not in model  # no phantom nested key minted
+
+
+def test_nested_nondotted_key_row_survives_reclassify_unchanged() -> None:
+    """A non-dotted nested key encodes IDENTICALLY → a stored SHARED row still matches.
+
+    Backward-compat guard: the injective encoding only diverges for keys with
+    a literal ``.`` (or the escape char); an ordinary nested key like
+    ``editor.fontSize`` keeps its byte-identical dotted path, so a row persisted
+    before the fix is not re-minted (it re-classifies SHARED, not PENDING).
+    """
+    base = b"editor:\n  fontSize: 14\n"
+    live = b"editor:\n  fontSize: 16\n"
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+    stored = serialize_structured([replace(u, cls=HunkClass.SHARED) for u in units])
+    fresh = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    classified = classify_structured(fresh, stored)
+
+    assert [u.path for u in classified] == ["editor.fontSize"]
+    assert all(u.cls is HunkClass.SHARED for u in classified)
