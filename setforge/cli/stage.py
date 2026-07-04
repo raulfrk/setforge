@@ -35,6 +35,7 @@ from setforge.cli._help_examples import STAGE_EXAMPLES
 from setforge.cli._output import OutputContext, render
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
+from setforge.errors import StructuredParseError
 from setforge.locking import profile_lock
 from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import share_draft
@@ -212,7 +213,7 @@ def collect_structured_stages(
             live = sub_dst.read_bytes()
             try:
                 fresh = su_mod.extract_structured_units(base, live, fmt)
-            except Exception:
+            except StructuredParseError:
                 continue  # unparseable → no interactive staging; capture is verbatim
             entry = reconcile_store.read_index(profile).files.get(str(fid))
             stored = entry.hunks if entry is not None else []

@@ -25,7 +25,12 @@ from typing import Final
 from ruamel.yaml import YAML
 from ruamel.yaml.nodes import ScalarNode
 
-from setforge.errors import DraftConfinementError, InvariantViolation
+from setforge.errors import (
+    DraftConfinementError,
+    InvariantViolation,
+    StructuredParseError,
+)
+from setforge.reconcile.index_model import KIND_KEY
 from setforge.reconcile.types import HunkClass
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
@@ -49,7 +54,6 @@ class StructuredFormat(StrEnum):
     """The structured file format a key-unit operation runs against."""
 
     YAML = "yaml"
-    JSON = "json"
     JSONC = "jsonc"
 
 
@@ -80,9 +84,10 @@ class KeyUnit:
 
     ``path`` is the dotted leaf path and the **identity** (path-only). ``cls`` is
     the staging classification; ``label`` is the human handle (the path itself);
-    ``value_hash`` is the sha256 of the normalised live leaf value, consulted to
-    flag a value edit since the unit was classified. ``draft_hash`` is set only
-    for a ``SHARED_DRAFTED`` unit.
+    ``value_hash`` is the sha256 of ``repr()`` of the live leaf value (see
+    :func:`extract_structured_units`, which hashes ``repr(live_value)``),
+    consulted to flag a value edit since the unit was classified. ``draft_hash``
+    is set only for a ``SHARED_DRAFTED`` unit.
     """
 
     cls: HunkClass
@@ -93,11 +98,6 @@ class KeyUnit:
     draft_hash: str | None = None
 
 
-def identity(unit: KeyUnit) -> str:
-    """The stable identity of a key-unit: its dotted ``path`` (path-only)."""
-    return unit.path
-
-
 def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -105,8 +105,8 @@ def _sha(data: bytes) -> str:
 def _yaml() -> YAML:
     """A ruamel round-trip YAML configured for byte-faithful preserve.
 
-    ``preserve_quotes`` keeps a scalar's quote style; ``width`` is set high so a
-    long scalar is never reflowed onto a new line (smell SP5).
+    ``preserve_quotes`` keeps a scalar's quote style; ``width`` is
+    :data:`_YAML_WIDTH` (see its rationale — no long-scalar reflow, smell SP5).
     """
     yaml = YAML(typ="rt")
     yaml.preserve_quotes = True
@@ -115,14 +115,29 @@ def _yaml() -> YAML:
 
 
 def _load_model(data: bytes, fmt: StructuredFormat) -> object:
-    """Parse ``data`` into a fresh comment-preserving model for ``fmt``."""
-    text = data.decode("utf-8")
-    if fmt is StructuredFormat.YAML:
-        return _yaml().load(io.StringIO(text))
-    from json5 import loads as _json5_loads
-    from json5.loader import ModelLoader
+    """Parse ``data`` into a fresh comment-preserving model for ``fmt``.
 
-    return _json5_loads(text, loader=ModelLoader())
+    Wraps a decode / parse failure into
+    :class:`~setforge.errors.StructuredParseError` so no raw
+    ``UnicodeDecodeError``, ruamel ``YAMLError`` (incl. a ``ComposerError`` for a
+    multi-document stream), or json5 parse exception escapes to a caller. The
+    stage walk catches it to fall back to line-level staging.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise StructuredParseError(
+            f"structured input is not valid UTF-8: {err}"
+        ) from err
+    try:
+        if fmt is StructuredFormat.YAML:
+            return _yaml().load(io.StringIO(text))
+        from json5 import loads as _json5_loads
+        from json5.loader import ModelLoader
+
+        return _json5_loads(text, loader=ModelLoader())
+    except Exception as err:
+        raise StructuredParseError(f"structured input is not parseable: {err}") from err
 
 
 def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
@@ -224,7 +239,7 @@ def serialize_structured(units: list[KeyUnit]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for unit in units:
         row: dict[str, object] = {
-            "kind": "key",
+            "kind": KIND_KEY,
             "cls": unit.cls.value,
             "label": unit.label,
             "path": unit.path,
@@ -254,14 +269,20 @@ def classify_structured(
     come from the draft store, so the live value may be anything). Paths are
     unique within a file, so no anchor-collision guard is needed. Anything
     unmatched stays PENDING.
+
+    Only ``kind:"key"`` rows carry a ``path`` + ``value_hash`` identity, so the
+    stored list is filtered to key-rows first — a stray line-row (``anchor`` +
+    ``live_hash``, no ``path``) sharing the entry can never raise an unwrapped
+    ``KeyError`` here.
     """
+    key_rows = [r for r in stored if r.get("kind") == KIND_KEY]
     drafted_by_path = {
         str(r["path"]): r
-        for r in stored
+        for r in key_rows
         if r.get("cls") == HunkClass.SHARED_DRAFTED.value
     }
-    by_identity = {(str(r["path"]), str(r["value_hash"])): r for r in stored}
-    by_path = {str(r["path"]): r for r in stored}
+    by_identity = {(str(r["path"]), str(r["value_hash"])): r for r in key_rows}
+    by_path = {str(r["path"]): r for r in key_rows}
     out: list[KeyUnit] = []
     for unit in fresh:
         drafted = drafted_by_path.get(unit.path)

@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from setforge.errors import DraftConfinementError, InvariantViolation
+from setforge.errors import (
+    DraftConfinementError,
+    InvariantViolation,
+    StructuredParseError,
+)
 from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
@@ -413,5 +417,95 @@ def test_multidoc_yaml_raises_never_silently_truncates() -> None:
     """
     text = b"a: 1\n---\nb: 2\n"
 
-    with pytest.raises(Exception):  # noqa: B017,PT011 — any load failure beats truncation
+    with pytest.raises(StructuredParseError):
         reconstruct_structured(text, text, [], {}, StructuredFormat.YAML)
+
+
+def test_non_utf8_bytes_raise_structured_parse_error() -> None:
+    """Non-UTF-8 structured bytes fail closed as StructuredParseError at decode.
+
+    ``_load_model`` decodes as UTF-8 first; an invalid byte sequence must surface
+    as the typed :class:`StructuredParseError`, not a raw ``UnicodeDecodeError``.
+    """
+    bad = b"\xff\xfe: 1\n"
+
+    with pytest.raises(StructuredParseError):
+        extract_structured_units(bad, bad, StructuredFormat.YAML)
+
+
+def test_classify_ignores_line_rows_in_mixed_stored() -> None:
+    """A line-row sharing the entry is ignored; the key-unit still classifies (SP).
+
+    ``classify_structured`` filters ``stored`` to ``kind:"key"`` rows, so a
+    line-hunk row (``anchor`` + ``live_hash``, no ``path``) can never raise an
+    unwrapped ``KeyError`` while the real key-unit still inherits its class.
+    """
+    fresh = [KeyUnit(HunkClass.PENDING, "fontSize", "fontSize", "sha256:v16")]
+    line_row: dict[str, object] = {
+        "kind": "line",
+        "cls": "shared",
+        "label": "some line",
+        "live_hash": "sha256:l",
+        "anchor": "sha256:a",
+    }
+    stored = [line_row, _row("shared", "fontSize", "sha256:v16")]
+
+    out = classify_structured(fresh, stored)
+
+    assert out[0].cls is HunkClass.SHARED
+    assert out[0].changed is False
+
+
+def test_reconstruct_merge_key_roundtrip_byte_identical() -> None:
+    """A YAML doc using a ``<<`` merge key round-trips byte-identical (SP4).
+
+    The extract side is pinned by test_extract_merge_key_...; this pins the
+    RECONSTRUCT side: a no-promotion rebuild of a merge-key doc reproduces the
+    input verbatim, so the ``<<`` reference and its anchor survive load+dump.
+    """
+    text = b"defaults: &d\n  x: 1\nchild:\n  <<: *d\n  y: 2\n"
+
+    out = reconstruct_structured(text, text, [], {}, StructuredFormat.YAML)
+
+    assert out == text
+
+
+def test_reconstruct_changed_shared_holds_at_base() -> None:
+    """A ``changed`` SHARED unit is held at BASE, not promoted to live.
+
+    ``_promotes`` returns ``False`` for a ``changed`` SHARED unit (value edited
+    since it was staged), so reconstruct keeps its base value pending re-confirm.
+    """
+    base = b"a: 1\nb: 2\n"
+    live = b"a: 9\nb: 2\n"
+    units = [KeyUnit(HunkClass.SHARED, "a", "a", "sha256:x", changed=True)]
+
+    out = reconstruct_structured(base, live, units, {}, StructuredFormat.YAML)
+
+    assert out == base  # held at base a:1, not promoted to live a:9
+
+
+def test_classify_shared_drafted_matches_by_path_ignoring_value_hash() -> None:
+    """A SHARED_DRAFTED row matches by PATH alone, carrying its draft_hash.
+
+    Its tracked bytes come from the draft store, so the live ``value_hash`` may
+    differ from the stored one; the unit still classifies SHARED_DRAFTED,
+    ``changed=False``, with the stored ``draft_hash`` carried through.
+    """
+    fresh = [KeyUnit(HunkClass.PENDING, "path", "path", "sha256:vNEW")]
+    stored: list[dict[str, object]] = [
+        {
+            "kind": "key",
+            "cls": "shared_drafted",
+            "label": "path",
+            "path": "path",
+            "value_hash": "sha256:vOLD",
+            "draft_hash": "sha256:d",
+        }
+    ]
+
+    out = classify_structured(fresh, stored)
+
+    assert out[0].cls is HunkClass.SHARED_DRAFTED
+    assert out[0].changed is False
+    assert out[0].draft_hash == "sha256:d"
