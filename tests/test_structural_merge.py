@@ -636,9 +636,10 @@ def test_codec_round_trips_via_append(segments: list[str]) -> None:
     """A path built segment-by-segment via ``append_key_segment`` splits back
     to the exact original segment list, for dots / backslashes / empties /
     unicode."""
-    path = ""
+    path: str | None = None
     for seg in segments:
         path = append_key_segment(path, seg)
+    assert path is not None
     assert split_key_path(path) == segments
 
 
@@ -656,15 +657,15 @@ def test_encode_identity_for_ordinary_key() -> None:
     """A key with neither ``.`` nor ``\\`` encodes to itself (identity), and
     ``append_key_segment`` reproduces the old bare join byte-for-byte."""
     assert encode_key_segment("plainKey") == "plainKey"
-    assert append_key_segment("", "plainKey") == "plainKey"
+    assert append_key_segment(None, "plainKey") == "plainKey"
     assert append_key_segment("a.b", "c") == "a.b.c"
 
 
 def test_flat_dotted_key_distinct_from_nested_path() -> None:
     """The flat key ``"a.b"`` encodes distinctly from the nested path
     ``a -> b``, and each round-trips to its own segment list."""
-    flat = append_key_segment("", "a.b")
-    nested = append_key_segment(append_key_segment("", "a"), "b")
+    flat = append_key_segment(None, "a.b")
+    nested = append_key_segment(append_key_segment(None, "a"), "b")
     assert flat != nested
     assert flat == "a\\.b"
     assert nested == "a.b"
@@ -677,3 +678,22 @@ def test_join_key_segments_reencodes_dotted_segments() -> None:
     and equals a bare join only when no segment carries ``.``/``\\``."""
     assert join_key_segments(["a", "b", "c"]) == "a.b.c"
     assert split_key_path(join_key_segments(["a.b", "c"])) == ["a.b", "c"]
+
+
+def test_merge_flat_dotted_key_and_nested_path_do_not_collide() -> None:
+    """The MERGE use-site keeps a flat ``"a.b"`` key distinct from nested ``a -> b``.
+
+    Guards ``_merge_key``'s ``append_key_segment`` threading: a doc carrying BOTH
+    a literal flat ``"a.b"`` key AND a nested ``a: {b: …}`` that BOTH diverge must
+    record TWO conflicts at DISTINCT paths. A use-site revert to a bare ``.``-join
+    would label both conflicts ``"a.b"`` and collapse this assertion — so this
+    covers the merge use-site the codec-unit tests never exercise.
+    """
+    base = {"a.b": 0, "a": {"b": 0}}
+    ours = {"a.b": 1, "a": {"b": 1}}  # live changed both leaves
+    theirs = {"a.b": 2, "a": {"b": 2}}  # upstream changed both differently
+
+    result = merge_structural(base, ours, theirs)
+
+    assert not result.clean
+    assert {c.path for c in result.conflicts} == {"a\\.b", "a.b"}

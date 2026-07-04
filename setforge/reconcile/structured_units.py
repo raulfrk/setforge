@@ -3,7 +3,8 @@ analog of :mod:`setforge.reconcile.hunks`.
 
 Where the line model extracts base↔live diff *hunks* keyed by a content+context
 anchor, this extracts per-KEY units keyed by a **dotted leaf path** (path-only
-identity; composite identity is a later change). A unit is classified by the
+identity; composite identity was considered and REJECTED as a non-goal for v1 —
+see ``docs/RULES.md`` DEC-1). A unit is classified by the
 same :class:`~setforge.reconcile.types.HunkClass`, stored in the same index, and
 reconstructed **through the model + re-serialize** (never text substitution) so
 comments, anchors, quoting, and key order survive the round-trip.
@@ -83,7 +84,9 @@ def structured_format(path: Path) -> StructuredFormat | None:
 class KeyUnit:
     """One structured leaf-key unit.
 
-    ``path`` is the dotted leaf path and the **identity** (path-only). ``cls`` is
+    ``path`` is the dotted leaf path and the **identity** (path-only; a composite
+    path+fingerprint identity was considered and REJECTED as a non-goal for v1 —
+    see ``docs/RULES.md`` DEC-1). ``cls`` is
     the staging classification; ``label`` is the human handle (the path itself);
     ``value_hash`` is the sha256 of ``repr()`` of the live leaf value (see
     :func:`extract_structured_units`, which hashes ``repr(live_value)``),
@@ -189,14 +192,19 @@ def _own_items(node: Mapping[object, object]) -> Iterator[tuple[object, object]]
         yield from node.items()
 
 
-def _walk_leaves(node: object, prefix: str = "") -> Iterator[tuple[str, object]]:
+def _walk_leaves(
+    node: object, prefix: str | None = None
+) -> Iterator[tuple[str, object]]:
     """Yield ``(dotted_path, plain_value)`` for every LEAF under ``node``.
 
     A leaf is any non-mapping value. Mapping keys extend the dotted prefix via
     :func:`~setforge.structural_merge.append_key_segment`, whose injective
     encoding escapes a literal ``.`` (or ``\\``) inside a key — so a flat key
     named ``"a.b"`` and a nested ``a: {b: …}`` yield DISTINCT paths instead of
-    colliding on ``"a.b"``. Only a mapping's OWN keys are walked (see
+    colliding on ``"a.b"``. The root call passes ``prefix=None`` (a real
+    sentinel), so a GENUINE empty-string mapping key stays distinct from the root
+    instead of both reading as "no prefix" — otherwise ``{"": {"a": 1}}`` would
+    collapse onto ``{"a": 1}``. Only a mapping's OWN keys are walked (see
     :func:`_own_items`).
     """
     if isinstance(node, Mapping):
@@ -204,7 +212,11 @@ def _walk_leaves(node: object, prefix: str = "") -> Iterator[tuple[str, object]]
             path = append_key_segment(prefix, str(key))
             yield from _walk_leaves(value, path)
     else:
-        yield (prefix, node)
+        # ``prefix is None`` only when the WHOLE document is a bare scalar (the
+        # root call never descended through a key); its single leaf takes the
+        # empty path, matching the pre-sentinel behavior. A leaf reached through
+        # any key always carries a real dotted-string prefix.
+        yield (prefix if prefix is not None else "", node)
 
 
 def extract_structured_units(

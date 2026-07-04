@@ -24,6 +24,7 @@ from setforge.reconcile.structured_units import (
     KeyUnit,
     StructuredFormat,
     _load_model,
+    _walk_leaves,
     assert_stage_fidelity_structured,
     classify_structured,
     extract_structured_units,
@@ -530,6 +531,40 @@ def test_flat_dotted_key_distinct_from_nested_key() -> None:
     """
     base = b'"a.b": 0\na:\n  b: 0\n'
     live = b'"a.b": 9\na:\n  b: 5\n'
+
+    units = extract_structured_units(base, live, StructuredFormat.YAML)
+
+    assert len(units) == 2
+    assert len({u.path for u in units}) == 2
+
+
+def test_walk_leaves_root_empty_key_distinct_from_no_prefix() -> None:
+    """An empty-string ROOT key must not collide with the no-prefix root.
+
+    Regression for the empty-string-key collision: ``_walk_leaves`` used
+    empty-string truthiness (``not prefix``) to mean "root", conflating the root
+    with a GENUINE empty-string mapping key. A real ``None`` sentinel for "root"
+    keeps the two distinct, so two physically-distinct leaves never collapse in
+    the ``dict(_walk_leaves(...))`` the extractor builds.
+    """
+    # An empty-string key nesting ``{"a": 1}`` must not collapse onto a bare
+    # ``{"a": 1}`` (the empty key contributes a real, distinct segment).
+    nested_empty = list(_walk_leaves({"": {"a": 1}}))
+    plain = list(_walk_leaves({"a": 1}))
+    assert nested_empty != plain
+    assert {p for p, _ in nested_empty}.isdisjoint({p for p, _ in plain})
+
+    # ``{"": 1}`` and ``{"": {"": 9}}`` must yield distinct leaf paths.
+    scalar_empty = {p for p, _ in _walk_leaves({"": 1})}
+    double_empty = {p for p, _ in _walk_leaves({"": {"": 9}})}
+    assert scalar_empty != double_empty
+
+
+def test_extract_empty_string_key_distinct_from_nonempty_same_shape() -> None:
+    """A doc with BOTH an empty-string key and a same-shaped non-empty key mints
+    two DISTINCT units (no silent collapse from the root/empty-key conflation)."""
+    base = b'"":\n  a: 0\na: 0\n'
+    live = b'"":\n  a: 9\na: 9\n'
 
     units = extract_structured_units(base, live, StructuredFormat.YAML)
 

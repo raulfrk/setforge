@@ -16,7 +16,8 @@ Two parts:
 
 Each rule has a **stable short ID** (`INV-*`, `UX-*`, `SAFE-*`, `PY-*`,
 `PROV-*`). IDs never change once shipped — gates, agents, and commit messages
-cite them.
+cite them. A `DEC-*` ID (§1.7) is a **decision record** — a rejected-alternative
+cut rather than a rule — cited the same way but not counted in the rule table.
 
 ---
 

@@ -122,11 +122,18 @@ class StructuralMergeResult:
 # separator character inside each segment makes the encoding injective.
 #
 # Backward-compat property: a key containing NEITHER ``.`` NOR ``\`` encodes to
-# ITSELF (identity), so ``append_key_segment`` matches the old ``f"{prefix}.{key}"``
-# byte-for-byte and ``split_key_path`` matches ``path.split(".")`` for any
-# escape-free path. Existing persisted index rows for ordinary keys keep matching
-# with no re-mint and no index-version bump; only a key with a literal ``.`` (the
-# previously-colliding case) or a ``\`` (vanishingly rare) changes encoding.
+# ITSELF (identity), so ``append_key_segment`` matches the old GUARDED join
+# (``f"{prefix}.{key}" if prefix else key``) byte-for-byte and ``split_key_path``
+# matches ``path.split(".")`` for any escape-free path. Existing persisted index
+# rows for ordinary keys keep matching with no re-mint and no index-version bump;
+# only a key with a literal ``.`` (the previously-colliding case) or a ``\``
+# (vanishingly rare) changes encoding.
+#
+# "Root" is a real ``None`` sentinel, NEVER the empty string: an empty-string
+# mapping KEY is a genuine segment (it encodes to ``""`` and prefixes its
+# children with the empty STRING), distinct from the no-prefix root. Using
+# empty-string truthiness for "root" would collapse ``{"": {"a": 1}}`` onto
+# ``{"a": 1}`` — the same silent data-loss the codec exists to prevent.
 
 
 def encode_key_segment(key: str) -> str:
@@ -140,16 +147,19 @@ def encode_key_segment(key: str) -> str:
     return key.replace("\\", "\\\\").replace(".", "\\.")
 
 
-def append_key_segment(prefix: str, key: str) -> str:
+def append_key_segment(prefix: str | None, key: str) -> str:
     """Extend a dotted path ``prefix`` with one more (encoded) ``key`` segment.
 
-    The injective replacement for the old ``f"{prefix}.{key}"`` join. When
-    ``prefix`` is empty the encoded key stands alone (a root segment); otherwise
-    it is appended after a literal ``.`` separator. For an escape-free ``key``
-    the result is byte-identical to the bare join.
+    The injective replacement for the old GUARDED join
+    (``f"{prefix}.{key}" if prefix else key``). ``prefix is None`` is the ROOT (a
+    real sentinel, never the empty string): the encoded key stands alone.
+    Otherwise the encoded key is appended after a literal ``.`` separator — so an
+    empty-string root KEY (``prefix == ""``) prefixes its children with a leading
+    ``.``, keeping it distinct from the root. For an escape-free ``key`` at the
+    root the result is byte-identical to the old guarded join.
     """
     encoded = encode_key_segment(key)
-    return encoded if not prefix else f"{prefix}.{encoded}"
+    return encoded if prefix is None else f"{prefix}.{encoded}"
 
 
 def split_key_path(path: str) -> list[str]:
@@ -577,12 +587,12 @@ def merge_structural(
     # place but return ours' wrapper so the result re-dumps with formatting.
     if isinstance(ours, JSONText):
         _merge_mapping(
-            _json5_inner(base), ours.value, _json5_inner(theirs), "", conflicts
+            _json5_inner(base), ours.value, _json5_inner(theirs), None, conflicts
         )
         return StructuralMergeResult(
             clean=not conflicts, merged_model=ours, conflicts=conflicts
         )
-    _merge_mapping(base, ours, theirs, "", conflicts)
+    _merge_mapping(base, ours, theirs, None, conflicts)
     return StructuralMergeResult(
         clean=not conflicts, merged_model=ours, conflicts=conflicts
     )
@@ -597,10 +607,14 @@ def _merge_mapping(
     base: object,
     ours: object,
     theirs: object,
-    prefix: str,
+    prefix: str | None,
     conflicts: list[PathConflict],
 ) -> None:
-    """Merge one mapping level in place, recursing into shared submaps."""
+    """Merge one mapping level in place, recursing into shared submaps.
+
+    ``prefix`` is ``None`` at the root (see :func:`append_key_segment`); deeper
+    levels pass the accumulated dotted path.
+    """
     backend = _make_backend(base, ours, theirs)
     for key in _union_keys(backend):
         _merge_key(backend, key, prefix, conflicts)
@@ -618,10 +632,13 @@ def _union_keys(backend: _MappingBackend) -> list[str]:
 def _merge_key(
     backend: _MappingBackend,
     key: str,
-    prefix: str,
+    prefix: str | None,
     conflicts: list[PathConflict],
 ) -> None:
-    """Resolve a single key across the three sides."""
+    """Resolve a single key across the three sides.
+
+    ``prefix`` is ``None`` at the root (see :func:`append_key_segment`).
+    """
     path = append_key_segment(prefix, key)
     b_present = backend.has("base", key)
     o_present = backend.has("ours", key)
@@ -881,7 +898,9 @@ def set_node_at_path(model: object, path: str, node: object) -> None:
     _set_node_leaf(parent, leaf, node, path)
 
 
-def deep_merge_into_node(target: object, live: Mapping, path: str) -> None:
+def deep_merge_into_node(
+    target: object, live: Mapping, path: str | None = None
+) -> None:
     """Deep-merge a PLAIN ``live`` mapping OVER the WRAPPED ``target`` node in place.
 
     The comment-preserving sibling of
@@ -905,6 +924,8 @@ def deep_merge_into_node(target: object, live: Mapping, path: str) -> None:
     Tracked-only keys are never iterated, so they (and their comments) are left
     byte-identical. ``target`` MUST already be a deep copy — this seam mutates it
     in place and the caller splices the result back via :func:`set_node_at_path`.
+    ``path`` is ``None`` at the root (see :func:`append_key_segment`); the
+    recursion threads the accumulated dotted path.
     """
     for key, live_value in live.items():
         sub_path = append_key_segment(path, key)
