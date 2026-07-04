@@ -50,11 +50,8 @@ class SpanOrphan:
 
     ``reason`` and ``tracked_siblings`` ride along ONLY for STRUCTURAL
     orphans (the deploy seam copies them from the structural span re-assert —
-    ``reason`` holds :class:`setforge.span_types.StructuralSpanOrphanReason`'s
-    value as a plain string so this markdown-side module never imports the
-    merge engine). The warning render site uses them to
-    attribute an upstream rename/delete and offer a did-you-mean over the
-    tracked sibling keys. Markdown orphans leave both at their defaults.
+    ``reason`` holds a plain string so this markdown-side module never imports
+    the merge engine). Markdown orphans leave both at their defaults.
     """
 
     anchor: str

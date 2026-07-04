@@ -59,7 +59,6 @@ from setforge.cli._helpers import (
     _refuse_duplicate_section_names,
     _resolve_drift_paths,
 )
-from setforge.cli._validate_errors import suggest_close_match
 from setforge.compare import (
     CompareStatus,
     DriftClass,
@@ -93,7 +92,6 @@ from setforge.source import (
 from setforge.span_types import (
     SpanEntry,
     SpanKind,
-    StructuralSpanOrphanReason,
 )
 from setforge.spans_overlay import SpanOrphan
 from setforge.ui.widgets import Button, Cancelled, button_bar
@@ -686,29 +684,13 @@ def _span_orphan_warning(sub_dst: Path, orphan: SpanOrphan) -> str:
 
     The single wording seam shared by the pass-1 ``--strict-spans`` gate
     (:func:`_refuse_on_pinned_orphans`) and the pass-2 warn
-    (:func:`_advance_span_states`). An
-    upstream-renamed-or-deleted structural orphan gets the upstream
-    attribution plus a did-you-mean over the tracked sibling keys the
-    orphan carries (:func:`~setforge.cli._validate_errors.suggest_close_match`
-    on the anchor's leaf segment — suggestion rendering lives HERE because
-    the merge driver must not import from ``cli``); every other orphan
-    keeps the generic could-not-be-relocated wording.
+    (:func:`_advance_span_states`). Every orphan keeps the generic
+    could-not-be-relocated wording.
     """
-    upstream_reason = StructuralSpanOrphanReason.UPSTREAM_RENAMED_OR_DELETED
-    if orphan.reason != upstream_reason:
-        return (
-            f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
-            f"could not be relocated upstream — region preserved, not dropped"
-        )
-    message = (
+    return (
         f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
-        f"was renamed or deleted upstream — region preserved, not dropped"
+        f"could not be relocated upstream — region preserved, not dropped"
     )
-    leaf = orphan.anchor.rpartition(".")[2]
-    suggestion = suggest_close_match(leaf, list(orphan.tracked_siblings))
-    if suggestion is not None:
-        message += f" (did you mean {suggestion!r}?)"
-    return message
 
 
 def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:

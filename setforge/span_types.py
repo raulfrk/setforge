@@ -44,7 +44,6 @@ __all__ = [
     "SpanKind",
     "SpanSemantics",
     "SpanState",
-    "StructuralSpanOrphanReason",
     "is_heading_anchor",
     "validate_span_disposition",
     "validate_spans_file_type",
@@ -433,40 +432,6 @@ class SpanState:
         if self.last_deployed_body is not None:
             record["last_deployed_body"] = self.last_deployed_body
         return record
-
-
-class StructuralSpanOrphanReason(StrEnum):
-    """Why a structural span pin could not be re-asserted / located.
-
-    Currently DORMANT: the re-assert pipeline that set these reasons has been
-    retired, so no live code constructs a reason-carrying ``SpanOrphan`` today
-    (orphans are built reason-less, and the install warning's did-you-mean
-    branch never fires). The enum + that branch are retained for the pending
-    span-surface retirement, which will rewire or remove them. Member meanings,
-    for that future work:
-
-    ``ABSENT_IN_LIVE`` — the pinned path is gone from the fresh live parse (the
-    user deleted ``P`` locally); there is nothing to re-impose.
-    ``MISSING_PARENT`` — an intermediate parent on the path is gone from the
-    merged model, so the leaf cannot be addressed by key.
-    ``PARENT_NOT_MAPPING`` — the resolved parent is a scalar/list, not a
-    mapping, so the leaf cannot be addressed by key.
-    ``UPSTREAM_RENAMED_OR_DELETED`` — refines ``ABSENT_IN_LIVE``: the path is
-    gone from live AND the stored base HAD a value at ``P`` while tracked no
-    longer does, so the loss is attributed to an upstream rename/delete rather
-    than a local edit; the orphan carries the tracked-side sibling keys at
-    ``P``'s parent so the warning can render a did-you-mean.
-    ``STRUCTURAL_FALLBACK`` — a shape clash between sides forced the whole file
-    off the structural engine onto the raw line-based merge; the pin could not
-    be re-asserted onto the line-merged text, so the merged value is PRESERVED
-    and warned rather than silently dropped.
-    """
-
-    ABSENT_IN_LIVE = "absent-in-live"
-    MISSING_PARENT = "missing-parent"
-    PARENT_NOT_MAPPING = "parent-not-mapping"
-    UPSTREAM_RENAMED_OR_DELETED = "upstream-renamed-or-deleted"
-    STRUCTURAL_FALLBACK = "structural-fallback"
 
 
 def validate_structural_spans(spans: list[SpanEntry]) -> None:
