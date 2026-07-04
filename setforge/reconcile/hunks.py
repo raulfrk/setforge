@@ -151,6 +151,28 @@ def identity(hunk: Hunk) -> tuple[str, str]:
     return (hunk.live_hash, hunk.anchor)
 
 
+def _section_heading(hunk: Hunk) -> str | None:
+    """The hunk's own markdown heading identity, or ``None`` if it has none.
+
+    Derived from the hunk's :attr:`~Hunk.label`, which already prefers a ``#``-led
+    heading found in the hunk's *own changed content* (see :func:`_label`). A label
+    that is an ATX heading is the region's stable identity — the handle used to
+    re-find a host-local additive section across an upstream restructure that shifts
+    its context :attr:`~Hunk.anchor`. Any other label (a first-line fallback or
+    ``(blank)``) has no clean heading, so a hunk without one simply never mints or
+    matches a ``reloc_anchor``. Shared by both the mint (:func:`serialize`) and the
+    match (:func:`classify`) sides so the two always agree on the identity.
+
+    Caveat: ``label`` can also fall back to the nearest *preceding base* heading
+    when the changed content has none, so a headingless insert sitting under a base
+    heading may derive that neighbour's heading. This never mis-carries: the
+    uniqueness guards in :func:`classify` drop any ambiguous heading, and an
+    unresolved match falls through to PENDING (never raises, invariant I7).
+    """
+    text = hunk.label.strip()
+    return text if text.startswith("#") else None
+
+
 def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     """Carry stored classifications onto freshly-extracted hunks by identity.
 
@@ -172,6 +194,9 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     at base via ``changed=True``, never duplicated).
     """
     fresh_anchor_counts = Counter(h.anchor for h in fresh)
+    fresh_heading_counts = Counter(
+        heading for h in fresh if (heading := _section_heading(h)) is not None
+    )
     drafted_by_anchor = {
         str(r["anchor"]): r
         for r in stored
@@ -179,6 +204,23 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
     }
     by_identity = {(str(r["live_hash"]), str(r["anchor"])): r for r in stored}
     by_anchor = {str(r["anchor"]): r for r in stored}
+    # Stored LOCAL rows keyed by their minted heading identity, but ONLY where the
+    # heading is unique among stored rows — a duplicated reloc_anchor is ambiguous,
+    # so it is dropped here and no fresh hunk can match it (invariant I8: never
+    # pick-first). Restricted to LOCAL because reloc_anchor is only ever minted on a
+    # host-local additive section.
+    reloc_counts = Counter(
+        str(r["reloc_anchor"])
+        for r in stored
+        if r.get("cls") == HunkClass.LOCAL.value and r.get("reloc_anchor") is not None
+    )
+    local_reloc_by_heading = {
+        str(r["reloc_anchor"]): r
+        for r in stored
+        if r.get("cls") == HunkClass.LOCAL.value
+        and r.get("reloc_anchor") is not None
+        and reloc_counts[str(r["reloc_anchor"])] == 1
+    }
     out: list[Hunk] = []
     for hunk in fresh:
         drafted = drafted_by_anchor.get(hunk.anchor)
@@ -189,6 +231,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                     cls=HunkClass.SHARED_DRAFTED,
                     changed=False,
                     draft_hash=_row_draft_hash(drafted),
+                    reloc_anchor=_row_reloc_anchor(drafted),
                 )
             )
             continue
@@ -200,6 +243,7 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                     cls=HunkClass(str(exact["cls"])),
                     changed=False,
                     draft_hash=_row_draft_hash(exact),
+                    reloc_anchor=_row_reloc_anchor(exact),
                 )
             )
             continue
@@ -211,9 +255,29 @@ def classify(fresh: list[Hunk], stored: list[dict[str, object]]) -> list[Hunk]:
                     cls=HunkClass(str(moved["cls"])),
                     changed=True,
                     draft_hash=_row_draft_hash(moved),
+                    reloc_anchor=_row_reloc_anchor(moved),
                 )
             )
             continue
+        # Reloc fallback: the exact/anchor identity is gone (an upstream restructure
+        # shifted the context), but the hunk's OWN heading identity uniquely matches
+        # a stored LOCAL row's minted reloc_anchor — carry that class, flagged
+        # changed=True (content/context shifted → surfaced for re-confirm). Unique on
+        # BOTH sides (fresh + stored) or no match at all (invariant I8).
+        heading = _section_heading(hunk)
+        if heading is not None and fresh_heading_counts[heading] == 1:
+            reloc_row = local_reloc_by_heading.get(heading)
+            if reloc_row is not None:
+                out.append(
+                    _with(
+                        hunk,
+                        cls=HunkClass(str(reloc_row["cls"])),
+                        changed=True,
+                        draft_hash=_row_draft_hash(reloc_row),
+                        reloc_anchor=_row_reloc_anchor(reloc_row),
+                    )
+                )
+                continue
         out.append(hunk)  # unmatched → PENDING (the extract default)
     return out
 
@@ -224,7 +288,23 @@ def _row_draft_hash(row: dict[str, object]) -> str | None:
     return str(value) if isinstance(value, str) else None
 
 
-def _with(hunk: Hunk, *, cls: HunkClass, changed: bool, draft_hash: str | None) -> Hunk:
+def _row_reloc_anchor(row: dict[str, object]) -> str | None:
+    """The row's minted ``reloc_anchor`` (heading identity), else ``None``."""
+    value = row.get("reloc_anchor")
+    return str(value) if isinstance(value, str) else None
+
+
+def _with(
+    hunk: Hunk,
+    *,
+    cls: HunkClass,
+    changed: bool,
+    draft_hash: str | None,
+    reloc_anchor: str | None,
+) -> Hunk:
+    # reloc_anchor comes from the matched STORED row (a fresh hunk always carries
+    # None), so a minted heading identity persists stably across runs rather than
+    # being recomputed each time.
     return Hunk(
         cls=cls,
         label=hunk.label,
@@ -234,7 +314,7 @@ def _with(hunk: Hunk, *, cls: HunkClass, changed: bool, draft_hash: str | None) 
         live_span=hunk.live_span,
         changed=changed,
         draft_hash=draft_hash,
-        reloc_anchor=hunk.reloc_anchor,
+        reloc_anchor=reloc_anchor,
     )
 
 
@@ -328,8 +408,17 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
     A ``SHARED_DRAFTED`` hunk additionally carries its ``draft_hash`` — the
     identity of its shareable draft (the draft *bytes* live in the ``drafts/``
     store, never the index). Other classes omit the key so existing rows stay
-    byte-stable. Independently, any hunk carrying a ``reloc_anchor`` (its markdown
-    heading identity) emits it; hunks without one omit the key.
+    byte-stable.
+
+    MINT: a LOCAL hunk that carries no ``reloc_anchor`` yet gets one minted from
+    its own markdown heading identity (:func:`_section_heading`), pinning a
+    host-local additive region across a later upstream restructure that shifts its
+    context anchor. The mint is first-write only: a hunk that already carries a
+    ``reloc_anchor`` (carried forward by :func:`classify` from its stored row) keeps
+    it verbatim, so the identity stays stable across runs rather than drifting. A
+    LOCAL hunk with no clean heading, and any non-LOCAL hunk, mints nothing. Any
+    hunk carrying a ``reloc_anchor`` (minted here or carried forward) emits it;
+    hunks without one omit the key so legacy rows stay byte-stable.
     """
     rows: list[dict[str, object]] = []
     for hunk in hunks:
@@ -341,7 +430,10 @@ def serialize(hunks: list[Hunk]) -> list[dict[str, object]]:
         }
         if hunk.cls is HunkClass.SHARED_DRAFTED and hunk.draft_hash is not None:
             row["draft_hash"] = hunk.draft_hash
-        if hunk.reloc_anchor is not None:
-            row["reloc_anchor"] = hunk.reloc_anchor
+        reloc = hunk.reloc_anchor
+        if reloc is None and hunk.cls is HunkClass.LOCAL:
+            reloc = _section_heading(hunk)
+        if reloc is not None:
+            row["reloc_anchor"] = reloc
         rows.append(row)
     return rows
