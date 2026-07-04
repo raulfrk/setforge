@@ -48,10 +48,11 @@ class SpanOrphan:
     (which ``--strict-spans`` may escalate) from a forked one. Both are
     preserved + warned, never dropped (Invariant I7).
 
-    ``reason`` and ``tracked_siblings`` ride along ONLY for STRUCTURAL
-    orphans (the deploy seam copies them from the structural span re-assert —
-    ``reason`` holds a plain string so this markdown-side module never imports
-    the merge engine). Markdown orphans leave both at their defaults.
+    ``reason`` and ``tracked_siblings`` are DORMANT placeholders: no live path
+    populates them (every construction passes only ``anchor`` + ``kind``) and,
+    since the structural re-assert pipeline that once fed them was retired,
+    nothing reads them. They are kept at their defaults until the whole
+    ``spans_overlay`` surface retires alongside the legacy deploy path.
     """
 
     anchor: str
