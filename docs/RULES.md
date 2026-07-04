@@ -141,6 +141,49 @@ Part 2(b)).
 
 ---
 
+### 1.7 Design decisions (structured reconcile)
+
+Durable **decision records** — the cuts a rule table can't hold (rejected
+alternatives + rationale). Not tagged/counted as rules; cite by ID.
+
+#### DEC-1 — Structured key-unit identity is **path-only**
+
+**Decision.** A structured key-unit is identified by its **path alone**.
+Composite identity is a non-goal for v1. Two hardenings from the structured
+key-unit identity investigation were **rejected**:
+
+- **Composite rename-survival identity** (path + value/sibling fingerprint, so
+  an overlay survives an upstream key rename). Rejected — no observed demand:
+  the author's config repo has **zero** key renames across its whole git
+  history. A rename re-mints the unit, which is acceptable for config files.
+- **Per-element list identity** (so a list reorder isn't whole-list
+  divergence). Rejected — the sole tracked structured file's lists
+  (`permissions.allow`, the `hooks.*` arrays) are **order-significant**, where
+  whole-list divergence is the *correct* behavior; per-element identity would be
+  wrong.
+
+**What was fixed instead — the dotted-key collision.**
+`reconcile/structured_units.py::_walk_leaves` built a unit's path by joining
+segments with a bare `.`, so a literal flat key `"a.b"` collided with a nested
+`a: {b: …}` (both → path `"a.b"`) and `extract_structured_units` silently
+collapsed the two distinct leaves into one unit. Fixed with an **injective path
+encoding** (escape a literal `.`/`\` within a segment — see
+`structural_merge.encode_key_segment` / `split_key_path`). The encoding is
+byte-identical for keys containing neither `.` nor `\`, so existing persisted
+index rows are **not** re-minted.
+
+**Scope — JSONC is not walked at key level yet.** `_load_model` returns a
+non-`Mapping` `JSONText` for JSONC, so `_walk_leaves` never recurses into it: a
+JSONC file (e.g. VSCode `settings.json`) is staged as a **single whole-document
+unit**, not per-key. VSCode's flat dotted keys
+(`claudeCode.allowDangerouslySkipPermissions`, `editor.fontSize`) therefore do
+**not** route through the KeyUnit engine today. The dotted-key fix is
+**forward-insurance** for when JSONC key-level walking + structured host-local
+keys land — the **STAGE B unification**, which is the follow-up that will
+exercise this path.
+
+---
+
 ## Part 2 — Testing rubric
 
 Every implementation references this section. The goal is test
