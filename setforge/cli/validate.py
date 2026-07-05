@@ -50,7 +50,6 @@ from setforge.errors import (
     SetforgeError,
     ValidationErrorWithContext,
 )
-from setforge.host_local_inject import resolve_anchor
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.markdown_spans import bound_span
@@ -62,8 +61,6 @@ from setforge.source import (
     MarketplaceOverlay,
     PluginOverlay,
     _LocalTrackedFileOverlay,
-    load_local_host_local_sections,
-    validate_host_local_sections_file_type,
 )
 from setforge.span_types import (
     SpanEntry,
@@ -105,8 +102,6 @@ def _check_profile(
     resolved = _check_profile_resolution(cfg, prof_name, ctx, failures)
     if resolved is None:
         return
-
-    _check_host_local_sections(cfg, resolved, repo_root, ctx, failures)
 
     _check_spans_file_types(cfg, resolved, repo_root, ctx, failures)
 
@@ -164,9 +159,7 @@ def _apply_local_overlay_check(
       schema into :class:`LocalOverlayLoadError` (config.py:782-783),
       so no separate ``except ValidationError`` clause is needed here
       — unlike :func:`_check_profile` (whose
-      ``apply_preserve_user_keys_overlay`` path does NOT wrap) and
-      :func:`_check_host_local_sections` (whose
-      ``load_local_host_local_sections`` does NOT wrap either).
+      ``apply_preserve_user_keys_overlay`` path does NOT wrap).
     - :class:`LocalOverlayError`: resolver-phase collision or unknown-
       remove → cross-ref did NOT run; record and fall back to Check 6.
     - bare :class:`ConfigError`: emitted by the cross-ref check itself
@@ -284,72 +277,6 @@ def _check_no_markers_remain(
         )
 
 
-def _check_host_local_sections(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Check: local.yaml host_local_sections validates against tracked srcs.
-
-    Two layers:
-
-    1. **File-type gate**: REJECT host_local_sections for non-markdown
-       tracked_files (anchor grammar requires .md / .markdown).
-    2. **Anchor resolution gate**: resolve every anchor against the
-       current tracked source on disk. Surfaces anchor-not-found /
-       anchor-ambiguous BEFORE install would attempt the splice
-       (offline gate per SPEC 1 acceptance commands).
-
-    No-op when local.yaml is absent or declares no host-local sections
-    for tracked_files in this profile.
-
-    Catches mirror ``_check_profile``'s broadened set:
-    ValidationError gets routed through the mockup-D formatter so the
-    suggestion / snippet / fix-hint UX surfaces; ConfigError stays a
-    string failure (existing UX); OSError / UnicodeDecodeError ride
-    through the YAML PARSE category. Without these, a malformed
-    local.yaml that already had its overlay-apply error reported
-    above would still abort the validate run here.
-    """
-    try:
-        overlay = load_local_host_local_sections()
-    except ConfigError as exc:
-        failures.append(f"{ctx}: {exc}")
-        return
-    except ValidationError as exc:
-        _route_local_yaml_validation_error(_LOCAL_CONFIG_PATH, exc, failures)
-        return
-    except (OSError, UnicodeDecodeError) as exc:
-        failures.append(format_yaml_parse_error(_LOCAL_CONFIG_PATH, 1, 1, str(exc)))
-        return
-    profile_ids = set(resolved.tracked_files)
-    for tf_id, sections_map in overlay.items():
-        if tf_id not in profile_ids:
-            continue
-        tracked_file = cfg.tracked_files[tf_id]
-        src = resolve_src(tracked_file, repo_root)
-        try:
-            validate_host_local_sections_file_type(tf_id, len(sections_map), src)
-        except ConfigError as exc:
-            failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
-            continue
-        if not src.exists():
-            # _check_tracked_srcs surfaces the missing-src error
-            # elsewhere; do not double-report here.
-            continue
-        text = src.read_text(encoding="utf-8")
-        for section_name, section in sections_map.items():
-            try:
-                resolve_anchor(text, section.anchor)
-            except (AnchorNotFoundError, AnchorAmbiguousError) as exc:
-                failures.append(
-                    f"{ctx}: tracked_file {tf_id!r}: "
-                    f"host_local_sections.{section_name}: {exc}"
-                )
-
-
 def _check_spans_file_types(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -359,8 +286,8 @@ def _check_spans_file_types(
 ) -> None:
     """Check: tracked_file span anchors match their source's file type.
 
-    Mirrors the file-type gate of :func:`_check_host_local_sections` (and
-    the install-time :func:`setforge.cli._install_helpers._validate_span_file_types`)
+    Mirrors the install-time file-type gate
+    (:func:`setforge.cli._install_helpers._validate_span_file_types`)
     so ``setforge validate --all`` — the offline CI gate — catches a
     wrong-grammar span anchor (a heading anchor on yaml/json, or a dotted-path
     anchor on markdown) BEFORE install would fail with a confusing runtime
@@ -445,7 +372,7 @@ def _check_spans_path_existence(
       is config, not host state) — never the base store, spans sidecar, or
       any live file. ``validate`` stays a stateless offline gate.
     * Missing src → silent skip (:func:`_check_tracked_srcs` reports it;
-      same double-report suppression as :func:`_check_host_local_sections`).
+      the same double-report suppression the other src checks apply).
     * Non-structural (markdown) srcs route to
       :func:`_check_markdown_span_anchors` (exact heading resolution);
       heading-shaped anchors on structural srcs → skip. OVERLAY spans
@@ -522,8 +449,7 @@ def _check_markdown_span_anchors(
     """Resolve PINNED / FORKED markdown span headings against the tracked src.
 
     The markdown counterpart of the structural dotted-path walk: each
-    heading anchor must resolve EXACTLY ONCE in the tracked source, offline
-    (mirroring :func:`_check_host_local_sections`'s anchor-resolution gate).
+    heading anchor must resolve EXACTLY ONCE in the tracked source, offline.
     ABSENT and AMBIGUOUS surface as distinct rows —
     :func:`setforge.markdown_spans.bound_span`'s two error types carry
     distinct messages. No fuzzy relocation here; that is install's job.
@@ -690,73 +616,6 @@ def _check_marketplaces(
                     f"{ctx}: plugin {bare_name!r} references unknown "
                     f"marketplace {mp_name!r}"
                 )
-
-
-def _route_local_yaml_validation_error(
-    local_yaml_path: Path,
-    exc: ValidationError,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Route a ``ValidationError`` raised by the local.yaml overlay loader.
-
-    Sibling of :func:`_route_setforge_yaml_validation_error` for the
-    local.yaml side. Re-loads local.yaml with
-    ``YAML(typ="rt")`` so the resulting ``CommentedMap`` carries
-    ``.lc`` line/column info for each error's ``loc`` path. Each
-    Pydantic error becomes one :class:`ValidationErrorWithContext`
-    carrier appended to ``failures`` via
-    :func:`_validation_error_to_context`.
-
-    Race-window resilience mirrors the setforge.yaml-side routing:
-    when the rt re-read fails (file became unreadable / unparseable
-    between the overlay load and this routing) or returns a non-Mapping
-    root, fall back to top-level ``(1, 1)`` placeholders so the
-    original :class:`ValidationError` still surfaces.
-    """
-    try:
-        raw_text = local_yaml_path.read_text(encoding="utf-8")
-        yaml_rt = YAML(typ="rt")
-        data = yaml_rt.load(raw_text)
-    except (OSError, UnicodeDecodeError, YAMLError):
-        # Either the re-read failed (race window) or the file became
-        # syntactically invalid between the overlay-loader parse and
-        # this routing. Fall back to a top-level placeholder so the
-        # original ValidationError still surfaces.
-        for err in exc.errors():
-            failures.append(_build_local_yaml_top_level_fallback(local_yaml_path, err))
-        return
-    if data is None or not isinstance(data, Mapping):
-        # Empty document or malformed top-level shape — placeholder
-        # carriers preserve the report-all-then-refuse contract.
-        for err in exc.errors():
-            failures.append(_build_local_yaml_top_level_fallback(local_yaml_path, err))
-        return
-    for err in exc.errors():
-        failures.append(
-            _validation_error_to_context(local_yaml_path, raw_text, data, err)
-        )
-
-
-def _build_local_yaml_top_level_fallback(
-    local_yaml_path: Path, err: Mapping[str, object]
-) -> ValidationErrorWithContext:
-    """Fallback carrier when the rt re-load fails for local.yaml.
-
-    Surfaces the Pydantic message at ``(1, 1)`` without snippet/pointer
-    detail. Mirrors :func:`_build_top_level_fallback` on the
-    setforge.yaml side but renders the home-relative path.
-    """
-    msg = str(err.get("msg", ""))
-    home_path = _home_relative(local_yaml_path)
-    return ValidationErrorWithContext(
-        file_path=local_yaml_path,
-        line=1,
-        column=1,
-        snippet_lines=[""],
-        field_value=msg or "value",
-        fix_hint=f"edit {home_path} — {msg}",
-        suggestion=None,
-    )
 
 
 def _check_local_yaml(

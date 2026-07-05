@@ -51,9 +51,8 @@ class LocalConfig(BaseModel):
     claude: dict[str, object] = Field(default_factory=dict)
     # ``tracked_files:`` carries per-tracked_file host-local overlay
     # (preserve_user_keys / host_local_sections). The nested-shape
-    # validation runs through :func:`_check_host_local_sections` and
-    # :func:`apply_preserve_user_keys_overlay`; this layer only asserts
-    # the key is allowed at the top level.
+    # validation runs through :func:`apply_preserve_user_keys_overlay`;
+    # this layer only asserts the key is allowed at the top level.
     tracked_files: dict[str, object] = Field(default_factory=dict)
     # SPEC 2 per-host plugin / extension / marketplace
     # overlay blocks. Free-form mapping shapes at this layer; the
