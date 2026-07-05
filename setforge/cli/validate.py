@@ -15,7 +15,7 @@ from pathlib import Path
 
 import typer
 from jinja2 import StrictUndefined, Template, TemplateSyntaxError, UndefinedError
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
@@ -410,6 +410,7 @@ def _check_local_yaml(
                 _validation_error_to_context(local_yaml_path, raw_text, data, err)
             )
     _check_local_yaml_tracked_files(local_yaml_path, raw_text, data, failures)
+    _check_local_yaml_overlay_blocks(local_yaml_path, raw_text, data, failures)
 
 
 def _check_local_yaml_tracked_files(
@@ -445,6 +446,60 @@ def _check_local_yaml_tracked_files(
                         raw_text,
                         data,
                         {**err, "loc": ("tracked_files", tf_id, *err["loc"])},
+                    )
+                )
+
+
+# The three SPEC 2 per-host overlay blocks, each a strict (``extra="forbid"``)
+# ``add`` / ``remove`` model. ``_LocalConfig`` types them loosely as
+# ``dict[str, object]`` so a typo'd sub-key (e.g. ``plugins.ad``) escapes the
+# top-level :func:`_check_local_yaml` pass — the sibling of the loose
+# ``tracked_files`` typing that :func:`_check_local_yaml_tracked_files` guards.
+_LOCAL_YAML_OVERLAY_BLOCK_MODELS: dict[str, type[BaseModel]] = {
+    "plugins": PluginOverlay,
+    "extensions": ExtensionOverlay,
+    "marketplaces": MarketplaceOverlay,
+}
+
+
+def _check_local_yaml_overlay_blocks(
+    local_yaml_path: Path,
+    raw_text: str,
+    data: Mapping[str, object],
+    failures: list[ValidationErrorWithContext | str],
+) -> None:
+    """Strictly validate each ``plugins`` / ``extensions`` / ``marketplaces`` block.
+
+    The loose ``_LocalConfig.{plugins,extensions,marketplaces}: dict[str, object]``
+    typing accepts any nested shape, so a typo'd overlay sub-key (e.g.
+    ``plugins.ad`` instead of ``plugins.add``) escapes the top-level
+    :func:`_check_local_yaml` pass. Re-validating each block against its
+    strict (``extra="forbid"``) overlay model surfaces the nested error here
+    — in the SCHEMA VALIDATION ERROR category with mockup-D line resolution
+    + did-you-mean suggestion — rather than only as the unformatted raw
+    pydantic string :func:`_apply_local_overlay_check` emits at
+    profile-resolution time.
+
+    Sibling of :func:`_check_local_yaml_tracked_files`; the two split because
+    the overlay blocks are top-level single models (``('plugins', <leaf>)``)
+    whereas ``tracked_files`` is a per-id mapping (``('tracked_files', <id>,
+    <leaf>)``). The candidate list per block is dispatched by
+    :func:`_candidate_list_for` from ``loc[0]``.
+    """
+    for block_key, model in _LOCAL_YAML_OVERLAY_BLOCK_MODELS.items():
+        block = data.get(block_key)
+        if not isinstance(block, Mapping):
+            continue
+        try:
+            model.model_validate(dict(block))
+        except ValidationError as exc:
+            for err in exc.errors():
+                failures.append(
+                    _validation_error_to_context(
+                        local_yaml_path,
+                        raw_text,
+                        data,
+                        {**err, "loc": (block_key, *err["loc"])},
                     )
                 )
 

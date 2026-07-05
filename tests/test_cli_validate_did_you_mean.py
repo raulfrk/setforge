@@ -327,6 +327,61 @@ def test_validate_local_yaml_close_match_suggests_known_key(
     assert "Did you mean 'binaries'" in result.output
 
 
+def test_validate_local_yaml_plugins_typo_suggests_add(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """A typo'd sub-key inside the ``plugins:`` overlay block surfaces the
+    mockup-D schema error with a ``PluginOverlay``-dispatched suggestion.
+
+    ``plugins`` is loosely typed ``dict[str, object]`` on ``_LocalConfig``, so
+    the strict overlay-block re-validation pass (not the top-level pass) is
+    what catches ``ad`` → ``add`` and renders it with file:line + Did-you-mean.
+    This is the regression guard for the retired local.yaml overlay-error
+    renderer — before its restoration this typo emitted only a raw pydantic
+    string with no ``✗ SCHEMA VALIDATION ERROR`` header or suggestion.
+    """
+    cfg = _write_minimal_config(tmp_path)
+    # 'ad' is distance 1 from 'add' — a PluginOverlay field.
+    local_yaml_at.write_text("plugins:\n  ad:\n    - foo@bar\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "✗ SCHEMA VALIDATION ERROR" in result.output
+    assert "Did you mean 'add'" in result.output
+    assert "Fix:" in result.output
+    # Walker resolves the nested loc to the real ``ad:`` line, not (1, 1).
+    assert "←─── line 2" in result.output
+
+
+def test_validate_local_yaml_extensions_typo_suggests_add(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """A typo'd sub-key inside the ``extensions:`` overlay block surfaces the
+    mockup-D schema error with an ``ExtensionOverlay``-dispatched suggestion."""
+    cfg = _write_minimal_config(tmp_path)
+    # 'adde' is distance 1 from 'add' (extra 'e').
+    local_yaml_at.write_text("extensions:\n  adde:\n    - some.ext\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "✗ SCHEMA VALIDATION ERROR" in result.output
+    assert "Did you mean 'add'" in result.output
+    assert "←─── line 2" in result.output
+
+
+def test_validate_local_yaml_marketplaces_typo_suggests_remove(
+    tmp_path: Path, local_yaml_at: Path
+) -> None:
+    """A typo'd sub-key inside the ``marketplaces:`` overlay block surfaces the
+    mockup-D schema error with a ``MarketplaceOverlay``-dispatched suggestion."""
+    cfg = _write_minimal_config(tmp_path)
+    # 'remov' is distance 1 from 'remove'.
+    local_yaml_at.write_text("marketplaces:\n  remov:\n    - foo\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
+    assert result.exit_code == 1, result.output
+    assert "✗ SCHEMA VALIDATION ERROR" in result.output
+    assert "Did you mean 'remove'" in result.output
+    assert "←─── line 2" in result.output
+
+
 def test_validate_local_yaml_no_close_match_omits_did_you_mean(
     tmp_path: Path, local_yaml_at: Path
 ) -> None:
