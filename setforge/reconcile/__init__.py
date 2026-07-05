@@ -8,6 +8,10 @@ without touching consumers.
 
 from __future__ import annotations
 
+from setforge.reconcile.host_local_record import (
+    record_local_reloc_sections,
+    section_heading_of_body,
+)
 from setforge.reconcile.index_model import FileEntry, Index
 from setforge.reconcile.merge import merge
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult
@@ -44,7 +48,9 @@ __all__ = [
     "read_local",
     "reconstruct",
     "record",
+    "record_local_reloc_sections",
     "resolve_conflicts",
+    "section_heading_of_body",
     "verify",
     "write_base",
     "write_index",

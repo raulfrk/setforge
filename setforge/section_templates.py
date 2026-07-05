@@ -67,22 +67,6 @@ def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str 
     return None
 
 
-def _template_heading(canonical_body_str: str) -> str | None:
-    """The heading identity a canonical template body will mint, or ``None``.
-
-    Runs the SAME derivation the reconcile store uses when it persists a LOCAL
-    host-local unit — :func:`setforge.reconcile.hunks._section_heading` over the
-    hunk :func:`~setforge.reconcile.hunks.extract_hunks` produces for a pure
-    insert of the body — so the seed-once gate and the LOCAL marking agree
-    byte-for-byte with the ``reloc_anchor`` :func:`~setforge.reconcile.hunks.serialize`
-    mints. A headingless body returns ``None`` and is refused up front.
-    """
-    from setforge.reconcile.hunks import _section_heading, extract_hunks
-
-    hunks = extract_hunks(b"", canonical_body_str.encode("utf-8"))
-    return _section_heading(hunks[0]) if hunks else None
-
-
 def seed_section_slots_to_store(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -108,20 +92,13 @@ def seed_section_slots_to_store(
     no stable ``reloc_anchor`` to fold onto).
     """
     import stat as stat_mod
-    from dataclasses import replace
 
     from setforge import atomicio, reconcile
     from setforge.anchors import AnchorAtEndOfFile
     from setforge.compare import resolve_dst, resolve_src
     from setforge.overlay_inject import canonical_body, inject_body_at_anchor
     from setforge.reconcile.host_local_view import host_local_sections_from_store
-    from setforge.reconcile.hunks import (
-        _section_heading,
-        classify,
-        extract_hunks,
-        serialize,
-    )
-    from setforge.reconcile.types import HunkClass, file_id
+    from setforge.reconcile.types import file_id
 
     if not resolved.section_slots:
         return []
@@ -148,7 +125,7 @@ def seed_section_slots_to_store(
                 f"readable: {src} ({exc})"
             ) from exc
         cbody = canonical_body(body)
-        heading = _template_heading(cbody)
+        heading = reconcile.section_heading_of_body(cbody.encode("utf-8"))
         if heading is None:
             raise ConfigError(
                 f"section_slots template {template_name!r} body has no markdown "
@@ -192,19 +169,15 @@ def seed_section_slots_to_store(
     mode = stat_mod.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
     atomicio.atomic_write_bytes(dst, new_live, mode=mode)
 
-    # Re-extract base->new_live and carry the existing classifications forward,
-    # marking ONLY the freshly-injected (still-PENDING) section hunks LOCAL so
-    # serialize mints their reloc_anchor.
+    # Carry the existing classifications forward, marking ONLY the freshly-injected
+    # (still-PENDING) section hunks LOCAL so serialize mints their reloc_anchor.
     residual_headings = {heading for heading, _ in residual}
-    classified = classify(extract_hunks(base, new_live), existing_hunks)
-    rows = serialize(
-        [
-            replace(hunk, cls=HunkClass.LOCAL)
-            if hunk.cls is HunkClass.PENDING
-            and _section_heading(hunk) in residual_headings
-            else hunk
-            for hunk in classified
-        ]
+    reconcile.record_local_reloc_sections(
+        profile,
+        fid,
+        base=base,
+        new_local=new_live,
+        existing_hunks=existing_hunks,
+        residual_headings=residual_headings,
     )
-    reconcile.record(profile, fid, base=base, local=new_live, hunks=rows)
     return seeded

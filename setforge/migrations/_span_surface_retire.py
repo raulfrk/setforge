@@ -282,12 +282,6 @@ class _SpanSurfaceRetireReverse:
         )
 
 
-#: Max characters in a hunk's derived heading label, mirrored from
-#: :data:`setforge.reconcile.hunks._LABEL_MAX` (kept local so the pre-flight and
-#: the mint agree without importing a private constant).
-_LABEL_MAX: Final = 60
-
-
 @dataclass(frozen=True, slots=True)
 class _SectionFold:
     """One ``(profile, tracked-file)`` whose residual host-local sections fold in.
@@ -306,25 +300,6 @@ class _SectionFold:
     fid: FileId
     tracked_bytes: bytes
     sections: dict[str, HostLocalSection]
-
-
-def _body_heading(canonical_body_bytes: bytes) -> str | None:
-    """The heading identity a canonical section body will mint, or ``None``.
-
-    Runs the SAME derivation the store uses when it persists a LOCAL host-local
-    unit — :func:`setforge.reconcile.hunks._section_heading` over the hunk
-    :func:`~setforge.reconcile.hunks.extract_hunks` produces for a pure insert of
-    the body — so the pre-flight heading check, the residual-vs-already-folded
-    comparison, and the LOCAL marking all agree byte-for-byte with the
-    ``reloc_anchor`` :func:`~setforge.reconcile.hunks.serialize` mints. Reads the
-    body's OWN first heading only (an empty base, so there is no neighbour heading
-    to borrow), so a headingless body returns ``None`` here and is refused up front
-    rather than silently minting a neighbour's heading.
-    """
-    from setforge.reconcile.hunks import _section_heading, extract_hunks
-
-    hunks = extract_hunks(b"", canonical_body_bytes)
-    return _section_heading(hunks[0]) if hunks else None
 
 
 def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
@@ -390,6 +365,7 @@ def _validate_headings(folds: list[_SectionFold]) -> None:
     mutates nothing and no ``local.yaml`` is stripped half-folded. Deduped by
     ``(tracked_file, section_name)`` since a file shared across profiles repeats.
     """
+    from setforge import reconcile
     from setforge.host_local_inject import _read_body
     from setforge.overlay_inject import canonical_body
 
@@ -397,7 +373,7 @@ def _validate_headings(folds: list[_SectionFold]) -> None:
     for fold in folds:
         for section_name, section in fold.sections.items():
             body = canonical_body(_read_body(section)).encode("utf-8")
-            if _body_heading(body) is None:
+            if reconcile.section_heading_of_body(body) is None:
                 bad.setdefault((fold.name, section_name), None)
     if bad:
         listing = "\n".join(
@@ -417,7 +393,7 @@ def _validate_headings(folds: list[_SectionFold]) -> None:
 def _fold_sections(fold: _SectionFold) -> None:
     """MERGE one unit's residual host-local sections into its LOCAL store.
 
-    The 6-step merge (call inside the profile lock):
+    The merge (call inside the profile lock):
 
     1. ``already`` = sections already present as LOCAL+reloc units;
        ``residual`` = declared sections whose heading is not yet folded.
@@ -427,38 +403,27 @@ def _fold_sections(fold: _SectionFold) -> None:
        any shared drift the host edited but has not promoted) or ``base``.
     3. Inject each residual body (canonical) at its anchor into ``start`` →
        ``new_local``.
-    4. Re-extract ``base -> new_local`` hunks and :func:`classify` them against the
-       EXISTING stored rows so every prior classification (SHARED / LOCAL /
-       SHARED_DRAFTED, INV-8 stage fidelity) is carried forward untouched.
-    5. Mark ONLY the freshly-injected section hunks LOCAL — a still-PENDING hunk
-       whose own heading is one of the residual headings — so
-       :func:`serialize` mints their ``reloc_anchor``; every carried-forward hunk
-       keeps its class.
-    6. ``record`` the merged base+local+hunks (drafts preserved: ``record`` leaves
-       the on-disk drafts manifest intact when passed no ``drafts=``).
+    4. :func:`~setforge.reconcile.record_local_reloc_sections` re-classifies
+       ``base -> new_local`` against the existing stored rows (carrying every
+       prior SHARED / LOCAL / SHARED_DRAFTED class forward untouched), marks only
+       the freshly-injected section hunks LOCAL so their ``reloc_anchor`` is
+       minted, and records the merged base+local+hunks (drafts preserved). Shared
+       with the install-time template seed so the two mint identically.
     """
-    from dataclasses import replace
-
     from setforge import reconcile
+    from setforge.anchors import Anchor
     from setforge.host_local_inject import _read_body
     from setforge.overlay_inject import canonical_body, inject_body_at_anchor
     from setforge.reconcile.host_local_view import host_local_sections_from_store
-    from setforge.reconcile.hunks import (
-        _section_heading,
-        classify,
-        extract_hunks,
-        serialize,
-    )
-    from setforge.reconcile.types import HunkClass
 
     profile, fid = fold.profile, fold.fid
     proj = host_local_sections_from_store(profile, fid)
     already_headings = set(proj.get(str(fid), {}))
 
-    residual: list[tuple[str, str, object]] = []  # (heading, canonical_body, anchor)
+    residual: list[tuple[str, str, Anchor]] = []  # (heading, canonical_body, anchor)
     for section in fold.sections.values():
         cbody = canonical_body(_read_body(section))
-        heading = _body_heading(cbody.encode("utf-8"))
+        heading = reconcile.section_heading_of_body(cbody.encode("utf-8"))
         # _validate_headings guarantees a heading here; guard defensively so a
         # None never lands in the residual-heading set (would over-match hunks).
         if heading is None or heading in already_headings:
@@ -477,21 +442,18 @@ def _fold_sections(fold: _SectionFold) -> None:
 
     text = start.decode("utf-8")
     for _heading, cbody, anchor in residual:
-        text = inject_body_at_anchor(text, anchor, cbody)  # type: ignore[arg-type]
+        text = inject_body_at_anchor(text, anchor, cbody)
     new_local = text.encode("utf-8")
 
     residual_headings = {heading for heading, _, _ in residual}
-    classified = classify(extract_hunks(base, new_local), existing_hunks)
-    rows = serialize(
-        [
-            replace(hunk, cls=HunkClass.LOCAL)
-            if hunk.cls is HunkClass.PENDING
-            and _section_heading(hunk) in residual_headings
-            else hunk
-            for hunk in classified
-        ]
+    reconcile.record_local_reloc_sections(
+        profile,
+        fid,
+        base=base,
+        new_local=new_local,
+        existing_hunks=existing_hunks,
+        residual_headings=residual_headings,
     )
-    reconcile.record(profile, fid, base=base, local=new_local, hunks=rows)
 
 
 def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
