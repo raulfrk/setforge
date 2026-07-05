@@ -242,11 +242,11 @@ def test_current_expected_is_four_zero() -> None:
     assert current_expected_schema_version == "4.0"
 
 
-def test_schema_major_is_three() -> None:
-    """The frozen manifest now describes major 3."""
+def test_schema_major_is_four() -> None:
+    """The frozen manifest now describes major 4."""
     from setforge.schema_manifest import SCHEMA_MAJOR
 
-    assert SCHEMA_MAJOR == 3
+    assert SCHEMA_MAJOR == 4
 
 
 def test_coverage_reaches_two_zero_real_tree() -> None:

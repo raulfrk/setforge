@@ -37,7 +37,7 @@ from setforge.config import (
 )
 from setforge.span_types import SpanEntry
 
-SCHEMA_MAJOR: int = 3
+SCHEMA_MAJOR: int = 4
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
 
 _MODELS: tuple[type[BaseModel], ...] = (
