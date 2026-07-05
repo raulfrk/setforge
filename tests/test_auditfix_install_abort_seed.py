@@ -1,22 +1,13 @@
-"""Regression tests: an aborted install must not mutate local.yaml.
+"""Regression tests: an aborted install must not seed a host-local store unit.
 
-The section-template seed-commit and the legacy ``host_local_sections`` →
-OVERLAY-span migration are in-place writes to ``local.yaml``. They were
-once committed UNDER the profile lock but BEFORE the
-validate-srcs / unexpected-drift / secrets-scan abort gates, so any of
-those gates aborting left ``local.yaml`` silently seeded and/or migrated
-with NO transition record to undo it (``setforge revert`` would then
-reverse an unrelated prior transition or find nothing).
+The section-template seed records a LOCAL reconcile-store unit UNDER the
+profile lock, AFTER deploy (STAGE B Path 1: it writes the reconcile store,
+never ``local.yaml``). Every refuse-before-write gate — validate-srcs,
+the unexpected-drift reject, and the secrets-scan abort — fires BEFORE
+deploy, so an abort must leave the reconcile store with NO seeded unit.
 
-The fix relocates both writes to AFTER every refuse-before-write gate.
-These tests pin that ordering: each drives an abort gate that fires
-after the (former) seed point and asserts ``local.yaml`` is byte-identical
-to its pre-install state — neither seeded nor span-migrated.
-
-They mirror ``test_install_section_templates``'s
-``test_install_welcome_decline_leaves_local_unseeded`` /
-``test_install_git_check_abort_leaves_local_unseeded`` (which cover the
-gates that already fired before the seed) for the gates that fire after it.
+These tests drive each abort gate and assert the profile's reconcile store
+projects no host-local section — neither seeded nor half-written.
 """
 
 from __future__ import annotations
@@ -28,8 +19,8 @@ import typer
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge import source as source_mod
 from setforge.cli import app
+from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.secrets import SecretFinding, SecretsScanResult
 
 _PROFILE = "seed-test"
@@ -42,19 +33,7 @@ _DOC = """\
 upstream notes body
 """
 
-_TEMPLATE_BODY = "SEEDED PYTHON CONVENTIONS\n"
-
-_LEGACY_LOCAL_YAML = (
-    "tracked_files:\n"
-    "  doc:\n"
-    "    host_local_sections:\n"
-    "      preexisting:\n"
-    "        anchor:\n"
-    "          kind: after-heading\n"
-    "          value: Notes\n"
-    "        body: |\n"
-    "          PRE-EXISTING HOST BODY\n"
-)
+_TEMPLATE_BODY = "## Python conventions\n\nSEEDED PYTHON CONVENTIONS\n"
 
 
 @pytest.fixture
@@ -93,24 +72,9 @@ def _write_config(repo: Path, *, src: str = "doc.md") -> Path:
     return config
 
 
-def _local_yaml_path(tmp_path: Path) -> Path:
-    # Matches conftest._isolated_local_config's LOCAL_CONFIG_PATH redirect.
-    return tmp_path / "local.yaml"
-
-
-def _is_seeded(local: Path) -> bool:
-    """True when local.yaml carries the seeded template body."""
-    if not local.exists():
-        return False
-    return "SEEDED PYTHON CONVENTIONS" in local.read_text(encoding="utf-8")
-
-
-def _is_span_migrated(local: Path) -> bool:
-    """True when a legacy host_local_sections block was retired into spans."""
-    if not local.exists():
-        return False
-    text = local.read_text(encoding="utf-8")
-    return "host_local_sections" not in text and "spans" in text
+def _seeded_in_store() -> bool:
+    """True when the profile's reconcile store projects any host-local section."""
+    return bool(host_local_sections_from_store(_PROFILE))
 
 
 def _finding() -> SecretFinding:
@@ -139,14 +103,12 @@ def _invoke(config: Path) -> Result:
     )
 
 
-def test_secrets_abort_leaves_local_unseeded(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_secrets_abort_leaves_store_unseeded(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A secrets-scan abort fires AFTER the (former) seed point — local.yaml
-    must stay unwritten."""
+    """A secrets-scan abort fires BEFORE deploy+seed — the store must stay
+    unseeded."""
     config = _write_config(repo)
-    local = _local_yaml_path(tmp_path)
-    assert not local.exists()
 
     monkeypatch.setattr(
         "setforge.cli.install.secrets_mod.run_pre_deploy_scan",
@@ -160,49 +122,15 @@ def test_secrets_abort_leaves_local_unseeded(
     result = _invoke(config)
     assert result.exit_code != 0, result.output
     assert "aborted by secrets scan" in result.output
-    assert not _is_seeded(local), "a secrets abort must not seed local.yaml: " + (
-        local.read_text(encoding="utf-8") if local.exists() else "<absent>"
-    )
-    assert source_mod._pending_seed is None
+    assert not _seeded_in_store(), "a secrets abort must not seed the store"
 
 
-def test_secrets_abort_leaves_local_yaml_byte_identical(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_drift_gate_abort_leaves_store_unseeded(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With a pre-existing legacy host_local_sections block, a secrets abort
-    must leave local.yaml byte-identical — neither seeded nor span-migrated."""
+    """The unexpected-drift reject fires BEFORE deploy+seed — the store must
+    stay unseeded."""
     config = _write_config(repo)
-    local = _local_yaml_path(tmp_path)
-    local.write_text(_LEGACY_LOCAL_YAML, encoding="utf-8")
-    pre_bytes = local.read_bytes()
-
-    monkeypatch.setattr(
-        "setforge.cli.install.secrets_mod.run_pre_deploy_scan",
-        lambda **_kw: SecretsScanResult(findings=(_finding(),), files_scanned=1),
-    )
-    monkeypatch.setattr(
-        "setforge.cli.install._handle_secret_findings",
-        lambda *_a, **_kw: False,
-    )
-
-    result = _invoke(config)
-    assert result.exit_code != 0, result.output
-    assert local.read_bytes() == pre_bytes, (
-        "a secrets abort must not mutate local.yaml; got:\n"
-        + local.read_text(encoding="utf-8")
-    )
-    assert not _is_span_migrated(local)
-
-
-def test_drift_gate_abort_leaves_local_unseeded(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The unexpected-drift reject fires AFTER the (former) seed point —
-    local.yaml must stay unwritten."""
-    config = _write_config(repo)
-    local = _local_yaml_path(tmp_path)
-    local.write_text(_LEGACY_LOCAL_YAML, encoding="utf-8")
-    pre_bytes = local.read_bytes()
 
     def _reject(**_kwargs: object) -> None:
         raise typer.Exit(code=2)
@@ -211,29 +139,14 @@ def test_drift_gate_abort_leaves_local_unseeded(
 
     result = _invoke(config)
     assert result.exit_code != 0
-    assert local.read_bytes() == pre_bytes, (
-        "a drift-gate abort must not mutate local.yaml; got:\n"
-        + local.read_text(encoding="utf-8")
-    )
-    assert not _is_seeded(local)
-    assert not _is_span_migrated(local)
-    assert source_mod._pending_seed is None
+    assert not _seeded_in_store(), "a drift-gate abort must not seed the store"
 
 
-def test_validate_srcs_abort_leaves_local_un_migrated(
-    repo: Path, tmp_path: Path
-) -> None:
+def test_validate_srcs_abort_leaves_store_unseeded(repo: Path) -> None:
     """A profile referencing a missing tracked src aborts at
-    validate_srcs_exist — a pre-existing legacy block must stay un-migrated."""
+    validate_srcs_exist — the store must stay unseeded."""
     config = _write_config(repo, src="does-not-exist.md")
-    local = _local_yaml_path(tmp_path)
-    local.write_text(_LEGACY_LOCAL_YAML, encoding="utf-8")
-    pre_bytes = local.read_bytes()
 
     result = _invoke(config)
     assert result.exit_code != 0, result.output
-    assert local.read_bytes() == pre_bytes, (
-        "a missing-src abort must not migrate local.yaml; got:\n"
-        + local.read_text(encoding="utf-8")
-    )
-    assert not _is_span_migrated(local)
+    assert not _seeded_in_store(), "a missing-src abort must not seed the store"

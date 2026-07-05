@@ -7,40 +7,36 @@ top-level ``Config.section_templates`` registry maps a template NAME →
 config-repo's ``templates/`` directory). A profile's
 ``section_slots`` maps a host-local user-section NAME → a template name.
 
-On install, before the deploy loop, an EMPTY or MISSING host-local
-section named in ``section_slots`` is seeded ONCE: the template body is
-written into the host's ``local.yaml`` as a ``host_local_sections``
-overlay block keyed by the section NAME. The existing install pipeline
-then migrates that block to a unified OVERLAY span and injects the body
-at deploy time, so the seeded content rides the standard host-local
-survival path:
+On install, AFTER deploy and UNDER the profile lock, a section named in
+``section_slots`` whose heading is not yet a host-local unit in the
+reconcile store is seeded ONCE: the template body is injected at
+end-of-file into the target markdown tracked file's stored
+``base``/``local`` and recorded as a LOCAL ``reloc_anchor`` unit
+(:func:`seed_section_slots_to_store`). The reconcile engine then owns
+that unit's deploy + drift natively, so the seeded content rides the
+standard host-local survival path:
 
-- A section that ALREADY carries an overlay body (the host has adopted /
-  edited it) is NEVER reseeded — the host owns it.
+- A section whose heading is ALREADY a LOCAL store unit (the host has
+  adopted / edited it) is NEVER reseeded — the store gate skips it.
 - Template-body edits in the library do NOT propagate: seeding fires
-  only when the section is absent on the host, so a populated section is
-  left untouched on every subsequent install.
+  only when the heading is absent from the store, so a populated section
+  is left untouched on every subsequent install.
 
-This module never touches drift reconciliation; seeding is a pre-merge fill
-into the host-owned overlay layer, not a drift reconcile.
+STAGE B (Path 1) retired the ``local.yaml`` ``host_local_sections`` /
+overlay-``spans`` surface; seeding writes NOTHING to ``local.yaml`` — the
+host-local intent lives ONLY in the reconcile per-unit store.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-
-from ruamel.yaml.comments import CommentedMap
 
 from setforge.config import Config, ResolvedProfile, SectionTemplateRef
 from setforge.errors import ConfigError
-from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
 __all__ = [
-    "SeedPlanEntry",
-    "plan_section_seeds",
     "resolve_template_src",
-    "seed_section_templates",
+    "seed_section_slots_to_store",
 ]
 
 
@@ -52,76 +48,6 @@ def resolve_template_src(ref: SectionTemplateRef, repo_root: Path) -> Path:
     ``<repo>/templates/`` instead.
     """
     return repo_root / "templates" / ref.src
-
-
-@dataclass(slots=True, frozen=True)
-class SeedPlanEntry:
-    """One planned seed: write ``body`` into ``section_name`` for ``tracked_file_id``.
-
-    ``template_name`` is carried for diagnostics. The plan is computed
-    against the host's CURRENT overlay state, so an entry appears ONLY for
-    a section with no existing host-local body (the seed-once gate).
-    """
-
-    tracked_file_id: str
-    section_name: str
-    template_name: str
-    body: str
-
-
-def plan_section_seeds(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    *,
-    existing_overlay: dict[str, set[str]],
-) -> list[SeedPlanEntry]:
-    """Compute the seed-once plan for a profile's ``section_slots``.
-
-    For each slot ``(section_name → template_name)`` whose ``section_name``
-    is NOT already present in the host's overlay for ANY tracked file, read
-    the template body and emit a :class:`SeedPlanEntry` targeting the FIRST
-    tracked markdown file in the resolved profile (insertion order). A slot
-    whose section is already populated on the host yields no entry — the
-    seed-once gate.
-
-    The chosen tracked file is the profile's first markdown-suffixed entry;
-    seeding has no per-file routing because a section NAME is the overlay
-    IDENTITY (unique within a host), and the body is injected at
-    end-of-file. Raises :class:`ConfigError` only on a genuinely
-    unreadable template body (a missing file the validate gate did not
-    catch), so install aborts cleanly before any write.
-    """
-    if not resolved.section_slots:
-        return []
-    already: set[str] = set()
-    for names in existing_overlay.values():
-        already |= names
-    target_id = _first_markdown_tracked_file(cfg, resolved)
-    if target_id is None:
-        return []
-    plan: list[SeedPlanEntry] = []
-    for section_name, template_name in resolved.section_slots.items():
-        if section_name in already:
-            continue
-        ref = cfg.section_templates[template_name]
-        src = resolve_template_src(ref, repo_root)
-        try:
-            body = src.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ConfigError(
-                f"section_slots template {template_name!r} body file not "
-                f"readable: {src} ({exc})"
-            ) from exc
-        plan.append(
-            SeedPlanEntry(
-                tracked_file_id=target_id,
-                section_name=section_name,
-                template_name=template_name,
-                body=body,
-            )
-        )
-    return plan
 
 
 def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str | None:
@@ -141,77 +67,144 @@ def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str 
     return None
 
 
-def _load_local_config_map(local_config_path: Path) -> CommentedMap:
-    """Round-trip-load ``local.yaml`` as a :class:`CommentedMap`.
+def _template_heading(canonical_body_str: str) -> str | None:
+    """The heading identity a canonical template body will mint, or ``None``.
 
-    A missing or empty file yields a fresh map. A non-mapping top level is
-    a corrupt ``local.yaml``, so raise :class:`ConfigError` rather than
-    clobber it with a fresh map (which would discard the user's content) —
-    mirroring :mod:`setforge.source`'s non-mapping-top-level contract.
+    Runs the SAME derivation the reconcile store uses when it persists a LOCAL
+    host-local unit — :func:`setforge.reconcile.hunks._section_heading` over the
+    hunk :func:`~setforge.reconcile.hunks.extract_hunks` produces for a pure
+    insert of the body — so the seed-once gate and the LOCAL marking agree
+    byte-for-byte with the ``reloc_anchor`` :func:`~setforge.reconcile.hunks.serialize`
+    mints. A headingless body returns ``None`` and is refused up front.
     """
-    if not local_config_path.exists():
-        return CommentedMap()
-    with local_config_path.open("r", encoding="utf-8") as fh:
-        data = yaml_rt().load(fh)
-    if data is None:
-        return CommentedMap()
-    if not isinstance(data, CommentedMap):
-        raise ConfigError(f"top-level of {local_config_path} must be a mapping")
-    return data
+    from setforge.reconcile.hunks import _section_heading, extract_hunks
+
+    hunks = extract_hunks(b"", canonical_body_str.encode("utf-8"))
+    return _section_heading(hunks[0]) if hunks else None
 
 
-def seed_section_templates(plan: list[SeedPlanEntry], local_config_path: Path) -> bool:
-    """Write the seed plan into ``local.yaml`` host_local_sections (seed-once).
+def seed_section_slots_to_store(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> list[str]:
+    """Seed a profile's ``section_slots`` as LOCAL reconcile-store units (seed-once).
 
-    Each :class:`SeedPlanEntry` becomes a
-    ``tracked_files.<id>.host_local_sections.<section_name>`` block with an
-    ``at-end-of-file`` anchor and the template ``body`` inline. The write
-    is a ruamel round-trip via
-    :func:`setforge.migrations._yaml_ops.atomic_write_yaml` (comments,
-    order, quoting, and file mode preserved). Returns ``True`` when at
-    least one section was written, ``False`` on a no-op — either the
-    empty plan or a non-empty plan whose every section already carries a
-    host-local body (nothing left to seed). No file write occurs in
-    either no-op case, so re-running converges.
+    Call INSIDE ``profile_lock`` and AFTER deploy (so deploy's pre-install store
+    snapshot is the pre-seed baseline a ``revert`` restores to). For each slot
+    whose template-body heading is not already a LOCAL+``reloc_anchor`` unit in
+    the profile's reconcile store, inject the canonical template body at
+    end-of-file into the target markdown tracked file's stored ``base``/``local``
+    and :func:`~setforge.reconcile.record` it as a LOCAL unit (host-local,
+    survives re-baselining). Returns the section names newly seeded (empty on the
+    seed-once no-op / no slots / no markdown target).
 
-    A pre-existing ``host_local_sections.<name>`` for a planned section is
-    left untouched — but ``plan_section_seeds`` already excludes populated
-    sections, so this is a belt-and-suspenders guard against a concurrent
-    edit between plan and write.
+    Writes NOTHING to ``local.yaml`` (Path 1); the host-local intent lives only
+    in the reconcile store, where :func:`host_local_sections_from_store` projects
+    it back for the seed-once gate and every other consumer. Raises
+    :class:`~setforge.errors.ConfigError` on an unreadable or headingless
+    template body (the store identity is heading-based, so a headingless body has
+    no stable ``reloc_anchor`` to fold onto).
     """
-    if not plan:
-        return False
-    data = _load_local_config_map(local_config_path)
+    import stat as stat_mod
+    from dataclasses import replace
 
-    tracked_files = data.get("tracked_files")
-    if tracked_files is None:
-        tracked_files = CommentedMap()
-        data["tracked_files"] = tracked_files
-    elif not isinstance(tracked_files, CommentedMap):
-        raise ConfigError(f"tracked_files in {local_config_path} must be a mapping")
+    from setforge import atomicio, reconcile
+    from setforge.anchors import AnchorAtEndOfFile
+    from setforge.compare import resolve_dst, resolve_src
+    from setforge.overlay_inject import canonical_body, inject_body_at_anchor
+    from setforge.reconcile.host_local_view import host_local_sections_from_store
+    from setforge.reconcile.hunks import (
+        _section_heading,
+        classify,
+        extract_hunks,
+        serialize,
+    )
+    from setforge.reconcile.types import HunkClass, file_id
 
-    wrote = False
-    for entry in plan:
-        tf_block = tracked_files.get(entry.tracked_file_id)
-        if not isinstance(tf_block, CommentedMap):
-            tf_block = CommentedMap()
-            tracked_files[entry.tracked_file_id] = tf_block
-        sections = tf_block.get("host_local_sections")
-        if not isinstance(sections, CommentedMap):
-            sections = CommentedMap()
-            tf_block["host_local_sections"] = sections
-        if entry.section_name in sections:
-            # Belt-and-suspenders: never overwrite an adopted section.
+    if not resolved.section_slots:
+        return []
+    target_id = _first_markdown_tracked_file(cfg, resolved)
+    if target_id is None:
+        return []
+    fid = file_id(target_id)
+
+    # Seed-once gate: a heading already projected as a LOCAL store unit is
+    # host-owned — never reseed it (parity with the migration's fold gate).
+    proj = host_local_sections_from_store(profile, fid)
+    already = set(proj.get(str(fid), {}))
+
+    residual: list[tuple[str, str]] = []  # (heading, canonical_body)
+    seeded: list[str] = []
+    for section_name, template_name in resolved.section_slots.items():
+        ref = cfg.section_templates[template_name]
+        src = resolve_template_src(ref, repo_root)
+        try:
+            body = src.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(
+                f"section_slots template {template_name!r} body file not "
+                f"readable: {src} ({exc})"
+            ) from exc
+        cbody = canonical_body(body)
+        heading = _template_heading(cbody)
+        if heading is None:
+            raise ConfigError(
+                f"section_slots template {template_name!r} body has no markdown "
+                f"heading; the reconcile-store identity is heading-based, so a "
+                f"headingless template cannot seed a stable host-local unit: {src}"
+            )
+        if heading in already:
             continue
-        section = CommentedMap()
-        anchor = CommentedMap()
-        anchor["kind"] = "at-end-of-file"
-        section["anchor"] = anchor
-        section["body"] = entry.body
-        sections[entry.section_name] = section
-        wrote = True
+        residual.append((heading, cbody))
+        seeded.append(section_name)
+    if not residual:
+        return []
 
-    if not wrote:
-        return False
-    atomic_write_yaml(local_config_path, data)
-    return True
+    tracked_file = cfg.tracked_files[target_id]
+    dst = resolve_dst(tracked_file)
+    # Base = the merge ancestor the reconcile engine reads (deploy recorded it as
+    # the tracked bytes); fall back to the tracked source for a never-recorded unit.
+    stored_base = reconcile.read_base(profile, fid)
+    if stored_base is not None:
+        base = stored_base
+    else:
+        src_path = resolve_src(tracked_file, repo_root)
+        base = src_path.read_bytes() if src_path.exists() else b""
+    # Live is the source of host-local truth: the reconcile engine PRESERVES live
+    # content, it never injects from the store. So the seed injects the template
+    # into the LIVE file (so it deploys THIS install) and records the store as a
+    # LOCAL unit so the 3-way preserves it every subsequent run.
+    live_now = dst.read_bytes() if dst.exists() else base
+
+    entry = reconcile.read_index(profile).files.get(str(fid))
+    existing_hunks = list(entry.hunks) if entry is not None else []
+
+    anchor = AnchorAtEndOfFile()
+    text = live_now.decode("utf-8")
+    for _heading, cbody in residual:
+        text = inject_body_at_anchor(text, anchor, cbody)
+    new_live = text.encode("utf-8")
+
+    # Write the injected stub into the live file, preserving its current mode
+    # (deploy just set it) so a re-mode is not spuriously recorded.
+    mode = stat_mod.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
+    atomicio.atomic_write_bytes(dst, new_live, mode=mode)
+
+    # Re-extract base->new_live and carry the existing classifications forward,
+    # marking ONLY the freshly-injected (still-PENDING) section hunks LOCAL so
+    # serialize mints their reloc_anchor.
+    residual_headings = {heading for heading, _ in residual}
+    classified = classify(extract_hunks(base, new_live), existing_hunks)
+    rows = serialize(
+        [
+            replace(hunk, cls=HunkClass.LOCAL)
+            if hunk.cls is HunkClass.PENDING
+            and _section_heading(hunk) in residual_headings
+            else hunk
+            for hunk in classified
+        ]
+    )
+    reconcile.record(profile, fid, base=base, local=new_live, hunks=rows)
+    return seeded
