@@ -326,13 +326,8 @@ def test_migrate_transition_round_trips_through_metadata_load(
     assert meta.profile == "migrate"
 
 
-# --------------------------------------------------------------------------- #
-# Chained 2.1 -> 4.0 (two writes_own_transition cutovers) apply + revert.
-# --------------------------------------------------------------------------- #
-
-# A 2.1-origin config: a plain markdown tracked file (no disposition), so the
-# disposition-retire cutover seeds its unified-store base and the span-surface
-# cutover folds the local.yaml host-local section into that same entry.
+# 2.1-origin: disposition-retire seeds the store base, span-surface-retire
+# then folds the local.yaml section into that same entry (chained 2.1 -> 4.0).
 _CHAIN_BASE = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
 
 _CHAIN_CFG_2_1 = """schema_version: "2.1"
@@ -398,14 +393,11 @@ def test_chained_2_1_to_4_0_apply_folds_and_stamps(
     assert result.exit_code == 0, result.output
     assert detect_current_schema(cfg) == "4.0"
 
-    # The host-local section is folded into the unified store as a LOCAL reloc.
     proj = host_local_sections_from_store("default", file_id("notes"))
     assert "notes" in proj
     assert "## My Tweaks" in {str(k) for k in proj["notes"]}
-    # The retired host-local surface is stripped from local.yaml.
     assert "host_local_sections" not in local_yaml.read_text(encoding="utf-8")
 
-    # Two writes_own_transition cutovers in one chain ⇒ two MIGRATE transitions.
     migrate_transitions = transitions.list_transitions(["migrate"])
     assert len(migrate_transitions) == 2
 
@@ -444,18 +436,13 @@ def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(
     )
     assert revert.exit_code == 0, revert.output
 
-    # Config files: byte-exact 2.1 origin (the coherent, user-facing guarantee).
     assert cfg.read_bytes() == cfg_origin
     assert local_yaml.read_bytes() == local_origin
 
-    # Store: the span-surface fold is undone — the host-local reloc unit is gone
-    # and local collapses back to base.
     fid = file_id("notes")
     assert host_local_sections_from_store("default", fid) == {}
     assert reconcile.read_index("default").files["notes"].hunks == []
     assert reconcile.read_local("default", fid) == _CHAIN_BASE
-    # ...but the disposition-retire base seed survives (3.0-intermediate residue),
-    # NOT the pristine pre-2.1 no-entry state.
     assert reconcile.read_base("default", fid) == _CHAIN_BASE
 
 

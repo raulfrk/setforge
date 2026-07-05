@@ -63,8 +63,7 @@ def _sections_for_file(
     profile: str, fid: FileId, stored: list[dict[str, object]]
 ) -> dict[HostLocalSectionName, HostLocalSection]:
     """Project one file's LOCAL+reloc_anchor units to :class:`HostLocalSection` s."""
-    # Fast exit: no LOCAL row carries a reloc_anchor -> no host-local section here,
-    # so skip the base/local read + re-extract entirely.
+    # Fast exit: skip the base/local read entirely when no row needs it.
     if not any(
         row.get("cls") == HunkClass.LOCAL.value and row.get("reloc_anchor") is not None
         for row in stored
@@ -72,9 +71,7 @@ def _sections_for_file(
         return {}
     base = store.read_base(profile, fid)
     local = store.read_local(profile, fid)
-    # A reloc row implies base + local were recorded together (store.record writes
-    # both before the index). A missing/absent side means the store is mid-write or
-    # inconsistent, so there is nothing to reconstruct — fail soft, project nothing.
+    # A missing/absent leg means the store is mid-write; fail soft.
     if base is None or not isinstance(local, bytes):
         return {}
     local_lines = split_lines(local)

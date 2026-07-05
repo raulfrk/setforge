@@ -81,8 +81,6 @@ def test_append_writes_at_eof_overlay_span(tmp_path: Path) -> None:
     local.write_text("# c\ntracked_files:\n  doc: {}\n", encoding="utf-8")
     n = append_overlay_spans(local, {"doc": [("notes", "host notes\n")]})
     assert n == 1
-    # The retired span-declaration surface is stripped from the strict overlay
-    # model on load; the raw host-local projection still reads the OVERLAY span.
     sections = load_local_host_local_sections(local)["doc"]
     assert set(sections) == {"notes"}
     assert sections[HostLocalSectionName("notes")].body == "host notes\n"

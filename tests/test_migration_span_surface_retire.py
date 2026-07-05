@@ -43,8 +43,6 @@ from setforge.source import HostLocalSectionName
 
 runner = CliRunner()
 
-# A tracked markdown file with three headed sections; the host-local additive
-# "## My Tweaks" section is spliced after the "Alpha" heading.
 _BASE = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
 _SECTION_BODY = "## My Tweaks\nmy custom line\n"
 
@@ -120,11 +118,6 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
     return roots.home / ".config" / "setforge" / "local.yaml"
 
 
-# --------------------------------------------------------------------------- #
-# Identity / registration surface.
-# --------------------------------------------------------------------------- #
-
-
 def test_expected_version_is_four_zero() -> None:
     assert current_expected_schema_version == "4.0"
 
@@ -167,21 +160,11 @@ def test_reverse_refuses_cleanly(tmp_path) -> None:
         rev.apply(roots=_roots_only(tmp_path))
 
 
-# --------------------------------------------------------------------------- #
-# apply() — no local.yaml: pure schema stamp (the frozen-fixture path).
-# --------------------------------------------------------------------------- #
-
-
 def test_apply_without_local_yaml_just_stamps(tmp_path) -> None:
     """No residual host-local surface ⇒ advance schema to 4.0, nothing folded."""
     roots = _setup(tmp_path, local_yaml_body=None, deploy=False)
     SpanSurfaceRetireMigration().apply(roots=roots)
     assert detect_current_schema(roots.cfg_path) == "4.0"
-
-
-# --------------------------------------------------------------------------- #
-# apply() -- the fold (tests a-c) + headingless refusal.
-# --------------------------------------------------------------------------- #
 
 
 def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
@@ -191,8 +174,6 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
     roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
     fid = file_id("notes")
 
-    # Pre-seed a real store entry: the host edited a SHARED region (ccc -> cccEDIT)
-    # under a heading far from the section anchor, and staged it SHARED.
     drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccEDIT\n"
     with locking.profile_lock("default"):
         drift_rows = serialize(
@@ -208,7 +189,6 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
     SpanSurfaceRetireMigration().apply(roots=roots)
 
     assert detect_current_schema(roots.cfg_path) == "4.0"
-    # Base untouched; the recorded shared drift survives inside the merged local.
     assert reconcile.read_base("default", fid) == _BASE
     expected_local = (
         b"## Alpha\n## My Tweaks\nmy custom line\naaa\n"
@@ -217,15 +197,11 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
     assert reconcile.read_local("default", fid) == expected_local
 
     hunks = reconcile.read_index("default").files["notes"].hunks
-    # The staged SHARED drift is carried forward untouched...
     assert any(h["cls"] == HunkClass.SHARED.value for h in hunks)
-    # ...and the section is now a LOCAL unit carrying its minted reloc_anchor.
     assert any(
         h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
         for h in hunks
     )
-    # Round-trips back OUT as the same section (keyed by its heading, not the
-    # arbitrary local.yaml declaration name "my-tweaks").
     proj = host_local_sections_from_store("default", fid)
     assert set(proj["notes"]) == {"## My Tweaks"}
     assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
@@ -241,8 +217,6 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
     roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
     fid = file_id("notes")
 
-    # Pre-seed: the host drafted the "## Gamma" region (ccc -> cccLOCAL kept local,
-    # a shareable "cccSHARED" draft blessed) — a SHARED_DRAFTED unit with draft bytes.
     drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccLOCAL\n"
     (gamma_hunk,) = extract_hunks(_BASE, drift_local)
     draft_bytes = b"cccSHARED\n"
@@ -263,18 +237,15 @@ def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> 
 
     assert detect_current_schema(roots.cfg_path) == "4.0"
     hunks = reconcile.read_index("default").files["notes"].hunks
-    # The SHARED_DRAFTED classification + its draft_hash are carried forward untouched.
     assert any(
         h["cls"] == HunkClass.SHARED_DRAFTED.value
         and h.get("draft_hash") == "sha256:gd"
         for h in hunks
     )
-    # ...and the new section folded in alongside as a LOCAL+reloc unit.
     assert any(
         h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
         for h in hunks
     )
-    # The draft BYTES survive in the drafts store (fold preserves the manifest).
     assert reconcile_store.read_drafts("default", fid) == {
         gamma_hunk.anchor: draft_bytes
     }
@@ -285,7 +256,7 @@ def test_apply_folds_undeployed_section_without_loss(tmp_path) -> None:
     — the body is the source of truth (base=tracked, local=synthesized)."""
     roots = _setup(tmp_path, local_yaml_body=_local_yaml_body(), deploy=False)
     fid = file_id("notes")
-    assert reconcile.read_base("default", fid) is None  # precondition: not seeded
+    assert reconcile.read_base("default", fid) is None
 
     SpanSurfaceRetireMigration().apply(roots=roots)
 
@@ -308,9 +279,7 @@ def test_apply_is_idempotent_no_double_seed(tmp_path) -> None:
     local_after_first = reconcile.read_local("default", fid)
     index_after_first = reconcile.read_index("default")
 
-    # Re-stamp back to 3.0 + re-declare the section so the (writes_own_transition)
-    # apply runs its fold again; the section is already a LOCAL+reloc unit, so the
-    # residual drains to empty and nothing is re-injected.
+    # Manually re-stamp to 3.0 + re-declare so `apply` runs its fold again.
     roots.cfg_path.write_text(_CFG, encoding="utf-8")
     _local_yaml_path(roots).write_text(_local_yaml_body(), encoding="utf-8")
 
@@ -319,7 +288,7 @@ def test_apply_is_idempotent_no_double_seed(tmp_path) -> None:
     assert reconcile.read_local("default", fid) == local_after_first
     assert reconcile.read_index("default") == index_after_first
     proj = host_local_sections_from_store("default", fid)
-    assert set(proj["notes"]) == {"## My Tweaks"}  # not duplicated
+    assert set(proj["notes"]) == {"## My Tweaks"}
 
 
 def test_apply_strips_retired_surface_from_local_yaml(tmp_path) -> None:
@@ -328,7 +297,7 @@ def test_apply_strips_retired_surface_from_local_yaml(tmp_path) -> None:
     SpanSurfaceRetireMigration().apply(roots=roots)
     text = _local_yaml_path(roots).read_text(encoding="utf-8")
     assert "host_local_sections" not in text
-    assert "My Tweaks" not in text  # body gone from local.yaml
+    assert "My Tweaks" not in text
 
 
 def test_apply_refuses_headingless_section(tmp_path) -> None:
@@ -341,15 +310,9 @@ def test_apply_refuses_headingless_section(tmp_path) -> None:
     )
     with pytest.raises(ConfigError, match=r"no markdown heading"):
         SpanSurfaceRetireMigration().apply(roots=roots)
-    # No mutation: schema stays 3.0, local.yaml still carries the declaration.
     assert detect_current_schema(roots.cfg_path) == "3.0"
     assert "host_local_sections" in _local_yaml_path(roots).read_text(encoding="utf-8")
     assert reconcile.read_base("default", file_id("notes")) is None
-
-
-# --------------------------------------------------------------------------- #
-# apply() — revert restores BOTH surfaces byte-exact (test d, INV-5).
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
@@ -371,8 +334,8 @@ def test_migrate_then_revert_restores_local_yaml_and_reconcile_legs(
     cfg = roots.cfg_path
     fid = file_id("notes")
 
-    # Pre-seed a drifted store entry so revert must restore MODIFIED legs, not just
-    # delete freshly-created ones.
+    # A drifted (not fresh) entry so revert must restore modified legs, not
+    # merely delete freshly-created ones.
     drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccEDIT\n"
     with locking.profile_lock("default"):
         drift_rows = serialize(
@@ -396,8 +359,7 @@ def test_migrate_then_revert_restores_local_yaml_and_reconcile_legs(
         app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
     )
     assert result.exit_code == 0, result.output
-    assert detect_current_schema(cfg) == "4.0"  # forward applied
-    # Sanity: the local content actually changed (the section was merged in).
+    assert detect_current_schema(cfg) == "4.0"
     assert local_path.read_bytes() != pre[local_path]
 
     revert = runner.invoke(

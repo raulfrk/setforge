@@ -107,12 +107,11 @@ def seed_section_slots_to_store(
         return []
     fid = file_id(target_id)
 
-    # Seed-once gate: a heading already projected as a LOCAL store unit is
-    # host-owned — never reseed it (parity with the migration's fold gate).
+    # Seed-once: a heading already a LOCAL store unit is host-owned, skip it.
     proj = host_local_sections_from_store(profile, fid)
     already = set(proj.get(str(fid), {}))
 
-    residual: list[tuple[str, str]] = []  # (heading, canonical_body)
+    residual: list[tuple[str, str]] = []
     seeded: list[str] = []
     for section_name, template_name in resolved.section_slots.items():
         ref = cfg.section_templates[template_name]
@@ -141,18 +140,13 @@ def seed_section_slots_to_store(
 
     tracked_file = cfg.tracked_files[target_id]
     dst = resolve_dst(tracked_file)
-    # Base = the merge ancestor the reconcile engine reads (deploy recorded it as
-    # the tracked bytes); fall back to the tracked source for a never-recorded unit.
     stored_base = reconcile.read_base(profile, fid)
     if stored_base is not None:
         base = stored_base
     else:
         src_path = resolve_src(tracked_file, repo_root)
         base = src_path.read_bytes() if src_path.exists() else b""
-    # Live is the source of host-local truth: the reconcile engine PRESERVES live
-    # content, it never injects from the store. So the seed injects the template
-    # into the LIVE file (so it deploys THIS install) and records the store as a
-    # LOCAL unit so the 3-way preserves it every subsequent run.
+    # The engine preserves LIVE, never injects from the store: write live directly.
     live_now = dst.read_bytes() if dst.exists() else base
 
     entry = reconcile.read_index(profile).files.get(str(fid))
@@ -164,13 +158,11 @@ def seed_section_slots_to_store(
         text = inject_body_at_anchor(text, anchor, cbody)
     new_live = text.encode("utf-8")
 
-    # Write the injected stub into the live file, preserving its current mode
-    # (deploy just set it) so a re-mode is not spuriously recorded.
+    # Preserve the current mode (deploy just set it): no spurious re-mode.
     mode = stat_mod.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
     atomicio.atomic_write_bytes(dst, new_live, mode=mode)
 
-    # Carry the existing classifications forward, marking ONLY the freshly-injected
-    # (still-PENDING) section hunks LOCAL so serialize mints their reloc_anchor.
+    # Only the freshly-injected PENDING hunks get marked LOCAL (to mint reloc_anchor).
     residual_headings = {heading for heading, _ in residual}
     reconcile.record_local_reloc_sections(
         profile,

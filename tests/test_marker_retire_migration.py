@@ -122,8 +122,6 @@ def test_apply_captures_host_local_to_overlay_then_strips(tmp_path: Path) -> Non
 
     MarkerRetireMigration().apply(roots=roots)
 
-    # Host-local body captured as an overlay span (read via the raw host-local
-    # projection — the strict overlay model strips the retired span surface)...
     local_yaml = roots.home / ".config" / "setforge" / "local.yaml"
     sections = load_local_host_local_sections(local_yaml)["claude"]
     assert set(sections) == {"paths"}

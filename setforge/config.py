@@ -847,9 +847,7 @@ def refuse_unmigrated_host_local_leak(
     has folded + stripped the surface the second condition is false and this
     gate is silent.
     """
-    # Lazy import: ``setforge.source`` imports this module at module load, so a
-    # top-level import here would cycle. Reading ``LOCAL_CONFIG_PATH`` off the
-    # module at call time also honors the test-suite redirect of the constant.
+    # Lazy import to dodge a load-time cycle with setforge.source.
     from setforge import source as source_mod
 
     expected_major = parse_schema_version(current_expected_schema_version)[0]

@@ -645,10 +645,7 @@ def test_serialize_structured_never_emits_reloc_anchor() -> None:
     rows = serialize_structured(units)
 
     assert all("reloc_anchor" not in row for row in rows)
-    # reloc_anchor is not part of the KEY-row identity contract (line-only key).
     assert "reloc_anchor" not in _HUNK_ROW_KEYS_KEY
-    # A KEY row carrying no reloc_anchor validates cleanly — the codec neither
-    # requires nor expects it on a key-unit row.
     for row in rows:
         row["kind"] = KIND_KEY
-        _check_hunk_row("f", row)  # does not raise
+        _check_hunk_row("f", row)

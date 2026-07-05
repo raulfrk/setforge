@@ -51,9 +51,6 @@ if TYPE_CHECKING:
     from setforge.source import HostLocalSection
     from setforge.transitions import StateSnapshotEntry, TransitionDir
 
-#: ``local.yaml`` relpath under ``roots.home`` (host-local overlay source) —
-#: the surface this cutover retires the span-declaration fields from. Copied
-#: from the disposition-retire migration so this module stays self-contained.
 _LOCAL_YAML_RELPATH: Final = (".config", "setforge", "local.yaml")
 
 
@@ -174,12 +171,10 @@ class SpanSurfaceRetireMigration:
 
         from setforge import locking, transitions
 
-        folds = _build_section_folds(roots)  # pass 1: enumerate (read-only)
-        _validate_headings(folds)  # pre-flight abort — raises before any write
+        folds = _build_section_folds(roots)
+        _validate_headings(folds)
 
         if not folds:
-            # No residual host-local section surface (e.g. no local.yaml): advance
-            # the schema so the config reaches 4.0, nothing to fold or strip.
             _stamp_schema_version(roots.cfg_path, self.to_version)
             return
 
@@ -201,23 +196,12 @@ class SpanSurfaceRetireMigration:
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
             cfg_post = roots.cfg_path.read_text(encoding="utf-8")
-            # Compute the post-strip local.yaml image WITHOUT writing it yet, so the
-            # transition records it as file_post and is COMMITTED before the
-            # destructive strip lands. Mirrors the disposition cutover's
-            # commit-before-delete: a crash in the strip window is then recoverable
-            # from the just-written transition (INV-5), never an irreversible
-            # store-folded + local.yaml-stripped + schema-4.0 + no-transition state.
+            # Compute (don't write) the post-strip image so it can be
+            # COMMITTED before the destructive strip lands (INV-5).
             local_post = _stripped_local_yaml_text(local_yaml)
 
-            # When the migrate driver threads its pre-chain frozen image, use it as
-            # file_pre so this single transition carries the FULL reverse delta to
-            # the chain's ORIGIN (INV-5); file_post re-snapshots the SAME paths now,
-            # with local.yaml overridden to the not-yet-written post-strip image.
-            # Applied outside the driver (pre_chain_snapshot is None) the transition
-            # carries just the cfg + local.yaml text edits (the reconcile legs are
-            # covered byte-exact by the state_snapshots either way — on revert the
-            # text patch reverses first, then the snapshots restore byte-exact and
-            # win for any overlapping reconcile-store path).
+            # A chain-threaded pre_chain_snapshot becomes file_pre so the
+            # reverse delta reaches the chain's ORIGIN (INV-5), not just here.
             pre = roots.pre_chain_snapshot
             file_pre: dict[Path, str | None]
             file_post: dict[Path, str | None]
@@ -235,9 +219,8 @@ class SpanSurfaceRetireMigration:
                 state_snapshots=snapshots,
             )
 
-            # Destructive strip AFTER the transition commit (INV-5): the retired
-            # host-local section surface is data-losing, so it must not run until
-            # the transition that can restore it is durable on disk.
+            # Destructive strip AFTER the transition commit (INV-5): must not
+            # run until the transition that can restore it is durable.
             _write_stripped_local_yaml(local_yaml, local_post)
 
 
@@ -430,12 +413,11 @@ def _fold_sections(fold: _SectionFold) -> None:
     proj = host_local_sections_from_store(profile, fid)
     already_headings = set(proj.get(str(fid), {}))
 
-    residual: list[tuple[str, str, Anchor]] = []  # (heading, canonical_body, anchor)
+    residual: list[tuple[str, str, Anchor]] = []
     for section in fold.sections.values():
         cbody = canonical_body(_read_body(section))
         heading = reconcile.section_heading_of_body(cbody.encode("utf-8"))
-        # _validate_headings guarantees a heading here; guard defensively so a
-        # None never lands in the residual-heading set (would over-match hunks).
+        # Defensive: _validate_headings already refused a headingless body.
         if heading is None or heading in already_headings:
             continue
         residual.append((heading, cbody, section.anchor))

@@ -29,7 +29,6 @@ runner = CliRunner()
 
 _NOTES = "## Alpha\naaa\n## Beta\nbbb\n"
 
-# An OLDER-major config (schema 3.0 under the now-4.0 engine).
 _CFG_OLD = """\
 schema_version: "3.0"
 tracked_files:
@@ -41,7 +40,6 @@ profiles:
     tracked_files: [notes]
 """
 
-# A CURRENT-major config (matches this engine's expected major).
 _CFG_CURRENT = """\
 schema_version: "4.0"
 tracked_files:
@@ -53,7 +51,6 @@ profiles:
     tracked_files: [notes]
 """
 
-# A local.yaml still declaring the retired host-local surface on ``notes``.
 _LOCAL_WITH_HOSTLOCAL = textwrap.dedent(
     """\
     tracked_files:
@@ -67,7 +64,6 @@ _LOCAL_WITH_HOSTLOCAL = textwrap.dedent(
     """
 )
 
-# A local.yaml with NO retired surface (an empty overlay on ``notes``).
 _LOCAL_NO_HOSTLOCAL = "tracked_files:\n  notes: {}\n"
 
 _MIGRATE_HINT = "setforge migrate --profile=default"
@@ -123,8 +119,7 @@ def _sync(config: Path) -> Result:
 
 
 def _capture(config: Path) -> Result:
-    # ``capture`` is the un-wrapped live→tracked writeback (``sync`` = capture +
-    # transition), so it carries the same host-local leak exposure and must gate too.
+    # capture = sync's un-wrapped writeback; same leak exposure, must gate too.
     return runner.invoke(
         app,
         [
@@ -151,11 +146,8 @@ def test_refuses_unmigrated_config_with_host_local_surface(
     result = invoke(config)
 
     assert result.exit_code != 0, result.output
-    # A clean ConfigError (SetforgeError subclass) — the CLI handler renders it
-    # as one line + nonzero exit, never a traceback.
     assert isinstance(result.exception, ConfigError), result.exception
     assert _MIGRATE_HINT in str(result.exception)
-    # No mutation: the shared tracked source is byte-for-byte unchanged.
     assert tracked.read_text(encoding="utf-8") == before
 
 
@@ -171,8 +163,6 @@ def test_older_major_without_host_local_surface_proceeds(
 
     result = invoke(config)
 
-    # The migrate-refuse must NOT fire; the run may exit for unrelated reasons,
-    # but never with our host-local-leak gate.
     if isinstance(result.exception, ConfigError):
         assert _MIGRATE_HINT not in str(result.exception)
     assert _MIGRATE_HINT not in result.output

@@ -228,46 +228,22 @@ def install(
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
     cfg = load_config(config)
-    # Refuse before any mutation when this host upgraded the engine past a
-    # schema major but has not yet folded its local.yaml host-local content
-    # into the reconcile store — deploying/seeding now could leak that
-    # host-local body into the shared tracked source.
+    # Refuse before mutation: unmigrated host-local content could leak.
     refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
-    # Apply local.yaml host-local mode/dst/symlink_target overlay
-    # — also AFTER profile resolution. Rebuilds each TrackedFile with the
-    # overlay-fields overrides applied so downstream resolve_dst / deploy /
-    # deploy_symlinked_file consume the override transparently.
+    # Both overlays below must apply AFTER profile resolution.
     apply_host_local_tracked_file_overrides(cfg)
-    # Project host-local sections from the reconcile store (STAGE B: the
-    # local.yaml host_local_sections declaration was retired). The map is
-    # threaded on inertly — the reconcile engine owns host-local deploy /
-    # drift natively — and drives the dry-run / preview surfaces.
+    # STAGE B: sections live in the reconcile store now, threaded read-only.
     host_local_sections_map = _load_validated_host_local_sections(
         cfg, resolved, repo_root, profile
     )
-    # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
-    # — also AFTER profile resolution. Mutates resolved
-    # and cfg in place so the existing reconcile path consumes the
-    # merged sets transparently. Raises LocalOverlayError (a
-    # ConfigError) on collision / unknown-remove, surfaced via the
-    # standard SetforgeError handler. The cross-ref check fires
-    # defensively here even when validate ran first (Q8).
     apply_local_overlay(cfg, resolved, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
     )
 
-    # Fresh-host welcome gate. Fires BEFORE every other
-    # phase (git-check, dry-run dispatch, state-dir probe, bootstrap,
-    # deploy) so a brand-new host can preview what the install will do
-    # and consent before any mutation OR diagnostic that depends on a
-    # specific source-tree state (the git-check on a dirty fresh-host
-    # source would otherwise raise before the user ever sees the
-    # welcome). ``--yes`` skips the welcome (the caller has consented
-    # out-of-band); ``--auto=*`` is rejected on a fresh host because
-    # there is no drift yet for the auto-resolver to act on.
+    # Fires BEFORE git-check so a dirty fresh-host source can't raise first.
     fresh = is_fresh_host()
     if fresh and not dry_run:
         reject_auto_on_fresh_host(auto=auto)
@@ -405,14 +381,7 @@ def install(
             strict_spans=strict_spans,
         )
 
-        # Seed-once host-local section templates as LOCAL reconcile-store units,
-        # AFTER deploy so deploy's pre-install store snapshot
-        # (deploy_outcome.state_snapshots) is the pre-seed baseline a revert
-        # restores to (the seeded unit is wiped on revert, no extra snapshot
-        # needed). Writes NOTHING to local.yaml. The seeded LOCAL unit
-        # deploys on the next reconcile, exactly as the legacy local.yaml seed
-        # (committed after the map load) did. The seed-once gate reads the store,
-        # so a re-run whose heading is already a LOCAL unit no-ops.
+        # Seed AFTER deploy so its pre-install snapshot is the revert baseline.
         seeded = section_templates_mod.seed_section_slots_to_store(
             cfg, resolved, repo_root, profile
         )

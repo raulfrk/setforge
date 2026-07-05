@@ -237,11 +237,6 @@ def test_non_string_draft_hash_is_corrupt() -> None:
         loads(text)
 
 
-# --------------------------------------------------------------------------- #
-# the optional reloc_anchor line-hunk field
-# --------------------------------------------------------------------------- #
-
-
 def test_line_row_with_reloc_anchor_round_trips() -> None:
     row = (
         '{"cls":"local","label":"## My Tweaks","live_hash":"sha256:aa",'
@@ -269,7 +264,6 @@ def test_non_string_reloc_anchor_is_corrupt() -> None:
 
 
 def test_line_row_without_reloc_anchor_is_valid() -> None:
-    # a legacy row carrying no reloc_anchor stays valid (optional, never required).
     row = '{"cls":"local","label":"x","live_hash":"sha256:aa","anchor":"sha256:bb"}'
     text = (
         '{"schema_version":"1.0","files":{"f":'

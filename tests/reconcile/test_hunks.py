@@ -307,7 +307,6 @@ def test_serialize_emits_reloc_anchor_when_set() -> None:
 
 
 def test_serialize_omits_reloc_anchor_when_absent() -> None:
-    # omit-when-None so legacy rows stay byte-stable (mirrors draft_hash).
     (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\nBETA\n")
     (row,) = serialize([hunk])
     assert "reloc_anchor" not in row
@@ -396,14 +395,8 @@ def test_classify_drafted_anchor_collision_fails_safe() -> None:
     assert not any(h.cls is HunkClass.SHARED_DRAFTED and not h.changed for h in out)
 
 
-# --------------------------------------------------------------------------- #
-# A2: mint + match a host-local reloc_anchor across a base restructure
-# --------------------------------------------------------------------------- #
-
-# A host-local ADDITIVE "## My Tweaks" section, first under one base (BASE_R1),
-# then carried across an upstream restructure that renames the SURROUNDING base
-# headings (BASE_R2) — which shifts the hunk's context anchor and breaks the
-# exact/anchor identity match, leaving only the heading-identity fallback.
+# R1 -> R2 simulates an upstream heading rename that breaks exact/anchor
+# identity, leaving only the heading-identity fallback to carry the class.
 BASE_R1 = b"## Alpha\naaa\n## Beta\nbbb\n"
 LIVE_R1 = b"## Alpha\naaa\n## My Tweaks\nmy custom line\n## Beta\nbbb\n"
 BASE_R2 = b"## Gamma\nggg\n## Delta\nddd\n"
@@ -417,41 +410,35 @@ def _local_section() -> Hunk:
 
 
 def test_serialize_mints_reloc_anchor_for_local_section() -> None:
-    # (a) A LOCAL additive section hunk gets its heading minted as reloc_anchor.
     (row,) = serialize([_local_section()])
     assert row["cls"] == HunkClass.LOCAL.value
     assert row["reloc_anchor"] == "## My Tweaks"
 
 
 def test_serialize_no_reloc_anchor_for_headingless_local_hunk() -> None:
-    # (d) A LOCAL hunk whose own content carries no clean heading gets none.
     (plain,) = extract_hunks(b"alpha\nbeta\ngamma\n", b"alpha\nBETA-EDITED\ngamma\n")
-    assert plain.label == "BETA-EDITED"  # first-line fallback, not a heading
+    assert plain.label == "BETA-EDITED"
     (row,) = serialize([replace(plain, cls=HunkClass.LOCAL)])
     assert "reloc_anchor" not in row
 
 
 def test_classify_reloc_match_carries_local_across_restructure() -> None:
-    # (b) The stored row missed by (live_hash, anchor) AND by anchor-alone, but its
-    # heading identity uniquely matches → carry LOCAL, flagged changed=True.
     stored_hunk = _local_section()
-    (row,) = serialize([stored_hunk])  # minted reloc_anchor persisted
+    (row,) = serialize([stored_hunk])
     fresh = extract_hunks(BASE_R2, LIVE_R2)
     section = _by_label(fresh)["## My Tweaks"]
-    # precondition: neither exact identity nor anchor-alone can match anymore.
     assert (section.live_hash, section.anchor) != (
         stored_hunk.live_hash,
         stored_hunk.anchor,
     )
     assert section.anchor != stored_hunk.anchor
     out = _by_label(classify(fresh, [row]))["## My Tweaks"]
-    assert out.cls is HunkClass.LOCAL  # class carried via heading identity
-    assert out.changed is True  # context shifted → surfaced for re-confirm
-    assert out.reloc_anchor == "## My Tweaks"  # minted identity carried forward
+    assert out.cls is HunkClass.LOCAL
+    assert out.changed is True
+    assert out.reloc_anchor == "## My Tweaks"
 
 
 def test_classify_reloc_ambiguous_stored_stays_pending() -> None:
-    # (c) Two stored LOCAL rows share the heading → ambiguous → NO match, PENDING.
     h = "## My Tweaks"
     fresh = [Hunk(HunkClass.PENDING, h, "sha256:l1", "sha256:fa", (0, 0), (0, 2))]
     stored: list[dict[str, object]] = [
@@ -471,12 +458,11 @@ def test_classify_reloc_ambiguous_stored_stays_pending() -> None:
         },
     ]
     (out,) = classify(fresh, stored)
-    assert out.cls is HunkClass.PENDING  # ambiguity → safe fallthrough
+    assert out.cls is HunkClass.PENDING
     assert out.reloc_anchor is None
 
 
 def test_classify_reloc_ambiguous_fresh_stays_pending() -> None:
-    # (c) Two fresh hunks share the heading → ambiguous → NO match, no raise.
     h = "## My Tweaks"
     fresh = [
         Hunk(HunkClass.PENDING, h, "sha256:l1", "sha256:fa", (0, 0), (0, 2)),
@@ -492,11 +478,10 @@ def test_classify_reloc_ambiguous_fresh_stays_pending() -> None:
         }
     ]
     out = classify(fresh, stored)
-    assert all(h.cls is HunkClass.PENDING for h in out)  # neither picked
+    assert all(h.cls is HunkClass.PENDING for h in out)
 
 
 def test_classify_headingless_hunk_does_not_reloc_match() -> None:
-    # (d) A headingless hunk never matches a stored reloc_anchor (no spurious carry).
     (plain,) = extract_hunks(b"alpha\nbeta\ngamma\n", b"alpha\nBETA-EDITED\ngamma\n")
     stored: list[dict[str, object]] = [
         {
@@ -513,22 +498,15 @@ def test_classify_headingless_hunk_does_not_reloc_match() -> None:
 
 
 def test_serialize_keeps_preexisting_reloc_anchor_when_heading_renamed() -> None:
-    # A reloc_anchor is minted ONCE and carried stable — never recomputed. A LOCAL
-    # hunk already carrying reloc_anchor="## Old" keeps it VERBATIM through serialize
-    # even though its current heading/label is now "## New" (which would otherwise
-    # mint "## New"). This is what pins a host-local section's identity across an
-    # in-section heading rename instead of drifting to the new text.
+    # Mint-once: pins identity across an in-section heading rename.
     from setforge.reconcile.hunks import _section_heading
 
     (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\n## New\nbeta\n")
     local_new = replace(hunk, cls=HunkClass.LOCAL)
-    # Precondition: this hunk's OWN heading would mint "## New" from scratch.
     assert local_new.label == "## New"
     assert _section_heading(local_new) == "## New"
 
     stale = replace(local_new, reloc_anchor="## Old")
     (row,) = serialize([stale])
 
-    assert (
-        row["reloc_anchor"] == "## Old"
-    )  # pre-existing carried verbatim, not "## New"
+    assert row["reloc_anchor"] == "## Old"

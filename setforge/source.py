@@ -527,10 +527,6 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
         return _LocalSourceConfig()
     if not isinstance(data, MutableMapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
-    # detect→guard→strip, BEFORE strict model_validate. The guard refuses a
-    # newer-major local.yaml cleanly; the in-memory strip drops the retired
-    # span-declaration keys (host_local_sections + OVERLAY spans) so the
-    # strict model accepts the document. No disk write — see the docstring.
     _local_yaml.guard_local_yaml_schema(data, path)
     _local_yaml.strip_retired_keys(data)
     # Extract only the keys this loader owns; ignore other blocks

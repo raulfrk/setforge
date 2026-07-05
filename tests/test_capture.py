@@ -206,21 +206,20 @@ def test_staged_capture_keeps_host_local_section_out_of_tracked(
     repo = tmp_path / "repo"
     src = repo / "tracked" / "CLAUDE.md"
     dst = tmp_path / "live" / "CLAUDE.md"
-    _write(src, base.decode())  # tracked == upstream base (no host section)
-    _write(dst, live.decode())  # live carries the additive host-local section
+    _write(src, base.decode())
+    _write(dst, live.decode())
 
     fid = file_id("CLAUDE.md")
     _stage_index("p", fid, base, live, {"## My Tweaks": HunkClass.LOCAL})
 
-    # Note: NO host_local_sections_map — the new sync behavior.
     capture_profile(
         _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
     )
 
     out = src.read_bytes()
-    assert b"## My Tweaks" not in out  # host-local section not leaked to tracked
+    assert b"## My Tweaks" not in out
     assert b"my host-only line" not in out
-    assert out == base  # tracked stays pure upstream base
+    assert out == base
     store.verify("p")
 
 

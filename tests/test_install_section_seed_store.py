@@ -112,16 +112,14 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
     """A fresh install records the template as a LOCAL store unit and writes
     NOTHING to local.yaml."""
     config = _write_config(repo)
-    # The REAL host-local config install scaffolds lives under $HOME (the fixture's
-    # monkeypatched home), NOT tmp_path/local.yaml — the latter never exists, so the
-    # no-write assertion below would pass vacuously. Point at the path install writes.
+    # Must be $HOME (the fixture's monkeypatched real scaffold root), not
+    # tmp_path, or the no-write assert below would pass vacuously.
     local_yaml = tmp_path / "home" / ".config" / "setforge" / "local.yaml"
 
     result = _invoke(config)
     assert result.exit_code == 0, result.output
     assert "seeded host-local section template(s): python-conventions" in result.output
 
-    # The store now projects exactly one host-local section carrying the body.
     proj = host_local_sections_from_store(_PROFILE)
     sections = proj.get("doc", {})
     assert len(sections) == 1, proj
@@ -129,11 +127,9 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
     assert section.body is not None
     assert "SEEDED PYTHON CONVENTIONS" in section.body
 
-    # It deploys THIS install: the live file carries the injected stub.
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
     assert "SEEDED PYTHON CONVENTIONS" in deployed
 
-    # The seed never writes a live local.yaml host_local_sections block.
     assert not _has_active_host_local_sections(local_yaml)
 
 
@@ -150,11 +146,9 @@ def test_second_install_does_not_reseed_and_deploys_host_local(
 
     second = _invoke(config)
     assert second.exit_code == 0, second.output
-    # Gate skips: no re-seed message, and still exactly one host-local unit.
     assert "seeded host-local section template(s)" not in second.output
     proj = host_local_sections_from_store(_PROFILE)
     assert len(proj.get("doc", {})) == 1, proj
 
-    # The seeded LOCAL unit deploys through the normal reconcile path.
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
     assert "SEEDED PYTHON CONVENTIONS" in deployed

@@ -214,13 +214,10 @@ def test_resolved_overlay_equivalent_to_legacy_projection(tmp_path: Path) -> Non
 
     migrate_local_yaml_overlay_spans(local)
 
-    # The projection reads the migrated OVERLAY spans raw; it must match the
-    # pre-migration ``host_local_sections`` projection byte-for-byte.
     migrated = load_local_host_local_sections(local)["claude_md"]
     assert set(migrated) == set(legacy)
     for name, section in legacy.items():
         got = migrated[name]
-        # Structured anchor identical (model-dump compare covers every kind).
         assert got.anchor.model_dump() == section.anchor.model_dump()
         assert got.body == section.body
         assert got.body_file == section.body_file
