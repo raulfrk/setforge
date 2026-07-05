@@ -47,19 +47,20 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_three_zero() -> None:
-    """The build now expects schema 3.0 after the disposition-retire bump."""
-    assert current_expected_schema_version == "3.0"
+def test_current_expected_schema_version_is_four_zero() -> None:
+    """The build now expects schema 4.0 after the span-surface-retire bump."""
+    assert current_expected_schema_version == "4.0"
 
 
 def test_migrations_registry_has_the_version_stamp_chain() -> None:
-    """The registry ships the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 chain, in order."""
-    assert len(MIGRATIONS) == 5
+    """The registry ships the 1.0→1.1→1.2→2.0→2.1→3.0→4.0 chain, in order."""
+    assert len(MIGRATIONS) == 6
     assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
     assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
     assert (MIGRATIONS[2].from_version, MIGRATIONS[2].to_version) == ("1.2", "2.0")
     assert (MIGRATIONS[3].from_version, MIGRATIONS[3].to_version) == ("2.0", "2.1")
     assert (MIGRATIONS[4].from_version, MIGRATIONS[4].to_version) == ("2.1", "3.0")
+    assert (MIGRATIONS[5].from_version, MIGRATIONS[5].to_version) == ("3.0", "4.0")
     # Appended in from_version order so the forward walk never has to sort.
     assert isinstance(MIGRATIONS[1], RestampMigration)
 
@@ -783,7 +784,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "3.0" in captured.err
+    assert "4.0" in captured.err
 
 
 # ---------------------------------------------------------------------------

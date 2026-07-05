@@ -124,7 +124,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "3.0"
+current_expected_schema_version: Final[str] = "4.0"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -533,6 +533,9 @@ from setforge.migrations._disposition_retire import (  # noqa: E402
     DispositionRetireMigration,
 )
 from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
+from setforge.migrations._span_surface_retire import (  # noqa: E402
+    SpanSurfaceRetireMigration,
+)
 
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     VersionStampMigration(),
@@ -540,6 +543,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     Contract20Migration(),
     MarkerRetireMigration(),
     DispositionRetireMigration(),
+    SpanSurfaceRetireMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 

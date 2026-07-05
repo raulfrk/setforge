@@ -235,11 +235,11 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_three_zero() -> None:
-    """The build now expects schema 3.0 after the disposition-retire bump."""
+def test_current_expected_is_four_zero() -> None:
+    """The build now expects schema 4.0 after the span-surface-retire bump."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "3.0"
+    assert current_expected_schema_version == "4.0"
 
 
 def test_schema_major_is_three() -> None:
