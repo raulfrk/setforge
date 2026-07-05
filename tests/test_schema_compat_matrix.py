@@ -237,9 +237,9 @@ def test_frozen_fixture_migrates_forward_to_current(
 
 
 def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
-    """A 4.0 (major-newer) config raises ConfigError, no traceback leak."""
+    """A 5.0 (major-newer) config raises ConfigError, no traceback leak."""
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text("schema_version: '4.0'\n" + _MINIMAL_BODY, encoding="utf-8")
+    cfg.write_text("schema_version: '5.0'\n" + _MINIMAL_BODY, encoding="utf-8")
     with pytest.raises(
         ConfigError, match=r"requires a newer setforge|upgrade setforge"
     ):
