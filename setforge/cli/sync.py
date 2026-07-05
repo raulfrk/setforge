@@ -197,9 +197,6 @@ def sync(
     cfg = load_config(config)
     # Same host-local leak gate as install (see install.py).
     refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
-    # Fold the local.yaml host-local overlay (mode/dst/spans/...) so capture
-    # sees the host-local OVERLAY spans and excises their bodies before any
-    # tracked write (leak gate — see the capture command above).
     apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
