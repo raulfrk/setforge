@@ -56,7 +56,6 @@ from setforge.errors import (
     SourceNotCloned,
 )
 from setforge.migrations import _local_yaml
-from setforge.span_types import SpanEntry, SpanKind
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -202,16 +201,22 @@ class HostLocalSection(BaseModel):
 class _LocalTrackedFileOverlay(BaseModel):
     """One tracked_file's worth of host-local overlay knobs.
 
-    Carries a ``host_local_sections`` mapping keyed by section name, a
-    ``spans`` list (host-local sub-file span intents), and three host-local
-    install-time overrides: ``mode`` (chmod), ``dst`` (retarget install
-    path), and ``symlink_target`` (deploy as a symlink). See each field's
-    docstring for the use case and validation semantics.
+    Carries the three host-local install-time overrides — ``mode`` (chmod),
+    ``dst`` (retarget install path), and ``symlink_target`` (deploy as a
+    symlink) — plus the vestigial-parse-tolerated ``disposition``. See each
+    field's docstring for the use case and validation semantics.
+
+    The host-local span-declaration surface (the ``host_local_sections``
+    mapping + the OVERLAY ``spans`` entries) was retired in the 3.0→4.0
+    span-surface-retire cutover; that intent now lives in the per-unit
+    reconcile store. A pre-4.0 ``local.yaml`` still declaring those keys is
+    forward-tolerated by stripping them IN MEMORY before this strict
+    (``extra=forbid``) model validates — see
+    :func:`setforge.migrations._local_yaml.strip_retired_keys`.
     """
 
     model_config = _STRICT
 
-    host_local_sections: dict[str, HostLocalSection] = {}
     mode: int | None = None
     """POSIX file-mode bits (chmod) for the live dst on this host.
 
@@ -289,20 +294,6 @@ class _LocalTrackedFileOverlay(BaseModel):
       :class:`setforge.errors.SetforgeError`. A tracked_file
       pointing at a real directory layout is almost certainly a
       config mistake.
-    """
-
-    spans: list[SpanEntry] = []
-    """Host-local sub-file span intents (pinned / forked regions).
-
-    Each :class:`~setforge.span_types.SpanEntry` freezes (``pinned``) or
-    host-isolates (``forked``) a sub-file region identified by a markdown
-    heading-text anchor, with no in-file marker. Host-local intent lives
-    here in ``local.yaml``; shared intent lives on the tracked-side
-    :class:`~setforge.config.TrackedFile.spans`. The resolved offsets +
-    baseline bytes are derived state in the spans sidecar
-    (:mod:`setforge.spans_store`), never duplicated into this intent
-    (Invariant I12). Anchor file-type legality is enforced by
-    :func:`setforge.span_types.validate_spans_file_type` at install time.
     """
 
     disposition: str | None = None
@@ -507,10 +498,13 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
     propagate unchanged (with the field-level message).
 
     Runs detect-before-validate: a cross-major-newer doc refuses cleanly
-    (:class:`ConfigError`), and a retired-key (``host_local_sections``)
-    doc is relocated to the unified span shape IN MEMORY BEFORE the
+    (:class:`ConfigError`), and a retired-key (``host_local_sections`` /
+    OVERLAY ``spans``) doc has those keys STRIPPED IN MEMORY BEFORE the
     ``extra="forbid"`` model sees it (else it would trip an
-    ``extra_forbidden`` error on the legacy key). The in-memory relocation
+    ``extra_forbidden`` error on the retired key). The span-declaration
+    surface is retired: this loader no longer reads host-local sections from
+    ``local.yaml`` (they live in the reconcile store now), so a degraded
+    pre-4.0 doc still LOADS, minus that surface. The in-memory strip
     deliberately does NOT touch disk: the on-disk retirement is owned by the
     3.0→4.0 span-surface-retire migration, which snapshots the pre-migration
     bytes first so ``revert`` restores them byte-for-byte.
@@ -526,12 +520,12 @@ def _load_local_source_config(path: Path) -> _LocalSourceConfig:
         return _LocalSourceConfig()
     if not isinstance(data, MutableMapping):
         raise ConfigError(f"top-level of {path} must be a mapping")
-    # detect→guard→relocate, BEFORE strict model_validate. The guard
-    # refuses a newer-major local.yaml cleanly; the in-memory relocation
-    # retires legacy keys (host_local_sections → spans) so the strict
-    # model accepts the document. No disk write — see the docstring.
+    # detect→guard→strip, BEFORE strict model_validate. The guard refuses a
+    # newer-major local.yaml cleanly; the in-memory strip drops the retired
+    # span-declaration keys (host_local_sections + OVERLAY spans) so the
+    # strict model accepts the document. No disk write — see the docstring.
     _local_yaml.guard_local_yaml_schema(data, path)
-    _local_yaml.relocate_retired_keys(data)
+    _local_yaml.strip_retired_keys(data)
     # Extract only the keys this loader owns; ignore other blocks
     # (binaries:, claude:, orphan_ignore:) which belong to other loaders.
     payload: dict[str, object] = {}
@@ -590,45 +584,55 @@ def validate_host_local_sections_file_type(
     )
 
 
-def _host_local_sections_for_overlay(
-    overlay: _LocalTrackedFileOverlay,
+def _host_local_sections_from_raw(
+    tracked_file: Mapping[str, object],
 ) -> dict[HostLocalSectionName, HostLocalSection]:
-    """Project one overlay's host-local sections, legacy + migrated unified.
+    """Project one RAW tracked_file mapping's host-local sections, unified.
+
+    Reads directly from the parsed-but-unvalidated ``local.yaml`` mapping —
+    NOT the strict :class:`_LocalTrackedFileOverlay` model, which no longer
+    carries the retired ``host_local_sections`` / OVERLAY ``spans`` fields.
+    This is the reader the 3.0→4.0 span-surface-retire migration folds
+    from: it must see a pre-4.0 host's declared sections to move them into
+    the reconcile store, so it cannot route through the stripping runtime
+    load path.
 
     Returns the union of:
 
     - the legacy ``host_local_sections`` block (pre-migration hosts), and
-    - every migrated OVERLAY ``spans`` entry (``kind=overlay``,
-      ``semantics=host-local``), reconstructed back into a
-      :class:`HostLocalSection` keyed by the span's identity ``anchor``
+    - every OVERLAY ``spans`` entry (``kind: overlay``), reconstructed into
+      a :class:`HostLocalSection` keyed by the span's identity ``anchor``
       (the original section name).
 
-    The migration (:mod:`setforge.overlay_migration`) physically rewrites
-    ``host_local_sections`` into OVERLAY spans on the first install, so a
-    legacy reader that projected only the old block returned ``{}`` for an
-    already-migrated host — blinding the capture host-local strip, the
-    compare overlay mask, the promote wizard, and the install injection.
-    Projecting the migrated spans back here keeps every one of those
-    consumers seeing the host-local content after the migration, so the
-    leak / erase / drift gaps the half-wired migration opened stay closed.
-
     A legacy block and a migrated span for the SAME name cannot coexist
-    (the migration deletes the legacy block as it appends the span);
-    should both ever appear, the legacy entry wins (it is inserted last)
-    — a no-op in practice since they carry identical bodies.
+    (the on-disk overlay migration deletes the legacy block as it appends
+    the span); should both ever appear, the legacy entry wins (inserted
+    last) — a no-op in practice since they carry identical bodies. Malformed
+    (non-mapping) entries are skipped; each surviving payload is validated
+    through :class:`HostLocalSection` so its exactly-one-of-body invariant
+    still holds.
     """
     sections: dict[HostLocalSectionName, HostLocalSection] = {}
-    for span in overlay.spans:
-        if span.kind is not SpanKind.OVERLAY or span.overlay is None:
-            continue
-        payload = span.overlay
-        sections[HostLocalSectionName(span.anchor)] = HostLocalSection(
-            anchor=payload.anchor,
-            body=payload.body,
-            body_file=payload.body_file,
-        )
-    for name, section in overlay.host_local_sections.items():
-        sections[HostLocalSectionName(name)] = section
+    raw_spans = tracked_file.get("spans")
+    if isinstance(raw_spans, list):
+        for span in raw_spans:
+            if not isinstance(span, Mapping) or span.get("kind") != "overlay":
+                continue
+            payload = span.get("overlay")
+            name = span.get("anchor")
+            if not isinstance(payload, Mapping) or name is None:
+                continue
+            sections[HostLocalSectionName(str(name))] = HostLocalSection.model_validate(
+                dict(payload)
+            )
+    raw_sections = tracked_file.get("host_local_sections")
+    if isinstance(raw_sections, Mapping):
+        for name, section in raw_sections.items():
+            if not isinstance(section, Mapping):
+                continue
+            sections[HostLocalSectionName(str(name))] = HostLocalSection.model_validate(
+                dict(section)
+            )
     return sections
 
 
@@ -637,24 +641,42 @@ def load_local_host_local_sections(
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
     """Return ``{tracked_file_id: {section_name: HostLocalSection}}``.
 
-    Mirrors :func:`load_local_tracked_file_overlays` shape but projects
-    each :class:`_LocalTrackedFileOverlay` to its host-local sections —
-    BOTH the legacy ``host_local_sections`` block AND the migrated OVERLAY
-    ``spans`` entries (see :func:`_host_local_sections_for_overlay` for the
-    unification rationale). Empty dict when the file is absent or no
-    tracked_file declares any host-local section. Entries that project to
-    an empty mapping are dropped from the result so callers can treat
-    presence as "has at least one section".
+    Reads the RAW ``local.yaml`` (safe-load), NOT the strict overlay model:
+    the ``host_local_sections`` / OVERLAY ``spans`` span-declaration surface
+    was retired from :class:`_LocalTrackedFileOverlay`, but the 3.0→4.0
+    span-surface-retire migration still needs to READ a pre-4.0 host's
+    declared sections to fold them into the reconcile store. This is that
+    reader (see :func:`_host_local_sections_from_raw` for the projection);
+    the runtime load path (:func:`_load_local_source_config`) STRIPS the
+    same surface instead.
 
-    Section-name keys are constructed as :data:`HostLocalSectionName`
-    here at the parse boundary (the local.yaml load point); downstream
-    callers receive the provenance-marked NewType so a type-checker
-    flags any attempt to pass a tracked-side shared-section name in.
+    Empty dict when the file is absent or no tracked_file declares any
+    host-local section; entries that project to an empty mapping are dropped
+    so callers can treat presence as "has at least one section". Guards the
+    schema major first (a newer-major ``local.yaml`` refuses cleanly).
+
+    Section-name keys are constructed as :data:`HostLocalSectionName` here
+    at the parse boundary; downstream callers receive the provenance-marked
+    NewType so a type-checker flags any attempt to pass a tracked-side
+    shared-section name in.
     """
-    overlays = _load_local_source_config(path).tracked_files
+    if not path.exists():
+        return {}
+    yaml = YAML(typ="safe")
+    try:
+        data = yaml.load(path.read_text(encoding="utf-8"))
+    except YAMLError as exc:
+        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
+    if not isinstance(data, Mapping):
+        return {}
+    _local_yaml.guard_local_yaml_schema(data, path)
+    tracked_files = data.get("tracked_files")
+    if not isinstance(tracked_files, Mapping):
+        return {}
     projected = {
-        tf_id: _host_local_sections_for_overlay(overlay)
-        for tf_id, overlay in overlays.items()
+        str(tf_id): _host_local_sections_from_raw(overlay)
+        for tf_id, overlay in tracked_files.items()
+        if isinstance(overlay, Mapping)
     }
     return {tf_id: sections for tf_id, sections in projected.items() if sections}
 

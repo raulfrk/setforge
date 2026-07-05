@@ -19,7 +19,6 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from setforge import jsonc
 from setforge import source as source_mod
 from setforge._legacy_markers import contains_user_section_marker
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
@@ -44,37 +43,19 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.errors import (
-    AnchorAmbiguousError,
-    AnchorNotFoundError,
     ConfigError,
     SetforgeError,
     ValidationErrorWithContext,
 )
 from setforge.local_config import LocalConfig as _LocalConfig
 from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
-from setforge.markdown_spans import bound_span
 from setforge.migrations._local_yaml import guard_local_yaml_schema
 from setforge.paths import template_context
 from setforge.source import (
     ExtensionOverlay,
-    HostLocalSection,
     MarketplaceOverlay,
     PluginOverlay,
     _LocalTrackedFileOverlay,
-)
-from setforge.span_types import (
-    SpanEntry,
-    SpanKind,
-    is_heading_anchor,
-    validate_spans_file_type,
-    validate_structural_spans,
-)
-from setforge.structural_merge import (
-    _load_structural,
-    get_at_path,
-    is_structural,
-    list_keys_at_path,
-    resolve_path_prefix,
 )
 
 
@@ -102,10 +83,6 @@ def _check_profile(
     resolved = _check_profile_resolution(cfg, prof_name, ctx, failures)
     if resolved is None:
         return
-
-    _check_spans_file_types(cfg, resolved, repo_root, ctx, failures)
-
-    _check_spans_path_existence(cfg, resolved, repo_root, ctx, failures)
 
     # Check 1c: apply the local.yaml plugin / extension
     # / marketplace overlay so its collision / unknown-remove and
@@ -274,254 +251,6 @@ def _check_no_markers_remain(
             f"{dot_ctx}: tracked src {tracked_file.src} still contains "
             "setforge:user-section marker(s); markers are retired at schema "
             "2.1 — run 'setforge migrate --profile=<name>' to strip them."
-        )
-
-
-def _check_spans_file_types(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Check: tracked_file span anchors match their source's file type.
-
-    Mirrors the install-time file-type gate
-    (:func:`setforge.cli._install_helpers._validate_span_file_types`)
-    so ``setforge validate --all`` — the offline CI gate — catches a
-    wrong-grammar span anchor (a heading anchor on yaml/json, or a dotted-path
-    anchor on markdown) BEFORE install would fail with a confusing runtime
-    relocation / re-assert miss.
-
-    For STRUCTURAL tracked_files it additionally runs the structural-span
-    integrity guards (:func:`setforge.span_types.validate_structural_spans`
-    — list-index rejection per Invariant I10 + overlap/nesting rejection per
-    Invariant I11). These otherwise fire only at merge / install time
-    (a :class:`~setforge.errors.ConfigError` mid-install), so a config with an
-    ``a[*]`` index anchor or overlapping pins would pass ``validate`` clean and
-    then abort install; surfacing them here keeps the offline gate complete.
-
-    Routes every :class:`~setforge.errors.ConfigError` from
-    :func:`setforge.span_types.validate_spans_file_type` /
-    :func:`setforge.span_types.validate_structural_spans` to a string
-    failure (existing UX). No-op for tracked_files without spans.
-
-    Like :func:`_check_spans_path_existence`, the validated span list is the
-    local.yaml-overlay-FOLDED view (:func:`_overlay_folded_spans`) — host-local
-    span declarations are checked exactly like tracked-side ones. Without the
-    fold, a host-local structural span overlapping a shared span (Invariant
-    I11) would pass this offline gate yet abort ``install`` mid-deploy, because
-    :func:`setforge.config.apply_host_local_tracked_file_overrides` folds both
-    scopes into one overlapping set before
-    :func:`~setforge.span_types.validate_structural_spans` runs at merge
-    time.
-    """
-    try:
-        overlays = source_mod.load_local_tracked_file_overlays(
-            source_mod.LOCAL_CONFIG_PATH
-        )
-    except (ConfigError, ValidationError, OSError):
-        # A malformed local.yaml is reported by Check 7 (_check_local_yaml);
-        # fold nothing here rather than double-report.
-        overlays = {}
-    for tf_id in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[tf_id]
-        spans = _overlay_folded_spans(tf_id, tracked_file, overlays)
-        if not spans:
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        try:
-            validate_spans_file_type(tf_id, spans, src)
-            if is_structural(src):
-                validate_structural_spans(list(spans))
-        except ConfigError as exc:
-            failures.append(f"{ctx}: tracked_file {tf_id!r}: {exc}")
-
-
-def _check_spans_path_existence(
-    cfg: Config,
-    resolved: ResolvedProfile,
-    repo_root: Path,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Check: every structural span's dotted path exists in its tracked src.
-
-    A PINNED or FORKED span whose dotted path no longer resolves in the
-    tracked source is a silent value leak: ``sync`` would absorb host
-    values into the config repo and ``install`` would lose them, with no
-    error on either path. This offline gate names every dead span path —
-    kind-agnostic (the leak is identical for pinned and forked) — with the
-    FIRST MISSING PREFIX segment so the fix is obvious, via
-    :func:`setforge.structural_merge.resolve_path_prefix` (the diagnostics
-    sibling of :func:`~setforge.structural_merge.get_at_path`).
-
-    A FORKED span that resolves to a non-scalar (mapping or list) fails
-    with a distinct row: forked spans take a scalar path (the scalar
-    three-way merge refuses every non-scalar operand, so a forked subtree
-    or list would silently degrade to whole-replace at merge time).
-    PINNED subtrees stay legal (whole-replace re-assert).
-
-    Scope and suppression rules:
-
-    * The checked span list is the local.yaml-overlay-FOLDED view
-      (:func:`_overlay_folded_spans`) — host-local span declarations are
-      validated exactly like tracked-side ones, on a local copy so
-      ``--all`` never double-applies the fold.
-    * Reads ONLY the tracked src (plus the local.yaml overlay block, which
-      is config, not host state) — never the base store, spans sidecar, or
-      any live file. ``validate`` stays a stateless offline gate.
-    * Missing src → silent skip (:func:`_check_tracked_srcs` reports it;
-      the same double-report suppression the other src checks apply).
-    * Non-structural (markdown) srcs route to
-      :func:`_check_markdown_span_anchors` (exact heading resolution);
-      heading-shaped anchors on structural srcs → skip. OVERLAY spans
-      carry an identity, not a path → skip.
-    * Unparseable structural src → exactly ONE failure row for the file,
-      then continue with the remaining tracked_files (report-all contract).
-    * List-suffix anchors (``[*]`` / ``[]``) → skip;
-      :func:`~setforge.span_types.validate_structural_spans` already
-      rejects them (Invariant I10) in :func:`_check_spans_file_types`.
-    """
-    try:
-        overlays = source_mod.load_local_tracked_file_overlays(
-            source_mod.LOCAL_CONFIG_PATH
-        )
-    except (ConfigError, ValidationError, OSError):
-        # A malformed local.yaml is reported by Check 7 (_check_local_yaml);
-        # fold nothing here rather than double-report.
-        overlays = {}
-    for tf_id in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[tf_id]
-        spans = _overlay_folded_spans(tf_id, tracked_file, overlays)
-        if not spans:
-            continue
-        src = resolve_src(tracked_file, repo_root)
-        if not src.exists():
-            # _check_tracked_srcs surfaces the missing-src error
-            # elsewhere; do not double-report here.
-            continue
-        if not is_structural(src):
-            _check_markdown_span_anchors(spans, src, tf_id, ctx, failures)
-            continue
-        try:
-            model = _load_structural(
-                src.read_text(encoding="utf-8"), jsonc.is_jsonc_file(src)
-            )
-        except Exception as exc:
-            # Broad on purpose: parser errors are library-specific
-            # (json-five / ruamel raise disjoint hierarchies); any failure
-            # to load means the same thing here — an unparseable src.
-            failures.append(f"{ctx}: tracked_file {tf_id!r}: unparseable src: {exc}")
-            continue
-        for span in spans:
-            if span.kind is SpanKind.OVERLAY or is_heading_anchor(span.anchor):
-                continue
-            _check_span_path(span, model, tf_id, ctx, failures)
-
-
-def _overlay_folded_spans(
-    tf_id: str,
-    tracked_file: TrackedFile,
-    overlays: dict[str, _LocalTrackedFileOverlay],
-) -> list[SpanEntry]:
-    """Return ``tracked_file.spans`` with the local.yaml overlay folded.
-
-    Tracked-side spans were retired, so this returns only the local.yaml
-    host-local overlay spans (already validated :class:`SpanEntry` objects) —
-    the sole remaining span surface, checked here for file-type legality.
-    """
-    overlay = overlays.get(tf_id)
-    if overlay is None or not overlay.spans:
-        return []
-    # Tracked-side spans were retired, so only the local.yaml host-local overlay
-    # spans remain to validate for file-type legality.
-    return list(overlay.spans)
-
-
-def _check_markdown_span_anchors(
-    spans: list[SpanEntry],
-    src: Path,
-    tf_id: str,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Resolve PINNED / FORKED markdown span headings against the tracked src.
-
-    The markdown counterpart of the structural dotted-path walk: each
-    heading anchor must resolve EXACTLY ONCE in the tracked source, offline.
-    ABSENT and AMBIGUOUS surface as distinct rows —
-    :func:`setforge.markdown_spans.bound_span`'s two error types carry
-    distinct messages. No fuzzy relocation here; that is install's job.
-    OVERLAY spans are skipped (their body lives in local.yaml; the
-    dead-anchor leak this check guards against does not apply). An
-    unreadable src yields exactly ONE row, mirroring the structural
-    unparseable-src contract.
-    """
-    md_spans = [
-        s
-        for s in spans
-        if s.kind is not SpanKind.OVERLAY and is_heading_anchor(s.anchor)
-    ]
-    if not md_spans:
-        return
-    try:
-        text = src.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        failures.append(f"{ctx}: tracked_file {tf_id!r}: unreadable src: {exc}")
-        return
-    for span in md_spans:
-        try:
-            bound_span(text, span.anchor)
-        except (AnchorNotFoundError, AnchorAmbiguousError) as exc:
-            failures.append(
-                f"{ctx}: tracked_file {tf_id!r}: {span.kind.value} span "
-                f"{span.anchor!r}: {exc}"
-            )
-
-
-def _check_span_path(
-    span: SpanEntry,
-    model: object,
-    tf_id: str,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Resolve one PINNED / FORKED span's dotted path against ``model``.
-
-    Appends at most one failure row: path-not-found (with the first missing
-    prefix, plus a did-you-mean built from the sibling keys at the deepest
-    resolvable prefix when one is close enough) or
-    forked-span-on-a-non-scalar. See :func:`_check_spans_path_existence`
-    for the full contract.
-    """
-    try:
-        resolved_prefix, missing = resolve_path_prefix(model, span.anchor)
-    except ValueError:
-        # List-suffix anchor: validate_structural_spans already
-        # reported it (I10); do not double-report here.
-        return
-    if missing is not None:
-        row = (
-            f"{ctx}: tracked_file {tf_id!r}: {span.kind.value} span "
-            f"{span.anchor!r}: path not found (missing at {missing!r}); "
-            f"add the key to the tracked src or remove the span"
-        )
-        leaf = missing.rsplit(".", 1)[-1]
-        match = suggest_close_match(leaf, list_keys_at_path(model, resolved_prefix))
-        if match is not None:
-            row += f" (did you mean {match!r}?)"
-        failures.append(row)
-        return
-    if span.kind is not SpanKind.FORKED:
-        return
-    value = get_at_path(model, span.anchor)
-    if isinstance(value, Mapping | list):
-        shape = "mapping" if isinstance(value, Mapping) else "list"
-        failures.append(
-            f"{ctx}: tracked_file {tf_id!r}: forked span "
-            f"{span.anchor!r}: path resolves to a {shape}; "
-            f"forked spans take a scalar path"
         )
 
 
@@ -1046,9 +775,7 @@ def _candidate_list_for(loc: tuple[object, ...]) -> list[str]:
     - ``('plugins', ...)`` → :class:`PluginOverlay.model_fields`.
     - ``('extensions', ...)`` → :class:`ExtensionOverlay.model_fields`.
     - ``('marketplaces', ...)`` → :class:`MarketplaceOverlay.model_fields`.
-    - ``('tracked_files', <id>, 'host_local_sections', ...)``
-      → :class:`HostLocalSection.model_fields` (sub-block keys).
-    - ``('tracked_files', <id>, ...)`` (other) →
+    - ``('tracked_files', <id>, ...)`` →
       :class:`_LocalTrackedFileOverlay.model_fields`.
     - anything else → top-level keys (fallback).
     """
@@ -1063,8 +790,6 @@ def _candidate_list_for(loc: tuple[object, ...]) -> list[str]:
         case "marketplaces":
             return list(MarketplaceOverlay.model_fields.keys())
         case "tracked_files":
-            if len(loc) >= 3 and loc[2] == "host_local_sections":
-                return list(HostLocalSection.model_fields.keys())
             return list(_LocalTrackedFileOverlay.model_fields.keys())
         case _:
             return _local_yaml_top_keys()

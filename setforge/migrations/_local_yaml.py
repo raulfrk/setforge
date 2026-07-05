@@ -50,7 +50,7 @@ __all__ = [
     "detect_local_yaml_schema",
     "guard_local_yaml_schema",
     "migrate_local_yaml",
-    "relocate_retired_keys",
+    "strip_retired_keys",
 ]
 
 LOCAL_YAML_BASELINE_VERSION: Final[str] = "1.0"
@@ -149,65 +149,50 @@ def migrate_local_yaml(path: Path) -> OverlayMigrationResult:
     return migrate_local_yaml_overlay_spans(path)
 
 
-def _relocate_tracked_file(tracked_file: MutableMapping[str, object]) -> int:
-    """Relocate one tracked_file's ``host_local_sections`` → ``spans`` in memory.
+def _strip_tracked_file(tracked_file: MutableMapping[str, object]) -> bool:
+    """Strip one tracked_file's retired span-declaration keys in memory.
 
-    Pure in-memory mirror of
-    :func:`setforge.overlay_migration._migrate_tracked_file`, operating on
-    the plain mappings a ``YAML(typ="safe")`` load yields (no ruamel
-    fidelity needed — the result feeds ``model_validate``, never a write).
-    Returns the number of sections moved; mutates ``tracked_file`` in place.
+    Drops the whole ``host_local_sections`` block AND the whole ``spans``
+    key (all entries, not just OVERLAY ones): the strict
+    :class:`setforge.source._LocalTrackedFileOverlay` model no longer
+    declares EITHER field, so any surviving entry would trip
+    ``extra_forbidden``. Operates on the plain mappings a
+    ``YAML(typ="safe")`` load yields; mutates ``tracked_file`` in place.
+    Returns whether anything was removed.
     """
-    sections = tracked_file.get("host_local_sections")
-    if not isinstance(sections, Mapping) or not sections:
-        return 0
-    spans = tracked_file.get("spans")
-    if not isinstance(spans, list):
-        spans = []
-        tracked_file["spans"] = spans
-    moved = 0
-    for name, section in sections.items():
-        if not isinstance(section, Mapping):
-            # Leave a malformed (non-mapping) section for the schema
-            # validator to reject; never silently drop it.
-            continue
-        spans.append(
-            {
-                "anchor": str(name),
-                "kind": "overlay",
-                "semantics": "host-local",
-                "overlay": section,
-            }
-        )
-        moved += 1
-    if moved:
-        del tracked_file["host_local_sections"]
-    return moved
+    changed = False
+    if tracked_file.pop("host_local_sections", None) is not None:
+        changed = True
+    if tracked_file.pop("spans", None) is not None:
+        changed = True
+    return changed
 
 
-def relocate_retired_keys(data: object) -> bool:
-    """Relocate retired local.yaml keys in ``data`` in place; report if any moved.
+def strip_retired_keys(data: object) -> bool:
+    """Strip retired local.yaml span-declaration keys in ``data``; report if any.
 
-    The IN-MEMORY counterpart to :func:`migrate_local_yaml`: it transforms
-    the parsed mapping (``host_local_sections`` → ``spans`` OVERLAY entries
-    under each ``tracked_files.<id>``) so the strict
+    The IN-MEMORY forward-tolerance step: it removes the retired
+    ``host_local_sections`` / OVERLAY ``spans`` keys from each
+    ``tracked_files.<id>`` so the strict
     :class:`~setforge.local_config.LocalConfig` /
-    ``_LocalSourceConfig`` model accepts the document, WITHOUT touching
-    disk. The on-disk rewrite is owned by the install path
-    (:func:`setforge.cli._install_helpers.migrate_local_overlay_spans_on_install`),
-    which snapshots the pre-migration bytes first so ``revert`` restores
-    them byte-for-byte; mutating the file here would race that snapshot.
+    ``_LocalSourceConfig`` model accepts a pre-4.0 document (degraded — the
+    host-local span-declaration surface is no longer read from
+    ``local.yaml``; it lives in the reconcile store now), WITHOUT touching
+    disk. The on-disk retirement is owned by the 3.0→4.0 span-surface-retire
+    migration, which snapshots the pre-migration bytes first so ``revert``
+    restores them byte-for-byte; mutating the file here would race that
+    snapshot.
 
-    Returns ``True`` when at least one section was relocated. A document
-    with no retired key is left untouched (returns ``False``).
+    Returns ``True`` when at least one key was stripped. A document with no
+    retired key is left untouched (returns ``False``).
     """
     if not isinstance(data, MutableMapping):
         return False
     tracked_files = data.get("tracked_files")
     if not isinstance(tracked_files, Mapping):
         return False
-    total = 0
+    changed = False
     for tracked_file in tracked_files.values():
         if isinstance(tracked_file, MutableMapping):
-            total += _relocate_tracked_file(tracked_file)
-    return total > 0
+            changed |= _strip_tracked_file(tracked_file)
+    return changed

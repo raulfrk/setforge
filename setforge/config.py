@@ -998,7 +998,6 @@ def collect_orphan_overlays(
             and overlay.dst is None
             and overlay.symlink_target is None
             and overlay.disposition is None
-            and not overlay.spans
         ):
             continue
         if tf_id not in config.tracked_files:

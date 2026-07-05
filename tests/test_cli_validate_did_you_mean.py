@@ -413,9 +413,9 @@ def test_validate_local_yaml_nested_extra_forbidden_resolves_real_line(
     candidate list dispatched by
     :func:`setforge.cli.validate._candidate_list_for` for
     ``loc[0]='tracked_files'`` is the
-    :class:`_LocalTrackedFileOverlay` field set (preserve_user_keys /
-    host_local_sections); ``not_a_real_field`` is far enough from both
-    that no misleading "Did you mean" fires.
+    :class:`_LocalTrackedFileOverlay` field set (mode / dst /
+    symlink_target / disposition); ``not_a_real_field`` is far enough from
+    all of them that no misleading "Did you mean" fires.
     """
     cfg = _write_minimal_config(tmp_path)
     # ``tracked_files:`` is a known top-level key; ``not_a_real_field``

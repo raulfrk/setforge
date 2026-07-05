@@ -17,11 +17,7 @@ from ruamel.yaml import YAML
 
 from setforge.anchors import AnchorKind
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
-from setforge.source import (
-    load_local_host_local_sections,
-    load_local_tracked_file_overlays,
-)
-from setforge.span_types import SpanKind, SpanSemantics
+from setforge.source import HostLocalSectionName, load_local_host_local_sections
 
 # A representative local.yaml carrying comments, a quoted scalar, and a
 # pre-existing (non-overlay) span the migration must leave intact.
@@ -74,20 +70,22 @@ def test_rewrites_representative_local_yaml(tmp_path: Path) -> None:
 
 
 def test_migrated_yaml_round_trips(tmp_path: Path) -> None:
-    """The rewritten document re-parses cleanly and validates as a span."""
+    """The rewritten document re-parses cleanly and projects the section back.
+
+    The retired span-declaration surface is stripped from the strict overlay
+    model on load, so the host-local content is read via
+    :func:`load_local_host_local_sections` — the raw projection the
+    span-surface-retire fold uses (``semantics: host-local`` is asserted on
+    the on-disk text in :func:`test_rewrites_representative_local_yaml`).
+    """
     local = _write(tmp_path / "local.yaml", _REPRESENTATIVE)
     migrate_local_yaml_overlay_spans(local)
 
-    overlays = load_local_tracked_file_overlays(local)
-    spans = overlays["claude_md"].spans
-    overlay_spans = [s for s in spans if s.kind is SpanKind.OVERLAY]
-    assert len(overlay_spans) == 1
-    span = overlay_spans[0]
-    assert span.anchor == "my-notes"
-    assert span.semantics is SpanSemantics.HOST_LOCAL
-    assert span.overlay is not None
-    assert span.overlay.anchor.kind is AnchorKind.AFTER_HEADING
-    assert span.overlay.body == "host-local notes body\n"
+    sections = load_local_host_local_sections(local)["claude_md"]
+    assert set(sections) == {"my-notes"}
+    section = sections[HostLocalSectionName("my-notes")]
+    assert section.anchor.kind is AnchorKind.AFTER_HEADING
+    assert section.body == "host-local notes body\n"
 
 
 def test_idempotent_second_run_is_byte_identical(tmp_path: Path) -> None:
@@ -182,8 +180,7 @@ def test_all_anchor_kinds_and_body_file_migrate(tmp_path: Path) -> None:
 
     assert result.migrated is True
     assert result.section_count == 6
-    overlays = load_local_tracked_file_overlays(local)
-    spans = {s.anchor: s for s in overlays["claude_md"].spans}
+    sections = load_local_host_local_sections(local)["claude_md"]
     kinds = {}
     for name in (
         "sec-after-heading",
@@ -192,17 +189,14 @@ def test_all_anchor_kinds_and_body_file_migrate(tmp_path: Path) -> None:
         "sec-at-end",
         "sec-after-section",
     ):
-        payload = spans[name].overlay
-        assert payload is not None
-        kinds[name] = payload.anchor.kind
+        kinds[name] = sections[HostLocalSectionName(name)].anchor.kind
     assert kinds["sec-after-heading"] is AnchorKind.AFTER_HEADING
     assert kinds["sec-before-heading"] is AnchorKind.BEFORE_HEADING
     assert kinds["sec-at-start"] is AnchorKind.AT_START_OF_FILE
     assert kinds["sec-at-end"] is AnchorKind.AT_END_OF_FILE
     assert kinds["sec-after-section"] is AnchorKind.AFTER_SECTION
     # body_file variant carries the path, not an inline body.
-    bf = spans["sec-body-file"].overlay
-    assert bf is not None
+    bf = sections[HostLocalSectionName("sec-body-file")]
     assert bf.body is None
     assert bf.body_file == Path("snippets/extra.md")
 
@@ -220,18 +214,16 @@ def test_resolved_overlay_equivalent_to_legacy_projection(tmp_path: Path) -> Non
 
     migrate_local_yaml_overlay_spans(local)
 
-    overlays = load_local_tracked_file_overlays(local)
-    overlay_spans = {
-        s.anchor: s for s in overlays["claude_md"].spans if s.kind is SpanKind.OVERLAY
-    }
-    assert set(overlay_spans) == set(legacy)
+    # The projection reads the migrated OVERLAY spans raw; it must match the
+    # pre-migration ``host_local_sections`` projection byte-for-byte.
+    migrated = load_local_host_local_sections(local)["claude_md"]
+    assert set(migrated) == set(legacy)
     for name, section in legacy.items():
-        payload = overlay_spans[name].overlay
-        assert payload is not None
+        got = migrated[name]
         # Structured anchor identical (model-dump compare covers every kind).
-        assert payload.anchor.model_dump() == section.anchor.model_dump()
-        assert payload.body == section.body
-        assert payload.body_file == section.body_file
+        assert got.anchor.model_dump() == section.anchor.model_dump()
+        assert got.body == section.body
+        assert got.body_file == section.body_file
 
 
 _MULTI_FILE = """\
@@ -260,15 +252,9 @@ def test_multiple_sections_and_files_all_migrate(tmp_path: Path) -> None:
 
     assert result.migrated is True
     assert result.section_count == 3
-    overlays = load_local_tracked_file_overlays(local)
-    claude = {
-        s.anchor for s in overlays["claude_md"].spans if s.kind is SpanKind.OVERLAY
-    }
-    gitcfg = {
-        s.anchor for s in overlays["gitconfig"].spans if s.kind is SpanKind.OVERLAY
-    }
-    assert claude == {"a", "b"}
-    assert gitcfg == {"c"}
+    projected = load_local_host_local_sections(local)
+    assert set(projected["claude_md"]) == {"a", "b"}
+    assert set(projected["gitconfig"]) == {"c"}
     text = local.read_text(encoding="utf-8")
     assert "host_local_sections:" not in text
 

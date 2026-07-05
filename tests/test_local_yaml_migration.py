@@ -37,7 +37,7 @@ from setforge.migrations._local_yaml import (
     detect_local_yaml_schema,
     guard_local_yaml_schema,
     migrate_local_yaml,
-    relocate_retired_keys,
+    strip_retired_keys,
 )
 
 # A local.yaml carrying the retired ``host_local_sections`` block — the
@@ -190,19 +190,44 @@ def test_load_path_does_not_rewrite_disk(tmp_path: Path) -> None:
     assert path.read_bytes() == before
 
 
-def test_relocate_retired_keys_in_memory() -> None:
-    """``relocate_retired_keys`` rewrites the parsed mapping in place."""
+def test_strip_retired_keys_in_memory() -> None:
+    """``strip_retired_keys`` drops the retired keys from the parsed mapping.
+
+    The span-declaration surface is retired: both ``host_local_sections``
+    AND ``spans`` are removed in place (not relocated), so the strict
+    overlay model — which declares neither field — accepts the document.
+    """
     data = YAML(typ="safe").load(_RETIRED_KEY_LOCAL)
-    assert relocate_retired_keys(data) is True
+    assert strip_retired_keys(data) is True
     tracked = data["tracked_files"]["claude_md"]
     assert "host_local_sections" not in tracked
-    assert tracked["spans"][0]["kind"] == "overlay"
+    assert "spans" not in tracked
 
 
-def test_relocate_clean_mapping_is_noop() -> None:
+def test_strip_removes_overlay_spans() -> None:
+    """A pre-4.0 doc carrying OVERLAY ``spans`` has them stripped too."""
+    doc = """\
+tracked_files:
+  claude_md:
+    spans:
+      - anchor: my-notes
+        kind: overlay
+        semantics: host-local
+        overlay:
+          anchor:
+            kind: after-heading
+            value: Notes
+          body: host-only body
+"""
+    data = YAML(typ="safe").load(doc)
+    assert strip_retired_keys(data) is True
+    assert "spans" not in data["tracked_files"]["claude_md"]
+
+
+def test_strip_clean_mapping_is_noop() -> None:
     """A mapping with no retired key is reported unchanged."""
     data = YAML(typ="safe").load(_SET_DELTA_LOCAL)
-    assert relocate_retired_keys(data) is False
+    assert strip_retired_keys(data) is False
 
 
 def test_load_path_set_delta_survives_baseline_load(tmp_path: Path) -> None:

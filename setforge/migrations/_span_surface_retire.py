@@ -503,7 +503,7 @@ def _strip_local_yaml(local_yaml: Path) -> None:
 
     Per tracked-file overlay: drop the legacy ``host_local_sections`` block and any
     OVERLAY (``kind: overlay``) ``spans`` entry — exactly the surface
-    :func:`setforge.source._host_local_sections_for_overlay` reads and this cutover
+    :func:`setforge.source._host_local_sections_from_raw` reads and this cutover
     folds into the store. Non-overlay spans (if any) and every other overlay knob
     (mode / dst / symlink_target) are left untouched. Overwrite-in-place (ruamel
     round-trip) preserves surrounding comments + key order; only rewritten when

@@ -21,7 +21,7 @@ from setforge.errors import ConfigError, MarkerError
 from setforge.migrations import MigrationRoots
 from setforge.migrations._marker_retire import MarkerRetireMigration
 from setforge.reconcile import file_id
-from setforge.source import load_local_tracked_file_overlays
+from setforge.source import HostLocalSectionName, load_local_host_local_sections
 
 
 def _h(body: str) -> str:
@@ -122,12 +122,12 @@ def test_apply_captures_host_local_to_overlay_then_strips(tmp_path: Path) -> Non
 
     MarkerRetireMigration().apply(roots=roots)
 
-    # Host-local body captured as an overlay span...
+    # Host-local body captured as an overlay span (read via the raw host-local
+    # projection — the strict overlay model strips the retired span surface)...
     local_yaml = roots.home / ".config" / "setforge" / "local.yaml"
-    overlay = load_local_tracked_file_overlays(local_yaml)["claude"]
-    assert overlay.spans[0].anchor == "paths"
-    assert overlay.spans[0].overlay is not None
-    assert overlay.spans[0].overlay.body == host_body
+    sections = load_local_host_local_sections(local_yaml)["claude"]
+    assert set(sections) == {"paths"}
+    assert sections[HostLocalSectionName("paths")].body == host_body
     # ...and absent from both stripped files (it lives only in the overlay now).
     assert host_body not in _live_path().read_text(encoding="utf-8")
     assert host_body not in _tracked_path(roots).read_text(encoding="utf-8")

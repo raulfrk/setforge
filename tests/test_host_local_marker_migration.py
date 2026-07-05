@@ -18,8 +18,7 @@ from setforge.host_local_marker_migration import (
     extract_host_local_marker_bodies,
 )
 from setforge.overlay_inject import canonical_body
-from setforge.source import load_local_tracked_file_overlays
-from setforge.span_types import SpanKind
+from setforge.source import HostLocalSectionName, load_local_host_local_sections
 
 _H = "a" * 64
 
@@ -82,12 +81,11 @@ def test_append_writes_at_eof_overlay_span(tmp_path: Path) -> None:
     local.write_text("# c\ntracked_files:\n  doc: {}\n", encoding="utf-8")
     n = append_overlay_spans(local, {"doc": [("notes", "host notes\n")]})
     assert n == 1
-    overlay = load_local_tracked_file_overlays(local)["doc"]
-    span = overlay.spans[0]
-    assert span.kind is SpanKind.OVERLAY
-    assert span.anchor == "notes"
-    assert span.overlay is not None
-    assert span.overlay.body == "host notes\n"
+    # The retired span-declaration surface is stripped from the strict overlay
+    # model on load; the raw host-local projection still reads the OVERLAY span.
+    sections = load_local_host_local_sections(local)["doc"]
+    assert set(sections) == {"notes"}
+    assert sections[HostLocalSectionName("notes")].body == "host notes\n"
     assert "# c" in local.read_text(encoding="utf-8")  # comment preserved
 
 
@@ -95,9 +93,10 @@ def test_append_canonicalizes_body(tmp_path: Path) -> None:
     local = tmp_path / "local.yaml"
     local.write_text("tracked_files:\n  doc: {}\n", encoding="utf-8")
     append_overlay_spans(local, {"doc": [("notes", "no trailing newline")]})
-    overlay = load_local_tracked_file_overlays(local)["doc"]
-    assert overlay.spans[0].overlay is not None
-    assert overlay.spans[0].overlay.body == canonical_body("no trailing newline")
+    sections = load_local_host_local_sections(local)["doc"]
+    assert sections[HostLocalSectionName("notes")].body == canonical_body(
+        "no trailing newline"
+    )
 
 
 def test_append_presence_check_idempotent(tmp_path: Path) -> None:
@@ -120,8 +119,7 @@ def test_append_creates_overlay_block_when_absent(tmp_path: Path) -> None:
     local = tmp_path / "local.yaml"
     local.write_text("tracked_files: {}\n", encoding="utf-8")
     assert append_overlay_spans(local, {"doc": [("notes", "b\n")]}) == 1
-    overlay = load_local_tracked_file_overlays(local)["doc"]
-    assert overlay.spans[0].anchor == "notes"
+    assert set(load_local_host_local_sections(local)["doc"]) == {"notes"}
 
 
 def test_append_creates_local_yaml_when_absent(tmp_path: Path) -> None:
@@ -130,8 +128,7 @@ def test_append_creates_local_yaml_when_absent(tmp_path: Path) -> None:
     assert not local.exists()
     assert append_overlay_spans(local, {"doc": [("notes", "b\n")]}) == 1
     assert local.exists()
-    overlay = load_local_tracked_file_overlays(local)["doc"]
-    assert overlay.spans[0].anchor == "notes"
+    assert set(load_local_host_local_sections(local)["doc"]) == {"notes"}
 
 
 def test_build_node_shape() -> None:
