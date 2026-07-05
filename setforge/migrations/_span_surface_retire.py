@@ -1,17 +1,33 @@
-"""The span-surface-retire cutover — schema 3.0 -> 4.0 (SKELETON).
+"""The span-surface-retire cutover — schema 3.0 -> 4.0.
 
 Retires the host-local span-declaration surface carried in the ``local.yaml``
-overlay (the per-tracked-file span/disposition overlay fields), folding whatever
-host-local intent survives into the unified per-unit reconcile store and
-stripping the retired keys from ``local.yaml``.
+overlay (the per-tracked-file ``host_local_sections`` block + OVERLAY ``spans``),
+folding whatever host-local intent survives into the unified per-unit reconcile
+store and stripping the retired keys from ``local.yaml``.
 
-This module currently ships the migration's IDENTITY + registration surface
-only: :attr:`SpanSurfaceRetireMigration.from_version` / ``to_version`` /
-``reverse`` / ``manifest`` / ``affected_paths``, plus the one-way reverse
-refusal (the fold is lossy — see :class:`_SpanSurfaceRetireReverse`). The heavy
-forward ``apply`` fold/strip body is implemented in a SEPARATE later task; until
-then the forward ``apply`` raises :class:`NotImplementedError` so no
-half-migration can run.
+The forward :meth:`SpanSurfaceRetireMigration.apply` is fully implemented:
+
+* **Headingless refuse (D2).** A pre-flight enumerates every residual
+  host-local section and aborts BEFORE any mutation if a body lacks a markdown
+  heading — the 4.0 store identity is heading-based (a stable ``reloc_anchor``
+  minted from the body's own heading), so a headingless body has no identity to
+  fold onto (see :func:`_validate_headings`).
+* **Fold.** Each ``(profile, fid)`` carrying a residual section MERGES the
+  section body into its unit's LOCAL store, preserving the recorded ``local``
+  bytes AND every existing hunk classification — SHARED / LOCAL / SHARED_DRAFTED
+  and its draft bytes — so no shared drift or blessed draft is clobbered
+  (INV-1 / INV-8; see :func:`_fold_sections`).
+* **Stamp + strip.** Advances ``schema_version`` to 4.0 and drops the retired
+  ``host_local_sections`` / overlay-``spans`` keys from ``local.yaml``.
+* **Transition.** Commits ONE durable ``MIGRATE`` transition (text patch for
+  ``setforge.yaml`` + ``local.yaml`` PLUS byte-exact state snapshots of every
+  mutated reconcile leg) so a crash or ``setforge revert --profile=migrate``
+  restores the pre-cutover state exactly.
+
+Idempotent: a section already present as a LOCAL+reloc unit is skipped, so a
+re-run drains to an empty residual and no-ops. No ``local.yaml`` (the
+frozen-fixture case) ⇒ nothing to fold: the schema is advanced and ``apply``
+returns without a transition.
 
 Modeled structurally on :mod:`setforge.migrations._disposition_retire` (the
 2.1 -> 3.0 cutover): a ``writes_own_transition`` forward migration whose reverse
@@ -53,8 +69,9 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
 class SpanSurfaceRetireMigration:
     """The 3.0 -> 4.0 forward cutover (see the module docstring).
 
-    SKELETON: identity + registration surface only. ``apply`` is deferred to a
-    later task and raises :class:`NotImplementedError` for now.
+    Folds the residual host-local section surface into the per-unit reconcile
+    store, stamps schema 4.0, strips the retired ``local.yaml`` keys, and commits
+    one durable transition — all in :meth:`apply`.
     """
 
     from_version: str = "3.0"
