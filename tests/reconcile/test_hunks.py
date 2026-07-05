@@ -510,3 +510,25 @@ def test_classify_headingless_hunk_does_not_reloc_match() -> None:
     (out,) = classify([plain], stored)
     assert out.cls is HunkClass.PENDING
     assert out.reloc_anchor is None
+
+
+def test_serialize_keeps_preexisting_reloc_anchor_when_heading_renamed() -> None:
+    # A reloc_anchor is minted ONCE and carried stable — never recomputed. A LOCAL
+    # hunk already carrying reloc_anchor="## Old" keeps it VERBATIM through serialize
+    # even though its current heading/label is now "## New" (which would otherwise
+    # mint "## New"). This is what pins a host-local section's identity across an
+    # in-section heading rename instead of drifting to the new text.
+    from setforge.reconcile.hunks import _section_heading
+
+    (hunk,) = extract_hunks(b"alpha\nbeta\n", b"alpha\n## New\nbeta\n")
+    local_new = replace(hunk, cls=HunkClass.LOCAL)
+    # Precondition: this hunk's OWN heading would mint "## New" from scratch.
+    assert local_new.label == "## New"
+    assert _section_heading(local_new) == "## New"
+
+    stale = replace(local_new, reloc_anchor="## Old")
+    (row,) = serialize([stale])
+
+    assert (
+        row["reloc_anchor"] == "## Old"
+    )  # pre-existing carried verbatim, not "## New"

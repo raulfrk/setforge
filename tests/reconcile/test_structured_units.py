@@ -612,3 +612,43 @@ def test_nested_nondotted_key_row_survives_reclassify_unchanged() -> None:
 
     assert [u.path for u in classified] == ["editor.fontSize"]
     assert all(u.cls is HunkClass.SHARED for u in classified)
+
+
+def test_serialize_structured_never_emits_reloc_anchor() -> None:
+    """A structured key-unit row is markdown-line-free: ``reloc_anchor`` (a heading
+    identity) is line-hunk-only and must NEVER appear on a ``kind:"key"`` row, nor
+    be part of the KEY-row codec's required identity.
+
+    Locks the surface split: a key-unit's identity is ``path`` + ``value_hash``, not
+    the line model's heading-relocation anchor. The check runs across a LOCAL and a
+    SHARED_DRAFTED unit (the two classes that could plausibly carry extra keys) and
+    confirms each serialized row (a) omits ``reloc_anchor`` and (b) validates through
+    the fail-closed index codec as a KEY row without it.
+    """
+    from setforge.reconcile.index_model import (
+        _HUNK_ROW_KEYS_KEY,
+        KIND_KEY,
+        _check_hunk_row,
+    )
+
+    units = [
+        KeyUnit(cls=HunkClass.LOCAL, label="a.b", path="a.b", value_hash="sha256:aa"),
+        KeyUnit(
+            cls=HunkClass.SHARED_DRAFTED,
+            label="c",
+            path="c",
+            value_hash="sha256:cc",
+            draft_hash="sha256:dd",
+        ),
+    ]
+
+    rows = serialize_structured(units)
+
+    assert all("reloc_anchor" not in row for row in rows)
+    # reloc_anchor is not part of the KEY-row identity contract (line-only key).
+    assert "reloc_anchor" not in _HUNK_ROW_KEYS_KEY
+    # A KEY row carrying no reloc_anchor validates cleanly — the codec neither
+    # requires nor expects it on a key-unit row.
+    for row in rows:
+        row["kind"] = KIND_KEY
+        _check_hunk_row("f", row)  # does not raise

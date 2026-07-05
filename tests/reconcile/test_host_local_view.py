@@ -16,7 +16,8 @@ from setforge.anchors import AnchorAfterHeading
 from setforge.reconcile import store
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.hunks import Hunk, extract_hunks, serialize
-from setforge.reconcile.types import HunkClass, file_id
+from setforge.reconcile.index_model import FileEntry, Index
+from setforge.reconcile.types import ABSENT, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
 
 # A host-local ADDITIVE "## My Tweaks" section spliced between two base headings.
@@ -90,3 +91,68 @@ def test_fid_filter_scopes_projection(tmp_state: Path) -> None:
 
     assert set(host_local_sections_from_store("p")) == {"a.md", "b.md"}
     assert set(host_local_sections_from_store("p", fid_a)) == {"a.md"}
+
+
+# Two host-local ADDITIVE sections in ONE file: "## Tweak One" spliced after Alpha
+# and "## Tweak Two" appended after Beta.
+MULTI_BASE = b"## Alpha\naaa\n## Beta\nbbb\n"
+MULTI_LOCAL = (
+    b"## Alpha\naaa\n## Tweak One\nfirst body\n"
+    b"## Beta\nbbb\n## Tweak Two\nsecond body\n"
+)
+
+
+def test_projects_two_local_reloc_sections_in_one_file(tmp_state: Path) -> None:
+    # Two LOCAL+reloc units in one file both project, each with its own body.
+    fid = file_id("claude/CLAUDE.md")
+    rows = serialize(
+        [
+            replace(
+                _hunk(MULTI_BASE, MULTI_LOCAL, "## Tweak One"), cls=HunkClass.LOCAL
+            ),
+            replace(
+                _hunk(MULTI_BASE, MULTI_LOCAL, "## Tweak Two"), cls=HunkClass.LOCAL
+            ),
+        ]
+    )
+    # precondition: both minted their heading identity.
+    assert {r["reloc_anchor"] for r in rows} == {"## Tweak One", "## Tweak Two"}
+    store.record("p", fid, base=MULTI_BASE, local=MULTI_LOCAL, hunks=rows)
+
+    sections = host_local_sections_from_store("p")["claude/CLAUDE.md"]
+
+    assert set(sections) == {"## Tweak One", "## Tweak Two"}
+    assert sections[HostLocalSectionName("## Tweak One")].body == (
+        "## Tweak One\nfirst body\n"
+    )
+    assert sections[HostLocalSectionName("## Tweak Two")].body == (
+        "## Tweak Two\nsecond body\n"
+    )
+
+
+def test_fail_soft_when_base_missing_for_reloc_row(tmp_state: Path) -> None:
+    # A reloc LOCAL row exists in the index, but NO base/local was recorded (a
+    # mid-write / inconsistent store). The projection fails soft: {} , never raises.
+    fid = file_id("orphan.md")
+    rows = serialize([replace(_hunk(BASE, LOCAL, "## My Tweaks"), cls=HunkClass.LOCAL)])
+    assert rows[0]["reloc_anchor"] == "## My Tweaks"  # the reloc row that triggers read
+    # Write ONLY the index — base/local legs are absent on disk.
+    store.write_index(
+        "p",
+        Index(
+            files={str(fid): FileEntry(present=True, local_hash="sha256:x", hunks=rows)}
+        ),
+    )
+    assert store.read_base("p", fid) is None  # precondition: base leg missing
+
+    assert host_local_sections_from_store("p") == {}
+
+
+def test_fail_soft_when_local_absent_for_reloc_row(tmp_state: Path) -> None:
+    # A reloc LOCAL row with a recorded base but an ABSENT local leg also fails soft.
+    fid = file_id("absent.md")
+    rows = serialize([replace(_hunk(BASE, LOCAL, "## My Tweaks"), cls=HunkClass.LOCAL)])
+    store.record("p", fid, base=BASE, local=ABSENT, hunks=rows)
+    assert store.read_local("p", fid) is ABSENT  # precondition: local recorded absent
+
+    assert host_local_sections_from_store("p") == {}
