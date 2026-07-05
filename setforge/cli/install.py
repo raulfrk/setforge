@@ -257,12 +257,12 @@ def install(
         # overlay-fields overrides applied so downstream resolve_dst / deploy /
         # deploy_symlinked_file consume the override transparently.
         apply_host_local_tracked_file_overrides(cfg)
-        # Load + validate the local.yaml host_local_sections overlay
-        # (host-local). Validation is file-type only at this layer: anchors /
-        # bodies are resolved during deploy._compute_content. Empty mapping
-        # when local.yaml is absent or declares no host-local sections.
+        # Project host-local sections from the reconcile store (STAGE B: the
+        # local.yaml host_local_sections declaration was retired). The map is
+        # threaded on inertly — the reconcile engine owns host-local deploy /
+        # drift natively — and drives the dry-run / preview surfaces.
         host_local_sections_map = _load_validated_host_local_sections(
-            cfg, resolved, repo_root
+            cfg, resolved, repo_root, profile
         )
         # Apply local.yaml plugin/extension/marketplace overlay (SPEC 2)
         # — also AFTER profile resolution. Mutates resolved

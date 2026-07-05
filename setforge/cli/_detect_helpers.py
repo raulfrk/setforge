@@ -717,7 +717,7 @@ def run_detect(*, config_path: Path, profile: str, tracked_file: str | None) -> 
     # compare/install). Tracked-side spans were retired, so there is no longer a
     # span fold here.
     apply_host_local_tracked_file_overrides(cfg)
-    overlay_map = _load_validated_host_local_sections(cfg, resolved, repo_root)
+    overlay_map = _load_validated_host_local_sections(cfg, resolved, repo_root, profile)
     console = Console()
     targets = _markdown_targets(cfg, profile, repo_root, tracked_file)
     any_drift = False

@@ -93,7 +93,7 @@ def compare(
         # not surface as drift. Same validator install uses (anchors
         # resolved at deploy time; this layer only sniffs file-type).
         host_local_sections_map = _load_validated_host_local_sections(
-            cfg, resolved, repo_root
+            cfg, resolved, repo_root, profile
         )
         report = compare_mod.compare_profile(
             cfg,

@@ -138,3 +138,51 @@ def test_resolve_drift_paths_directory_subfiles_do_not_collide(
     # The earlier sub-file did NOT collapse onto the later one.
     assert by_name[name1][0] != by_name[name2][0]
     assert by_name[name1][1] != by_name[name2][1]
+
+
+def test_load_validated_host_local_sections_reads_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STAGE B: the shared host-local loader reads from the reconcile store.
+
+    Post-retirement there is no local.yaml ``host_local_sections`` declaration;
+    the sections are LOCAL units in the reconcile store. This pins that
+    :func:`_install_helpers._load_validated_host_local_sections` projects them
+    from the store (not local.yaml) and filters to the resolved profile.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from dataclasses import replace as dc_replace
+
+    from setforge.reconcile import store
+    from setforge.reconcile.hunks import extract_hunks, serialize
+    from setforge.reconcile.types import HunkClass, file_id
+
+    repo_root = tmp_path / "repo"
+    (repo_root / "tracked").mkdir(parents=True)
+    (repo_root / "tracked" / "CLAUDE.md").write_text(
+        "## Alpha\naaa\n", encoding="utf-8"
+    )
+
+    base = b"## Alpha\naaa\n## Beta\nbbb\n"
+    live = b"## Alpha\naaa\n## My Tweaks\nhost line\n## Beta\nbbb\n"
+    fid = file_id("doc")
+    hunk = next(h for h in extract_hunks(base, live) if h.label == "## My Tweaks")
+    store.record(
+        "p",
+        fid,
+        base=base,
+        local=live,
+        hunks=serialize([dc_replace(hunk, cls=HunkClass.LOCAL)]),
+    )
+
+    cfg = Config(
+        tracked_files={"doc": TrackedFile(src=Path("CLAUDE.md"), dst="~/doc.md")},
+        profiles={"p": Profile(tracked_files=["doc"])},
+    )
+    resolved = ResolvedProfile(tracked_files=["doc"])
+
+    out = _install_helpers._load_validated_host_local_sections(
+        cfg, resolved, repo_root, "p"
+    )
+    assert set(out) == {"doc"}
+    assert set(out["doc"]) == {"## My Tweaks"}

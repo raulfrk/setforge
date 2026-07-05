@@ -80,13 +80,13 @@ from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.overlay_migration import migrate_local_yaml_overlay_spans
 from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
+from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import _claude_merge_unavailable
 from setforge.section_mode import ReconcileAuto
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
-    load_local_host_local_sections,
     validate_host_local_sections_file_type,
 )
 from setforge.span_types import (
@@ -98,25 +98,25 @@ from setforge.ui.widgets import Button, Cancelled, button_bar
 
 
 def _load_validated_host_local_sections(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path
+    cfg: Config, resolved: ResolvedProfile, repo_root: Path, profile: str
 ) -> dict[str, dict[HostLocalSectionName, HostLocalSection]]:
-    """Load local.yaml host_local_sections + reject non-markdown tracked_files.
+    """Project host-local sections from the reconcile store for ``profile``.
 
     Returns ``{tracked_file_id: {section_name: HostLocalSection}}`` for
-    every tracked_file in the resolved profile that declares at least
-    one host-local section. tracked_files NOT in the resolved profile
-    are dropped silently (no error — the user may target a different
-    profile on a different host). Non-markdown ``src`` with declared
-    host-local sections raises :class:`ConfigError` via
-    :func:`validate_host_local_sections_file_type` BEFORE any file is
-    written (anti-smell item: install aborts cleanly).
+    every tracked_file in the resolved profile that carries at least one
+    host-local section. tracked_files NOT in the resolved profile are
+    dropped silently (no error — the user may target a different profile on
+    a different host). Non-markdown ``src`` still routes through
+    :func:`validate_host_local_sections_file_type` as a defensive gate,
+    though the store only ever projects markdown reloc sections.
 
-    Shared between :mod:`setforge.cli.install` and
-    :mod:`setforge.cli.compare` so both surfaces validate identically
-    before threading the overlay through ``deploy.resolve_deploy`` /
-    ``compare_profile`` respectively.
+    STAGE B retires the local.yaml ``host_local_sections`` declaration: the
+    sections now live as LOCAL units in the reconcile store, read back by
+    :func:`setforge.reconcile.host_local_view.host_local_sections_from_store`.
+    Shared between :mod:`setforge.cli.install` and :mod:`setforge.cli.compare`
+    so both surfaces read the same store-backed projection.
     """
-    overlay = load_local_host_local_sections()
+    overlay = host_local_sections_from_store(profile)
     result: dict[str, dict[HostLocalSectionName, HostLocalSection]] = {}
     profile_ids = set(resolved.tracked_files)
     for tf_id, sections_map in overlay.items():
@@ -1238,7 +1238,7 @@ def _dry_run_pipeline(
     # Loaded here rather than carried on ``ctx`` so this read-only path
     # stays self-contained, mirroring ``_dry_run_emit_host_local_inject``.
     host_local_sections_map = _load_validated_host_local_sections(
-        ctx.cfg, ctx.resolved, ctx.repo_root
+        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
     )
     drift_report = compare_mod.compare_profile(
         ctx.cfg,
@@ -1359,7 +1359,7 @@ def _dry_run_emit_host_local_inject(ctx: ProfileContext) -> None:
     declares no host-local sections for tracked_files in this profile.
     """
     typer.echo("=== would-be host-local section inject ===")
-    overlay = load_local_host_local_sections()
+    overlay = host_local_sections_from_store(ctx.profile)
     profile_ids = set(ctx.resolved.tracked_files)
     matched: list[tuple[str, HostLocalSectionName, Path]] = []
     for tf_id, sections_map in overlay.items():

@@ -272,7 +272,7 @@ def _run_capture_confirm_gate(
     if auto_enum is not capture_mod.CaptureAuto.USE_LIVE:
         return
     host_local_sections_map = _load_validated_host_local_sections(
-        ctx.cfg, ctx.resolved, ctx.repo_root
+        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
     )
     drift_report = compare_mod.compare_profile(
         ctx.cfg,
