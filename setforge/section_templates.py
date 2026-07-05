@@ -22,7 +22,7 @@ standard host-local survival path:
   only when the heading is absent from the store, so a populated section
   is left untouched on every subsequent install.
 
-STAGE B (Path 1) retired the ``local.yaml`` ``host_local_sections`` /
+STAGE B retired the ``local.yaml`` ``host_local_sections`` /
 overlay-``spans`` surface; seeding writes NOTHING to ``local.yaml`` — the
 host-local intent lives ONLY in the reconcile per-unit store.
 """
@@ -84,7 +84,7 @@ def seed_section_slots_to_store(
     survives re-baselining). Returns the section names newly seeded (empty on the
     seed-once no-op / no slots / no markdown target).
 
-    Writes NOTHING to ``local.yaml`` (Path 1); the host-local intent lives only
+    Writes NOTHING to ``local.yaml``; the host-local intent lives only
     in the reconcile store, where :func:`host_local_sections_from_store` projects
     it back for the seed-once gate and every other consumer. Raises
     :class:`~setforge.errors.ConfigError` on an unreadable or headingless

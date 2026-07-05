@@ -1,10 +1,10 @@
-"""Tests for the reconcile-store host-local section projection (task B1).
+"""Tests for the reconcile-store host-local section projection.
 
 :func:`host_local_sections_from_store` reads the host-local markdown sections
 back OUT of the reconcile per-unit store (LOCAL line units carrying a
 ``reloc_anchor`` heading identity) in the same shape
 :func:`setforge.source.load_local_host_local_sections` produced, so the legacy
-consumers can be repointed at the store (task D2).
+consumers can be repointed at the store.
 """
 
 from __future__ import annotations

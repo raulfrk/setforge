@@ -1,7 +1,7 @@
 """Regression tests: an aborted install must not seed a host-local store unit.
 
 The section-template seed records a LOCAL reconcile-store unit UNDER the
-profile lock, AFTER deploy (STAGE B Path 1: it writes the reconcile store,
+profile lock, AFTER deploy (STAGE B: it writes the reconcile store,
 never ``local.yaml``). Every refuse-before-write gate — validate-srcs,
 the unexpected-drift reject, and the secrets-scan abort — fires BEFORE
 deploy, so an abort must leave the reconcile store with NO seeded unit.

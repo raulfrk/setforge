@@ -1,6 +1,6 @@
 """Project host-local markdown sections back OUT of the reconcile store.
 
-STAGE B (Path 1) retires the ``local.yaml`` ``host_local_sections`` / ``spans``
+STAGE B retires the ``local.yaml`` ``host_local_sections`` / ``spans``
 declaration of host-local markdown sections. Afterwards host-local content lives
 ONLY in the reconcile per-unit store, as LOCAL line units carrying a stable
 ``reloc_anchor`` heading identity (minted in
@@ -9,8 +9,7 @@ projection for :func:`setforge.source.load_local_host_local_sections`: it reads
 those units back into the SAME
 ``{tracked_file_id: {section_name: HostLocalSection}}`` shape, so the legacy
 consumers (compare drift-mask, validate anchor-legality, capture strip, install
-seed, dry-run display) repoint here without changing their downstream code
-(task D2).
+seed, dry-run display) repoint here without changing their downstream code.
 
 A store unit is a host-local section iff its persisted index row is
 ``cls == "local"`` AND carries a ``reloc_anchor``. The persisted rows hold no byte

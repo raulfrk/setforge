@@ -409,7 +409,7 @@ def install(
         # AFTER deploy so deploy's pre-install store snapshot
         # (deploy_outcome.state_snapshots) is the pre-seed baseline a revert
         # restores to (the seeded unit is wiped on revert, no extra snapshot
-        # needed). Writes NOTHING to local.yaml (Path 1). The seeded LOCAL unit
+        # needed). Writes NOTHING to local.yaml. The seeded LOCAL unit
         # deploys on the next reconcile, exactly as the legacy local.yaml seed
         # (committed after the map load) did. The seed-once gate reads the store,
         # so a re-run whose heading is already a LOCAL unit no-ops.

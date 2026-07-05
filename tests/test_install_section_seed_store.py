@@ -1,4 +1,4 @@
-"""Section-template seeding into the reconcile store (STAGE B Path 1).
+"""Section-template seeding into the reconcile store (STAGE B).
 
 On a fresh host an install seeds each ``section_slots`` template as a LOCAL
 reconcile-store unit — NOT a ``local.yaml`` ``host_local_sections`` block.
@@ -133,7 +133,7 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
     deployed = _dst(tmp_path).read_text(encoding="utf-8")
     assert "SEEDED PYTHON CONVENTIONS" in deployed
 
-    # Path 1: the seed never writes a live local.yaml host_local_sections block.
+    # The seed never writes a live local.yaml host_local_sections block.
     assert not _has_active_host_local_sections(local_yaml)
 
 

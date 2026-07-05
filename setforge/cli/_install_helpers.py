@@ -379,7 +379,7 @@ def _resolve_plain_reconcile(
     fid = reconcile.file_id(sub_name)
     # Claude-merge is offered (button visible) ONLY in the interactive wizard;
     # in a non-interactive / --auto / CI run it stays the unavailable stub so
-    # it is never auto-invoked (D6). The factory returns a closure — claude is
+    # it is never auto-invoked. The factory returns a closure — claude is
     # spawned only if the user presses the button.
     claude_merge = (
         make_claude_merge_fn(display_path=str(sub_dst))

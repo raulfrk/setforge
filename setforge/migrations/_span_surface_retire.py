@@ -7,7 +7,7 @@ store and stripping the retired keys from ``local.yaml``.
 
 The forward :meth:`SpanSurfaceRetireMigration.apply` is fully implemented:
 
-* **Headingless refuse (D2).** A pre-flight enumerates every residual
+* **Headingless refuse.** A pre-flight enumerates every residual
   host-local section and aborts BEFORE any mutation if a body lacks a markdown
   heading — the 4.0 store identity is heading-based (a stable ``reloc_anchor``
   minted from the body's own heading), so a headingless body has no identity to
@@ -129,8 +129,8 @@ class SpanSurfaceRetireMigration:
         disposition-retire cutover. Existence is NOT filtered (a missing path
         snapshots as absent and restores by deletion); the union is deduped
         preserving order. No spans / scalar-base legacy stores appear — those were
-        already retired by the disposition cutover; C2 only folds the residual
-        host-local SECTION surface into the unified store.
+        already retired by the disposition cutover; this migration only folds the
+        residual host-local SECTION surface into the unified store.
         """
         from setforge import base_store
         from setforge.reconcile import store as reconcile_store
@@ -151,10 +151,10 @@ class SpanSurfaceRetireMigration:
         return tuple(seen)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        """Fold the residual host-local section surface, then stamp + strip (§C2).
+        """Fold the residual host-local section surface, then stamp + strip.
 
         Pass 1 enumerates every ``(profile, fid)`` that carries a residual
-        ``local.yaml`` host-local section and pre-flight-aborts (D2) if ANY section
+        ``local.yaml`` host-local section and pre-flight-aborts if ANY section
         body lacks a markdown heading — the 4.0 store identity is heading-based, so
         a headingless body cannot mint a stable ``reloc_anchor`` (raises HERE,
         before any mutation). Pass 2 holds ALL profile locks across one arc: capture
@@ -175,7 +175,7 @@ class SpanSurfaceRetireMigration:
         from setforge import locking, transitions
 
         folds = _build_section_folds(roots)  # pass 1: enumerate (read-only)
-        _validate_headings(folds)  # D2 pre-flight abort — raises before any write
+        _validate_headings(folds)  # pre-flight abort — raises before any write
 
         if not folds:
             # No residual host-local section surface (e.g. no local.yaml): advance
@@ -365,7 +365,7 @@ def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
 
 
 def _validate_headings(folds: list[_SectionFold]) -> None:
-    """Pre-flight (D2): every host-local section body must yield a heading, or abort.
+    """Pre-flight: every host-local section body must yield a heading, or abort.
 
     Part of plan-building, BEFORE any mutation — the 4.0 store identity is the
     body's markdown heading (``reloc_anchor``), so a headingless legacy
@@ -471,9 +471,10 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
 
     Overwrite-in-place preserves surviving key positions + comments; the single
     atomic write is crash-safe and captured in the cutover transition for
-    byte-exact revert. Unlike the disposition cutover, C2 strips NO setforge.yaml
-    tracked-file keys — the retired host-local surface lives in ``local.yaml``
-    (see :func:`_stripped_local_yaml_text`), so this only advances the stamp. Raises
+    byte-exact revert. Unlike the disposition cutover, this cutover strips NO
+    setforge.yaml tracked-file keys — the retired host-local surface lives in
+    ``local.yaml`` (see :func:`_stripped_local_yaml_text`), so this only advances
+    the stamp. Raises
     :class:`ConfigError` on a non-mapping root.
     """
     from setforge.migrations import _require_mapping_root

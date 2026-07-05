@@ -1,7 +1,7 @@
 """Tests for the 3.0 -> 4.0 span-surface-retire migration.
 
-Task C1 stood up the migration's identity + registration surface. Task C2
-implements the real ``apply``: it folds the residual ``local.yaml`` host-local
+These cover the migration's identity + registration surface and the real
+``apply``: it folds the residual ``local.yaml`` host-local
 section surface into the per-unit reconcile LOCAL store (MERGING into any
 existing entry so shared drift + staged classifications survive), stamps schema
 4.0, and strips the retired ``host_local_sections`` / overlay-``spans`` keys,
@@ -9,7 +9,7 @@ transition-revertibly.
 
 The fold is heading-identity based: a host-local section is folded onto a
 ``reloc_anchor`` minted from the body's own markdown heading, so a body without a
-heading is refused up front (D2 pre-flight).
+heading is refused up front by a pre-flight check.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# Identity / registration surface (unchanged from C1).
+# Identity / registration surface.
 # --------------------------------------------------------------------------- #
 
 
@@ -180,7 +180,7 @@ def test_apply_without_local_yaml_just_stamps(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# apply() -- the fold (tests a-c) + headingless refusal (D2).
+# apply() -- the fold (tests a-c) + headingless refusal.
 # --------------------------------------------------------------------------- #
 
 
@@ -332,7 +332,7 @@ def test_apply_strips_retired_surface_from_local_yaml(tmp_path) -> None:
 
 
 def test_apply_refuses_headingless_section(tmp_path) -> None:
-    """(D2) A host-local section body with no markdown heading is refused up front —
+    """A host-local section body with no markdown heading is refused up front —
     the 4.0 store identity is heading-based — and nothing is mutated."""
     roots = _setup(
         tmp_path,
