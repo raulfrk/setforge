@@ -11,19 +11,23 @@ ruamel re-dump skew).
 
 from __future__ import annotations
 
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from setforge import transitions
+from setforge import reconcile, transitions
 from setforge.cli import app
 from setforge.migrations import (
     ManifestEntry,
     ManifestType,
     MigrationRoots,
+    detect_current_schema,
 )
+from setforge.reconcile import file_id
+from setforge.reconcile.host_local_view import host_local_sections_from_store
 
 runner = CliRunner()
 
@@ -320,3 +324,157 @@ def test_migrate_transition_round_trips_through_metadata_load(
     meta = transitions.load_meta(recorded)
     assert meta.command is transitions.TransitionCommand.MIGRATE
     assert meta.profile == "migrate"
+
+
+# --------------------------------------------------------------------------- #
+# Chained 2.1 -> 4.0 (two writes_own_transition cutovers) apply + revert.
+# --------------------------------------------------------------------------- #
+
+# A 2.1-origin config: a plain markdown tracked file (no disposition), so the
+# disposition-retire cutover seeds its unified-store base and the span-surface
+# cutover folds the local.yaml host-local section into that same entry.
+_CHAIN_BASE = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
+
+_CHAIN_CFG_2_1 = """schema_version: "2.1"
+tracked_files:
+  notes:
+    src: notes.md
+    dst: ~/notes.md
+profiles:
+  default:
+    tracked_files: [notes]
+"""
+
+_CHAIN_LOCAL_YAML = textwrap.dedent(
+    """\
+    tracked_files:
+      notes:
+        host_local_sections:
+          my-tweaks:
+            anchor:
+              kind: after-heading
+              value: Alpha
+            body: "## My Tweaks\\nmy custom line\\n"
+    """
+)
+
+
+def _write_chain_origin(tmp_path: Path) -> tuple[Path, Path]:
+    """Lay down a 2.1-origin config + deployed live file + host-local local.yaml.
+
+    Returns ``(cfg_path, local_yaml_path)``. ``Path.home()`` is the per-test
+    isolated home (the conftest ``_isolate_home`` autouse fixture), the same root
+    the reconcile store + local.yaml resolve under.
+    """
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    cfg = repo / "setforge.yaml"
+    cfg.write_text(_CHAIN_CFG_2_1, encoding="utf-8")
+    (repo / "tracked" / "notes.md").write_bytes(_CHAIN_BASE)
+    home = Path.home()
+    (home / "notes.md").write_bytes(_CHAIN_BASE)
+    local_yaml = home / ".config" / "setforge" / "local.yaml"
+    local_yaml.parent.mkdir(parents=True, exist_ok=True)
+    local_yaml.write_text(_CHAIN_LOCAL_YAML, encoding="utf-8")
+    return cfg, local_yaml
+
+
+def test_chained_2_1_to_4_0_apply_folds_and_stamps(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """A single ``migrate --to 4.0`` from a 2.1 origin runs BOTH cutovers.
+
+    The disposition-retire (2.1->3.0) and span-surface-retire (3.0->4.0) steps
+    each set ``writes_own_transition``; the one command applies both, reaching 4.0
+    with the local.yaml section folded as a LOCAL+reloc unit and the retired
+    surface stripped. Because both steps own a transition, TWO durable MIGRATE
+    transitions land on disk.
+    """
+    cfg, local_yaml = _write_chain_origin(tmp_path)
+
+    result = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    assert detect_current_schema(cfg) == "4.0"
+
+    # The host-local section is folded into the unified store as a LOCAL reloc.
+    proj = host_local_sections_from_store("default", file_id("notes"))
+    assert "notes" in proj
+    assert "## My Tweaks" in {str(k) for k in proj["notes"]}
+    # The retired host-local surface is stripped from local.yaml.
+    assert "host_local_sections" not in local_yaml.read_text(encoding="utf-8")
+
+    # Two writes_own_transition cutovers in one chain ⇒ two MIGRATE transitions.
+    migrate_transitions = transitions.list_transitions(["migrate"])
+    assert len(migrate_transitions) == 2
+
+
+def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` after a chained 2.1->4.0 restores the config files exactly.
+
+    The later cutover's transition carries the FULL pre-chain (2.1) image as its
+    text patch, so a single ``revert`` returns BOTH ``setforge.yaml`` and
+    ``local.yaml`` byte-exact to the 2.1 origin.
+
+    Documented limitation of a two-owner chain: ``revert`` replays only the LATEST
+    transition (the span-surface leg). Its state-snapshots capture the store AFTER
+    the disposition seed, so the reconcile store returns to the 3.0-INTERMEDIATE
+    shape, not the pristine pre-2.1 no-entry state — the span-surface FOLD is
+    undone (local reverts to base, no host-local reloc unit survives) but the
+    disposition-retire cutover's additive base seed remains. This residue is
+    benign: it is exactly what a re-run of ``migrate --to 4.0`` would (idempotently)
+    re-seed, and the retired 2.1 legacy-store readers no longer exist in the
+    binary. The user-facing config files are the coherent guarantee; the store
+    residue is asserted here so a regression in either direction is caught.
+    """
+    cfg, local_yaml = _write_chain_origin(tmp_path)
+    cfg_origin = cfg.read_bytes()
+    local_origin = local_yaml.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+
+    # Config files: byte-exact 2.1 origin (the coherent, user-facing guarantee).
+    assert cfg.read_bytes() == cfg_origin
+    assert local_yaml.read_bytes() == local_origin
+
+    # Store: the span-surface fold is undone — the host-local reloc unit is gone
+    # and local collapses back to base.
+    fid = file_id("notes")
+    assert host_local_sections_from_store("default", fid) == {}
+    assert reconcile.read_index("default").files["notes"].hunks == []
+    assert reconcile.read_local("default", fid) == _CHAIN_BASE
+    # ...but the disposition-retire base seed survives (3.0-intermediate residue),
+    # NOT the pristine pre-2.1 no-entry state.
+    assert reconcile.read_base("default", fid) == _CHAIN_BASE
+
+
+def test_chained_2_1_to_4_0_second_revert_is_redo(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """A second ``revert`` acts as REDO — re-advancing the config to 4.0."""
+    cfg, _ = _write_chain_origin(tmp_path)
+    runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
+    )
+    first = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert first.exit_code == 0, first.output
+    assert detect_current_schema(cfg) == "2.1"
+
+    second = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert second.exit_code == 0, second.output
+    assert detect_current_schema(cfg) == "4.0"
