@@ -112,7 +112,10 @@ def test_fresh_install_seeds_local_store_unit_not_local_yaml(
     """A fresh install records the template as a LOCAL store unit and writes
     NOTHING to local.yaml."""
     config = _write_config(repo)
-    local_yaml = tmp_path / "local.yaml"
+    # The REAL host-local config install scaffolds lives under $HOME (the fixture's
+    # monkeypatched home), NOT tmp_path/local.yaml — the latter never exists, so the
+    # no-write assertion below would pass vacuously. Point at the path install writes.
+    local_yaml = tmp_path / "home" / ".config" / "setforge" / "local.yaml"
 
     result = _invoke(config)
     assert result.exit_code == 0, result.output

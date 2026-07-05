@@ -231,6 +231,55 @@ def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
     assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
 
 
+def test_apply_fold_preserves_shared_drafted_class_and_draft_bytes(tmp_path) -> None:
+    """A fid whose store already carries a SHARED_DRAFTED hunk (+ its draft_hash +
+    draft bytes) survives the fold of a NEW residual host-local section: the fold
+    carries the SHARED_DRAFTED classification forward AND leaves the draft bytes in
+    the drafts store untouched (record with no explicit drafts= preserves them)."""
+    from setforge.reconcile import store as reconcile_store
+
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
+    fid = file_id("notes")
+
+    # Pre-seed: the host drafted the "## Gamma" region (ccc -> cccLOCAL kept local,
+    # a shareable "cccSHARED" draft blessed) — a SHARED_DRAFTED unit with draft bytes.
+    drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccLOCAL\n"
+    (gamma_hunk,) = extract_hunks(_BASE, drift_local)
+    draft_bytes = b"cccSHARED\n"
+    with locking.profile_lock("default"):
+        drafted_rows = serialize(
+            [replace(gamma_hunk, cls=HunkClass.SHARED_DRAFTED, draft_hash="sha256:gd")]
+        )
+        reconcile.record(
+            "default",
+            fid,
+            base=_BASE,
+            local=drift_local,
+            hunks=drafted_rows,
+            drafts={gamma_hunk.anchor: draft_bytes},
+        )
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+    hunks = reconcile.read_index("default").files["notes"].hunks
+    # The SHARED_DRAFTED classification + its draft_hash are carried forward untouched.
+    assert any(
+        h["cls"] == HunkClass.SHARED_DRAFTED.value
+        and h.get("draft_hash") == "sha256:gd"
+        for h in hunks
+    )
+    # ...and the new section folded in alongside as a LOCAL+reloc unit.
+    assert any(
+        h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
+        for h in hunks
+    )
+    # The draft BYTES survive in the drafts store (fold preserves the manifest).
+    assert reconcile_store.read_drafts("default", fid) == {
+        gamma_hunk.anchor: draft_bytes
+    }
+
+
 def test_apply_folds_undeployed_section_without_loss(tmp_path) -> None:
     """(b) A section on an UNDEPLOYED file (no live file, no store entry) still folds
     — the body is the source of truth (base=tracked, local=synthesized)."""
