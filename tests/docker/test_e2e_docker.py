@@ -1740,16 +1740,16 @@ def test_e2e_docker_migrate_check_no_migrations_available(
 ) -> None:
     """--check reports no migrations available when already at the expected schema.
 
-    A config already pinned to the build's current expected schema (3.0)
+    A config already pinned to the build's current expected schema (4.0)
     has nothing to bridge, so ``--check`` reports ``no migrations
     available`` and exits 0. The frozen-1.0-config case (which now DOES
-    surface the full 1.0 → … → 3.0 chain) is covered in
+    surface the full 1.0 → … → 4.0 chain) is covered in
     ``test_e2e_docker_migrate.py``.
     """
     c = docker_container()
     c.write_text(
         "/tmp/at-current/setforge.yaml",
-        "schema_version: '3.0'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
+        "schema_version: '4.0'\nversion: 1\ntracked_files: {}\nprofiles: {p: {}}\n",
     )
     result = c.exec(
         [

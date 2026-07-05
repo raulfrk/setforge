@@ -172,17 +172,18 @@ def test_validate_local_yaml_marketplaces_typo_suggests_marketplaces(
     assert "←─── line 2" in out
 
 
-def test_validate_local_yaml_host_local_sections_typo_suggests(
+def test_validate_local_yaml_host_local_sections_is_retired_unknown_key(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A typo'd sub-key inside a ``host_local_sections.<name>`` block
-    triggers a "Did you mean" against :class:`HostLocalSection.model_fields`
-    (``anchor`` / ``body`` / ``body_file``)."""
+    """``host_local_sections`` is a RETIRED overlay field (STAGE B): the
+    span-declaration surface moved to the reconcile store, so the key is
+    gone from :class:`_LocalTrackedFileOverlay`.
+
+    A local.yaml still declaring it surfaces as an ``extra_forbidden``
+    unknown key at the ``tracked_files.<id>`` level — NOT a "Did you mean
+    'host_local_sections'" suggestion (the field no longer exists, so
+    suggesting it back would be wrong)."""
     c = docker_container()
-    # ``bdy`` is distance 1 from ``body``. The full host_local_sections
-    # shape requires nested ``anchor:`` + body discriminator, but
-    # extra_forbidden fires on ``bdy`` before the exactly-one-of validator
-    # runs (Pydantic processes extra-key checks first).
     c.write_text(
         _HOME_LOCAL_YAML,
         "tracked_files:\n"
@@ -194,8 +195,10 @@ def test_validate_local_yaml_host_local_sections_typo_suggests(
     rc, out = _run_validate(c)
     assert rc == 1, out
     assert "✗ SCHEMA VALIDATION ERROR" in out
-    assert "Did you mean 'body'" in out
+    assert "unknown key 'host_local_sections'" in out
     assert "Fix:" in out
+    # The retired field must NOT be suggested back as a known key.
+    assert "Did you mean 'host_local_sections'" not in out
 
 
 def test_validate_local_yaml_tracked_files_nested_typo_suggests(
