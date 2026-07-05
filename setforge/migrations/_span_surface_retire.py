@@ -200,15 +200,19 @@ class SpanSurfaceRetireMigration:
                 _fold_sections(fold)
 
             _stamp_schema_version(roots.cfg_path, self.to_version)
-            _strip_local_yaml(local_yaml)
             cfg_post = roots.cfg_path.read_text(encoding="utf-8")
-            local_post = (
-                local_yaml.read_text(encoding="utf-8") if local_yaml.exists() else None
-            )
+            # Compute the post-strip local.yaml image WITHOUT writing it yet, so the
+            # transition records it as file_post and is COMMITTED before the
+            # destructive strip lands. Mirrors the disposition cutover's
+            # commit-before-delete: a crash in the strip window is then recoverable
+            # from the just-written transition (INV-5), never an irreversible
+            # store-folded + local.yaml-stripped + schema-4.0 + no-transition state.
+            local_post = _stripped_local_yaml_text(local_yaml)
 
             # When the migrate driver threads its pre-chain frozen image, use it as
             # file_pre so this single transition carries the FULL reverse delta to
-            # the chain's ORIGIN (INV-5); file_post re-snapshots the SAME paths now.
+            # the chain's ORIGIN (INV-5); file_post re-snapshots the SAME paths now,
+            # with local.yaml overridden to the not-yet-written post-strip image.
             # Applied outside the driver (pre_chain_snapshot is None) the transition
             # carries just the cfg + local.yaml text edits (the reconcile legs are
             # covered byte-exact by the state_snapshots either way — on revert the
@@ -220,6 +224,7 @@ class SpanSurfaceRetireMigration:
             if pre is not None:
                 file_pre = dict(pre)
                 file_post = dict(transitions.snapshot_paths(tuple(pre)))
+                file_post[local_yaml] = local_post
             else:
                 file_pre = {roots.cfg_path: cfg_pre, local_yaml: local_pre}
                 file_post = {roots.cfg_path: cfg_post, local_yaml: local_post}
@@ -229,6 +234,11 @@ class SpanSurfaceRetireMigration:
                 file_post=file_post,
                 state_snapshots=snapshots,
             )
+
+            # Destructive strip AFTER the transition commit (INV-5): the retired
+            # host-local section surface is data-losing, so it must not run until
+            # the transition that can restore it is durable on disk.
+            _write_stripped_local_yaml(local_yaml, local_post)
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,7 +473,7 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
     atomic write is crash-safe and captured in the cutover transition for
     byte-exact revert. Unlike the disposition cutover, C2 strips NO setforge.yaml
     tracked-file keys — the retired host-local surface lives in ``local.yaml``
-    (see :func:`_strip_local_yaml`), so this only advances the stamp. Raises
+    (see :func:`_stripped_local_yaml_text`), so this only advances the stamp. Raises
     :class:`ConfigError` on a non-mapping root.
     """
     from setforge.migrations import _require_mapping_root
@@ -477,31 +487,38 @@ def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
     atomic_write_yaml(cfg_path, data)
 
 
-def _strip_local_yaml(local_yaml: Path) -> None:
-    """Remove the retired host-local SECTION surface from ``local.yaml`` (comment-safe).
+def _stripped_local_yaml_text(local_yaml: Path) -> str | None:
+    """The text ``local.yaml`` WILL hold once the section surface is stripped.
 
-    Per tracked-file overlay: drop the legacy ``host_local_sections`` block and any
+    Pure (no write): loads the current document, drops the retired host-local
+    SECTION surface from an in-memory ruamel round-trip copy, and returns the
+    serialized result — so :meth:`SpanSurfaceRetireMigration.apply` can capture it
+    as the transition's ``file_post`` and COMMIT before the destructive write
+    lands (INV-5). ``None`` when the file is absent; the CURRENT text verbatim when
+    nothing needs stripping (a section-free ``local.yaml`` — so ``file_post``
+    matches the untouched on-disk bytes and the strip no-ops).
+
+    Per tracked-file overlay: drops the legacy ``host_local_sections`` block and any
     OVERLAY (``kind: overlay``) ``spans`` entry — exactly the surface
     :func:`setforge.source._host_local_sections_from_raw` reads and this cutover
     folds into the store. Non-overlay spans (if any) and every other overlay knob
-    (mode / dst / symlink_target) are left untouched. Overwrite-in-place (ruamel
-    round-trip) preserves surrounding comments + key order; only rewritten when
-    something actually changed, so a section-free ``local.yaml`` is not churned.
+    (mode / dst / symlink_target) are left untouched. The ruamel round-trip
+    preserves surrounding comments + key order.
     """
+    import io
     from collections.abc import MutableMapping
 
-    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+    from setforge.migrations._yaml_ops import yaml_rt
 
     if not local_yaml.exists():
-        return
-    yaml = yaml_rt()
-    with local_yaml.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
+        return None
+    current = local_yaml.read_text(encoding="utf-8")
+    data = yaml_rt().load(current)
     if not isinstance(data, MutableMapping):
-        return
+        return current
     tracked_files = data.get("tracked_files")
     if not isinstance(tracked_files, MutableMapping):
-        return
+        return current
 
     changed = False
     for entry in tracked_files.values():
@@ -511,8 +528,31 @@ def _strip_local_yaml(local_yaml: Path) -> None:
             changed = True
         if _strip_overlay_spans(entry):
             changed = True
-    if changed:
-        atomic_write_yaml(local_yaml, data)
+    if not changed:
+        return current
+    buf = io.StringIO()
+    yaml_rt().dump(data, buf)
+    return buf.getvalue()
+
+
+def _write_stripped_local_yaml(local_yaml: Path, stripped_text: str | None) -> None:
+    """Write the precomputed post-strip ``local.yaml`` text atomically (destructive).
+
+    Called AFTER the transition commit so a crash in the strip window is
+    recoverable from the just-written transition (INV-5). No-op when the file is
+    absent (``stripped_text is None``) or unchanged (a section-free ``local.yaml``,
+    so it is never churned). The destination permission bits are preserved.
+    """
+    import stat as stat_mod
+
+    from setforge import atomicio
+
+    if stripped_text is None or not local_yaml.exists():
+        return
+    if stripped_text == local_yaml.read_text(encoding="utf-8"):
+        return
+    dst_mode = stat_mod.S_IMODE(local_yaml.stat().st_mode)
+    atomicio.atomic_write_text(local_yaml, stripped_text, mode=dst_mode)
 
 
 def _strip_overlay_spans(entry: object) -> bool:
