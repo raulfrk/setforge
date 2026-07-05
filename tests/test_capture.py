@@ -182,6 +182,48 @@ def test_staged_capture_demote_uncaptures(
     assert out == _A5_BASE  # tracked back to pure upstream base
 
 
+def test_staged_capture_keeps_host_local_section_out_of_tracked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-retirement: a host-local section kept out of tracked WITHOUT the
+    legacy local.yaml ``host_local_sections`` strip.
+
+    STAGE B retires the local.yaml host-local declaration; ``sync`` no longer
+    threads a ``host_local_sections_map`` into ``capture_profile``. A host-local
+    section is instead a LOCAL unit in the reconcile store (a purely-additive
+    ``## My Tweaks`` section carrying a minted ``reloc_anchor``). This pins that
+    the reconcile-native staged capture keeps that LOCAL content host-only — it
+    must NOT round-trip into the shared tracked source — proving the strip was
+    redundant.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    from setforge.reconcile import store
+    from setforge.reconcile.types import HunkClass, file_id
+
+    base = b"## Alpha\naaa\n## Beta\nbbb\n"
+    live = b"## Alpha\naaa\n## My Tweaks\nmy host-only line\n## Beta\nbbb\n"
+
+    repo = tmp_path / "repo"
+    src = repo / "tracked" / "CLAUDE.md"
+    dst = tmp_path / "live" / "CLAUDE.md"
+    _write(src, base.decode())  # tracked == upstream base (no host section)
+    _write(dst, live.decode())  # live carries the additive host-local section
+
+    fid = file_id("CLAUDE.md")
+    _stage_index("p", fid, base, live, {"## My Tweaks": HunkClass.LOCAL})
+
+    # Note: NO host_local_sections_map — the new sync behavior.
+    capture_profile(
+        _a5_config(dst), "p", repo, setforge_yaml_path=tmp_path / "setforge.yaml"
+    )
+
+    out = src.read_bytes()
+    assert b"## My Tweaks" not in out  # host-local section not leaked to tracked
+    assert b"my host-only line" not in out
+    assert out == base  # tracked stays pure upstream base
+    store.verify("p")
+
+
 def test_unstaged_file_falls_back_to_legacy_absorb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

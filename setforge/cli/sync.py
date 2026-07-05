@@ -67,9 +67,6 @@ from setforge.errors import (
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile.types import file_id
-from setforge.source import (
-    load_local_host_local_sections,
-)
 
 
 def _build_capture_plan(
@@ -461,12 +458,12 @@ def _run_capture(
     the partial-write truth. ``command`` is retained for call-site parity
     but no longer drives a (false) "restored from snapshot" message.
 
-    Loads the local.yaml host_local_sections overlay so
-    capture-back filters out the names install would have injected from
-    local.yaml. Without this, host-local marker pairs in the live file
-    round-trip into tracked sources on the next sync.
+    No host-local overlay is loaded: host-local content is now a LOCAL unit
+    in the reconcile store, and ``capture_profile``'s per-hunk staged path
+    (:func:`setforge.capture._capture_staged_plain`) already promotes ONLY
+    the SHARED hunks into tracked and keeps LOCAL host-only content out, so
+    the legacy local.yaml ``host_local_sections`` strip is redundant.
     """
-    host_local_sections_map = load_local_host_local_sections()
     try:
         return capture_mod.capture_profile(
             cfg,
@@ -474,7 +471,6 @@ def _run_capture(
             repo_root,
             setforge_yaml_path=config.resolve(),
             auto=auto_enum,
-            host_local_sections_map=host_local_sections_map,
         )
     except CaptureRequiresInteractive as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
