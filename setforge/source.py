@@ -30,7 +30,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal, NewType
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
@@ -622,18 +629,36 @@ def _host_local_sections_from_raw(
             name = span.get("anchor")
             if not isinstance(payload, Mapping) or name is None:
                 continue
-            sections[HostLocalSectionName(str(name))] = HostLocalSection.model_validate(
-                dict(payload)
+            sections[HostLocalSectionName(str(name))] = _validate_host_local_section(
+                str(name), dict(payload)
             )
     raw_sections = tracked_file.get("host_local_sections")
     if isinstance(raw_sections, Mapping):
         for name, section in raw_sections.items():
             if not isinstance(section, Mapping):
                 continue
-            sections[HostLocalSectionName(str(name))] = HostLocalSection.model_validate(
-                dict(section)
+            sections[HostLocalSectionName(str(name))] = _validate_host_local_section(
+                str(name), dict(section)
             )
     return sections
+
+
+def _validate_host_local_section(
+    name: str, payload: dict[str, object]
+) -> HostLocalSection:
+    """Validate one raw host-local section payload, wrapping the pydantic error.
+
+    A wrong-shape pre-4.0 body would otherwise surface an unwrapped
+    :class:`pydantic.ValidationError`; wrap it in :class:`ConfigError` (mirroring
+    the ``YAMLError`` wrap in :func:`load_local_host_local_sections`) so the
+    3.0→4.0 migration reports a coherent diagnostic naming the offending section.
+    """
+    try:
+        return HostLocalSection.model_validate(payload)
+    except ValidationError as exc:
+        raise ConfigError(
+            f"invalid host-local section {name!r} in local.yaml: {exc}"
+        ) from exc
 
 
 def load_local_host_local_sections(

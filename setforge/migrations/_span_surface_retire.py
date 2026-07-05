@@ -97,11 +97,11 @@ class SpanSurfaceRetireMigration:
         )
 
     def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
-        """Read-only ``--check`` inventory: the schema stamp + retired-surface NOTEs.
+        """Read-only ``--check`` inventory: schema-stamp EDIT + retired-surface NOTE.
 
-        The concrete per-``(profile, fid)`` enumeration lands with the fold body;
-        the skeleton lists the schema stamp EDIT plus a NOTE naming the retired
-        ``local.yaml`` span-declaration surface.
+        Deliberately coarse — one EDIT (the ``schema_version`` stamp) plus one NOTE
+        naming the retired ``local.yaml`` span-declaration surface — rather than a
+        per-``(profile, fid)`` section enumeration.
         """
         return (
             ManifestEntry(
