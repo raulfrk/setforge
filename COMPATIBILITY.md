@@ -204,6 +204,63 @@ store is unlinked. While that transition is retained,
 lockstep — the recovery a stateless reverse migration cannot provide, and the
 **only** downgrade across this major boundary.
 
+## Span-surface retirement — a one-way contract step
+
+The `3.0 → 4.0` migration retires the **host-local span-declaration surface** —
+the `local.yaml` `host_local_sections` blocks and the per-tracked-file
+overlay-`spans` fields — folding whatever host-local intent survives into the
+unified per-unit `LOCAL` reconcile store and stripping the retired keys from
+`local.yaml`. It is the **contract** step of the store-backed host-local model:
+each residual host-local section becomes an ordinary `LOCAL` unit keyed by a
+`reloc_anchor` minted from the section body's markdown heading, and the legacy
+`host_local_sections` / overlay-`spans` config fields are removed.
+
+This is a **MAJOR** bump (`3 → 4`), so it is the concrete instance of the
+*forward compatibility* limit above: an older (`3.x`) engine reading a `4.0`
+config **refuses cleanly** (non-zero, no traceback) via the cross-major
+`schema_version` guard, rather than silently misreading a config whose retired
+fields it no longer understands.
+
+The forward migration is **data-preserving**: it merges each residual section
+into its unit's `LOCAL` store, preserving the recorded `local` bytes and the
+existing hunk classifications. But the collapse is **lossy in the reverse
+direction** — the folded sections dissolve into per-unit `SHARED`/`LOCAL` hunks
+with no way to regenerate the original `host_local_sections`/`spans` declaration —
+so, per the *Stated limit*, the `4.0 → 3.0` schema reverse **refuses cleanly**
+rather than emitting a config it cannot faithfully reconstruct. The bump still
+registers that reverse (satisfying the *both ways* rule); it exits non-zero
+naming the recovery path.
+
+Recovery is **transition-based, not schema-reverse-based.** The forward
+migration captures pre-state snapshots of every mutated reconcile leg plus the
+`local.yaml` text patch and commits ONE durable transition **before** any strip.
+While that transition is retained, `setforge revert --profile=migrate`
+byte-restores the pre-cutover state in lockstep — the recovery a stateless
+reverse migration cannot provide, and the **only** downgrade across this major
+boundary.
+
+### Headingless host-local sections — a hard pre-flight refuse
+
+The `4.0` store identity is heading-based: a unit's `reloc_anchor` is minted
+from the section body's own leading markdown heading. A host-local section body
+with **no markdown heading** therefore cannot mint a stable anchor, and the
+migration has no neighbour heading to borrow from (the fold lands the body into
+an empty base). Rather than silently mint a wrong anchor, the migration
+**pre-flight-aborts before any mutation** if ANY host-local section body lacks a
+heading, naming each offending `(tracked_file, section)`. The operator must give
+each such body a leading markdown heading (e.g. `## My Notes`) or remove it, then
+re-run the migration. This is a hard refuse, not a warning — a headingless
+section is never folded.
+
+### Migrate-before-operate ordering
+
+A `4.0` engine on a pre-`4.0` config **requires migration first**. The capture
+(`sync`) path no longer reads `local.yaml` `host_local_sections` — it relies on
+the per-unit `LOCAL` store being populated, which only the `3.0 → 4.0` migration
+does. Operating a `4.0` engine against an un-migrated config would therefore drop
+host-local content silently; run `setforge migrate` to fold the surface into the
+store before any `install` / `sync` / `compare` on a `4.0` engine.
+
 ## `validate` orphan-overlay diagnostics
 
 `local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /
