@@ -814,6 +814,62 @@ def _warn_on_schema_mismatch(config: Config) -> None:
     )
 
 
+def refuse_unmigrated_host_local_leak(
+    config: Config, *, verb: str, profile: str
+) -> None:
+    """Refuse a mutating verb on an un-migrated host that still carries
+    host-local content in ``local.yaml``.
+
+    The host-local declaration surface (``host_local_sections`` / overlay
+    ``spans``) was retired from ``local.yaml``: host-local content now lives in
+    the reconcile store, folded in by the schema migration that also bumps the
+    major. A host that upgraded the ENGINE past that major but has NOT yet run
+    ``setforge migrate`` still carries the retired surface in ``local.yaml``,
+    and the runtime load path silently STRIPS it — so a ``sync`` / ``install``
+    on that host would bake the un-folded host-local body into the SHARED
+    tracked source (a silent host-local leak). ``COMPATIBILITY.md`` documents
+    the migrate-before-operate ordering; this gate ENFORCES it for the two
+    mutating verbs.
+
+    Refuse cleanly (a traceback-free :class:`~setforge.errors.ConfigError` the
+    CLI handler renders as one line + nonzero exit) when BOTH hold:
+
+    - the engine's expected schema MAJOR is newer than the config's declared
+      major (an un-migrated OLDER config — the cross-major-NEWER case is
+      already refused in :func:`_guard_schema_version`, and a same-or-newer
+      major has nothing left to fold), AND
+    - ``local.yaml`` still declares the retired host-local surface (i.e. the
+      migration's fold reader still projects at least one host-local section).
+
+    An older-major config with NO retired surface proceeds untouched, so the
+    deliberate ``migrate --pin`` older-schema workflow stays a nag (see
+    :func:`_warn_on_schema_mismatch`), not a refuse. Once ``setforge migrate``
+    has folded + stripped the surface the second condition is false and this
+    gate is silent.
+    """
+    # Lazy import: ``setforge.source`` imports this module at module load, so a
+    # top-level import here would cycle. Reading ``LOCAL_CONFIG_PATH`` off the
+    # module at call time also honors the test-suite redirect of the constant.
+    from setforge import source as source_mod
+
+    expected_major = parse_schema_version(current_expected_schema_version)[0]
+    declared_major = parse_schema_version(config.schema_version)[0]
+    if declared_major >= expected_major:
+        return
+    if not source_mod.load_local_host_local_sections(source_mod.LOCAL_CONFIG_PATH):
+        return
+    raise ConfigError(
+        f"{verb} refuses to run: setforge.yaml declares schema_version "
+        f"{config.schema_version!r} but this setforge expects "
+        f"{current_expected_schema_version!r}, and local.yaml still declares "
+        "host-local content (host_local_sections / overlay spans) that has not "
+        "been folded into the reconcile store. Proceeding could bake that "
+        "host-local content into the shared tracked source. Run "
+        f"`setforge migrate --profile={profile}` to fold host-local content "
+        "into the store before install/sync."
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class HostLocalTrackedFileOverride:
     """One tracked_file's resolved overlay-fields overlay state.

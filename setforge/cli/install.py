@@ -67,6 +67,7 @@ from setforge.config import (
     apply_host_local_tracked_file_overrides,
     apply_local_overlay,
     load_config,
+    refuse_unmigrated_host_local_leak,
     resolve_profile,
 )
 from setforge.errors import SetforgeError
@@ -227,6 +228,11 @@ def install(
     section_auto = _parse_section_auto(auto, reconcile_user_sections)
 
     cfg = load_config(config)
+    # Refuse before any mutation when this host upgraded the engine past a
+    # schema major but has not yet folded its local.yaml host-local content
+    # into the reconcile store — deploying/seeding now could leak that
+    # host-local body into the shared tracked source.
+    refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
     repo_root = config.resolve().parent
     resolved = resolve_profile(cfg, profile)
     # Apply local.yaml host-local mode/dst/symlink_target overlay

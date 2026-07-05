@@ -58,6 +58,7 @@ from setforge.config import (
     Config,
     apply_host_local_tracked_file_overrides,
     load_config,
+    refuse_unmigrated_host_local_leak,
     resolve_profile,
 )
 from setforge.errors import (
@@ -197,6 +198,11 @@ def sync(
     auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
+    # Refuse before any capture/writeback when this host upgraded the engine
+    # past a schema major but has not yet folded its local.yaml host-local
+    # content into the reconcile store — capturing now could bake that
+    # host-local body into the shared tracked source.
+    refuse_unmigrated_host_local_leak(cfg, verb="sync", profile=profile)
     # Fold the local.yaml host-local overlay (mode/dst/spans/...) so capture
     # sees the host-local OVERLAY spans and excises their bodies before any
     # tracked write (leak gate — see the capture command above).
