@@ -22,13 +22,15 @@ chain (the 1.0->1.1->1.2 schema-version expand).
 
 from __future__ import annotations
 
+import contextlib
 import difflib
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -647,16 +649,48 @@ def _render_chain_previews(
         # branch on actual user filesystem layout may not be exercisable
         # in the shadow tree — preview falls back to "no diff" for those
         # paths and the real apply step does the work.
-        for migration in chain:
-            label = f"{migration.from_version} → {migration.to_version}"
-            with _suppress_preview_errors(label=label):
-                migration.apply(roots=shadow_roots)
+        #
+        # Redirect the state root (reconcile store + transitions) into the
+        # throwaway shadow tree for the duration of the preview apply. A
+        # ``writes_own_transition`` cutover mutates the GLOBAL per-unit store and
+        # commits a durable transition inside ``apply`` — both keyed off
+        # ``state_root()`` (SETFORGE_STATE_DIR), NOT ``roots.home`` — so without
+        # this the read-only preview would corrupt the real store AND leave a
+        # phantom transition that supersedes the real apply's on ``revert``.
+        with _preview_state_root(tmp_root / "_shadow_state"):
+            for migration in chain:
+                label = f"{migration.from_version} → {migration.to_version}"
+                with _suppress_preview_errors(label=label):
+                    migration.apply(roots=shadow_roots)
         triples: list[tuple[Path, str, str]] = []
         for original, shadow in mapping.items():
             before = _read_or_empty(original)
             after = _read_or_empty(shadow)
             triples.append((original, before, after))
         return triples
+
+
+@contextlib.contextmanager
+def _preview_state_root(shadow_state: Path) -> Iterator[None]:
+    """Temporarily point ``SETFORGE_STATE_DIR`` at a throwaway shadow dir.
+
+    Scopes the reconcile per-unit store + the transition log to ``shadow_state``
+    (created on demand) so a ``writes_own_transition`` migration's ``apply`` — which
+    mutates the global store and commits a real transition — writes into the
+    throwaway preview tree instead of the user's live state. Restores the prior
+    value (or unsets it when there was none) on exit, even on error.
+    """
+    key = transitions._STATE_ENV
+    prior = os.environ.get(key)
+    shadow_state.mkdir(parents=True, exist_ok=True)
+    os.environ[key] = str(shadow_state)
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prior
 
 
 def _shadow_path(tmp_root: Path, p: Path) -> Path:

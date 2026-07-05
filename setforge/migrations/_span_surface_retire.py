@@ -23,10 +23,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from setforge.errors import ConfigError
 from setforge.migrations import ManifestEntry, ManifestType, MigrationRoots
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from setforge.reconcile import FileId
+    from setforge.source import HostLocalSection
+    from setforge.transitions import StateSnapshotEntry, TransitionDir
 
 #: ``local.yaml`` relpath under ``roots.home`` (host-local overlay source) —
 #: the surface this cutover retires the span-declaration fields from. Copied
@@ -96,18 +103,115 @@ class SpanSurfaceRetireMigration:
         )
 
     def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
-        """The paths the cutover reads/writes/strips (drives backup + rollback).
+        """Every path the cutover reads/writes/strips (drives backup + rollback).
 
-        The skeleton lists the two definite top-level surfaces — ``setforge.yaml``
-        (schema stamp) and the host-local ``local.yaml`` (span-declaration strip).
-        The fold body extends this with each migrated ``(profile, fid)``'s
-        reconcile legs, mirroring the disposition-retire cutover.
+        The two definite top-level surfaces — ``setforge.yaml`` (schema stamp) and
+        the host-local ``local.yaml`` (span-declaration strip) — plus each folded
+        ``(profile, fid)``'s reconcile legs (base / local-content / local-absent /
+        drafts) and each touched profile's reconcile index, mirroring the
+        disposition-retire cutover. Existence is NOT filtered (a missing path
+        snapshots as absent and restores by deletion); the union is deduped
+        preserving order. No spans / scalar-base legacy stores appear — those were
+        already retired by the disposition cutover; C2 only folds the residual
+        host-local SECTION surface into the unified store.
         """
-        return (roots.cfg_path, _local_yaml_path(roots))
+        from setforge import base_store
+        from setforge.reconcile import store as reconcile_store
+
+        seen: dict[Path, None] = {roots.cfg_path: None, _local_yaml_path(roots): None}
+        folds = _build_section_folds(roots)
+        for fold in folds:
+            key = str(fold.fid)
+            for path in (
+                base_store.base_path(fold.profile, key),
+                reconcile_store.local_content_path(fold.profile, key),
+                reconcile_store.local_absent_path(fold.profile, key),
+                reconcile_store.drafts_manifest_path(fold.profile, key),
+            ):
+                seen.setdefault(path, None)
+        for profile in {fold.profile for fold in folds}:
+            seen.setdefault(reconcile_store.index_manifest_path(profile), None)
+        return tuple(seen)
 
     def apply(self, *, roots: MigrationRoots) -> None:
-        """NOT YET IMPLEMENTED — the fold/strip body lands in a later task."""
-        raise NotImplementedError("SpanSurfaceRetire.apply is implemented in task C2")
+        """Fold the residual host-local section surface, then stamp + strip (§C2).
+
+        Pass 1 enumerates every ``(profile, fid)`` that carries a residual
+        ``local.yaml`` host-local section and pre-flight-aborts (D2) if ANY section
+        body lacks a markdown heading — the 4.0 store identity is heading-based, so
+        a headingless body cannot mint a stable ``reloc_anchor`` (raises HERE,
+        before any mutation). Pass 2 holds ALL profile locks across one arc: capture
+        pre-state snapshots (reconcile legs + index), MERGE each residual section
+        into its unit's LOCAL store (preserving the recorded ``local`` bytes AND the
+        existing hunk classifications — INV-1 / INV-8), stamp schema 4.0, strip the
+        retired ``host_local_sections`` / overlay-``spans`` from ``local.yaml``, then
+        COMMIT the one durable transition (state_snapshots + the cfg/local.yaml text
+        patch). Idempotent: a section already present as a LOCAL+reloc unit is
+        skipped, so a re-run drains to an empty residual and no-ops.
+
+        No ``local.yaml`` (the frozen-fixture case) ⇒ nothing to fold: just advance
+        the schema to 4.0 and return (no transition), mirroring the disposition
+        cutover's empty-records branch.
+        """
+        import contextlib
+
+        from setforge import locking, transitions
+
+        folds = _build_section_folds(roots)  # pass 1: enumerate (read-only)
+        _validate_headings(folds)  # D2 pre-flight abort — raises before any write
+
+        if not folds:
+            # No residual host-local section surface (e.g. no local.yaml): advance
+            # the schema so the config reaches 4.0, nothing to fold or strip.
+            _stamp_schema_version(roots.cfg_path, self.to_version)
+            return
+
+        profiles = sorted({fold.profile for fold in folds})
+        local_yaml = _local_yaml_path(roots)
+        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        local_pre = (
+            local_yaml.read_text(encoding="utf-8") if local_yaml.exists() else None
+        )
+
+        with contextlib.ExitStack() as locks:
+            for profile in profiles:
+                locks.enter_context(locking.profile_lock(profile))
+
+            snapshots = _capture_span_snapshots(folds, profiles)
+
+            for fold in folds:
+                _fold_sections(fold)
+
+            _stamp_schema_version(roots.cfg_path, self.to_version)
+            _strip_local_yaml(local_yaml)
+            cfg_post = roots.cfg_path.read_text(encoding="utf-8")
+            local_post = (
+                local_yaml.read_text(encoding="utf-8") if local_yaml.exists() else None
+            )
+
+            # When the migrate driver threads its pre-chain frozen image, use it as
+            # file_pre so this single transition carries the FULL reverse delta to
+            # the chain's ORIGIN (INV-5); file_post re-snapshots the SAME paths now.
+            # Applied outside the driver (pre_chain_snapshot is None) the transition
+            # carries just the cfg + local.yaml text edits (the reconcile legs are
+            # covered byte-exact by the state_snapshots either way — on revert the
+            # text patch reverses first, then the snapshots restore byte-exact and
+            # win for any overlapping reconcile-store path).
+            pre = roots.pre_chain_snapshot
+            file_pre: dict[Path, str | None]
+            file_post: dict[Path, str | None]
+            if pre is not None:
+                file_pre = dict(pre)
+                file_post = dict(transitions.snapshot_paths(tuple(pre)))
+            else:
+                file_pre = {roots.cfg_path: cfg_pre, local_yaml: local_pre}
+                file_post = {roots.cfg_path: cfg_post, local_yaml: local_post}
+
+            _write_span_retire_transition(
+                file_pre=file_pre,
+                file_post=file_post,
+                state_snapshots=snapshots,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,3 +263,364 @@ class _SpanSurfaceRetireReverse:
             "'setforge revert --profile=migrate' to restore the pre-cutover state "
             "from the recorded transition."
         )
+
+
+#: Max characters in a hunk's derived heading label, mirrored from
+#: :data:`setforge.reconcile.hunks._LABEL_MAX` (kept local so the pre-flight and
+#: the mint agree without importing a private constant).
+_LABEL_MAX: Final = 60
+
+
+@dataclass(frozen=True, slots=True)
+class _SectionFold:
+    """One ``(profile, tracked-file)`` whose residual host-local sections fold in.
+
+    Per ``(profile, fid)`` because the reconcile store is profile-scoped, even
+    though the host-local section INTENT is declared once per tracked-file in
+    ``local.yaml``. ``tracked_bytes`` is the DL1 base seed (verbatim tracked
+    source, only used when the unit has no store entry yet); ``sections`` is the
+    unified host-local section projection (legacy ``host_local_sections`` block
+    PLUS migrated OVERLAY ``spans``) read via
+    :func:`setforge.source.load_local_host_local_sections`.
+    """
+
+    profile: str
+    name: str
+    fid: FileId
+    tracked_bytes: bytes
+    sections: dict[str, HostLocalSection]
+
+
+def _body_heading(canonical_body_bytes: bytes) -> str | None:
+    """The heading identity a canonical section body will mint, or ``None``.
+
+    Runs the SAME derivation the store uses when it persists a LOCAL host-local
+    unit — :func:`setforge.reconcile.hunks._section_heading` over the hunk
+    :func:`~setforge.reconcile.hunks.extract_hunks` produces for a pure insert of
+    the body — so the pre-flight heading check, the residual-vs-already-folded
+    comparison, and the LOCAL marking all agree byte-for-byte with the
+    ``reloc_anchor`` :func:`~setforge.reconcile.hunks.serialize` mints. Reads the
+    body's OWN first heading only (an empty base, so there is no neighbour heading
+    to borrow), so a headingless body returns ``None`` here and is refused up front
+    rather than silently minting a neighbour's heading.
+    """
+    from setforge.reconcile.hunks import _section_heading, extract_hunks
+
+    hunks = extract_hunks(b"", canonical_body_bytes)
+    return _section_heading(hunks[0]) if hunks else None
+
+
+def _build_section_folds(roots: MigrationRoots) -> list[_SectionFold]:
+    """Enumerate every ``(profile, fid)`` carrying a host-local section (read-only).
+
+    Reads the unified host-local section projection from ``local.yaml`` (legacy
+    ``host_local_sections`` + migrated OVERLAY ``spans``) via
+    :func:`setforge.source.load_local_host_local_sections`, then walks the real
+    profile-inheritance so a tracked-file shared across N profiles folds into each
+    profile's store. Symlink tracked-files are skipped (they carry no section
+    surface). No ``local.yaml`` (the frozen-fixture case) short-circuits to ``[]``
+    before touching setforge.yaml, so the no-op stamp path never parses a config.
+    """
+    from setforge.compare import resolve_src
+    from setforge.config import Config, resolve_profile
+    from setforge.migrations._yaml_ops import yaml_rt
+    from setforge.reconcile import file_id
+    from setforge.source import load_local_host_local_sections
+
+    local_yaml = _local_yaml_path(roots)
+    if not local_yaml.exists():
+        return []
+    sections_by_tf = load_local_host_local_sections(local_yaml)
+    if not sections_by_tf:
+        return []
+
+    yaml = yaml_rt()
+    with roots.cfg_path.open("r", encoding="utf-8") as fh:
+        raw = yaml.load(fh)
+    if not isinstance(raw, dict):
+        return []
+    config = Config.model_validate(raw)
+
+    folds: list[_SectionFold] = []
+    for profile_name in config.profiles:
+        for name in resolve_profile(config, profile_name).tracked_files:
+            if name not in sections_by_tf:
+                continue
+            tracked_file = config.tracked_files[name]
+            if tracked_file.symlink is not None:
+                continue
+            src = resolve_src(tracked_file, roots.repo_root)
+            folds.append(
+                _SectionFold(
+                    profile=profile_name,
+                    name=name,
+                    fid=file_id(name),
+                    tracked_bytes=src.read_bytes() if src.exists() else b"",
+                    sections={str(k): v for k, v in sections_by_tf[name].items()},
+                )
+            )
+    return folds
+
+
+def _validate_headings(folds: list[_SectionFold]) -> None:
+    """Pre-flight (D2): every host-local section body must yield a heading, or abort.
+
+    Part of plan-building, BEFORE any mutation — the 4.0 store identity is the
+    body's markdown heading (``reloc_anchor``), so a headingless legacy
+    ``host_local_sections`` body has no stable identity to fold onto (it could not
+    round-trip out of the store, and a re-run could not tell it was already
+    folded). A single offender raises here listing every one, so the cutover
+    mutates nothing and no ``local.yaml`` is stripped half-folded. Deduped by
+    ``(tracked_file, section_name)`` since a file shared across profiles repeats.
+    """
+    from setforge.host_local_inject import _read_body
+    from setforge.overlay_inject import canonical_body
+
+    bad: dict[tuple[str, str], None] = {}
+    for fold in folds:
+        for section_name, section in fold.sections.items():
+            body = canonical_body(_read_body(section)).encode("utf-8")
+            if _body_heading(body) is None:
+                bad.setdefault((fold.name, section_name), None)
+    if bad:
+        listing = "\n".join(
+            f"  {tf}: host-local section {name!r} has no markdown heading"
+            for tf, name in bad
+        )
+        raise ConfigError(
+            "cannot migrate to schema 4.0: "
+            f"{len(bad)} host-local section(s) have no markdown heading. The 4.0 "
+            "store identity is heading-based (a stable reloc_anchor minted from the "
+            "body's own heading), so a headingless section cannot be folded. Give "
+            "each a leading markdown heading (e.g. '## My Notes') or remove it, then "
+            "re-run (nothing was changed):\n" + listing
+        )
+
+
+def _fold_sections(fold: _SectionFold) -> None:
+    """MERGE one unit's residual host-local sections into its LOCAL store.
+
+    The 6-step merge (call inside the profile lock):
+
+    1. ``already`` = sections already present as LOCAL+reloc units;
+       ``residual`` = declared sections whose heading is not yet folded.
+       Empty residual ⇒ return (idempotent — a re-run drains to nothing).
+    2. ``base`` = the recorded merge base (or the tracked seed for a
+       never-seeded unit); ``start`` = the recorded ``local`` bytes (preserving
+       any shared drift the host edited but has not promoted) or ``base``.
+    3. Inject each residual body (canonical) at its anchor into ``start`` →
+       ``new_local``.
+    4. Re-extract ``base -> new_local`` hunks and :func:`classify` them against the
+       EXISTING stored rows so every prior classification (SHARED / LOCAL /
+       SHARED_DRAFTED, INV-8 stage fidelity) is carried forward untouched.
+    5. Mark ONLY the freshly-injected section hunks LOCAL — a still-PENDING hunk
+       whose own heading is one of the residual headings — so
+       :func:`serialize` mints their ``reloc_anchor``; every carried-forward hunk
+       keeps its class.
+    6. ``record`` the merged base+local+hunks (drafts preserved: ``record`` leaves
+       the on-disk drafts manifest intact when passed no ``drafts=``).
+    """
+    from dataclasses import replace
+
+    from setforge import reconcile
+    from setforge.host_local_inject import _read_body
+    from setforge.overlay_inject import canonical_body, inject_body_at_anchor
+    from setforge.reconcile.host_local_view import host_local_sections_from_store
+    from setforge.reconcile.hunks import (
+        _section_heading,
+        classify,
+        extract_hunks,
+        serialize,
+    )
+    from setforge.reconcile.types import HunkClass
+
+    profile, fid = fold.profile, fold.fid
+    proj = host_local_sections_from_store(profile, fid)
+    already_headings = set(proj.get(str(fid), {}))
+
+    residual: list[tuple[str, str, object]] = []  # (heading, canonical_body, anchor)
+    for section in fold.sections.values():
+        cbody = canonical_body(_read_body(section))
+        heading = _body_heading(cbody.encode("utf-8"))
+        # _validate_headings guarantees a heading here; guard defensively so a
+        # None never lands in the residual-heading set (would over-match hunks).
+        if heading is None or heading in already_headings:
+            continue
+        residual.append((heading, cbody, section.anchor))
+    if not residual:
+        return
+
+    stored_base = reconcile.read_base(profile, fid)
+    base = stored_base if stored_base is not None else fold.tracked_bytes
+    stored_local = reconcile.read_local(profile, fid)
+    start = stored_local if isinstance(stored_local, bytes) else base
+
+    entry = reconcile.read_index(profile).files.get(str(fid))
+    existing_hunks = list(entry.hunks) if entry is not None else []
+
+    text = start.decode("utf-8")
+    for _heading, cbody, anchor in residual:
+        text = inject_body_at_anchor(text, anchor, cbody)  # type: ignore[arg-type]
+    new_local = text.encode("utf-8")
+
+    residual_headings = {heading for heading, _, _ in residual}
+    classified = classify(extract_hunks(base, new_local), existing_hunks)
+    rows = serialize(
+        [
+            replace(hunk, cls=HunkClass.LOCAL)
+            if hunk.cls is HunkClass.PENDING
+            and _section_heading(hunk) in residual_headings
+            else hunk
+            for hunk in classified
+        ]
+    )
+    reconcile.record(profile, fid, base=base, local=new_local, hunks=rows)
+
+
+def _stamp_schema_version(cfg_path: Path, to_version: str) -> None:
+    """Stamp ``schema_version: <to_version>`` in setforge.yaml (comment-safe).
+
+    Overwrite-in-place preserves surviving key positions + comments; the single
+    atomic write is crash-safe and captured in the cutover transition for
+    byte-exact revert. Unlike the disposition cutover, C2 strips NO setforge.yaml
+    tracked-file keys — the retired host-local surface lives in ``local.yaml``
+    (see :func:`_strip_local_yaml`), so this only advances the stamp. Raises
+    :class:`ConfigError` on a non-mapping root.
+    """
+    from setforge.migrations import _require_mapping_root
+    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+    yaml = yaml_rt()
+    with cfg_path.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    data = _require_mapping_root(data, cfg_path)
+    data["schema_version"] = to_version
+    atomic_write_yaml(cfg_path, data)
+
+
+def _strip_local_yaml(local_yaml: Path) -> None:
+    """Remove the retired host-local SECTION surface from ``local.yaml`` (comment-safe).
+
+    Per tracked-file overlay: drop the legacy ``host_local_sections`` block and any
+    OVERLAY (``kind: overlay``) ``spans`` entry — exactly the surface
+    :func:`setforge.source._host_local_sections_for_overlay` reads and this cutover
+    folds into the store. Non-overlay spans (if any) and every other overlay knob
+    (mode / dst / symlink_target) are left untouched. Overwrite-in-place (ruamel
+    round-trip) preserves surrounding comments + key order; only rewritten when
+    something actually changed, so a section-free ``local.yaml`` is not churned.
+    """
+    from collections.abc import MutableMapping
+
+    from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+
+    if not local_yaml.exists():
+        return
+    yaml = yaml_rt()
+    with local_yaml.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    if not isinstance(data, MutableMapping):
+        return
+    tracked_files = data.get("tracked_files")
+    if not isinstance(tracked_files, MutableMapping):
+        return
+
+    changed = False
+    for entry in tracked_files.values():
+        if not isinstance(entry, MutableMapping):
+            continue
+        if entry.pop("host_local_sections", None) is not None:
+            changed = True
+        if _strip_overlay_spans(entry):
+            changed = True
+    if changed:
+        atomic_write_yaml(local_yaml, data)
+
+
+def _strip_overlay_spans(entry: object) -> bool:
+    """Drop every OVERLAY (``kind: overlay``) span from one overlay ``entry``.
+
+    Deletes in-place (bottom-up so indices stay valid), removing the whole
+    ``spans`` key when nothing survives. Returns whether anything changed.
+    """
+    from collections.abc import MutableMapping
+
+    if not isinstance(entry, MutableMapping):
+        return False
+    spans = entry.get("spans")
+    if not isinstance(spans, list):
+        return False
+    changed = False
+    for idx in range(len(spans) - 1, -1, -1):
+        span = spans[idx]
+        if isinstance(span, MutableMapping) and span.get("kind") == "overlay":
+            del spans[idx]
+            changed = True
+    if changed and not spans:
+        entry.pop("spans", None)
+    return changed
+
+
+def _capture_span_snapshots(
+    folds: list[_SectionFold], profiles: list[str]
+) -> tuple[StateSnapshotEntry, ...]:
+    """Snapshot every reconcile leg the fold mutates, BEFORE any mutation.
+
+    Per ``(profile, fid)``: the byte BASE (shared with the unified store) plus the
+    reconcile local-content / local-absent / drafts legs. The per-profile INDEX is
+    captured ONCE, outside the fid loop, so a 2nd+ fid never records a
+    post-mutation index. A never-seeded leg captures ``payload=None`` so revert
+    deletes the seed; an already-present leg captures its bytes so revert restores
+    them byte-exact (winning over the text patch for any overlapping path).
+    """
+    from setforge import transitions
+
+    entries: list[StateSnapshotEntry] = []
+    for fold in folds:
+        key = str(fold.fid)
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.BASE, fold.profile, key
+            )
+        )
+        entries.extend(transitions.reconcile_file_snapshots(fold.profile, key))
+    for profile in profiles:
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.INDEX, profile, profile
+            )
+        )
+    return tuple(entries)
+
+
+def _write_span_retire_transition(
+    *,
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+    state_snapshots: tuple[StateSnapshotEntry, ...],
+) -> TransitionDir:
+    """Record the cutover's single durable ``MIGRATE`` transition.
+
+    Carries BOTH a text patch for ``setforge.yaml`` + ``local.yaml``
+    (``file_pre`` -> ``file_post``; the schema flip + section strip, reversed by
+    ``patch -R``) AND the binary ``state_snapshots`` of every mutated reconcile
+    leg (restored byte-exact by ``restore_state_snapshots``). ``apply`` calls this
+    AFTER folding + stamping + stripping, so a crash or ``setforge revert`` after
+    the commit restores the pre-cutover state exactly. Returns the transition dir.
+    """
+    import sys
+
+    from setforge import transitions
+    from setforge._redact import redact_argv
+
+    return transitions.write_transition(
+        transitions.make_meta(
+            transitions.TransitionCommand.MIGRATE,
+            transitions.MIGRATE_TRANSITION_PROFILE,
+            end_timestamp=transitions.now_utc().isoformat(),
+            command_line=redact_argv(sys.argv[1:]),
+        ),
+        file_pre,
+        file_post,
+        None,
+        state_snapshots=state_snapshots,
+    )

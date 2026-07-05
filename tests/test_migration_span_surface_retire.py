@@ -1,20 +1,33 @@
-"""Tests for the 3.0 -> 4.0 span-surface-retire migration SKELETON.
+"""Tests for the 3.0 -> 4.0 span-surface-retire migration.
 
-Task C1 stands up the migration class + registers it + bumps the expected
-schema version so :func:`find_migration_path` resolves 3.0 -> 4.0. The heavy
-fold/strip ``apply`` body is a SEPARATE later task, so these tests pin ONLY the
-identity / registration surface and deliberately do NOT call ``apply`` (the
-skeleton raises ``NotImplementedError``).
+Task C1 stood up the migration's identity + registration surface. Task C2
+implements the real ``apply``: it folds the residual ``local.yaml`` host-local
+section surface into the per-unit reconcile LOCAL store (MERGING into any
+existing entry so shared drift + staged classifications survive), stamps schema
+4.0, and strips the retired ``host_local_sections`` / overlay-``spans`` keys,
+transition-revertibly.
+
+The fold is heading-identity based: a host-local section is folded onto a
+``reloc_anchor`` minted from the body's own markdown heading, so a body without a
+heading is refused up front (D2 pre-flight).
 """
 
 from __future__ import annotations
 
-import pytest
+import textwrap
+from dataclasses import replace
+from pathlib import Path
 
+import pytest
+from typer.testing import CliRunner
+
+from setforge import locking, reconcile
+from setforge.cli import app
 from setforge.errors import ConfigError
 from setforge.migrations import (
     MigrationRoots,
     current_expected_schema_version,
+    detect_current_schema,
     find_migration_path,
     parse_schema_version,
 )
@@ -22,16 +35,97 @@ from setforge.migrations._span_surface_retire import (
     SpanSurfaceRetireMigration,
     _SpanSurfaceRetireReverse,
 )
+from setforge.reconcile import file_id
+from setforge.reconcile.host_local_view import host_local_sections_from_store
+from setforge.reconcile.hunks import extract_hunks, serialize
+from setforge.reconcile.types import HunkClass
+from setforge.source import HostLocalSectionName
+
+runner = CliRunner()
+
+# A tracked markdown file with three headed sections; the host-local additive
+# "## My Tweaks" section is spliced after the "Alpha" heading.
+_BASE = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
+_SECTION_BODY = "## My Tweaks\nmy custom line\n"
+
+_CFG = """schema_version: "3.0"
+tracked_files:
+  notes:
+    src: notes.md
+    dst: ~/notes.md
+profiles:
+  default:
+    tracked_files: [notes]
+"""
 
 
-def _roots(tmp_path):
+def _local_yaml_body(
+    *, body: str = _SECTION_BODY, section_name: str = "my-tweaks"
+) -> str:
+    """A ``local.yaml`` declaring one host-local section on ``notes``.
+
+    ``section_name`` is the (arbitrary) legacy dict-key; it deliberately differs
+    from the body's heading so the tests prove the fold keys on the HEADING
+    identity, not the declaration name.
+    """
+    escaped = body.replace("\n", "\\n")
+    return textwrap.dedent(
+        f"""\
+        tracked_files:
+          notes:
+            host_local_sections:
+              {section_name}:
+                anchor:
+                  kind: after-heading
+                  value: Alpha
+                body: "{escaped}"
+        """
+    )
+
+
+def _roots_only(tmp_path: Path) -> MigrationRoots:
     return MigrationRoots(
         cfg_path=tmp_path / "setforge.yaml", repo_root=tmp_path, home=tmp_path
     )
 
 
+def _setup(
+    tmp_path: Path,
+    *,
+    base: bytes = _BASE,
+    local_yaml_body: str | None = None,
+    deploy: bool = True,
+) -> MigrationRoots:
+    """Write setforge.yaml + tracked source + (optionally) local.yaml + live file.
+
+    ``home`` is the per-test isolated ``Path.home()`` (autouse fixture), the SAME
+    root the reconcile store resolves under — so a test can pre-seed the store and
+    the migration observes it.
+    """
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    (repo / "setforge.yaml").write_text(_CFG, encoding="utf-8")
+    (repo / "tracked" / "notes.md").write_bytes(base)
+    home = Path.home()
+    if local_yaml_body is not None:
+        lc = home / ".config" / "setforge" / "local.yaml"
+        lc.parent.mkdir(parents=True, exist_ok=True)
+        lc.write_text(local_yaml_body, encoding="utf-8")
+    if deploy:
+        (home / "notes.md").write_bytes(base)
+    return MigrationRoots(cfg_path=repo / "setforge.yaml", repo_root=repo, home=home)
+
+
+def _local_yaml_path(roots: MigrationRoots) -> Path:
+    return roots.home / ".config" / "setforge" / "local.yaml"
+
+
+# --------------------------------------------------------------------------- #
+# Identity / registration surface (unchanged from C1).
+# --------------------------------------------------------------------------- #
+
+
 def test_expected_version_is_four_zero() -> None:
-    """The build now expects schema 4.0 after the span-surface-retire bump."""
     assert current_expected_schema_version == "4.0"
 
 
@@ -40,7 +134,6 @@ def test_parse_four_zero() -> None:
 
 
 def test_find_migration_path_three_zero_to_four_zero_is_one_step() -> None:
-    """3.0 -> 4.0 resolves to a single registered migration."""
     chain = find_migration_path(from_v="3.0", to_v="4.0")
     assert len(chain) == 1
     assert (chain[0].from_version, chain[0].to_version) == ("3.0", "4.0")
@@ -56,26 +149,12 @@ def test_reverse_is_swapped() -> None:
     rev = SpanSurfaceRetireMigration().reverse
     assert isinstance(rev, _SpanSurfaceRetireReverse)
     assert (rev.from_version, rev.to_version) == ("4.0", "3.0")
-    # reverse-of-reverse is the forward again (Protocol symmetry).
     assert (rev.reverse.from_version, rev.reverse.to_version) == ("3.0", "4.0")
 
 
-def test_forward_exposes_manifest_and_affected_paths(tmp_path) -> None:
-    """manifest()/affected_paths() are callable and describe the footprint."""
-    roots = _roots(tmp_path)
-    m = SpanSurfaceRetireMigration()
-    manifest = m.manifest(roots=roots)
-    assert isinstance(manifest, tuple)
-    # The schema stamp is always in the footprint.
-    assert any(e.affected_path == roots.cfg_path for e in manifest)
-    paths = m.affected_paths(roots=roots)
-    assert isinstance(paths, tuple)
-    assert roots.cfg_path in paths
-
-
 def test_reverse_manifest_is_note_only_and_touches_nothing(tmp_path) -> None:
-    roots = _roots(tmp_path)
     rev = _SpanSurfaceRetireReverse()
+    roots = _roots_only(tmp_path)
     entries = rev.manifest(roots=roots)
     assert len(entries) == 1
     assert entries[0].affected_path == roots.cfg_path
@@ -83,13 +162,200 @@ def test_reverse_manifest_is_note_only_and_touches_nothing(tmp_path) -> None:
 
 
 def test_reverse_refuses_cleanly(tmp_path) -> None:
-    """The schema reverse is lossy — it refuses and points at the transition."""
     rev = _SpanSurfaceRetireReverse()
     with pytest.raises(ConfigError, match=r"setforge revert --profile=migrate"):
-        rev.apply(roots=_roots(tmp_path))
+        rev.apply(roots=_roots_only(tmp_path))
 
 
-def test_forward_apply_is_not_yet_implemented(tmp_path) -> None:
-    """The fold/strip body lands in a later task; the skeleton refuses to run."""
-    with pytest.raises(NotImplementedError):
-        SpanSurfaceRetireMigration().apply(roots=_roots(tmp_path))
+# --------------------------------------------------------------------------- #
+# apply() — no local.yaml: pure schema stamp (the frozen-fixture path).
+# --------------------------------------------------------------------------- #
+
+
+def test_apply_without_local_yaml_just_stamps(tmp_path) -> None:
+    """No residual host-local surface ⇒ advance schema to 4.0, nothing folded."""
+    roots = _setup(tmp_path, local_yaml_body=None, deploy=False)
+    SpanSurfaceRetireMigration().apply(roots=roots)
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+
+
+# --------------------------------------------------------------------------- #
+# apply() -- the fold (tests a-c) + headingless refusal (D2).
+# --------------------------------------------------------------------------- #
+
+
+def test_apply_folds_deployed_section_preserving_drift(tmp_path) -> None:
+    """(a) A deployed file with a PRE-EXISTING store entry (shared drift + a staged
+    hunk) folds the local.yaml section as a LOCAL+reloc unit WITHOUT clobbering the
+    recorded drift or the staged classification (INV-1 / INV-8)."""
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
+    fid = file_id("notes")
+
+    # Pre-seed a real store entry: the host edited a SHARED region (ccc -> cccEDIT)
+    # under a heading far from the section anchor, and staged it SHARED.
+    drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccEDIT\n"
+    with locking.profile_lock("default"):
+        drift_rows = serialize(
+            [
+                replace(h, cls=HunkClass.SHARED)
+                for h in extract_hunks(_BASE, drift_local)
+            ]
+        )
+        reconcile.record(
+            "default", fid, base=_BASE, local=drift_local, hunks=drift_rows
+        )
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert detect_current_schema(roots.cfg_path) == "4.0"
+    # Base untouched; the recorded shared drift survives inside the merged local.
+    assert reconcile.read_base("default", fid) == _BASE
+    expected_local = (
+        b"## Alpha\n## My Tweaks\nmy custom line\naaa\n"
+        b"## Beta\nbbb\n## Gamma\ncccEDIT\n"
+    )
+    assert reconcile.read_local("default", fid) == expected_local
+
+    hunks = reconcile.read_index("default").files["notes"].hunks
+    # The staged SHARED drift is carried forward untouched...
+    assert any(h["cls"] == HunkClass.SHARED.value for h in hunks)
+    # ...and the section is now a LOCAL unit carrying its minted reloc_anchor.
+    assert any(
+        h["cls"] == HunkClass.LOCAL.value and h.get("reloc_anchor") == "## My Tweaks"
+        for h in hunks
+    )
+    # Round-trips back OUT as the same section (keyed by its heading, not the
+    # arbitrary local.yaml declaration name "my-tweaks").
+    proj = host_local_sections_from_store("default", fid)
+    assert set(proj["notes"]) == {"## My Tweaks"}
+    assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
+
+
+def test_apply_folds_undeployed_section_without_loss(tmp_path) -> None:
+    """(b) A section on an UNDEPLOYED file (no live file, no store entry) still folds
+    — the body is the source of truth (base=tracked, local=synthesized)."""
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body(), deploy=False)
+    fid = file_id("notes")
+    assert reconcile.read_base("default", fid) is None  # precondition: not seeded
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert reconcile.read_base("default", fid) == _BASE
+    expected_local = (
+        b"## Alpha\n## My Tweaks\nmy custom line\naaa\n## Beta\nbbb\n## Gamma\nccc\n"
+    )
+    assert reconcile.read_local("default", fid) == expected_local
+    proj = host_local_sections_from_store("default", fid)
+    assert proj["notes"][HostLocalSectionName("## My Tweaks")].body == _SECTION_BODY
+
+
+def test_apply_is_idempotent_no_double_seed(tmp_path) -> None:
+    """(c) A second run does not re-inject the already-folded section (idempotent),
+    keyed on the heading identity, not the declaration name."""
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body(), deploy=False)
+    fid = file_id("notes")
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+    local_after_first = reconcile.read_local("default", fid)
+    index_after_first = reconcile.read_index("default")
+
+    # Re-stamp back to 3.0 + re-declare the section so the (writes_own_transition)
+    # apply runs its fold again; the section is already a LOCAL+reloc unit, so the
+    # residual drains to empty and nothing is re-injected.
+    roots.cfg_path.write_text(_CFG, encoding="utf-8")
+    _local_yaml_path(roots).write_text(_local_yaml_body(), encoding="utf-8")
+
+    SpanSurfaceRetireMigration().apply(roots=roots)
+
+    assert reconcile.read_local("default", fid) == local_after_first
+    assert reconcile.read_index("default") == index_after_first
+    proj = host_local_sections_from_store("default", fid)
+    assert set(proj["notes"]) == {"## My Tweaks"}  # not duplicated
+
+
+def test_apply_strips_retired_surface_from_local_yaml(tmp_path) -> None:
+    """After a fold the retired host-local surface is stripped from local.yaml."""
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body(), deploy=False)
+    SpanSurfaceRetireMigration().apply(roots=roots)
+    text = _local_yaml_path(roots).read_text(encoding="utf-8")
+    assert "host_local_sections" not in text
+    assert "My Tweaks" not in text  # body gone from local.yaml
+
+
+def test_apply_refuses_headingless_section(tmp_path) -> None:
+    """(D2) A host-local section body with no markdown heading is refused up front —
+    the 4.0 store identity is heading-based — and nothing is mutated."""
+    roots = _setup(
+        tmp_path,
+        local_yaml_body=_local_yaml_body(body="just a plain note line\n"),
+        deploy=False,
+    )
+    with pytest.raises(ConfigError, match=r"no markdown heading"):
+        SpanSurfaceRetireMigration().apply(roots=roots)
+    # No mutation: schema stays 3.0, local.yaml still carries the declaration.
+    assert detect_current_schema(roots.cfg_path) == "3.0"
+    assert "host_local_sections" in _local_yaml_path(roots).read_text(encoding="utf-8")
+    assert reconcile.read_base("default", file_id("notes")) is None
+
+
+# --------------------------------------------------------------------------- #
+# apply() — revert restores BOTH surfaces byte-exact (test d, INV-5).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    state = tmp_path / "state"
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(state))
+    return state
+
+
+def test_migrate_then_revert_restores_local_yaml_and_reconcile_legs(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """(d) A full ``migrate --apply`` through the driver is revertible byte-exact
+    across BOTH the local.yaml strip AND the mutated reconcile legs (INV-5)."""
+    from setforge import base_store
+    from setforge.reconcile import store as reconcile_store
+
+    roots = _setup(tmp_path, local_yaml_body=_local_yaml_body())
+    cfg = roots.cfg_path
+    fid = file_id("notes")
+
+    # Pre-seed a drifted store entry so revert must restore MODIFIED legs, not just
+    # delete freshly-created ones.
+    drift_local = b"## Alpha\naaa\n## Beta\nbbb\n## Gamma\ncccEDIT\n"
+    with locking.profile_lock("default"):
+        drift_rows = serialize(
+            [
+                replace(h, cls=HunkClass.SHARED)
+                for h in extract_hunks(_BASE, drift_local)
+            ]
+        )
+        reconcile.record(
+            "default", fid, base=_BASE, local=drift_local, hunks=drift_rows
+        )
+
+    local_yaml = _local_yaml_path(roots)
+    base_path = base_store.base_path("default", str(fid))
+    local_path = reconcile_store.local_content_path("default", str(fid))
+    index_path = reconcile_store.index_manifest_path("default")
+    pre = {p: p.read_bytes() for p in (local_yaml, base_path, local_path, index_path)}
+    cfg_pre = cfg.read_bytes()
+
+    result = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    assert detect_current_schema(cfg) == "4.0"  # forward applied
+    # Sanity: the local content actually changed (the section was merged in).
+    assert local_path.read_bytes() != pre[local_path]
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+
+    assert cfg.read_bytes() == cfg_pre
+    for p, want in pre.items():
+        assert p.read_bytes() == want, f"revert did not restore {p} byte-exact"
