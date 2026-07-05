@@ -163,9 +163,20 @@ class SpanSurfaceRetireMigration:
         patch). Idempotent: a section already present as a LOCAL+reloc unit is
         skipped, so a re-run drains to an empty residual and no-ops.
 
-        No ``local.yaml`` (the frozen-fixture case) ⇒ nothing to fold: just advance
-        the schema to 4.0 and return (no transition), mirroring the disposition
-        cutover's empty-records branch.
+        No ``local.yaml`` (the frozen-fixture case) ⇒ nothing to fold: advance
+        the schema to 4.0 and record a stamp-only transition. Unlike the
+        disposition cutover's empty-records branch (which could return without a
+        transition because a LATER cutover owned the chain's record), THIS is the
+        chain's TERMINAL ``writes_own_transition`` step, and the driver skips its
+        own text transition whenever any chain step owns one
+        (:func:`setforge.cli.migrate._chain_owns_transition`). So a bare early
+        return would leave the 3.0 -> 4.0 stamp outside every transition, and a
+        single ``revert`` would reverse an earlier step's ``-> 3.0`` patch against
+        the on-disk 4.0 config and fail (INV-5: one revert reaches the origin).
+        The recorded transition threads the chain-origin ``setforge.yaml`` (and
+        ``local.yaml``) from ``pre_chain_snapshot`` and carries NO state_snapshots
+        (nothing folded) — so it never overlaps an earlier cutover's store
+        snapshots.
         """
         import contextlib
 
@@ -175,7 +186,7 @@ class SpanSurfaceRetireMigration:
         _validate_headings(folds)
 
         if not folds:
-            _stamp_schema_version(roots.cfg_path, self.to_version)
+            self._record_stamp_only_transition(roots)
             return
 
         profiles = sorted({fold.profile for fold in folds})
@@ -222,6 +233,40 @@ class SpanSurfaceRetireMigration:
             # Destructive strip AFTER the transition commit (INV-5): must not
             # run until the transition that can restore it is durable.
             _write_stripped_local_yaml(local_yaml, local_post)
+
+    def _record_stamp_only_transition(self, roots: MigrationRoots) -> None:
+        """Stamp schema 4.0 and record the terminal cutover's stamp transition.
+
+        The no-fold path (see :meth:`apply`). Covers ONLY ``setforge.yaml`` (and
+        ``local.yaml`` when the chain touched it) — never a reconcile-store leg —
+        so the text patch cannot overlap an earlier cutover's binary
+        state_snapshots. Threads the chain-origin image from
+        ``pre_chain_snapshot`` so a single ``revert`` reaches the chain's ORIGIN,
+        not the intermediate 3.0 state (INV-5).
+        """
+        from setforge import transitions
+
+        local_yaml = _local_yaml_path(roots)
+        cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
+        _stamp_schema_version(roots.cfg_path, self.to_version)
+
+        pre = roots.pre_chain_snapshot
+        file_pre: dict[Path, str | None]
+        if pre is not None:
+            # Restrict the threaded image to the user-facing config files; a
+            # store leg in pre_chain is restored by an earlier cutover's
+            # state_snapshots, not by this text patch.
+            file_pre = {roots.cfg_path: pre.get(roots.cfg_path, cfg_pre)}
+            if local_yaml in pre:
+                file_pre[local_yaml] = pre[local_yaml]
+        else:
+            file_pre = {roots.cfg_path: cfg_pre}
+        file_post = dict(transitions.snapshot_paths(tuple(file_pre)))
+        _write_span_retire_transition(
+            file_pre=file_pre,
+            file_post=file_post,
+            state_snapshots=(),
+        )
 
 
 @dataclass(frozen=True, slots=True)

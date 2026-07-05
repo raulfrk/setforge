@@ -446,6 +446,53 @@ def test_chained_2_1_to_4_0_single_revert_restores_config_to_origin(
     assert reconcile.read_base("default", fid) == _CHAIN_BASE
 
 
+def _write_chain_origin_no_host_local(tmp_path: Path) -> Path:
+    """A 2.1-origin config + deployed live file but NO local.yaml host-local.
+
+    The disposition-retire (2.1->3.0) step seeds the store and owns a transition,
+    but the terminal span-surface-retire (3.0->4.0) step finds nothing to fold —
+    exercising its no-fold branch. Returns ``cfg_path``.
+    """
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    cfg = repo / "setforge.yaml"
+    cfg.write_text(_CHAIN_CFG_2_1, encoding="utf-8")
+    (repo / "tracked" / "notes.md").write_bytes(_CHAIN_BASE)
+    (Path.home() / "notes.md").write_bytes(_CHAIN_BASE)
+    return cfg
+
+
+def test_chained_2_1_to_4_0_no_fold_single_revert_restores_config_to_origin(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` restores the config to origin even when nothing folds.
+
+    Regression guard for INV-5 across a two-owner chain whose TERMINAL cutover
+    no-ops. With no local.yaml host-local surface, the span-surface-retire
+    (3.0->4.0) step folds nothing; it must STILL record a stamp transition
+    threading the chain-origin config, or the driver — which skips its own text
+    transition whenever a chain step owns one — leaves the 3.0->4.0 stamp outside
+    every transition, and a single ``revert`` reverses the disposition step's
+    (2.1-origin -> 3.0) patch against the on-disk 4.0 config and FAILS. The docker
+    e2e (``test_migrate_2_1_to_3_0_strips_disposition_and_reverts`` /
+    ``test_migrate_apply_is_revertible``) caught this; this is the unit guard.
+    """
+    cfg = _write_chain_origin_no_host_local(tmp_path)
+    cfg_origin = cfg.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "4.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+    assert detect_current_schema(cfg) == "4.0"
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+    assert cfg.read_bytes() == cfg_origin
+
+
 def test_chained_2_1_to_4_0_second_revert_is_redo(
     tmp_path: Path, state_dir: Path
 ) -> None:
