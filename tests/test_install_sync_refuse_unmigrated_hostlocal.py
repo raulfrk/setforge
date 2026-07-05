@@ -122,7 +122,23 @@ def _sync(config: Path) -> Result:
     )
 
 
-@pytest.mark.parametrize("invoke", [_install, _sync], ids=["install", "sync"])
+def _capture(config: Path) -> Result:
+    # ``capture`` is the un-wrapped live→tracked writeback (``sync`` = capture +
+    # transition), so it carries the same host-local leak exposure and must gate too.
+    return runner.invoke(
+        app,
+        [
+            "capture",
+            "--profile=default",
+            f"--config={config}",
+            "--auto=use-live",
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "invoke", [_install, _sync, _capture], ids=["install", "sync", "capture"]
+)
 def test_refuses_unmigrated_config_with_host_local_surface(
     tmp_path: Path, invoke
 ) -> None:
@@ -143,7 +159,9 @@ def test_refuses_unmigrated_config_with_host_local_surface(
     assert tracked.read_text(encoding="utf-8") == before
 
 
-@pytest.mark.parametrize("invoke", [_install, _sync], ids=["install", "sync"])
+@pytest.mark.parametrize(
+    "invoke", [_install, _sync, _capture], ids=["install", "sync", "capture"]
+)
 def test_older_major_without_host_local_surface_proceeds(
     tmp_path: Path, invoke
 ) -> None:
@@ -160,7 +178,9 @@ def test_older_major_without_host_local_surface_proceeds(
     assert _MIGRATE_HINT not in result.output
 
 
-@pytest.mark.parametrize("invoke", [_install, _sync], ids=["install", "sync"])
+@pytest.mark.parametrize(
+    "invoke", [_install, _sync, _capture], ids=["install", "sync", "capture"]
+)
 def test_current_major_config_proceeds(tmp_path: Path, invoke) -> None:
     """Current-major config ⇒ gate stays silent even with a retired surface present."""
     config = _write_repo(tmp_path, _CFG_CURRENT)

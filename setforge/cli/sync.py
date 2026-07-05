@@ -136,10 +136,7 @@ def capture(
     auto_enum = _parse_capture_auto(auto)
 
     cfg = load_config(config)
-    # Fold the local.yaml host-local overlay (mode/dst/spans/...) into the
-    # tracked_files so capture sees the host-local OVERLAY spans on
-    # ``tracked_file.spans`` and can excise their bodies before any tracked
-    # write — without this fold the overlay body leaks into the shared repo.
+    refuse_unmigrated_host_local_leak(cfg, verb="capture", profile=profile)
     apply_host_local_tracked_file_overrides(cfg)
     repo_root = config.resolve().parent
     try:
