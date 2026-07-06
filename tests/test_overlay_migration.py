@@ -1,6 +1,6 @@
 """Physical ``local.yaml`` rewrite: ``host_local_sections`` → OVERLAY spans.
 
-Covers :func:`setforge.overlay_migration.migrate_local_yaml_overlay_spans`:
+Covers :func:`setforge.migrations._local_yaml.migrate_local_yaml_overlay_spans`:
 the on-disk retirement of the legacy host-local mechanism into the unified
 span model, with comment / order / quoting / mode preservation, idempotency,
 all five anchor kinds + the ``body_file`` variant, and behavioral equivalence
@@ -16,7 +16,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from setforge.anchors import AnchorKind
-from setforge.overlay_migration import migrate_local_yaml_overlay_spans
+from setforge.migrations._local_yaml import migrate_local_yaml_overlay_spans
 from setforge.source import HostLocalSectionName, load_local_host_local_sections
 
 # A representative local.yaml carrying comments, a quoted scalar, and a
