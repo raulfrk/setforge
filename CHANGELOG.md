@@ -15,6 +15,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   offered for deletion, while a file removed from a still-managed tree
   still surfaces. The dry-run note now reports an `unmanaged` skip count.
 
+### Removed
+- **The inert `install --strict-spans` flag and the `setforge section`
+  command** are gone. Both were dead remnants of the retired overlay-spans
+  subsystem: `--strict-spans` gated a pinned-orphan refusal that can never
+  fire (the span-orphan set has been empty since the disposition/spans
+  cutover), and `section detect` produced overlay-span metadata the deploy
+  path no longer reads. Their removal retires the last callers of six
+  now-deleted legacy modules.
+
 ## [0.3.0] - 2026-06-15
 
 The host-reproducibility and schema-versioning release. v0.3.0 makes a
