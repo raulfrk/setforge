@@ -9,7 +9,6 @@ from rich.syntax import Syntax
 
 from setforge import compare as compare_mod
 from setforge import transitions
-from setforge._legacy_markers import extract_sections
 from setforge.cli import (
     _CONFIG_OPTION,
     _PROFILE_OPTION,
@@ -36,6 +35,7 @@ from setforge.config import (
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
 from setforge.locking import profile_lock
 from setforge.source import HostLocalSection, HostLocalSectionName
+from setforge.user_section_markers import extract_sections
 
 
 @app.command(epilog=COMPARE_EXAMPLES)

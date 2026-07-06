@@ -1,0 +1,553 @@
+"""Reconcile-native user-section marker reader.
+
+The live, non-legacy home for the marker-READING machinery the current
+engine still needs after the schema-2.1 marker retirement:
+
+* :mod:`setforge.host_local_inject` resolves ``after-section`` anchors
+  against markers (:func:`_walk_markers` + :class:`_EndMarker`);
+* :mod:`setforge.cli.compare` enumerates live-side sections
+  (:func:`extract_sections`);
+* :mod:`setforge.cli.validate` gates tracked sources on residual markers
+  (:func:`contains_user_section_marker`);
+* :mod:`setforge.cli.migrate` de-markers host-local pairs
+  (:func:`strip_host_local_markers`);
+* :mod:`setforge.cli._helpers` surfaces the duplicate-name pre-check
+  (:func:`detect_duplicate_section_names`);
+* :mod:`setforge.capture` name-scoped strips host-local pairs on writeback
+  (:func:`strip_host_local_sections`).
+
+This module is a byte-faithful PORT of the marker grammar frozen in
+:mod:`setforge._legacy_markers` (which stays pinned by the migration
+chain). It imports ZERO legacy modules — the grammar is duplicated here
+so the live edge no longer reaches back into the frozen reader.
+
+Marker syntax (HTML comments only)::
+
+    <!-- setforge:user-section start <host-local|shared> NAME -->
+    ... preserved content ...
+    <!-- setforge:user-section end <host-local|shared> NAME hash=<sha256-hex> -->
+
+The ``host-local|shared`` keyword is REQUIRED on both start and end markers,
+and end markers carry a mandatory ``hash=<64-char-lowercase-hex>`` segment
+recording the sha256 of the section body.
+
+The strict parser (``allow_legacy=False``, the default) raises
+:class:`MarkerError` for any marker missing the semantics keyword, any
+end marker missing the ``hash=<...>`` segment, OR any ``hash=`` segment
+whose value is not exactly 64 lowercase hex chars. The migration-only
+escape hatch ``allow_legacy=True`` tolerates all three: missing semantics
+parses as :attr:`SectionSemantics.SHARED`; missing or malformed hash
+yields ``embedded_hash=None``. Start and end keywords must match. Nested
+sections are not supported. End-marker names must match start-marker names.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import assert_never
+
+from setforge.errors import MarkerError
+
+
+class SectionSemantics(StrEnum):
+    """Closed set of user-section marker semantics keywords."""
+
+    HOST_LOCAL = "host-local"
+    SHARED = "shared"
+
+
+_SEMANTICS_KEYWORDS = "host-local|shared"
+
+_MARKER_RE = re.compile(
+    r"^\s*<!--\s*setforge:user-section\s+(start|end)"
+    rf"(?:\s+({_SEMANTICS_KEYWORDS}))?"
+    r"(?:\s+(?!hash=)(\S+))?"
+    r"(?:\s+hash=(\S+))?"
+    r"\s*-->\s*$"
+)
+
+# Broad detector: matches any line whose prefix declares it as one of our
+# markers, regardless of payload shape. Used by :func:`_parse_marker_line` to
+# distinguish "not our marker at all" from "our marker, but malformed" so the
+# latter surfaces a precise :class:`MarkerError` instead of being silently
+# dropped as outside-content. Captures (kind, rest-before-`-->`).
+_MARKER_PREFIX_RE = re.compile(
+    r"^\s*<!--\s*setforge:user-section\s+(start|end)\s+(.*?)\s*-->\s*$"
+)
+
+_HASH_VALUE_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(slots=True, frozen=True)
+class _BodyLine:
+    """A line inside a section body (between a start and its end marker)."""
+
+    line: str
+
+
+@dataclass(slots=True, frozen=True)
+class _OutsideLine:
+    """A line outside any section (no enclosing marker pair)."""
+
+    line: str
+
+
+@dataclass(slots=True, frozen=True)
+class _StartMarker:
+    """A validated user-section start-marker line."""
+
+    line: str
+    name: str | None
+    semantics: SectionSemantics
+
+
+@dataclass(slots=True, frozen=True)
+class _EndMarker:
+    """A validated user-section end-marker line.
+
+    ``key`` is the section's canonical name (the start-marker name, or the
+    0-based string index assigned to unnamed sections in order of appearance).
+    ``name`` mirrors the start-marker's name (``None`` for unnamed sections).
+    ``semantics`` mirrors the start-marker's semantics keyword.
+    ``embedded_hash`` is the ``hash=<...>`` segment value, or ``None`` if the
+    end marker omits it.
+    """
+
+    line: str
+    name: str | None
+    key: str
+    semantics: SectionSemantics
+    embedded_hash: str | None
+
+
+_MarkerEvent = _BodyLine | _OutsideLine | _StartMarker | _EndMarker
+
+
+@dataclass(slots=True)
+class _WalkState:
+    """Mutable state machine accumulator for :func:`_walk_markers`.
+
+    Tracks the currently-open section (``None`` when no section is open)
+    and the next 0-based index to assign to an unnamed section. ``seen_keys``
+    records every section key already closed so a second pair sharing one
+    key is rejected (it would otherwise collapse silently in the dict-keyed
+    primitives). Mutated in place by :func:`_handle_start_marker` and
+    :func:`_handle_end_marker`.
+    """
+
+    in_section: bool = False
+    section_name: str | None = None
+    section_semantics: SectionSemantics | None = None
+    unnamed_index: int = 0
+    seen_keys: set[str] = field(default_factory=set)
+
+
+def _handle_start_marker(
+    line: str,
+    lineno: int,
+    name: str | None,
+    semantics: SectionSemantics,
+    state: _WalkState,
+) -> _StartMarker:
+    """Validate a start marker, mutate ``state``, return the event.
+
+    Raises :class:`MarkerError` when a section is already open (nested
+    start). On success, marks ``state.in_section`` true and records the
+    new section's name and semantics.
+    """
+    if state.in_section:
+        raise MarkerError(
+            f"line {lineno}: nested user-section start (previous section still open)"
+        )
+    state.in_section = True
+    state.section_name = name
+    state.section_semantics = semantics
+    return _StartMarker(line, name, semantics)
+
+
+def _handle_end_marker(
+    line: str,
+    lineno: int,
+    name: str | None,
+    semantics: SectionSemantics,
+    embedded_hash: str | None,
+    allow_legacy: bool,
+    reject_duplicate_keys: bool,
+    state: _WalkState,
+) -> _EndMarker:
+    """Validate an end marker, mutate ``state``, return the event.
+
+    Raises :class:`MarkerError` on end-without-start, name mismatch with
+    the open section, semantics mismatch with the open section, or missing
+    ``hash=<...>`` segment when ``allow_legacy`` is false. When
+    ``reject_duplicate_keys`` is true, also raises on a section key already
+    closed earlier in the same text — a duplicate name would otherwise
+    collapse silently in the dict-keyed primitives, splicing one surviving
+    body into both regions and corrupting the first region's end-marker
+    hash. The line-iterating strip/migration helpers leave the flag false
+    so they can still de-marker a live file that already carries duplicate
+    pairs. On success, closes the open section and (for unnamed sections)
+    increments ``state.unnamed_index``.
+    """
+    if not state.in_section:
+        raise MarkerError(f"line {lineno}: user-section end without matching start")
+    if name != state.section_name:
+        raise MarkerError(
+            f"line {lineno}: user-section end name {name!r} does not "
+            f"match start name {state.section_name!r}"
+        )
+    if semantics != state.section_semantics:
+        raise MarkerError(
+            f"line {lineno}: user-section end semantics {semantics.value!r} "
+            f"does not match start semantics "
+            f"{state.section_semantics.value if state.section_semantics else None!r}"
+        )
+    if embedded_hash is None and not allow_legacy:
+        raise MarkerError(
+            f"line {lineno}: user-section end marker missing required "
+            f"'hash=<sha256-hex>' segment"
+        )
+    key = (
+        state.section_name
+        if state.section_name is not None
+        else str(state.unnamed_index)
+    )
+    if reject_duplicate_keys and key in state.seen_keys:
+        raise MarkerError(f"line {lineno}: duplicate user-section name {key!r}")
+    state.seen_keys.add(key)
+    event = _EndMarker(line, state.section_name, key, semantics, embedded_hash)
+    if state.section_name is None:
+        state.unnamed_index += 1
+    state.in_section = False
+    state.section_name = None
+    state.section_semantics = None
+    return event
+
+
+def _raise_if_malformed_marker(line: str, lineno: int) -> None:
+    """Raise :class:`MarkerError` when ``line`` looks like one of our markers
+    but is malformed (currently: unknown semantics keyword).
+
+    Called by :func:`_parse_marker_line` after the strict ``_MARKER_RE`` has
+    failed. Without this gate, a marker like
+    ``<!-- setforge:user-section start fish-tacos NAME -->`` would be
+    silently treated as outside-content; the user would see no error or
+    an opaque downstream "end-without-start" instead of the precise
+    "unknown semantics keyword" with line context.
+
+    Today only the unknown-semantics case is detected here; other
+    malformed shapes (e.g. trailing junk after ``-->``) still parse as
+    non-markers because they don't satisfy the broad-prefix matcher.
+    """
+    broad = _MARKER_PREFIX_RE.match(line)
+    if broad is None:
+        return
+    kind = broad.group(1)
+    rest = broad.group(2)
+    tokens = rest.split()
+    if not tokens:
+        return
+    first = tokens[0]
+    if first in {s.value for s in SectionSemantics}:
+        return
+    # A ``hash=`` token in the semantics position (token 1) is always
+    # malformed — the strict syntax is ``<kind> <semantics> [NAME]
+    # [hash=<sha>]`` and ``hash=`` only appears in position 3 on end
+    # markers. Surface this distinctly so the user sees "you forgot the
+    # semantics keyword" rather than "unknown semantics keyword
+    # 'hash=abc'".
+    if first.startswith("hash="):
+        raise MarkerError(
+            f"line {lineno}: user-section {kind} marker is missing the "
+            f"semantics keyword before {first!r}; expected "
+            f"'host-local' or 'shared' as the first token"
+        )
+    raise MarkerError(
+        f"line {lineno}: user-section {kind} marker has unknown semantics "
+        f"keyword {first!r}; expected 'host-local' or 'shared'"
+    )
+
+
+def _parse_marker_line(
+    line: str, lineno: int, *, allow_legacy: bool
+) -> tuple[str, str, str | None, str | None] | None:
+    """Parse one line and return marker components or None for non-markers.
+
+    Returns ``(kind, semantics_value, name, embedded_hash)`` when
+    ``line`` matches ``_MARKER_RE``, where:
+    - ``kind`` is ``"start"`` or ``"end"``.
+    - ``semantics_value`` is the matched semantics keyword
+      (``"host-local"`` or ``"shared"``).
+    - ``name`` is the section name or ``None`` for unnamed sections.
+    - ``embedded_hash`` is the ``hash=<64-hex>`` value or ``None``.
+
+    Returns ``None`` when the line is not a marker line (body content
+    or outside-any-section content).
+
+    Raises :class:`MarkerError` on a marker line missing its semantics
+    keyword when ``allow_legacy=False``. When ``allow_legacy=True``, a
+    missing semantics is treated as ``"shared"``. The missing-hash
+    check on ``end`` markers is deferred to the state machine in
+    :func:`_walk_markers` so it fires AFTER name/semantics-mismatch
+    validation (preserving pre-extraction error ordering).
+
+    Also raises :class:`MarkerError` when the captured ``hash=`` segment
+    is present but not exactly 64 lowercase hex chars and
+    ``allow_legacy=False``; under ``allow_legacy=True`` a malformed
+    ``hash=`` is treated as if the segment were absent
+    (``embedded_hash=None``), tolerating pre-hash files that may carry
+    garbled hash values.
+    """
+    match = _MARKER_RE.match(line)
+    if match is None:
+        _raise_if_malformed_marker(line, lineno)
+        return None
+    kind = match.group(1)
+    semantics_raw = match.group(2)
+    name = match.group(3)
+    embedded_hash = match.group(4)
+    if embedded_hash is not None and not _HASH_VALUE_RE.fullmatch(embedded_hash):
+        if not allow_legacy:
+            raise MarkerError(
+                f"line {lineno}: malformed hash= segment {embedded_hash!r}; "
+                f"expected 64 lowercase hex chars"
+            )
+        embedded_hash = None
+    if semantics_raw is None:
+        if not allow_legacy:
+            raise MarkerError(
+                f"line {lineno}: user-section {kind} marker missing "
+                f"required 'host-local' or 'shared' keyword"
+            )
+        semantics_raw = SectionSemantics.SHARED.value
+    return kind, semantics_raw, name, embedded_hash
+
+
+def _walk_markers(
+    text: str,
+    *,
+    allow_legacy: bool = False,
+    reject_duplicate_keys: bool = False,
+) -> Iterator[_MarkerEvent]:
+    """Yield one event per line in ``text``, validating marker pairing.
+
+    Centralizes the state machine shared by :func:`extract_sections` and
+    :func:`strip_host_local_markers`: tracks open/closed section state,
+    assigns unnamed-section indices, and raises :class:`MarkerError` on
+    nested starts, ends-without-starts, name/semantics mismatches,
+    missing-keyword markers, missing end-marker hashes, and unclosed
+    sections. Consumers receive validated, fully-keyed events and only do
+    their accumulator logic.
+
+    When ``allow_legacy`` is true (migration-only escape hatch used by
+    the install path on live-side reads), markers missing the
+    ``host-local`` / ``shared`` keyword parse as
+    :attr:`SectionSemantics.SHARED`, and end markers missing the
+    ``hash=<...>`` segment yield ``embedded_hash=None`` instead of
+    raising. All other validation is unaffected.
+
+    ``reject_duplicate_keys`` (default false) makes a second section pair
+    sharing one key raise :class:`MarkerError` instead of yielding it.
+    :func:`extract_sections` passes it true, because there a duplicate name
+    silently drops the first body. The default stays false so the
+    line-iterating consumers (:func:`strip_host_local_markers`, and
+    :func:`setforge.host_local_inject._find_after_section_offsets`, which
+    deliberately collects every same-named match to raise its own
+    ambiguity error) keep their event-by-event behavior.
+    """
+    state = _WalkState()
+    for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
+        parsed = _parse_marker_line(line, lineno, allow_legacy=allow_legacy)
+        if parsed is None:
+            yield _BodyLine(line) if state.in_section else _OutsideLine(line)
+            continue
+        kind, semantics_raw, name, embedded_hash = parsed
+        semantics = SectionSemantics(semantics_raw)
+        if kind == "start":
+            yield _handle_start_marker(line, lineno, name, semantics, state)
+        else:
+            yield _handle_end_marker(
+                line,
+                lineno,
+                name,
+                semantics,
+                embedded_hash,
+                allow_legacy,
+                reject_duplicate_keys,
+                state,
+            )
+
+    if state.in_section:
+        name = state.section_name
+        ident = name if name is not None else str(state.unnamed_index)
+        raise MarkerError(f"unclosed user-section (started as {ident!r})")
+
+
+def contains_user_section_marker(text: str) -> bool:
+    """Return ``True`` if ``text`` contains any ``setforge:user-section`` marker line.
+
+    Regex-only scan over the broad marker-prefix detector — matches a start
+    OR end marker line regardless of whether it is well-formed, pre-hash, or
+    otherwise malformed. A prose MENTION of the marker syntax (text that is
+    not itself a complete ``<!-- ... -->`` marker line) does not match.
+
+    Used by ``setforge validate`` to enforce that tracked sources carry no
+    residual markers after the schema-2.1 retirement migration.
+    """
+    return any(_MARKER_PREFIX_RE.match(line) for line in text.splitlines())
+
+
+def detect_duplicate_section_names(text: str) -> str | None:
+    """Return the first user-section name that appears on two start markers.
+
+    Regex-only scan (does NOT call :func:`_walk_markers`). Lets the CLI
+    layer surface a clear "rename one of the duplicate sections" error
+    before the strict parser's :class:`MarkerError` propagates as a raw
+    ``line N: duplicate user-section name`` message. The core parse
+    primitive rejects duplicates loudly via :func:`_handle_end_marker`;
+    this detector is the user-actionable pre-check.
+
+    Unnamed sections (no NAME token) are keyed positionally and can never
+    collide, so they are ignored here. Returns ``None`` when no named
+    start marker repeats.
+    """
+    seen: set[str] = set()
+    for line in text.splitlines():
+        match = _MARKER_RE.match(line)
+        if match is None:
+            continue
+        kind = match.group(1)
+        name = match.group(3)
+        if kind != "start" or name is None:
+            continue
+        if name in seen:
+            return name
+        seen.add(name)
+    return None
+
+
+def extract_sections(text: str, *, allow_legacy: bool = False) -> dict[str, str]:
+    """Return the content between every marker pair in ``text``.
+
+    Named sections are keyed by their name; unnamed sections are keyed by
+    sequential string indices ("0", "1", ...). Section content includes any
+    trailing newline up to (but not including) the end-marker line.
+
+    Raises :class:`MarkerError` for nested sections, end-without-start,
+    name-mismatched pairs, or unclosed start markers. With the strict
+    default (``allow_legacy=False``) also raises on markers missing the
+    ``host-local``/``shared`` keyword or end markers missing
+    ``hash=<...>``; pass ``allow_legacy=True`` to tolerate both (the
+    install path's migration-only mode for pre-hash live files).
+    """
+    sections: dict[str, str] = {}
+    section_lines: list[str] = []
+    for event in _walk_markers(
+        text, allow_legacy=allow_legacy, reject_duplicate_keys=True
+    ):
+        match event:
+            case _BodyLine(line=line):
+                section_lines.append(line)
+            case _StartMarker():
+                section_lines = []
+            case _EndMarker(key=key):
+                sections[key] = "".join(section_lines)
+                section_lines = []
+            case _OutsideLine():
+                pass
+            case _ as never:
+                assert_never(never)
+    return sections
+
+
+def strip_host_local_sections(
+    text: str, *, names: frozenset[str], allow_legacy: bool = True
+) -> str:
+    """Return ``text`` with named host-local marker pairs (markers + body) removed.
+
+    Used by the capture path (:func:`setforge.capture.capture_tracked_file`)
+    to prevent host-local sections injected by ``setforge install`` (from
+    local.yaml ``host_local_sections``) from leaking back into tracked
+    sources on the next ``setforge sync``. ``names`` is the set of
+    host-local section names declared in local.yaml — only those pairs
+    are removed; any host-local marker pair the user authored directly
+    in tracked (carried through to live) passes through unchanged.
+    Shared marker pairs always pass through. ``allow_legacy`` mirrors
+    the strip/extract default — capture reads live-side text that may
+    contain pre-hash markers.
+
+    No-op when ``names`` is empty.
+    """
+    if not names:
+        return text
+    out_lines: list[str] = []
+    drop = False
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
+        match event:
+            case _StartMarker(semantics=SectionSemantics.HOST_LOCAL, name=name) if (
+                name in names
+            ):
+                drop = True
+                continue
+            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, key=key) if (
+                key in names
+            ):
+                drop = False
+                continue
+            case _BodyLine(line=line):
+                if not drop:
+                    out_lines.append(line)
+            case (
+                _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
+    return "".join(out_lines)
+
+
+def strip_host_local_markers(text: str, *, allow_legacy: bool = True) -> str:
+    """Return ``text`` with EVERY host-local marker pair (markers + body) removed.
+
+    The deploy-side de-marker for the markerless host-local migration: once a
+    host-local section's body is carried as a markerless overlay (injected
+    after the merge), the tracked-authored placeholder pair must not reach the
+    deployed file. Drops every host-local user-section pair regardless of
+    name; shared marker pairs always pass through untouched.
+
+    The whole file is parsed via :func:`_walk_markers` (which validates
+    pairing and raises :class:`MarkerError` on any malformed / unclosed /
+    nested / mismatched marker), so the function returns the complete
+    stripped string or raises — never a partial result. The kept lines are
+    exact-bytes: no normalization, no trailing-newline policy.
+
+    Idempotent: once the host-local pairs are gone, a second pass finds none
+    and returns its input unchanged.
+    """
+    out_lines: list[str] = []
+    drop = False
+    for event in _walk_markers(text, allow_legacy=allow_legacy):
+        match event:
+            case _StartMarker(semantics=SectionSemantics.HOST_LOCAL):
+                drop = True
+                continue
+            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL):
+                drop = False
+                continue
+            case _BodyLine(line=line):
+                if not drop:
+                    out_lines.append(line)
+            case (
+                _OutsideLine(line=line)
+                | _StartMarker(line=line)
+                | _EndMarker(line=line)
+            ):
+                out_lines.append(line)
+            case _ as never:
+                assert_never(never)
+    return "".join(out_lines)

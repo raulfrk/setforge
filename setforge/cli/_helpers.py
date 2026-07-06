@@ -12,7 +12,6 @@ from pathlib import Path
 
 import typer
 
-from setforge._legacy_markers import detect_duplicate_section_names
 from setforge.capture import CaptureAuto
 from setforge.compare import (
     CompareReport,
@@ -25,6 +24,7 @@ from setforge.compare import (
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
 from setforge.reconcile_apply import ReconcileAuto
+from setforge.user_section_markers import detect_duplicate_section_names
 
 
 @dataclass(slots=True, frozen=True)
@@ -177,7 +177,8 @@ def _refuse_duplicate_section_names(ctx: ProfileContext, *, command: str) -> Non
     pair, but that surfaces partway through a strict parse as an opaque
     ``line N: duplicate user-section name 'NAME'`` message.
 
-    This pre-check runs :func:`setforge._legacy_markers.detect_duplicate_section_names`
+    This pre-check runs
+    :func:`setforge.user_section_markers.detect_duplicate_section_names`
     (regex-only; no strict parse) on every line-based tracked_file's tracked
     SRC and live DST, raising a single user-actionable error naming the
     duplicated section BEFORE any strict parse happens. Structural files

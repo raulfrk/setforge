@@ -20,7 +20,6 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from setforge import source as source_mod
-from setforge._legacy_markers import contains_user_section_marker
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import FETCH_EXAMPLES, VALIDATE_EXAMPLES
@@ -57,6 +56,7 @@ from setforge.source import (
     PluginOverlay,
     _LocalTrackedFileOverlay,
 )
+from setforge.user_section_markers import contains_user_section_marker
 
 
 def _local_yaml_top_keys() -> list[str]:

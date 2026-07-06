@@ -39,8 +39,8 @@ from typing import Any, Final
 import typer
 from ruamel.yaml.error import YAMLError
 
-from setforge import _legacy_markers as sections
 from setforge import atomicio, transitions
+from setforge import user_section_markers as sections
 from setforge._redact import redact_argv
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import MIGRATE_EXAMPLES

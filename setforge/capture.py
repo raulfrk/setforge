@@ -21,10 +21,10 @@ from pathlib import Path
 from rich.console import Console
 
 from setforge import (
-    _legacy_markers as sections,
+    atomicio,
 )
 from setforge import (
-    atomicio,
+    user_section_markers as sections,
 )
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, resolve_profile
