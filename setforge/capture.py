@@ -13,7 +13,6 @@ applies the host-state strip above.
 """
 
 import stat
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -331,14 +330,12 @@ def capture_profile(
     repo_root: Path,
     *,
     setforge_yaml_path: Path,
-    interactive: bool | None = None,
     auto: CaptureAuto | None = None,
     snapshot_base: Path | None = None,
     console: Console | None = None,
     host_local_sections_map: (
         Mapping[str, dict[HostLocalSectionName, HostLocalSection]] | None
     ) = None,
-    local_config_path: Path | None = None,
 ) -> list[CaptureResult]:
     """Capture every tracked_file in the resolved profile from live → tracked.
 
@@ -357,10 +354,6 @@ def capture_profile(
     setforge_yaml_path:
         Path to ``setforge.yaml`` — needed by the wizard's ``[s]``
         action.
-    interactive:
-        Force-toggle for whether the wizard prompts. ``None`` (default)
-        auto-detects via ``sys.stdin.isatty()``. ``False`` requires
-        ``auto`` to be set when drift exists.
     auto:
         Non-interactive resolution: ``"use-live"`` absorbs all drift
         (reproduces today's silent-absorb behavior),
@@ -379,13 +372,6 @@ def capture_profile(
         Propagated from the wizard when the user cancels mid-prompt;
         the CLI layer renders the cancellation and exits 130.
     """
-    if interactive is None:
-        interactive = sys.stdin.isatty()
-    if local_config_path is None:
-        from setforge.source import LOCAL_CONFIG_PATH
-
-        local_config_path = LOCAL_CONFIG_PATH
-
     # The disposition path runs its own per-conflict capture handling
     # (_capture_disposition_file); disposition=None files capture live verbatim
     # minus host-local overlays. Per-tracked_file writeback below.

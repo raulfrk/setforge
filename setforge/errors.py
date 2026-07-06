@@ -185,23 +185,11 @@ class RevertFailed(SetforgeError):
     captured stderr or the conflicting paths."""
 
 
-class CaptureRequiresInteractive(SetforgeError):
-    """Raised when ``setforge sync`` would need wizard prompts but no
-    TTY is available and ``--auto`` wasn't passed.
-
-    Triggered by :func:`setforge.capture.capture_profile` when the
-    capture-time wizard would surface drift (deep-merge sub-key drift or
-    top-level non-preserve drift) and the caller cannot prompt. The
-    escape hatch is the ``--auto={use-live, keep-tracked}`` CLI flag,
-    which routes through :func:`setforge.wizard.run_wizard_loop`'s
-    ``auto_accept`` parameter."""
-
-
 class ConfirmRequiresInteractive(SetforgeError):
     """Raised when a mutating ``--auto*`` flag is set, stdin is not a
     TTY, and ``--yes`` was not passed.
 
-    Sibling of :class:`CaptureRequiresInteractive` for the
+    Raised by the
     :func:`setforge.cli._confirm.confirm_auto_operation` gate that
     fronts ``install --auto-accept-*`` / ``install --auto=use-tracked``
     / ``sync --auto=use-live``. The escape hatch is ``--yes`` /

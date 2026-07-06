@@ -87,11 +87,11 @@ def compare(
     _refuse_duplicate_section_names(profile_ctx, command="compare")
 
     with profile_lock(profile):
-        # Load + validate the local.yaml host_local_sections
-        # overlay so ``compare_profile`` threads it into ``diff_file`` —
-        # a live file that already received its host-local sections must
-        # not surface as drift. Same validator install uses (anchors
-        # resolved at deploy time; this layer only sniffs file-type).
+        # Load + validate the local.yaml host_local_sections overlay so
+        # ``compare_profile`` can classify a live file that already received
+        # its host-local sections instead of surfacing it as drift. Same
+        # validator install uses (anchors resolved at deploy time; this
+        # layer only sniffs file-type).
         host_local_sections_map = _load_validated_host_local_sections(
             cfg, resolved, repo_root, profile
         )

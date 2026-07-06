@@ -62,7 +62,6 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.errors import (
-    CaptureRequiresInteractive,
     ExtensionToolMissing,
 )
 from setforge.locking import profile_lock
@@ -173,9 +172,7 @@ def sync(
         "--auto",
         help=(
             "Non-interactive capture-time drift resolution: 'use-live' "
-            "absorbs all drift; 'keep-tracked' rejects all drift. Without "
-            "TTY and without --auto, sync exits 1 with "
-            "CaptureRequiresInteractive."
+            "absorbs all drift; 'keep-tracked' rejects all drift."
         ),
     ),
     yes: bool = typer.Option(
@@ -381,26 +378,23 @@ def _sync_snapshot_paths(
 ) -> list[Path]:
     """Tracked srcs under the profile + ``setforge.yaml`` + local.yaml.
 
-    Includes :data:`LOCAL_CONFIG_PATH` so any capture-time mutation of
-    local.yaml rides the SYNC transition's patch — the mutation is applied
-    by ``_run_capture`` AFTER ``file_pre`` is captured here. Snapshotting
-    local.yaml in both ``file_pre`` and ``file_post`` lets ``revert``
-    restore the pre-mutation state instead of silently losing it.
+    Includes :data:`LOCAL_CONFIG_PATH` so any transition-spanning mutation
+    of local.yaml is revertable. Capture itself no longer writes local.yaml
+    (host-local content is a LOCAL unit in the reconcile store); the include
+    is retained so that a local.yaml write landing inside the SYNC
+    transition lets ``revert`` restore the pre-mutation state rather than
+    silently losing it.
 
-    The PROMOTE wizard also mutates local.yaml, but it fires BEFORE this
-    function and records its own ``TransitionCommand.PROMOTE`` snapshot
-    (taken pre-mutation). Because ``file_pre`` here is captured AFTER
-    promote has already applied, the SYNC snapshot only spans the
-    capture-time delta layered on top — the two transitions reverse
-    disjoint diffs and do not double-record the same change.
+    The PROMOTE wizard mutates local.yaml, but it fires BEFORE this function
+    and records its own ``TransitionCommand.PROMOTE`` snapshot (taken
+    pre-mutation), so the two transitions reverse disjoint diffs and do not
+    double-record the same change.
     """
     paths = [sub_src for _, _, sub_src, _ in _iter_all_tracked_files(ctx)]
     paths.append(config.resolve())
     # Resolve LOCAL_CONFIG_PATH off the module so it tracks any runtime
-    # override (tests monkeypatch ``setforge.source.LOCAL_CONFIG_PATH``;
-    # ``capture`` reads the same attribute lazily when it writes the
-    # kept overlay body) — a module-bound import would diverge from the
-    # path capture actually mutates.
+    # override (tests monkeypatch ``setforge.source.LOCAL_CONFIG_PATH``) —
+    # a module-bound import would diverge from the runtime value.
     paths.append(source_mod.LOCAL_CONFIG_PATH.resolve())
     return paths
 
@@ -442,14 +436,14 @@ def _run_capture(
     *,
     command: str,
 ) -> list[capture_mod.CaptureResult]:
-    """Run ``capture_profile`` with the standard CLI error mapping.
+    """Run ``capture_profile``.
 
-    Maps ``CaptureRequiresInteractive`` → exit-1. ``KeyboardInterrupt``
-    is NOT swallowed here: ``capture_profile`` performs no internal
-    snapshot/restore, so the caller owns the Ctrl-C contract — ``sync``
-    restores from the pre-capture snapshot it took and ``capture`` reports
-    the partial-write truth. ``command`` is retained for call-site parity
-    but no longer drives a (false) "restored from snapshot" message.
+    ``KeyboardInterrupt`` is NOT swallowed here: ``capture_profile``
+    performs no internal snapshot/restore, so the caller owns the Ctrl-C
+    contract — ``sync`` restores from the pre-capture snapshot it took and
+    ``capture`` reports the partial-write truth. ``command`` is retained
+    for call-site parity but no longer drives a (false) "restored from
+    snapshot" message.
 
     No host-local overlay is loaded: host-local content is now a LOCAL unit
     in the reconcile store, and ``capture_profile``'s per-hunk staged path
@@ -457,17 +451,13 @@ def _run_capture(
     the SHARED hunks into tracked and keeps LOCAL host-only content out, so
     the legacy local.yaml ``host_local_sections`` strip is redundant.
     """
-    try:
-        return capture_mod.capture_profile(
-            cfg,
-            profile,
-            repo_root,
-            setforge_yaml_path=config.resolve(),
-            auto=auto_enum,
-        )
-    except CaptureRequiresInteractive as exc:
-        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(1) from exc
+    return capture_mod.capture_profile(
+        cfg,
+        profile,
+        repo_root,
+        setforge_yaml_path=config.resolve(),
+        auto=auto_enum,
+    )
 
 
 def _restore_sync_snapshots(

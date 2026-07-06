@@ -49,6 +49,7 @@ __all__ = [
     "detect_local_yaml_schema",
     "guard_local_yaml_schema",
     "migrate_local_yaml",
+    "migrate_local_yaml_overlay_spans",
     "strip_retired_keys",
 ]
 

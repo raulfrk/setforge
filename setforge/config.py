@@ -105,11 +105,6 @@ class McpScope(StrEnum):
     LOCAL = "local"
 
 
-# SectionMode now lives in the leaf module setforge.section_mode so
-# setforge.span_types (imported by config below) can carry it on
-# SpanEntry.capture_mode without a spans → config → spans import cycle.
-
-
 def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
     """Validate a ``mode`` value's TYPE shape; return plain ``int`` or ``None``.
 
