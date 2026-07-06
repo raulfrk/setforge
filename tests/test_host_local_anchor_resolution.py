@@ -217,6 +217,28 @@ class TestResolveInSection:
         assert fell_back is True
         assert text.splitlines()[line] == "## B"
 
+    def test_section_end_spans_deeper_child_headings(self) -> None:
+        # A deeper child heading (``###`` under ``##``) stays INSIDE the
+        # section, so the fallback end-of-section lands at the next SAME-level
+        # heading (``## B``), never at the child. Guards ``_scan_end``'s
+        # ``<= level`` boundary against closing a section on its own child.
+        text = "## A\nx1\n### Child\nc1\n## B\nb1\n"
+        anchor = AnchorInSection(heading="A", level=2, after_line="GONE", offset=99)
+        line, fell_back = _resolve_in_section(text, anchor)
+        assert fell_back is True
+        assert text.splitlines()[line] == "## B"
+
+    def test_section_end_closes_at_lower_level_heading(self) -> None:
+        # A LOWER-level heading (``#`` above a ``##`` section) closes the
+        # section. Guards ``_scan_end``'s ``this_level <= level`` boundary: a
+        # mutation to ``== level`` would stop a level-1 heading from closing a
+        # level-2 section, running the fallback to EOF instead of ``# Top``.
+        text = "## A\nx1\n# Top\nt1\n"
+        anchor = AnchorInSection(heading="A", level=2, after_line="GONE", offset=99)
+        line, fell_back = _resolve_in_section(text, anchor)
+        assert fell_back is True
+        assert text.splitlines()[line] == "# Top"
+
 
 class TestHeadingLevel:
     """The pure ATX heading-level classifier folded into host_local_inject."""

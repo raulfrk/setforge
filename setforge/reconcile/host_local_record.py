@@ -20,6 +20,7 @@ verbatim copies that can silently diverge.
 
 from __future__ import annotations
 
+import stat
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -137,8 +138,9 @@ def seed_section_slots_to_store(
     whose template-body heading is not already a LOCAL+``reloc_anchor`` unit in
     the profile's reconcile store, inject the canonical template body at
     end-of-file into the target markdown tracked file's stored ``base``/``local``
-    and :func:`~setforge.reconcile.record` it as a LOCAL unit (host-local,
-    survives re-baselining). Returns the section names newly seeded (empty on the
+    and records it as a LOCAL unit via :func:`record_local_reloc_sections`
+    (host-local, survives re-baselining). Returns the section names newly seeded
+    (empty on the
     seed-once no-op / no slots / no markdown target).
 
     Writes NOTHING to ``local.yaml``; the host-local intent lives only
@@ -148,8 +150,6 @@ def seed_section_slots_to_store(
     template body (the store identity is heading-based, so a headingless body has
     no stable ``reloc_anchor`` to fold onto).
     """
-    import stat as stat_mod
-
     from setforge import atomicio, reconcile
     from setforge.anchors import AnchorAtEndOfFile
     from setforge.body_canon import canonical_body, inject_body_at_anchor
@@ -216,7 +216,7 @@ def seed_section_slots_to_store(
     new_live = text.encode("utf-8")
 
     # Preserve the current mode (deploy just set it): no spurious re-mode.
-    mode = stat_mod.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
+    mode = stat.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
     atomicio.atomic_write_bytes(dst, new_live, mode=mode)
 
     # Only the freshly-injected PENDING hunks get marked LOCAL (to mint reloc_anchor).

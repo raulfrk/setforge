@@ -264,6 +264,20 @@ def test_spans_manifest_snapshot_round_trip(state_dir: Path) -> None:
     assert spans_path.read_bytes() == manifest_bytes
 
 
+def test_spans_manifest_path_rejects_traversal(state_dir: Path) -> None:
+    """A ``store="spans"`` key that escapes the profile subtree is refused.
+
+    The inlined SPANS path keeps the traversal guard the retired
+    ``spans_store`` applied: an absolute or ``..``-bearing file-id can never
+    resolve a manifest outside ``spans/<profile>/``, so a hand-edited
+    ``store="spans"`` transition cannot write a payload out of the subtree on
+    revert.
+    """
+    for bad_key in ("../escape", "nested/../../escape", "/abs/escape"):
+        with pytest.raises(InvalidTransitionRecord):
+            snapshot_store_state(SnapshotStore.SPANS, _PROFILE, bad_key)
+
+
 def test_snapshot_store_state_reads_current_bytes(state_dir: Path) -> None:
     """snapshot_store_state captures present bytes and absent-as-None."""
     base = _store_paths(state_dir)[SnapshotStore.BASE]

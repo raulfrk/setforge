@@ -95,7 +95,7 @@ class SpanKind(StrEnum):
     ``local.yaml`` (the :attr:`SpanEntry.overlay` payload); deploy injects
     it AFTER the merge and excises it BEFORE the merge, and capture excises
     the exact body bytes before any tracked write (see
-    :mod:`setforge.overlay_inject`). Markdown-only.
+    :mod:`setforge.body_canon`). Markdown-only.
     """
 
     PINNED = "pinned"

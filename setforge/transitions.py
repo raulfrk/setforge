@@ -834,6 +834,32 @@ _STATE_SNAPSHOTS_DIRNAME: Final[str] = "state_snapshots"
 _STATE_SNAPSHOTS_MANIFEST: Final[str] = "manifest.json"
 
 
+def _spans_manifest_path(profile: str, key: str) -> Path:
+    """SPANS sidecar manifest path, guarding traversal inline.
+
+    Replicates the traversal guard the retired ``spans_store.manifest_path``
+    applied — so the legacy module stays unimported yet the guard is NOT
+    dropped: an absolute or ``..``-bearing ``key`` is rejected, and the
+    resolved path is confirmed to stay inside ``spans/<profile>/``. A
+    hand-edited ``store="spans"`` transition record therefore can never
+    write a payload outside the subtree on revert (the same threat model
+    :func:`_validate_one_state_snapshot` guards ``payload_file`` against).
+    """
+    candidate = Path(key)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise InvalidTransitionRecord(
+            f"unsafe spans file-id {key!r}: must be a relative path with no "
+            "'..' components"
+        )
+    profile_root = (state_root() / "spans" / profile).resolve()
+    target = (profile_root / f"{candidate}.json").resolve()
+    if profile_root not in target.parents:
+        raise InvalidTransitionRecord(
+            f"spans file-id {key!r} resolves outside spans/{profile}/"
+        )
+    return target
+
+
 def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     """Resolve one snapshot entry to its on-disk store path.
 
@@ -843,9 +869,10 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     import :func:`state_root` from here, so those imports are deferred to
     call time to keep the module graph acyclic. The ``SPANS`` store is the
     retired legacy sidecar, kept only so pre-existing ``store="spans"``
-    transitions still restore byte-exact — its manifest path
-    (``state_root()/spans/<profile>/<key>.json``) is inlined here rather
-    than reached through the retired ``spans_store`` module.
+    transitions still restore byte-exact — its guarded manifest path is
+    computed by :func:`_spans_manifest_path` (which keeps the retired
+    ``spans_store`` traversal guard inline rather than reaching through the
+    retired module).
     """
     from setforge import base_store, scalar_base_store
     from setforge.reconcile import store as reconcile_store
@@ -854,7 +881,7 @@ def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
         case SnapshotStore.BASE:
             return base_store.base_path(profile, key)
         case SnapshotStore.SPANS:
-            return state_root() / "spans" / profile / f"{key}.json"
+            return _spans_manifest_path(profile, key)
         case SnapshotStore.SCALAR_BASE:
             return scalar_base_store.manifest_path(profile, key)
         case SnapshotStore.LOCAL_CONTENT:
