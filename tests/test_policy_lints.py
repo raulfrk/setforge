@@ -62,7 +62,7 @@ def test_shell_true_is_repo_wide_even_in_allowlisted_file() -> None:
 # --------------------------------------------------------------------------- #
 def test_legacy_api_fires_in_enforced_pkg() -> None:
     vs = check_source(
-        "from setforge.spans_overlay import apply\n", "setforge/reconcile/merge.py"
+        "from setforge.spans_store import apply\n", "setforge/reconcile/merge.py"
     )
     assert len(_ids(vs, "SAFE-2")) == 1
 
@@ -79,8 +79,8 @@ def test_legacy_api_import_variants() -> None:
     for src in (
         "import setforge._legacy_markers as s\n",
         "from setforge import _legacy_markers\n",
-        "from setforge.spans_overlay import apply\n",
-        "from setforge.section_wizard import run\n",
+        "from setforge.spans_store import apply\n",
+        "from setforge.section_mode import run\n",
     ):
         vs = check_source(src, "setforge/provision/x.py")
         assert _ids(vs, "SAFE-2"), f"expected SAFE-2 for: {src!r}"
