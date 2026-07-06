@@ -21,8 +21,6 @@ from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import SpanState
-from setforge.spans_overlay import SpanOrphan
 from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -39,8 +37,7 @@ class DeployResult:
     """Outcome of a :func:`copy_atomic` call.
 
     ``new_base`` / ``merge_conflicts`` are populated on the disposition
-    (byte-base 3-way) path; ``new_span_states`` / ``span_orphans`` ride the
-    span re-overlay path. All are inert defaults on a plain verbatim deploy.
+    (byte-base 3-way) path, and inert defaults on a plain verbatim deploy.
 
     ``prior_mode`` records the live file's permission bits AS THEY WERE
     immediately before this deploy chmod-ed them, and ONLY when the deploy
@@ -58,8 +55,6 @@ class DeployResult:
     backup_path: Path | None
     new_base: str | None = None
     merge_conflicts: list[LineConflict | PathConflict] = field(default_factory=list)
-    new_span_states: dict[str, SpanState] | None = None
-    span_orphans: list[SpanOrphan] = field(default_factory=list)
     prior_mode: int | None = None
 
 
@@ -72,10 +67,9 @@ class ResolvedDeploy:
     write step needs: the post-merge / post-overlay ``content``, the
     symlink-resolved ``real_dst`` plus its ``dst_existed`` probe, the
     ``effective_mode`` to apply, and the state-advance payload
-    (``new_base`` / ``merge_conflicts`` / ``new_span_states`` /
-    ``span_orphans``) that :class:`DeployResult` threads back to the caller.
-    Holding these records in memory lets an orchestrator resolve EVERY file
-    first and only then start writing (refuse-before-write).
+    (``new_base`` / ``merge_conflicts``) that :class:`DeployResult` threads
+    back to the caller. Holding these records in memory lets an orchestrator
+    resolve EVERY file first and only then start writing (refuse-before-write).
     """
 
     src: Path
@@ -85,8 +79,6 @@ class ResolvedDeploy:
     content: str
     new_base: str | None
     merge_conflicts: list[LineConflict | PathConflict]
-    new_span_states: dict[str, SpanState] | None
-    span_orphans: list[SpanOrphan]
 
 
 def copy_atomic(
@@ -138,7 +130,7 @@ def resolve_deploy(
     (:mod:`setforge.reconcile`): the caller overrides
     :attr:`ResolvedDeploy.content` with the reconciled bytes before the write,
     so this function deploys ``src`` verbatim and leaves ``new_base`` /
-    ``merge_conflicts`` / ``new_span_states`` / ``span_orphans`` inert.
+    ``merge_conflicts`` inert.
 
     ``host_local_sections`` is a vestigial parameter: host-local content is now
     owned by the reconcile engine (the marker-injection path was retired with
@@ -170,8 +162,6 @@ def resolve_deploy(
         content=content,
         new_base=None,
         merge_conflicts=[],
-        new_span_states=None,
-        span_orphans=[],
     )
 
 
@@ -204,8 +194,6 @@ def write_resolved_deploy(
         resolved.effective_mode,
         new_base=resolved.new_base,
         merge_conflicts=resolved.merge_conflicts,
-        new_span_states=resolved.new_span_states,
-        span_orphans=resolved.span_orphans,
     )
 
 
@@ -219,21 +207,17 @@ def _write_resolved_content(
     *,
     new_base: str | None,
     merge_conflicts: list[LineConflict | PathConflict],
-    new_span_states: dict[str, SpanState] | None = None,
-    span_orphans: list[SpanOrphan] | None = None,
 ) -> DeployResult:
     """Apply NOOP/CREATED/UPDATED detection + atomic write to ``content``.
 
     Shared by both branches of :func:`copy_atomic` so the NOOP-detection,
     mode-only-drift fixup and :func:`_atomic_write` logic live in one place.
-    ``new_base`` / ``merge_conflicts`` (disposition path) and
-    ``new_span_states`` / ``span_orphans`` (span re-overlay path) are threaded
-    onto EVERY returned :class:`DeployResult` — including the NOOP and
+    ``new_base`` / ``merge_conflicts`` (disposition path) are threaded onto
+    EVERY returned :class:`DeployResult` — including the NOOP and
     mode-only-drift paths — so a clean disposition merge that equals live still
-    re-baselines and the spans sidecar advances even on a NOOP write whose
-    post-splice content already equals live.
+    re-baselines even on a NOOP write whose post-splice content already equals
+    live.
     """
-    span_orphans = span_orphans or []
     if dst_existed:
         existing = real_dst.read_text(encoding="utf-8")
         action = DeployAction.NOOP if existing == content else DeployAction.UPDATED
@@ -254,8 +238,6 @@ def _write_resolved_content(
                 backup_path=None,
                 new_base=new_base,
                 merge_conflicts=merge_conflicts,
-                new_span_states=new_span_states,
-                span_orphans=span_orphans,
                 # The content patch is empty for a mode-only fixup, so the
                 # pre-install mode is the ONLY reversible record of this
                 # change — hand it to the transition writer for revert.
@@ -267,8 +249,6 @@ def _write_resolved_content(
             backup_path=None,
             new_base=new_base,
             merge_conflicts=merge_conflicts,
-            new_span_states=new_span_states,
-            span_orphans=span_orphans,
         )
 
     # Capture the live mode BEFORE the atomic write swaps perms, but only
@@ -289,8 +269,6 @@ def _write_resolved_content(
         backup_path=backup_path,
         new_base=new_base,
         merge_conflicts=merge_conflicts,
-        new_span_states=new_span_states,
-        span_orphans=span_orphans,
         prior_mode=prior_mode,
     )
 

@@ -45,7 +45,6 @@ from setforge.config import (
 from setforge.errors import BaseStoreError
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import SpanEntry
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
@@ -463,36 +462,17 @@ def resolve_dst(tracked_file: TrackedFile) -> Path:
 def diff_file(
     src: Path,
     dst: Path,
-    *,
-    overlay_spans: list[SpanEntry] | None = None,
 ) -> str:
     """Return the unified diff between ``src`` (tracked) and ``dst`` (live).
 
     For a ``disposition=None`` tracked_file the deployed content is ``src``
-    verbatim, so the comparison is a plain unified diff. ``overlay_spans`` are the
-    host-local OVERLAY spans the file carries: their markerless bodies are excised
-    from the live side first (by their exact recorded bytes), so a live file that
-    already received its host-local overlay does NOT show as phantom drift against
-    the markerless tracked source — the symmetric read of deploy's inject. The
-    canonical body is the needle (compare is offline / state-free); a body
-    hand-edited away from canonical falls through as real drift.
+    verbatim, so the comparison is a plain unified diff.
     """
     if not dst.exists():
         return ""
 
-    import contextlib
-
-    from setforge import overlay_deploy
-    from setforge.overlay_inject import OverlayAmbiguousError
-
     dst_text = dst.read_text(encoding="utf-8")
     rendered_src = src.read_text(encoding="utf-8")
-    if overlay_spans:
-        # Ambiguous needle — leave the body in; it surfaces as drift.
-        with contextlib.suppress(OverlayAmbiguousError):
-            dst_text, _ = overlay_deploy.excise_overlay_bodies(
-                dst_text, overlay_spans, {}
-            )
     diff_lines = difflib.unified_diff(
         dst_text.splitlines(keepends=True),
         rendered_src.splitlines(keepends=True),
@@ -542,17 +522,14 @@ def compare_profile(
     shape for callers that don't have a transitions dir handy.
 
     ``host_local_sections`` is the validated local.yaml overlay shaped
-    ``{tracked_file_id: {section_name: HostLocalSection}}`` (SPEC 1).
-    When provided, the per-tracked_file overlay is threaded
-    into :func:`diff_file` so a live file that already received its
-    host-local sections does NOT show up as drift, AND the post-merge
-    rendered ``src`` mirrors what ``setforge install`` would actually
-    deploy (overlay-aware compare). The CLI surface
+    ``{tracked_file_id: {section_name: HostLocalSection}}`` (SPEC 1). It is
+    threaded through to :func:`_compare_one` for caller symmetry but no longer
+    alters the diff: host-local content is now owned by the reconcile engine,
+    so :func:`diff_file` performs a plain verbatim comparison. The CLI surface
     (:func:`setforge.cli.compare.compare`) loads + validates the map
     via :func:`setforge.cli._install_helpers._load_validated_host_local_sections`
     before passing it in; callers that don't carry an overlay (e.g.
-    the orphan-detection and status commands) pass ``None`` and get the
-    pre-host-local behavior.
+    the orphan-detection and status commands) pass ``None``.
 
     Overlay contract (SPEC 2): this function re-resolves
     the profile via :func:`resolve_profile` and intentionally discards

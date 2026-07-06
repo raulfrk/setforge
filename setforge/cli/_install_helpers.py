@@ -5,9 +5,8 @@ Helpers extracted from ``install()`` body:
 - :func:`_check_unexpected_drift`: bare-install drift gate + :class:`typer.Exit`
   on no-resolve.
 - :func:`_deploy_all_tracked_files`: two-pass tracked-file deploy —
-  a read-only :func:`setforge.deploy.resolve_deploy` pass, the
-  ``--strict-spans`` refusal gate, then the write pass
-  (:func:`_execute_pending_deploys`).
+  a read-only :func:`setforge.deploy.resolve_deploy` pass, then the
+  write pass (:func:`_execute_pending_deploys`).
 - :func:`_write_install_transition`: snapshot +
   :func:`setforge.transitions.write_transition` wrapper that returns
   the written target path.
@@ -88,11 +87,6 @@ from setforge.source import (
     HostLocalSectionName,
     validate_host_local_sections_file_type,
 )
-from setforge.span_types import (
-    SpanEntry,
-    SpanKind,
-)
-from setforge.spans_overlay import SpanOrphan
 from setforge.ui.widgets import Button, Cancelled, button_bar
 
 
@@ -216,12 +210,9 @@ def _deploy_all_tracked_files(
     deferred wholesale (``resolved=None``) — their deploy primitive is
     self-contained and span-free.
 
-    **Refusal gate.** With ``strict_spans`` set, ANY pinned-span orphan
-    across the records refuses the whole install
-    (:func:`_refuse_on_pinned_orphans`) — every orphan is reported and ZERO
-    tracked files, bases, sidecars, or transitions are touched (bootstrap
-    stubs are created earlier in the pipeline), so there is no partial
-    install to undo.
+    ``strict_spans`` is retained on the signature for CLI symmetry with the
+    ``--strict-spans`` flag; its former pinned-span refusal gate is inert now
+    that the unified reconcile engine has no span-orphan trigger.
 
     **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
     in order, per file: apply the deferred base migration → write the
@@ -273,8 +264,6 @@ def _deploy_all_tracked_files(
                     interactive=interactive,
                 )
             )
-    if strict_spans:
-        _refuse_on_pinned_orphans(pending)
     return _execute_pending_deploys(profile, pending)
 
 
@@ -408,7 +397,6 @@ def _resolve_plain_reconcile(
         sub_dst=sub_dst,
         tracked_file=tracked_file,
         host_local=None,
-        file_spans=[],
         resolved=replace(scaffold, content=new_content),
         reconcile=(fid, outcome),
     )
@@ -473,7 +461,6 @@ def _resolve_structured_reconcile(
         sub_dst=sub_dst,
         tracked_file=tracked_file,
         host_local=None,
-        file_spans=[],
         resolved=replace(scaffold, content=new_content),
         reconcile=(fid, outcome),
     )
@@ -510,7 +497,6 @@ def _resolve_one_pending(
             sub_dst=sub_dst,
             tracked_file=tracked_file,
             host_local=host_local,
-            file_spans=[],
             resolved=None,
         )
     # Every non-symlink file flows through the unified 3-way reconcile engine
@@ -554,7 +540,6 @@ def _resolve_one_pending(
         sub_dst=sub_dst,
         tracked_file=tracked_file,
         host_local=host_local,
-        file_spans=[],
         resolved=resolved,
     )
 
@@ -574,65 +559,8 @@ class _PendingDeploy:
     sub_dst: Path
     tracked_file: TrackedFile
     host_local: dict[HostLocalSectionName, HostLocalSection] | None
-    file_spans: list[SpanEntry]
     resolved: deploy.ResolvedDeploy | None
     reconcile: tuple[FileId, reconcile_apply.ReconcileOutcome] | None = None
-
-
-def _span_orphan_warning(sub_dst: Path, orphan: SpanOrphan) -> str:
-    """Render the one-line warning for a span orphan.
-
-    The single wording seam shared by the pass-1 ``--strict-spans`` gate
-    (:func:`_refuse_on_pinned_orphans`) and the pass-2 warn
-    (:func:`_advance_span_states`). Every orphan keeps the generic
-    could-not-be-relocated wording.
-    """
-    return (
-        f"warning: {sub_dst}: span {orphan.anchor!r} ({orphan.kind.value}) "
-        f"could not be relocated upstream — region preserved, not dropped"
-    )
-
-
-def _refuse_on_pinned_orphans(pending: list[_PendingDeploy]) -> None:
-    """Refuse the whole install when any pass-1 record carries a PINNED orphan.
-
-    The ``--strict-spans`` gate, run BETWEEN pass 1 (read-only resolve) and
-    pass 2 (writes): when at least one pinned span orphaned, every collected
-    orphan warning is printed (same wording as the pass-2 warn in
-    :func:`_advance_span_states` — pass 2 never runs on this path) and ONE
-    aggregated :class:`SetforgeError` is raised with a per-file refusal line,
-    so the user sees the COMPLETE orphan set instead of one file per attempt.
-    No-op when no pinned orphan exists (forked orphans warn in pass 2 but
-    never refuse).
-    """
-    has_pinned = any(
-        orphan.kind is SpanKind.PINNED
-        for record in pending
-        if record.resolved is not None
-        for orphan in record.resolved.span_orphans
-    )
-    if not has_pinned:
-        return
-    failures: list[str] = []
-    for record in pending:
-        if record.resolved is None:
-            continue
-        pinned: list[str] = []
-        for orphan in record.resolved.span_orphans:
-            typer.secho(
-                _span_orphan_warning(record.sub_dst, orphan),
-                err=True,
-                fg=typer.colors.YELLOW,
-            )
-            if orphan.kind is SpanKind.PINNED:
-                pinned.append(orphan.anchor)
-        if pinned:
-            joined = ", ".join(repr(a) for a in pinned)
-            failures.append(
-                f"{record.sub_dst}: --strict-spans: pinned span(s) {joined} "
-                f"orphaned (anchor gone upstream); refusing install"
-            )
-    raise SetforgeError("\n".join(failures))
 
 
 def _capture_store_snapshots(

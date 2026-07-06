@@ -39,7 +39,6 @@ from setforge.migrations import (
     current_expected_schema_version,
     parse_schema_version,
 )
-from setforge.section_mode import SectionMode as SectionMode
 
 if TYPE_CHECKING:
     from setforge.source import (
@@ -109,8 +108,6 @@ class McpScope(StrEnum):
 # SectionMode now lives in the leaf module setforge.section_mode so
 # setforge.span_types (imported by config below) can carry it on
 # SpanEntry.capture_mode without a spans → config → spans import cycle.
-# Re-exported here for back-compat: ``from setforge.config import SectionMode``
-# stays valid for every existing call site.
 
 
 def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:

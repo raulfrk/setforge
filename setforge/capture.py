@@ -2,24 +2,14 @@
 
 The inverse of ``deploy.copy_atomic``. Reads each profile tracked_file's
 ``dst`` (the live copy) and writes a host-state-stripped version back to
-``src`` (the tracked copy):
-
-- markerless host-local OVERLAY bodies (carried in local.yaml) are excised
-  by their exact recorded bytes, so live host-local content never bakes
-  into the shared tracked source.
-- legacy ``host_local_sections`` marker pairs that ``install`` injected are
-  name-scoped stripped (markers and body both removed).
+``src`` (the tracked copy): legacy ``host_local_sections`` marker pairs that
+``install`` injected are name-scoped stripped (markers and body both removed).
 
 Capture is no longer a silent absorb. When a tracked_file carries drift
 between tracked and live, capture resolves it via
 ``--auto={use-live, keep-tracked}`` (``use-live`` absorbs the drift into
-tracked, ``keep-tracked`` refuses it) or an interactive confirm; the
-per-tracked_file writeback then applies the host-state strip above.
-
-The ``CaptureRequiresInteractive`` exception is raised when capture
-would prompt but stdin is not a TTY and ``--auto`` wasn't supplied —
-the CLI layer renders this as a non-zero exit with a clear migration
-hint.
+tracked, ``keep-tracked`` refuses it); the per-tracked_file writeback then
+applies the host-state strip above.
 """
 
 import stat
@@ -28,7 +18,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from rich.console import Console
 
@@ -37,21 +26,14 @@ from setforge import (
 )
 from setforge import (
     atomicio,
-    overlay_deploy,
-    spans_store,
 )
 from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, resolve_profile
-from setforge.errors import CaptureRequiresInteractive, OverlayBodyUnlocatable
 from setforge.reconcile import hunks as reconcile_hunks
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
 from setforge.reconcile.types import FileId, HunkClass, file_id
 from setforge.source import HostLocalSection, HostLocalSectionName
-from setforge.span_types import SpanEntry
-
-if TYPE_CHECKING:
-    from setforge.overlay_body_wizard import OverlayBodyEdit, OverlayEditChoice
 
 
 class CaptureAction(StrEnum):
@@ -87,8 +69,6 @@ def capture_tracked_file(
     dst: Path,
     *,
     host_local_section_names: frozenset[str] = frozenset(),
-    spans: list[SpanEntry] | None = None,
-    span_states: dict[str, "spans_store.SpanState"] | None = None,
     sub_name: str = "",
     tracked_file_id: str = "",
     auto: "CaptureAuto | None" = None,
@@ -99,13 +79,9 @@ def capture_tracked_file(
 
     A ``disposition=None`` tracked_file deploys tracked verbatim, so capture is
     a wholesale live → tracked writeback — EXCEPT host-local content, which must
-    never leak into the shared tracked source:
-
-    - markerless host-local OVERLAY bodies (carried in local.yaml) are excised
-      by their exact recorded bytes via :func:`_capture_overlay_bodies` (a
-      hand-edited body routes to the keep/discard wizard);
-    - legacy ``host_local_sections`` marker pairs injected by ``install`` are
-      name-scoped stripped via :func:`sections.strip_host_local_sections`.
+    never leak into the shared tracked source: legacy ``host_local_sections``
+    marker pairs injected by ``install`` are name-scoped stripped via
+    :func:`sections.strip_host_local_sections`.
 
     Returns :class:`CaptureResult.NOOP` when the resulting tracked content is
     byte-identical to the existing tracked file, or SKIPPED when live is absent.
@@ -116,23 +92,6 @@ def capture_tracked_file(
         )
 
     content = dst.read_text(encoding="utf-8")
-    # MARKERLESS host-local OVERLAY bodies own their excise: install injects
-    # them without markers, so the name-scoped marker strip below cannot see
-    # them — they would round-trip into the shared tracked source (a host-state
-    # leak). Runs only when overlay spans exist, so files without host-local
-    # overlays are byte-for-byte the live content.
-    md_overlay = overlay_deploy.overlay_spans(spans) if spans else []
-    if md_overlay:
-        content = _capture_overlay_bodies(
-            content,
-            md_overlay,
-            span_states or {},
-            sub_name=sub_name,
-            tracked_file_id=tracked_file_id,
-            auto=auto,
-            interactive=interactive,
-            local_config_path=local_config_path,
-        )
     # Drop legacy host-local marker pairs + bodies injected by install (via
     # local.yaml host_local_sections) before the writeback. Name-scoped to
     # ``host_local_section_names`` so a host-local marker the user authored
@@ -420,9 +379,6 @@ def capture_profile(
 
     Raises
     ------
-    CaptureRequiresInteractive
-        When drift would prompt but stdin is not a TTY and ``auto`` is
-        unset.
     KeyboardInterrupt
         Propagated from the wizard when the user cancels mid-prompt;
         the CLI layer renders the cancellation and exits 130.
@@ -475,8 +431,6 @@ def capture_profile(
                     sub_src,
                     sub_dst,
                     host_local_section_names=host_local_names,
-                    spans=[],
-                    span_states={},
                     sub_name=sub_name,
                     tracked_file_id=name,
                     auto=auto,
@@ -492,119 +446,3 @@ def capture_profile(
                 )
             )
     return results
-
-
-def _capture_overlay_bodies(
-    live_text: str,
-    md_overlay: list[SpanEntry],
-    span_states: dict[str, "spans_store.SpanState"],
-    *,
-    sub_name: str,
-    tracked_file_id: str,
-    auto: "CaptureAuto | None",
-    interactive: bool,
-    local_config_path: Path | None,
-) -> str:
-    """Return ``live_text`` with every overlay body excised (always body-free).
-
-    Per overlay span: try the exact-bytes excise first. On a miss, detect a
-    hand-edit near the anchor. A located edit routes to the keep/discard
-    decision (``--auto`` map, else interactive prompt, else
-    :class:`~setforge.errors.CaptureRequiresInteractive`); KEEP writes the
-    edit into ``local.yaml`` (never tracked) before excising the located
-    body, DISCARD just excises it (canonical re-imposed next deploy). The
-    tracked write is body-free either way.
-
-    Fail-closed on an unlocatable miss: when the exact-bytes excise misses
-    AND no edit can be located near the anchor, the sidecar disambiguates.
-    If a body WAS deployed at this anchor (``stored.last_deployed_body`` is
-    non-empty) the hand-edited body cannot be proven excised — capturing
-    would leak it into tracked, so we raise
-    :class:`~setforge.errors.OverlayBodyUnlocatable` BEFORE any tracked
-    write. Only a genuine no-deploy record (``stored is None`` or no stored
-    body) is skipped as the clean first-deploy / absent case.
-    """
-    from setforge import overlay_body_wizard
-
-    text = live_text
-    for span in md_overlay:
-        stored = span_states.get(span.anchor)
-        excised, found = overlay_deploy.excise_overlay_bodies(text, [span], span_states)
-        if found:
-            text = excised
-            continue
-        edit = overlay_body_wizard.detect_overlay_body_edit(
-            text, span, stored, tracked_file_id=tracked_file_id
-        )
-        if edit is None:
-            # No exact match AND no locatable edit. Disambiguate via the
-            # sidecar: if a body WAS deployed here, the (hand-edited)
-            # host-local body is somewhere in `text` but unlocatable — we
-            # CANNOT prove the tracked write is body-free, so FAIL CLOSED
-            # before any tracked write rather than leak it. Only a genuine
-            # no-deploy record (first deploy / absent) is safe to skip.
-            if stored is not None and stored.last_deployed_body:
-                raise OverlayBodyUnlocatable(sub_name=sub_name, anchor=span.anchor)
-            continue
-        choice = overlay_body_wizard.require_interactive_or_auto(
-            auto, interactive, edit_count=1
-        )
-        if choice is None:
-            choice = _prompt_overlay_edit(edit)
-        if choice is overlay_body_wizard.OverlayEditChoice.SKIP:
-            # Skip: leave the edited body in live AND in the tracked write?
-            # No — the tracked write must stay body-free regardless, so we
-            # still excise the located region; "skip" only defers the
-            # local.yaml writeback decision to a later sync.
-            text = overlay_body_wizard.excise_located_body(text, span.anchor, stored)
-            continue
-        if choice is overlay_body_wizard.OverlayEditChoice.KEEP:
-            if local_config_path is None:
-                raise CaptureRequiresInteractive(
-                    "cannot keep a hand-edited overlay body without a "
-                    "local.yaml path to write it into"
-                )
-            overlay_body_wizard.write_edited_body_to_local(
-                edit, local_config_path=local_config_path
-            )
-        # KEEP and DISCARD both excise the located body from the tracked
-        # write; KEEP additionally persisted the edit to local.yaml above.
-        text = overlay_body_wizard.excise_located_body(text, span.anchor, stored)
-    return text
-
-
-def _prompt_overlay_edit(
-    edit: "OverlayBodyEdit",
-) -> "OverlayEditChoice":
-    """Render the diff + read one keep/discard/skip choice for a hand-edited body."""
-    import difflib
-
-    from rich.syntax import Syntax
-
-    from setforge import overlay_body_wizard
-    from setforge.wizard import read_one_choice
-
-    console = Console()
-    diff = "".join(
-        difflib.unified_diff(
-            edit.canonical_body.splitlines(keepends=True),
-            edit.live_body.splitlines(keepends=True),
-            fromfile=f"local.yaml/{edit.tracked_file_id}{edit.anchor}",
-            tofile=f"live{edit.anchor}",
-        )
-    )
-    console.print(
-        f"host-local overlay body hand-edited at {edit.anchor!r} "
-        f"({edit.tracked_file_id}):"
-    )
-    if diff:
-        console.print(Syntax(diff, "diff"))
-    choice = read_one_choice(
-        "   [k]eep edit (write to local.yaml) / [d]iscard / [s]kip: ",
-        {"k", "d", "s"},
-    )
-    return {
-        "k": overlay_body_wizard.OverlayEditChoice.KEEP,
-        "d": overlay_body_wizard.OverlayEditChoice.DISCARD,
-        "s": overlay_body_wizard.OverlayEditChoice.SKIP,
-    }[choice]
