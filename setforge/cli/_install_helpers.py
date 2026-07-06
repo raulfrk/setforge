@@ -191,7 +191,6 @@ def _deploy_all_tracked_files(
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
     section_auto: ReconcileAuto | None = None,
     interactive: bool = False,
-    strict_spans: bool = False,
 ) -> DeployOutcome:
     """Deploy every tracked_file in two passes: resolve all, THEN write all.
 
@@ -209,10 +208,6 @@ def _deploy_all_tracked_files(
     (bounded by the config-tree size). Symlink-declared tracked_files are
     deferred wholesale (``resolved=None``) — their deploy primitive is
     self-contained and span-free.
-
-    ``strict_spans`` is retained on the signature for CLI symmetry with the
-    ``--strict-spans`` flag; its former pinned-span refusal gate is inert now
-    that the unified reconcile engine has no span-orphan trigger.
 
     **Pass 2 (writes).** :func:`_execute_pending_deploys` replays the records
     in order, per file: apply the deferred base migration → write the

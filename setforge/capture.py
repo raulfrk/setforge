@@ -69,11 +69,7 @@ def capture_tracked_file(
     dst: Path,
     *,
     host_local_section_names: frozenset[str] = frozenset(),
-    sub_name: str = "",
-    tracked_file_id: str = "",
     auto: "CaptureAuto | None" = None,
-    interactive: bool = False,
-    local_config_path: Path | None = None,
 ) -> CaptureResult:
     """Write ``dst`` (live) back to ``src`` (tracked) for a disposition=None file.
 
@@ -431,11 +427,7 @@ def capture_profile(
                     sub_src,
                     sub_dst,
                     host_local_section_names=host_local_names,
-                    sub_name=sub_name,
-                    tracked_file_id=name,
                     auto=auto,
-                    interactive=interactive,
-                    local_config_path=local_config_path,
                 )
             results.append(
                 CaptureResult(

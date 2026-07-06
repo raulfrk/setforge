@@ -189,18 +189,6 @@ def install(
             "never fetches, so this flag is a no-op there."
         ),
     ),
-    strict_spans: bool = typer.Option(
-        False,
-        "--strict-spans",
-        help=(
-            "Escalate an orphaned PINNED span (its anchor went missing "
-            "upstream) from a warning to a refuse-install. The refusal "
-            "fires before any tracked file is written — no tracked file "
-            "deploys, no transition lands (bootstrap stubs are created "
-            "earlier in the pipeline). Forked-span and non-strict orphans "
-            "always warn and continue."
-        ),
-    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -378,7 +366,6 @@ def install(
             host_local_sections_map=host_local_sections_map,
             section_auto=section_auto,
             interactive=interactive,
-            strict_spans=strict_spans,
         )
 
         # Seed AFTER deploy so its pre-install snapshot is the revert baseline.

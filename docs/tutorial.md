@@ -392,7 +392,7 @@ quick index.
 
 - **`install --profile=P`** — deploy tracked → live. Key flags: `--dry-run`,
   `--yes`, `--auto={use-tracked,keep-live}`, `--reconcile-user-sections`,
-  `--no-secrets-scan`, `--strict-spans`, `--retry-failed`. *When:* first setup,
+  `--no-secrets-scan`, `--retry-failed`. *When:* first setup,
   after `fetch`, or after tracked content changes. → [walkthrough](#4-install--deploy-tracked--live)
 - **`compare --profile=P`** — report drift (the Drift Summary table). Key flags:
   `--full-diff`, `--check` (non-zero exit on drift), `--strict`. *When:* before
