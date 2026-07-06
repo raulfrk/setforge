@@ -10,13 +10,14 @@ from __future__ import annotations
 import pytest
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
-from setforge.host_local_inject import resolve_anchor
+from setforge.host_local_inject import _resolve_in_section, resolve_anchor
 from setforge.source import (
     AnchorAfterHeading,
     AnchorAfterSection,
     AnchorAtEndOfFile,
     AnchorAtStartOfFile,
     AnchorBeforeHeading,
+    AnchorInSection,
 )
 
 
@@ -160,3 +161,43 @@ class TestAfterSectionAnchor:
         )
         offset = resolve_anchor(text, AnchorAfterSection(name="notes"))
         assert offset == 3
+
+
+_RESOLVE_TRACKED = "# Title\n\n## A\nx1\nx2\n\n## B\nb1\n"
+
+
+class TestResolveInSection:
+    """In-section anchor resolution (``host_local_inject._resolve_in_section``).
+
+    Re-homed from the retired overlay carve-pipeline suite — pure-function
+    unit tests over the surviving in-section resolver.
+    """
+
+    def test_exact_preceding_line(self) -> None:
+        anchor = AnchorInSection(heading="A", level=2, after_line="x1", offset=1)
+        line, fell_back = _resolve_in_section(_RESOLVE_TRACKED, anchor)
+        assert fell_back is False
+        assert _RESOLVE_TRACKED.splitlines()[line] == "x2"
+
+    def test_offset_when_after_line_absent(self) -> None:
+        anchor = AnchorInSection(heading="A", level=2, after_line=None, offset=2)
+        line, fell_back = _resolve_in_section(_RESOLVE_TRACKED, anchor)
+        assert fell_back is False
+        # heading line 2 + 1 + offset 2 = 5, still inside section A (## B is line 6)
+        assert line == 5
+
+    def test_falls_back_to_end_of_section(self) -> None:
+        anchor = AnchorInSection(heading="A", level=2, after_line="GONE", offset=99)
+        line, fell_back = _resolve_in_section(_RESOLVE_TRACKED, anchor)
+        assert fell_back is True
+        assert _RESOLVE_TRACKED.splitlines()[line] == "## B"
+
+    def test_heading_gone_hard_fails(self) -> None:
+        anchor = AnchorInSection(heading="A", level=2, after_line="x1", offset=1)
+        with pytest.raises(AnchorNotFoundError):
+            _resolve_in_section("# Title\n\n## Z\nz1\n", anchor)
+
+    def test_heading_duplicated_hard_fails(self) -> None:
+        anchor = AnchorInSection(heading="A", level=2, after_line="x1", offset=1)
+        with pytest.raises(AnchorAmbiguousError):
+            _resolve_in_section("## A\nx1\n\n## A\nq\n", anchor)
