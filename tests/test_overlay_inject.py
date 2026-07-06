@@ -84,3 +84,27 @@ def test_excise_prefers_first_needle_in_sequence_order() -> None:
     excised, found = excise_unique_needle(text, [canonical, prior])
     assert found == prior
     assert "PRIOR" not in excised
+
+
+def test_shim_and_canon_are_a_single_source() -> None:
+    # The overlay_inject shim MUST re-export the exact objects body_canon
+    # defines — a body injected through the legacy shim path must excise
+    # byte-exact through body_canon, and vice versa, or a silent EOL /
+    # seam-newline drift could leak host-local content into tracked.
+    from setforge import body_canon, overlay_inject
+
+    assert overlay_inject.canonical_body is body_canon.canonical_body
+    assert overlay_inject.inject_body_at_anchor is body_canon.inject_body_at_anchor
+    assert overlay_inject.excise_unique_needle is body_canon.excise_unique_needle
+    assert overlay_inject.OverlayAmbiguousError is body_canon.OverlayAmbiguousError
+
+    text = "# Title\n\n## Notes\n\nshared\n"
+    # Write via the legacy shim path...
+    body = overlay_inject.canonical_body("HOST LOCAL\r\nBODY")
+    injected = overlay_inject.inject_body_at_anchor(
+        text, AnchorAfterHeading(value="Notes"), body
+    )
+    # ...excise via the new canonical module — byte-exact round-trip.
+    excised, found = body_canon.excise_unique_needle(injected, [body])
+    assert found == body
+    assert excised == text

@@ -23,7 +23,6 @@ from setforge import (
     transitions,
 )
 from setforge import secrets as secrets_mod
-from setforge import section_templates as section_templates_mod
 from setforge import source as source_mod
 from setforge.cli import (
     _CONFIG_OPTION,
@@ -72,6 +71,7 @@ from setforge.config import (
 )
 from setforge.errors import SetforgeError
 from setforge.locking import profile_lock
+from setforge.reconcile import host_local_record
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
     ReconcileStatus,
@@ -369,7 +369,7 @@ def install(
         )
 
         # Seed AFTER deploy so its pre-install snapshot is the revert baseline.
-        seeded = section_templates_mod.seed_section_slots_to_store(
+        seeded = host_local_record.seed_section_slots_to_store(
             cfg, resolved, repo_root, profile
         )
         if seeded:

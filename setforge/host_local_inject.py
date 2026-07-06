@@ -1,11 +1,13 @@
 """Anchor resolution for markdown tracked_files.
 
 Resolves a :data:`setforge.source.Anchor` against rendered markdown text to a
-line offset — the shared splice-point primitive the markerless overlay engine
-(:mod:`setforge.overlay_inject`) uses to place
+line offset — the shared splice-point primitive the markerless overlay body
+engine (:mod:`setforge.body_canon`) uses to place
 each host-local body. (The legacy marker-pair injection that once lived here was
 retired with the user-section markers; only the resolvers + EOL/fence helpers
-remain.)
+remain.) This module also houses the fence-aware in-section scanners
+(:func:`heading_level`, :func:`_find_heading_lines`, :func:`_scan_end`) that
+bound an ``in-section`` anchor's enclosing heading region.
 
 Anchor grammar:
 
@@ -73,10 +75,80 @@ _HEADING_RE: re.Pattern[str] = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$")
 # we accept those too via the leading whitespace class).
 _FENCE_RE: re.Pattern[str] = re.compile(r"^\s{0,3}(```|~~~)")
 
+# ATX heading with its ``#``-run captured (group 1 = the hashes, group 2 =
+# the trimmed text). Widened from ``_HEADING_RE`` — which discards the run —
+# so the in-section scan can read the heading LEVEL to bound a section.
+_HEADING_LEVEL_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*$")
+
 
 def _normalise_eol(text: str) -> str:
     """Return ``text`` with CRLF and CR line endings collapsed to LF."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def heading_level(line: str) -> int | None:
+    """Return the ATX heading level (1-6) of ``line``, or ``None``.
+
+    ``None`` when ``line`` is not an ATX heading. Fence awareness is the
+    caller's concern — this is a pure per-line classifier.
+    """
+    match = _HEADING_LEVEL_RE.match(line)
+    if match is None:
+        return None
+    return len(match.group(1))
+
+
+def _find_heading_lines(text: str, level: int, heading_text: str) -> list[int]:
+    """Return every 0-indexed line whose heading matches ``(level, text)``.
+
+    Skips lines inside fenced code blocks via the same ``_FENCE_RE`` toggle
+    the anchor resolvers use, so a heading-shaped line inside a fence
+    never matches. Matching is byte-exact on both the level and the
+    trimmed text.
+    """
+    matches: list[int] = []
+    in_fence = False
+    for idx, line in enumerate(text.splitlines()):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = _HEADING_LEVEL_RE.match(line)
+        if match is None:
+            continue
+        if len(match.group(1)) == level and match.group(2) == heading_text:
+            matches.append(idx)
+    return matches
+
+
+def _scan_end(text: str, start_line: int, level: int) -> int:
+    """Return the half-open end line of the section starting at ``start_line``.
+
+    Scans forward from the line AFTER ``start_line`` to the first heading
+    whose level is <= ``level``, returning that heading's line index; else
+    EOF (the total line count). The fence toggle is RE-RUN from the start
+    of the file up to ``start_line`` so a section that itself opens inside (or
+    after) a fence is bounded correctly — a ``#``-line inside a fenced code
+    block must NOT close the section (the most likely bug-injection site).
+    """
+    lines = text.splitlines()
+    # Re-establish fence state up to and including the heading line.
+    in_fence = False
+    for idx in range(start_line + 1):
+        if _FENCE_RE.match(lines[idx]):
+            in_fence = not in_fence
+    for idx in range(start_line + 1, len(lines)):
+        line = lines[idx]
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        this_level = heading_level(line)
+        if this_level is not None and this_level <= level:
+            return idx
+    return len(lines)
 
 
 def _find_heading_offsets(text: str, heading: str) -> list[int]:
@@ -222,12 +294,9 @@ def _resolve_in_section(text: str, anchor: AnchorInSection) -> tuple[int, bool]:
     same hard-fail the after-heading resolver gives (there is no section to
     fall back into without the heading).
 
-    The section boundary + level-aware heading match are reused from
-    :mod:`setforge.markdown_spans` via a deferred import (that module imports
-    ``_FENCE_RE`` from here, so a module-level import would cycle).
+    The section boundary + level-aware heading match run through the
+    module-level :func:`_find_heading_lines` / :func:`_scan_end` scanners.
     """
-    from setforge.markdown_spans import _find_heading_lines, _scan_end
-
     matches = _find_heading_lines(text, anchor.level, anchor.heading)
     if not matches:
         raise AnchorNotFoundError(

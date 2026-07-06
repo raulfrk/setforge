@@ -69,9 +69,7 @@ LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
     {
         "_legacy_markers",  # frozen legacy marker reader (was sections.py)
         "section_mode",
-        "section_templates",
         "spans_store",
-        "markdown_spans",
         "overlay_inject",
     }
 )

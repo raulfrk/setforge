@@ -10,7 +10,11 @@ from __future__ import annotations
 import pytest
 
 from setforge.errors import AnchorAmbiguousError, AnchorNotFoundError
-from setforge.host_local_inject import _resolve_in_section, resolve_anchor
+from setforge.host_local_inject import (
+    _resolve_in_section,
+    heading_level,
+    resolve_anchor,
+)
 from setforge.source import (
     AnchorAfterHeading,
     AnchorAfterSection,
@@ -201,3 +205,24 @@ class TestResolveInSection:
         anchor = AnchorInSection(heading="A", level=2, after_line="x1", offset=1)
         with pytest.raises(AnchorAmbiguousError):
             _resolve_in_section("## A\nx1\n\n## A\nq\n", anchor)
+
+    def test_section_end_ignores_heading_inside_fence(self) -> None:
+        # A ``#``-line inside a fenced code block must NOT close the section,
+        # so the fallback end-of-section lands past the fence at the real
+        # next same-level heading (``## B``). Guards the fence-aware
+        # ``_scan_end`` re-established from the file head.
+        text = "## A\nx1\n```sh\n## not a heading inside a fence\n```\nmore\n## B\nb1\n"
+        anchor = AnchorInSection(heading="A", level=2, after_line="GONE", offset=99)
+        line, fell_back = _resolve_in_section(text, anchor)
+        assert fell_back is True
+        assert text.splitlines()[line] == "## B"
+
+
+class TestHeadingLevel:
+    """The pure ATX heading-level classifier folded into host_local_inject."""
+
+    def test_heading_level_counts_hash_run(self) -> None:
+        assert heading_level("# Top") == 1
+        assert heading_level("## Foo") == 2
+        assert heading_level("### Bar") == 3
+        assert heading_level("Not a heading") is None

@@ -5,8 +5,8 @@ reads host-local sections back OUT). Two call sites inject additive markdown
 sections at end-of-file and then persist them as LOCAL units carrying a stable
 ``reloc_anchor`` heading identity:
 
-- the install-time template seed
-  (``setforge.section_templates.seed_section_slots_to_store``), and
+- the install-time template seed (:func:`seed_section_slots_to_store`, housed
+  here), and
 - the 3.0 -> 4.0 span-surface-retire migration fold
   (``setforge.migrations._span_surface_retire._fold_sections``).
 
@@ -21,7 +21,10 @@ verbatim copies that can silently diverge.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
+from typing import TYPE_CHECKING
 
+from setforge.errors import ConfigError
 from setforge.reconcile import store
 from setforge.reconcile.hunks import (
     _section_heading,
@@ -31,7 +34,15 @@ from setforge.reconcile.hunks import (
 )
 from setforge.reconcile.types import FileId, HunkClass
 
-__all__ = ["record_local_reloc_sections", "section_heading_of_body"]
+if TYPE_CHECKING:
+    from setforge.config import Config, ResolvedProfile, SectionTemplateRef
+
+__all__ = [
+    "record_local_reloc_sections",
+    "resolve_template_src",
+    "section_heading_of_body",
+    "seed_section_slots_to_store",
+]
 
 
 def section_heading_of_body(body: bytes) -> str | None:
@@ -84,3 +95,138 @@ def record_local_reloc_sections(
         ]
     )
     store.record(profile, fid, base=base, local=new_local, hunks=rows)
+
+
+def resolve_template_src(ref: SectionTemplateRef, repo_root: Path) -> Path:
+    """Resolve a template ``src`` (relative to ``templates/``) to an absolute path.
+
+    Mirrors :func:`setforge.compare.resolve_src` (which roots tracked-file
+    ``src`` at ``<repo>/tracked/``); the template library is rooted at
+    ``<repo>/templates/`` instead.
+    """
+    return repo_root / "templates" / ref.src
+
+
+def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str | None:
+    """Return the first resolved tracked_file id whose ``src`` is markdown.
+
+    Host-local sections are supported only on markdown tracked_files (see
+    :func:`setforge.source.validate_host_local_sections_file_type`), so the
+    seed target must be one. ``None`` when the profile has no markdown
+    tracked_file to host the seeded section.
+    """
+    for tf_id in resolved.tracked_files:
+        tracked_file = cfg.tracked_files.get(tf_id)
+        if tracked_file is None:
+            continue
+        if tracked_file.src.suffix.lower() in {".md", ".markdown"}:
+            return tf_id
+    return None
+
+
+def seed_section_slots_to_store(
+    cfg: Config,
+    resolved: ResolvedProfile,
+    repo_root: Path,
+    profile: str,
+) -> list[str]:
+    """Seed a profile's ``section_slots`` as LOCAL reconcile-store units (seed-once).
+
+    Call INSIDE ``profile_lock`` and AFTER deploy (so deploy's pre-install store
+    snapshot is the pre-seed baseline a ``revert`` restores to). For each slot
+    whose template-body heading is not already a LOCAL+``reloc_anchor`` unit in
+    the profile's reconcile store, inject the canonical template body at
+    end-of-file into the target markdown tracked file's stored ``base``/``local``
+    and :func:`~setforge.reconcile.record` it as a LOCAL unit (host-local,
+    survives re-baselining). Returns the section names newly seeded (empty on the
+    seed-once no-op / no slots / no markdown target).
+
+    Writes NOTHING to ``local.yaml``; the host-local intent lives only
+    in the reconcile store, where :func:`host_local_sections_from_store` projects
+    it back for the seed-once gate and every other consumer. Raises
+    :class:`~setforge.errors.ConfigError` on an unreadable or headingless
+    template body (the store identity is heading-based, so a headingless body has
+    no stable ``reloc_anchor`` to fold onto).
+    """
+    import stat as stat_mod
+
+    from setforge import atomicio, reconcile
+    from setforge.anchors import AnchorAtEndOfFile
+    from setforge.body_canon import canonical_body, inject_body_at_anchor
+    from setforge.compare import resolve_dst, resolve_src
+    from setforge.reconcile.host_local_view import host_local_sections_from_store
+    from setforge.reconcile.types import file_id
+
+    if not resolved.section_slots:
+        return []
+    target_id = _first_markdown_tracked_file(cfg, resolved)
+    if target_id is None:
+        return []
+    fid = file_id(target_id)
+
+    # Seed-once: a heading already a LOCAL store unit is host-owned, skip it.
+    proj = host_local_sections_from_store(profile, fid)
+    already = set(proj.get(str(fid), {}))
+
+    residual: list[tuple[str, str]] = []
+    seeded: list[str] = []
+    for section_name, template_name in resolved.section_slots.items():
+        ref = cfg.section_templates[template_name]
+        src = resolve_template_src(ref, repo_root)
+        try:
+            body = src.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(
+                f"section_slots template {template_name!r} body file not "
+                f"readable: {src} ({exc})"
+            ) from exc
+        cbody = canonical_body(body)
+        heading = reconcile.section_heading_of_body(cbody.encode("utf-8"))
+        if heading is None:
+            raise ConfigError(
+                f"section_slots template {template_name!r} body has no markdown "
+                f"heading; the reconcile-store identity is heading-based, so a "
+                f"headingless template cannot seed a stable host-local unit: {src}"
+            )
+        if heading in already:
+            continue
+        residual.append((heading, cbody))
+        seeded.append(section_name)
+    if not residual:
+        return []
+
+    tracked_file = cfg.tracked_files[target_id]
+    dst = resolve_dst(tracked_file)
+    stored_base = reconcile.read_base(profile, fid)
+    if stored_base is not None:
+        base = stored_base
+    else:
+        src_path = resolve_src(tracked_file, repo_root)
+        base = src_path.read_bytes() if src_path.exists() else b""
+    # The engine preserves LIVE, never injects from the store: write live directly.
+    live_now = dst.read_bytes() if dst.exists() else base
+
+    entry = reconcile.read_index(profile).files.get(str(fid))
+    existing_hunks = list(entry.hunks) if entry is not None else []
+
+    anchor = AnchorAtEndOfFile()
+    text = live_now.decode("utf-8")
+    for _heading, cbody in residual:
+        text = inject_body_at_anchor(text, anchor, cbody)
+    new_live = text.encode("utf-8")
+
+    # Preserve the current mode (deploy just set it): no spurious re-mode.
+    mode = stat_mod.S_IMODE(dst.stat().st_mode) if dst.exists() else tracked_file.mode
+    atomicio.atomic_write_bytes(dst, new_live, mode=mode)
+
+    # Only the freshly-injected PENDING hunks get marked LOCAL (to mint reloc_anchor).
+    residual_headings = {heading for heading, _ in residual}
+    reconcile.record_local_reloc_sections(
+        profile,
+        fid,
+        base=base,
+        new_local=new_live,
+        existing_hunks=existing_hunks,
+        residual_headings=residual_headings,
+    )
+    return seeded
