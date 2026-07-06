@@ -4,7 +4,7 @@ Regression coverage for the bug where carved host-local content relocated to
 just under its enclosing heading instead of staying where it was hand-typed.
 These are pure-function tests over the carve → deploy primitives
 (``propose_anchor`` → ``inject_body_at_anchor``), mirroring the real
-``section detect`` → ``install`` round-trip without the docker e2e cost.
+carve → ``install`` round-trip without the docker e2e cost.
 """
 
 from __future__ import annotations

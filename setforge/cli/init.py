@@ -49,8 +49,7 @@ from setforge.errors import ConfirmRequiresInteractive
 # lazy ``__getattr__`` below so cold-start commands (``setforge --help``,
 # ``setforge validate``) skip the ~140ms prompt_toolkit import. Tests
 # monkeypatch ``setforge.cli.init.radiolist_dialog`` directly through the
-# same attribute path; mirror :mod:`setforge.cli._confirm` and
-# :mod:`setforge.cli.section` exactly.
+# same attribute path; mirror :mod:`setforge.cli._confirm` exactly.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
