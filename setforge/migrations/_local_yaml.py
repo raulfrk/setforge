@@ -156,9 +156,8 @@ def _build_overlay_span(name: str, section: CommentedMap) -> CommentedMap:
     orphan).
     """
     entry = CommentedMap()
-    # Insertion order mirrors the documented OVERLAY span shape: identity
-    # anchor, kind, semantics, then the nested overlay payload (the original
-    # section map, comments and scalar styles intact).
+    # CommentedMap serializes in insertion order, so this order fixes the
+    # documented OVERLAY span shape in the rewritten YAML.
     entry["anchor"] = name
     entry["kind"] = "overlay"
     entry["semantics"] = "host-local"
@@ -220,7 +219,6 @@ def migrate_local_yaml_overlay_spans(
     with path.open("r", encoding="utf-8") as fh:
         data = yaml.load(fh)
     if not isinstance(data, CommentedMap):
-        # An empty / non-mapping local.yaml has no tracked_files to migrate.
         return OverlayMigrationResult(migrated=False, section_count=0)
     tracked_files = data.get("tracked_files")
     if not isinstance(tracked_files, CommentedMap):
@@ -230,8 +228,6 @@ def migrate_local_yaml_overlay_spans(
         if isinstance(tracked_file, CommentedMap):
             total += _migrate_tracked_file(tracked_file)
     if total == 0:
-        # No-op: never rewrite a file that needs no migration (preserves
-        # byte-for-byte identity for the idempotent / already-migrated case).
         return OverlayMigrationResult(migrated=False, section_count=0)
     atomic_write_yaml(path, data)
     return OverlayMigrationResult(migrated=True, section_count=total)
@@ -251,11 +247,9 @@ def migrate_local_yaml(path: Path) -> OverlayMigrationResult:
     Returns the delegate's :class:`OverlayMigrationResult` so the caller
     can tell whether the file was rewritten and reload accordingly.
     """
-    # Today the only registered transform is the baseline-major span
-    # rewrite, which is itself a presence-check (idempotent, byte-exact on
-    # a clean file), so no explicit version gate is needed yet. A future
-    # in-major migration would branch here on
-    # ``detect_local_yaml_schema(path)`` before delegating.
+    # No explicit version gate yet — the one registered transform is
+    # presence-checked and idempotent; branch on detect_local_yaml_schema()
+    # here once a second migration lands.
     return migrate_local_yaml_overlay_spans(path)
 
 
