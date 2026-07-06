@@ -382,14 +382,10 @@ def _sync_snapshot_paths(
     """Tracked srcs under the profile + ``setforge.yaml`` + local.yaml.
 
     Includes :data:`LOCAL_CONFIG_PATH` so any capture-time mutation of
-    local.yaml rides the SYNC transition's patch. ``capture`` writes
-    local.yaml when a host-local OVERLAY body has been hand-edited and
-    the user (or ``--auto=use-live`` -> KEEP) keeps the edit:
-    ``_capture_overlay_bodies`` calls
-    ``overlay_body_wizard.write_edited_body_to_local`` inside
-    ``_run_capture``, AFTER ``file_pre`` is captured here. Snapshotting
+    local.yaml rides the SYNC transition's patch — the mutation is applied
+    by ``_run_capture`` AFTER ``file_pre`` is captured here. Snapshotting
     local.yaml in both ``file_pre`` and ``file_post`` lets ``revert``
-    restore the pre-edit body instead of silently losing it.
+    restore the pre-mutation state instead of silently losing it.
 
     The PROMOTE wizard also mutates local.yaml, but it fires BEFORE this
     function and records its own ``TransitionCommand.PROMOTE`` snapshot

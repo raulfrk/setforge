@@ -69,7 +69,7 @@ def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
 def build_overlay_span_node(name: str, body: str) -> CommentedMap:
     """Build an at-end-of-file host-local OVERLAY span YAML node.
 
-    Mirrors the shape :func:`setforge.overlay_migration._build_overlay_span`
+    Mirrors the shape :func:`setforge.migrations._local_yaml._build_overlay_span`
     produces: identity ``anchor`` (the section name), ``kind: overlay``,
     ``semantics: host-local``, and the nested ``overlay`` payload carrying the
     structured ``at-end-of-file`` splice anchor + the canonicalized body. The

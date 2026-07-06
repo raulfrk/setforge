@@ -197,34 +197,6 @@ class CaptureRequiresInteractive(SetforgeError):
     ``auto_accept`` parameter."""
 
 
-class OverlayBodyUnlocatable(SetforgeError):
-    """Raised when a deployed host-local overlay body cannot be proven excised.
-
-    The capture-side leak gate (:func:`setforge.capture._capture_overlay_bodies`)
-    must guarantee the tracked write is body-free. A span whose sidecar records
-    a ``last_deployed_body`` (a body WAS deployed at this anchor) but whose body
-    is now neither exactly present in the live file NOR fuzzy-locatable near its
-    anchor cannot be safely excised — capturing would leak the hand-edited
-    host-local body into the shared tracked repo. Rather than fail open, the
-    gate REFUSES before any tracked write.
-
-    The message names the file + anchor and the recovery: re-run
-    ``setforge install`` to re-impose the canonical body (so the exact needle
-    matches again), or lift the live edit into ``local.yaml`` by hand first.
-    """
-
-    def __init__(self, *, sub_name: str, anchor: str) -> None:
-        self.sub_name = sub_name
-        self.anchor = anchor
-        super().__init__(
-            f"host-local overlay body at {anchor!r} in {sub_name!r} was deployed "
-            "but is now neither present verbatim nor locatable near its anchor; "
-            "refusing to capture (would leak the host-local body into tracked). "
-            "Re-run `setforge install` to re-impose the canonical body, or lift "
-            "the live edit into local.yaml by hand first."
-        )
-
-
 class ConfirmRequiresInteractive(SetforgeError):
     """Raised when a mutating ``--auto*`` flag is set, stdin is not a
     TTY, and ``--yes`` was not passed.
@@ -294,22 +266,6 @@ class InvalidTransitionRecord(SetforgeError):
     the existing :class:`SetforgeError` handler so the user sees a
     clean error instead of an opaque ``ValueError`` from a tuple
     unpack mid-revert."""
-
-
-class InvalidLocalConfigShape(SetforgeError):
-    """Raised when hand-edited ``local.yaml`` has a wrong shape at an
-    overlay-body writeback target.
-
-    Surfaced by
-    :func:`setforge.overlay_body_wizard.write_edited_body_to_local` when the
-    keep-path tries to locate ``tracked_files.<id>.spans[*].overlay.body`` and
-    finds the ``tracked_file`` entry, the matching span, or its ``overlay``
-    node missing or a scalar rather than a mapping. ``local.yaml`` is
-    hand-editable, so this is a trust-boundary shape failure — same precedent
-    as :class:`InvalidTransitionRecord` for hand-edited JSON. Subclass of
-    :class:`SetforgeError` so the global handler renders it as
-    ``error: <message>`` naming the file + the missing/scalar key instead of
-    an opaque ``KeyError`` traceback."""
 
 
 class MarketplaceCacheMiss(SetforgeError):

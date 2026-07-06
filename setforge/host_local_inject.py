@@ -2,7 +2,7 @@
 
 Resolves a :data:`setforge.source.Anchor` against rendered markdown text to a
 line offset — the shared splice-point primitive the markerless overlay engine
-(:mod:`setforge.overlay_deploy` / :mod:`setforge.overlay_inject`) uses to place
+(:mod:`setforge.overlay_inject`) uses to place
 each host-local body. (The legacy marker-pair injection that once lived here was
 retired with the user-section markers; only the resolvers + EOL/fence helpers
 remain.)
