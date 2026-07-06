@@ -229,6 +229,41 @@ def test_restore_is_idempotent(state_dir: Path) -> None:
     assert paths[SnapshotStore.SCALAR_BASE].read_bytes() == b""
 
 
+def test_spans_manifest_snapshot_round_trip(state_dir: Path) -> None:
+    """A transition carrying a ``store="spans"`` manifest with real bytes must
+    still load + restore byte-exact after the spans_store live edge is inlined.
+
+    Pre-existing on-disk transitions carry ``store="spans"`` entries; the
+    ``SnapshotStore.SPANS`` case now inlines the manifest path instead of
+    reaching through the retired ``spans_store`` module. This guards that the
+    inlined path lands at the SAME on-disk location and the sidecar bytes
+    survive a capture -> mutate -> restore arc verbatim (no decode/re-encode).
+    """
+    spans_path = _store_paths(state_dir)[SnapshotStore.SPANS]
+    # A realistic sorted-key spans manifest (spans_store's on-disk shape).
+    manifest_bytes = (
+        b'{\n  "sha256:anchor": {\n    "anchor": "sha256:anchor",\n'
+        b'    "fingerprint": "sha256:deadbeef"\n  }\n}\n'
+    )
+    spans_path.parent.mkdir(parents=True, exist_ok=True)
+    spans_path.write_bytes(manifest_bytes)
+
+    # Capture goes through the inlined SPANS path -> must read these bytes.
+    captured = snapshot_store_state(SnapshotStore.SPANS, _PROFILE, "claude/CLAUDE.md")
+    assert captured.payload == manifest_bytes
+
+    out = _write((captured,))
+    loaded = load_state_snapshots(out)
+    assert loaded is not None
+    assert loaded[0].payload == manifest_bytes  # survives write + load byte-exact
+
+    # A later command overwrites the sidecar with drifted bytes...
+    spans_path.write_bytes(b'{"sha256:anchor": {"drifted": true}}\n')
+    restore_state_snapshots(loaded)
+    # ...and revert restores the captured manifest byte-exact at the same path.
+    assert spans_path.read_bytes() == manifest_bytes
+
+
 def test_snapshot_store_state_reads_current_bytes(state_dir: Path) -> None:
     """snapshot_store_state captures present bytes and absent-as-None."""
     base = _store_paths(state_dir)[SnapshotStore.BASE]

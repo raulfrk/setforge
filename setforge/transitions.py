@@ -837,21 +837,24 @@ _STATE_SNAPSHOTS_MANIFEST: Final[str] = "manifest.json"
 def _snapshot_target(store: SnapshotStore, profile: str, key: str) -> Path:
     """Resolve one snapshot entry to its on-disk store path.
 
-    Delegates to each store module's public path accessor so the
+    Delegates to each surviving store module's public path accessor so its
     traversal guard (relative key, no ``..``, stays inside the profile
-    subtree) and the per-store suffix convention (``.json`` for the two
-    manifest stores) live in exactly one place. The store modules import
-    :func:`state_root` from here, so the imports are deferred to call
-    time to keep the module graph acyclic.
+    subtree) and suffix convention live in one place; the store modules
+    import :func:`state_root` from here, so those imports are deferred to
+    call time to keep the module graph acyclic. The ``SPANS`` store is the
+    retired legacy sidecar, kept only so pre-existing ``store="spans"``
+    transitions still restore byte-exact — its manifest path
+    (``state_root()/spans/<profile>/<key>.json``) is inlined here rather
+    than reached through the retired ``spans_store`` module.
     """
-    from setforge import base_store, scalar_base_store, spans_store
+    from setforge import base_store, scalar_base_store
     from setforge.reconcile import store as reconcile_store
 
     match store:
         case SnapshotStore.BASE:
             return base_store.base_path(profile, key)
         case SnapshotStore.SPANS:
-            return spans_store.manifest_path(profile, key)
+            return state_root() / "spans" / profile / f"{key}.json"
         case SnapshotStore.SCALAR_BASE:
             return scalar_base_store.manifest_path(profile, key)
         case SnapshotStore.LOCAL_CONTENT:
