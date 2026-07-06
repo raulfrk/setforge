@@ -60,6 +60,7 @@ from setforge.structural_merge import merge_structural
 
 __all__ = [
     "AutoSide",
+    "ReconcileAuto",
     "ReconcileKind",
     "ReconcileOutcome",
     "SeedChoice",
@@ -67,6 +68,18 @@ __all__ = [
     "reconcile_plain_file",
     "reconcile_structured_file",
 ]
+
+
+class ReconcileAuto(StrEnum):
+    """Closed set of non-interactive resolutions for install reconcile.
+
+    The CLI ``--auto`` surface for ``--reconcile-user-sections``: ``USE_TRACKED``
+    deploys tracked-side updates over the live body, ``KEEP_LIVE`` keeps live.
+    Co-located with :class:`AutoSide` (the per-region merge side it maps onto).
+    """
+
+    USE_TRACKED = "use-tracked"
+    KEEP_LIVE = "keep-live"
 
 
 class AutoSide(StrEnum):

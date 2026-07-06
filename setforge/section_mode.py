@@ -5,27 +5,13 @@
 :attr:`~setforge.span_types.SpanEntry.capture_mode` WITHOUT the import
 cycle a ``spans → config → spans`` edge would create
 (:mod:`setforge.config` already imports :class:`~setforge.span_types.SpanEntry`).
-:mod:`setforge.config` re-exports the name for back-compat, so existing
-``from setforge.config import SectionMode`` call sites stay valid.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["ReconcileAuto", "SectionMode"]
-
-
-class ReconcileAuto(StrEnum):
-    """Closed set of non-interactive resolutions for install reconcile.
-
-    Relocated here (a leaf enum module) from the retired ``section_wizard`` so
-    the disposition / deploy / span-reconcile engine can dispatch on it without
-    reaching into a legacy marker module.
-    """
-
-    USE_TRACKED = "use-tracked"
-    KEEP_LIVE = "keep-live"
+__all__ = ["SectionMode"]
 
 
 class SectionMode(StrEnum):

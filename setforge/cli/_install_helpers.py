@@ -81,7 +81,6 @@ from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
 from setforge.reconcile.wizard import _claude_merge_unavailable
-from setforge.section_mode import ReconcileAuto
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -163,7 +162,7 @@ def _check_unexpected_drift(
 def _want_interactive_reconcile(
     *,
     reconcile_user_sections: bool,
-    section_auto: ReconcileAuto | None,
+    section_auto: reconcile_apply.ReconcileAuto | None,
 ) -> bool:
     """Whether install should resolve reconcile conflicts interactively.
 
@@ -189,7 +188,7 @@ def _deploy_all_tracked_files(
     ctx: ProfileContext,
     *,
     host_local_sections_map: Mapping[str, dict[HostLocalSectionName, HostLocalSection]],
-    section_auto: ReconcileAuto | None = None,
+    section_auto: reconcile_apply.ReconcileAuto | None = None,
     interactive: bool = False,
 ) -> DeployOutcome:
     """Deploy every tracked_file in two passes: resolve all, THEN write all.
@@ -318,16 +317,18 @@ def _seed_prompt_interactive(
     )
 
 
-def _auto_side(section_auto: ReconcileAuto | None) -> reconcile_apply.AutoSide | None:
+def _auto_side(
+    section_auto: reconcile_apply.ReconcileAuto | None,
+) -> reconcile_apply.AutoSide | None:
     """Map the install ``--auto`` mode onto the reconcile resolution side.
 
     ``keep-live`` keeps the live side (OURS); ``use-tracked`` takes the
     upstream side (THEIRS); ``None`` (no ``--auto``) leaves conflicts to
     defer / the wizard.
     """
-    if section_auto is ReconcileAuto.KEEP_LIVE:
+    if section_auto is reconcile_apply.ReconcileAuto.KEEP_LIVE:
         return reconcile_apply.AutoSide.OURS
-    if section_auto is ReconcileAuto.USE_TRACKED:
+    if section_auto is reconcile_apply.ReconcileAuto.USE_TRACKED:
         return reconcile_apply.AutoSide.THEIRS
     return None
 
@@ -340,7 +341,7 @@ def _resolve_plain_reconcile(
     tracked_file: TrackedFile,
     *,
     interactive: bool,
-    section_auto: ReconcileAuto | None,
+    section_auto: reconcile_apply.ReconcileAuto | None,
 ) -> _PendingDeploy | None:
     """Resolve a PLAIN tracked file through the 3-way reconcile engine.
 
@@ -405,7 +406,7 @@ def _resolve_structured_reconcile(
     tracked_file: TrackedFile,
     *,
     interactive: bool,
-    section_auto: ReconcileAuto | None,
+    section_auto: reconcile_apply.ReconcileAuto | None,
 ) -> _PendingDeploy | None:
     """Resolve a STRUCTURED (yaml/json/jsonc) tracked file via the key-aware engine.
 
@@ -469,7 +470,7 @@ def _resolve_one_pending(
     tracked_file: TrackedFile,
     *,
     host_local: dict[HostLocalSectionName, HostLocalSection] | None,
-    section_auto: ReconcileAuto | None,
+    section_auto: reconcile_apply.ReconcileAuto | None,
     interactive: bool,
 ) -> _PendingDeploy:
     """Resolve one sub-entry's pass-1 record (read-only; no writes).

@@ -24,7 +24,7 @@ from setforge.compare import (
 )
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import SetforgeError
-from setforge.section_mode import ReconcileAuto
+from setforge.reconcile_apply import ReconcileAuto
 
 
 @dataclass(slots=True, frozen=True)

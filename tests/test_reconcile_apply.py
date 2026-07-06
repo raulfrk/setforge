@@ -26,12 +26,21 @@ from setforge.reconcile import (
 from setforge.reconcile.wizard import CANCEL
 from setforge.reconcile_apply import (
     AutoSide,
+    ReconcileAuto,
     ReconcileKind,
     SeedChoice,
     reconcile_plain_file,
 )
 
 _PROFILE = "test-apply"
+
+
+def test_reconcile_auto_members() -> None:
+    # ReconcileAuto lives here (co-located with AutoSide) so the CLI --auto
+    # surface dispatches on it without importing a legacy marker module.
+    assert ReconcileAuto.USE_TRACKED == "use-tracked"
+    assert ReconcileAuto.KEEP_LIVE == "keep-live"
+    assert {m.value for m in ReconcileAuto} == {"use-tracked", "keep-live"}
 
 
 @pytest.fixture(autouse=True)
