@@ -6,7 +6,7 @@ set with [from local.yaml] / U+2212-prefixed remove tags, plus the
 footer summary line ``[Host overlay summary: ...]`` per Q9 Shape A.
 
 The renderer routes ALL tag wording through
-:func:`setforge.local_overlay.display_tag` — these tests fix the
+:func:`setforge.overlay_provenance.display_tag` — these tests fix the
 expected output strings so a future regression that bypasses
 ``display_tag`` surfaces here.
 """
@@ -21,7 +21,7 @@ from setforge.config import (
     MarketplaceSourceKind,
     Profile,
 )
-from setforge.local_overlay import (
+from setforge.overlay_provenance import (
     OverlayOrigin,
     ResolvedExtension,
     ResolvedMarketplace,
@@ -218,7 +218,7 @@ def test_render_uses_display_tag_for_wording() -> None:
     a future inline f-string that drifts from display_tag's literal would
     fail this comparison.
     """
-    from setforge.local_overlay import display_tag
+    from setforge.overlay_provenance import display_tag
 
     resolution = LocalOverlayResolution(
         plugins=[

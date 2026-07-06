@@ -390,7 +390,7 @@ class PluginOverlay(BaseModel):
     Lives under ``local.yaml``'s top-level ``plugins:`` key. Both lists
     default to empty so a partial overlay (only ``add`` or only ``remove``)
     is a valid shape; the resolver merges them with the profile chain at
-    load time via :func:`setforge.local_overlay.resolve_plugin_overlay`.
+    load time via :func:`setforge.overlay_provenance.resolve_plugin_overlay`.
 
     ``add`` entries use the same ``name@marketplace`` shape as
     ``Profile.claude_plugins`` so the bare-name @ marketplace dispatch in
@@ -466,7 +466,7 @@ class _LocalSourceConfig(BaseModel):
     from SPEC 8) plus the per-host plugin/extension/marketplace overlay
     blocks (SPEC 2) so the loader can apply the overlays
     at profile-resolution time via :mod:`setforge.preserved_keys` and
-    :mod:`setforge.local_overlay`.
+    :mod:`setforge.overlay_provenance`.
     """
 
     model_config = _STRICT

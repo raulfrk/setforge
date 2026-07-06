@@ -234,11 +234,11 @@ def _tag_provenance[T](
 
     1. If ``item`` appears in ``overlay_remove`` it was removed via
        ``local.yaml`` overlay — tag from
-       :func:`setforge.local_overlay.display_tag` with
+       :func:`setforge.overlay_provenance.display_tag` with
        :attr:`OverlayOrigin.LOCAL_REMOVE`.
     2. If ``item`` appears in ``overlay_add`` it was added via
        ``local.yaml`` overlay — tag from
-       :func:`setforge.local_overlay.display_tag` with
+       :func:`setforge.overlay_provenance.display_tag` with
        :attr:`OverlayOrigin.LOCAL_ADD`.
     3. If ``item`` first appears in the chain at ancestor ``X`` —
        tag ``[from profile X]``. ``chain_resolved_by_name`` is
@@ -253,12 +253,12 @@ def _tag_provenance[T](
     as a mutable-default avatar (frozensets are immutable).
 
     Overlay-origin wording is sourced from
-    :func:`setforge.local_overlay.display_tag` — the single source of
+    :func:`setforge.overlay_provenance.display_tag` — the single source of
     truth for SPEC 2 tag literals. Constructing the strings inline
     here would split the SoT (cf. the dedicated parity test in
     ``tests/test_local_overlay_resolver.py``).
     """
-    from setforge.local_overlay import OverlayOrigin, display_tag
+    from setforge.overlay_provenance import OverlayOrigin, display_tag
 
     if item in overlay_remove:
         return display_tag(OverlayOrigin.LOCAL_REMOVE)

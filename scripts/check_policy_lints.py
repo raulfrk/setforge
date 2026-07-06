@@ -73,7 +73,6 @@ LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
         "spans_store",
         "markdown_spans",
         "overlay_inject",
-        "local_overlay",
     }
 )
 

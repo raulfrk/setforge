@@ -30,7 +30,7 @@ from setforge.config import (
     apply_local_overlay,
 )
 from setforge.errors import ConfigError, ValidationErrorWithContext
-from setforge.local_overlay import LocalOverlayError, OverlayOrigin
+from setforge.overlay_provenance import LocalOverlayError, OverlayOrigin
 
 
 def _make_cfg(

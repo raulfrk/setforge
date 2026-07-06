@@ -48,7 +48,7 @@ from setforge.source import HostLocalSection, HostLocalSectionName
 
 if TYPE_CHECKING:
     from setforge.config import HostLocalTrackedFileOverride, LocalOverlayResolution
-    from setforge.local_overlay import (
+    from setforge.overlay_provenance import (
         OverlayOrigin,
         ResolvedExtension,
         ResolvedMarketplace,
@@ -977,9 +977,9 @@ def render_local_overlay_block(
     line so test fixtures can assert on string content directly. The
     SPEC 2 mockup uses the U+2212 minus sign for the remove tag; this
     function routes the literal through
-    :func:`setforge.local_overlay.display_tag` (SoT for the wording).
+    :func:`setforge.overlay_provenance.display_tag` (SoT for the wording).
     """
-    from setforge.local_overlay import (
+    from setforge.overlay_provenance import (
         has_local_overlay,
     )
 
@@ -1034,7 +1034,7 @@ def _emit_overlay_section(
     - ``+ value`` (no tag) for PROFILE.
     - U+2212 prefix + value + remove tag for LOCAL_REMOVE.
     """
-    from setforge.local_overlay import OverlayOrigin, display_tag
+    from setforge.overlay_provenance import OverlayOrigin, display_tag
 
     if not entries:
         return
@@ -1075,7 +1075,7 @@ def _format_overlay_footer_summary(
     with the minus character at U+2212 (decimal 8722) for column-width
     parity with the per-row remove markers.
     """
-    from setforge.local_overlay import OverlayOrigin
+    from setforge.overlay_provenance import OverlayOrigin
 
     def _counts(entries: "_OverlayResolvedEntries") -> tuple[int, int]:
         adds = sum(1 for e in entries if e.origin is OverlayOrigin.LOCAL_ADD)

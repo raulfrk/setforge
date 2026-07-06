@@ -48,8 +48,8 @@ from setforge.errors import (
     ValidationErrorWithContext,
 )
 from setforge.local_config import LocalConfig as _LocalConfig
-from setforge.local_overlay import LocalOverlayError, LocalOverlayLoadError
 from setforge.migrations._local_yaml import guard_local_yaml_schema
+from setforge.overlay_provenance import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
 from setforge.source import (
     ExtensionOverlay,

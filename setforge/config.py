@@ -24,7 +24,12 @@ from ruamel.yaml import YAML
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge.errors import ConfigError, ProfileNotFound
-from setforge.local_overlay import (
+from setforge.migrations import (
+    _meets_floor,
+    current_expected_schema_version,
+    parse_schema_version,
+)
+from setforge.overlay_provenance import (
     LocalOverlayError,
     LocalOverlayLoadError,
     ResolvedExtension,
@@ -33,11 +38,6 @@ from setforge.local_overlay import (
     resolve_extension_overlay,
     resolve_marketplace_overlay,
     resolve_plugin_overlay,
-)
-from setforge.migrations import (
-    _meets_floor,
-    current_expected_schema_version,
-    parse_schema_version,
 )
 
 if TYPE_CHECKING:
@@ -1146,7 +1146,7 @@ def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:
     mockup; ``remove`` entries are bare names. Returns ``(name, None)``
     when no ``@`` separator is present so the same parser drives both
     list shapes. Empty / whitespace-only refs raise
-    :class:`setforge.local_overlay.LocalOverlayError` (the resolver-
+    :class:`setforge.overlay_provenance.LocalOverlayError` (the resolver-
     phase sentinel) so a typo'd YAML list entry surfaces under the same
     error-routing arm as add ∩ remove collisions — load-phase failures
     are :class:`LocalOverlayLoadError`; this is a resolver-phase failure
@@ -1172,12 +1172,12 @@ def _parse_overlay_plugin_pid(pid: str) -> tuple[str, str | None]:
 class LocalOverlayResolution:
     """Resolved provenance lists for one apply_local_overlay() run.
 
-    Carries the three :class:`setforge.local_overlay` resolved lists so
+    Carries the three :class:`setforge.overlay_provenance` resolved lists so
     callers (compare's overlay-block renderer, install's per-line
     provenance) can display ``[from local.yaml]`` / SPEC-2 remove tags
     without re-running the resolvers. Callers that need to suppress the
     footer summary on a no-op overlay walk should use
-    :func:`setforge.local_overlay.has_local_overlay` on the relevant
+    :func:`setforge.overlay_provenance.has_local_overlay` on the relevant
     field — gating is data-driven (LOCAL_ADD / LOCAL_REMOVE membership),
     not configuration-shape-driven.
     """
@@ -1201,7 +1201,7 @@ def _load_overlay_blocks(
 
     Load-phase failures (YAML parse error, non-mapping top level,
     Pydantic shape error in an overlay block) are re-raised as
-    :class:`setforge.local_overlay.LocalOverlayLoadError` — a sentinel
+    :class:`setforge.overlay_provenance.LocalOverlayLoadError` — a sentinel
     subclass of :class:`ConfigError` — so the validate CLI can
     distinguish them from cross-ref-phase failures (which keep raising
     bare :class:`ConfigError`). The distinction matters because a
@@ -1237,8 +1237,8 @@ def _resolve_provenance_lists(
 ]:
     """Resolve the three provenance lists for the SPEC 2 overlay.
 
-    Each :mod:`setforge.local_overlay` resolver raises
-    :class:`setforge.local_overlay.LocalOverlayError` (a
+    Each :mod:`setforge.overlay_provenance` resolver raises
+    :class:`setforge.overlay_provenance.LocalOverlayError` (a
     :class:`ConfigError`) on collision or unknown-remove — the caller
     surfaces those errors under the validate report-all-then-refuse
     contract.

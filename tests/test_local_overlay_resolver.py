@@ -1,15 +1,15 @@
 """Unit tests for the local.yaml plugin/extension/marketplace overlay resolvers.
 
 Spec: SPEC 2. Validates the semantics of
-:func:`setforge.local_overlay.resolve_plugin_overlay`,
-:func:`setforge.local_overlay.resolve_extension_overlay`, and
-:func:`setforge.local_overlay.resolve_marketplace_overlay` — the
+:func:`setforge.overlay_provenance.resolve_plugin_overlay`,
+:func:`setforge.overlay_provenance.resolve_extension_overlay`, and
+:func:`setforge.overlay_provenance.resolve_marketplace_overlay` — the
 contract that ``compare`` / ``install`` / ``validate`` rely on to
 display provenance tags per SPEC 2's ``[from local.yaml]`` (adds) and
 U+2212-prefixed ``removed via local.yaml`` (removes) shape — see
-:func:`setforge.local_overlay.display_tag` for the verbatim wording.
+:func:`setforge.overlay_provenance.display_tag` for the verbatim wording.
 
-Also pins :func:`setforge.local_overlay.display_tag` as the SINGLE
+Also pins :func:`setforge.overlay_provenance.display_tag` as the SINGLE
 source of truth for the tag wording so a future inline f-string in
 install / compare / validate code paths will fail one of the
 substring asserts at the bottom of this file.
@@ -25,7 +25,7 @@ import pytest
 
 from setforge.config import MarketplaceSourceKind
 from setforge.errors import ConfigError
-from setforge.local_overlay import (
+from setforge.overlay_provenance import (
     LocalOverlayError,
     OverlayOrigin,
     ResolvedExtension,
@@ -447,7 +447,7 @@ def test_display_tag_single_source_of_truth_in_codebase() -> None:
     Walks every ``setforge/**/*.py`` for the U+2212-prefixed
     ``removed via local.yaml`` literal (the SPEC-2-specific tag with
     U+2212 MINUS SIGN); allows it only inside
-    ``setforge/local_overlay.py`` (definition site). Any other site is
+    ``setforge/overlay_provenance.py`` (definition site). Any other site is
     an anti-smell hit — the caller MUST go through :func:`display_tag`.
 
     The ``[from local.yaml]`` tag is intentionally NOT checked here:
@@ -468,7 +468,7 @@ def test_display_tag_single_source_of_truth_in_codebase() -> None:
     remove_tag = f"[{minus} removed via local.yaml]"
     offenders: list[tuple[Path, int]] = []
     for py in pkg_root.rglob("*.py"):
-        if py.name == "local_overlay.py":
+        if py.name == "overlay_provenance.py":
             continue
         text = py.read_text(encoding="utf-8")
         tree = ast.parse(text, filename=str(py))
@@ -483,7 +483,7 @@ def test_display_tag_single_source_of_truth_in_codebase() -> None:
     assert not offenders, (
         f"SPEC 2 remove tag literal constructed outside display_tag(): "
         f"{offenders}. Route all tag wording through "
-        "setforge.local_overlay.display_tag."
+        "setforge.overlay_provenance.display_tag."
     )
 
 
@@ -499,14 +499,14 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
 
     Two legitimate definition sites are allow-listed:
 
-    - ``setforge/local_overlay.py`` — SPEC 2 SoT (plugin / extension
+    - ``setforge/overlay_provenance.py`` — SPEC 2 SoT (plugin / extension
       / marketplace overlay tags).
     - ``setforge/preserved_keys.py`` — SPEC 8 SoT (``preserve_user_keys``
       overlay tag — independent concern with the same wording, declared
       separately by design).
 
     Every other ``setforge/**/*.py`` MUST source the literal via
-    :func:`setforge.local_overlay.display_tag` (or
+    :func:`setforge.overlay_provenance.display_tag` (or
     :func:`setforge.preserved_keys.display_tag` for SPEC 8 callers).
 
     Hardened (round 4): the original implementation walked only
@@ -530,7 +530,7 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
 
     pkg_root = Path(setforge.__file__).parent
     add_tag = "[from local.yaml]"
-    allow = {"local_overlay.py", "preserved_keys.py"}
+    allow = {"overlay_provenance.py", "preserved_keys.py"}
     offenders: list[tuple[Path, int]] = []
     for py in pkg_root.rglob("*.py"):
         if py.name in allow:
@@ -548,7 +548,7 @@ def test_display_tag_local_add_single_source_of_truth_in_codebase() -> None:
     assert not offenders, (
         f"SPEC 2 ADD tag literal constructed outside display_tag(): "
         f"{offenders}. Route all tag wording through "
-        "setforge.local_overlay.display_tag (SPEC 2) or "
+        "setforge.overlay_provenance.display_tag (SPEC 2) or "
         "setforge.preserved_keys.display_tag (SPEC 8)."
     )
 
