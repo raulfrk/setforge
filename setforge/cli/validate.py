@@ -47,7 +47,7 @@ from setforge.errors import (
     ValidationErrorWithContext,
 )
 from setforge.local_config import LocalConfig as _LocalConfig
-from setforge.migrations._local_yaml import guard_local_yaml_schema
+from setforge.migrations._local_yaml import guard_local_yaml_schema, strip_retired_keys
 from setforge.overlay_provenance import LocalOverlayError, LocalOverlayLoadError
 from setforge.paths import template_context
 from setforge.source import (
@@ -402,6 +402,15 @@ def _check_local_yaml(
     # malformed schema_version surfaces as a ConfigError, not a Pydantic
     # ValidationError. validate is read-only, so no migration runs here.
     guard_local_yaml_schema(data, local_yaml_path)
+    # Strip the retired host_local_sections / OVERLAY spans keys IN MEMORY
+    # before the extra="forbid" models validate — mirrors the loader
+    # (_load_local_source_config in source.py). The span-declaration surface is
+    # retired permanently and version-independently, so a pre-4.0 / 4.0
+    # local.yaml still carrying those keys must validate clean: the strict
+    # _LocalTrackedFileOverlay no longer declares them, and without this strip
+    # a surviving retired key trips extra_forbidden. In-memory only — the
+    # on-disk retirement is owned by the span-surface-retire migration.
+    strip_retired_keys(data)
     try:
         _LocalConfig.model_validate(dict(data))
     except ValidationError as exc:
