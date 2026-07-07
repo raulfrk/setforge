@@ -64,12 +64,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --- legacy subsystem (SAFE-2) -------------------------------------------------
 # The four old mechanisms: disposition / sections / spans / overlays. A new-engine
-# module importing any of these (by leaf module name) is a violation.
-LEGACY_MODULES_BANNED: frozenset[str] = frozenset(
-    {
-        "section_mode",
-    }
-)
+# module importing any of these (by leaf module name) is a violation. EMPTY today:
+# the last legacy leaf (``section_mode``) was retired at schema 5.0, so the ban
+# list is drained and the SAFE-2 guard sits DORMANT — it fires nothing until a
+# future legacy leaf is re-listed. The lint mechanism is kept live (tested against
+# a synthetic banned name) so re-arming is a one-line change.
+LEGACY_MODULES_BANNED: frozenset[str] = frozenset()
 
 # New-engine packages whose code must NOT reach back into the legacy subsystem.
 # Empty of files today (the new engine lands here later); the ban activates

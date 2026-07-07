@@ -184,7 +184,7 @@ def _translate_sections(tracked_file: CommentedMap, roots: MigrationRoots) -> bo
     so a pre-hash tracked source still enumerates). No markers -> no span, still drop
     the flag (a clean converge). Each marked section is split by its semantics:
 
-    * **shared** -> a section :class:`SpanEntry` (``kind: pinned``) carrying the
+    * **shared** -> a section ``spans`` entry (``kind: pinned``) carrying the
       file's ``capture_mode``; the file takes ``disposition: shared`` so the
       shared 3-way merge (with base auto-seed) is active at install.
     * **host-local** -> a markerless host-local OVERLAY span sourced from the

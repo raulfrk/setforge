@@ -7,10 +7,9 @@ markdown tracked file at install time. The six shapes — ``after-heading``,
 case-fold) by the inject engine (:mod:`setforge.host_local_inject`).
 
 This module is a LEAF: it imports nothing from setforge beyond the Pydantic
-primitives, so both :mod:`setforge.source` (the host-local overlay loader)
-and :mod:`setforge.span_types` (the OVERLAY span payload) can import the same
-:data:`Anchor` union without forming an import cycle. :mod:`setforge.source`
-re-exports these names for backward compatibility.
+primitives, so :mod:`setforge.source` (the host-local overlay loader) can
+import the :data:`Anchor` union without forming an import cycle.
+:mod:`setforge.source` re-exports these names for backward compatibility.
 """
 
 from __future__ import annotations

@@ -47,20 +47,21 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_four_zero() -> None:
-    """The build now expects schema 4.0 after the span-surface-retire bump."""
-    assert current_expected_schema_version == "4.0"
+def test_current_expected_schema_version_is_five_zero() -> None:
+    """The build now expects schema 5.0 after the span-types-retire bump."""
+    assert current_expected_schema_version == "5.0"
 
 
 def test_migrations_registry_has_the_version_stamp_chain() -> None:
-    """The registry ships the 1.0→1.1→1.2→2.0→2.1→3.0→4.0 chain, in order."""
-    assert len(MIGRATIONS) == 6
+    """The registry ships the 1.0→1.1→1.2→2.0→2.1→3.0→4.0→5.0 chain, in order."""
+    assert len(MIGRATIONS) == 7
     assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
     assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
     assert (MIGRATIONS[2].from_version, MIGRATIONS[2].to_version) == ("1.2", "2.0")
     assert (MIGRATIONS[3].from_version, MIGRATIONS[3].to_version) == ("2.0", "2.1")
     assert (MIGRATIONS[4].from_version, MIGRATIONS[4].to_version) == ("2.1", "3.0")
     assert (MIGRATIONS[5].from_version, MIGRATIONS[5].to_version) == ("3.0", "4.0")
+    assert (MIGRATIONS[6].from_version, MIGRATIONS[6].to_version) == ("4.0", "5.0")
     # Appended in from_version order so the forward walk never has to sort.
     assert isinstance(MIGRATIONS[1], RestampMigration)
 
@@ -226,7 +227,7 @@ def test_find_migration_path_reverse_one_step() -> None:
 def test_find_migration_path_unreachable_target_returns_empty() -> None:
     """A target no chain reaches terminates with () — never hangs."""
     assert find_migration_path(from_v="1.1", to_v="0.9") == ()
-    assert find_migration_path(from_v="1.0", to_v="5.0") == ()
+    assert find_migration_path(from_v="1.0", to_v="6.0") == ()
 
 
 def test_find_migration_path_malformed_version_raises_configerror() -> None:
@@ -784,7 +785,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "4.0" in captured.err
+    assert "5.0" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1006,3 +1007,157 @@ def test_restamp_reverse_non_mapping_root_raises_config_error(
     cfg = _seed_cfg(tmp_path, body)
     with pytest.raises(ConfigError):
         _RESTAMP_1_1_TO_1_2.reverse.apply(roots=_roots_for(cfg))
+
+
+# ---------------------------------------------------------------------------
+# Seventh real migration — span-types-retire restamp 4.0 → 5.0 (+ reverse).
+#
+# A SYMMETRIC restamp like 1.1 ↔ 1.2: both endpoints carry schema_version, so
+# the 5.0 → 4.0 reverse RESTAMPS (never strips) and is REACHABLE (no refuse).
+# apply() is restamp-only but defensively refuses a config still carrying a
+# retired `spans` block (the span surface was stripped at 3.0 → 4.0).
+# ---------------------------------------------------------------------------
+
+_CFG_BODY_AT_4_0: Final[str] = (
+    "# top comment\n"
+    "version: 1\n"
+    "schema_version: '4.0'\n"
+    "tracked_files:\n"
+    "  foo:\n"
+    "    src: foo.md  # eol comment\n"
+    "    dst: foo.md\n"
+    "profiles:\n"
+    "  base:\n"
+    "    tracked_files:\n"
+    "      - foo\n"
+)
+
+
+def _span_types_retire() -> Migration:
+    from setforge.migrations._span_types_retire import SpanTypesRetireMigration
+
+    return SpanTypesRetireMigration()
+
+
+def test_span_types_retire_is_registered_and_terminal() -> None:
+    """The 4.0 → 5.0 step is the LAST registered migration."""
+    from setforge.migrations._span_types_retire import SpanTypesRetireMigration
+
+    assert isinstance(MIGRATIONS[-1], SpanTypesRetireMigration)
+    assert (MIGRATIONS[-1].from_version, MIGRATIONS[-1].to_version) == ("4.0", "5.0")
+    assert MIGRATIONS[-1].to_version == current_expected_schema_version
+
+
+def test_span_types_retire_satisfies_protocol_and_owns_terminal_transition() -> None:
+    m = _span_types_retire()
+    assert isinstance(m, Migration)
+    # Chain-terminal: the forward records its own origin-threading transition so
+    # one revert reaches the chain origin even past an earlier cutover's 4.0 image.
+    assert m.writes_own_transition is True  # type: ignore[attr-defined]
+    # A standalone 5.0 → 4.0 down-migration is single-step: the driver records it.
+    assert m.reverse.writes_own_transition is False  # type: ignore[attr-defined]
+
+
+def test_span_types_retire_reverse_is_swapped_and_reachable_symmetric() -> None:
+    """The reverse swaps 5.0 → 4.0, is a real restamp (not a refuse), symmetric."""
+    m = _span_types_retire()
+    rev = m.reverse
+    assert (rev.from_version, rev.to_version) == ("5.0", "4.0")
+    # reverse-of-reverse is the original forward direction.
+    assert (rev.reverse.from_version, rev.reverse.to_version) == ("4.0", "5.0")
+
+
+def test_span_types_retire_find_path_reachable_both_ways() -> None:
+    """4.0 → 5.0 forward AND 5.0 → 4.0 reverse both resolve to a one-step chain."""
+    fwd = find_migration_path(from_v="4.0", to_v="5.0")
+    assert len(fwd) == 1
+    assert (fwd[0].from_version, fwd[0].to_version) == ("4.0", "5.0")
+
+    rev = find_migration_path(from_v="5.0", to_v="4.0")
+    assert len(rev) == 1
+    assert (rev[0].from_version, rev[0].to_version) == ("5.0", "4.0")
+
+
+def test_span_types_retire_apply_stamps_in_place_preserving_order(
+    tmp_path: Path,
+) -> None:
+    """``apply`` overwrites schema_version 4.0 → 5.0 in place — position unchanged."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_4_0)
+    yaml = yaml_rt()
+    before_keys = list(yaml.load(_CFG_BODY_AT_4_0).keys())
+
+    _span_types_retire().apply(roots=_roots_for(cfg))
+
+    assert detect_current_schema(cfg) == "5.0"
+    after = cfg.read_text(encoding="utf-8")
+    assert "# top comment" in after
+    assert "# eol comment" in after
+    assert "- foo" in after
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert list(data.keys()) == before_keys
+    assert data["schema_version"] == "5.0"
+
+
+def test_span_types_retire_reverse_restamps_four_zero_not_strips(
+    tmp_path: Path,
+) -> None:
+    """The 5.0 → 4.0 reverse leaves '4.0' present, NOT absence (a restamp)."""
+    cfg = _seed_cfg(tmp_path, "schema_version: '5.0'\n" + _CFG_BODY_NO_VERSION)
+    _span_types_retire().reverse.apply(roots=_roots_for(cfg))
+    yaml = yaml_rt()
+    with cfg.open("r", encoding="utf-8") as fh:
+        data = yaml.load(fh)
+    assert "schema_version" in data  # NOT stripped
+    assert data["schema_version"] == "4.0"
+    assert detect_current_schema(cfg) == "4.0"  # NOT "1.0"
+
+
+def test_span_types_retire_up_down_up_is_byte_identical(tmp_path: Path) -> None:
+    """up → down → up on the 4.0 config is byte-identical + reorder-safe."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_4_0)
+    roots = _roots_for(cfg)
+    fwd = _span_types_retire()
+    rev = fwd.reverse
+
+    fwd.apply(roots=roots)  # 4.0 → 5.0 (normalizes + stamps)
+    after_first_up = cfg.read_bytes()
+
+    rev.apply(roots=roots)  # 5.0 → 4.0
+    fwd.apply(roots=roots)  # 4.0 → 5.0 again
+
+    assert cfg.read_bytes() == after_first_up
+    assert detect_current_schema(cfg) == "5.0"
+
+
+def test_span_types_retire_apply_refuses_stray_spans(tmp_path: Path) -> None:
+    """A 4.0 config still carrying a `spans` block is refused, not restamped."""
+    body = (
+        "version: 1\n"
+        "schema_version: '4.0'\n"
+        "tracked_files:\n"
+        "  foo:\n"
+        "    src: foo.md\n"
+        "    dst: foo.md\n"
+        "    spans:\n"
+        "      - anchor: '## Notes'\n"
+        "profiles:\n"
+        "  base: {}\n"
+    )
+    cfg = _seed_cfg(tmp_path, body)
+    with pytest.raises(ConfigError, match="span-declaration surface was retired"):
+        _span_types_retire().apply(roots=_roots_for(cfg))
+    # Nothing was stamped: the config is still at 4.0.
+    assert detect_current_schema(cfg) == "4.0"
+
+
+def test_span_types_retire_manifest_and_affected_paths(tmp_path: Path) -> None:
+    """manifest()/affected_paths() describe exactly the single-file in-place stamp."""
+    cfg = _seed_cfg(tmp_path, _CFG_BODY_AT_4_0)
+    roots = _roots_for(cfg)
+    m = _span_types_retire()
+    assert m.affected_paths(roots=roots) == (cfg,)
+    (entry,) = m.manifest(roots=roots)
+    assert entry.type is ManifestType.EDIT
+    assert entry.affected_path == cfg
+    assert "schema_version" in entry.description

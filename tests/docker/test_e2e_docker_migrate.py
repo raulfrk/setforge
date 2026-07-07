@@ -1,12 +1,12 @@
 """Docker e2e tests for ``setforge migrate`` — the schema version-stamp chain.
 
-Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 migration chain end-to-end
-against a real Debian 12 container + the installed ``setforge`` binary:
+Exercises the 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 migration chain
+end-to-end against a real Debian 12 container + the installed ``setforge`` binary:
 
-- ``migrate --check`` lists the full 1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 chain
+- ``migrate --check`` lists the full 1.0 → … → 4.0 → 5.0 chain
   on a frozen 1.0 config (the listing never gates, so it shows all steps).
-- ``migrate --apply --yes`` walks the chain to ``schema_version: '4.0'`` (the
-  build's current expected) and writes a ``.pre-4.0.bak`` backup sibling. The
+- ``migrate --apply --yes`` walks the chain to ``schema_version: '5.0'`` (the
+  build's current expected) and writes a ``.pre-5.0.bak`` backup sibling. The
   destructive 1.2 → 2.0 contract step is gated on an operator-declared
   ``minimum_version >= 2.0``, so the apply-family configs carry that floor.
 - ``migrate --pin=1.0`` round-trips (pins back to the chain's from_version).
@@ -86,11 +86,12 @@ def _seed_floored_config(c: ContainerHandle) -> None:
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --check`` lists the full 1.0 → … → 3.0 → 4.0 chain.
+    """``migrate --check`` lists the full 1.0 → … → 4.0 → 5.0 chain.
 
     The listing never gates on the contract floor, so a floorless frozen 1.0
     config still shows all steps (including the 1.2 → 2.0 contract, the
-    2.0 → 2.1 marker-retire step, and the 3.0 → 4.0 span-surface-retire cutover).
+    2.0 → 2.1 marker-retire step, the 3.0 → 4.0 span-surface-retire cutover, and
+    the 4.0 → 5.0 span-types-retire restamp).
     """
     c = docker_container()
     _seed_frozen_config(c)
@@ -100,20 +101,21 @@ def test_migrate_check_lists_the_stamp(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = result.stdout + result.stderr
-    assert "6 migration(s) available" in combined, combined
+    assert "7 migration(s) available" in combined, combined
     assert "1.0 → 1.1" in combined, combined
     assert "1.1 → 1.2" in combined, combined
     assert "1.2 → 2.0" in combined, combined
     assert "2.0 → 2.1" in combined, combined
     assert "2.1 → 3.0" in combined, combined
     assert "3.0 → 4.0" in combined, combined
+    assert "4.0 → 5.0" in combined, combined
     assert "schema_version" in combined, combined
 
 
 def test_migrate_apply_stamps_schema_version_with_backup(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``migrate --apply --yes`` stamps ``schema_version: '4.0'`` + writes a backup."""
+    """``migrate --apply --yes`` stamps ``schema_version: '5.0'`` + writes a backup."""
     c = docker_container()
     _seed_floored_config(c)
     result = c.exec(
@@ -130,10 +132,10 @@ def test_migrate_apply_stamps_schema_version_with_backup(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     after = c.read_text(_CFG_PATH)
-    # A frozen-1.0 apply runs the full chain to the build's expected version (4.0).
-    assert "schema_version: '4.0'" in after, after
+    # A frozen-1.0 apply runs the full chain to the build's expected version (5.0).
+    assert "schema_version: '5.0'" in after, after
     # The APPLY_WITH_BACKUP default writes a .pre-<chain-end>.bak sibling.
-    backup = c.read_text(f"{_CFG_PATH}.pre-4.0.bak")
+    backup = c.read_text(f"{_CFG_PATH}.pre-5.0.bak")
     assert "schema_version" not in backup, backup
 
 
@@ -143,11 +145,10 @@ def test_migrate_apply_is_revertible(
     """A frozen-1.0 migrate --apply reverts to the byte-exact origin (INV-5).
 
     The frozen 1.0 config (no schema_version) is stamped through the full chain
-    to 4.0. The chain ends in the span-surface-retire cutover, which records the
-    single durable transition (commit-before-unlink); the migrate driver threads
-    its pre-chain frozen image into that transition, so ONE ``setforge revert
-    --profile=migrate`` walks the config all the way back to the frozen-1.0
-    origin — not merely an intermediate schema state.
+    to 5.0. The chain-terminal span-types-retire restamp records the single
+    durable transition threading the migrate driver's pre-chain frozen image, so
+    ONE ``setforge revert --profile=migrate`` walks the config all the way back
+    to the frozen-1.0 origin — not merely an intermediate schema state.
     """
     c = docker_container()
     _seed_floored_config(c)
@@ -167,7 +168,7 @@ def test_migrate_apply_is_revertible(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '4.0'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '5.0'" in c.read_text(_CFG_PATH)
 
     revert_res = c.exec(
         [
@@ -206,10 +207,10 @@ def test_migrate_2_1_to_3_0_strips_disposition_and_reverts(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
     """The 2.1 config migrates forward through the full chain to a clean, valid
-    4.0 config and is revertible.
+    5.0 config and is revertible.
 
     A 2.1 config declaring ``disposition:`` is migrated to the build's current
-    4.0: the retired ``disposition`` key is stripped at the 2.1 → 3.0 step so
+    5.0: the retired ``disposition`` key is stripped at the 2.1 → 3.0 step so
     ``validate`` accepts the result, then ``setforge revert --profile=migrate``
     byte-restores the pre-migration 2.1 config (disposition key back).
     """
@@ -233,7 +234,7 @@ def test_migrate_2_1_to_3_0_strips_disposition_and_reverts(
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
     after = c.read_text(_CFG_PATH)
-    assert "schema_version: '4.0'" in after, after
+    assert "schema_version: '5.0'" in after, after
     assert "disposition" not in after, after
 
     validate_res = c.exec(
@@ -271,7 +272,7 @@ def test_migrate_pin_round_trips_to_from_version(
     """``migrate --pin=1.0`` writes the from_version back into setforge.yaml."""
     c = docker_container()
     _seed_floored_config(c)
-    # First stamp it through the chain to 4.0, then pin back to 1.0.
+    # First stamp it through the chain to 5.0, then pin back to 1.0.
     apply_res = c.exec(
         [
             "uv",
@@ -285,7 +286,7 @@ def test_migrate_pin_round_trips_to_from_version(
         check=False,
     )
     assert apply_res.returncode == 0, apply_res.stdout + apply_res.stderr
-    assert "schema_version: '4.0'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '5.0'" in c.read_text(_CFG_PATH)
 
     pin_res = c.exec(
         ["uv", "run", "setforge", "migrate", "--pin=1.0", f"--config={_CFG_PATH}"],
@@ -295,8 +296,8 @@ def test_migrate_pin_round_trips_to_from_version(
     after = c.read_text(_CFG_PATH)
     assert "schema_version" in after, after
     assert "1.0" in after, after
-    # The pin overwrote the applied 4.0 stamp in place.
-    assert "schema_version: '4.0'" not in after, after
+    # The pin overwrote the applied 5.0 stamp in place.
+    assert "schema_version: '5.0'" not in after, after
 
 
 def test_frozen_pre_bump_config_still_installs(
@@ -314,7 +315,7 @@ def test_frozen_pre_bump_config_still_installs(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    # The schema-mismatch warning fires (1.0 declared vs 1.1 expected) but
+    # The schema-mismatch warning fires (1.0 declared vs 5.0 expected) but
     # install proceeds and deploys the tracked file.
     combined = result.stdout + result.stderr
     assert "schema_version" in combined, combined
@@ -412,11 +413,13 @@ def test_downgrade_across_marker_retire_refuses(
     The 4.0 span-surface retirement is ONE-WAY: a stateless reverse cannot
     regenerate the retired host-local span-declaration surface from the per-unit
     SHARED/LOCAL store it folded into. Applying forward to the build's current
-    4.0 then requesting ``--to=2.0`` hits that irreversible reverse step FIRST
-    (4.0 → 3.0, before ever reaching the 2.0 → 2.1 marker boundary), so it must
-    refuse with the irreversibility message and roll back, leaving the config at
-    4.0 — the reversible window is served by ``setforge revert --profile=migrate``
-    (byte-restore), not by a stateless reverse migration.
+    5.0 then requesting ``--to=2.0`` walks the reachable 5.0 → 4.0 span-types
+    restamp first, then hits that irreversible 4.0 → 3.0 reverse step (before ever
+    reaching the 2.0 → 2.1 marker boundary), so the chain refuses with the
+    irreversibility message and ATOMICALLY rolls back the completed 5.0 → 4.0
+    step, leaving the config at 5.0 — the reversible window is served by
+    ``setforge revert --profile=migrate`` (byte-restore), not by a stateless
+    reverse migration.
     """
     c = docker_container()
     _seed_floored_config(c)
@@ -433,7 +436,7 @@ def test_downgrade_across_marker_retire_refuses(
         check=False,
     )
     assert up.returncode == 0, up.stdout + up.stderr
-    assert "schema_version: '4.0'" in c.read_text(_CFG_PATH)
+    assert "schema_version: '5.0'" in c.read_text(_CFG_PATH)
 
     down = c.exec(
         [
@@ -453,16 +456,16 @@ def test_downgrade_across_marker_retire_refuses(
     assert "cannot down-migrate from schema 4.0 to 3.0" in combined, combined
     assert "cannot be regenerated" in combined, combined
     assert "Traceback (most recent call last)" not in combined, combined
-    # The refused downgrade rolled back: the config is still at 4.0.
-    assert "schema_version: '4.0'" in c.read_text(_CFG_PATH)
+    # The refused downgrade atomically rolled back the 5.0 → 4.0 step: still 5.0.
+    assert "schema_version: '5.0'" in c.read_text(_CFG_PATH)
 
 
 def test_install_cross_major_config_refuses_clean(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A 5.0 config on this (4.x) engine refuses cleanly — no traceback."""
+    """A 6.0 config on this (5.x) engine refuses cleanly — no traceback."""
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "5.0"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "6.0"\n'))
     result = c.exec(
         ["uv", "run", "setforge", "install", "--profile=base"],
         check=False,
@@ -517,12 +520,12 @@ def test_sub_floor_engine_refuses_all_config_verbs(
 ) -> None:
     """A floor above this build's schema refuses every config-reading verb.
 
-    minimum_version 4.5 puts this (schema-4.0) engine below the floor, so the
+    minimum_version 5.5 puts this (schema-5.0) engine below the floor, so the
     floor fires and refuses every config-reading verb. ``--version`` (no config
     read) stays usable.
     """
     c = docker_container()
-    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "4.5"\n'))
+    _seed_cfg(c, _cfg_with_schema('schema_version: "2.0"\nminimum_version: "5.5"\n'))
     for verb in (
         ["install", "--profile=base"],
         ["compare", "--profile=base"],

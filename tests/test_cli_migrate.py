@@ -470,7 +470,7 @@ def test_pin_rejects_unknown_version_real_registry(tmp_path: Path) -> None:
 
 
 def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
-    """B-M5: lists the real 1.0→1.1→1.2→2.0→2.1→3.0→4.0 chain on 1.0."""
+    """B-M5: lists the real 1.0→1.1→1.2→2.0→2.1→3.0→4.0→5.0 chain on 1.0."""
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\ntracked_files: {}\nprofiles: {p: {}}\n", encoding="utf-8"
@@ -478,13 +478,54 @@ def test_check_lists_real_registry_migration(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "--check", f"--config={cfg}"])
     assert result.exit_code == 0, result.output
-    assert "6 migration(s) available" in result.output
+    assert "7 migration(s) available" in result.output
     assert "1.0 → 1.1" in result.output
     assert "1.1 → 1.2" in result.output
     assert "1.2 → 2.0" in result.output
     assert "2.0 → 2.1" in result.output
     assert "2.1 → 3.0" in result.output
     assert "3.0 → 4.0" in result.output
+    assert "4.0 → 5.0" in result.output
+
+
+def test_to_five_zero_from_four_zero_is_schema_only_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    """B-M8: ``--to=5.0`` on a 4.0 config is schema-only; 5.0 → 4.0 is reachable.
+
+    Drives the REAL registry span-types-retire step. The 4.0 → 5.0 apply touches
+    ONLY schema_version (every other field byte-identical), and the reverse
+    5.0 → 4.0 restamps back — proving the down direction is reachable, not a refuse.
+    """
+    from setforge.migrations import detect_current_schema
+
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(
+        "# header\nversion: 1\nschema_version: '4.0'\n"
+        "tracked_files: {}\nprofiles: {p: {}}\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    # A helper to compare everything EXCEPT the schema_version stamp.
+    def _non_schema_body(text: str) -> list[str]:
+        return [ln for ln in text.splitlines() if "schema_version" not in ln]
+
+    before_body = _non_schema_body(cfg.read_text(encoding="utf-8"))
+
+    up = runner.invoke(
+        app, ["migrate", f"--config={cfg}", "--to=5.0", "--apply", "--yes"]
+    )
+    assert up.exit_code == 0, up.output
+    assert detect_current_schema(cfg) == "5.0"
+    assert _non_schema_body(cfg.read_text(encoding="utf-8")) == before_body
+
+    down = runner.invoke(
+        app, ["migrate", f"--config={cfg}", "--to=4.0", "--apply", "--yes"]
+    )
+    assert down.exit_code == 0, down.output
+    assert detect_current_schema(cfg) == "4.0"
+    assert _non_schema_body(cfg.read_text(encoding="utf-8")) == before_body
 
 
 def test_pin_accepts_current_known_version(tmp_path: Path) -> None:

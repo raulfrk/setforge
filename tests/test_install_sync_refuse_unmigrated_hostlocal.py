@@ -41,7 +41,7 @@ profiles:
 """
 
 _CFG_CURRENT = """\
-schema_version: "4.0"
+schema_version: "5.0"
 tracked_files:
   notes:
     src: notes.md

@@ -235,18 +235,18 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_four_zero() -> None:
-    """The build now expects schema 4.0 after the span-surface-retire bump."""
+def test_current_expected_is_five_zero() -> None:
+    """The build now expects schema 5.0 after the span-types-retire bump."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "4.0"
+    assert current_expected_schema_version == "5.0"
 
 
-def test_schema_major_is_four() -> None:
-    """The frozen manifest now describes major 4."""
+def test_schema_major_is_five() -> None:
+    """The frozen manifest now describes major 5."""
     from setforge.schema_manifest import SCHEMA_MAJOR
 
-    assert SCHEMA_MAJOR == 4
+    assert SCHEMA_MAJOR == 5
 
 
 def test_coverage_reaches_two_zero_real_tree() -> None:

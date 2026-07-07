@@ -118,8 +118,11 @@ def _local_yaml_path(roots: MigrationRoots) -> Path:
     return roots.home / ".config" / "setforge" / "local.yaml"
 
 
-def test_expected_version_is_four_zero() -> None:
-    assert current_expected_schema_version == "4.0"
+def test_span_surface_retire_is_no_longer_terminal() -> None:
+    # The build advanced past 4.0 (span_types retirement → 5.0); the
+    # span-surface cutover is now an intermediate chain step, not the head.
+    assert current_expected_schema_version == "5.0"
+    assert parse_schema_version(current_expected_schema_version) > (4, 0)
 
 
 def test_parse_four_zero() -> None:

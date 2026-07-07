@@ -35,9 +35,8 @@ from setforge.config import (
     SectionTemplateRef,
     TrackedFile,
 )
-from setforge.span_types import SpanEntry
 
-SCHEMA_MAJOR: int = 4
+SCHEMA_MAJOR: int = 5
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
 
 _MODELS: tuple[type[BaseModel], ...] = (
@@ -50,7 +49,6 @@ _MODELS: tuple[type[BaseModel], ...] = (
     McpServerRef,
     SectionTemplateRef,
     ResolvedProfile,
-    SpanEntry,
 )
 
 
@@ -141,14 +139,6 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "mcp_servers": "list[str]",
         "cargo_binaries": "list[str]",
         "section_slots": "dict[str, str]",
-    },
-    "SpanEntry": {
-        "anchor": "<class 'str'>",
-        "kind": "<enum 'SpanKind'>",
-        "semantics": "<enum 'SpanSemantics'>",
-        "overlay": "setforge.span_types.OverlaySpanPayload | None",
-        "deep": "<class 'bool'>",
-        "capture_mode": "<enum 'SectionMode'>",
     },
 }
 
