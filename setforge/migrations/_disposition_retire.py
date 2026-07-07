@@ -130,7 +130,7 @@ class DispositionRetireMigration:
         """
         from setforge import base_store, scalar_base_store
         from setforge.reconcile import store as reconcile_store
-        from setforge.transitions import state_root
+        from setforge.transitions import _spans_manifest_path
 
         seen: dict[Path, None] = {roots.cfg_path: None}
         records = _build_legacy_records(roots)
@@ -141,7 +141,7 @@ class DispositionRetireMigration:
                 reconcile_store.local_content_path(rec.profile, key),
                 reconcile_store.local_absent_path(rec.profile, key),
                 reconcile_store.drafts_manifest_path(rec.profile, key),
-                state_root() / "spans" / rec.profile / f"{key}.json",
+                _spans_manifest_path(rec.profile, key),
                 scalar_base_store.manifest_path(rec.profile, key),
             ):
                 seen.setdefault(path, None)
@@ -582,11 +582,11 @@ def _delete_legacy_stores(records: list[_FidLegacy], profiles: list[str]) -> Non
     """
     from setforge import scalar_base_store
     from setforge.base_store_format import SIDECAR_NAME
-    from setforge.transitions import state_root
+    from setforge.transitions import _spans_manifest_path
 
     for rec in records:
         key = str(rec.fid)
-        (state_root() / "spans" / rec.profile / f"{key}.json").unlink(missing_ok=True)
+        _spans_manifest_path(rec.profile, key).unlink(missing_ok=True)
         scalar_base_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
     for profile in profiles:
         # The profile root is the manifest's parent dir; drop its dangling

@@ -184,7 +184,6 @@ only_mutate = [
     "setforge/base_store.py",
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
-    "setforge/spans_store.py",
 ]
 # Scope the tests mutmut runs to the focused per-module unit suites for the
 # core. Two reasons: (1) mutmut runs the suite from a mutants/ sandbox that
@@ -210,9 +209,6 @@ pytest_add_cli_args_test_selection = [
     "tests/test_base_store.py",
     "tests/test_base_store_format.py",
     "tests/test_scalar_base_store.py",
-    "tests/test_spans_store.py",
-    "tests/test_spans_overlay.py",
-    "tests/test_spans_relocation.py",
 ]
 # Runner neutralization (load-bearing): mutmut shells out to pytest, which
 # would otherwise inherit our default addopts (`--cov=setforge
