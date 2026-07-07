@@ -172,17 +172,24 @@ def test_validate_local_yaml_marketplaces_typo_suggests_marketplaces(
     assert "←─── line 2" in out
 
 
-def test_validate_local_yaml_host_local_sections_is_retired_unknown_key(
+def test_validate_local_yaml_host_local_sections_is_tolerated_retired_key(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``host_local_sections`` is a RETIRED overlay field (STAGE B): the
-    span-declaration surface moved to the reconcile store, so the key is
-    gone from :class:`_LocalTrackedFileOverlay`.
+    """``host_local_sections`` is a RETIRED overlay field: the span-declaration
+    surface moved to the reconcile store, so the key is gone from
+    :class:`_LocalTrackedFileOverlay`.
 
-    A local.yaml still declaring it surfaces as an ``extra_forbidden``
-    unknown key at the ``tracked_files.<id>`` level — NOT a "Did you mean
-    'host_local_sections'" suggestion (the field no longer exists, so
-    suggesting it back would be wrong)."""
+    But a local.yaml still declaring it must still VALIDATE CLEAN — the engine
+    guarantees permanent backward compatibility, and the install/sync loader
+    (``_load_local_source_config``) strips the retired ``host_local_sections`` /
+    ``spans`` keys in memory before the ``extra="forbid"`` models see them. The
+    ``validate`` command must be consistent with what the engine accepts: it
+    would be wrong to hard-fail a config that ``install``/``sync`` process
+    happily. So ``validate`` strips the retired keys the same way (in memory,
+    no disk touch — the on-disk retirement is owned by the 3.0->4.0
+    span-surface-retire migration) and the doc validates ``ok``. A genuinely
+    unknown (non-retired) key still trips ``extra_forbidden`` — see the sibling
+    ``..._tracked_files_nested_typo_suggests`` test."""
     c = docker_container()
     c.write_text(
         _HOME_LOCAL_YAML,
@@ -193,12 +200,11 @@ def test_validate_local_yaml_host_local_sections_is_retired_unknown_key(
         "        bdy: hello\n",
     )
     rc, out = _run_validate(c)
-    assert rc == 1, out
-    assert "✗ SCHEMA VALIDATION ERROR" in out
-    assert "unknown key 'host_local_sections'" in out
-    assert "Fix:" in out
-    # The retired field must NOT be suggested back as a known key.
-    assert "Did you mean 'host_local_sections'" not in out
+    assert rc == 0, out
+    assert "ok" in out
+    # The retired key is stripped in memory — never surfaced as a schema error.
+    assert "✗ SCHEMA VALIDATION ERROR" not in out
+    assert "unknown key 'host_local_sections'" not in out
 
 
 def test_validate_local_yaml_tracked_files_nested_typo_suggests(
