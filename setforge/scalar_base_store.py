@@ -100,8 +100,7 @@ def manifest_path(profile: str, file_id: str) -> Path:
     Public so the transition state-snapshot integration (Invariant I5)
     can capture and restore the manifest's verbatim bytes alongside the
     byte base and the spans sidecar. Applies the same traversal guard as
-    the read/write entry points. Mirrors
-    :func:`setforge.spans_store.manifest_path`.
+    the read/write entry points.
     """
     return _resolve_target(profile, file_id)
 

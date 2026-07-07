@@ -10,8 +10,9 @@ unified span model, drops the legacy keys, and stamps ``schema_version: "2.0"``:
 - ``preserve_user_keys_deep: [P, ...]`` -> the same, with ``deep=True`` (the
   re-assert deep-merges instead of whole-replacing).
 - ``preserve_user_sections: true`` -> one section span per marked section in
-  the TRACKED src file (enumerated via :func:`setforge._legacy_markers.extract_sections`
-  with ``allow_legacy=True``), each carrying ``capture_mode`` = the file's
+  the TRACKED src file (enumerated via
+  :func:`setforge.migrations._frozen_markers.extract_sections` with
+  ``allow_legacy=True``), each carrying ``capture_mode`` = the file's
   ``preserve_user_sections_mode``. No markers in src -> emit no span, still
   drop the flag (a clean converge).
 
@@ -40,11 +41,6 @@ from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from setforge._legacy_markers import (
-    SectionSemantics,
-    extract_sections,
-    section_semantics,
-)
 from setforge.errors import ConfigError, MarkerError
 from setforge.migrations import (
     ManifestEntry,
@@ -54,6 +50,11 @@ from setforge.migrations import (
     _require_mapping_root,
     parse_schema_version,
     preserve_contract_schema_version,
+)
+from setforge.migrations._frozen_markers import (
+    SectionSemantics,
+    extract_sections,
+    section_semantics,
 )
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 
@@ -179,8 +180,8 @@ def _translate_sections(tracked_file: CommentedMap, roots: MigrationRoots) -> bo
     """Translate ``preserve_user_sections`` -> spans by semantics; drop the flags.
 
     Section anchors are enumerated from the TRACKED src file's markers via
-    :func:`setforge._legacy_markers.extract_sections` (``allow_legacy=True`` so a
-    pre-hash tracked source still enumerates). No markers -> no span, still drop
+    :func:`setforge.migrations._frozen_markers.extract_sections` (``allow_legacy=True``
+    so a pre-hash tracked source still enumerates). No markers -> no span, still drop
     the flag (a clean converge). Each marked section is split by its semantics:
 
     * **shared** -> a section :class:`SpanEntry` (``kind: pinned``) carrying the

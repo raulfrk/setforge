@@ -7,8 +7,8 @@ the intent is fully stealthy: nothing is written into the file body. The
 intent lives declaratively in either ``local.yaml``
 (``tracked_files.<id>.spans:``, host-local) or the tracked
 ``setforge.yaml`` (shared), and the resolved offsets + baseline bytes
-live in a sidecar (:mod:`setforge.spans_store`), never duplicated into the
-intent (Invariant I12).
+live in a per-``(profile, file-id)`` spans sidecar, never duplicated into
+the intent (Invariant I12).
 
 This module holds ONLY the intent value object and the closed-set enums,
 deliberately free of any merge / capture / relocation logic so both
@@ -110,7 +110,7 @@ class SpanSemantics(StrEnum):
     per-machine. ``shared`` — intent lives in the tracked ``setforge.yaml``
     and propagates across hosts (tracked-side updates surface in the
     reconcile flow). Mirrors
-    :class:`setforge._legacy_markers.SectionSemantics`.
+    :class:`setforge.user_section_markers.SectionSemantics`.
     """
 
     HOST_LOCAL = "host-local"

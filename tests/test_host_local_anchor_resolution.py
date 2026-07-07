@@ -115,7 +115,7 @@ class TestAfterSectionAnchor:
         write-back to tracked. Pairs the user authored directly in
         tracked (not in the names set) must survive.
         """
-        from setforge._legacy_markers import strip_host_local_sections
+        from setforge.user_section_markers import strip_host_local_sections
 
         text = (
             "<!-- setforge:user-section start host-local injected hash=a -->\n"
@@ -136,7 +136,7 @@ class TestAfterSectionAnchor:
 
     def test_strip_host_local_sections_noop_on_empty_names(self) -> None:
         """No-op when no host-local names declared in local.yaml."""
-        from setforge._legacy_markers import strip_host_local_sections
+        from setforge.user_section_markers import strip_host_local_sections
 
         text = (
             "<!-- setforge:user-section start host-local x hash=a -->\n"

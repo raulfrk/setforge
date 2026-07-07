@@ -404,8 +404,8 @@ def _validate_headings(folds: list[_SectionFold]) -> None:
     ``(tracked_file, section_name)`` since a file shared across profiles repeats.
     """
     from setforge import reconcile
+    from setforge.body_canon import canonical_body
     from setforge.host_local_inject import _read_body
-    from setforge.overlay_inject import canonical_body
 
     bad: dict[tuple[str, str], None] = {}
     for fold in folds:
@@ -450,8 +450,8 @@ def _fold_sections(fold: _SectionFold) -> None:
     """
     from setforge import reconcile
     from setforge.anchors import Anchor
+    from setforge.body_canon import canonical_body, inject_body_at_anchor
     from setforge.host_local_inject import _read_body
-    from setforge.overlay_inject import canonical_body, inject_body_at_anchor
     from setforge.reconcile.host_local_view import host_local_sections_from_store
 
     profile, fid = fold.profile, fold.fid

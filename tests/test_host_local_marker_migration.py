@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from setforge.body_canon import canonical_body
 from setforge.errors import MarkerError
 from setforge.host_local_marker_migration import (
     append_overlay_spans,
     build_overlay_span_node,
     extract_host_local_marker_bodies,
 )
-from setforge.overlay_inject import canonical_body
 from setforge.source import HostLocalSectionName, load_local_host_local_sections
 
 _H = "a" * 64

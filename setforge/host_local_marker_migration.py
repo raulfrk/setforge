@@ -19,16 +19,16 @@ from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from setforge._legacy_markers import (
+from setforge.body_canon import canonical_body
+from setforge.errors import MarkerError
+from setforge.migrations._frozen_markers import (
     SectionSemantics,
     _BodyLine,
     _EndMarker,
     _StartMarker,
     _walk_markers,
 )
-from setforge.errors import MarkerError
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
-from setforge.overlay_inject import canonical_body
 
 
 def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
@@ -36,13 +36,14 @@ def extract_host_local_marker_bodies(text: str) -> dict[str, str]:
 
     Body is the exact bytes between the markers (trailing newline included, up
     to but not including the end-marker line), matching
-    :func:`setforge._legacy_markers.extract_sections`. Shared regions are ignored.
+    :func:`setforge.migrations._frozen_markers.extract_sections`. Shared regions
+    are ignored.
 
     Raises :class:`~setforge.errors.MarkerError` on a duplicate host-local name
     (silently dropping one — the dict last-wins of ``extract_sections`` — would
     lose a per-host body before it could be captured) AND, via
-    :func:`setforge._legacy_markers._walk_markers`, on any malformed / unclosed /
-    nested / name-mismatched marker in ``text``. ``MarkerError`` is a
+    :func:`setforge.migrations._frozen_markers._walk_markers`, on any malformed /
+    unclosed / nested / name-mismatched marker in ``text``. ``MarkerError`` is a
     :class:`~setforge.errors.SetforgeError`, so the CLI surfaces it as a clean
     ``error: ...`` exit rather than a traceback.
     """
@@ -73,7 +74,7 @@ def build_overlay_span_node(name: str, body: str) -> CommentedMap:
     produces: identity ``anchor`` (the section name), ``kind: overlay``,
     ``semantics: host-local``, and the nested ``overlay`` payload carrying the
     structured ``at-end-of-file`` splice anchor + the canonicalized body. The
-    body is canonicalized (:func:`setforge.overlay_inject.canonical_body`) so
+    body is canonicalized (:func:`setforge.body_canon.canonical_body`) so
     deploy-inject ↔ capture-excise round-trip byte-exact.
     """
     anchor = CommentedMap()

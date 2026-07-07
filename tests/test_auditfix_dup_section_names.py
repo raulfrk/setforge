@@ -4,11 +4,10 @@ Audit finding ``dup_section_names``: two sections sharing one name
 (e.g. hand-authored or migrated tracked CLAUDE.md with two
 ``<!-- setforge:user-section start shared A -->`` regions) used to
 collapse silently in the dict-keyed primitives — only the last body
-survived, ``merge_sections`` spliced it into BOTH regions (first
-region's distinct content permanently lost), and ``set_marker_hashes``
-stamped one hash onto both end markers (corrupting the first region's
-``hash=`` segment). The core parse/merge/hash primitives now raise
-:class:`MarkerError` on the second pair instead of collapsing.
+survived. The dict-keyed parse primitives now raise :class:`MarkerError`
+on the second pair instead of collapsing, and the CLI surfaces an
+actionable "rename one of the two sections" error before that raw parse
+error can propagate mid-deploy.
 """
 
 from pathlib import Path
@@ -17,17 +16,12 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
-from setforge._legacy_markers import (
-    detect_duplicate_section_names,
-    extract_marker_hashes,
-    extract_sections,
-    hash_sections,
-    merge_sections,
-    section_semantics,
-    set_marker_hashes,
-)
 from setforge.cli import app
 from setforge.errors import MarkerError, SetforgeError
+from setforge.user_section_markers import (
+    detect_duplicate_section_names,
+    extract_sections,
+)
 
 _HASH_64 = "0" * 64
 
@@ -54,33 +48,6 @@ def test_extract_sections_rejects_duplicate_name_allow_legacy() -> None:
     # names — a duplicate is structural corruption, not a pre-hash artifact.
     with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
         extract_sections(_TWO_SHARED_A, allow_legacy=True)
-
-
-def test_merge_sections_rejects_duplicate_name() -> None:
-    # The data-loss path: this used to emit LIVE2 into BOTH regions.
-    with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
-        merge_sections(_TWO_SHARED_A, {"A": "LIVE2\n"})
-
-
-def test_set_marker_hashes_rejects_duplicate_name() -> None:
-    # The hash-corruption path: this used to stamp one hash onto both ends.
-    with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
-        set_marker_hashes(_TWO_SHARED_A, {"A": _HASH_64})
-
-
-def test_hash_sections_rejects_duplicate_name() -> None:
-    with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
-        hash_sections(_TWO_SHARED_A)
-
-
-def test_extract_marker_hashes_rejects_duplicate_name() -> None:
-    with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
-        extract_marker_hashes(_TWO_SHARED_A)
-
-
-def test_section_semantics_rejects_duplicate_name() -> None:
-    with pytest.raises(MarkerError, match=r"duplicate user-section name 'A'"):
-        section_semantics(_TWO_SHARED_A)
 
 
 def test_distinct_names_still_parse() -> None:

@@ -805,8 +805,8 @@ def validate_source_dir(source: Source) -> Path:
     if config_path.exists():
         return config_path
     # Friendly migration error for the my_setup.yaml -> setforge.yaml
-    # rename. Mirrors the legacy-namespace detector
-    # pattern in setforge._legacy_markers.detect_legacy_namespace_markers.
+    # rename. Mirrors the legacy-namespace detector pattern (a regex
+    # prefix scan for the pre-rename ``my-setup:`` namespace).
     legacy_path = source_dir / _LEGACY_CONFIG_FILENAME
     if legacy_path.exists():
         quoted_dir = shlex.quote(str(source_dir))

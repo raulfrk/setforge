@@ -1,18 +1,19 @@
 """Unit tests for the marker-retire migration's frozen embedded parser.
 
 The self-contained marker parser the migration embeds so it keeps working AFTER
-``sections.py`` is deleted. Its correctness is data-loss-critical (it decides
-host-local vs shared, which gates what reaches the shared repo), so it is
-**differential-tested** against the trusted :mod:`setforge._legacy_markers` parser for
-valid input + pinned on the security-critical strict-refuse cases.
+the legacy parser modules are deleted. Its correctness is data-loss-critical (it
+decides host-local vs shared, which gates what reaches the shared repo), so it is
+**differential-tested** against the sibling frozen parser
+:mod:`setforge.migrations._frozen_markers` for valid input + pinned on the
+security-critical strict-refuse cases.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from setforge import _legacy_markers as sections
 from setforge.errors import MarkerError
+from setforge.migrations import _frozen_markers as sections
 from setforge.migrations._marker_retire import ParsedSection, parse_markers
 
 _SHARED = (
@@ -38,9 +39,12 @@ def test_embedded_parser_matches_sections_for_valid_input() -> None:
         n: s.value for n, s in sections.section_semantics(_SHARED).items()
     }
     assert {n: p.body for n, p in parsed.items()} == sections.extract_sections(_SHARED)
-    assert {
-        n: p.embedded_hash for n, p in parsed.items()
-    } == sections.extract_marker_hashes(_SHARED)
+    # The frozen sibling parser drops the marker HASH machinery, so the embedded
+    # hashes are pinned directly against the fixture's end-marker segments.
+    assert {n: p.embedded_hash for n, p in parsed.items()} == {
+        "rules": "a" * 64,
+        "paths": "b" * 64,
+    }
 
 
 def test_embedded_parser_classifies_semantics() -> None:

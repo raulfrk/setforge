@@ -128,8 +128,9 @@ class DispositionRetireMigration:
         NOT filtered here (a missing path snapshots as absent and restores by
         deletion); the union is deduped preserving order.
         """
-        from setforge import base_store, scalar_base_store, spans_store
+        from setforge import base_store, scalar_base_store
         from setforge.reconcile import store as reconcile_store
+        from setforge.transitions import state_root
 
         seen: dict[Path, None] = {roots.cfg_path: None}
         records = _build_legacy_records(roots)
@@ -140,7 +141,7 @@ class DispositionRetireMigration:
                 reconcile_store.local_content_path(rec.profile, key),
                 reconcile_store.local_absent_path(rec.profile, key),
                 reconcile_store.drafts_manifest_path(rec.profile, key),
-                spans_store.manifest_path(rec.profile, key),
+                state_root() / "spans" / rec.profile / f"{key}.json",
                 scalar_base_store.manifest_path(rec.profile, key),
             ):
                 seen.setdefault(path, None)
@@ -579,12 +580,13 @@ def _delete_legacy_stores(records: list[_FidLegacy], profiles: list[str]) -> Non
     touched — it is now the unified store's base. Every unlink is ``missing_ok``
     so a re-run (or a resumed post-crash run) is a clean no-op.
     """
-    from setforge import scalar_base_store, spans_store
+    from setforge import scalar_base_store
     from setforge.base_store_format import SIDECAR_NAME
+    from setforge.transitions import state_root
 
     for rec in records:
         key = str(rec.fid)
-        spans_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
+        (state_root() / "spans" / rec.profile / f"{key}.json").unlink(missing_ok=True)
         scalar_base_store.manifest_path(rec.profile, key).unlink(missing_ok=True)
     for profile in profiles:
         # The profile root is the manifest's parent dir; drop its dangling
