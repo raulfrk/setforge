@@ -261,6 +261,36 @@ does. Operating a `4.0` engine against an un-migrated config would therefore dro
 host-local content silently; run `setforge migrate` to fold the surface into the
 store before any `install` / `sync` / `compare` on a `4.0` engine.
 
+## Span-types retirement — the reversible major bump
+
+The `4.0 → 5.0` migration retires the dead `span_types` type definitions — the
+now-unreferenced data model that survived the `3.0 → 4.0` fold only as schema
+cruft. Unlike the three prior cutovers (`2.0 → 2.1`, `2.1 → 3.0`, `3.0 → 4.0`),
+each a **lossy one-way** contract step whose down-migration **refuses**, this
+major bump is the **EXCEPTION**: a fully-reversible **symmetric restamp**.
+
+Nothing is lost that a schema restamp cannot restore. The host-local span
+surface was already stripped at `3.0 → 4.0`; by `4.0` no deployed config carries
+span data, so `4.0 → 5.0` only deletes dead type definitions and advances the
+stamp. The forward `apply` defensively confirms no stray `spans` block lingers
+in `setforge.yaml`, then overwrites `schema_version` in place.
+
+So the `5.0 → 4.0` down-migration is a **real restamp, not a refuse**: both
+endpoints carry `schema_version`, so the reverse down-stamps the value to `4.0`
+in place (it never strips the key, which would let schema detection misread the
+result as an older baseline). An `up → down → up` cycle is byte-identical against
+the post-`ruamel`-normalization document. This honors the *both ways* rule
+without the *Stated limit* escape the lossy majors invoke.
+
+It remains a **MAJOR** bump (`4 → 5`): an older (`4.x`) engine reading a `5.0`
+config still **refuses cleanly** via the cross-major `schema_version` guard.
+
+As the **chain-terminal** step, a `migrate` reaching `5.0` from an older schema
+in one command records this cutover's transition threading the whole chain's
+pre-migration origin image, so a single `setforge revert --profile=migrate`
+byte-restores the entire chain's origin — config **and** every reconcile-store
+leg an earlier cutover seeded — not merely the intermediate `4.0` state.
+
 ## `validate` orphan-overlay diagnostics
 
 `local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /

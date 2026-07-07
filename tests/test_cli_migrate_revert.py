@@ -512,3 +512,83 @@ def test_chained_2_1_to_4_0_second_revert_is_redo(
     )
     assert second.exit_code == 0, second.output
     assert detect_current_schema(cfg) == "4.0"
+
+
+def test_chained_2_1_to_5_0_single_revert_restores_config_and_store_to_origin(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` after a 2.1->5.0 FOLD chain reaches the TRUE origin.
+
+    The chain runs THREE ``writes_own_transition`` cutovers — disposition-retire
+    (2.1->3.0), span-surface-retire (3.0->4.0, folds the host-local section into
+    the store), and the CHAIN-TERMINAL span-types-retire (4.0->5.0). A single
+    ``revert`` replays only the LATEST (span-types) transition, and span-types
+    threads the FULL pre-chain origin image as its text patch while carrying NO
+    ``state_snapshots``. So — unlike the 4.0-terminal case, where span-surface's
+    own state_snapshots override the text patch back to the 3.0-INTERMEDIATE store
+    shape and a disposition seed residue survives — here the text patch is the
+    SOLE reverse authority for every path: it reverses each reconcile-store leg
+    from its post-fold bytes back to its absent-at-origin state, DELETING it. So
+    one revert returns BOTH the config files AND the store byte-exact to the
+    pristine 2.1 origin (no seed residue), the stronger INV-5 guarantee this
+    terminal owner's full-leg text threading buys.
+    """
+    cfg, local_yaml = _write_chain_origin(tmp_path)
+    cfg_origin = cfg.read_bytes()
+    local_origin = local_yaml.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "5.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+    assert detect_current_schema(cfg) == "5.0"
+    # All three cutovers own a durable transition.
+    assert len(transitions.list_transitions(["migrate"])) == 3
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+
+    assert cfg.read_bytes() == cfg_origin
+    assert local_yaml.read_bytes() == local_origin
+
+    # True origin: every reconcile-store leg is gone, not merely reverted to an
+    # intermediate seeded shape (contrast the 4.0-terminal residue test above).
+    fid = file_id("notes")
+    assert host_local_sections_from_store("default", fid) == {}
+    assert "notes" not in reconcile.read_index("default").files
+    assert reconcile.read_local("default", fid) is None
+    assert reconcile.read_base("default", fid) is None
+
+
+def test_chained_2_1_to_5_0_no_fold_single_revert_restores_config_and_store(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` reaches the 2.1 origin for a 5.0 chain with nothing to fold.
+
+    With no ``local.yaml`` host-local surface the span-surface-retire step folds
+    nothing (its no-fold branch), but disposition-retire still seeds the reconcile
+    store and the terminal span-types-retire still threads the full pre-chain
+    image. A single ``revert`` of the terminal transition (``state_snapshots=()``)
+    text-reverses the config stamp back to 2.1 AND deletes the disposition seed —
+    reaching the true origin, config and store alike.
+    """
+    cfg = _write_chain_origin_no_host_local(tmp_path)
+    cfg_origin = cfg.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "5.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+    assert detect_current_schema(cfg) == "5.0"
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+
+    assert cfg.read_bytes() == cfg_origin
+    fid = file_id("notes")
+    assert "notes" not in reconcile.read_index("default").files
+    assert reconcile.read_base("default", fid) is None
