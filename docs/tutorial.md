@@ -507,18 +507,20 @@ model instead:
 Legacy `version: 1` configs that relied on marker *survival* are migrated to
 this span model by `setforge migrate` (and on `install`).
 
-Declare a section with `section emit` (paste the pair into the source yourself)
-or `section add` (insert it at an anchor line):
+Declare a section by hand-authoring the marker pair in the tracked source (there
+is no `section` subcommand). The `host-local` / `shared` keyword is required on
+both markers:
 
-```console
-$ setforge section emit host-local mymachine
+```markdown
 <!-- setforge:user-section start host-local mymachine -->
-
-<!-- setforge:user-section end host-local mymachine hash=01ba4719c80b6fe9… -->
-
-$ setforge section add --profile=default --tracked-file notes \
-      --semantics shared --name mysection --anchor-line 1
+... per-machine body ...
+<!-- setforge:user-section end host-local mymachine -->
 ```
+
+Leave the end marker's `hash=<sha256-hex>` segment off (or drop in any
+placeholder) — `setforge install` computes and rewrites the real body hash on
+every run, so you never calculate it yourself. Name the section (optional) to
+key it stably; unnamed sections are keyed by position. Sections cannot nest.
 
 When a **shared** section has drifted between live and tracked, `install`
 (with `--reconcile-user-sections`) opens the reconcile wizard — one prompt per

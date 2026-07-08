@@ -154,8 +154,26 @@ Configs predating schema 2.0 (no `schema_version`, or an older one) that relied
 on marker *survival* in the live file are migrated to this span model by
 `setforge migrate` (and transparently on
 `install`). The project-root [CLAUDE.md](../CLAUDE.md) documents the full marker
-grammar; adding marker pairs is automated by `setforge section` — see
-[commands.md](commands.md).
+grammar. Marker pairs are **hand-authored** — there is no `section` subcommand;
+open the tracked source and write the pair yourself. The `host-local` / `shared`
+keyword is required on both markers and must match; the `NAME` is optional (and
+must match between start and end when present). Leave off the end marker's
+`hash=<sha256-hex>` segment — `install` computes and rewrites it on every run, so
+you never calculate it by hand. See [commands.md](commands.md#managing-user-section-markers)
+for the authoring walkthrough.
+
+#### Seeding host-local bodies (optional)
+
+For host-local sections you can seed an empty body from a reusable template
+instead of typing it out on each machine. Register the body file under the
+config's top-level `section_templates:` (a name → `src:` path relative to the
+config repo's `templates/` directory), then map a host-local section NAME to it
+in a profile's `section_slots:`. On `install`, an empty or missing host-local
+section named there is seeded **once** from the template body; a section that
+already has content is left untouched (the host owns it), so later template
+edits do not propagate to a host that has already adopted the section. This is a
+convenience layer on top of hand-authored markers — the marker pair is still
+what declares the section.
 
 ### YAML / JSON: preserved keys → spans
 

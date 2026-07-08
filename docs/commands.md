@@ -66,30 +66,40 @@ tracked-file orphans).
 
 ### Managing user-section markers
 
-`setforge section` automates adding `<!-- setforge:user-section ... -->` marker
-pairs to tracked markdown:
+User-section markers are **hand-authored** — there is no `section` subcommand.
+Open the tracked source and add the `<!-- setforge:user-section ... -->` pair
+yourself:
 
-```bash
-# Interactive: arrow-key picker for semantics + TUI anchor picker + confirm.
-setforge section add --profile=<profile>
-
-# Scripted: every flag set, --yes bypasses the final confirm.
-setforge section add --profile=<profile> \
-    --tracked-file=<key-from-setforge.yaml> \
-    --semantics=shared \
-    --name=my-notes \
-    --anchor-line=42 \
-    --body-source=empty \
-    --yes
-
-# Print a paste-ready marker pair for files setforge cannot edit
-# (anything not .md or .markdown).
-setforge section emit shared my-notes
+```markdown
+<!-- setforge:user-section start host-local my-notes -->
+... per-machine body; kept live, never shared ...
+<!-- setforge:user-section end host-local my-notes -->
 ```
 
-`section add` only edits `.md` / `.markdown`; other suffixes print a hint to
-use `section emit` and paste the pair manually. The end marker is stamped with
-the body's sha256 hash on write so the pair passes strict parsing immediately.
+Rules the parser enforces (see `setforge/user_section_markers.py`):
+
+- The `host-local` / `shared` keyword is **required** on both the start and end
+  marker, and the two must match.
+- The `NAME` is **optional** but must match between start and end when present;
+  unnamed sections are keyed by their position in the file. No nesting.
+- The end marker also carries a `hash=<sha256-hex>` segment (64 lowercase hex
+  chars). **You never compute it by hand** — omit it (or leave any placeholder)
+  when you first author the pair, and `setforge install` stamps and rewrites the
+  real body hash on every run.
+
+Pick the semantics keyword by where the body should live:
+
+- **host-local** — per-machine content. The body is injected *markerless* into
+  the live file and kept as an overlay in `local.yaml`; it never reaches the
+  config repo and is always preserved live.
+- **shared** — content that travels in the config repo. Tracked-side updates
+  reconcile against live edits through the `install --reconcile-user-sections`
+  wizard.
+
+Markers work in any tracked text file, not just markdown. To *seed* an empty
+host-local section's body from a reusable template, see the optional
+`section_templates` / `section_slots` helper in
+[configuration.md](configuration.md#seeding-host-local-bodies-optional).
 
 ## Mutating `--auto=*` confirmation
 
