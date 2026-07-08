@@ -28,6 +28,41 @@ from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
 
+#: The ``-o`` fragment that makes ssh fail instead of prompting for a
+#: passphrase, and the full default command used when the user set no
+#: ``GIT_SSH_COMMAND`` at all. Shared from one place so the append fragment
+#: and the from-scratch default can never drift apart.
+_SSH_BATCHMODE_FRAGMENT: Final[str] = "-oBatchMode=yes"
+_SSH_BATCHMODE_DEFAULT: Final[str] = f"ssh {_SSH_BATCHMODE_FRAGMENT}"
+
+#: Anchored, case-insensitive probe for a user-supplied ``-o BatchMode`` /
+#: ``-oBatchMode`` option. Anchored on the ``-o`` so it matches only a real ssh
+#: option — NOT a substring like ``-i ~/BatchMode_key``. ``\b`` after the key
+#: lets it catch ``=yes`` AND ``=no`` (ssh is first-wins per ``-o`` param, so
+#: appending ``=yes`` after a user ``=no`` would be ignored anyway).
+_SSH_BATCHMODE_RE: Final[re.Pattern[str]] = re.compile(
+    r"-o\s*BatchMode\b", re.IGNORECASE
+)
+
+
+def _harden_git_ssh_command(value: str | None) -> str:
+    """Return the ``GIT_SSH_COMMAND`` value with ``BatchMode`` guaranteed set.
+
+    - An unset / empty / whitespace-only value falls back to the full
+      :data:`_SSH_BATCHMODE_DEFAULT` (``ssh -oBatchMode=yes``).
+    - A user value that ALREADY pins ``BatchMode`` (``=yes`` OR ``=no``) is
+      returned verbatim — ssh is first-wins per ``-o`` param, so appending a
+      second ``BatchMode`` would be ignored and leave a self-contradictory
+      string; the user's explicit choice wins.
+    - Otherwise the value keeps every user token and gains the
+      :data:`_SSH_BATCHMODE_FRAGMENT` so ssh fails rather than prompting.
+    """
+    if value is None or not value.strip():
+        return _SSH_BATCHMODE_DEFAULT
+    if _SSH_BATCHMODE_RE.search(value):
+        return value
+    return f"{value} {_SSH_BATCHMODE_FRAGMENT}"
+
 
 def _hardened_env() -> dict[str, str]:
     """Non-prompting, locale-pinned environment for every git invocation.
@@ -40,10 +75,12 @@ def _hardened_env() -> dict[str, str]:
       Git Credential Manager never pop a prompt, so a fetch that needs a
       missing credential fails fast instead of blocking a background / CI
       ``install`` on a TTY until the timeout.
-    - ``GIT_SSH_COMMAND`` gains ``-oBatchMode=yes`` so ssh fails rather
-      than prompting for a passphrase — but only when the user has NOT
-      set their own ``GIT_SSH_COMMAND`` (a custom identity file is theirs
-      to keep).
+    - ``GIT_SSH_COMMAND`` is hardened so ssh fails rather than prompting for
+      a passphrase (see :func:`_harden_git_ssh_command`): an unset value
+      becomes ``ssh -oBatchMode=yes``, a user value gains ``-oBatchMode=yes``
+      UNLESS it already pins ``BatchMode`` (``=yes`` or ``=no``), in which
+      case the user's explicit choice is preserved unchanged. A custom
+      identity file or other ssh flags are always kept.
     - ``LANG``/``LC_ALL=C`` pin the locale so ``--porcelain`` / ``rev-parse``
       output stays parser-stable (mirrors ``cli/status.py``).
     """
@@ -54,7 +91,7 @@ def _hardened_env() -> dict[str, str]:
         "LANG": "C",
         "LC_ALL": "C",
     }
-    env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    env["GIT_SSH_COMMAND"] = _harden_git_ssh_command(os.environ.get("GIT_SSH_COMMAND"))
     return env
 
 
