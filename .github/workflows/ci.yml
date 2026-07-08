@@ -34,14 +34,11 @@ jobs:
       # CI is the hard backstop for the policy lints (the PreToolUse hook is
       # fast local feedback but can fail open on unparseable commit commands).
       - run: uv run python scripts/check_policy_lints.py
-      - run: uv run pytest
-      # SEAM (do not enable yet): coverage gate.
-      # When the coverage-gate work lands, the line-coverage floor is enforced
-      # HERE as its own step (e.g. `uv run pytest --cov-fail-under=<N>`), with
-      # NO continue-on-error so a regression below the floor fails the PR.
-      # Intentionally absent now: the coverage gate is blocked on separate,
-      # not-yet-landed work. (Coverage is already collected by the `pytest`
-      # step above via pyproject addopts; this seam is the hard FAILING gate.)
+      # Coverage floor gate: the single blocking enforcer of the 85% branch
+      # floor. Its own step, no continue-on-error / --no-cov so a regression
+      # below the floor fails the PR. Runs on the serial `tests` job (no xdist:
+      # pytest-cov's Central controller crashes under xdist worker setup).
+      - run: uv run pytest --cov-fail-under=85
 
   pr-e2e-smoke:
     name: E2E Docker smoke (PR)
