@@ -239,8 +239,6 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
 
 
 def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
-    # Locally-deleted file (upstream unchanged) must stay absent, not
-    # resurrected as a zero-byte file.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
@@ -251,26 +249,22 @@ def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
     assert result.exit_code == 0, result.output
     assert not _live().exists(), "honored deletion must not resurrect the file"
     assert "removed" in result.output
-    # Base kept (not pruned), so merge(ABSENT, ABSENT, tracked) can't re-add it.
     assert _base() == b"v1\n"
 
 
 def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
-    # Once honored (absence recorded, base == tracked), reinstall is a real
-    # NOOP (no churn).
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
-    assert _install(config).exit_code == 0  # honor (writes a transition)
+    assert _install(config).exit_code == 0
     transitions_before = _transition_dirs()
-    assert _install(config).exit_code == 0  # steady state
+    assert _install(config).exit_code == 0
     assert not _live().exists()
     assert _transition_dirs() == transitions_before, "steady-state must not churn"
 
 
 def test_delete_modify_routes_to_deferred(repo: Path) -> None:
-    # Delete + upstream change is NOT silently honored — routes to DEFERRED.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
@@ -283,13 +277,11 @@ def test_delete_modify_routes_to_deferred(repo: Path) -> None:
 
 
 def test_revert_restores_deletion_and_no_resurrect(repo: Path) -> None:
-    # Revert of a honored deletion must restore the pre-delete base, and a
-    # subsequent reinstall must re-honor rather than resurrect the file.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
-    assert _install(config).exit_code == 0  # honor the deletion
+    assert _install(config).exit_code == 0
     assert not _live().exists()
 
     assert _revert(config).exit_code == 0, "revert of a honored deletion"

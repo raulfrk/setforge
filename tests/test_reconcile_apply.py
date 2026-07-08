@@ -89,7 +89,6 @@ class TestCleanOutcomes:
 
 class TestDeletionOutcomes:
     def test_clean_deletion_is_honored_as_remove(self) -> None:
-        # theirs == base: a clean absent merge is a REMOVE, not a WRITE.
         fid = _fid()
         record(_PROFILE, fid, base=b"v1\n", local=b"v1\n")
         out = reconcile_plain_file(_PROFILE, fid, live=ABSENT, tracked=b"v1\n")
@@ -105,7 +104,6 @@ class TestDeletionOutcomes:
         assert out.kind is ReconcileKind.NOOP
 
     def test_delete_modify_defers_not_honored(self) -> None:
-        # theirs != base: delete/modify conflict, NOT a silent honor.
         fid = _fid()
         record(_PROFILE, fid, base=b"v1\n", local=b"v1\n")
         out = reconcile_plain_file(_PROFILE, fid, live=ABSENT, tracked=b"v2\n")

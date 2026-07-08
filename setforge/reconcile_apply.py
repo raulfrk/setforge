@@ -259,11 +259,9 @@ def reconcile_plain_file(
 
     if result.clean:
         merged = result.merged()
-        # Key the deletion honor on the merge OUTCOME (clean absent=True), NOT
-        # on ``live is ABSENT`` — a delete/modify (theirs != base) never reaches
-        # here (merge returns a conflict) and so keeps routing to DEFERRED.
+        # Key the honor on the merge outcome, not ``live is ABSENT`` — a delete/modify
+        # conflict never reaches here (merge already routed it to DEFERRED).
         if result.absent:
-            # Already recorded absent at tracked: real NOOP (first honor uses REMOVE).
             if read_local(profile, fid) is ABSENT and base_raw == tracked:
                 return ReconcileOutcome(ReconcileKind.NOOP)
             return ReconcileOutcome(

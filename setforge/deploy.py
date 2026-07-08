@@ -30,8 +30,6 @@ class DeployAction(StrEnum):
     CREATED = "created"
     UPDATED = "updated"
     NOOP = "noop"
-    # Emitted by the install write pass for a reconcile REMOVE, never by
-    # write_resolved_deploy (which only ever writes bytes).
     REMOVED = "removed"
 
 

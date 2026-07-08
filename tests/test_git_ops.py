@@ -402,8 +402,6 @@ class TestRunGitEnvHardening:
     def test_batchmode_probe_not_fooled_by_substring(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Anchored on -o: a filename merely containing "BatchMode" isn't mistaken
-        # for the flag.
         monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/BatchMode_key")
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == "ssh -i ~/BatchMode_key -oBatchMode=yes"
@@ -420,7 +418,6 @@ class TestRunGitEnvHardening:
     def test_preserves_user_command_that_pins_batchmode(
         self, monkeypatch: pytest.MonkeyPatch, user_value: str
     ) -> None:
-        # ssh is first-wins per -o param — the user's exact string must survive.
         monkeypatch.setenv("GIT_SSH_COMMAND", user_value)
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == user_value

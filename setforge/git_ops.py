@@ -28,16 +28,10 @@ from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
 
-#: Shared from one place so the append fragment and the from-scratch default
-#: can never drift apart.
 _SSH_BATCHMODE_FRAGMENT: Final[str] = "-oBatchMode=yes"
 _SSH_BATCHMODE_DEFAULT: Final[str] = f"ssh {_SSH_BATCHMODE_FRAGMENT}"
 
-#: Anchored, case-insensitive probe for a user-supplied ``-o BatchMode`` /
-#: ``-oBatchMode`` option. Anchored on the ``-o`` so it matches only a real ssh
-#: option — NOT a substring like ``-i ~/BatchMode_key``. ``\b`` after the key
-#: lets it catch ``=yes`` AND ``=no`` (ssh is first-wins per ``-o`` param, so
-#: appending ``=yes`` after a user ``=no`` would be ignored anyway).
+#: Anchored on -o: ssh is first-wins, so a user's BatchMode=yes/no stays untouched.
 _SSH_BATCHMODE_RE: Final[re.Pattern[str]] = re.compile(
     r"-o\s*BatchMode\b", re.IGNORECASE
 )

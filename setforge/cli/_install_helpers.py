@@ -696,9 +696,8 @@ def _execute_pending_deploys(
     # Files whose byte base must SURVIVE the end-of-run prune: disposition
     # files AND plain files routed through the reconcile engine (both persist
     # a base in the shared base_store, keyed by file_id). A plain file absent
-    # from this set would have its reconcile base pruned every run. A honored
-    # deletion (REMOVE) is kept here too so its base is NOT pruned — else the
-    # next install merges (ABSENT, ABSENT, tracked) and re-creates the file.
+    # from this set would have its reconcile base pruned every run.
+    # A honored deletion's base is kept too, so pruning it can't resurrect the file.
     base_keep_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
@@ -719,10 +718,7 @@ def _execute_pending_deploys(
                 f"pending deploy for {record.sub_name!r} has no resolution "
                 "and no symlink declaration"
             )
-        # A resolved deletion: a REAL unlink of live (never a zero-byte write),
-        # then advance the store to local=ABSENT and KEEP the base. Keyed on the
-        # merge outcome, so a delete/modify (which reaches DEFERRED, not REMOVE)
-        # never lands here.
+        # REMOVE = a real unlink of live, never a zero-byte write.
         if (
             record.reconcile is not None
             and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
@@ -731,9 +727,7 @@ def _execute_pending_deploys(
             base_keep_ids.add(record.sub_name)
             store_mutated |= _advance_reconcile_store(profile, record)
             continue
-        # Steady-state absence: a NOOP whose live file was already gone. Writing
-        # the resolved "" content would CREATE a zero-byte file — resurrecting
-        # the deletion — so skip the write entirely.
+        # Skip the write: it would CREATE a zero-byte file, resurrecting the deletion.
         if (
             record.reconcile is not None
             and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
@@ -762,8 +756,7 @@ def _execute_pending_deploys(
     # keep-set (a file left the profile, lost its disposition, or stopped
     # being a reconcile-eligible plain file) are removed. The keep-set spans
     # disposition + plain-reconcile files, so an engine-routed plain file's
-    # base survives instead of being pruned every run. A dropped entry counts
-    # as store_mutated too (see DeployOutcome).
+    # base survives instead of being pruned every run.
     if _prune_bases_removed_any(profile, base_keep_ids):
         store_mutated = True
     return DeployOutcome(

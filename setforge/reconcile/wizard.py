@@ -56,7 +56,7 @@ __all__ = [
 
 #: Resolve ONE conflict region. Returns the merged bytes, or :data:`CANCEL` to
 #: decline (the wizard then re-prompts that region). A4 injects the real
-#: resumable ``claude -p`` session; :func:`claude_merge_unavailable` is the stub.
+#: resumable ``claude -p`` session; :func:`_claude_merge_unavailable` is the stub.
 type ClaudeMergeFn = Callable[[Conflict], bytes | Cancelled]
 
 #: Styled-fragment list — prompt_toolkit's ``(style_class, text)`` shape.
@@ -84,9 +84,7 @@ def claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
     return CANCEL
 
 
-#: Back-compat private alias — kept pointing at the public function so existing
-#: ``from ... import _claude_merge_unavailable`` imports (and identity checks
-#: against them) keep working after the promotion to a public name.
+#: Back-compat alias for old ``_claude_merge_unavailable`` imports/identity checks.
 _claude_merge_unavailable = claude_merge_unavailable
 
 
