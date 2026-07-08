@@ -26,9 +26,7 @@ _CONTROL: Final = frozenset({chr(c) for c in range(0x20)} | {"\x7f"})
 
 
 def content_sha(data: bytes) -> str:
-    """The one content-integrity hash: stage's write path and store's
-    fail-closed verify must agree byte-for-byte, or verify raises.
-    """
+    """A mismatch here must raise, not silently pass (fail-closed integrity check)."""
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
