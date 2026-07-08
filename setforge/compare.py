@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         ResolvedMarketplace,
         ResolvedPlugin,
     )
+    from setforge.reconcile.structured_units import StructuredFormat
 
     # PEP 695 type alias for the three overlay resolution lists shape.
     # Defined under TYPE_CHECKING so the ``Resolved*`` forward refs
@@ -772,7 +773,18 @@ def _reconcile_staged_expected(
     from setforge.errors import InvariantViolation, ReconcileStoreError
     from setforge.reconcile import hunks as reconcile_hunks
     from setforge.reconcile import store as reconcile_store
+    from setforge.reconcile.structured_units import structured_format
     from setforge.reconcile.types import file_id as make_file_id
+
+    # A YAML/JSON reconcile file stages per-KEY, not per line-hunk — the same
+    # predicate stage/capture branch on. Route it to the structured analog so the
+    # plain hunk path never runs over key-rows (and mind the ``.jsonc`` → None
+    # trap: ``structured_format`` returns None there, keeping the plain path).
+    fmt = structured_format(dst)
+    if fmt is not None:
+        return _reconcile_staged_expected_structured(
+            profile, file_id_str, src, dst, fmt
+        )
 
     try:
         fid = make_file_id(file_id_str)
@@ -802,6 +814,73 @@ def _reconcile_staged_expected(
         ValueError,
     ):
         return False  # degrade like _is_stale — never raise in read-only compare
+
+
+def _reconcile_staged_expected_structured(
+    profile: str,
+    file_id_str: str,
+    src: Path,
+    dst: Path,
+    fmt: "StructuredFormat",
+) -> bool:
+    """True when a reconcile-staged STRUCTURED file's tracked holds exactly the
+    promoted key-unit set — the per-KEY analog of :func:`_reconcile_staged_expected`.
+
+    Mirrors the plain path but over key-units: reconstructs the expected tracked
+    content from ``base`` + the recorded key-unit classifications + the drafts
+    manifest and asserts INV-8 against the on-disk tracked BYTES (never a
+    re-parsed model — a reformat / key-reorder must not mask real drift). The
+    host-specific side of a ``SHARED_DRAFTED`` key's live↔tracked divergence is
+    then expected staging, not drift; a drifted sibling LOCAL/PENDING key still
+    fails INV-8 because the assertion runs over the FULL classified set.
+
+    Returns ``False`` (→ the entry classifies as real/unexpected drift) when the
+    file is not reconcile-staged (no base, or no classified key-units) OR when
+    INV-8 fails. Crash-free, mirroring :func:`_reconcile_staged_expected`: any
+    parse / store / filesystem / draft-confinement error degrades to ``False`` —
+    the read-only compare never raises and never blesses on error.
+    """
+    from setforge.errors import (
+        InvariantViolation,
+        ReconcileStoreError,
+        StructuredParseError,
+    )
+    from setforge.reconcile import store as reconcile_store
+    from setforge.reconcile import structured_units as su
+    from setforge.reconcile.types import file_id as make_file_id
+
+    try:
+        fid = make_file_id(file_id_str)
+        base = reconcile_store.read_base(profile, fid)
+        if base is None:
+            return False
+        entry = reconcile_store.read_index(profile).files.get(file_id_str)
+        if entry is None or not entry.hunks:
+            return False  # not structurally staged → not this slot's case
+        live = dst.read_bytes()
+        tracked = src.read_bytes()
+        fresh = su.extract_structured_units(base, live, fmt)
+        units = su.classify_structured(fresh, entry.hunks)
+        drafts = reconcile_store.read_drafts(profile, fid)
+        # Drafts flow through reconstruct_structured → parse_scalar_draft
+        # (type-confinement); a type-diverging / tampered draft raises
+        # DraftConfinementError (an InvariantViolation) → the False-returning
+        # except, never a silent bless.
+        su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)
+        return True
+    except InvariantViolation:
+        # INV-8 (or draft-confinement) failed → tracked is NOT the promoted set →
+        # real drift. DraftConfinementError is an InvariantViolation, caught here.
+        return False
+    except (
+        StructuredParseError,
+        BaseStoreError,
+        ReconcileStoreError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
+        return False  # degrade like the plain path — never raise in read-only compare
 
 
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:

@@ -177,8 +177,15 @@ def test_structured_walk_draft_type_confined_scalar(
     assert f"workdir: {_DRAFT_SCALAR}" in tracked  # the drafted scalar promoted
     assert "/home/tester" not in tracked  # host value NEVER leaked into tracked
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host value
-    # NOTE: `compare` is not yet structured-staging aware (it has no
-    # structured-unit slot, unlike the plain SHARED_DRAFTED `_reconcile_staged_expected`
-    # path), so it still flags this blessed divergence as drift. That belongs with
-    # the structured install/sync/compare wiring; this e2e asserts only the per-key
-    # stage + capture surface the structured walk delivers.
+
+    # A blessed SHARED_DRAFTED divergence is NOT re-flagged as drift: tracked holds
+    # exactly the drafted set, so the host-only live value classifies EXPECTED and
+    # `compare --check` stays clean while host ≠ tracked.
+    assert _prof(c, "compare", "--check")[0] == 0
+
+    # Negative control: a genuine tracked hand-edit the promoted set does NOT
+    # explain (the drafted scalar swapped for an off-set value → INV-8 fails) still
+    # surfaces as drift, so the clean result above is not a blanket "structured
+    # files never drift" tautology.
+    c.write_text(_TRACKED, c.read_text(_TRACKED).replace(_DRAFT_SCALAR, "~/tampered"))
+    assert _prof(c, "compare", "--check")[0] != 0
