@@ -523,30 +523,33 @@ every run, so you never calculate it yourself. Name the section (optional) to
 key it stably; unnamed sections are keyed by position. Sections cannot nest.
 
 When a **shared** section has drifted between live and tracked, `install`
-(with `--reconcile-user-sections`) opens the reconcile wizard — one prompt per
-drifted section:
+(with `--reconcile-user-sections`) opens the reconcile wizard — one full-screen
+prompt per conflicting region. Each region shows the two sides framed as a
+git-style diff, with a **navigable button bar** below it (arrow keys move the
+focus, Enter picks):
 
 ```
-───────────────────────────────────────────────────────────
- section notes.md (shared) pending tracked update
-───────────────────────────────────────────────────────────
---- live/notes.md
-+++ tracked/notes.md
-@@ -42,8 +42,9 @@
-   timeout: 30
--  retries: 5
-+  retries: 3
-
-  [k] keep live          preserve the current live body
-  [t] take tracked       overwrite live with the tracked body
-  [e] edit               open $EDITOR with the live body as seed
-  [s] skip               keep live, ask again next install
-  [q] quit-keep-rest     keep live for this and all remaining
-
-   Choice (k/t/e/s/q): _
+┌─ ~/.claude/notes.md — region 1 of 1 ────────────────────┐
+│ <<<<<<< OURS (this host)                                │
+│   retries: 5                                            │
+│ =======                                                 │
+│   retries: 3                                            │
+│ >>>>>>> THEIRS (upstream)                               │
+│                                                         │
+│   [ Ours ]  Theirs   Edit   Claude-merge   Skip         │
+└─────────────────────────────────────────────────────────┘
 ```
 
-*(reconcile wizard rendered from `setforge/section_wizard.py`)*
+The options:
+
+- **Ours** — keep the live side of the region.
+- **Theirs** — take the tracked/upstream side.
+- **Edit** — open `$EDITOR` seeded with the git-style markers to hand-merge
+  (shown only when both sides are valid UTF-8).
+- **Claude-merge** — hand the region to Claude for a merge (shown only when
+  all three sides are valid UTF-8).
+- **Skip** — keep live for this region and re-surface it on the next install
+  (the file is not re-baselined).
 
 A worked example of the host-local vs shared model and the `disposition` /
 `spans` preservation model is in **[configuration.md](configuration.md)**.
