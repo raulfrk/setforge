@@ -26,13 +26,8 @@ _CONTROL: Final = frozenset({chr(c) for c in range(0x20)} | {"\x7f"})
 
 
 def content_sha(data: bytes) -> str:
-    """The canonical ``"sha256:"``-prefixed digest of ``data``'s raw bytes.
-
-    The ONE content-integrity hash for the reconcile store: the interactive
-    ``stage`` write path and :func:`setforge.reconcile.store.verify`'s
-    fail-closed check must agree byte-for-byte, so both resolve here. The prefix
-    and raw-bytes input are load-bearing — a mismatch fails every
-    ``SHARED_DRAFTED`` draft's verify gate (``InvariantViolation``).
+    """The one content-integrity hash: stage's write path and store's
+    fail-closed verify must agree byte-for-byte, or verify raises.
     """
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
