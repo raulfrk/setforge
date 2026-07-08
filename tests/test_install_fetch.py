@@ -138,13 +138,9 @@ class TestFetchWiring:
     def test_no_fetch_runs_no_git_operation(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The real intent of --no-fetch: ZERO git operations run (nothing is
-        # cloned / fetched / checked). Every git_ops shell-out funnels through
-        # ``_run_git`` (its single ``subprocess.run`` seam), so spying it proves
-        # no git subprocess ran — WITHOUT the false positives a global
-        # ``subprocess.run`` spy would hit (``git_ops.subprocess`` is the shared
-        # stdlib module, so a global patch would also catch the transition's
-        # local ``git rev-parse HEAD`` provenance call).
+        # Spies _run_git (the single shell-out seam) rather than global
+        # subprocess.run, which would false-positive on the transition's own
+        # `git rev-parse HEAD` provenance call.
         calls: list[object] = []
 
         def _spy(*args: object, **kwargs: object) -> object:
@@ -160,10 +156,8 @@ class TestFetchWiring:
     def test_no_fetch_missing_git_clone_raises_source_not_cloned(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A GitSource whose clone is missing + --no-fetch: no silent network
-        # touch; the missing clone surfaces a clean SourceNotCloned downstream
-        # (the git-check resolves the absent clone dir). --no-git-check is NOT
-        # passed here so the check actually runs.
+        # --no-git-check is NOT passed, so the check runs and surfaces the
+        # missing clone as SourceNotCloned (no silent network touch).
         git_src = GitSource(url="https://example.invalid/cfg.git", ref="main")
         monkeypatch.setattr(
             "setforge.cli.install.resolve_source_for_git_check",

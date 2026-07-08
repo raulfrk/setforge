@@ -263,9 +263,7 @@ def reconcile_plain_file(
         # on ``live is ABSENT`` — a delete/modify (theirs != base) never reaches
         # here (merge returns a conflict) and so keeps routing to DEFERRED.
         if result.absent:
-            # Steady state (store already records absence with the base at
-            # tracked) is a real NOOP — no store churn, no transition. The
-            # FIRST honoring advances the store to local=ABSENT via REMOVE.
+            # Already recorded absent at tracked: real NOOP (first honor uses REMOVE).
             if read_local(profile, fid) is ABSENT and base_raw == tracked:
                 return ReconcileOutcome(ReconcileKind.NOOP)
             return ReconcileOutcome(

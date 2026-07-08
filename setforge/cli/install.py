@@ -395,11 +395,7 @@ def install(
 
         _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
 
-        # INV-4: an idempotent re-install (empty content patch AND no store /
-        # delta / mode / seed change) writes NO transition dir — skip the churn
-        # of an empty, indefinitely-kept record. Any store mutation with an
-        # empty patch (e.g. honoring a deletion) still records its transition so
-        # revert can restore the store.
+        # INV-4: skip the transition on a true no-op (see _install_recorded_nothing).
         if not no_transition and not _install_recorded_nothing(
             file_pre=file_pre,
             file_post=file_post,
@@ -443,9 +439,8 @@ def _gate_on_deferred_reconcile(
     already let the user choose Skip per region, so it does NOT gate — those
     defers warned per file during the deploy.
 
-    Count-only: each deferred file was ALREADY echoed per-file (the yellow
-    ``merge conflict kept live`` warn during deploy), so this gate reports just
-    the count + the actionable resolution — no second per-file list.
+    Count-only: each file was ALREADY echoed via the per-file deploy-time warn,
+    so no second per-file list here.
     """
     if not deferred or interactive:
         return

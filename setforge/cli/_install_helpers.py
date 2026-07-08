@@ -276,13 +276,11 @@ def _plain_reconcile_content(
 ) -> str | None:
     """The live str to write for a plain-reconcile outcome, or None to fall back.
 
-    ``WRITE`` writes the merged bytes. A resolved deletion is NOT seen here — it
-    is a :attr:`~reconcile_apply.ReconcileKind.REMOVE`, handled by the caller as
-    a real unlink before this function is reached (a str writer cannot express
-    a deletion). The ``bytes`` guard on ``WRITE`` therefore stays only as a
-    defensive fall-back. ``NOOP`` / ``DEFERRED`` / ``CANCELLED`` keep the
-    current live content (empty when live was absent), so
-    :func:`deploy.write_resolved_deploy` detects a NOOP and never clobbers a
+    A resolved deletion never reaches here — it's a
+    :attr:`~reconcile_apply.ReconcileKind.REMOVE`, unlinked for real by the
+    caller before this function runs (a str writer can't express a deletion).
+    ``NOOP`` / ``DEFERRED`` / ``CANCELLED`` keep the current live content, so
+    :func:`deploy.write_resolved_deploy` detects the NOOP and never clobbers a
     local edit with the tracked source.
     """
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
@@ -657,11 +655,9 @@ class DeployOutcome:
     real conflicts unresolved.
 
     ``store_mutated`` is True iff this run advanced the reconcile store (a
-    ``WRITE`` or ``REMOVE`` record, or a base prune that actually dropped an
-    entry). The caller ANDs it with an empty content patch to decide whether to
-    skip the transition entirely: an empty-patch run that still mutated the
-    store (e.g. honoring a deletion by marking the base ABSENT) MUST keep its
-    transition so revert can restore the store.
+    ``WRITE``/``REMOVE`` record, or a base prune that dropped an entry) — see
+    :func:`_install_recorded_nothing` for why this must gate an empty-patch
+    transition skip.
     """
 
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
@@ -735,12 +731,9 @@ def _execute_pending_deploys(
             base_keep_ids.add(record.sub_name)
             store_mutated |= _advance_reconcile_store(profile, record)
             continue
-        # Steady-state absence: a NOOP whose live file was already gone (the
-        # store records the deletion, base == tracked). Writing the resolved
-        # "" content would CREATE a zero-byte file — resurrecting the deletion —
-        # so skip the write entirely. The base stays kept below so it is not
-        # pruned. A normal NOOP (live present) still flows to
-        # write_resolved_deploy, which detects the NOOP without writing.
+        # Steady-state absence: a NOOP whose live file was already gone. Writing
+        # the resolved "" content would CREATE a zero-byte file — resurrecting
+        # the deletion — so skip the write entirely.
         if (
             record.reconcile is not None
             and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
@@ -769,9 +762,8 @@ def _execute_pending_deploys(
     # keep-set (a file left the profile, lost its disposition, or stopped
     # being a reconcile-eligible plain file) are removed. The keep-set spans
     # disposition + plain-reconcile files, so an engine-routed plain file's
-    # base survives instead of being pruned every run. A prune that actually
-    # drops an entry is a store mutation too (the transition must not be
-    # skipped as a no-op even with an empty content patch).
+    # base survives instead of being pruned every run. A dropped entry counts
+    # as store_mutated too (see DeployOutcome).
     if _prune_bases_removed_any(profile, base_keep_ids):
         store_mutated = True
     return DeployOutcome(
@@ -797,16 +789,15 @@ def _prune_bases_removed_any(profile: str, base_keep_ids: set[str]) -> bool:
 def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
     """Advance the reconcile store for a plain file AFTER its live write.
 
-    Returns True iff the store was actually mutated (a ``WRITE`` or ``REMOVE``
-    record). A ``WRITE`` outcome ``record``s the new base (= tracked) + the
-    deployed content (a :func:`reconcile.record` failure PROPAGATES — base
-    lagging live is the safe failure direction). A ``REMOVE`` outcome (a
-    honored clean deletion) ``record``s ``local=ABSENT`` at ``base=tracked``,
-    so the next install stays a deletion rather than resurrecting the file. A
-    ``DEFERRED`` outcome (a non-TTY / ``--auto`` conflict, or a skipped region)
-    keeps live, does NOT re-baseline, and WARNs so the divergence re-surfaces
-    on the next interactive install. ``NOOP`` / ``CANCELLED`` leave the store
-    untouched.
+    Returns True iff the store was mutated (``WRITE``/``REMOVE``). ``WRITE``
+    records the new base (= tracked) + deployed content (a
+    :func:`reconcile.record` failure PROPAGATES — base lagging live is the
+    safe failure direction). ``REMOVE`` (a honored clean deletion) records
+    ``local=ABSENT`` at ``base=tracked`` so the next install stays a deletion
+    instead of resurrecting the file. ``DEFERRED`` (a non-TTY / ``--auto``
+    conflict, or a skipped region) keeps live, does NOT re-baseline, and WARNs
+    so the divergence re-surfaces next install. ``NOOP``/``CANCELLED`` leave
+    the store untouched.
     """
     assert record.reconcile is not None
     fid, outcome = record.reconcile
@@ -841,12 +832,9 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
 def _honor_reconcile_removal(record: _PendingDeploy) -> None:
     """Unlink the live file for a honored clean deletion (never a zero-byte write).
 
-    The write pass's counterpart to :func:`deploy.write_resolved_deploy` for a
-    :attr:`~reconcile_apply.ReconcileKind.REMOVE`: the merge resolved to ABSENT,
-    so the file is removed (``missing_ok`` — the user typically deleted it
-    already; the unlink makes the outcome explicit and revert-symmetric). The
-    live path is the symlink-resolved ``real_dst``, matching the transition
-    snapshot + patch surface.
+    ``missing_ok=True``: the user typically already deleted it; the unlink
+    makes the outcome explicit and revert-symmetric. Uses the symlink-resolved
+    ``real_dst`` to match the transition snapshot + patch surface.
     """
     assert record.resolved is not None
     record.resolved.real_dst.unlink(missing_ok=True)

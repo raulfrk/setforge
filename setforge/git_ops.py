@@ -28,10 +28,8 @@ from setforge.errors import GitOpError
 
 _GIT_TIMEOUT_SECONDS: Final[int] = 300
 
-#: The ``-o`` fragment that makes ssh fail instead of prompting for a
-#: passphrase, and the full default command used when the user set no
-#: ``GIT_SSH_COMMAND`` at all. Shared from one place so the append fragment
-#: and the from-scratch default can never drift apart.
+#: Shared from one place so the append fragment and the from-scratch default
+#: can never drift apart.
 _SSH_BATCHMODE_FRAGMENT: Final[str] = "-oBatchMode=yes"
 _SSH_BATCHMODE_DEFAULT: Final[str] = f"ssh {_SSH_BATCHMODE_FRAGMENT}"
 
@@ -51,9 +49,7 @@ def _harden_git_ssh_command(value: str | None) -> str:
     - An unset / empty / whitespace-only value falls back to the full
       :data:`_SSH_BATCHMODE_DEFAULT` (``ssh -oBatchMode=yes``).
     - A user value that ALREADY pins ``BatchMode`` (``=yes`` OR ``=no``) is
-      returned verbatim — ssh is first-wins per ``-o`` param, so appending a
-      second ``BatchMode`` would be ignored and leave a self-contradictory
-      string; the user's explicit choice wins.
+      returned verbatim — see :data:`_SSH_BATCHMODE_RE` for why.
     - Otherwise the value keeps every user token and gains the
       :data:`_SSH_BATCHMODE_FRAGMENT` so ssh fails rather than prompting.
     """
@@ -76,11 +72,7 @@ def _hardened_env() -> dict[str, str]:
       missing credential fails fast instead of blocking a background / CI
       ``install`` on a TTY until the timeout.
     - ``GIT_SSH_COMMAND`` is hardened so ssh fails rather than prompting for
-      a passphrase (see :func:`_harden_git_ssh_command`): an unset value
-      becomes ``ssh -oBatchMode=yes``, a user value gains ``-oBatchMode=yes``
-      UNLESS it already pins ``BatchMode`` (``=yes`` or ``=no``), in which
-      case the user's explicit choice is preserved unchanged. A custom
-      identity file or other ssh flags are always kept.
+      a passphrase — see :func:`_harden_git_ssh_command`.
     - ``LANG``/``LC_ALL=C`` pin the locale so ``--porcelain`` / ``rev-parse``
       output stays parser-stable (mirrors ``cli/status.py``).
     """

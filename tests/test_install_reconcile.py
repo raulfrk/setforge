@@ -239,15 +239,14 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
 
 
 def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
-    # A locally-deleted file (upstream unchanged) is HONORED: the reinstall
-    # leaves it absent — NOT re-created as a zero-byte file — and records the
-    # absence in the store. The base is kept so a later run does not resurrect.
+    # Locally-deleted file (upstream unchanged) must stay absent, not
+    # resurrected as a zero-byte file.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
     assert _live().exists()
 
-    _live().unlink()  # user deletes the live file
+    _live().unlink()
     result = _install(config)
     assert result.exit_code == 0, result.output
     assert not _live().exists(), "honored deletion must not resurrect the file"
@@ -257,8 +256,8 @@ def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
 
 
 def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
-    # Once the deletion is honored (store records absence, base == tracked), a
-    # further reinstall is a real NOOP: no new transition dir (no churn).
+    # Once honored (absence recorded, base == tracked), reinstall is a real
+    # NOOP (no churn).
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
@@ -271,14 +270,12 @@ def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
 
 
 def test_delete_modify_routes_to_deferred(repo: Path) -> None:
-    # Live deleted AND upstream changed (theirs != base) is a delete/modify
-    # conflict — NOT a silent honor. It routes to the DEFERRED gate (non-zero
-    # exit), leaving the file absent and the base unadvanced.
+    # Delete + upstream change is NOT silently honored — routes to DEFERRED.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
     _live().unlink()
-    _write_tracked(repo, "v2\n")  # upstream diverges from the base
+    _write_tracked(repo, "v2\n")
     result = _install(config)
     assert result.exit_code != 0, result.output
     assert "conflict" in result.output.lower()
@@ -286,9 +283,8 @@ def test_delete_modify_routes_to_deferred(repo: Path) -> None:
 
 
 def test_revert_restores_deletion_and_no_resurrect(repo: Path) -> None:
-    # Reverting a honored-deletion install restores the pre-delete BASE (so the
-    # store is a consistent pair again) and a subsequent reinstall re-honors the
-    # deletion instead of resurrecting / mis-merging the file.
+    # Revert of a honored deletion must restore the pre-delete base, and a
+    # subsequent reinstall must re-honor rather than resurrect the file.
     config = _write_config(repo)
     _write_tracked(repo, "v1\n")
     assert _install(config).exit_code == 0
@@ -300,7 +296,6 @@ def test_revert_restores_deletion_and_no_resurrect(repo: Path) -> None:
     assert _base() == b"v1\n", "revert restores the pre-delete base bytes"
     assert not _live().exists(), "the live file stayed absent (nothing to undo)"
 
-    # Reinstall after revert re-honors the deletion — no zero-byte resurrection.
     result = _install(config)
     assert result.exit_code == 0, result.output
     assert not _live().exists()

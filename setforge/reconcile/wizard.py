@@ -76,11 +76,10 @@ _MAX_DISPLAY_LINES = 40
 def claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
     """Default Claude-merge stub: always declines (re-prompts the region).
 
-    This is the public default-arg sentinel shared by the install-side
-    reconcile callers (``reconcile_apply`` / ``cli._install_helpers``): a
-    non-interactive / ``--auto`` / CI run wires this so Claude-merge is never
-    auto-invoked. The ``_claude_merge_unavailable`` alias below is retained for
-    back-compat with call sites that import the underscore name.
+    The public default-arg sentinel shared by the install-side reconcile
+    callers (``reconcile_apply`` / ``cli._install_helpers``): a
+    non-interactive / ``--auto`` / CI run wires this so Claude-merge is
+    never auto-invoked.
     """
     return CANCEL
 

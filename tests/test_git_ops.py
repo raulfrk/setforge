@@ -395,9 +395,6 @@ class TestRunGitEnvHardening:
     def test_appends_batchmode_to_user_command_without_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A user GIT_SSH_COMMAND that does NOT pin BatchMode keeps every token
-        # AND gains -oBatchMode=yes, so ssh still fails-fast instead of
-        # prompting for a passphrase on a bg / CI install.
         monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/.ssh/custom_id")
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/custom_id -oBatchMode=yes"
@@ -405,9 +402,8 @@ class TestRunGitEnvHardening:
     def test_batchmode_probe_not_fooled_by_substring(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The probe is anchored on the -o option, so an identity file whose name
-        # merely CONTAINS "BatchMode" is not mistaken for an explicit setting —
-        # the fragment is still appended.
+        # Anchored on -o: a filename merely containing "BatchMode" isn't mistaken
+        # for the flag.
         monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/BatchMode_key")
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == "ssh -i ~/BatchMode_key -oBatchMode=yes"
@@ -424,9 +420,7 @@ class TestRunGitEnvHardening:
     def test_preserves_user_command_that_pins_batchmode(
         self, monkeypatch: pytest.MonkeyPatch, user_value: str
     ) -> None:
-        # ssh is first-wins per -o param, so a user who explicitly set BatchMode
-        # (yes OR no, any spacing / case) keeps their exact string — appending a
-        # second =yes would be ignored and leave a self-contradictory command.
+        # ssh is first-wins per -o param — the user's exact string must survive.
         monkeypatch.setenv("GIT_SSH_COMMAND", user_value)
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == user_value
@@ -435,8 +429,6 @@ class TestRunGitEnvHardening:
     def test_blank_user_command_falls_back_to_full_default(
         self, monkeypatch: pytest.MonkeyPatch, blank: str
     ) -> None:
-        # An empty / whitespace-only value is not a usable command — fall back
-        # to the full "ssh -oBatchMode=yes" default rather than a bare fragment.
         monkeypatch.setenv("GIT_SSH_COMMAND", blank)
         env = self._capture_env(monkeypatch)["env"]
         assert env["GIT_SSH_COMMAND"] == "ssh -oBatchMode=yes"
