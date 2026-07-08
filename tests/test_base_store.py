@@ -97,6 +97,18 @@ def test_prune_missing_profile_is_noop() -> None:
     base_store.prune("never-written", {"a"})
 
 
+def test_list_base_ids_returns_recorded_ids(state_dir: Path) -> None:
+    base_store.write_base("vm", "a", b"1")
+    base_store.write_base("vm", "nested/c", b"2")
+    # Exact-set equality: an empty-set or dropped-id return fails here, and the
+    # format-version sidecar must not leak into the id set.
+    assert base_store.list_base_ids("vm") == {"a", "nested/c"}
+
+
+def test_list_base_ids_missing_profile_is_empty() -> None:
+    assert base_store.list_base_ids("never-written") == set()
+
+
 # --- format-version sidecar wiring ---------------------------------------
 
 
