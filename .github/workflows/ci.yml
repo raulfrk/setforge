@@ -34,10 +34,6 @@ jobs:
       # CI is the hard backstop for the policy lints (the PreToolUse hook is
       # fast local feedback but can fail open on unparseable commit commands).
       - run: uv run python scripts/check_policy_lints.py
-      # Coverage floor gate: the single blocking enforcer of the 85% branch
-      # floor. Its own step, no continue-on-error / --no-cov so a regression
-      # below the floor fails the PR. Safe here since `tests` runs serially
-      # (see e2e-docker's --no-cov comment below for the xdist+--cov crash).
       - run: uv run pytest --cov-fail-under=85
 
   pr-e2e-smoke:

@@ -149,11 +149,6 @@ sigterm = true
 
 [tool.coverage.report]
 show_missing = true
-# No fail_under here on purpose: pytest-cov honors this threshold on EVERY
-# local `--cov` run (including single-file/subset runs), which false-fails
-# them. The 85% branch floor is enforced by exactly ONE gate — the explicit
-# `--cov-fail-under=85` on the CI `tests` step. Coverage stays collected +
-# shown locally; the floor only blocks in CI.
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:", "@(typing\\.)?overload"]
 
 [tool.mutmut]
