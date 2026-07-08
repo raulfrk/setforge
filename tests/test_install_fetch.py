@@ -16,8 +16,10 @@ import pytest
 from click.testing import Result
 from typer.testing import CliRunner
 
+from setforge import git_ops
 from setforge import source as source_mod
 from setforge.cli import app
+from setforge.errors import SourceNotCloned
 from setforge.source import GitSource, PathSource
 
 _PROFILE = "test-fetch"
@@ -132,3 +134,52 @@ class TestFetchWiring:
         result = _install(config)
         assert result.exit_code == 0, result.output
         assert "nothing to fetch" not in result.output
+
+    def test_no_fetch_runs_no_git_operation(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The real intent of --no-fetch: ZERO git operations run (nothing is
+        # cloned / fetched / checked). Every git_ops shell-out funnels through
+        # ``_run_git`` (its single ``subprocess.run`` seam), so spying it proves
+        # no git subprocess ran — WITHOUT the false positives a global
+        # ``subprocess.run`` spy would hit (``git_ops.subprocess`` is the shared
+        # stdlib module, so a global patch would also catch the transition's
+        # local ``git rev-parse HEAD`` provenance call).
+        calls: list[object] = []
+
+        def _spy(*args: object, **kwargs: object) -> object:
+            calls.append((args, kwargs))
+            raise AssertionError("no git operation must run under --no-fetch")
+
+        monkeypatch.setattr(git_ops, "_run_git", _spy)
+        config = _write_config(repo)
+        result = _install(config, "--no-fetch")
+        assert result.exit_code == 0, result.output
+        assert calls == []
+
+    def test_no_fetch_missing_git_clone_raises_source_not_cloned(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A GitSource whose clone is missing + --no-fetch: no silent network
+        # touch; the missing clone surfaces a clean SourceNotCloned downstream
+        # (the git-check resolves the absent clone dir). --no-git-check is NOT
+        # passed here so the check actually runs.
+        git_src = GitSource(url="https://example.invalid/cfg.git", ref="main")
+        monkeypatch.setattr(
+            "setforge.cli.install.resolve_source_for_git_check",
+            lambda _repo_root: git_src,
+        )
+        config = _write_config(repo)
+        result = CliRunner().invoke(
+            app,
+            [
+                "install",
+                f"--profile={_PROFILE}",
+                f"--config={config}",
+                "--no-secrets-scan",
+                "--yes",
+                "--no-fetch",
+            ],
+        )
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SourceNotCloned)
