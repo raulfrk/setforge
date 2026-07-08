@@ -128,3 +128,75 @@ def test_unstaged_plain_file_is_unexpected(tmp_path: Path) -> None:
     config, repo = _config(tmp_path, BASE)  # tracked = base, no staging recorded
     entry = compare_profile(config, "p", repo).entries[0]
     assert entry.drift_class is DriftClass.UNEXPECTED
+
+
+# --- structured branch: degrade-to-False guards (direct unit) -----------------
+# `_reconcile_staged_expected` routes a YAML/JSON dst to its structured analog,
+# which must NEVER bless-on-error: each of these guards returns False, and a
+# mutant flipping any of them to True would (wrongly) classify the divergence
+# EXPECTED. Exercised directly because the structured guards have no e2e caller.
+
+
+def _structured_dst(tmp_path: Path, name: str, body: bytes) -> Path:
+    dst = tmp_path / "live" / name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(body)
+    return dst
+
+
+def test_structured_base_missing_degrades_to_false(tmp_path: Path) -> None:
+    # No recorded base for the .yaml → the `base is None` guard returns False.
+    from setforge.compare import _reconcile_staged_expected
+
+    src = tmp_path / "repo" / "tracked" / "settings.yaml"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"theme: dark\n")
+    dst = _structured_dst(tmp_path, "settings.yaml", b"theme: light\n")
+
+    assert _reconcile_staged_expected("p", "settings.yaml", src, dst) is False
+
+
+def test_structured_no_staged_units_degrades_to_false(tmp_path: Path) -> None:
+    # A base+local is recorded but no key-units are classified → the
+    # `entry is None or not entry.hunks` guard returns False.
+    from setforge import locking
+    from setforge.compare import _reconcile_staged_expected
+
+    base, live = b"theme: dark\n", b"theme: light\n"
+    with locking.profile_lock("p"):
+        reconcile_store.record("p", file_id("settings.yaml"), base=base, local=live)
+
+    src = tmp_path / "repo" / "tracked" / "settings.yaml"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(base)  # tracked == base, but that never matters — no staged units
+    dst = _structured_dst(tmp_path, "settings.yaml", live)
+
+    assert _reconcile_staged_expected("p", "settings.yaml", src, dst) is False
+
+
+def test_structured_unparseable_live_degrades_to_false(tmp_path: Path) -> None:
+    # A genuinely-staged key-unit, but the on-disk live is unparseable JSON →
+    # extract_structured_units raises StructuredParseError, caught by the broad
+    # `except (StructuredParseError, ...)` → False (never bless on a parse error).
+    from setforge import locking
+    from setforge.compare import _reconcile_staged_expected
+    from setforge.reconcile.structured_units import KeyUnit, serialize_structured
+    from setforge.reconcile.types import HunkClass
+
+    base = b'{"theme": "dark"}'
+    unit = KeyUnit(HunkClass.LOCAL, "theme", "theme", "sha256:x")
+    with locking.profile_lock("p"):
+        reconcile_store.record(
+            "p",
+            file_id("settings.json"),
+            base=base,
+            local=b'{"theme": "light"}',
+            hunks=serialize_structured([unit]),
+        )
+
+    src = tmp_path / "repo" / "tracked" / "settings.json"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(base)
+    dst = _structured_dst(tmp_path, "settings.json", b"{ not valid json")
+
+    assert _reconcile_staged_expected("p", "settings.json", src, dst) is False

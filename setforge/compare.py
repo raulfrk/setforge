@@ -870,7 +870,7 @@ def _reconcile_staged_expected_structured(
         return True
     except InvariantViolation:
         # INV-8 (or draft-confinement) failed → tracked is NOT the promoted set →
-        # real drift. DraftConfinementError is an InvariantViolation, caught here.
+        # real drift.
         return False
     except (
         StructuredParseError,
