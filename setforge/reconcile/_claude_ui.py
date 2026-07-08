@@ -19,7 +19,8 @@ def _themed_style() -> Style:
 
 
 def _fenced(label: str, data: bytes, token: str) -> str:
-    """A fresh per-call token, not a fixed one, is what keeps this un-spoofable."""
+    """Fence ``data`` between two ``token`` lines as inert content; the caller
+    passes a fresh per-call token so fenced data can't spoof the delimiter."""
     return f"--{label}--\n{token}\n{data.decode('utf-8')}\n{token}"
 
 

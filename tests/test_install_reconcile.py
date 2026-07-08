@@ -301,7 +301,7 @@ def test_claude_merge_wired_only_when_interactive(
     # non-interactively it stays the unavailable stub (never auto-invoked).
     from setforge.cli import _install_helpers as ih
     from setforge.config import TrackedFile
-    from setforge.reconcile.wizard import _claude_merge_unavailable
+    from setforge.reconcile.wizard import claude_merge_unavailable
     from setforge.reconcile_apply import ReconcileKind, ReconcileOutcome
 
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
@@ -327,4 +327,4 @@ def test_claude_merge_wired_only_when_interactive(
     ih._resolve_plain_reconcile(
         "p", "note", src, dst, tf, interactive=False, section_auto=None
     )
-    assert captured["cm"] is _claude_merge_unavailable
+    assert captured["cm"] is claude_merge_unavailable

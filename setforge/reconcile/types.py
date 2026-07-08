@@ -26,7 +26,7 @@ _CONTROL: Final = frozenset({chr(c) for c in range(0x20)} | {"\x7f"})
 
 
 def content_sha(data: bytes) -> str:
-    """A mismatch here must raise, not silently pass (fail-closed integrity check)."""
+    """The ``sha256:``-prefixed hex digest of ``data`` — the store's integrity hash."""
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 

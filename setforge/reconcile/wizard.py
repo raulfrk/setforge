@@ -56,7 +56,7 @@ __all__ = [
 
 #: Resolve ONE conflict region. Returns the merged bytes, or :data:`CANCEL` to
 #: decline (the wizard then re-prompts that region). A4 injects the real
-#: resumable ``claude -p`` session; :func:`_claude_merge_unavailable` is the stub.
+#: resumable ``claude -p`` session; :func:`claude_merge_unavailable` is the stub.
 type ClaudeMergeFn = Callable[[Conflict], bytes | Cancelled]
 
 #: Styled-fragment list — prompt_toolkit's ``(style_class, text)`` shape.
@@ -76,9 +76,6 @@ _MAX_DISPLAY_LINES = 40
 def claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
     """Default Claude-merge stub: always declines (re-prompts the region)."""
     return CANCEL
-
-
-_claude_merge_unavailable = claude_merge_unavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,7 +294,7 @@ def resolve_conflicts(
     result: MergeResult,
     *,
     display_path: str | None = None,
-    claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
+    claude_merge: ClaudeMergeFn = claude_merge_unavailable,
 ) -> WizardResult | Cancelled:
     """Drive the per-region wizard over ``result``'s conflicts, in order.
 

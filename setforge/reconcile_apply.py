@@ -209,8 +209,10 @@ def reconcile_plain_file(
     ``base = read_base`` (``ABSENT`` when no base is recorded — a first
     install or a not-yet-seeded divergence), ``ours = live``, ``theirs =
     tracked``. A clean merge that already equals live with the base already
-    at tracked is a :attr:`~ReconcileKind.NOOP`; any other clean merge is a
-    :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``.
+    at tracked is a :attr:`~ReconcileKind.NOOP`; a clean merge resolving to
+    absence is a :attr:`~ReconcileKind.REMOVE` (unlink live, record
+    ``local=ABSENT``); any other clean merge is a :attr:`~ReconcileKind.WRITE`
+    advancing the base to ``tracked``.
 
     A conflict resolves by, in order: the per-region wizard when
     ``interactive`` (a cancel / skipped region writes nothing and does NOT
