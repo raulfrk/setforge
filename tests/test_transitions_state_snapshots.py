@@ -410,9 +410,9 @@ def test_reconcile_store_snapshot_round_trip(state_dir: Path) -> None:
     row: dict[str, object] = {
         "cls": "shared_drafted",
         "label": "## Paths",
-        "live_hash": store._sha(b"host"),
+        "live_hash": store.content_sha(b"host"),
         "anchor": "sha256:a",
-        "draft_hash": store._sha(draft),
+        "draft_hash": store.content_sha(draft),
     }
     store.record(
         _PROFILE,

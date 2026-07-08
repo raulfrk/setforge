@@ -14,6 +14,7 @@ from a zero-byte file and from "not recorded yet" (``None``).
 
 from __future__ import annotations
 
+import hashlib
 from enum import Enum, StrEnum
 from typing import Final, NewType
 
@@ -22,6 +23,18 @@ from setforge.errors import UnsafeFileId
 FileId = NewType("FileId", str)
 
 _CONTROL: Final = frozenset({chr(c) for c in range(0x20)} | {"\x7f"})
+
+
+def content_sha(data: bytes) -> str:
+    """The canonical ``"sha256:"``-prefixed digest of ``data``'s raw bytes.
+
+    The ONE content-integrity hash for the reconcile store: the interactive
+    ``stage`` write path and :func:`setforge.reconcile.store.verify`'s
+    fail-closed check must agree byte-for-byte, so both resolve here. The prefix
+    and raw-bytes input are load-bearing — a mismatch fails every
+    ``SHARED_DRAFTED`` draft's verify gate (``InvariantViolation``).
+    """
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def file_id(key: str) -> FileId:

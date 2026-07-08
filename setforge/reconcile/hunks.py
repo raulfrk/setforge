@@ -20,7 +20,6 @@ region — the host's local delta over the recorded merge base. Two principles:
 
 from __future__ import annotations
 
-import hashlib
 from collections import Counter
 from dataclasses import dataclass
 
@@ -28,7 +27,7 @@ from patiencediff import PatienceSequenceMatcher
 
 from setforge.errors import InvariantViolation
 from setforge.reconcile.merge import split_lines  # canonical engine line splitter
-from setforge.reconcile.types import HunkClass
+from setforge.reconcile.types import HunkClass, content_sha
 
 #: Base-context lines hashed on each side of a hunk to anchor its identity to
 #: surrounding base content (so an edit elsewhere in the file does not re-mint it).
@@ -70,10 +69,6 @@ class Hunk:
     changed: bool = False
     draft_hash: str | None = None
     reloc_anchor: str | None = None
-
-
-def _sha(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _norm(lines: list[bytes]) -> bytes:
@@ -128,7 +123,7 @@ def extract_hunks(base: bytes, live: bytes) -> list[Hunk]:
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
-        anchor = _sha(
+        anchor = content_sha(
             _norm(base_lines[max(0, i1 - _CONTEXT_LINES) : i1])
             + b"\x00"
             + _norm(base_lines[i2 : i2 + _CONTEXT_LINES])
@@ -137,7 +132,7 @@ def extract_hunks(base: bytes, live: bytes) -> list[Hunk]:
             Hunk(
                 cls=HunkClass.PENDING,
                 label=_label(base_lines, live_lines, i1, i2, j1, j2),
-                live_hash=_sha(_norm(live_lines[j1:j2])),
+                live_hash=content_sha(_norm(live_lines[j1:j2])),
                 anchor=anchor,
                 base_span=(i1, i2),
                 live_span=(j1, j2),

@@ -176,7 +176,7 @@ def test_edit_returns_edited_bytes(
         seen.append(target.read_text(encoding="utf-8"))  # editor sees the draft
         target.write_text("EDITED\n", encoding="utf-8")
 
-    monkeypatch.setattr("setforge.reconcile.claude_merge.run_editor", _fake_editor)
+    monkeypatch.setattr("setforge.reconcile._claude_ui.run_editor", _fake_editor)
     out = _run(b"c\re")  # Claude-merge → empty instruction → draft → Edit
     assert isinstance(out, WizardResult)
     assert out.merged.merged() == b"EDITED\n"

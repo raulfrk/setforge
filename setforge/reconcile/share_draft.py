@@ -29,10 +29,14 @@ from prompt_toolkit.styles import Style
 
 from setforge.claude_session import ClaudeSession, ClaudeSessionError
 from setforge.errors import DraftConfinementError
-from setforge.reconcile.claude_merge import _edit_draft  # shared editor helper
+from setforge.reconcile._claude_ui import (
+    _edit_draft,
+    _fenced,
+    _sanitize_controls,
+    _strip_fence,
+    _themed_style,
+)
 from setforge.reconcile.structured_units import StructuredFormat, parse_scalar_draft
-from setforge.reconcile.wizard import _sanitize_controls
-from setforge.ui.theme import THEME, pt_style
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
 
 _PROMPT_HEADER: Final = (
@@ -78,22 +82,6 @@ class _Choice(StrEnum):
     BACK = "back"
 
 
-def _themed_style() -> Style:
-    rules = {
-        key.removeprefix("class:"): value for key, value in pt_style(THEME).items()
-    }
-    return Style.from_dict(rules)
-
-
-def _fenced(label: str, data: bytes, token: str) -> str:
-    """The region fenced between ``token`` lines as inert DATA.
-
-    Precondition: ``data`` is UTF-8 (the stage walk only reaches drafting for a
-    UTF-8 plain file).
-    """
-    return f"--{label}--\n{token}\n{data.decode('utf-8')}\n{token}"
-
-
 def _build_prompt(region: bytes, instruction: str, display_path: str) -> str:
     """Turn-1 prompt: rules header, the fenced host region, optional instruction."""
     token = uuid4().hex
@@ -113,14 +101,6 @@ def _build_prompt(region: bytes, instruction: str, display_path: str) -> str:
 def _build_refine(instruction: str) -> str:
     """A re-prompt carries just the instruction (the session holds context)."""
     return instruction if instruction.strip() else _DEFAULT_REFINE
-
-
-def _strip_fence(text: str) -> str:
-    """Drop a single wrapping ``` code fence, if the whole draft is wrapped in one."""
-    lines = text.strip("\n").splitlines()
-    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1])
-    return text
 
 
 def _validate(draft: str) -> str | None:

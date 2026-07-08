@@ -41,12 +41,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from prompt_toolkit.styles import Style
-
 from setforge._editor import run_editor
+from setforge.reconcile._claude_ui import _sanitize_controls, _themed_style
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.types import FileId
-from setforge.ui.theme import THEME, pt_style
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar
 
 __all__ = ["ClaudeMergeFn", "WizardResult", "resolve_conflicts"]
@@ -128,27 +126,6 @@ def _all_utf8(conflict: Conflict) -> bool:
     return _both_utf8(conflict)
 
 
-def _sanitize_controls(text: str) -> str:
-    """Map C0 controls (except newline) and DEL to caret notation for display.
-
-    A raw ``\\x00``/ESC/control char written into a ``FormattedTextControl`` is
-    emitted as a literal screen cell and corrupts the panel; newline is kept so
-    the body stays multi-line.
-    """
-    out: list[str] = []
-    for ch in text:
-        code = ord(ch)
-        if ch == "\n":
-            out.append(ch)
-        elif code < 0x20:
-            out.append(f"^{chr(code + 0x40)}")
-        elif code == 0x7F:
-            out.append("^?")
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
 def _truncate(text: str) -> str:
     """Cap the display at :data:`_MAX_DISPLAY_LINES` lines with a marker."""
     lines = text.splitlines(keepends=True)
@@ -189,23 +166,6 @@ def _render_conflict(conflict: Conflict) -> _Fragments:
 def _title(path: str, index: int, total: int) -> str:
     """Frame title, e.g. ``~/.claude/CLAUDE.md — region 2 of 3``."""
     return f"{path} — region {index} of {total}"
-
-
-def _themed_style() -> Style:
-    """The Tokyo Night role palette as a prompt_toolkit ``Style``.
-
-    Merged over the widget's own button classes inside ``button_bar`` (it only
-    carries the role classes, never ``button`` / ``button.focused``).
-
-    :func:`~setforge.ui.theme.pt_style` returns *reference*-form keys
-    (``class:success``), the shape a fragment uses to point at a class;
-    :meth:`Style.from_dict` keys are *definition*-form (bare ``success``), so we
-    strip the ``class:`` prefix.
-    """
-    rules = {
-        key.removeprefix("class:"): value for key, value in pt_style(THEME).items()
-    }
-    return Style.from_dict(rules)
 
 
 def _region_buttons(conflict: Conflict) -> list[Button[_Choice]]:

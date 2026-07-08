@@ -41,12 +41,13 @@ from setforge.reconcile import hunks as hunks_mod
 from setforge.reconcile import share_draft
 from setforge.reconcile import store as reconcile_store
 from setforge.reconcile import structured_units as su_mod
+from setforge.reconcile._claude_ui import _themed_style
 from setforge.reconcile.hunks import Hunk
 from setforge.reconcile.merge import split_lines
 from setforge.reconcile.structured_units import KeyUnit, StructuredFormat
-from setforge.reconcile.types import FileId, HunkClass, file_id
+from setforge.reconcile.types import FileId, HunkClass, content_sha, file_id
 from setforge.scalar_merge import ABSENT
-from setforge.ui import THEME, Button, button_bar, pt_style
+from setforge.ui import Button, button_bar
 from setforge.ui.widgets import CANCEL
 
 
@@ -257,9 +258,7 @@ def walk_structured(
             break
         if decision is None:
             continue
-        draft_hash = (
-            hunks_mod._sha(decision.draft) if decision.draft is not None else None
-        )
+        draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(unit, cls=decision.cls, draft_hash=draft_hash)
         if decision.draft is not None:
             drafts[unit.path] = decision.draft
@@ -355,9 +354,7 @@ def walk(hunks: list[Hunk], choose: Choice) -> WalkResult:
             break
         if decision is None:
             continue
-        draft_hash = (
-            hunks_mod._sha(decision.draft) if decision.draft is not None else None
-        )
+        draft_hash = content_sha(decision.draft) if decision.draft is not None else None
         out[index] = replace(hunk, cls=decision.cls, draft_hash=draft_hash)
         if decision.draft is not None:
             drafts[hunk.anchor] = decision.draft
@@ -380,12 +377,7 @@ def _hunk_preview(stage: FileStage, hunk: Hunk) -> str:
 
 def _interactive_choice(stage: FileStage) -> Choice:
     """A button-bar-backed choose callback for the interactive walk."""
-    # Strip the ``class:`` prefix pt_style emits — Style.from_dict keys on bare
-    # role names (mirrors claude_merge / wizard / share_draft _themed_style;
-    # de-forking the four copies is tracked separately).
-    style = Style.from_dict(
-        {key.removeprefix("class:"): value for key, value in pt_style(THEME).items()}
-    )
+    style = _themed_style()
 
     def choose(hunk: Hunk, index: int, total: int) -> Decision | None | _Quit:
         flag = " (changed)" if hunk.changed else ""
@@ -465,9 +457,7 @@ def _unit_preview(stage: StructuredFileStage, unit: KeyUnit) -> str:
 
 def _structured_interactive_choice(stage: StructuredFileStage) -> StructuredChoice:
     """A button-bar-backed choose callback for the interactive structured walk."""
-    style = Style.from_dict(
-        {key.removeprefix("class:"): value for key, value in pt_style(THEME).items()}
-    )
+    style = _themed_style()
 
     def choose(unit: KeyUnit, index: int, total: int) -> Decision | None | _Quit:
         flag = " (changed)" if unit.changed else ""

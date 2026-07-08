@@ -40,7 +40,7 @@ def _stage(
     for h in reconcile_hunks.extract_hunks(BASE, LIVE):
         cls = classes.get(h.label, HunkClass.PENDING)
         draft_hash = (
-            reconcile_store._sha(drafts[h.anchor])
+            reconcile_store.content_sha(drafts[h.anchor])
             if cls is HunkClass.SHARED_DRAFTED
             else None
         )

@@ -147,7 +147,7 @@ def _drafted_row(anchor: str, draft: bytes) -> dict[str, object]:
         "label": "## Worktrees",
         "live_hash": "sha256:live",
         "anchor": anchor,
-        "draft_hash": store._sha(draft),
+        "draft_hash": store.content_sha(draft),
     }
 
 

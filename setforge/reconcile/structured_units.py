@@ -15,7 +15,6 @@ store (the caller wires all I/O).
 
 from __future__ import annotations
 
-import hashlib
 import io
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -32,7 +31,7 @@ from setforge.errors import (
     StructuredParseError,
 )
 from setforge.reconcile.index_model import KIND_KEY
-from setforge.reconcile.types import HunkClass
+from setforge.reconcile.types import HunkClass, content_sha
 from setforge.scalar_merge import ABSENT
 from setforge.structural_merge import (
     append_key_segment,
@@ -100,10 +99,6 @@ class KeyUnit:
     value_hash: str
     changed: bool = False
     draft_hash: str | None = None
-
-
-def _sha(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _yaml() -> YAML:
@@ -241,7 +236,7 @@ def extract_structured_units(
                 cls=HunkClass.PENDING,
                 label=path,
                 path=path,
-                value_hash=_sha(repr(live_value).encode("utf-8")),
+                value_hash=content_sha(repr(live_value).encode("utf-8")),
             )
         )
     return units

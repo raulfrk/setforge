@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import json
 from pathlib import Path
 
@@ -46,7 +45,14 @@ from setforge.errors import (
 )
 from setforge.reconcile import index_model
 from setforge.reconcile.index_model import FileEntry, Index
-from setforge.reconcile.types import ABSENT, Absent, FileId, HunkClass, file_id
+from setforge.reconcile.types import (
+    ABSENT,
+    Absent,
+    FileId,
+    HunkClass,
+    content_sha,
+    file_id,
+)
 from setforge.transitions import state_root
 
 _DIR_MODE = 0o700
@@ -361,10 +367,6 @@ def write_index(profile: str, index: Index) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _sha(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
-
-
 def reconstruct(profile: str, fid: FileId) -> bytes | None | Absent:
     """Reconstruct the live content for ``fid``.
 
@@ -420,7 +422,7 @@ def _verify_one(profile: str, fid: FileId, entry: FileEntry | None) -> None:
             f"INV-10: {profile}/{fid} index 'present' disagrees with the local store"
         )
     if entry.present:
-        actual = _sha(content.read_bytes())
+        actual = content_sha(content.read_bytes())
         if actual != entry.local_hash:
             raise InvariantViolation(
                 f"INV-2: {profile}/{fid} local bytes do not match recorded hash"
@@ -446,7 +448,7 @@ def _verify_drafts(profile: str, fid: FileId, entry: FileEntry | None) -> None:
             f"SHARED_DRAFTED hunk set"
         )
     for anchor, data in manifest.items():
-        if _sha(data) != drafted[anchor]:
+        if content_sha(data) != drafted[anchor]:
             raise InvariantViolation(
                 f"INV-2: {profile}/{fid} draft bytes for {anchor} do not match the "
                 f"recorded draft_hash"
@@ -505,7 +507,7 @@ def record(
     if drafts is not None:
         write_drafts(profile, fid, drafts)
     present = local is not ABSENT
-    local_hash = _sha(local) if isinstance(local, bytes) else None
+    local_hash = content_sha(local) if isinstance(local, bytes) else None
     index = read_index(profile)
     files = dict(index.files)
     if hunks is None:

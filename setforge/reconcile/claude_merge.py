@@ -24,19 +24,21 @@ can act as an instruction.
 
 from __future__ import annotations
 
-import subprocess
-import tempfile
 from enum import StrEnum
-from pathlib import Path
 from uuid import uuid4
 
 from prompt_toolkit.styles import Style
 
-from setforge._editor import run_editor
 from setforge.claude_session import ClaudeSession, ClaudeSessionError
+from setforge.reconcile._claude_ui import (
+    _edit_draft,
+    _fenced,
+    _sanitize_controls,
+    _strip_fence,
+    _themed_style,
+)
 from setforge.reconcile.merge_model import Conflict
-from setforge.reconcile.wizard import ClaudeMergeFn, _sanitize_controls
-from setforge.ui.theme import THEME, pt_style
+from setforge.reconcile.wizard import ClaudeMergeFn
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
 
 _PROMPT_HEADER = (
@@ -66,29 +68,6 @@ class _Draft(StrEnum):
     BACK = "back"
 
 
-def _themed_style() -> Style:
-    """The Tokyo Night role palette as a prompt_toolkit ``Style``.
-
-    Built from the public theme API exactly as the wizard does — the
-    reference-form keys (``class:success``) are stripped to definition-form
-    (``success``) for :meth:`Style.from_dict`. Merged over the widgets' own
-    button classes inside ``button_bar`` / ``text_prompt``.
-    """
-    rules = {
-        key.removeprefix("class:"): value for key, value in pt_style(THEME).items()
-    }
-    return Style.from_dict(rules)
-
-
-def _fenced(label: str, side: bytes, token: str) -> str:
-    """One labelled side fenced between ``token`` lines as inert DATA.
-
-    Precondition: ``side`` decodes as UTF-8 — guaranteed by the wizard's
-    Claude-merge button gate (:func:`~setforge.reconcile.wizard._all_utf8`).
-    """
-    return f"--{label}--\n{token}\n{side.decode('utf-8')}\n{token}"
-
-
 def _build_prompt(conflict: Conflict, instruction: str, display_path: str) -> str:
     """The turn-1 prompt: the rules header, the three fenced sides, and — only
     when the user typed one — their instruction fenced subordinate."""
@@ -114,14 +93,6 @@ def _build_refine(instruction: str) -> str:
     return instruction if instruction.strip() else _DEFAULT_REFINE
 
 
-def _strip_fence(text: str) -> str:
-    """Drop a single wrapping ``` code fence, if the whole draft is wrapped in one."""
-    lines = text.strip("\n").splitlines()
-    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1])
-    return text
-
-
 def _has_markers(text: str) -> bool:
     """Whether any line still begins with a git-conflict marker."""
     return any(
@@ -140,31 +111,6 @@ def _validate(draft: str) -> str | None:
     if clean.strip() == "" or _has_markers(clean):
         return None
     return clean
-
-
-def _edit_draft(seed: str) -> bytes | Cancelled:
-    """Open ``$EDITOR`` seeded with the draft; return edited bytes or :data:`CANCEL`.
-
-    Mirrors :func:`~setforge.reconcile.wizard._edit_region`: a benign editor
-    abort (``CalledProcessError``) or a non-UTF-8 read-back re-prompts
-    (``CANCEL``); an editor-config fault (``SetforgeError`` from
-    :func:`run_editor`) propagates. The tempfile is unlinked on every outcome.
-    """
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".txt", encoding="utf-8", delete=False
-    ) as handle:
-        handle.write(seed)
-        tmp_path = Path(handle.name)
-    try:
-        run_editor(tmp_path)
-        text = tmp_path.read_text(encoding="utf-8")
-    except (subprocess.CalledProcessError, UnicodeDecodeError):
-        return CANCEL
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    if text == "":
-        return CANCEL
-    return text.encode("utf-8")
 
 
 def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
