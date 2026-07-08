@@ -111,10 +111,10 @@ def test_install_auto_accept_tracked_with_yes(
 ) -> None:
     """--auto-accept-tracked --yes: applies, exit 0."""
     c = docker_container()
-    # Use jsonc-shallow (a plain JSONC reconcile file); replacing the whole
-    # live file with an unrelated key produces the drift the gate must surface.
+    # jsonc-shallow (a plain JSONC reconcile file). Replacing the live file
+    # with an unrelated key is a live-only edit; the retired confirm gate no
+    # longer fires, so the apply is a clean no-op that preserves the edit.
     _install(c, "test-jsonc-shallow")
-    # Mutate live to introduce unexpected drift.
     live_path = c.exec(
         ["bash", "-c", "ls /home/tester/.setforge_e2e/jsonc/*.json | head -1"],
     ).stdout.strip()
@@ -129,11 +129,10 @@ def test_install_auto_accept_tracked_with_yes(
         extra=["--auto-accept-tracked", "--yes"],
         check=False,
     )
-    # Acceptance: didn't get blocked by the confirm gate.
     assert result.returncode == 0, result.stderr or result.stdout
-    # Positive content check — confirms the install actually executed
-    # past the gate (revert hint only prints on successful transition).
-    assert "↩  revert with" in result.stdout
+    # No-op: preserved local edit → no transition, no revert hint.
+    assert "noop" in result.stdout
+    assert "↩  revert with" not in result.stdout
 
 
 def test_install_auto_accept_tracked_non_tty_no_yes_exit_1(
@@ -192,7 +191,9 @@ def test_install_auto_accept_live_with_yes(
         check=False,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "↩  revert with" in result.stdout
+    # No-op: preserved local edit → no transition, no revert hint.
+    assert "noop" in result.stdout
+    assert "↩  revert with" not in result.stdout
 
 
 def test_install_auto_accept_live_non_tty_no_yes_exit_1(
@@ -344,29 +345,23 @@ def test_sync_auto_keep_tracked_no_confirm(
 
 
 @pytest.mark.xdist_group("docker_daemon")
-def test_install_auto_use_tracked_revert_roundtrip(
+def test_install_auto_use_tracked_live_only_edit_is_noop(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """Apply with --yes, then revert restores the original state."""
+    """A live-only section edit + --auto=use-tracked is a clean no-op.
+
+    base==tracked (static fixture), so only live diverged: the 3-way reconcile
+    preserves the local edit — no conflict, no change, no transition emitted.
+    """
     c = docker_container()
     _install(c, "test-reconcile-sections")
     old = "- rule A\n"
     c.write_text(_LIVE_SHARED, _shared_section(old, _sha256(old)))
     pre = c.read_text(_LIVE_SHARED)
-    _install(c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"])
-    revert = c.exec(
-        [
-            "uv",
-            "run",
-            "setforge",
-            "revert",
-            "--profile=test-reconcile-sections",
-            f"--config={CONFIG_FIXTURE}",
-            "--yes",
-        ],
-        check=False,
+    result = _install(
+        c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"]
     )
-    assert revert.returncode == 0, revert.stderr or revert.stdout
+    assert "↩  revert with" not in result.stdout
     assert c.read_text(_LIVE_SHARED) == pre
 
 
