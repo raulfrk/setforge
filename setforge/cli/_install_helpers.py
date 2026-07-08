@@ -274,15 +274,6 @@ def _plain_reconcile_content(
     outcome: reconcile_apply.ReconcileOutcome,
     live_bytes: bytes | None,
 ) -> str | None:
-    """The live str to write for a plain-reconcile outcome, or None to fall back.
-
-    A resolved deletion never reaches here — it's a
-    :attr:`~reconcile_apply.ReconcileKind.REMOVE`, unlinked for real by the
-    caller before this function runs (a str writer can't express a deletion).
-    ``NOOP`` / ``DEFERRED`` / ``CANCELLED`` keep the current live content, so
-    :func:`deploy.write_resolved_deploy` detects the NOOP and never clobbers a
-    local edit with the tracked source.
-    """
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
         if not isinstance(outcome.content, bytes):
             return None
@@ -453,17 +444,6 @@ def _pending_from_reconcile(
     outcome: reconcile_apply.ReconcileOutcome,
     live_bytes: bytes | None,
 ) -> _PendingDeploy | None:
-    """Build the pass-1 record from a reconcile ``outcome``, or ``None`` to fall
-    back to the legacy verbatim path.
-
-    A :attr:`~reconcile_apply.ReconcileKind.REMOVE` (a resolved deletion) carries
-    the ``scaffold`` unchanged (for its ``real_dst``) and rides pass 2 as a real
-    unlink — NEVER a zero-byte write, and NEVER the ``record.reconcile is None``
-    legacy path (which is excluded from the base keep-set and would resurrect the
-    file next install). Every other kind resolves its ``content`` through
-    :func:`_plain_reconcile_content`; a binary / non-utf8 / deletion-edge
-    ``None`` falls back to the verbatim tracked deploy.
-    """
     if outcome.kind is reconcile_apply.ReconcileKind.REMOVE:
         return _PendingDeploy(
             sub_name=sub_name,
@@ -653,11 +633,6 @@ class DeployOutcome:
     conflict was DEFERRED (kept live, base not advanced) — the caller gates a
     non-zero exit on them for a non-interactive run, since the install left
     real conflicts unresolved.
-
-    ``store_mutated`` is True iff this run advanced the reconcile store (a
-    ``WRITE``/``REMOVE`` record, or a base prune that dropped an entry) — see
-    :func:`_install_recorded_nothing` for why this must gate an empty-patch
-    transition skip.
     """
 
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
@@ -697,7 +672,6 @@ def _execute_pending_deploys(
     # files AND plain files routed through the reconcile engine (both persist
     # a base in the shared base_store, keyed by file_id). A plain file absent
     # from this set would have its reconcile base pruned every run.
-    # A honored deletion's base is kept too, so pruning it can't resurrect the file.
     base_keep_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
@@ -727,7 +701,6 @@ def _execute_pending_deploys(
             base_keep_ids.add(record.sub_name)
             store_mutated |= _advance_reconcile_store(profile, record)
             continue
-        # Skip the write: it would CREATE a zero-byte file, resurrecting the deletion.
         if (
             record.reconcile is not None
             and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
@@ -768,30 +741,14 @@ def _execute_pending_deploys(
 
 
 def _prune_bases_removed_any(profile: str, base_keep_ids: set[str]) -> bool:
-    """Prune bases outside ``base_keep_ids``; return True iff any was dropped.
-
-    Reads the pre-prune base id set FIRST so the caller can tell an actual
-    store mutation (an entry removed) apart from a no-op steady-state prune —
-    the latter must not force a transition on an otherwise-empty install run.
-    """
+    """Prune outside ``base_keep_ids``; read ids first so a real drop is known."""
     before = base_store.list_base_ids(profile)
     base_store.prune(profile, base_keep_ids)
     return bool(before - base_keep_ids)
 
 
 def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
-    """Advance the reconcile store for a plain file AFTER its live write.
-
-    Returns True iff the store was mutated (``WRITE``/``REMOVE``). ``WRITE``
-    records the new base (= tracked) + deployed content (a
-    :func:`reconcile.record` failure PROPAGATES — base lagging live is the
-    safe failure direction). ``REMOVE`` (a honored clean deletion) records
-    ``local=ABSENT`` at ``base=tracked`` so the next install stays a deletion
-    instead of resurrecting the file. ``DEFERRED`` (a non-TTY / ``--auto``
-    conflict, or a skipped region) keeps live, does NOT re-baseline, and WARNs
-    so the divergence re-surfaces next install. ``NOOP``/``CANCELLED`` leave
-    the store untouched.
-    """
+    """Advance the reconcile store after a live write; True iff mutated."""
     assert record.reconcile is not None
     fid, outcome = record.reconcile
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
@@ -823,12 +780,6 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
 
 
 def _honor_reconcile_removal(record: _PendingDeploy) -> None:
-    """Unlink the live file for a honored clean deletion (never a zero-byte write).
-
-    ``missing_ok=True``: the user typically already deleted it; the unlink
-    makes the outcome explicit and revert-symmetric. Uses the symlink-resolved
-    ``real_dst`` to match the transition snapshot + patch surface.
-    """
     assert record.resolved is not None
     record.resolved.real_dst.unlink(missing_ok=True)
     typer.echo(f"{deploy.DeployAction.REMOVED.value:>8}  {record.sub_dst}")
@@ -866,24 +817,7 @@ def _install_recorded_nothing(
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...],
     seeded: bool,
 ) -> bool:
-    """True when this install changed nothing revertable — skip the transition.
-
-    An idempotent re-install (no upstream change, no local edit, nothing to
-    reconcile) writes an EMPTY content patch AND leaves the store untouched.
-    Transitions are kept indefinitely per project policy, so writing an empty
-    one is pure churn (INV-4: a true no-op writes no transition dir at all).
-
-    The guard ANDs the empty patch with EVERY other payload the transition
-    records, so it is NOT ``if not patch`` alone:
-
-    - ``store_mutated`` — a store advance with an empty content patch (e.g.
-      honoring a deletion by marking the base ABSENT, or a base prune) MUST
-      keep its transition or revert cannot restore the store;
-    - ``prior_modes`` — a mode-only fixup carries no content patch, only the
-      recorded pre-install perm bits;
-    - the ext / plugin / mcp deltas, the reconcile-outcomes list, and the
-      host-local seed — each is an independently-revertable / replayable change.
-    """
+    """True iff nothing revertable changed (ANDs the patch with every delta below)."""
     if transitions.compute_patch(file_pre, file_post):
         return False
     if deploy_outcome.store_mutated or deploy_outcome.prior_modes:

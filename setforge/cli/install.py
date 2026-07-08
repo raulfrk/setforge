@@ -395,7 +395,6 @@ def install(
 
         _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
 
-        # INV-4: skip the transition on a true no-op (see _install_recorded_nothing).
         if not no_transition and not _install_recorded_nothing(
             file_pre=file_pre,
             file_post=file_post,
@@ -438,9 +437,6 @@ def _gate_on_deferred_reconcile(
     silently passing over a conflict. An interactive run (``interactive`` True)
     already let the user choose Skip per region, so it does NOT gate — those
     defers warned per file during the deploy.
-
-    Count-only: each file was ALREADY echoed via the per-file deploy-time warn,
-    so no second per-file list here.
     """
     if not deferred or interactive:
         return

@@ -31,22 +31,13 @@ _GIT_TIMEOUT_SECONDS: Final[int] = 300
 _SSH_BATCHMODE_FRAGMENT: Final[str] = "-oBatchMode=yes"
 _SSH_BATCHMODE_DEFAULT: Final[str] = f"ssh {_SSH_BATCHMODE_FRAGMENT}"
 
-#: Anchored on -o: ssh is first-wins, so a user's BatchMode=yes/no stays untouched.
 _SSH_BATCHMODE_RE: Final[re.Pattern[str]] = re.compile(
     r"-o\s*BatchMode\b", re.IGNORECASE
 )
 
 
 def _harden_git_ssh_command(value: str | None) -> str:
-    """Return the ``GIT_SSH_COMMAND`` value with ``BatchMode`` guaranteed set.
-
-    - An unset / empty / whitespace-only value falls back to the full
-      :data:`_SSH_BATCHMODE_DEFAULT` (``ssh -oBatchMode=yes``).
-    - A user value that ALREADY pins ``BatchMode`` (``=yes`` OR ``=no``) is
-      returned verbatim — see :data:`_SSH_BATCHMODE_RE` for why.
-    - Otherwise the value keeps every user token and gains the
-      :data:`_SSH_BATCHMODE_FRAGMENT` so ssh fails rather than prompting.
-    """
+    """Add BatchMode=yes to GIT_SSH_COMMAND, unless the user already pinned it."""
     if value is None or not value.strip():
         return _SSH_BATCHMODE_DEFAULT
     if _SSH_BATCHMODE_RE.search(value):
@@ -65,8 +56,6 @@ def _hardened_env() -> dict[str, str]:
       Git Credential Manager never pop a prompt, so a fetch that needs a
       missing credential fails fast instead of blocking a background / CI
       ``install`` on a TTY until the timeout.
-    - ``GIT_SSH_COMMAND`` is hardened so ssh fails rather than prompting for
-      a passphrase — see :func:`_harden_git_ssh_command`.
     - ``LANG``/``LC_ALL=C`` pin the locale so ``--porcelain`` / ``rev-parse``
       output stays parser-stable (mirrors ``cli/status.py``).
     """

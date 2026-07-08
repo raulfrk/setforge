@@ -22,9 +22,6 @@ Outcomes encode the A0 guards directly:
   already at tracked: an idempotent re-install writes nothing and does not
   re-record (no store churn).
 - ``WRITE`` — deploy ``content`` to live and ``record`` ``new_base``.
-- ``REMOVE`` — a clean deletion (live deleted, upstream unchanged, so the merge
-  resolves to ABSENT): the caller performs a real remove/unlink of live and
-  ``record``s ``local=ABSENT`` at ``base=new_base``. NOT a zero-byte write.
 - ``DEFERRED`` — a region was skipped in the wizard; write nothing and do
   NOT re-baseline (the unresolved upstream change must re-surface next run).
 - ``CANCELLED`` — the user aborted the whole-file wizard; write nothing,
@@ -128,14 +125,7 @@ class ReconcileKind(StrEnum):
 
 @dataclass(slots=True, frozen=True)
 class ReconcileOutcome:
-    """The decision for one plain tracked file.
-
-    ``content`` and ``new_base`` are populated for :attr:`ReconcileKind.WRITE`
-    (``content`` = the merged bytes to deploy to live) and for
-    :attr:`ReconcileKind.REMOVE` (``content`` = :data:`ABSENT`, signalling the
-    caller to unlink live). ``new_base`` is the upstream bytes the caller
-    records as the new merge base. Both are ``None`` for the no-write kinds.
-    """
+    """The decision for one plain tracked file."""
 
     kind: ReconcileKind
     content: bytes | Absent | None = None
@@ -222,12 +212,6 @@ def reconcile_plain_file(
     at tracked is a :attr:`~ReconcileKind.NOOP`; any other clean merge is a
     :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``.
 
-    A clean deletion (live deleted, upstream unchanged so the merge resolves to
-    ABSENT) is honored as a :attr:`~ReconcileKind.REMOVE`: the caller unlinks
-    live for real and records ``local=ABSENT`` at ``base=tracked``. Once the
-    store already records that absence (``read_local`` is ABSENT with the base
-    at tracked), the re-install is a :attr:`~ReconcileKind.NOOP` — no churn.
-
     A conflict resolves by, in order: the per-region wizard when
     ``interactive`` (a cancel / skipped region writes nothing and does NOT
     re-baseline); else ``--auto`` (``auto`` set) collapsing every region to
@@ -259,8 +243,6 @@ def reconcile_plain_file(
 
     if result.clean:
         merged = result.merged()
-        # Key the honor on the merge outcome, not ``live is ABSENT`` — a delete/modify
-        # conflict never reaches here (merge already routed it to DEFERRED).
         if result.absent:
             if read_local(profile, fid) is ABSENT and base_raw == tracked:
                 return ReconcileOutcome(ReconcileKind.NOOP)
