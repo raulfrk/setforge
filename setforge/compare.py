@@ -776,10 +776,8 @@ def _reconcile_staged_expected(
     from setforge.reconcile.structured_units import structured_format
     from setforge.reconcile.types import file_id as make_file_id
 
-    # A YAML/JSON reconcile file stages per-KEY, not per line-hunk — the same
-    # predicate stage/capture branch on. Route it to the structured analog so the
-    # plain hunk path never runs over key-rows (and mind the ``.jsonc`` → None
-    # trap: ``structured_format`` returns None there, keeping the plain path).
+    # YAML/JSON stage per-KEY; route to the structured analog (``.jsonc`` stays
+    # on this plain path — ``structured_format`` returns None for it).
     fmt = structured_format(dst)
     if fmt is not None:
         return _reconcile_staged_expected_structured(
@@ -823,22 +821,9 @@ def _reconcile_staged_expected_structured(
     dst: Path,
     fmt: "StructuredFormat",
 ) -> bool:
-    """True when a reconcile-staged STRUCTURED file's tracked holds exactly the
-    promoted key-unit set — the per-KEY analog of :func:`_reconcile_staged_expected`.
-
-    Mirrors the plain path but over key-units: reconstructs the expected tracked
-    content from ``base`` + the recorded key-unit classifications + the drafts
-    manifest and asserts INV-8 against the on-disk tracked BYTES (never a
-    re-parsed model — a reformat / key-reorder must not mask real drift). The
-    host-specific side of a ``SHARED_DRAFTED`` key's live↔tracked divergence is
-    then expected staging, not drift; a drifted sibling LOCAL/PENDING key still
-    fails INV-8 because the assertion runs over the FULL classified set.
-
-    Returns ``False`` (→ the entry classifies as real/unexpected drift) when the
-    file is not reconcile-staged (no base, or no classified key-units) OR when
-    INV-8 fails. Crash-free, mirroring :func:`_reconcile_staged_expected`: any
-    parse / store / filesystem / draft-confinement error degrades to ``False`` —
-    the read-only compare never raises and never blesses on error.
+    """Per-key analog of :func:`_reconcile_staged_expected`: asserts INV-8 against
+    on-disk tracked BYTES (not a re-parsed model) so a SHARED_DRAFTED key's
+    host-only divergence classifies as expected staging, not drift.
     """
     from setforge.errors import (
         InvariantViolation,
@@ -856,22 +841,16 @@ def _reconcile_staged_expected_structured(
             return False
         entry = reconcile_store.read_index(profile).files.get(file_id_str)
         if entry is None or not entry.hunks:
-            return False  # not structurally staged → not this slot's case
+            return False
         live = dst.read_bytes()
         tracked = src.read_bytes()
         fresh = su.extract_structured_units(base, live, fmt)
         units = su.classify_structured(fresh, entry.hunks)
         drafts = reconcile_store.read_drafts(profile, fid)
-        # Drafts flow through reconstruct_structured → parse_scalar_draft
-        # (type-confinement); a type-diverging / tampered draft raises
-        # DraftConfinementError (an InvariantViolation) → the False-returning
-        # except, never a silent bless.
         su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)
         return True
     except InvariantViolation:
-        # INV-8 (or draft-confinement) failed → tracked is NOT the promoted set →
-        # real drift.
-        return False
+        return False  # INV-8/draft-confinement failed → real drift, never bless
     except (
         StructuredParseError,
         BaseStoreError,

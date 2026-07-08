@@ -131,10 +131,7 @@ def test_unstaged_plain_file_is_unexpected(tmp_path: Path) -> None:
 
 
 # --- structured branch: degrade-to-False guards (direct unit) -----------------
-# `_reconcile_staged_expected` routes a YAML/JSON dst to its structured analog,
-# which must NEVER bless-on-error: each of these guards returns False, and a
-# mutant flipping any of them to True would (wrongly) classify the divergence
-# EXPECTED. Exercised directly because the structured guards have no e2e caller.
+# Exercised directly (no e2e caller): must never bless-on-error / misclassify drift.
 
 
 def _structured_dst(tmp_path: Path, name: str, body: bytes) -> Path:
@@ -145,7 +142,6 @@ def _structured_dst(tmp_path: Path, name: str, body: bytes) -> Path:
 
 
 def test_structured_base_missing_degrades_to_false(tmp_path: Path) -> None:
-    # No recorded base for the .yaml → the `base is None` guard returns False.
     from setforge.compare import _reconcile_staged_expected
 
     src = tmp_path / "repo" / "tracked" / "settings.yaml"
@@ -157,8 +153,6 @@ def test_structured_base_missing_degrades_to_false(tmp_path: Path) -> None:
 
 
 def test_structured_no_staged_units_degrades_to_false(tmp_path: Path) -> None:
-    # A base+local is recorded but no key-units are classified → the
-    # `entry is None or not entry.hunks` guard returns False.
     from setforge import locking
     from setforge.compare import _reconcile_staged_expected
 
@@ -168,16 +162,13 @@ def test_structured_no_staged_units_degrades_to_false(tmp_path: Path) -> None:
 
     src = tmp_path / "repo" / "tracked" / "settings.yaml"
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_bytes(base)  # tracked == base, but that never matters — no staged units
+    src.write_bytes(base)
     dst = _structured_dst(tmp_path, "settings.yaml", live)
 
     assert _reconcile_staged_expected("p", "settings.yaml", src, dst) is False
 
 
 def test_structured_unparseable_live_degrades_to_false(tmp_path: Path) -> None:
-    # A genuinely-staged key-unit, but the on-disk live is unparseable JSON →
-    # extract_structured_units raises StructuredParseError, caught by the broad
-    # `except (StructuredParseError, ...)` → False (never bless on a parse error).
     from setforge import locking
     from setforge.compare import _reconcile_staged_expected
     from setforge.reconcile.structured_units import KeyUnit, serialize_structured

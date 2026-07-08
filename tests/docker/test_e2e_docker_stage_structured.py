@@ -178,14 +178,9 @@ def test_structured_walk_draft_type_confined_scalar(
     assert "/home/tester" not in tracked  # host value NEVER leaked into tracked
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host value
 
-    # A blessed SHARED_DRAFTED divergence is NOT re-flagged as drift: tracked holds
-    # exactly the drafted set, so the host-only live value classifies EXPECTED and
-    # `compare --check` stays clean while host ≠ tracked.
+    # host-only divergence classifies EXPECTED → clean despite host != tracked
     assert _prof(c, "compare", "--check")[0] == 0
 
-    # Negative control: a genuine tracked hand-edit the promoted set does NOT
-    # explain (the drafted scalar swapped for an off-set value → INV-8 fails) still
-    # surfaces as drift, so the clean result above is not a blanket "structured
-    # files never drift" tautology.
+    # negative control: an unexplained tracked edit (INV-8 fails) still surfaces
     c.write_text(_TRACKED, c.read_text(_TRACKED).replace(_DRAFT_SCALAR, "~/tampered"))
     assert _prof(c, "compare", "--check")[0] != 0
