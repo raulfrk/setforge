@@ -80,7 +80,7 @@ from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.host_local_view import host_local_sections_from_store
 from setforge.reconcile.structured_units import structured_format
-from setforge.reconcile.wizard import _claude_merge_unavailable
+from setforge.reconcile.wizard import claude_merge_unavailable
 from setforge.source import (
     HostLocalSection,
     HostLocalSectionName,
@@ -276,13 +276,14 @@ def _plain_reconcile_content(
 ) -> str | None:
     """The live str to write for a plain-reconcile outcome, or None to fall back.
 
-    ``WRITE`` writes the merged bytes — except a merge that resolved to
-    deletion (``ABSENT`` content) returns ``None`` so the caller falls back
-    to the legacy verbatim path (the str-based deploy writer cannot express
-    a deletion; a rare edge for a locally-deleted file). ``NOOP`` /
-    ``DEFERRED`` / ``CANCELLED`` keep the current live content (empty when
-    live was absent), so :func:`deploy.write_resolved_deploy` detects a NOOP
-    and never clobbers a local edit with the tracked source.
+    ``WRITE`` writes the merged bytes. A resolved deletion is NOT seen here — it
+    is a :attr:`~reconcile_apply.ReconcileKind.REMOVE`, handled by the caller as
+    a real unlink before this function is reached (a str writer cannot express
+    a deletion). The ``bytes`` guard on ``WRITE`` therefore stays only as a
+    defensive fall-back. ``NOOP`` / ``DEFERRED`` / ``CANCELLED`` keep the
+    current live content (empty when live was absent), so
+    :func:`deploy.write_resolved_deploy` detects a NOOP and never clobbers a
+    local edit with the tracked source.
     """
     if outcome.kind is reconcile_apply.ReconcileKind.WRITE:
         if not isinstance(outcome.content, bytes):
@@ -369,7 +370,7 @@ def _resolve_plain_reconcile(
     claude_merge = (
         make_claude_merge_fn(display_path=str(sub_dst))
         if interactive
-        else _claude_merge_unavailable
+        else claude_merge_unavailable
     )
     outcome = reconcile_apply.reconcile_plain_file(
         profile,
@@ -384,17 +385,8 @@ def _resolve_plain_reconcile(
         # seed keeps live without prompting.
         seed_prompt=_seed_prompt_interactive,
     )
-    new_content = _plain_reconcile_content(outcome, live_bytes)
-    if new_content is None:
-        return None
-    return _PendingDeploy(
-        sub_name=sub_name,
-        sub_src=sub_src,
-        sub_dst=sub_dst,
-        tracked_file=tracked_file,
-        host_local=None,
-        resolved=replace(scaffold, content=new_content),
-        reconcile=(fid, outcome),
+    return _pending_from_reconcile(
+        sub_name, sub_src, sub_dst, tracked_file, scaffold, fid, outcome, live_bytes
     )
 
 
@@ -434,7 +426,7 @@ def _resolve_structured_reconcile(
     claude_merge = (
         make_claude_merge_fn(display_path=str(sub_dst))
         if interactive
-        else _claude_merge_unavailable
+        else claude_merge_unavailable
     )
     outcome = reconcile_apply.reconcile_structured_file(
         profile,
@@ -448,6 +440,42 @@ def _resolve_structured_reconcile(
         claude_merge=claude_merge,
         seed_prompt=_seed_prompt_interactive,
     )
+    return _pending_from_reconcile(
+        sub_name, sub_src, sub_dst, tracked_file, scaffold, fid, outcome, live_bytes
+    )
+
+
+def _pending_from_reconcile(
+    sub_name: str,
+    sub_src: Path,
+    sub_dst: Path,
+    tracked_file: TrackedFile,
+    scaffold: deploy.ResolvedDeploy,
+    fid: FileId,
+    outcome: reconcile_apply.ReconcileOutcome,
+    live_bytes: bytes | None,
+) -> _PendingDeploy | None:
+    """Build the pass-1 record from a reconcile ``outcome``, or ``None`` to fall
+    back to the legacy verbatim path.
+
+    A :attr:`~reconcile_apply.ReconcileKind.REMOVE` (a resolved deletion) carries
+    the ``scaffold`` unchanged (for its ``real_dst``) and rides pass 2 as a real
+    unlink — NEVER a zero-byte write, and NEVER the ``record.reconcile is None``
+    legacy path (which is excluded from the base keep-set and would resurrect the
+    file next install). Every other kind resolves its ``content`` through
+    :func:`_plain_reconcile_content`; a binary / non-utf8 / deletion-edge
+    ``None`` falls back to the verbatim tracked deploy.
+    """
+    if outcome.kind is reconcile_apply.ReconcileKind.REMOVE:
+        return _PendingDeploy(
+            sub_name=sub_name,
+            sub_src=sub_src,
+            sub_dst=sub_dst,
+            tracked_file=tracked_file,
+            host_local=None,
+            resolved=scaffold,
+            reconcile=(fid, outcome),
+        )
     new_content = _plain_reconcile_content(outcome, live_bytes)
     if new_content is None:
         return None
@@ -627,11 +655,19 @@ class DeployOutcome:
     conflict was DEFERRED (kept live, base not advanced) — the caller gates a
     non-zero exit on them for a non-interactive run, since the install left
     real conflicts unresolved.
+
+    ``store_mutated`` is True iff this run advanced the reconcile store (a
+    ``WRITE`` or ``REMOVE`` record, or a base prune that actually dropped an
+    entry). The caller ANDs it with an empty content patch to decide whether to
+    skip the transition entirely: an empty-patch run that still mutated the
+    store (e.g. honoring a deletion by marking the base ABSENT) MUST keep its
+    transition so revert can restore the store.
     """
 
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...]
     prior_modes: dict[Path, int]
     deferred_reconcile: tuple[Path, ...] = ()
+    store_mutated: bool = False
 
 
 def _execute_pending_deploys(
@@ -660,10 +696,13 @@ def _execute_pending_deploys(
     state_snapshots = _capture_store_snapshots(profile, pending)
     prior_modes: dict[Path, int] = {}
     deferred_reconcile: list[Path] = []
+    store_mutated = False
     # Files whose byte base must SURVIVE the end-of-run prune: disposition
     # files AND plain files routed through the reconcile engine (both persist
     # a base in the shared base_store, keyed by file_id). A plain file absent
-    # from this set would have its reconcile base pruned every run.
+    # from this set would have its reconcile base pruned every run. A honored
+    # deletion (REMOVE) is kept here too so its base is NOT pruned — else the
+    # next install merges (ABSENT, ABSENT, tracked) and re-creates the file.
     base_keep_ids: set[str] = set()
     for record in pending:
         tracked_file = record.tracked_file
@@ -684,6 +723,32 @@ def _execute_pending_deploys(
                 f"pending deploy for {record.sub_name!r} has no resolution "
                 "and no symlink declaration"
             )
+        # A resolved deletion: a REAL unlink of live (never a zero-byte write),
+        # then advance the store to local=ABSENT and KEEP the base. Keyed on the
+        # merge outcome, so a delete/modify (which reaches DEFERRED, not REMOVE)
+        # never lands here.
+        if (
+            record.reconcile is not None
+            and record.reconcile[1].kind is reconcile_apply.ReconcileKind.REMOVE
+        ):
+            _honor_reconcile_removal(record)
+            base_keep_ids.add(record.sub_name)
+            store_mutated |= _advance_reconcile_store(profile, record)
+            continue
+        # Steady-state absence: a NOOP whose live file was already gone (the
+        # store records the deletion, base == tracked). Writing the resolved
+        # "" content would CREATE a zero-byte file — resurrecting the deletion —
+        # so skip the write entirely. The base stays kept below so it is not
+        # pruned. A normal NOOP (live present) still flows to
+        # write_resolved_deploy, which detects the NOOP without writing.
+        if (
+            record.reconcile is not None
+            and record.reconcile[1].kind is reconcile_apply.ReconcileKind.NOOP
+            and not record.resolved.dst_existed
+        ):
+            typer.echo(f"{deploy.DeployAction.NOOP.value:>8}  {record.sub_dst}")
+            base_keep_ids.add(record.sub_name)
+            continue
         result = deploy.write_resolved_deploy(record.resolved)
         if result.prior_mode is not None:
             # ``result.dst`` is the symlink-resolved real_dst — the SAME
@@ -697,31 +762,51 @@ def _execute_pending_deploys(
         # byte base below): a base that lags live re-merges safely next run.
         if record.reconcile is not None:
             base_keep_ids.add(record.sub_name)
-            _advance_reconcile_store(profile, record)
+            store_mutated |= _advance_reconcile_store(profile, record)
             if record.reconcile[1].kind is reconcile_apply.ReconcileKind.DEFERRED:
                 deferred_reconcile.append(record.sub_dst)
     # PRUNE after the whole loop: bases whose file_id is not in this run's
     # keep-set (a file left the profile, lost its disposition, or stopped
     # being a reconcile-eligible plain file) are removed. The keep-set spans
     # disposition + plain-reconcile files, so an engine-routed plain file's
-    # base survives instead of being pruned every run.
-    base_store.prune(profile, base_keep_ids)
+    # base survives instead of being pruned every run. A prune that actually
+    # drops an entry is a store mutation too (the transition must not be
+    # skipped as a no-op even with an empty content patch).
+    if _prune_bases_removed_any(profile, base_keep_ids):
+        store_mutated = True
     return DeployOutcome(
         state_snapshots=state_snapshots,
         prior_modes=prior_modes,
         deferred_reconcile=tuple(deferred_reconcile),
+        store_mutated=store_mutated,
     )
 
 
-def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
+def _prune_bases_removed_any(profile: str, base_keep_ids: set[str]) -> bool:
+    """Prune bases outside ``base_keep_ids``; return True iff any was dropped.
+
+    Reads the pre-prune base id set FIRST so the caller can tell an actual
+    store mutation (an entry removed) apart from a no-op steady-state prune —
+    the latter must not force a transition on an otherwise-empty install run.
+    """
+    before = base_store.list_base_ids(profile)
+    base_store.prune(profile, base_keep_ids)
+    return bool(before - base_keep_ids)
+
+
+def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> bool:
     """Advance the reconcile store for a plain file AFTER its live write.
 
-    A ``WRITE`` outcome ``record``s the new base (= tracked) + the deployed
-    content (a :func:`reconcile.record` failure PROPAGATES — base lagging
-    live is the safe failure direction). A ``DEFERRED`` outcome (a non-TTY /
-    ``--auto`` conflict, or a skipped region) keeps live, does NOT
-    re-baseline, and WARNs so the divergence re-surfaces on the next
-    interactive install. ``NOOP`` / ``CANCELLED`` leave the store untouched.
+    Returns True iff the store was actually mutated (a ``WRITE`` or ``REMOVE``
+    record). A ``WRITE`` outcome ``record``s the new base (= tracked) + the
+    deployed content (a :func:`reconcile.record` failure PROPAGATES — base
+    lagging live is the safe failure direction). A ``REMOVE`` outcome (a
+    honored clean deletion) ``record``s ``local=ABSENT`` at ``base=tracked``,
+    so the next install stays a deletion rather than resurrecting the file. A
+    ``DEFERRED`` outcome (a non-TTY / ``--auto`` conflict, or a skipped region)
+    keeps live, does NOT re-baseline, and WARNs so the divergence re-surfaces
+    on the next interactive install. ``NOOP`` / ``CANCELLED`` leave the store
+    untouched.
     """
     assert record.reconcile is not None
     fid, outcome = record.reconcile
@@ -737,7 +822,12 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
                 err=True,
                 fg=typer.colors.YELLOW,
             )
-    elif outcome.kind is reconcile_apply.ReconcileKind.DEFERRED:
+        return True
+    if outcome.kind is reconcile_apply.ReconcileKind.REMOVE:
+        assert outcome.new_base is not None
+        reconcile.record(profile, fid, base=outcome.new_base, local=reconcile.ABSENT)
+        return True
+    if outcome.kind is reconcile_apply.ReconcileKind.DEFERRED:
         typer.secho(
             f"warning: {record.sub_dst}: merge conflict kept live, base not "
             f"advanced — conflict re-surfaces next install (re-run "
@@ -745,6 +835,22 @@ def _advance_reconcile_store(profile: str, record: _PendingDeploy) -> None:
             err=True,
             fg=typer.colors.YELLOW,
         )
+    return False
+
+
+def _honor_reconcile_removal(record: _PendingDeploy) -> None:
+    """Unlink the live file for a honored clean deletion (never a zero-byte write).
+
+    The write pass's counterpart to :func:`deploy.write_resolved_deploy` for a
+    :attr:`~reconcile_apply.ReconcileKind.REMOVE`: the merge resolved to ABSENT,
+    so the file is removed (``missing_ok`` — the user typically deleted it
+    already; the unlink makes the outcome explicit and revert-symmetric). The
+    live path is the symlink-resolved ``real_dst``, matching the transition
+    snapshot + patch surface.
+    """
+    assert record.resolved is not None
+    record.resolved.real_dst.unlink(missing_ok=True)
+    typer.echo(f"{deploy.DeployAction.REMOVED.value:>8}  {record.sub_dst}")
 
 
 def _echo_host_local_sections_provenance(
@@ -766,6 +872,48 @@ def _echo_host_local_sections_provenance(
         f"    injected {len(host_local_sections)} host-local section{plural} "
         f"{HOST_LOCAL_PROVENANCE_TAG}: {names}"
     )
+
+
+def _install_recorded_nothing(
+    *,
+    file_pre: Mapping[Path, str | None],
+    file_post: Mapping[Path, str | None],
+    deploy_outcome: DeployOutcome,
+    ext_delta: transitions.ExtensionDelta | None,
+    plugin_delta: transitions.PluginDelta | None,
+    mcp_delta: transitions.MCPDelta | None,
+    reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...],
+    seeded: bool,
+) -> bool:
+    """True when this install changed nothing revertable — skip the transition.
+
+    An idempotent re-install (no upstream change, no local edit, nothing to
+    reconcile) writes an EMPTY content patch AND leaves the store untouched.
+    Transitions are kept indefinitely per project policy, so writing an empty
+    one is pure churn (INV-4: a true no-op writes no transition dir at all).
+
+    The guard ANDs the empty patch with EVERY other payload the transition
+    records, so it is NOT ``if not patch`` alone:
+
+    - ``store_mutated`` — a store advance with an empty content patch (e.g.
+      honoring a deletion by marking the base ABSENT, or a base prune) MUST
+      keep its transition or revert cannot restore the store;
+    - ``prior_modes`` — a mode-only fixup carries no content patch, only the
+      recorded pre-install perm bits;
+    - the ext / plugin / mcp deltas, the reconcile-outcomes list, and the
+      host-local seed — each is an independently-revertable / replayable change.
+    """
+    if transitions.compute_patch(file_pre, file_post):
+        return False
+    if deploy_outcome.store_mutated or deploy_outcome.prior_modes:
+        return False
+    if ext_delta is not None and not ext_delta.is_empty():
+        return False
+    if plugin_delta is not None and not plugin_delta.is_empty():
+        return False
+    if mcp_delta is not None and not mcp_delta.is_empty():
+        return False
+    return not (reconcile_outcomes or seeded)
 
 
 def _write_install_transition(

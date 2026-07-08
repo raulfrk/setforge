@@ -21,6 +21,8 @@ from setforge.reconcile import (
     MergeResult,
     WizardResult,
     file_id,
+    read_local,
+    record,
     write_base,
 )
 from setforge.reconcile.wizard import CANCEL
@@ -83,6 +85,37 @@ class TestCleanOutcomes:
         write_base(_PROFILE, fid, b"orig\n")
         out = reconcile_plain_file(_PROFILE, fid, live=b"edited\n", tracked=b"orig\n")
         assert out.kind is ReconcileKind.NOOP
+
+
+class TestDeletionOutcomes:
+    def test_clean_deletion_is_honored_as_remove(self) -> None:
+        # live deleted, upstream unchanged (theirs == base): the merge resolves
+        # to ABSENT and the store still records the content — a REMOVE that
+        # advances the store to local=ABSENT at base=tracked.
+        fid = _fid()
+        record(_PROFILE, fid, base=b"v1\n", local=b"v1\n")
+        out = reconcile_plain_file(_PROFILE, fid, live=ABSENT, tracked=b"v1\n")
+        assert out.kind is ReconcileKind.REMOVE
+        assert out.content is ABSENT
+        assert out.new_base == b"v1\n"
+
+    def test_steady_state_absence_is_noop(self) -> None:
+        # Once the store records the absence (local == ABSENT, base == tracked),
+        # a re-install is a real NOOP — no churn.
+        fid = _fid()
+        record(_PROFILE, fid, base=b"v1\n", local=ABSENT)
+        assert read_local(_PROFILE, fid) is ABSENT
+        out = reconcile_plain_file(_PROFILE, fid, live=ABSENT, tracked=b"v1\n")
+        assert out.kind is ReconcileKind.NOOP
+
+    def test_delete_modify_defers_not_honored(self) -> None:
+        # live deleted AND upstream changed (theirs != base): a delete/modify
+        # conflict routes to DEFERRED — the deletion is NOT silently honored.
+        fid = _fid()
+        record(_PROFILE, fid, base=b"v1\n", local=b"v1\n")
+        out = reconcile_plain_file(_PROFILE, fid, live=ABSENT, tracked=b"v2\n")
+        assert out.kind is ReconcileKind.DEFERRED
+        assert out.new_base is None
 
 
 class TestConflictOutcomes:

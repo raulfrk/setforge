@@ -30,6 +30,10 @@ class DeployAction(StrEnum):
     CREATED = "created"
     UPDATED = "updated"
     NOOP = "noop"
+    # A reconcile-resolved deletion: live was removed for real (never a
+    # zero-byte write). Emitted by the install write pass, not by
+    # write_resolved_deploy (which only ever writes bytes).
+    REMOVED = "removed"
 
 
 @dataclass(frozen=True, slots=True)

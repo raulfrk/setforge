@@ -22,6 +22,9 @@ Outcomes encode the A0 guards directly:
   already at tracked: an idempotent re-install writes nothing and does not
   re-record (no store churn).
 - ``WRITE`` — deploy ``content`` to live and ``record`` ``new_base``.
+- ``REMOVE`` — a clean deletion (live deleted, upstream unchanged, so the merge
+  resolves to ABSENT): the caller performs a real remove/unlink of live and
+  ``record``s ``local=ABSENT`` at ``base=new_base``. NOT a zero-byte write.
 - ``DEFERRED`` — a region was skipped in the wizard; write nothing and do
   NOT re-baseline (the unresolved upstream change must re-surface next run).
 - ``CANCELLED`` — the user aborted the whole-file wizard; write nothing,
@@ -41,6 +44,7 @@ from setforge.reconcile import (
     MergeResult,
     merge,
     read_base,
+    read_local,
     resolve_conflicts,
 )
 from setforge.reconcile.merge_model import MergeInput
@@ -54,7 +58,7 @@ from setforge.reconcile.wizard import (
     CANCEL,
     Cancelled,
     ClaudeMergeFn,
-    _claude_merge_unavailable,
+    claude_merge_unavailable,
 )
 from setforge.structural_merge import merge_structural
 
@@ -117,6 +121,7 @@ class ReconcileKind(StrEnum):
 
     NOOP = "noop"
     WRITE = "write"
+    REMOVE = "remove"
     DEFERRED = "deferred"
     CANCELLED = "cancelled"
 
@@ -125,10 +130,11 @@ class ReconcileKind(StrEnum):
 class ReconcileOutcome:
     """The decision for one plain tracked file.
 
-    ``content`` and ``new_base`` are populated only for :attr:`ReconcileKind.WRITE`:
-    ``content`` is the merged bytes to deploy to live (``ABSENT`` ⇒ the file
-    should be removed), ``new_base`` is the upstream bytes the caller records
-    as the new merge base. Both are ``None`` for the no-write kinds.
+    ``content`` and ``new_base`` are populated for :attr:`ReconcileKind.WRITE`
+    (``content`` = the merged bytes to deploy to live) and for
+    :attr:`ReconcileKind.REMOVE` (``content`` = :data:`ABSENT`, signalling the
+    caller to unlink live). ``new_base`` is the upstream bytes the caller
+    records as the new merge base. Both are ``None`` for the no-write kinds.
     """
 
     kind: ReconcileKind
@@ -205,7 +211,7 @@ def reconcile_plain_file(
     interactive: bool = False,
     auto: AutoSide | None = None,
     display_path: str | None = None,
-    claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
+    claude_merge: ClaudeMergeFn = claude_merge_unavailable,
     seed_prompt: SeedPrompt = _default_seed_prompt,
 ) -> ReconcileOutcome:
     """Decide how to reconcile one plain tracked file via the 3-way engine.
@@ -215,6 +221,12 @@ def reconcile_plain_file(
     tracked``. A clean merge that already equals live with the base already
     at tracked is a :attr:`~ReconcileKind.NOOP`; any other clean merge is a
     :attr:`~ReconcileKind.WRITE` advancing the base to ``tracked``.
+
+    A clean deletion (live deleted, upstream unchanged so the merge resolves to
+    ABSENT) is honored as a :attr:`~ReconcileKind.REMOVE`: the caller unlinks
+    live for real and records ``local=ABSENT`` at ``base=tracked``. Once the
+    store already records that absence (``read_local`` is ABSENT with the base
+    at tracked), the re-install is a :attr:`~ReconcileKind.NOOP` — no churn.
 
     A conflict resolves by, in order: the per-region wizard when
     ``interactive`` (a cancel / skipped region writes nothing and does NOT
@@ -247,6 +259,18 @@ def reconcile_plain_file(
 
     if result.clean:
         merged = result.merged()
+        # Key the deletion honor on the merge OUTCOME (clean absent=True), NOT
+        # on ``live is ABSENT`` — a delete/modify (theirs != base) never reaches
+        # here (merge returns a conflict) and so keeps routing to DEFERRED.
+        if result.absent:
+            # Steady state (store already records absence with the base at
+            # tracked) is a real NOOP — no store churn, no transition. The
+            # FIRST honoring advances the store to local=ABSENT via REMOVE.
+            if read_local(profile, fid) is ABSENT and base_raw == tracked:
+                return ReconcileOutcome(ReconcileKind.NOOP)
+            return ReconcileOutcome(
+                ReconcileKind.REMOVE, content=ABSENT, new_base=tracked
+            )
         if merged == live and base_raw == tracked:
             return ReconcileOutcome(ReconcileKind.NOOP)
         return ReconcileOutcome(ReconcileKind.WRITE, content=merged, new_base=tracked)
@@ -281,7 +305,7 @@ def reconcile_structured_file(
     interactive: bool = False,
     auto: AutoSide | None = None,
     display_path: str | None = None,
-    claude_merge: ClaudeMergeFn = _claude_merge_unavailable,
+    claude_merge: ClaudeMergeFn = claude_merge_unavailable,
     seed_prompt: SeedPrompt = _default_seed_prompt,
 ) -> ReconcileOutcome:
     """Decide how to reconcile one STRUCTURED (yaml/json/jsonc) tracked file.

@@ -130,6 +130,28 @@ def write_base(profile: str, file_id: str, data: bytes) -> None:
         ) from err
 
 
+def list_base_ids(profile: str) -> set[str]:
+    """Return the file-id of every stored base under ``profile``.
+
+    Derives each id the same way :func:`prune` and :func:`write_base` key it
+    (relative POSIX path under the profile root), excluding the format-version
+    sidecar. Empty set when the profile has no stored bases yet. Lets a caller
+    tell whether a subsequent :func:`prune` will actually drop anything.
+    """
+    profile_root = _profile_root(profile)
+    if not profile_root.is_dir():
+        return set()
+    ids: set[str] = set()
+    for path in profile_root.rglob("*"):
+        if not path.is_file():
+            continue
+        file_id = path.relative_to(profile_root).as_posix()
+        if file_id == base_store_format.SIDECAR_NAME:
+            continue
+        ids.add(file_id)
+    return ids
+
+
 def prune(profile: str, live_file_ids: set[str]) -> None:
     """Remove stored bases under ``profile`` not in ``live_file_ids``.
 

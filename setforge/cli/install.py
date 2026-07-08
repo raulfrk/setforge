@@ -43,6 +43,7 @@ from setforge.cli._helpers import (
 from setforge.cli._install_helpers import (
     _deploy_all_tracked_files,
     _dry_run_pipeline,
+    _install_recorded_nothing,
     _load_validated_host_local_sections,
     _run_predeploy_gates,
     _want_interactive_reconcile,
@@ -394,7 +395,21 @@ def install(
 
         _emit_reconcile_summary(plugin_outcomes, ext_outcomes)
 
-        if not no_transition:
+        # INV-4: an idempotent re-install (empty content patch AND no store /
+        # delta / mode / seed change) writes NO transition dir — skip the churn
+        # of an empty, indefinitely-kept record. Any store mutation with an
+        # empty patch (e.g. honoring a deletion) still records its transition so
+        # revert can restore the store.
+        if not no_transition and not _install_recorded_nothing(
+            file_pre=file_pre,
+            file_post=file_post,
+            deploy_outcome=deploy_outcome,
+            ext_delta=ext_delta,
+            plugin_delta=plugin_delta,
+            mcp_delta=mcp_delta,
+            reconcile_outcomes=plugin_outcomes + ext_outcomes,
+            seeded=bool(seeded),
+        ):
             target = _write_install_transition(
                 profile,
                 file_pre,
@@ -427,20 +442,22 @@ def _gate_on_deferred_reconcile(
     silently passing over a conflict. An interactive run (``interactive`` True)
     already let the user choose Skip per region, so it does NOT gate — those
     defers warned per file during the deploy.
+
+    Count-only: each deferred file was ALREADY echoed per-file (the yellow
+    ``merge conflict kept live`` warn during deploy), so this gate reports just
+    the count + the actionable resolution — no second per-file list.
     """
     if not deferred or interactive:
         return
     count = len(deferred)
     typer.secho(
         f"error: {count} file{'s' if count != 1 else ''} deferred with "
-        "unresolved conflicts — re-run `setforge install` interactively, or "
-        "pass --auto=keep-live / --auto=use-tracked to resolve "
-        "non-interactively:",
+        "unresolved conflicts (see the per-file warnings above) — re-run "
+        "`setforge install` interactively, or pass --auto=keep-live / "
+        "--auto=use-tracked to resolve non-interactively.",
         err=True,
         fg=typer.colors.RED,
     )
-    for path in deferred:
-        typer.secho(f"  - {path}", err=True, fg=typer.colors.RED)
     raise typer.Exit(code=1)
 
 

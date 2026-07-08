@@ -47,11 +47,16 @@ from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.types import FileId
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar
 
-__all__ = ["ClaudeMergeFn", "WizardResult", "resolve_conflicts"]
+__all__ = [
+    "ClaudeMergeFn",
+    "WizardResult",
+    "claude_merge_unavailable",
+    "resolve_conflicts",
+]
 
 #: Resolve ONE conflict region. Returns the merged bytes, or :data:`CANCEL` to
 #: decline (the wizard then re-prompts that region). A4 injects the real
-#: resumable ``claude -p`` session; :func:`_claude_merge_unavailable` is the stub.
+#: resumable ``claude -p`` session; :func:`claude_merge_unavailable` is the stub.
 type ClaudeMergeFn = Callable[[Conflict], bytes | Cancelled]
 
 #: Styled-fragment list — prompt_toolkit's ``(style_class, text)`` shape.
@@ -68,9 +73,22 @@ _THEIRS_MARKER = ">>>>>>> THEIRS (upstream)"
 _MAX_DISPLAY_LINES = 40
 
 
-def _claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
-    """Default Claude-merge stub: always declines (re-prompts the region)."""
+def claude_merge_unavailable(_conflict: Conflict) -> Cancelled:
+    """Default Claude-merge stub: always declines (re-prompts the region).
+
+    This is the public default-arg sentinel shared by the install-side
+    reconcile callers (``reconcile_apply`` / ``cli._install_helpers``): a
+    non-interactive / ``--auto`` / CI run wires this so Claude-merge is never
+    auto-invoked. The ``_claude_merge_unavailable`` alias below is retained for
+    back-compat with call sites that import the underscore name.
+    """
     return CANCEL
+
+
+#: Back-compat private alias — kept pointing at the public function so existing
+#: ``from ... import _claude_merge_unavailable`` imports (and identity checks
+#: against them) keep working after the promotion to a public name.
+_claude_merge_unavailable = claude_merge_unavailable
 
 
 @dataclass(frozen=True, slots=True)

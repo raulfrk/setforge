@@ -166,19 +166,6 @@ def test_clean_reinstall_is_idempotent(repo: Path) -> None:
     assert _base_mtime_ns() == base_mtime_before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "INV-4 acceptance clause unmet: an idempotent re-install (no upstream "
-        "change, no local edit) still writes an empty transition dir, kept "
-        "indefinitely per project policy. The empty-patch transition skip "
-        "(skip the transition when changes.patch is empty AND there is no "
-        "store delta) is not yet implemented. strict=True means this gate "
-        "flips to a hard failure (XPASS) the moment the skip lands, forcing "
-        "this marker's removal — instead of the test weakening to accept the "
-        "violation."
-    ),
-)
 def test_idempotent_reinstall_writes_no_transition(repo: Path) -> None:
     # INV-4 (no-op-ness): no-new-upstream + no-local-edits must write NO new
     # transition dir. Asserted strictly here instead of being relaxed to
@@ -248,6 +235,75 @@ def test_revert_restores_base_so_reinstall_recreates(repo: Path) -> None:
     # Reinstall re-creates the file (a fresh first install again).
     assert _install(config).exit_code == 0
     assert _live().read_text(encoding="utf-8") == "v1\n"
+    assert _base() == b"v1\n"
+
+
+def test_clean_deletion_is_honored_not_resurrected(repo: Path) -> None:
+    # A locally-deleted file (upstream unchanged) is HONORED: the reinstall
+    # leaves it absent — NOT re-created as a zero-byte file — and records the
+    # absence in the store. The base is kept so a later run does not resurrect.
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    assert _live().exists()
+
+    _live().unlink()  # user deletes the live file
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert not _live().exists(), "honored deletion must not resurrect the file"
+    assert "removed" in result.output
+    # Base kept (not pruned), so merge(ABSENT, ABSENT, tracked) can't re-add it.
+    assert _base() == b"v1\n"
+
+
+def test_second_install_after_deletion_is_a_real_noop(repo: Path) -> None:
+    # Once the deletion is honored (store records absence, base == tracked), a
+    # further reinstall is a real NOOP: no new transition dir (no churn).
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    _live().unlink()
+    assert _install(config).exit_code == 0  # honor (writes a transition)
+    transitions_before = _transition_dirs()
+    assert _install(config).exit_code == 0  # steady state
+    assert not _live().exists()
+    assert _transition_dirs() == transitions_before, "steady-state must not churn"
+
+
+def test_delete_modify_routes_to_deferred(repo: Path) -> None:
+    # Live deleted AND upstream changed (theirs != base) is a delete/modify
+    # conflict — NOT a silent honor. It routes to the DEFERRED gate (non-zero
+    # exit), leaving the file absent and the base unadvanced.
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    _live().unlink()
+    _write_tracked(repo, "v2\n")  # upstream diverges from the base
+    result = _install(config)
+    assert result.exit_code != 0, result.output
+    assert "conflict" in result.output.lower()
+    assert _base() == b"v1\n", "delete/modify must NOT advance the base"
+
+
+def test_revert_restores_deletion_and_no_resurrect(repo: Path) -> None:
+    # Reverting a honored-deletion install restores the pre-delete BASE (so the
+    # store is a consistent pair again) and a subsequent reinstall re-honors the
+    # deletion instead of resurrecting / mis-merging the file.
+    config = _write_config(repo)
+    _write_tracked(repo, "v1\n")
+    assert _install(config).exit_code == 0
+    _live().unlink()
+    assert _install(config).exit_code == 0  # honor the deletion
+    assert not _live().exists()
+
+    assert _revert(config).exit_code == 0, "revert of a honored deletion"
+    assert _base() == b"v1\n", "revert restores the pre-delete base bytes"
+    assert not _live().exists(), "the live file stayed absent (nothing to undo)"
+
+    # Reinstall after revert re-honors the deletion — no zero-byte resurrection.
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert not _live().exists()
     assert _base() == b"v1\n"
 
 
