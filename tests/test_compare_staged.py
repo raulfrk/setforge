@@ -130,10 +130,6 @@ def test_unstaged_plain_file_is_unexpected(tmp_path: Path) -> None:
     assert entry.drift_class is DriftClass.UNEXPECTED
 
 
-# --- structured branch: degrade-to-False guards (direct unit) -----------------
-# Exercised directly (no e2e caller): must never bless-on-error / misclassify drift.
-
-
 def _structured_dst(tmp_path: Path, name: str, body: bytes) -> Path:
     dst = tmp_path / "live" / name
     dst.parent.mkdir(parents=True, exist_ok=True)

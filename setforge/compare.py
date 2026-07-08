@@ -776,9 +776,7 @@ def _reconcile_staged_expected(
     from setforge.reconcile.structured_units import structured_format
     from setforge.reconcile.types import file_id as make_file_id
 
-    # YAML/JSON stage per-KEY; route to the structured analog (``.jsonc`` stays
-    # on this plain path — ``structured_format`` returns None for it).
-    fmt = structured_format(dst)
+    fmt = structured_format(dst)  # None for .jsonc — stays on this plain path
     if fmt is not None:
         return _reconcile_staged_expected_structured(
             profile, file_id_str, src, dst, fmt
@@ -821,10 +819,6 @@ def _reconcile_staged_expected_structured(
     dst: Path,
     fmt: "StructuredFormat",
 ) -> bool:
-    """Per-key analog of :func:`_reconcile_staged_expected`: asserts INV-8 against
-    on-disk tracked BYTES (not a re-parsed model) so a SHARED_DRAFTED key's
-    host-only divergence classifies as expected staging, not drift.
-    """
     from setforge.errors import (
         InvariantViolation,
         ReconcileStoreError,
@@ -842,7 +836,7 @@ def _reconcile_staged_expected_structured(
         entry = reconcile_store.read_index(profile).files.get(file_id_str)
         if entry is None or not entry.hunks:
             return False
-        live = dst.read_bytes()
+        live = dst.read_bytes()  # raw bytes, not re-parsed — INV-8 needs on-disk form
         tracked = src.read_bytes()
         fresh = su.extract_structured_units(base, live, fmt)
         units = su.classify_structured(fresh, entry.hunks)
@@ -850,7 +844,7 @@ def _reconcile_staged_expected_structured(
         su.assert_stage_fidelity_structured(base, live, tracked, units, drafts, fmt)
         return True
     except InvariantViolation:
-        return False  # INV-8/draft-confinement failed → real drift, never bless
+        return False
     except (
         StructuredParseError,
         BaseStoreError,
@@ -859,7 +853,7 @@ def _reconcile_staged_expected_structured(
         UnicodeDecodeError,
         ValueError,
     ):
-        return False  # degrade like the plain path — never raise in read-only compare
+        return False
 
 
 def _span_only_drift(src: Path, dst: Path, tracked_file: TrackedFile) -> bool:

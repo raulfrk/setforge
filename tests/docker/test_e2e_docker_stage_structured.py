@@ -178,9 +178,7 @@ def test_structured_walk_draft_type_confined_scalar(
     assert "/home/tester" not in tracked  # host value NEVER leaked into tracked
     assert "/home/tester" in c.read_text(_LIVE)  # live keeps the host value
 
-    # host-only divergence classifies EXPECTED → clean despite host != tracked
     assert _prof(c, "compare", "--check")[0] == 0
 
-    # negative control: an unexplained tracked edit (INV-8 fails) still surfaces
     c.write_text(_TRACKED, c.read_text(_TRACKED).replace(_DRAFT_SCALAR, "~/tampered"))
     assert _prof(c, "compare", "--check")[0] != 0
