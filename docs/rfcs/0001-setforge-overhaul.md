@@ -1,6 +1,6 @@
 # RFC 0001 — SetForge Overhaul
 
-**Status:** DRAFT — all design settled: config-reconciliation, package-provisioning, migration, UX (wizard + theme), testing strategy, project Claude tooling, and the self-improvement loop. **This document is ordered in build sequence** (framing → Wave-0 foundations → feature pillars → migration → reference). Ready for decomposition into implementation beads. A **v1.1 roadmap** (project profiles) is in §14.
+**Status:** DRAFT — all design settled: config-reconciliation, package-provisioning, migration, UX (wizard + theme), testing strategy, project Claude tooling, and the self-improvement loop. **This document is ordered in build sequence** (framing → Wave-0 foundations → feature pillars → migration → reference). Ready for decomposition into implementation tasks. A **v1.1 roadmap** (project profiles) is in §14.
 **Output target:** this RFC → an implementation plan (epics + subtasks).
 **Method:** brain-dump → per-component elicitation → mockups iterated in revdiff + web-mockup (see ledger for state).
 
@@ -123,7 +123,7 @@ A project-scoped `.claude/` toolset (version-controlled in the engine repo), in 
 - **A. Enforcement** — a 3-tier funnel. **Tier 1 deterministic** (coverage/mutation/AST-lint + policy
   lints: wizard-letter-ban, theme-hardcode-ban, `shell=True`-ban, legacy-API-ban — via pre-commit + CI +
   an optional `PreToolUse` commit hook) **BLOCKS**. **Tier 2 advisory LLM review fan** — a skill dispatches
-  `test-quality-reviewer` + `design-invariant-reviewer` alongside the existing python-* + bd-leak agents,
+  `test-quality-reviewer` + `design-invariant-reviewer` alongside the existing python-* + tracker-leak agents,
   grounded in `docs/RULES.md`, two-pass, structured verdicts — **ADVISORY only**. **Tier 3 human** (revdiff
   + merge) **BLOCKS**. Rule: deterministic + human block, LLM advises (hard-blocking AI review breeds
   false-positive fatigue).
@@ -157,7 +157,7 @@ standalone** (no ad-hoc mode):
   commit.
 - **P5 review fan** — **the bridge is a CLAUDE.md manifest (Option A):** the project CLAUDE.md declares the
   extra reviewers (`test-quality-reviewer`, `design-invariant-reviewer`) that session-flow dispatches
-  alongside the global python-* + bd-leak fan.
+  alongside the global python-* + tracker-leak fan.
 - **P6 merge** — Tier-1 gates block.
 - **P7 post-merge** — the fan re-runs on merged HEAD; nightly full mutation.
 - **Self-improvement** proposals surface at the **P6 and session-end** checkpoints → revdiff →
@@ -214,7 +214,7 @@ Every tool (gate, agent, scaffold) carries a uniform self-improvement component,
 existing capture → propose → approve protocol:
 
 - **Loop:** tool hits a gap → emits a **proposal** (SARIF-shaped card: source / category / evidence /
-  proposed-diff / dedup-key / confidence) → a **backlog** (the bd task system; dedup + supersede +
+  proposed-diff / dedup-key / confidence) → a **backlog** (the task backlog; dedup + supersede +
   vote-evict) → surfaced **batched at the P6 and session-end checkpoints** → **revdiff** review → **approve**
   (lands as a diff) or **decline** (suppressed, never re-raised).
 - **Grounding rule (reliability):** a proposal MUST cite an external signal — gate verdict, surviving
@@ -614,8 +614,8 @@ git-like staging + provisioning model:
 
 ## 13. Decomposition — epics + dependencies
 
-**Bead hierarchy = version → sub-epic → task.** Each release is a **top-level epic**; the lettered
-epics are **sub-epics** under it; the numbered items are **tasks** under each sub-epic (beads `--parent`
+**Task hierarchy = version → sub-epic → task.** Each release is a **top-level epic**; the lettered
+epics are **sub-epics** under it; the numbered items are **tasks** under each sub-epic (a parent-link
 chain: `v1.0.0` → `A` → `A1`). Two release epics:
 
 - **Epic `v1.0.0`** — sub-epics **A–F** below (build order in §4; ~40 tasks).
@@ -687,7 +687,7 @@ Sub-epics + their tasks (the build-order waves are in §4):
 - F4. `design-invariant-reviewer` agent (grounded in RULES.md)
 - F5. `enforce-tests` skill + wire the fan into session-flow Phase 5/7
 - F6. Generative scaffolds (`scaffold-provisioner` / `-wizard` / `author-*`); CI staging
-- F7. Self-improvement loop (proposal schema + bd backlog + revdiff approval)
+- F7. Self-improvement loop (proposal schema + a backlog system + revdiff approval)
 - F8. **Maintenance skills:** `docs-sync` + `security/dependency-triage` (operational tail; `flaky-test-triage` optional)
 
 **Deps:** the tooling/test SPINE — F1 → F2a; F1 → F3/F4 → F5; F1 → (F2a/F3/F4) → F7; and E1 — is built
@@ -700,7 +700,7 @@ once A+B cores exist, and C → A+B (Wave 3).
 faked-binary integration test (A4).
 
 **Pitfall checklist** (subprocess injection, partial-failure/idempotent reconcile, process/resource/network)
-is recorded on the design bead and seeds each B-epic's "bugs to avoid" spec section.
+is recorded on the design task and seeds each B-epic's "bugs to avoid" spec section.
 
 ---
 
@@ -726,7 +726,7 @@ setforge project visibility <path> <file> --hidden | --tracked
 
 - **Default = hidden**, toggleable **any time**, **per file**.
 - **hidden** = added to the target repo's `.git/info/exclude` (per-clone, never committed) — your private
-  host-local layer; the team never sees it (the stealth trick beads use).
+  host-local layer; the team never sees it (the stealth trick the issue tracker uses).
 - **tracked** = normal committed repo content, shared with the team.
 - **Toggling**: hidden→tracked un-excludes it; tracked→hidden does `git rm --cached` (keeps the file on
   disk) + re-excludes.
