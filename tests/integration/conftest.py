@@ -251,6 +251,14 @@ _DEFAULT_TRACKED: dict[str, tuple[str, str]] = {
 
 _DST_TEMPLATE = "~/.setforge_it/{src}"
 
+# The three binaries this tier MOCKS (never passes through). Every one is
+# defaulted to ABSENT so its reconcile leg warn-and-skips and no stray host
+# subprocess fires; ``present_binary(name)`` selectively re-enables one. The
+# ``SETFORGE_<NAME>_BIN`` override env var for each is cleared from the shape
+# below so ``resolve_binary`` falls through to the sandboxed resolver. Single
+# source of truth reused by BOTH the env-clear loop and the resolver.
+_MOCKED_BINARIES: frozenset[str] = frozenset({"claude", "code", "gitleaks"})
+
 
 def _write_config_repo(
     repo: Path,
@@ -324,9 +332,10 @@ def integration_env(
     - ``SETFORGE_STATE_DIR`` (transition records) → ``tmp_path/state``.
     - ``MARKETPLACE_CACHE_ROOT`` (git-clone cache root) → ``tmp_path/mp``.
     - ``LOCAL_CONFIG_PATH`` (all three re-export sites) → ``tmp_path/local.yaml``.
-    - ``SETFORGE_CLAUDE_BIN`` / ``SETFORGE_CODE_BIN`` / ``SETFORGE_GITLEAKS_BIN``
-      → cleared, so ``resolve_binary`` falls through to ``shutil.which`` and
-      the tests control presence/absence explicitly.
+    - the ``SETFORGE_<NAME>_BIN`` override env var for each mocked binary
+      (see :data:`_MOCKED_BINARIES`) → cleared, so ``resolve_binary`` falls
+      through to ``shutil.which`` and the tests control presence/absence
+      explicitly.
 
     Parameters (all optional): ``profile`` name and ``tracked`` corpus map,
     and ``git_init`` to seed the repo as a real git checkout (default True,
@@ -359,10 +368,10 @@ def integration_env(
         monkeypatch.setattr(mod_attr, local_yaml)
     # Clear binary-override env so resolve_binary uses shutil.which and the
     # FakeProcess policy governs whether a call is allowed.
-    for var in ("SETFORGE_CLAUDE_BIN", "SETFORGE_CODE_BIN", "SETFORGE_GITLEAKS_BIN"):
-        monkeypatch.delenv(var, raising=False)
+    for name in _MOCKED_BINARIES:
+        monkeypatch.delenv(f"SETFORGE_{name.upper()}_BIN", raising=False)
 
-    # Default the three MOCKED binaries (claude/code/gitleaks) to ABSENT so
+    # The three MOCKED binaries default to ABSENT (see _MOCKED_BINARIES) so
     # each reconcile leg takes its warn-and-skip path and no stray subprocess
     # fires. `resolve_binary` would otherwise fall through to `shutil.which`,
     # which finds the DEV HOST's real claude/code/gitleaks and shells out to
@@ -370,7 +379,6 @@ def integration_env(
     # selectively re-enables one. Every OTHER binary (notably `patch`, used
     # by the revert reverse-patch path, and `git`) delegates to the REAL
     # `resolve_binary` — those are safe local tools the tier passes through.
-    _MOCKED = frozenset({"claude", "code", "gitleaks"})
     _present_paths: dict[str, Path] = {}
     fake_bin_dir = tmp_path / "fakebin"
     fake_bin_dir.mkdir(exist_ok=True)
@@ -380,7 +388,7 @@ def integration_env(
     _real_resolve = _binaries_mod.resolve_binary
 
     def _resolver(name: str) -> Path | None:
-        if name in _MOCKED:
+        if name in _MOCKED_BINARIES:
             return _present_paths.get(name)
         return _real_resolve(name)
 

@@ -41,3 +41,9 @@ repos:
         types: [python]
         pass_filenames: false
         stages: [pre-commit]
+      - id: check-e2e-manifest
+        name: check-e2e-manifest (verdict manifest ↔ collected e2e set)
+        entry: uv run python scripts/check_e2e_manifest.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

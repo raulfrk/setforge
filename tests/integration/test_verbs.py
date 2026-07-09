@@ -8,12 +8,22 @@ stdout (that would test the mock, not the code).
 The no-leak proof (:class:`TestNoLeakProof`) shows a stray unregistered
 ``claude`` invocation RAISES ``ProcessNotRegisteredError`` rather than
 reaching the host binary.
+
+Deferred verb — ``upgrade``: intentionally has NO integration test here. Its
+one meaningful seam is PyPI (``setforge._pypi_client.fetch_latest_version``),
+which sits OUTSIDE this tier's git/claude/code/gitleaks subprocess-mock
+boundary — covering it would require either a network hit (barred by this
+tier's no-leak contract) or a mock of the HTTP client (which would test the
+mock, not the code). It is instead covered at the e2e/smoke layer by
+``test_e2e_docker_upgrade_check_mode``. Recorded here so the "each mutating
+verb" scope has a documented deferral rather than a silent gap.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -22,7 +32,7 @@ from .conftest import IntegrationEnv
 pytestmark = pytest.mark.integration
 
 
-def _transition_dirs(env: IntegrationEnv) -> list:
+def _transition_dirs(env: IntegrationEnv) -> list[Path]:
     root = env.state_dir / "transitions"
     if not root.exists():
         return []
@@ -293,10 +303,22 @@ class TestPlugin:
 
         No claude is registered, so if plugin list tried to shell out it
         would RAISE — a clean exit proves it takes the declared-only path.
+        The minimal seeded config declares NO claude_plugins, so the
+        projection must render the empty-set branch verbatim: assert on that
+        rendered line (a post-parse observable) so a mutation to the
+        declared/installed union or the empty-guard is caught, not just the
+        exit code.
         """
         env = integration_env()
         result = env.run_verb(["plugin", "list"])
         assert result.exit_code == 0, result.output
+        assert "(no plugins declared or installed)" in result.output, result.output
+        # The per-row status tokens are emitted ONLY on the non-empty table
+        # branch; their absence pins that the empty-union branch (not the
+        # table branch) ran, so the assertion bites a projection mutation
+        # that renders rows for an empty union.
+        for status_token in ("enabled", "missing-from-install", "missing-from-decl"):
+            assert status_token not in result.output, result.output
 
 
 # ---------------------------------------------------------------------------

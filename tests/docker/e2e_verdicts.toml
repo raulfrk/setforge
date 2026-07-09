@@ -1,4 +1,4 @@
-# E2E audit-and-prune verdict manifest (E5).
+# E2E audit-and-prune verdict manifest.
 #
 # One [tests."<node-id>"] row per collected e2e_docker test node id, keyed by
 # FULL node id (path::[Class::]func). Kept in lock-step with the real collected
@@ -1277,11 +1277,10 @@ signal = "structured (per-key) stage walk share/demote"
 verbs = ["sync"]
 
 [tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_list_json_projection"]
-verdict = "merge"
+verdict = "keep"
 smoke = false
-signal = "stage --list JSON envelope (command/name/counts) overlaps the --list assert in the skip-then-quit walk test; fold the envelope-shape check into that sibling"
+signal = "kept for the unique envelope[\"command\"]==\"stage\" shape assertion; the skip-then-quit sibling shares the counts assert but not this envelope-command check, so it is not cleanly redundant"
 verbs = ["sync"]
-superseded_by = ["tests/docker/test_e2e_docker_stage_walk.py::test_stage_walk_skip_then_quit_classifies_nothing"]
 
 [tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_non_tty_exits_2"]
 verdict = "keep"

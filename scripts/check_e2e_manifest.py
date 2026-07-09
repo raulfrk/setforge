@@ -37,6 +37,7 @@ Invocation::
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tomllib
@@ -44,6 +45,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "tests" / "docker" / "e2e_verdicts.toml"
+
+# A collected node id is a non-blank, whitespace-free path prefix followed by
+# ``::`` (``path::[Class::]func[...]``). Anchoring on this shape (rather than a
+# bare ``"::" in line`` substring test) means a stray warning/banner/summary
+# line that merely CONTAINS ``::`` — e.g. a deprecation notice citing a
+# dotted-and-colon'd symbol — cannot be mis-parsed as a node id.
+_NODE_ID_RE = re.compile(r"^\S+::")
 
 VALID_VERDICTS: frozenset[str] = frozenset(
     {"keep", "change", "merge", "delete", "should-be-integration"}
@@ -77,9 +85,10 @@ def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:
     default ``addopts`` ``-m 'not e2e_docker'`` exclude — without it collection
     sees zero e2e tests and the whole gate passes vacuously) and ``--no-cov``
     (the coverage plugin otherwise appends a term-missing table that pollutes
-    the node-id parse). Node ids are the lines containing ``::``; the trailing
-    "N/M tests collected" summary and any coverage rows never contain ``::`` so
-    they are filtered out.
+    the node-id parse) and ``-p no:cacheprovider`` (suppresses the cache
+    banner). Only lines matching :data:`_NODE_ID_RE` (``^\\S+::``) are kept, so
+    a warning/banner/summary line that merely contains ``::`` cannot be
+    mis-parsed as a node id.
 
     FAIL-CLOSED: a nonzero pytest exit raises, surfaced by the caller as a hard
     gate failure — never a silent empty list.
@@ -107,7 +116,11 @@ def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:
             f"pytest --collect-only -m {extra_marker_expr!r} exited "
             f"{proc.returncode} (fail-closed):\n{proc.stdout}\n{proc.stderr}"
         )
-    return [line.strip() for line in proc.stdout.splitlines() if "::" in line]
+    return [
+        stripped
+        for line in proc.stdout.splitlines()
+        if _NODE_ID_RE.match(stripped := line.strip())
+    ]
 
 
 def _load_manifest() -> dict[str, dict[str, object]]:
@@ -207,7 +220,10 @@ def gate_superseded_by_live(
     for node_id, row in manifest.items():
         if row.get("verdict") not in PRUNE_VERDICTS:
             continue
-        for sup in row.get("superseded_by", []):  # type: ignore[union-attr]
+        superseded = row.get("superseded_by", [])
+        if not isinstance(superseded, list):
+            continue
+        for sup in superseded:
             if sup not in collected_set:
                 out.append(
                     f"superseded-by: {node_id!r} is marked "
