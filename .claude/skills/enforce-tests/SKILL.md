@@ -23,7 +23,7 @@ and the two project agents take five inputs; `reviewing-bd-leaks` takes its own
 four (`BASE_SHA`, `HEAD_SHA`, `changed_files`, `pr_number`).
 
 ```sh
-BASE_SHA=$(git merge-base HEAD origin/main)   # canonical base — pinned
+BASE_SHA=$(git merge-base HEAD main)   # canonical base — pinned (local main; origin lags while unpushed)
 HEAD_SHA=$(git rev-parse HEAD)
 git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > /tmp/enforce_changed.0
 ```
