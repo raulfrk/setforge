@@ -1,39 +1,8 @@
 #!/usr/bin/env python3
-"""E2E audit-verdict-manifest gate for the Docker suite.
-
-A STANDALONE script (NOT a pytest test — pytest is skippable via markers
-and ``addopts``, which would silently disarm the contract; same reasoning
-as :mod:`scripts.check_schema_gates` and :mod:`scripts.check_policy_lints`).
-
-It keeps ``tests/docker/e2e_verdicts.toml`` — the audit-and-prune verdict
-manifest — in lock-step with the REAL collected e2e test set, so a test
-can never be added/renamed/removed without an accompanying verdict row.
-Five gates:
-
-1. set-equality — every collected node id has a manifest row AND every
-   manifest row names a still-collected id (checked in BOTH directions,
-   never a length compare, which would mask a dup+gap).
-2. uniqueness — no node id appears twice in the manifest.
-3. superseded-by-liveness — every ``delete``/``merge`` row's
-   ``superseded_by`` ids still exist in the collected set (no
-   mutual-deletion pair where the sibling that "covers" a pruned test is
-   itself pruned).
-4. verb-smoke-coverage — every setforge verb has >=1 ``smoke: true``
-   manifest row, cross-checked against the REAL ``-m 'e2e_docker and
-   smoke'`` collection so a typo'd ``@pytest.mark.smok`` (a silent no-op)
-   cannot satisfy the gate on the manifest side alone.
-5. fail-closed — a nonzero collect exit OR an empty collected set is a
-   hard failure (never a vacuous pass; the default ``addopts`` excludes
-   ``e2e_docker`` via ``-m 'not e2e_docker'``, so collection MUST pass an
-   explicit ``-m e2e_docker`` or it silently sees zero tests).
-
-Exit ``0`` clean / ``1`` on any violation (offending ids printed to
-stderr).
-
-Invocation::
-
-    uv run python scripts/check_e2e_manifest.py
-"""
+"""E2E verdict-manifest gate: keeps e2e_verdicts.toml in lock-step with the
+real collected test set. STANDALONE (not pytest, which is skippable via
+markers) so the contract can't be silently disarmed; fail-closed on a
+nonzero/empty collect so a masked default ``-m`` exclude can't pass vacuously."""
 
 from __future__ import annotations
 
@@ -46,11 +15,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "tests" / "docker" / "e2e_verdicts.toml"
 
-# A collected node id is a non-blank, whitespace-free path prefix followed by
-# ``::`` (``path::[Class::]func[...]``). Anchoring on this shape (rather than a
-# bare ``"::" in line`` substring test) means a stray warning/banner/summary
-# line that merely CONTAINS ``::`` — e.g. a deprecation notice citing a
-# dotted-and-colon'd symbol — cannot be mis-parsed as a node id.
 _NODE_ID_RE = re.compile(r"^\S+::")
 
 VALID_VERDICTS: frozenset[str] = frozenset(
@@ -58,10 +22,6 @@ VALID_VERDICTS: frozenset[str] = frozenset(
 )
 PRUNE_VERDICTS: frozenset[str] = frozenset({"delete", "merge"})
 
-# Every setforge verb (+ the two cross-cutting UX surfaces) that MUST retain
-# at least one smoke-tagged golden-path e2e test. Keyed to the ``verbs`` list
-# each manifest row declares, so the smoke-coverage gate is verb-aware rather
-# than counting a bare total.
 REQUIRED_SMOKE_VERBS: frozenset[str] = frozenset(
     {
         "install",
@@ -79,20 +39,8 @@ REQUIRED_SMOKE_VERBS: frozenset[str] = frozenset(
 
 
 def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:
-    """Return the REAL collected node-id list for a marker expression.
-
-    Runs ``pytest --collect-only -q`` with an EXPLICIT ``-m`` (overriding the
-    default ``addopts`` ``-m 'not e2e_docker'`` exclude — without it collection
-    sees zero e2e tests and the whole gate passes vacuously) and ``--no-cov``
-    (the coverage plugin otherwise appends a term-missing table that pollutes
-    the node-id parse) and ``-p no:cacheprovider`` (suppresses the cache
-    banner). Only lines matching :data:`_NODE_ID_RE` (``^\\S+::``) are kept, so
-    a warning/banner/summary line that merely contains ``::`` cannot be
-    mis-parsed as a node id.
-
-    FAIL-CLOSED: a nonzero pytest exit raises, surfaced by the caller as a hard
-    gate failure — never a silent empty list.
-    """
+    # Explicit -m overrides the default addopts exclude; a nonzero exit raises
+    # (fail-closed) rather than returning an empty list.
     proc = subprocess.run(
         [
             "uv",
@@ -124,7 +72,6 @@ def _collect_node_ids(*, extra_marker_expr: str = "e2e_docker") -> list[str]:
 
 
 def _load_manifest() -> dict[str, dict[str, object]]:
-    """Parse the verdict manifest; return its ``[tests]`` node-id → row table."""
     with MANIFEST_PATH.open("rb") as fh:
         data = tomllib.load(fh)
     tests = data.get("tests")
@@ -136,7 +83,6 @@ def _load_manifest() -> dict[str, dict[str, object]]:
 
 
 def gate_collect_nonempty(collected: list[str]) -> list[str]:
-    """Fail-closed: an empty collected set is never a valid clean pass."""
     if len(collected) == 0:
         return [
             "fail-closed: pytest collected ZERO e2e_docker tests — the marker "
@@ -147,8 +93,6 @@ def gate_collect_nonempty(collected: list[str]) -> list[str]:
 
 
 def gate_row_shape(manifest: dict[str, dict[str, object]]) -> list[str]:
-    """Every row must carry a valid ``verdict``, a bool ``smoke``, a ``signal``,
-    and a ``verbs`` list; prune verdicts additionally require ``superseded_by``."""
     out: list[str] = []
     for node_id, row in manifest.items():
         verdict = row.get("verdict")
@@ -177,7 +121,6 @@ def gate_row_shape(manifest: dict[str, dict[str, object]]) -> list[str]:
 def gate_set_equality(
     collected: list[str], manifest: dict[str, dict[str, object]]
 ) -> list[str]:
-    """Collected and manifest node-id sets must match in BOTH directions."""
     collected_set = set(collected)
     manifest_set = set(manifest)
     out: list[str] = []
@@ -196,7 +139,6 @@ def gate_set_equality(
 
 
 def gate_uniqueness(collected: list[str]) -> list[str]:
-    """Node ids must be unique (a dup+gap would net to the same COUNT)."""
     seen: set[str] = set()
     dups: set[str] = set()
     for node_id in collected:
@@ -209,12 +151,7 @@ def gate_uniqueness(collected: list[str]) -> list[str]:
 def gate_superseded_by_live(
     collected: list[str], manifest: dict[str, dict[str, object]]
 ) -> list[str]:
-    """Every prune row's ``superseded_by`` id must still be collected.
-
-    Guards the mutual-deletion trap: a ``delete``/``merge`` row may only cite a
-    sibling that is ITSELF still present (and thus still asserting the shared
-    behavior). A superseded_by pointing at a since-removed id is a hard failure.
-    """
+    # Guards mutual-deletion: a superseded_by target must itself still be collected.
     collected_set = set(collected)
     out: list[str] = []
     for node_id, row in manifest.items():
@@ -237,21 +174,12 @@ def gate_superseded_by_live(
 def gate_verb_smoke_coverage(
     smoke_collected: list[str], manifest: dict[str, dict[str, object]]
 ) -> list[str]:
-    """Every required verb must have >=1 REAL smoke-collected golden-path row.
-
-    Cross-checks the manifest's ``smoke = true`` rows against the id set that
-    pytest ACTUALLY collects under ``-m 'e2e_docker and smoke'`` — so a
-    manifest row claiming ``smoke = true`` whose test lacks a real (or has a
-    typo'd) ``@pytest.mark.smoke`` cannot satisfy the gate, and vice versa.
-    """
     smoke_set = set(smoke_collected)
     out: list[str] = []
 
     manifest_smoke_ids = {
         node_id for node_id, row in manifest.items() if row.get("smoke") is True
     }
-    # The manifest's smoke flag and the real @pytest.mark.smoke collection must
-    # agree exactly — either drift means a mislabeled row or a typo'd marker.
     claimed_but_not_marked = sorted(manifest_smoke_ids - smoke_set)
     for node_id in claimed_but_not_marked:
         out.append(
@@ -281,7 +209,6 @@ def gate_verb_smoke_coverage(
 
 
 def run_all_gates() -> list[str]:
-    """Run every gate against the live tree; return aggregated violations."""
     try:
         collected = _collect_node_ids(extra_marker_expr="e2e_docker")
     except RuntimeError as err:
@@ -289,7 +216,6 @@ def run_all_gates() -> list[str]:
 
     violations = gate_collect_nonempty(collected)
     if violations:
-        # No point running set gates against a vacuous collection.
         return violations
 
     try:
@@ -311,7 +237,6 @@ def run_all_gates() -> list[str]:
 
 
 def main() -> int:
-    """Run every gate; print violations and return a process exit code."""
     violations = run_all_gates()
     if violations:
         print("E2E verdict-manifest gate FAILED:", file=sys.stderr)
