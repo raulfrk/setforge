@@ -9,11 +9,18 @@
 #   - `bd <subcommand>` command lines
 #   - `.beads/` database paths
 #   - the `~/handoff` tracker repo path
-# It deliberately does NOT match bare issue IDs (`setforge-<id>`): that shape is
-# indistinguishable by regex from the repo/branch/worktree names that
-# legitimately appear in shipping docs (`setforge-config`, `setforge-p5qc-audit`).
-# Issue-ID and fuzzy detection ("bd", "beads", epic-child shorthand) require
-# judgment and are handled by the bd-leak-reviewer agent, not this gate.
+#   - stemmed depth-3 epic-child version shorthand carrying an unambiguous
+#     tracker stem: `post-N.N.N` and `setforge-<stem>.N.N.N` (the boundary-
+#     anchored arms below). These shapes only arise from bd epic-child IDs, so
+#     matching them cannot collide with the repo/branch names or the semver pins
+#     (`0.1.42`, `2.1.126`, `merge3>=0.0.16`) that ship legitimately.
+# It deliberately does NOT match bare issue IDs (`setforge-<id>`), nor bare
+# stem-less depth-3 shorthand (`deoq.4.15.4`): those shapes are indistinguishable
+# by regex from the repo/branch/worktree names and RFC bead pointers that
+# legitimately appear in shipping docs (`setforge-config`, `setforge-p5qc-audit`,
+# the intentional `deoq.*` IDs in `docs/rfcs/`). Bare-issue-ID and fuzzy
+# detection ("bd", "beads", stem-less epic-child shorthand) require judgment and
+# are handled by the bd-leak-reviewer agent, not this gate.
 #
 # Usage:
 #   check-no-bd-refs.sh <file> [<file> ...]   # scan staged file CONTENT (pre-commit)
@@ -24,7 +31,15 @@ set -euo pipefail
 
 # Structured, high-precision patterns (extended regex). The bd-command verb list
 # tracks the documented surface; new verbs are caught by the agent's fuzzy pass.
-readonly PATTERN='(\bbd[[:space:]]+(create|q|ready|show|list|update|close|note|comment|dep|blocked|search|recall|remember|forget|memories|defer|undefer|reopen|supersede|stale|orphans|assign|human|doctor|preflight|prime|children|init|migrate|upgrade)\b)|(\.beads(/|\b))|(~/handoff\b)'
+# The epic-child arms are boundary-anchored: a left guard `(^|[^a-z-])` so a
+# longer word tail (`compost-`, `postgres-`) can't back into the `post-`/stem,
+# and a right guard `([^0-9.-]|$)` so a longer version pin can't extend past the
+# depth-3 coordinate — a trailing digit, `.` (4th segment), or `-` (semver
+# prerelease) all fall outside the match. The final segment is a single `[0-9]`
+# on purpose: it is the ONE spot where a bead grandchild coordinate and a real
+# 2-digit semver patch (`...4.15.44`) are regex-indistinguishable, so the gate
+# stays on the precision side and defers 2-digit-final leaks to the agent.
+readonly PATTERN='(\bbd[[:space:]]+(create|q|ready|show|list|update|close|note|comment|dep|blocked|search|recall|remember|forget|memories|defer|undefer|reopen|supersede|stale|orphans|assign|human|doctor|preflight|prime|children|init|migrate|upgrade)\b)|(\.beads(/|\b))|(~/handoff\b)|((^|[^a-z-])post-[0-9]+\.[0-9]+\.[0-9]([^0-9.-]|$))|((^|[^a-z-])setforge-[a-z0-9]+\.[0-9]+\.[0-9]+\.[0-9]([^0-9.-]|$))'
 
 # Paths exempt from scanning: the private orchestration layer legitimately
 # references bd, and the detector's own files carry the patterns by necessity.
