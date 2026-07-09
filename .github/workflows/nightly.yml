@@ -55,23 +55,20 @@ jobs:
           HYPOTHESIS_PROFILE: deep
         run: uv run pytest -m "not e2e_docker" --no-cov -v
 
-  # ---------------------------------------------------------------------------
-  # SEAM (do not enable yet): full-suite mutation testing.
-  #
-  # When the mutation-testing work lands, a `mutmut run` over the whole engine
-  # wires in HERE as its own job (it is too slow for per-PR CI, so the nightly
-  # budget is its home). It MUST be its own job with NO continue-on-error so a
-  # surviving mutant fails the nightly loudly. Intentionally absent now:
-  # mutation testing is blocked on separate, not-yet-landed work.
-  #
-  #   mutmut-full:
-  #     name: Full mutation testing (mutmut run)
-  #     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-  #     runs-on: ubuntu-latest
-  #     steps:
-  #       - uses: actions/checkout@v4
-  #       - uses: astral-sh/setup-uv@v4
-  #       - run: uv sync --extra dev
-  #       - run: uv run mutmut run
-  #       - run: uv run mutmut results
-  # ---------------------------------------------------------------------------
+  mutmut-full:
+    name: Full mutation testing (mutmut run)
+    # Full-engine-core mutation run — too slow for per-PR CI, so the nightly
+    # budget is its home (the diff-scoped PR gate is pr-mutmut-diff in ci.yml).
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev
+      # `|| true` keeps the STEP green when survivors remain: `mutmut run` exits
+      # nonzero on survivors, which is expected — the gate, not mutmut, decides.
+      - run: uv run mutmut run || true
+      # The gate reads `mutmut results` and blocks (its own exit code) on every
+      # non-allowlisted survivor across the whole core. NO continue-on-error:
+      # a surviving mutant fails the nightly loudly.
+      - run: uv run python scripts/mutmut_diff_gate.py --full
