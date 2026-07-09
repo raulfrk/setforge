@@ -214,7 +214,7 @@ Every tool (gate, agent, scaffold) carries a uniform self-improvement component,
 existing capture → propose → approve protocol:
 
 - **Loop:** tool hits a gap → emits a **proposal** (SARIF-shaped card: source / category / evidence /
-  proposed-diff / dedup-key / confidence) → a **backlog** (the task backlog; dedup + supersede +
+  proposed-diff / dedup-key / confidence) → a **backlog** (dedup + supersede +
   vote-evict) → surfaced **batched at the P6 and session-end checkpoints** → **revdiff** review → **approve**
   (lands as a diff) or **decline** (suppressed, never re-raised).
 - **Grounding rule (reliability):** a proposal MUST cite an external signal — gate verdict, surviving
@@ -726,7 +726,7 @@ setforge project visibility <path> <file> --hidden | --tracked
 
 - **Default = hidden**, toggleable **any time**, **per file**.
 - **hidden** = added to the target repo's `.git/info/exclude` (per-clone, never committed) — your private
-  host-local layer; the team never sees it (the stealth trick the issue tracker uses).
+  host-local layer; the team never sees it (the same stealth trick git-native issue trackers use).
 - **tracked** = normal committed repo content, shared with the team.
 - **Toggling**: hidden→tracked un-excludes it; tracked→hidden does `git rm --cached` (keeps the file on
   disk) + re-excludes.
