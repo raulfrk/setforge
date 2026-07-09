@@ -29,7 +29,7 @@ Profiles are defined in the USER's config repo's `setforge.yaml`. The author's d
 ## Workflow verbs
 
 - `uv run setforge compare --profile=<name>` — read-only drift check (live vs tracked).
-- `uv run setforge sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on `preserve_user_keys_deep` sub-keys or top-level non-preserve keys triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
+- `uv run setforge sync --profile=<name>` — capture live edits into tracked/. Always `git diff` after to review. Drift on any tracked_file (file-content or mode bits) triggers the merge wizard interactively; for non-interactive use pass `--auto=use-live` (silent-absorb, today's behavior) or `--auto=keep-tracked` (refuse to absorb).
 - `uv run setforge install --profile=<name>` — deploy tracked → live. Drift inside `shared` user-section markers triggers the reconcile wizard interactively when `--reconcile-user-sections` is passed; for non-interactive use pass `--auto=use-tracked` (deploy tracked-side updates over the live body) or `--auto=keep-live` (silence the warning, keep live). `--reconcile-user-sections` and `--auto=` are mutually exclusive (exit 2). Bare `install` warns once per shared-drifted file and keeps live. `host-local` sections are always preserved-live regardless of flags.
 - `uv run setforge revert --profile=<name>` — undo the most recent install/sync (file diffs via `patch -R` + extension reverse). Drift refuses cleanly; second invocation acts as redo. Transitions live at `~/.local/state/setforge/transitions/` (kept indefinitely; pruning is a future bead).
 - `uv run setforge validate --profile=<name>` — config-shape check (schema + profile chain + Jinja2 + tracked srcs + claude_plugins references). No filesystem comparison; works offline. CI runs `validate --all`.
@@ -174,7 +174,7 @@ After editing the config repo, commit + push there. On the next `setforge instal
 
 `~/.claude/additional-content.md` is intentionally untracked per host. `setforge install` creates a stub if missing. Never commit its content.
 
-`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. The profile's `preserve_user_keys` overlays those keys from live to tracked on `install`, and `capture` strips them from tracked, so they stay host-local without manual intervention. Comments in the JSONC settings file are preserved end-to-end.
+`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Those keys stay host-local through the reconcile engine's per-key staging: on `install` each top-level key in the JSONC file is classified SHARED (merged into tracked) or LOCAL (kept host-only); `sync` promotes only the SHARED keys back to tracked. Comments in the JSONC settings file are preserved end-to-end (json5 AST round-trip).
 
 ## Don't-do list
 
