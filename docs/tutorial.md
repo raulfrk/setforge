@@ -51,7 +51,7 @@ a realistic terminal mockup, and a note on when to reach for it.
 - **Profiles.** A profile is a named subset of tracked files / plugins /
   extensions, with optional inheritance (`extends:`). Every command that
   deploys or compares takes `--profile`.
-- **Schema.** `setforge.yaml` carries `schema_version: "2.0"`. An optional
+- **Schema.** `setforge.yaml` carries `schema_version: "5.0"`. An optional
   `minimum_version:` floor refuses to run an engine older than your config
   needs. Older `version: 1` configs still load and are migrated forward by
   `setforge migrate`.
@@ -158,7 +158,7 @@ A minimal config repo is a manifest plus the file content it points at:
 
 ```yaml
 # ~/projects/dotfiles/setforge.yaml
-schema_version: "2.0"
+schema_version: "5.0"
 tracked_files:
   gitconfig:
     src: gitconfig            # lives at tracked/gitconfig
@@ -447,8 +447,8 @@ quick index.
   ```
   === schema migration check ===
   your setforge.yaml:  ~/projects/dotfiles/setforge.yaml
-    declared schema:   2.0
-  installed setforge expects schema:   2.0
+    declared schema:   5.0
+  installed setforge expects schema:   5.0
   === no migrations available ===
   ```
 

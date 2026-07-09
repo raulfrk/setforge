@@ -69,7 +69,7 @@ your-config/
 
 ```yaml
 # your-config/setforge.yaml
-schema_version: "2.0"
+schema_version: "5.0"
 tracked_files:
   example:
     src: example.txt            # lives at tracked/example.txt
@@ -85,7 +85,7 @@ See [docs/configuration.md](docs/configuration.md) for the full schema
 (templates, file modes, extensions, plugins, per-host preservation).
 
 (Configs without a `schema_version` — or with an older one — still load and are
-migrated forward to the current `2.0` by `setforge migrate`. The unrelated
+migrated forward to the current `5.0` by `setforge migrate`. The unrelated
 engine-owned `version:` file-format field defaults to `1` and you don't set it.)
 
 **4. Wire setforge to your config**
