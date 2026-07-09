@@ -67,20 +67,20 @@ from setforge.migrations import (
 # any other payload before a ``--pin`` value can reach ``setforge.yaml``.
 _PIN_VERSION_RE: Final = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 
-# ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via
-# the module-level ``__getattr__`` below — non-interactive callers and
+# ``setforge.ui.widgets.button_bar`` is imported lazily via the
+# module-level ``__getattr__`` below — non-interactive callers and
 # the cold-start path of ``setforge migrate --check`` / ``--help`` never
-# pay the ~140ms cost. The TUI fires only on the ``--apply`` confirm
-# path. The module-attribute access path is preserved so the test suite
-# can ``monkeypatch.setattr("setforge.cli.migrate.radiolist_dialog",
-# ...)`` for headless test runs.
+# pay the ~140ms prompt_toolkit cost. The TUI fires only on the
+# ``--apply`` confirm path. The module-attribute access path is preserved
+# so the test suite can ``monkeypatch.setattr(
+# "setforge.cli.migrate.button_bar", ...)`` for headless test runs.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -794,21 +794,22 @@ def _confirm_migrate(
     to_version = chain[-1].to_version
     typer.echo("=== confirm ===")
     from setforge.cli import migrate as _self  # local alias for monkeypatch path
+    from setforge.ui.widgets import CANCEL, Button
 
-    result = _self.radiolist_dialog(
-        title="setforge migrate",
-        text=_dialog_text(chain=chain, roots=roots),
-        values=[
-            (MigrateChoice.ABORT, "no, abort — no mutations (default — safe)"),
-            (
-                MigrateChoice.APPLY_WITH_BACKUP,
+    result = _self.button_bar(
+        [
+            Button("no, abort — no mutations (default — safe)", MigrateChoice.ABORT),
+            Button(
                 f"yes, apply + write per-file backups (.pre-{to_version}.bak)",
+                MigrateChoice.APPLY_WITH_BACKUP,
             ),
-            (MigrateChoice.APPLY_NO_BACKUP, "yes, apply, no backups"),
+            Button("yes, apply, no backups", MigrateChoice.APPLY_NO_BACKUP),
         ],
-        default=MigrateChoice.ABORT,
-    ).run()
-    if result is None:  # Esc — explicit user cancel
+        title="setforge migrate",
+        body=_dialog_text(chain=chain, roots=roots),
+        initial=0,
+    )
+    if result is CANCEL:  # Esc — explicit user cancel
         return MigrateChoice.ABORT
     assert isinstance(result, MigrateChoice)
     return result

@@ -7,9 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from prompt_toolkit.application import create_app_session
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from setforge.cli import _secrets_confirm
 from setforge.secrets import SecretAction, SecretFinding
+from setforge.ui.widgets import CANCEL
 
 
 def _hash(text: str) -> str:
@@ -29,32 +33,23 @@ def _make_finding(snippet: str = "ghp_xxxxxxxxxxxx") -> SecretFinding:
     )
 
 
-class _FakeDialogResult:
-    """Stand-in for prompt_toolkit's ``Dialog`` return object.
+class _DialogRecorder:
+    """Callable replacing ``button_bar`` to record + control returns.
 
-    Mirrors the pattern in ``tests/test_cli_auto_confirm.py`` so the
-    seam shape is consistent across wizard tests.
+    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
+    no ``.run()`` indirection — so the recorder yields ``return_value`` on
+    call.
     """
 
     def __init__(self, *, return_value: object) -> None:
         self._return_value = return_value
-
-    def run(self) -> object:
-        return self._return_value
-
-
-class _DialogRecorder:
-    """Callable replacing ``radiolist_dialog`` to record + control returns."""
-
-    def __init__(self, *, return_value: object) -> None:
-        self.fake = _FakeDialogResult(return_value=return_value)
         self.call_count = 0
         self.last_kwargs: dict[str, Any] | None = None
 
-    def __call__(self, *_args: Any, **kwargs: Any) -> _FakeDialogResult:
+    def __call__(self, *_args: Any, **kwargs: Any) -> object:
         self.call_count += 1
         self.last_kwargs = kwargs
-        return self.fake
+        return self._return_value
 
 
 def _patch_dialog(
@@ -62,7 +57,7 @@ def _patch_dialog(
 ) -> _DialogRecorder:
     """Install a ``_DialogRecorder`` at the lazy-import seam."""
     recorder = _DialogRecorder(return_value=return_value)
-    monkeypatch.setattr("setforge.cli._secrets_confirm.radiolist_dialog", recorder)
+    monkeypatch.setattr("setforge.cli._secrets_confirm.button_bar", recorder)
     return recorder
 
 
@@ -113,10 +108,10 @@ def test_dialog_silence_one_shot_returns_silence(
     assert action is SecretAction.SILENCE_ONE_SHOT
 
 
-def test_dialog_none_treated_as_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc / Ctrl-C (dialog returns None) maps to ABORT (mockup-T default)."""
+def test_dialog_cancel_treated_as_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Esc / Ctrl-C (widget returns CANCEL) maps to ABORT (mockup-T default)."""
     _force_tty(monkeypatch)
-    _patch_dialog(monkeypatch, return_value=None)
+    _patch_dialog(monkeypatch, return_value=CANCEL)
 
     action = _secrets_confirm.prompt_secret_action(_make_finding())
 
@@ -205,13 +200,42 @@ def test_yes_short_circuit_emits_no_warning(
 # ---------------------------------------------------------------------------
 
 
-def test_radiolist_dialog_attribute_resolves_lazily() -> None:
-    """The module-level ``__getattr__`` exposes ``radiolist_dialog`` on demand."""
-    obj = _secrets_confirm.radiolist_dialog
+def test_button_bar_attribute_resolves_lazily() -> None:
+    """The module-level ``__getattr__`` exposes ``button_bar`` on demand."""
+    obj = _secrets_confirm.button_bar
     assert callable(obj)
 
 
-def test_radiolist_dialog_unknown_attribute_raises() -> None:
+def test_button_bar_unknown_attribute_raises() -> None:
     """``__getattr__`` raises ``AttributeError`` for unknown names."""
     with pytest.raises(AttributeError):
         _ = _secrets_confirm.nonexistent_attribute
+
+
+# ---------------------------------------------------------------------------
+# Real-widget construction — drive the actual button_bar (no monkeypatch).
+# Guards the headless truecolor crash that a stubbed recorder cannot see:
+# construction-only unit tests bypass the real prompt_toolkit widget build.
+# ---------------------------------------------------------------------------
+
+
+def test_real_widget_enter_selects_initial_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enter on the freshly-built widget selects the initial button (ABORT)."""
+    _force_tty(monkeypatch)
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")  # Enter → initial focus = ABORT (index 0)
+        with create_app_session(input=pipe, output=DummyOutput()):
+            action = _secrets_confirm.prompt_secret_action(_make_finding())
+    assert action is SecretAction.ABORT
+
+
+def test_real_widget_escape_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Esc through the real widget yields CANCEL → mapped to ABORT."""
+    _force_tty(monkeypatch)
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\x1b")  # Esc → CANCEL
+        with create_app_session(input=pipe, output=DummyOutput()):
+            action = _secrets_confirm.prompt_secret_action(_make_finding())
+    assert action is SecretAction.ABORT

@@ -23,20 +23,20 @@ from rich.table import Table
 
 from setforge.errors import ConfirmRequiresInteractive
 
-# ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via the
-# module-level ``__getattr__`` below so non-interactive callers (and the
-# cold-start path of ``setforge --help`` / ``validate`` / ``compare``)
-# never pay the ~140ms cost. The TUI fires only when ``yes=False`` and
-# stdin is a TTY. Module-level ``__getattr__`` keeps the attribute-on-
-# module access path that the test suite's ``monkeypatch.setattr(
-# "setforge.cli._confirm.radiolist_dialog", ...)`` relies on.
+# The themed ``button_bar`` widget is imported lazily via the module-level
+# ``__getattr__`` below so non-interactive callers (and the cold-start path
+# of ``setforge --help`` / ``validate`` / ``compare``) never pay the ~140ms
+# prompt_toolkit cost. The TUI fires only when ``yes=False`` and stdin is a
+# TTY. Module-level ``__getattr__`` keeps the attribute-on-module access path
+# that the test suite's ``monkeypatch.setattr(
+# "setforge.cli._confirm.button_bar", ...)`` relies on.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -79,7 +79,7 @@ def prompt_failure_action(
     """Render an arrow-key picker for a reconcile failure; return the choice.
 
     ``yes=True`` short-circuits to ``default`` (``FailureAction.SKIP``).
-    ``None`` from the dialog (user pressed Esc) is treated as
+    :data:`CANCEL` from the widget (user pressed Esc) is treated as
     :attr:`FailureAction.ABORT` — consistent with
     :func:`confirm_auto_operation`'s Esc-as-abort handling.
 
@@ -110,24 +110,28 @@ def prompt_failure_action(
     if console is None:
         console = Console(stderr=True)
     console.print(f"[bold red]=== reconcile failure ===[/bold red]\n{message}")
+    from setforge.ui.widgets import CANCEL, Button
+
+    _rows = [
+        Button("skip this item, continue with the rest", FailureAction.SKIP),
+        Button("retry now (re-attempt the same operation)", FailureAction.RETRY),
+        Button("abort install (roll back actions so far)", FailureAction.ABORT),
+        Button("diagnose (show full failure trace)", FailureAction.DIAGNOSE),
+    ]
+    _initial = next((i for i, b in enumerate(_rows) if b.value == default), 0)
     while True:
-        # ``radiolist_dialog`` resolves through the module-level
-        # ``__getattr__`` (lazy prompt_toolkit import); tests monkeypatch
-        # the same attribute path.
+        # ``button_bar`` resolves through the module-level ``__getattr__``
+        # (lazy prompt_toolkit import); tests monkeypatch the same attribute
+        # path.
         from setforge.cli import _confirm as _self  # local alias for monkeypatch
 
-        choice = _self.radiolist_dialog(
+        choice = _self.button_bar(
+            _rows,
             title="setforge reconcile failure",
-            text="What would you like to do?",
-            values=[
-                (FailureAction.SKIP, "skip this item, continue with the rest"),
-                (FailureAction.RETRY, "retry now (re-attempt the same operation)"),
-                (FailureAction.ABORT, "abort install (roll back actions so far)"),
-                (FailureAction.DIAGNOSE, "diagnose (show full failure trace)"),
-            ],
-            default=default,
-        ).run()
-        if choice is None:
+            body="What would you like to do?",
+            initial=_initial,
+        )
+        if choice is CANCEL:
             return FailureAction.ABORT
         if choice is FailureAction.DIAGNOSE:
             trace = full_stderr if full_stderr else "(no captured trace available)"
@@ -227,8 +231,8 @@ def confirm_auto_operation(
     Short-circuits to True if ``yes`` is set (no panel rendered). Returns
     True if ``plan`` has no changes and no risks (no-op). Otherwise raises
     :class:`ConfirmRequiresInteractive` when stdin is not a TTY, or runs
-    the arrow-key prompt and returns the user's choice. ``None`` from the
-    dialog (Esc) is treated as abort.
+    the arrow-key prompt and returns the user's choice. :data:`CANCEL` from
+    the widget (Esc) is treated as abort.
     """
     if yes:
         return True
@@ -244,23 +248,22 @@ def confirm_auto_operation(
     if console is None:
         console = Console(stderr=True)
     _render_panel(command=command, profile=profile, plan=plan, console=console)
-    # ``radiolist_dialog`` resolves through the module-level
-    # ``__getattr__`` (lazy prompt_toolkit import); tests monkeypatch
-    # the same attribute path.
+    # ``button_bar`` resolves through the module-level ``__getattr__`` (lazy
+    # prompt_toolkit import); tests monkeypatch the same attribute path.
     from setforge.cli import _confirm as _self  # local alias for monkeypatch path
+    from setforge.ui.widgets import CANCEL, Button
 
-    # prompt_toolkit 3.0.x yes_no_dialog has no default= kwarg; radiolist
-    # with default=False gives default-No behavior.
-    choice = _self.radiolist_dialog(
-        title=f"setforge {command}",
-        text="Proceed with the mutation above?",
-        values=[
-            (False, "No  — abort, no mutations"),
-            (True, "Yes — apply the changes"),
+    # ``initial=0`` focuses the No button first — default-No behavior.
+    choice = _self.button_bar(
+        [
+            Button("No  — abort, no mutations", False),
+            Button("Yes — apply the changes", True),
         ],
-        default=False,
-    ).run()
-    if choice is None or choice is False:
+        title=f"setforge {command}",
+        body="Proceed with the mutation above?",
+        initial=0,
+    )
+    if choice is CANCEL or choice is False:
         console.print("[red]✗ aborted[/red] — no mutations applied")
         return False
     console.print("[green]✓ proceeding[/green]")

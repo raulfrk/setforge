@@ -1,8 +1,10 @@
 """``setforge init`` — bootstrap config dirs + local.yaml template + env health.
 
-Mockup J (user-approved 2026-05-18). Three radiolist_dialog prompts:
+Mockup J (user-approved 2026-05-18). Three themed ``button_bar`` prompts:
 source-config (skip/git/path), apply-confirm (proceed/abort),
 ``--force`` confirm (abort/overwrite+backup/overwrite+no-backup).
+Interactive GIT/PATH selections collect their URL / directory via a
+follow-up ``text_prompt``.
 Reinit is idempotent and content-aware — re-running without
 ``--force`` rechecks the environment and surfaces newly-enabled
 capabilities (mockup scenario 2) without overwriting local.yaml.
@@ -45,22 +47,23 @@ from setforge.cli._init_helpers import (
 )
 from setforge.errors import ConfirmRequiresInteractive
 
-# prompt_toolkit's ``radiolist_dialog`` resolves through this module's
-# lazy ``__getattr__`` below so cold-start commands (``setforge --help``,
-# ``setforge validate``) skip the ~140ms prompt_toolkit import. Tests
-# monkeypatch ``setforge.cli.init.radiolist_dialog`` directly through the
-# same attribute path; mirror :mod:`setforge.cli._confirm` exactly.
+# The themed ``button_bar`` / ``text_prompt`` widgets resolve through this
+# module's lazy ``__getattr__`` below so cold-start commands (``setforge
+# --help``, ``setforge validate``) skip the ~140ms prompt_toolkit import that
+# :mod:`setforge.ui.widgets` pulls in. Tests monkeypatch
+# ``setforge.cli.init.button_bar`` / ``setforge.cli.init.text_prompt`` directly
+# through the same attribute path; mirror :mod:`setforge.cli._confirm` exactly.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
-    if name == "input_dialog":
-        from prompt_toolkit.shortcuts import input_dialog
+        return button_bar
+    if name == "text_prompt":
+        from setforge.ui.widgets import text_prompt
 
-        return input_dialog
+        return text_prompt
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -209,15 +212,16 @@ def _prompt_source_config(
     Non-interactive precedence: ``--path-source`` > ``--git-source`` >
     default ``SKIP`` (when ``--no-prompt`` is set without a source flag,
     the user opted out of configuring a source). Interactive flow goes
-    through :func:`radiolist_dialog` with arrow-key selection per
+    through :func:`button_bar` with arrow-key selection per
     mockup J line 553.
 
     Returns a :class:`SourceSpec` carrying both the choice and the
     per-kind fields (path / url+ref) needed to write a ``source:``
     block into ``local.yaml``. Interactive GIT/PATH selections collect
-    the URL / directory via a follow-up :func:`input_dialog`; an empty
-    or cancelled entry falls back to :attr:`SourceChoice.SKIP` so the
-    stub stays editable rather than half-written.
+    the URL / directory via a follow-up :func:`text_prompt`; a cancelled
+    (Esc → :data:`CANCEL`), empty, or whitespace-only entry falls back to
+    :attr:`SourceChoice.SKIP` so the stub stays editable rather than
+    half-written.
     """
     if path_source is not None:
         return SourceSpec(
@@ -237,44 +241,59 @@ def _prompt_source_config(
             "setforge init requires --no-prompt when stdin is not a TTY"
         )
     from setforge.cli import init as _self
+    from setforge.ui.widgets import Button
 
-    result = _self.radiolist_dialog(
+    result = _self.button_bar(
+        [
+            Button("skip (default)", SourceChoice.SKIP),
+            Button("git URL", SourceChoice.GIT),
+            Button("local path", SourceChoice.PATH),
+        ],
         title="configure your config-repo source?",
-        text=(
+        body=(
             "skip = configure later (edit local.yaml's source: block by hand)\n"
             "git  = clone a remote config repo now\n"
             "path = point to a local config-repo directory now"
         ),
-        values=[
-            (SourceChoice.SKIP, "skip (default)"),
-            (SourceChoice.GIT, "git URL"),
-            (SourceChoice.PATH, "local path"),
-        ],
-        default=SourceChoice.SKIP,
-    ).run()
+        initial=0,
+    )
     if result is SourceChoice.GIT:
-        url = _self.input_dialog(
+        url = _collect_source_entry(
             title="git config-repo source",
-            text="Enter the git URL to clone (blank to skip):",
-        ).run()
-        # Strip first: a whitespace-only entry is truthy but would write a
-        # `path:`/`url:` plain scalar that YAML re-reads as null — a
-        # half-written stub. Collapse it (and None/empty) to SKIP.
-        url = (url or "").strip()
-        if not url:
+            body="Enter the git URL to clone (blank to skip):",
+        )
+        if url is None:
             return SourceSpec(choice=SourceChoice.SKIP)
         return SourceSpec(choice=SourceChoice.GIT, url=url, ref=git_ref)
     if result is SourceChoice.PATH:
-        path_str = _self.input_dialog(
+        path_str = _collect_source_entry(
             title="local config-repo source",
-            text="Enter the local config-repo directory (blank to skip):",
-        ).run()
-        path_str = (path_str or "").strip()
-        if not path_str:
+            body="Enter the local config-repo directory (blank to skip):",
+        )
+        if path_str is None:
             return SourceSpec(choice=SourceChoice.SKIP)
         return SourceSpec(choice=SourceChoice.PATH, path=Path(path_str))
-    # SKIP selection or None (cancel/escape).
+    # SKIP selection or CANCEL (Esc / Ctrl-C).
     return SourceSpec(choice=SourceChoice.SKIP)
+
+
+def _collect_source_entry(*, title: str, body: str) -> str | None:
+    """Run the GIT/PATH follow-up :func:`text_prompt` → a usable string or None.
+
+    Returns the stripped entry, or ``None`` when the user gave nothing usable —
+    a cancel (Esc → :data:`CANCEL`), an empty submit, or a whitespace-only entry.
+    A whitespace-only value is truthy but would write a ``path:``/``url:`` plain
+    scalar that YAML re-reads as null (a half-written stub), so it collapses to
+    ``None`` exactly like cancel/empty — the caller maps that to SKIP.
+    """
+    from setforge.cli import init as _self
+    from setforge.ui.widgets import CANCEL
+
+    entered = _self.text_prompt(title=title, body=body)
+    if entered is CANCEL:
+        return None
+    entered = entered.strip()
+    return entered or None
 
 
 def _prompt_apply_confirm(*, no_prompt: bool) -> ApplyChoice:
@@ -286,21 +305,22 @@ def _prompt_apply_confirm(*, no_prompt: bool) -> ApplyChoice:
             "setforge init requires --no-prompt when stdin is not a TTY"
         )
     from setforge.cli import init as _self
+    from setforge.ui.widgets import CANCEL, Button
 
-    result = _self.radiolist_dialog(
+    result = _self.button_bar(
+        [
+            Button("proceed", ApplyChoice.PROCEED),
+            Button("abort", ApplyChoice.ABORT),
+        ],
         title="ready to apply?",
-        text=(
+        body=(
             "proceed creates the directories above and (re)writes "
             "local.yaml — a customized local.yaml is backed up to a .bak "
             "first; abort makes no changes"
         ),
-        values=[
-            (ApplyChoice.PROCEED, "proceed"),
-            (ApplyChoice.ABORT, "abort"),
-        ],
-        default=ApplyChoice.PROCEED,
-    ).run()
-    if result is None:
+        initial=0,
+    )
+    if result is CANCEL:
         return ApplyChoice.ABORT
     assert isinstance(result, ApplyChoice)
     return result
@@ -321,27 +341,28 @@ def _prompt_force_confirm(*, no_prompt: bool) -> ForceChoice:
             "setforge init requires --no-prompt when stdin is not a TTY"
         )
     from setforge.cli import init as _self
+    from setforge.ui.widgets import CANCEL, Button
 
-    result = _self.radiolist_dialog(
+    result = _self.button_bar(
+        [
+            Button("abort (default — no changes)", ForceChoice.ABORT),
+            Button(
+                "overwrite + back up existing files",
+                ForceChoice.OVERWRITE_WITH_BACKUP,
+            ),
+            Button(
+                "overwrite + no backup (existing content discarded)",
+                ForceChoice.OVERWRITE_NO_BACKUP,
+            ),
+        ],
         title="setforge init --force",
-        text=(
+        body=(
             "DESTRUCTIVE: this will overwrite ~/.config/setforge/local.yaml.\n"
             "Pick a recovery option:"
         ),
-        values=[
-            (ForceChoice.ABORT, "abort (default — no changes)"),
-            (
-                ForceChoice.OVERWRITE_WITH_BACKUP,
-                "overwrite + back up existing files",
-            ),
-            (
-                ForceChoice.OVERWRITE_NO_BACKUP,
-                "overwrite + no backup (existing content discarded)",
-            ),
-        ],
-        default=ForceChoice.ABORT,
-    ).run()
-    if result is None:
+        initial=0,
+    )
+    if result is CANCEL:
         return ForceChoice.ABORT
     assert isinstance(result, ForceChoice)
     return result
@@ -440,8 +461,8 @@ def _prompt_config_repo_dir(*, no_prompt: bool) -> Path:
 
     Default is ``~/projects/<name>-config`` per
     :func:`setforge.cli._config_repo.default_config_repo_dir`. Under
-    ``--no-prompt`` the default is taken verbatim. Interactively, an
-    :func:`input_dialog` collects the directory (blank → default). A
+    ``--no-prompt`` the default is taken verbatim. Interactively, a
+    :func:`text_prompt` collects the directory (blank or Esc → default). A
     non-TTY without ``--no-prompt`` raises
     :class:`ConfirmRequiresInteractive` consistent with the other prompts.
     """
@@ -453,12 +474,15 @@ def _prompt_config_repo_dir(*, no_prompt: bool) -> Path:
             "setforge init requires --no-prompt when stdin is not a TTY"
         )
     from setforge.cli import init as _self
+    from setforge.ui.widgets import CANCEL
 
-    entered = _self.input_dialog(
+    entered = _self.text_prompt(
         title="config-repo directory",
-        text=f"Where to scaffold the config repo? (blank = {default}):",
-    ).run()
-    entered = (entered or "").strip()
+        body=f"Where to scaffold the config repo? (blank = {default}):",
+    )
+    if entered is CANCEL:
+        return default
+    entered = entered.strip()
     if not entered:
         return default
     return Path(entered).expanduser()

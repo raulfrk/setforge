@@ -7,7 +7,7 @@ Runs before the drift gate; warns on:
 
 Non-TTY without ``--no-git-check`` AND dirty/stale state RAISES
 :class:`ConfirmRequiresInteractive` — non-TTY + mutating op = raise
-(consent for mutation; not fall-back). The radiolist offers
+(consent for mutation; not fall-back). The button bar offers
 abort / proceed / show-diff-and-re-prompt.
 """
 
@@ -38,18 +38,18 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 _GIT_TIMEOUT_SECONDS: int = 30
 _GIT_LOCALE_ENV: Mapping[str, str] = {"LANG": "C", "LC_ALL": "C"}
 
-# prompt_toolkit's ``radiolist_dialog`` resolves through this module's
-# lazy ``__getattr__`` below — mirrors :mod:`setforge.cli._confirm` and
+# The themed ``button_bar`` widget resolves through this module's lazy
+# ``__getattr__`` below — mirrors :mod:`setforge.cli._confirm` and
 # :mod:`setforge.cli.init` so cold-start commands (``setforge --help``)
 # never pay the ~140ms prompt_toolkit import. Tests monkeypatch
-# ``setforge.cli._git_check.radiolist_dialog`` through this same path.
+# ``setforge.cli._git_check.button_bar`` through this same path.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -377,7 +377,7 @@ def prompt_git_check_choice(
     stdin is not a TTY, since install is about to mutate live state.
     ``--no-git-check`` is the automation escape hatch.
 
-    Returns :data:`GitCheckChoice.ABORT` on Esc/None (consistent with
+    Returns :data:`GitCheckChoice.ABORT` on Esc/:data:`CANCEL` (consistent with
     :func:`setforge.cli._confirm.confirm_auto_operation`'s Esc-as-abort
     handling). Caller inspects the return value to choose between
     abort (exit 1), proceed (continue to drift gate), or show-diff
@@ -398,19 +398,20 @@ def prompt_git_check_choice(
         console=console,
     )
     from setforge.cli import _git_check as _self  # local alias for monkeypatch
+    from setforge.ui.widgets import CANCEL, Button
 
     abort_label, proceed_label, show_label = _choice_labels(source=source)
-    choice = _self.radiolist_dialog(
-        title="setforge install — pre-deploy git check",
-        text="The config source is not in a clean baseline. What do you want to do?",
-        values=[
-            (GitCheckChoice.ABORT, abort_label),
-            (GitCheckChoice.PROCEED, proceed_label),
-            (GitCheckChoice.SHOW_DIFF, show_label),
+    choice = _self.button_bar(
+        [
+            Button(abort_label, GitCheckChoice.ABORT),
+            Button(proceed_label, GitCheckChoice.PROCEED),
+            Button(show_label, GitCheckChoice.SHOW_DIFF),
         ],
-        default=GitCheckChoice.ABORT,
-    ).run()
-    if choice is None:
+        title="setforge install — pre-deploy git check",
+        body="The config source is not in a clean baseline. What do you want to do?",
+        initial=0,
+    )
+    if choice is CANCEL:
         return GitCheckChoice.ABORT
     return choice
 

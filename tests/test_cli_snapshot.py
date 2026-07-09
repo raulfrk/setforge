@@ -269,7 +269,7 @@ def test_snapshot_restore_unknown_profile_exits_1(
     assert "profile not found" in _outerr(result)
 
 
-def test_snapshot_restore_choice_abort_via_radiolist(
+def test_snapshot_restore_choice_abort_via_button_bar(
     fake_home: Path,
     config_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -287,17 +287,11 @@ def test_snapshot_restore_choice_abort_via_radiolist(
     )
     assert create.exit_code == 0
 
-    class _FakeDialog:
-        def __init__(self, _choice: object) -> None:
-            self._choice = _choice
-
-        def run(self) -> object:
-            return self._choice
-
-    def fake_radiolist(*_a: object, **_kw: object) -> _FakeDialog:
-        return _FakeDialog(cli_snap.RestoreChoice.ABORT)
-
-    monkeypatch.setattr(cli_snap, "radiolist_dialog", fake_radiolist)
+    monkeypatch.setattr(
+        cli_snap,
+        "button_bar",
+        lambda *_a, **_kw: cli_snap.RestoreChoice.ABORT,
+    )
     # Pretend stdin is a TTY so the prompt path is reached.
     monkeypatch.setattr(cli_snap, "_stdin_is_tty", lambda: True)
     result = _invoke(
@@ -305,6 +299,41 @@ def test_snapshot_restore_choice_abort_via_radiolist(
             "snapshot",
             "restore",
             "cancel-me",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert _effective_exit_code(result) == 1
+    assert "aborted" in _outerr(result)
+
+
+def test_snapshot_restore_choice_cancel_via_button_bar(
+    fake_home: Path,
+    config_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Esc (CANCEL sentinel) from the button bar is treated as ABORT (exit 1)."""
+    from setforge.ui.widgets import CANCEL
+
+    _seed_live_file(fake_home)
+    create = _invoke(
+        [
+            "snapshot",
+            "create",
+            "esc-me",
+            "--profile=test-profile",
+            f"--config={config_repo}",
+        ]
+    )
+    assert create.exit_code == 0
+
+    monkeypatch.setattr(cli_snap, "button_bar", lambda *_a, **_kw: CANCEL)
+    monkeypatch.setattr(cli_snap, "_stdin_is_tty", lambda: True)
+    result = _invoke(
+        [
+            "snapshot",
+            "restore",
+            "esc-me",
             "--profile=test-profile",
             f"--config={config_repo}",
         ]
@@ -331,11 +360,11 @@ def test_snapshot_restore_choice_pre_snapshot_first(
     )
     dst.write_text("drifted v2 body\n")
 
-    class _FakeDialog:
-        def run(self) -> object:
-            return cli_snap.RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT
-
-    monkeypatch.setattr(cli_snap, "radiolist_dialog", lambda *_, **__: _FakeDialog())
+    monkeypatch.setattr(
+        cli_snap,
+        "button_bar",
+        lambda *_, **__: cli_snap.RestoreChoice.RESTORE_WITH_PRE_SNAPSHOT,
+    )
     monkeypatch.setattr(cli_snap, "_stdin_is_tty", lambda: True)
 
     result = _invoke(

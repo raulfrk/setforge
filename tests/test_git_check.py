@@ -28,6 +28,7 @@ from setforge.cli._git_check import (
 )
 from setforge.errors import ConfirmRequiresInteractive
 from setforge.source import GitSource, PathSource
+from setforge.ui.widgets import CANCEL
 
 
 def _git_init(repo: Path, *, initial_branch: str = "main") -> Path:
@@ -341,22 +342,14 @@ class TestPromptGitCheckChoice:
                 source=source, dirty_lines=[" M file"], detached=False
             )
 
-    def test_tty_dispatches_to_radiolist(
+    def test_tty_dispatches_to_button_bar(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """TTY caller invokes ``radiolist_dialog`` and returns its choice."""
+        """TTY caller invokes ``button_bar`` and returns its choice."""
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
-
-        class FakeDialog:
-            def __init__(self, **kwargs: Any) -> None:
-                self.kwargs = kwargs
-
-            def run(self) -> GitCheckChoice:
-                return GitCheckChoice.PROCEED
-
         monkeypatch.setattr(
-            "setforge.cli._git_check.radiolist_dialog",
-            lambda **kwargs: FakeDialog(**kwargs),
+            "setforge.cli._git_check.button_bar",
+            lambda *a, **k: GitCheckChoice.PROCEED,
         )
         source = PathSource(path=tmp_path)
         assert (
@@ -366,22 +359,14 @@ class TestPromptGitCheckChoice:
             is GitCheckChoice.PROCEED
         )
 
-    def test_dialog_returns_none_treated_as_abort(
+    def test_dialog_returns_cancel_treated_as_abort(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """User pressing Esc (None from radiolist) → ABORT."""
+        """User pressing Esc (CANCEL from button_bar) → ABORT."""
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
-
-        class FakeDialog:
-            def __init__(self, **kwargs: Any) -> None:
-                pass
-
-            def run(self) -> None:
-                return None
-
         monkeypatch.setattr(
-            "setforge.cli._git_check.radiolist_dialog",
-            lambda **kwargs: FakeDialog(**kwargs),
+            "setforge.cli._git_check.button_bar",
+            lambda *a, **k: CANCEL,
         )
         source = PathSource(path=tmp_path)
         assert (
@@ -427,17 +412,9 @@ class TestRunGitCheckOrRaise:
         repo = _git_init(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
-
-        class FakeDialog:
-            def __init__(self, **kwargs: Any) -> None:
-                pass
-
-            def run(self) -> GitCheckChoice:
-                return GitCheckChoice.PROCEED
-
         monkeypatch.setattr(
-            "setforge.cli._git_check.radiolist_dialog",
-            lambda **kwargs: FakeDialog(**kwargs),
+            "setforge.cli._git_check.button_bar",
+            lambda *a, **k: GitCheckChoice.PROCEED,
         )
         source = PathSource(path=repo)
         run_git_check_or_raise(source=source, no_git_check=False)
@@ -451,17 +428,9 @@ class TestRunGitCheckOrRaise:
         repo = _git_init(tmp_path / "repo")
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
-
-        class FakeDialog:
-            def __init__(self, **kwargs: Any) -> None:
-                pass
-
-            def run(self) -> GitCheckChoice:
-                return GitCheckChoice.ABORT
-
         monkeypatch.setattr(
-            "setforge.cli._git_check.radiolist_dialog",
-            lambda **kwargs: FakeDialog(**kwargs),
+            "setforge.cli._git_check.button_bar",
+            lambda *a, **k: GitCheckChoice.ABORT,
         )
         source = PathSource(path=repo)
         with pytest.raises(typer.Exit) as exc:
@@ -476,17 +445,9 @@ class TestRunGitCheckOrRaise:
         (repo / "README.md").write_text("# dirty\n")
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         choices = iter([GitCheckChoice.SHOW_DIFF, GitCheckChoice.PROCEED])
-
-        class FakeDialog:
-            def __init__(self, **kwargs: Any) -> None:
-                pass
-
-            def run(self) -> GitCheckChoice:
-                return next(choices)
-
         monkeypatch.setattr(
-            "setforge.cli._git_check.radiolist_dialog",
-            lambda **kwargs: FakeDialog(**kwargs),
+            "setforge.cli._git_check.button_bar",
+            lambda *a, **k: next(choices),
         )
         source = PathSource(path=repo)
         run_git_check_or_raise(source=source, no_git_check=False)

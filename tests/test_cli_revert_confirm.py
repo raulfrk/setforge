@@ -27,8 +27,13 @@ from setforge.errors import ConfirmRequiresInteractive
 # ---------------------------------------------------------------------------
 
 
-class _FakeDialogResult:
-    """Stand-in for prompt_toolkit's ``Dialog`` return object."""
+class _DialogRecorder:
+    """Callable replacing the themed ``button_bar`` widget.
+
+    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
+    there is no ``.run()`` indirection — so the recorder returns
+    ``return_value`` from ``__call__`` and raises ``side_effect`` inline.
+    """
 
     def __init__(
         self,
@@ -38,27 +43,17 @@ class _FakeDialogResult:
     ) -> None:
         self._return_value = return_value
         self._side_effect = side_effect
-        self.run_calls = 0
+        self.call_count = 0
+        self.last_args: tuple[Any, ...] = ()
+        self.last_kwargs: dict[str, Any] = {}
 
-    def run(self) -> object:
-        self.run_calls += 1
+    def __call__(self, *args: Any, **kwargs: Any) -> object:
+        self.call_count += 1
+        self.last_args = args
+        self.last_kwargs = kwargs
         if self._side_effect is not None:
             raise self._side_effect()
         return self._return_value
-
-
-class _DialogRecorder:
-    """Callable that records invocation and returns a configured fake."""
-
-    def __init__(self, fake: _FakeDialogResult | None = None) -> None:
-        self.fake = fake or _FakeDialogResult()
-        self.call_count = 0
-        self.last_kwargs: dict[str, Any] = {}
-
-    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialogResult:
-        self.call_count += 1
-        self.last_kwargs = kwargs
-        return self.fake
 
 
 def _patch_dialog(
@@ -67,10 +62,8 @@ def _patch_dialog(
     return_value: object = RevertChoice.ABORT,
     side_effect: type[BaseException] | None = None,
 ) -> _DialogRecorder:
-    recorder = _DialogRecorder(
-        _FakeDialogResult(return_value=return_value, side_effect=side_effect)
-    )
-    monkeypatch.setattr("setforge.cli._revert_confirm.radiolist_dialog", recorder)
+    recorder = _DialogRecorder(return_value=return_value, side_effect=side_effect)
+    monkeypatch.setattr("setforge.cli._revert_confirm.button_bar", recorder)
     return recorder
 
 
@@ -217,12 +210,14 @@ def test_tty_dialog_apply_with_editor_returns_apply_with_editor(
     assert choice is RevertChoice.APPLY_WITH_EDITOR
 
 
-def test_tty_dialog_returns_none_treated_as_abort(
+def test_tty_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns None from radiolist_dialog → ABORT."""
+    """User pressing Esc returns CANCEL from button_bar → ABORT."""
+    from setforge.ui.widgets import CANCEL
+
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    _patch_dialog(monkeypatch, return_value=None)
+    _patch_dialog(monkeypatch, return_value=CANCEL)
     choice = confirm_revert_operation(plan=_make_plan(), yes=False)
     assert choice is RevertChoice.ABORT
 
@@ -230,8 +225,8 @@ def test_tty_dialog_returns_none_treated_as_abort(
 def test_tty_dialog_returns_false_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Defensive: prompt_toolkit can return False on cancel in some
-    versions; treat as ABORT same as None."""
+    """Defensive: a monkeypatched widget could return False; treat as
+    ABORT same as CANCEL."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_value=False)
     choice = confirm_revert_operation(plan=_make_plan(), yes=False)
@@ -246,12 +241,14 @@ def test_keyboard_interrupt_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_default_dialog_value_is_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Safe-default invariant per acceptance #5: default selected option
-    in the dialog is ABORT."""
+    """Safe-default invariant per acceptance #5: the initially-focused
+    button (``initial=0``) is the ABORT button."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     recorder = _patch_dialog(monkeypatch, return_value=RevertChoice.ABORT)
     confirm_revert_operation(plan=_make_plan(), yes=False)
-    assert recorder.last_kwargs.get("default") is RevertChoice.ABORT
+    assert recorder.last_kwargs.get("initial") == 0
+    buttons = recorder.last_args[0]
+    assert buttons[0].value is RevertChoice.ABORT
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +396,30 @@ def test_panel_shows_transition_age(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Multi-step wizard: CANCEL path
+# ---------------------------------------------------------------------------
+
+
+def test_multi_step_dialog_returns_cancel_treated_as_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Esc on the multi-step button bar returns CANCEL → ABORT."""
+    from setforge.cli._revert_confirm import (
+        MultiStepRevertPlan,
+        confirm_multi_step_revert_operation,
+    )
+    from setforge.ui.widgets import CANCEL
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_dialog(monkeypatch, return_value=CANCEL)
+    plan = MultiStepRevertPlan(profile="vm-headless", steps=(_make_plan(),))
+    console = Console(record=True)
+    choice = confirm_multi_step_revert_operation(plan=plan, yes=False, console=console)
+    assert choice is RevertChoice.ABORT
+    assert "aborted" in console.export_text()
+
+
+# ---------------------------------------------------------------------------
 # CLI integration via CliRunner (revert.py --yes wiring)
 # ---------------------------------------------------------------------------
 
@@ -449,8 +470,8 @@ def test_revert_yes_short_circuits_no_dialog_call(
     )
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr("setforge.vscode_extensions.resolve_binary", lambda _: None)
-    recorder = _DialogRecorder(_FakeDialogResult(return_value=RevertChoice.APPLY))
-    monkeypatch.setattr("setforge.cli._revert_confirm.radiolist_dialog", recorder)
+    recorder = _DialogRecorder(return_value=RevertChoice.APPLY)
+    monkeypatch.setattr("setforge.cli._revert_confirm.button_bar", recorder)
 
     install_res = runner.invoke(app, ["install", "--profile=vmh", f"--config={cfg}"])
     assert install_res.exit_code == 0, install_res.output

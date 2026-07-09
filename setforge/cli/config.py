@@ -71,21 +71,21 @@ from setforge.local_config import LocalConfig
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.source import get_resolved_source, validate_source_dir
 
-# ``prompt_toolkit`` symbols are resolved lazily via PEP 562 so
+# The themed prompt_toolkit widgets are resolved lazily via PEP 562 so
 # ``setforge config --help`` and the shell-completion callbacks stay
 # fast (the prompt_toolkit cold-start is ~140 ms). Tests monkeypatch
-# attributes on this module to intercept the dialogs.
+# attributes on this module to intercept the widgets.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
-    if name == "input_dialog":
-        from prompt_toolkit.shortcuts import input_dialog
+        return button_bar
+    if name == "text_prompt":
+        from setforge.ui.widgets import text_prompt
 
-        return input_dialog
+        return text_prompt
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -93,9 +93,9 @@ def _module_self() -> Any:  # noqa: ANN401
     """Return this module so callers can resolve monkeypatched PEP 562 attrs.
 
     The :func:`_prompt_confirm` / :func:`_prompt_marketplace_kind`
-    helpers reach for ``radiolist_dialog`` / ``input_dialog`` via this
+    helpers reach for ``button_bar`` / ``text_prompt`` via this
     module so tests that monkeypatch
-    ``setforge.cli.config.radiolist_dialog`` intercept the live
+    ``setforge.cli.config.button_bar`` intercept the live
     reference. Defining the indirection once at module scope keeps
     the per-call sites tight.
     """
@@ -312,17 +312,19 @@ def _prompt_confirm(
     console.print(Panel.fit(f"About to update [cyan]{yaml_path}[/cyan]:"))
     console.print(diff_text or "(no diff)")
     console.print("[green]Validate result: ✓ clean.[/green]")
+    from setforge.ui.widgets import CANCEL, Button
+
     _self = _module_self()
-    choice = _self.radiolist_dialog(
-        title="setforge config",
-        text="Apply the mutation above?",
-        values=[
-            (False, "abort (no change)"),
-            (True, "write"),
+    choice = _self.button_bar(
+        [
+            Button("abort (no change)", False),
+            Button("write", True),
         ],
-        default=False,
-    ).run()
-    if choice is None or choice is False:
+        title="setforge config",
+        body="Apply the mutation above?",
+        initial=0,
+    )
+    if choice is CANCEL or choice is False:
         console.print("[red]✗ aborted[/red] — file not modified")
         return False
     console.print("[green]✓ writing[/green]")
@@ -729,31 +731,33 @@ def _resolve_from_flags(
 
 
 def _prompt_marketplace_kind() -> tuple[str, str | None, str | None]:
-    """Drive the interactive marketplaces.add flow via prompt_toolkit dialogs.
+    """Drive the interactive marketplaces.add flow via the themed widgets.
 
-    Lazy-imports the module-level radiolist/input dialog symbols so
+    Lazy-imports the module-level ``button_bar`` / ``text_prompt`` symbols so
     monkeypatch indirection from the unit tests still resolves through
     the live module object.
     """
+    from setforge.ui.widgets import CANCEL, Button
+
     _self = _module_self()
-    chosen = _self.radiolist_dialog(
-        title="setforge config add marketplaces.add",
-        text="Pick the source kind for this marketplace:",
-        values=[
-            (MarketplaceSourceKind.GITHUB.value, "github (owner/name)"),
-            (MarketplaceSourceKind.PATH.value, "path (local clone)"),
+    chosen = _self.button_bar(
+        [
+            Button("github (owner/name)", MarketplaceSourceKind.GITHUB.value),
+            Button("path (local clone)", MarketplaceSourceKind.PATH.value),
         ],
-        default=MarketplaceSourceKind.GITHUB.value,
-    ).run()
-    if chosen is None:
+        title="setforge config add marketplaces.add",
+        body="Pick the source kind for this marketplace:",
+        initial=0,
+    )
+    if chosen is CANCEL:
         raise SetforgeError("marketplaces.add aborted (no source picked)")
     if chosen == MarketplaceSourceKind.GITHUB.value:
-        repo_str = _self.input_dialog(title="repo slug", text="owner/name:").run()
-        if not repo_str:
+        repo_str = _self.text_prompt(title="repo slug", body="owner/name:")
+        if repo_str is CANCEL or not repo_str:
             raise SetforgeError("marketplaces.add aborted (no repo entered)")
         return chosen, repo_str, None
-    path_str = _self.input_dialog(title="path", text="absolute path:").run()
-    if not path_str:
+    path_str = _self.text_prompt(title="path", body="absolute path:")
+    if path_str is CANCEL or not path_str:
         raise SetforgeError("marketplaces.add aborted (no path entered)")
     return chosen, None, path_str
 

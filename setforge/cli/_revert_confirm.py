@@ -21,21 +21,21 @@ from rich.panel import Panel
 
 from setforge.errors import ConfirmRequiresInteractive
 
-# ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via
-# the module-level ``__getattr__`` below so non-interactive callers (and
-# the cold-start path of ``setforge --help`` / ``validate`` / ``compare``)
-# never pay the ~140ms cost. The TUI fires only when ``yes=False`` and
-# stdin is a TTY. Module-level ``__getattr__`` keeps the attribute-on-
-# module access path that the test suite's ``monkeypatch.setattr(
-# "setforge.cli._revert_confirm.radiolist_dialog", ...)`` relies on.
+# The themed ``button_bar`` widget is imported lazily via the module-level
+# ``__getattr__`` below so non-interactive callers (and the cold-start path
+# of ``setforge --help`` / ``validate`` / ``compare``) never pay the ~140ms
+# prompt_toolkit cost. The TUI fires only when ``yes=False`` and stdin is a
+# TTY. Module-level ``__getattr__`` keeps the attribute-on-module access
+# path that the test suite's ``monkeypatch.setattr(
+# "setforge.cli._revert_confirm.button_bar", ...)`` relies on.
 # Mirrors the trampoline in ``setforge/cli/_confirm.py``.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -266,33 +266,34 @@ def _render_panel(plan: RevertPlan, console: Console) -> None:
 
 
 def _prompt_choice(plan: RevertPlan) -> RevertChoice:
-    """Drive ``radiolist_dialog`` and translate its return into a RevertChoice.
+    """Drive ``button_bar`` and translate its return into a RevertChoice.
 
-    Esc / Ctrl-C returns ``None`` from prompt_toolkit; some versions
-    return ``False`` on cancel — both map to :attr:`RevertChoice.ABORT`
+    Esc / Ctrl-C returns :data:`CANCEL` from the widget; a monkeypatched
+    stub could still return ``False`` — both map to :attr:`RevertChoice.ABORT`
     per the wizard-discipline invariant.
     """
     # Resolve through the module-level ``__getattr__`` (lazy prompt_toolkit
     # import); tests monkeypatch the same attribute path.
     from setforge.cli import _revert_confirm as _self
+    from setforge.ui.widgets import CANCEL, Button
 
-    choice = _self.radiolist_dialog(
-        title=f"setforge revert ({plan.transition_type})",
-        text="What should setforge do?",
-        values=[
-            (RevertChoice.ABORT, "no, abort (default — safe)"),
-            (RevertChoice.APPLY, "yes, revert"),
-            (
-                RevertChoice.APPLY_WITH_EDITOR,
+    choice = _self.button_bar(
+        [
+            Button("no, abort (default — safe)", RevertChoice.ABORT),
+            Button("yes, revert", RevertChoice.APPLY),
+            Button(
                 "yes + open editor before applying",
+                RevertChoice.APPLY_WITH_EDITOR,
             ),
         ],
-        default=RevertChoice.ABORT,
-    ).run()
-    if choice is None or choice is False:
+        title=f"setforge revert ({plan.transition_type})",
+        body="What should setforge do?",
+        initial=0,
+    )
+    if choice is CANCEL or choice is False:
         return RevertChoice.ABORT
     if not isinstance(choice, RevertChoice):
-        # Defensive: a monkeypatched dialog could return a stray value.
+        # Defensive: a monkeypatched widget could return a stray value.
         return RevertChoice.ABORT
     return choice
 
@@ -379,27 +380,28 @@ def _render_multi_step_panel(plan: MultiStepRevertPlan, console: Console) -> Non
 
 
 def _prompt_multi_step_choice(plan: MultiStepRevertPlan) -> RevertChoice:
-    """Drive ``radiolist_dialog`` for the multi-step plan; map to RevertChoice.
+    """Drive ``button_bar`` for the multi-step plan; map to RevertChoice.
 
     Esc / Ctrl-C / unknown returns map to :attr:`RevertChoice.ABORT`
     per the wizard-discipline invariant — the safe default for a
     destructive multi-step op.
     """
     from setforge.cli import _revert_confirm as _self
+    from setforge.ui.widgets import CANCEL, Button
 
-    choice = _self.radiolist_dialog(
-        title=f"setforge revert --to-before ({len(plan.steps)} steps)",
-        text="What should setforge do?",
-        values=[
-            (RevertChoice.ABORT, "no, abort (default — safe)"),
-            (
-                RevertChoice.APPLY,
+    choice = _self.button_bar(
+        [
+            Button("no, abort (default — safe)", RevertChoice.ABORT),
+            Button(
                 f"yes, revert these {len(plan.steps)} transitions",
+                RevertChoice.APPLY,
             ),
         ],
-        default=RevertChoice.ABORT,
-    ).run()
-    if choice is None or choice is False:
+        title=f"setforge revert --to-before ({len(plan.steps)} steps)",
+        body="What should setforge do?",
+        initial=0,
+    )
+    if choice is CANCEL or choice is False:
         return RevertChoice.ABORT
     if not isinstance(choice, RevertChoice):
         return RevertChoice.ABORT

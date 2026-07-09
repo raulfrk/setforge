@@ -26,6 +26,7 @@ from typing import Final
 
 from prompt_toolkit.application import Application, get_app
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
@@ -35,6 +36,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 
 from setforge.ui.box import frame
+from setforge.ui.theme import pt_style
 
 #: Styled-fragment list, the shape prompt_toolkit's ``FormattedTextControl``
 #: accepts: ``(style_class, text)`` pairs.
@@ -78,21 +80,34 @@ _STACK_THRESHOLD: int = 24
 #: Frame width never exceeds this (mirrors :data:`box._MAX_WIDTH`).
 _MAX_WIDTH: int = 100
 
-# Local standalone palette; the theme module's pt_style(THEME) replaces this
-# once both land. The class names are stable. ANSI colour names (not hex) keep
-# this UX-3-clean — concrete truecolor values are the theme module's job, not
-# the widget's.
-_STYLE: Style = Style.from_dict(
+# Widget-only classes the theme's semantic roles do NOT cover: the button
+# chrome. ``button`` inherits the ``text`` role's colour by class-name reuse;
+# ``button.focused`` is a reverse-video highlight. ANSI names (not hex) keep
+# this UX-3-clean — the concrete truecolor role values come from the theme.
+_BUTTON_STYLE: Style = Style.from_dict(
     {
-        "accent": "ansibrightblue",
-        "heading": "ansibrightmagenta",
-        "muted": "ansibrightblack",
-        "text": "ansiwhite",
-        "identifier": "ansibrightcyan",
         "button.focused": "reverse ansibrightblue",
         "button": "ansiwhite",
     }
 )
+
+
+def _theme_style() -> Style:
+    """The theme's semantic roles as a prompt_toolkit :class:`Style`.
+
+    ``pt_style()`` keys its ``dict`` as ``class:<role>``; :meth:`Style.from_dict`
+    prepends its own ``class:`` and rejects a key that already carries it, so the
+    prefix is stripped here before wrapping.
+    """
+    return Style.from_dict(
+        {key.removeprefix("class:"): value for key, value in pt_style().items()}
+    )
+
+
+#: The widgets' DEFAULT style: the theme module's semantic roles (truecolor hex
+#: per role) merged with the widget-only button chrome. A caller's ``style=`` is
+#: merged OVER this (see :func:`button_bar`); ``None`` keeps this default.
+_STYLE: BaseStyle = merge_styles([_theme_style(), _BUTTON_STYLE])
 
 
 def _derive_accelerators(buttons: Sequence[Button[object]]) -> dict[int, str]:
@@ -335,7 +350,7 @@ def button_bar[T](
     given, is *merged over* the widget's built-in palette
     (:data:`merge_styles`) — so a caller's theme overrides the role colours
     while the widget's own ``button`` / ``button.focused`` classes survive;
-    ``None`` keeps the standalone palette. Esc / Ctrl-C return :data:`CANCEL`.
+    ``None`` keeps the themed default palette. Esc / Ctrl-C return :data:`CANCEL`.
     The result is :meth:`Application.run`'s exit value — the single result
     channel (no mutable result holder).
     """
@@ -422,23 +437,33 @@ def text_prompt(
     *,
     title: str | None = None,
     body: str | _Fragments | None = None,
+    default: str = "",
     style: BaseStyle | None = None,
 ) -> str | _Cancelled:
     """Full-screen single-line themed text input — a sibling of :func:`button_bar`.
 
     Renders a framed ``body`` panel (optional, same ``str`` / fragments shape as
     ``button_bar``) above a one-line editable buffer. **Enter** submits the
-    current text — which **may be empty**: a blank submit returns ``""`` (a
-    meaningful answer — e.g. "use the default", not a cancel). **Esc / Ctrl-C**
+    current text — which **may be empty**: a blank submit returns the current
+    buffer text (``default`` if the buffer was left untouched, else ``""``) — a
+    meaningful answer, e.g. "use the default", never a cancel. **Esc / Ctrl-C**
     return :data:`CANCEL`. ``style`` is merged over the widget's built-in palette
-    exactly like ``button_bar``; ``None`` keeps the standalone palette.
+    exactly like ``button_bar``; ``None`` keeps the themed default palette.
+
+    ``default`` pre-fills the buffer *through the* :class:`Buffer` /
+    :class:`Document` *constructor* with the cursor placed at end-of-text — so
+    the first Backspace deletes the last default char (a post-construction
+    ``buffer.text = default`` would leave the cursor at 0 and swallow it).
 
     Layout and keybindings are factored into :func:`_text_prompt_layout` /
     :func:`_text_prompt_keybindings`, matching ``button_bar``'s decomposition.
     Driven headlessly in tests via ``create_app_session`` + a pipe input, the
     same pattern as ``button_bar`` (text bytes then a terminating ``\\r``).
     """
-    buffer = Buffer(multiline=False)
+    buffer = Buffer(
+        document=Document(text=default, cursor_position=len(default)),
+        multiline=False,
+    )
 
     def _accept(buff: Buffer) -> bool:
         # Enter on a single-line buffer fires the accept handler; exit with the

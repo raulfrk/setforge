@@ -76,36 +76,21 @@ def fake_show_completion(
     return captured
 
 
-class _FakeDialogResult:
-    """Stand-in for ``radiolist_dialog(...).run()``."""
+def _stub_dialog(monkeypatch: pytest.MonkeyPatch, return_value: object) -> None:
+    """Pin ``setforge.cli.completion.button_bar`` to a canned return value.
 
-    def __init__(self, return_value: object) -> None:
-        self._return_value = return_value
-        self.run_calls = 0
-
-    def run(self) -> object:
-        self.run_calls += 1
-        return self._return_value
-
-
-def _stub_dialog(
-    monkeypatch: pytest.MonkeyPatch, return_value: object
-) -> _FakeDialogResult:
-    """Pin ``setforge.cli.completion.radiolist_dialog`` to a canned result.
-
-    Also force ``sys.stdin.isatty`` → True so the mutate-gate inside
-    :func:`completion_install` lets the interactive branch run under
+    The themed ``button_bar`` returns its chosen value directly (no ``.run()``
+    indirection). Also force ``sys.stdin.isatty`` → True so the mutate-gate
+    inside :func:`completion_install` lets the interactive branch run under
     pytest (where the test runner's stdin is non-TTY by default).
     """
-    result = _FakeDialogResult(return_value)
 
-    def fake_dialog(**kwargs: Any) -> _FakeDialogResult:
-        del kwargs
-        return result
+    def fake_dialog(*args: Any, **kwargs: Any) -> object:
+        del args, kwargs
+        return return_value
 
-    monkeypatch.setattr("setforge.cli.completion.radiolist_dialog", fake_dialog)
+    monkeypatch.setattr("setforge.cli.completion.button_bar", fake_dialog)
     monkeypatch.setattr("setforge.cli.completion._stdin_is_tty", lambda: True)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +235,11 @@ def test_completion_install_zsh_dialog_escape_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
     fake_show_completion: list[tuple[list[str], dict[str, str] | None]],
 ) -> None:
+    from setforge.ui.widgets import CANCEL
+
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
-    _stub_dialog(monkeypatch, None)
+    _stub_dialog(monkeypatch, CANCEL)  # Esc / Ctrl-C → CANCEL sentinel → ABORT
 
     result = _RUNNER.invoke(app, ["completion", "install", "zsh"])
 
@@ -381,7 +368,7 @@ def test_completion_install_bash_idempotent_source_line(
     assert "source " in after_first
     assert "setforge.bash" in after_first
 
-    # Re-stub the dialog (the previous fixture had `run_calls == 1`).
+    # Re-stub the confirm bar for the second install invocation.
     _stub_dialog(monkeypatch, CompletionChoice.YES_AND_WIRE)
     second = _RUNNER.invoke(app, ["completion", "install", "bash"])
     assert second.exit_code == 0, second.output
@@ -469,10 +456,12 @@ def test_script_path_fish(home: Path) -> None:
     )
 
 
-def test_completion_module_lazy_radiolist_attr_resolves() -> None:
-    """The PEP 562 __getattr__ exposes prompt_toolkit's radiolist_dialog."""
-    dialog = completion_mod.radiolist_dialog
-    assert callable(dialog)
+def test_completion_module_lazy_button_bar_attr_resolves() -> None:
+    """The PEP 562 __getattr__ exposes the themed button_bar widget."""
+    from setforge.ui.widgets import button_bar
+
+    resolved = completion_mod.button_bar
+    assert resolved is button_bar
 
 
 def test_completion_module_lazy_unknown_attr_raises() -> None:

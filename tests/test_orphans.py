@@ -720,6 +720,35 @@ def test_apply_non_tty_resolver_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         orphans_mod._pick_cleanup_branch(yes=False)
 
 
+class _TtyStdin:
+    @staticmethod
+    def isatty() -> bool:
+        return True
+
+
+def test_apply_tty_button_bar_returns_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interactive TTY: the button bar's chosen value flows straight through."""
+    monkeypatch.setattr("sys.stdin", _TtyStdin)
+    monkeypatch.setattr(
+        orphans_mod,
+        "button_bar",
+        lambda *_a, **_kw: orphans_mod.ApplyChoice.DELETE_ONLY,
+    )
+    assert (
+        orphans_mod._pick_cleanup_branch(yes=False)
+        is orphans_mod.ApplyChoice.DELETE_ONLY
+    )
+
+
+def test_apply_tty_button_bar_cancel_is_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interactive TTY: Esc (CANCEL sentinel) maps to ABORT."""
+    from setforge.ui.widgets import CANCEL
+
+    monkeypatch.setattr("sys.stdin", _TtyStdin)
+    monkeypatch.setattr(orphans_mod, "button_bar", lambda *_a, **_kw: CANCEL)
+    assert orphans_mod._pick_cleanup_branch(yes=False) is orphans_mod.ApplyChoice.ABORT
+
+
 # ---------------------------------------------------------------------------
 # CLI: --ignore writes local.yaml only
 # ---------------------------------------------------------------------------

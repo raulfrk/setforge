@@ -51,18 +51,19 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    """Lazy ``radiolist_dialog`` import.
+    """Lazy ``button_bar`` import.
 
     Mirrors :func:`setforge.cli._confirm.__getattr__` so the
-    ~140ms ``prompt_toolkit`` import only fires when the dialog is
-    actually rendered. Tests monkeypatch this attribute the same way
-    they do for ``_confirm`` (``monkeypatch.setattr(
-    "setforge.cli._welcome.radiolist_dialog", ...)``).
+    ~140ms ``prompt_toolkit`` import (pulled in transitively by
+    :mod:`setforge.ui.widgets`) only fires when the dialog is actually
+    rendered. Tests monkeypatch this attribute the same way they do for
+    ``_confirm`` (``monkeypatch.setattr(
+    "setforge.cli._welcome.button_bar", ...)``).
     """
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -326,35 +327,37 @@ def _run_dialog(
     values: tuple[tuple[WelcomeChoice, str], ...],
     default: WelcomeChoice,
 ) -> WelcomeChoice:
-    """Run the radiolist dialog under terminal-restore signal handlers.
+    """Run the themed button-bar under terminal-restore signal handlers.
 
-    Esc returns :attr:`WelcomeChoice.ABORT` — the safe default for an
-    info-and-consent panel. The terminal-restore wrapper runs in
-    try/finally so the prior signal handlers are restored even if
-    ``radiolist_dialog`` raises.
+    Esc / Ctrl-C return :attr:`WelcomeChoice.ABORT` — the safe default for an
+    info-and-consent panel. The terminal-restore wrapper runs in try/finally so
+    the prior signal handlers are restored even if the widget raises.
     """
+    from setforge.ui.widgets import CANCEL, Button
+
     # Defense-in-depth TTY guard: ``prompt_welcome`` already raises
     # WelcomeRequiresInteractive when stdin is non-TTY, but a future
     # caller that wires _run_dialog without that gate would silently
     # spawn the dialog against a non-TTY stdin and hang. The assert
     # documents the invariant + makes a regression loud.
     assert sys.stdin.isatty(), "_run_dialog requires a TTY; caller must gate"
+    buttons = [Button(label, choice) for choice, label in values]
+    initial = next(i for i, (choice, _) in enumerate(values) if choice is default)
     prev = _install_terminal_restore((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
     try:
-        # Resolve ``radiolist_dialog`` through the module so the PEP 562
+        # Resolve ``button_bar`` through the module so the PEP 562
         # ``__getattr__`` lazy-import fires AND tests can monkeypatch the
         # attribute. ``sys.modules[__name__]`` keeps the lookup local
         # without re-importing this file.
-        dialog = sys.modules[__name__].radiolist_dialog
-        choice = dialog(
+        choice = sys.modules[__name__].button_bar(
+            buttons,
             title="setforge install — fresh host",
-            text="What would you like to do?",
-            values=list(values),
-            default=default,
-        ).run()
+            body="What would you like to do?",
+            initial=initial,
+        )
     finally:
         _restore_terminal(prev)
-    if choice is None:
+    if choice is CANCEL:  # Esc / Ctrl-C → safe abort
         return WelcomeChoice.ABORT
     return choice
 

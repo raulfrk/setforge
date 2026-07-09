@@ -17,14 +17,18 @@ from setforge.cli._confirm import (
     confirm_auto_operation,
 )
 from setforge.errors import ConfirmRequiresInteractive
+from setforge.ui.widgets import CANCEL
 
 
-class _FakeDialogResult:
-    """Stand-in for prompt_toolkit's ``Dialog`` return object.
+class _DialogRecorder:
+    """Callable that records invocation and returns a configured value.
 
-    The real ``radiolist_dialog(...)`` returns a ``Dialog`` whose
-    ``.run()`` yields the user's choice. Tests configure
-    ``.run()`` to return a value, raise ``KeyboardInterrupt``, etc.
+    Replaces ``setforge.cli._confirm.button_bar`` so tests can assert the
+    widget was/was-not invoked without ``unittest.mock.MagicMock``
+    semantics. ``button_bar`` returns the chosen value (or :data:`CANCEL`)
+    directly — no ``.run()`` indirection — so the recorder yields
+    ``return_value`` on call, or raises ``side_effect`` (e.g. to simulate a
+    Ctrl-C propagating out of the widget).
     """
 
     def __init__(
@@ -35,30 +39,13 @@ class _FakeDialogResult:
     ) -> None:
         self._return_value = return_value
         self._side_effect = side_effect
-        self.run_calls = 0
+        self.call_count = 0
 
-    def run(self) -> object:
-        self.run_calls += 1
+    def __call__(self, *args: Any, **kwargs: Any) -> object:
+        self.call_count += 1
         if self._side_effect is not None:
             raise self._side_effect()
         return self._return_value
-
-
-class _DialogRecorder:
-    """Callable that records invocation and returns a configured fake.
-
-    Replaces ``setforge.cli._confirm.radiolist_dialog`` so tests can
-    assert the dialog was/was-not invoked without
-    ``unittest.mock.MagicMock`` semantics.
-    """
-
-    def __init__(self, fake: _FakeDialogResult | None = None) -> None:
-        self.fake = fake or _FakeDialogResult()
-        self.call_count = 0
-
-    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialogResult:
-        self.call_count += 1
-        return self.fake
 
 
 def _patch_dialog(
@@ -67,11 +54,9 @@ def _patch_dialog(
     return_value: object = True,
     side_effect: type[BaseException] | None = None,
 ) -> _DialogRecorder:
-    """Replace ``radiolist_dialog`` with a recorder; return it for assertions."""
-    recorder = _DialogRecorder(
-        _FakeDialogResult(return_value=return_value, side_effect=side_effect)
-    )
-    monkeypatch.setattr("setforge.cli._confirm.radiolist_dialog", recorder)
+    """Replace ``button_bar`` with a recorder; return it for assertions."""
+    recorder = _DialogRecorder(return_value=return_value, side_effect=side_effect)
+    monkeypatch.setattr("setforge.cli._confirm.button_bar", recorder)
     return recorder
 
 
@@ -237,12 +222,12 @@ def test_tty_no_response_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "aborted" in console.export_text()
 
 
-def test_tty_dialog_returns_none_treated_as_abort(
+def test_tty_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns None from radiolist_dialog → abort."""
+    """User pressing Esc returns CANCEL from button_bar → abort."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    _patch_dialog(monkeypatch, return_value=None)
+    _patch_dialog(monkeypatch, return_value=CANCEL)
     assert (
         confirm_auto_operation(
             command="install --auto=use-tracked",

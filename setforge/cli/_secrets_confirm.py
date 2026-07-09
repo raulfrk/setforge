@@ -1,23 +1,23 @@
 """Arrow-key wizard for the pre-deploy secrets scan prompt (mockup T).
 
 Renders a Rich panel describing one :class:`SecretFinding`, then prompts
-the user via ``prompt_toolkit``'s ``radiolist_dialog`` for one of three
-actions (ABORT default / ALLOWLIST / SILENCE_ONE_SHOT). Esc returns
+the user via the themed ``button_bar`` widget for one of three actions
+(ABORT default / ALLOWLIST / SILENCE_ONE_SHOT). Esc returns
 :data:`SecretAction.ABORT` — consistent with
-:func:`setforge.cli._confirm.confirm_auto_operation`'s ``None``-as-abort
+:func:`setforge.cli._confirm.confirm_auto_operation`'s :data:`CANCEL`-as-abort
 treatment.
 
-The ``radiolist_dialog`` symbol is imported lazily via the module-level
+The ``button_bar`` symbol is imported lazily via the module-level
 ``__getattr__`` so the cold path of non-wizard commands does not pay
 the ~140ms ``prompt_toolkit`` import cost. Tests monkeypatch
-``setforge.cli._secrets_confirm.radiolist_dialog`` via this same
+``setforge.cli._secrets_confirm.button_bar`` via this same
 attribute-access seam (mirrors :mod:`setforge.cli._confirm`).
 """
 
 from __future__ import annotations
 
 import sys
-from typing import Any, cast
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -29,10 +29,10 @@ __all__ = ["prompt_secret_action"]
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -59,9 +59,9 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
     non-interactive callers MUST NOT silently bypass a secret finding
     (auto-bypass would defeat the defense-in-depth goal of the scan).
     Non-TTY stdin also returns ABORT, emitting a yellow stderr warning
-    first so the abort is not silent. Esc / ``None`` from the dialog
+    first so the abort is not silent. Esc / :data:`CANCEL` from the widget
     also returns ABORT (the mockup-T default). Tests monkeypatch
-    ``setforge.cli._secrets_confirm.radiolist_dialog`` to control the
+    ``setforge.cli._secrets_confirm.button_bar`` to control the
     return value.
     """
     if yes:
@@ -77,23 +77,24 @@ def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAct
     console = Console(stderr=True)
     _render_panel(finding, console)
     from setforge.cli import _secrets_confirm as _self  # monkeypatch seam
+    from setforge.ui.widgets import CANCEL, Button
 
-    choice = _self.radiolist_dialog(
-        title="setforge install — potential secret detected",
-        text="How would you like to proceed?",
-        values=[
-            (SecretAction.ABORT, "Abort install — review and remove the secret"),
-            (
-                SecretAction.ALLOWLIST,
+    choice = _self.button_bar(
+        [
+            Button("Abort install — review and remove the secret", SecretAction.ABORT),
+            Button(
                 "Proceed (allowlist this snippet hash; persisted host-local)",
+                SecretAction.ALLOWLIST,
             ),
-            (
-                SecretAction.SILENCE_ONE_SHOT,
+            Button(
                 "Proceed (silence one-shot — do NOT add to allowlist)",
+                SecretAction.SILENCE_ONE_SHOT,
             ),
         ],
-        default=SecretAction.ABORT,
-    ).run()
-    if choice is None:
+        title="setforge install — potential secret detected",
+        body="How would you like to proceed?",
+        initial=0,
+    )
+    if choice is CANCEL:
         return SecretAction.ABORT
-    return cast(SecretAction, choice)
+    return choice

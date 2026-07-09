@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`setforge.cli.upgrade` (radiolist + subprocess mocked)."""
+"""Unit tests for :mod:`setforge.cli.upgrade` (button_bar + subprocess mocked)."""
 
 from __future__ import annotations
 
@@ -108,37 +108,37 @@ def _make_plan(
     )
 
 
-class _FakeDialog:
-    """Stand-in for ``radiolist_dialog(...).run()``."""
-
-    def __init__(self, *, return_value: object) -> None:
-        self._return_value = return_value
-        self.run_calls = 0
-        self.last_kwargs: dict[str, Any] | None = None
-
-    def run(self) -> object:
-        self.run_calls += 1
-        return self._return_value
-
-
 class _DialogRecorder:
-    def __init__(self, fake: _FakeDialog) -> None:
-        self.fake = fake
+    """Stand-in for ``setforge.ui.widgets.button_bar``.
+
+    Records each call's positional buttons + keyword args and returns a
+    preset value (a button ``value`` or the ``CANCEL`` sentinel). The CLI
+    calls ``button_bar(buttons, ..., initial=i)`` directly (no ``.run()``).
+    """
+
+    def __init__(self, return_value: object) -> None:
+        self._return_value = return_value
         self.call_count = 0
+        self.args: list[tuple[Any, ...]] = []
         self.kwargs: list[dict[str, Any]] = []
 
-    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialog:
+    def __call__(self, *args: Any, **kwargs: Any) -> object:
         self.call_count += 1
+        self.args.append(args)
         self.kwargs.append(kwargs)
-        return self.fake
+        return self._return_value
+
+    def initial_value(self, call: int = 0) -> object:
+        """The ``value`` of the button the ``initial=`` index selects."""
+        buttons = self.args[call][0]
+        return buttons[self.kwargs[call]["initial"]].value
 
 
-def _patch_radiolist(
+def _patch_button_bar(
     monkeypatch: pytest.MonkeyPatch, *, return_value: object
 ) -> _DialogRecorder:
-    fake = _FakeDialog(return_value=return_value)
-    recorder = _DialogRecorder(fake)
-    monkeypatch.setattr("setforge.cli.upgrade.radiolist_dialog", recorder)
+    recorder = _DialogRecorder(return_value)
+    monkeypatch.setattr("setforge.cli.upgrade.button_bar", recorder)
     return recorder
 
 
@@ -148,7 +148,7 @@ def test_confirm_panel_renders_schema_impact_for_all_kinds(
     """Panel always shows ``=== schema impact ===`` regardless of kind."""
     for kind in SchemaChangeKind:
         plan = _make_plan(schema_kind=kind)
-        _patch_radiolist(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+        _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
         _confirm_upgrade(plan, yes=False)
         captured = capsys.readouterr().out
         assert "=== schema impact ===" in captured, (
@@ -160,7 +160,7 @@ def test_confirm_panel_no_prompt_picks_migrate_check_on_detected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _make_plan(schema_kind=SchemaChangeKind.DETECTED)
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.ABORT)
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
     choice = _confirm_upgrade(plan, yes=True)
     assert choice is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
     assert recorder.call_count == 0
@@ -170,15 +170,17 @@ def test_confirm_panel_no_prompt_picks_upgrade_on_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.ABORT)
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
     choice = _confirm_upgrade(plan, yes=True)
     assert choice is UpgradeChoice.UPGRADE
     assert recorder.call_count == 0
 
 
 def test_confirm_panel_esc_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    from setforge.ui.widgets import CANCEL
+
     plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
-    _patch_radiolist(monkeypatch, return_value=None)
+    _patch_button_bar(monkeypatch, return_value=CANCEL)
     choice = _confirm_upgrade(plan, yes=False)
     assert choice is UpgradeChoice.ABORT
 
@@ -187,20 +189,20 @@ def test_confirm_panel_default_biases_migrate_check_when_detected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _make_plan(schema_kind=SchemaChangeKind.DETECTED)
-    recorder = _patch_radiolist(
+    recorder = _patch_button_bar(
         monkeypatch, return_value=UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
     )
     _confirm_upgrade(plan, yes=False)
-    assert recorder.kwargs[0]["default"] is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
+    assert recorder.initial_value() is UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK
 
 
 def test_confirm_panel_default_biases_upgrade_when_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _make_plan(schema_kind=SchemaChangeKind.NONE)
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
     _confirm_upgrade(plan, yes=False)
-    assert recorder.kwargs[0]["default"] is UpgradeChoice.UPGRADE
+    assert recorder.initial_value() is UpgradeChoice.UPGRADE
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +564,10 @@ def test_cli_upgrade_pypi_fetch_error_exits_one(
 # ---------------------------------------------------------------------------
 
 
-def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_radiolist(
+def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-TTY + no ``--no-prompt`` must raise before any radiolist opens."""
+    """Non-TTY + no ``--no-prompt`` must raise before any button bar opens."""
     from setforge.errors import ConfirmRequiresInteractive
 
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
@@ -573,8 +575,8 @@ def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_radiolist(
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    # Seam guard: the radiolist must never be constructed on a non-TTY.
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.UPGRADE)
+    # Seam guard: the button bar must never be constructed on a non-TTY.
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
 
     def fail_run(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("non-TTY confirm guard must not shell out")
@@ -598,8 +600,8 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    # The radiolist must never run on the automation path either.
-    recorder = _patch_radiolist(monkeypatch, return_value=UpgradeChoice.ABORT)
+    # The button bar must never run on the automation path either.
+    recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
 
     responses = [
         subprocess.CompletedProcess(
@@ -632,7 +634,7 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
 # ---------------------------------------------------------------------------
 
 
-def test_upgrade_module_uses_only_radiolist_no_typer_prompt() -> None:
+def test_upgrade_module_uses_only_button_bar_no_typer_prompt() -> None:
     """Grep upgrade.py for forbidden prompt shapes."""
     text = upgrade_mod.__file__ or ""
     assert text  # path must be present

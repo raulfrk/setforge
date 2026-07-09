@@ -1,8 +1,7 @@
 """CLI-level tests for ``setforge migrate``.
 
-Mocks the prompt_toolkit ``radiolist_dialog`` to the deterministic
-``_FakeDialog`` pattern used by the rest of the suite (see
-``tests/test_cli_section.py``) so the wizard runs headless.
+Mocks the themed ``button_bar`` widget with a deterministic stub
+(``_fake_button_bar``) so the wizard runs headless.
 
 The tests cover three call paths:
 
@@ -10,8 +9,9 @@ The tests cover three call paths:
   AND a chain-populated state injected via ``monkeypatch.setattr(
   "setforge.migrations.MIGRATIONS", ...)``.
 - ``--apply``: short-circuit ``"nothing to apply"`` on empty registry,
-  AND a full multi-file apply flow with the radiolist returning each
-  of the three :class:`MigrateChoice` outcomes.
+  AND a full multi-file apply flow with the button bar returning each
+  of the three :class:`MigrateChoice` outcomes, plus the ``CANCEL``
+  (Esc) path.
 - ``--pin=X.Y``: writes ``schema_version: <pin>`` into setforge.yaml
   while preserving comments + key order.
 """
@@ -37,22 +37,14 @@ from setforge.migrations import (
 # ---------------------------------------------------------------------------
 
 
-class _FakeDialog:
-    """Stand-in for prompt_toolkit's ``radiolist_dialog`` callable.
+def _fake_button_bar(value: Any) -> Any:
+    """Stand-in for ``setforge.ui.widgets.button_bar``.
 
-    The CLI does ``radiolist_dialog(...).run()`` — we return an object
-    whose ``.run()`` yields a preset value, so the test can drive the
-    wizard headless.
+    The CLI calls ``button_bar(...)`` directly (no ``.run()``) and gets
+    back either a button ``value`` or the ``CANCEL`` sentinel; the stub
+    returns a preset value so the wizard runs headless.
     """
-
-    def __init__(self, value: Any) -> None:
-        self._value = value
-
-    def __call__(self, *_args: Any, **_kwargs: Any) -> _FakeDialog:
-        return self
-
-    def run(self) -> Any:
-        return self._value
+    return lambda *_args, **_kwargs: value
 
 
 @dataclass(slots=True, frozen=True)
@@ -167,7 +159,7 @@ def test_apply_empty_registry_says_nothing_to_apply(
 def test_apply_with_yes_applies_with_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--yes`` collapses to APPLY_WITH_BACKUP without TTY/radiolist."""
+    """``--yes`` collapses to APPLY_WITH_BACKUP without TTY/button bar."""
     # ``migrate --apply`` writes a real transition via transitions_root() →
     # Path.home(); pin SETFORGE_STATE_DIR so the record lands in a per-test
     # tmp tree independent of the autouse HOME-isolation fixture (belt-and-
@@ -197,10 +189,10 @@ def test_apply_with_yes_applies_with_backup(
     assert ".pre-1.1.bak" in result.output
 
 
-def test_apply_radiolist_abort_writes_nothing(
+def test_apply_button_bar_abort_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the user picks ABORT in the radiolist, no files are touched."""
+    """When the user picks ABORT in the button bar, no files are touched."""
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     pre_bytes = cfg.read_bytes()
@@ -211,11 +203,11 @@ def test_apply_radiolist_abort_writes_nothing(
     from setforge.cli.migrate import MigrateChoice
 
     monkeypatch.setattr(
-        "setforge.cli.migrate.radiolist_dialog", _FakeDialog(MigrateChoice.ABORT)
+        "setforge.cli.migrate.button_bar", _fake_button_bar(MigrateChoice.ABORT)
     )
 
     # CliRunner installs a non-TTY StringIO as sys.stdin; we need the
-    # ``_confirm_migrate`` TTY check to pass through so the radiolist
+    # ``_confirm_migrate`` TTY check to pass through so the button-bar
     # stub fires. Patch the module's ``sys`` to a stand-in whose
     # ``stdin.isatty()`` returns True.
     class _TtyStdin:
@@ -237,7 +229,41 @@ def test_apply_radiolist_abort_writes_nothing(
     assert not (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
 
 
-def test_apply_radiolist_no_backup_skips_backup_files(
+def test_apply_button_bar_cancel_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Esc (CANCEL sentinel) from the button bar aborts — no files touched."""
+    from setforge.ui.widgets import CANCEL
+
+    cfg = tmp_path / "setforge.yaml"
+    _write_minimal_setforge_yaml(cfg, with_old_key=True)
+    pre_bytes = cfg.read_bytes()
+    chain = (_SetforgeYamlEditMigration(),)
+    monkeypatch.setattr("setforge.migrations.MIGRATIONS", chain)
+    monkeypatch.setattr("setforge.migrations.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.current_expected_schema_version", "1.1")
+    monkeypatch.setattr("setforge.cli.migrate.button_bar", _fake_button_bar(CANCEL))
+
+    class _TtyStdin:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    class _Sys:
+        stdin = _TtyStdin()
+        argv: ClassVar[list[str]] = ["setforge", "migrate", "--apply"]
+
+    monkeypatch.setattr("setforge.cli.migrate.sys", _Sys)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "--apply", f"--config={cfg}"])
+    assert result.exit_code == 0, result.output
+    assert "aborted" in result.output
+    assert cfg.read_bytes() == pre_bytes
+    assert not (cfg.parent / "setforge.yaml.pre-1.1.bak").exists()
+
+
+def test_apply_button_bar_no_backup_skips_backup_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``APPLY_NO_BACKUP`` mutates files but skips the .pre-X.Y.bak siblings."""
@@ -255,12 +281,12 @@ def test_apply_radiolist_no_backup_skips_backup_files(
     from setforge.cli.migrate import MigrateChoice
 
     monkeypatch.setattr(
-        "setforge.cli.migrate.radiolist_dialog",
-        _FakeDialog(MigrateChoice.APPLY_NO_BACKUP),
+        "setforge.cli.migrate.button_bar",
+        _fake_button_bar(MigrateChoice.APPLY_NO_BACKUP),
     )
 
     # CliRunner installs a non-TTY StringIO as sys.stdin; we need the
-    # ``_confirm_migrate`` TTY check to pass through so the radiolist
+    # ``_confirm_migrate`` TTY check to pass through so the button-bar
     # stub fires. Patch the module's ``sys`` to a stand-in whose
     # ``stdin.isatty()`` returns True.
     class _TtyStdin:

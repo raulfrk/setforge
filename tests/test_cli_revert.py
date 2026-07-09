@@ -646,7 +646,7 @@ def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
     """Multi-step revert wizard returning ABORT must leave the live tree
     and the transitions history untouched.
 
-    Mocks ``setforge.cli._revert_confirm.radiolist_dialog`` to return
+    Mocks ``setforge.cli._revert_confirm.button_bar`` to return
     :class:`RevertChoice.ABORT`, drives ``revert --to-before`` (no
     ``--yes``) under an isatty stub, and asserts exit 0 + no live
     mutation + no reverse-transition dir.
@@ -670,7 +670,7 @@ def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
     # sys.stdin to a non-TTY pipe AT invoke time, so we cannot just
     # patch the underlying sys.stdin). Swap the entire `sys` module
     # reference inside _revert_confirm with a stub that exposes a TTY
-    # stdin. Then have radiolist_dialog return ABORT.
+    # stdin. Then have button_bar return ABORT.
     from setforge.cli import _revert_confirm as _rc_module
     from setforge.cli._revert_confirm import RevertChoice as _RC
 
@@ -684,19 +684,10 @@ def test_revert_to_before_user_aborts_via_radiolist_makes_no_changes(
 
     monkeypatch.setattr(_rc_module, "sys", _FakeSys)
 
-    class _FakeDialog:
-        def __init__(self, return_value: object) -> None:
-            self._return_value = return_value
+    def _fake_button_bar(*_args: object, **_kwargs: object) -> object:
+        return _RC.ABORT
 
-        def run(self) -> object:
-            return self._return_value
-
-    def _fake_radiolist(**_kwargs: object) -> _FakeDialog:
-        return _FakeDialog(_RC.ABORT)
-
-    monkeypatch.setattr(
-        "setforge.cli._revert_confirm.radiolist_dialog", _fake_radiolist
-    )
+    monkeypatch.setattr("setforge.cli._revert_confirm.button_bar", _fake_button_bar)
 
     revert_result = runner.invoke(
         app,

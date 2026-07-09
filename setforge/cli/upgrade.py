@@ -54,15 +54,15 @@ from setforge.errors import ConfirmRequiresInteractive, PyPIFetchError, UpgradeE
 # Lets ``setforge --help`` / ``setforge upgrade --help`` skip the
 # ~140ms prompt_toolkit cold-start cost; the TUI fires only on the
 # interactive confirm path. The module-attribute path
-# ``setforge.cli.upgrade.radiolist_dialog`` is preserved so tests
+# ``setforge.cli.upgrade.button_bar`` is preserved so tests
 # monkeypatch it the same way the ``_confirm`` tests do.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -405,21 +405,26 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
     _render_confirm_panel(plan, console=console)
 
     from setforge.cli import upgrade as _self  # local alias for monkeypatch
+    from setforge.ui.widgets import CANCEL, Button
 
-    choice = _self.radiolist_dialog(
+    buttons = [
+        Button("Abort — no changes", UpgradeChoice.ABORT),
+        Button("Upgrade", UpgradeChoice.UPGRADE),
+        Button(
+            "Upgrade + run `setforge migrate --check`",
+            UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK,
+        ),
+    ]
+    initial = next(
+        i for i, button in enumerate(buttons) if button.value is default_choice
+    )
+    choice = _self.button_bar(
+        buttons,
         title="setforge upgrade",
-        text="Proceed?",
-        values=[
-            (UpgradeChoice.ABORT, "Abort — no changes"),
-            (UpgradeChoice.UPGRADE, "Upgrade"),
-            (
-                UpgradeChoice.UPGRADE_AND_MIGRATE_CHECK,
-                "Upgrade + run `setforge migrate --check`",
-            ),
-        ],
-        default=default_choice,
-    ).run()
-    if choice is None:
+        body="Proceed?",
+        initial=initial,
+    )
+    if choice is CANCEL:
         console.print("[red]✗ aborted[/red] (Esc) — no changes")
         return UpgradeChoice.ABORT
     if choice is UpgradeChoice.ABORT:

@@ -34,17 +34,17 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 # practice, so a 10s wait is generous slack for a healthy install.
 _SHOW_COMPLETION_TIMEOUT_SECONDS = 10.0
 
-# ``prompt_toolkit.shortcuts.radiolist_dialog`` resolves through this
-# module's PEP 562 ``__getattr__`` so cold-start commands (``setforge
-# --help``, ``setforge validate``) skip the ~140ms prompt_toolkit
-# import.
+# The themed ``button_bar`` widget resolves through this module's PEP 562
+# ``__getattr__`` so cold-start commands (``setforge --help``, ``setforge
+# validate``) skip the ~140ms prompt_toolkit import that
+# :mod:`setforge.ui.widgets` pulls in.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -339,30 +339,31 @@ def _resolve_non_dialog_choice(
 
 
 def _run_install_dialog(shell: ShellKind) -> CompletionChoice:
-    """Show the arrow-key install-confirm dialog and return the choice.
+    """Show the arrow-key install-confirm bar and return the choice.
 
-    ESC / Ctrl-C on the dialog is reported by prompt_toolkit as a
-    ``None`` result; we treat that as :attr:`CompletionChoice.ABORT`.
+    Esc / Ctrl-C on the bar returns the :data:`CANCEL` sentinel; we treat
+    that as :attr:`CompletionChoice.ABORT`.
     """
     from setforge.cli import completion as _self  # local alias for monkeypatch path
+    from setforge.ui.widgets import CANCEL, Button
 
-    result = _self.radiolist_dialog(
-        title=f"setforge completion install {shell.value}",
-        text="Pick how setforge should wire the completion script:",
-        values=[
-            (
-                CompletionChoice.YES_AND_WIRE,
+    result = _self.button_bar(
+        [
+            Button(
                 "yes, write completion + wire shell rc (default)",
+                CompletionChoice.YES_AND_WIRE,
             ),
-            (
-                CompletionChoice.YES_ONLY,
+            Button(
                 "yes, write completion only — I'll wire shell rc myself",
+                CompletionChoice.YES_ONLY,
             ),
-            (CompletionChoice.ABORT, "abort"),
+            Button("abort", CompletionChoice.ABORT),
         ],
-        default=CompletionChoice.YES_AND_WIRE,
-    ).run()
-    if result is None:
+        title=f"setforge completion install {shell.value}",
+        body="Pick how setforge should wire the completion script:",
+        initial=0,
+    )
+    if result is CANCEL:
         return CompletionChoice.ABORT
     assert isinstance(result, CompletionChoice)
     return result

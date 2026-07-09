@@ -19,39 +19,29 @@ from setforge.cli._confirm import (
 )
 from setforge.cli._plugin_helpers import _emit_reconcile_summary
 from setforge.transitions import ReconcileKind, ReconcileOutcome, ReconcileStatus
+from setforge.ui.widgets import CANCEL
 
 
-class _FakeDialogResult:
-    """Stand-in for ``prompt_toolkit.shortcuts.radiolist_dialog``'s return.
+class _DialogRecorder:
+    """Records each ``button_bar(...)`` invocation for assertions.
 
-    ``.run()`` consumes one entry from ``return_values`` per call so a
-    DIAGNOSE re-prompt can resolve to a different terminal action than
-    the first invocation.
+    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
+    no ``.run()`` indirection. The recorder consumes one entry from
+    ``return_values`` per call so a DIAGNOSE re-prompt can resolve to a
+    different terminal action than the first invocation.
     """
 
     def __init__(self, return_values: list[Any]) -> None:
         self._queue = list(return_values)
-        self.run_calls = 0
-
-    def run(self) -> Any:
-        self.run_calls += 1
-        if not self._queue:
-            raise AssertionError("ran out of fake dialog responses")
-        return self._queue.pop(0)
-
-
-class _DialogRecorder:
-    """Records each ``radiolist_dialog(...)`` invocation for assertions."""
-
-    def __init__(self, return_values: list[Any]) -> None:
-        self.fake = _FakeDialogResult(return_values)
         self.call_count = 0
         self.last_kwargs: dict[str, Any] = {}
 
-    def __call__(self, *args: Any, **kwargs: Any) -> _FakeDialogResult:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.call_count += 1
         self.last_kwargs = kwargs
-        return self.fake
+        if not self._queue:
+            raise AssertionError("ran out of fake dialog responses")
+        return self._queue.pop(0)
 
 
 def _patch_dialog(
@@ -59,9 +49,9 @@ def _patch_dialog(
     *,
     return_values: list[Any],
 ) -> _DialogRecorder:
-    """Replace ``radiolist_dialog`` with a recorder; return it for assertions."""
+    """Replace ``button_bar`` with a recorder; return it for assertions."""
     recorder = _DialogRecorder(return_values)
-    monkeypatch.setattr("setforge.cli._confirm.radiolist_dialog", recorder)
+    monkeypatch.setattr("setforge.cli._confirm.button_bar", recorder)
     return recorder
 
 
@@ -184,20 +174,20 @@ def test_tty_abort_response_returns_abort(monkeypatch: pytest.MonkeyPatch) -> No
     assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT
 
 
-# --- Esc / None handling -------------------------------------------------
+# --- Esc / CANCEL handling -----------------------------------------------
 
 
-def test_dialog_returns_none_treated_as_abort(
+def test_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns None from radiolist_dialog → ABORT.
+    """User pressing Esc returns CANCEL from button_bar → ABORT.
 
     Consistent with :func:`confirm_auto_operation`'s Esc-as-abort
     handling. Critical for the failure-prompt path: an accidental Esc
     on a network-flaky mid-reconcile MUST NOT silently skip — it must
     surface as ABORT so the user knows the install is rolling back."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    _patch_dialog(monkeypatch, return_values=[None])
+    _patch_dialog(monkeypatch, return_values=[CANCEL])
     assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT
 
 
@@ -259,16 +249,16 @@ def test_diagnose_then_abort_returns_abort(
     assert prompt_failure_action(message="failed", yes=False) is FailureAction.ABORT
 
 
-def test_diagnose_then_none_returns_abort(
+def test_diagnose_then_cancel_returns_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The re-prompt after DIAGNOSE also honors Esc-as-abort — the
-    full Esc/None handling is in the loop body, not gated by first
+    full Esc/CANCEL handling is in the loop body, not gated by first
     iteration."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(
         monkeypatch,
-        return_values=[FailureAction.DIAGNOSE, None],
+        return_values=[FailureAction.DIAGNOSE, CANCEL],
     )
     assert prompt_failure_action(message="failed", yes=False) is FailureAction.ABORT
 

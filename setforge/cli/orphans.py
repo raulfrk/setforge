@@ -49,19 +49,19 @@ __all__ = [
     "cleanup_orphans",
 ]
 
-# ``prompt_toolkit.shortcuts.radiolist_dialog`` is imported lazily via the
+# ``setforge.ui.widgets.button_bar`` is imported lazily via the
 # module-level ``__getattr__`` below so non-interactive callers never pay
 # the ~140ms cost. The TUI fires only when ``apply=True`` and stdin is a
 # TTY. Module-level ``__getattr__`` keeps the attribute-on-module path
-# that tests' ``monkeypatch.setattr("setforge.cli.orphans.radiolist_dialog", ...)``
+# that tests' ``monkeypatch.setattr("setforge.cli.orphans.button_bar", ...)``
 # relies on (same pattern as :mod:`setforge.cli._confirm`).
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
-    if name == "radiolist_dialog":
-        from prompt_toolkit.shortcuts import radiolist_dialog
+    if name == "button_bar":
+        from setforge.ui.widgets import button_bar
 
-        return radiolist_dialog
+        return button_bar
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -203,21 +203,25 @@ def _pick_cleanup_branch(*, yes: bool) -> ApplyChoice:
     # Lazy import resolves via module-level ``__getattr__`` (tests
     # monkeypatch the same attribute path).
     from setforge.cli import orphans as _self
+    from setforge.ui.widgets import CANCEL, Button
 
-    choice = _self.radiolist_dialog(
-        title="setforge cleanup-orphans",
-        text="What would you like to do?",
-        values=[
-            (ApplyChoice.ABORT, "no, abort (default)"),
-            (ApplyChoice.DELETE_ONLY, "yes, delete the listed paths (NOT revert-able)"),
-            (
-                ApplyChoice.DELETE_AND_TRANSITION,
+    choice = _self.button_bar(
+        [
+            Button("no, abort (default)", ApplyChoice.ABORT),
+            Button(
+                "yes, delete the listed paths (NOT revert-able)",
+                ApplyChoice.DELETE_ONLY,
+            ),
+            Button(
                 "yes + write transition for revert",
+                ApplyChoice.DELETE_AND_TRANSITION,
             ),
         ],
-        default=ApplyChoice.ABORT,
-    ).run()
-    if choice is None:
+        title="setforge cleanup-orphans",
+        body="What would you like to do?",
+        initial=0,
+    )
+    if choice is CANCEL:
         return ApplyChoice.ABORT
     return choice
 

@@ -10,11 +10,14 @@ terminating key (pipe EOF does NOT auto-exit a prompt_toolkit Application).
 
 from __future__ import annotations
 
+import io
+
 import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
-from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output import ColorDepth, DummyOutput
+from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.styles import Style, merge_styles
 
 from setforge.ui.widgets import (
@@ -298,12 +301,14 @@ def _drive_with_size(input_keys: bytes, *, columns: int) -> object:
 # ---------------------------------------------------------------------------
 
 
-def _drive_prompt(input_keys: bytes, *, body: str | None = None) -> object:
+def _drive_prompt(
+    input_keys: bytes, *, body: str | None = None, default: str = ""
+) -> object:
     """Run :func:`text_prompt` with piped input + dummy output."""
     with create_pipe_input() as pipe:
         pipe.send_bytes(input_keys)
         with create_app_session(input=pipe, output=DummyOutput()):
-            return text_prompt(title="claude-merge", body=body)
+            return text_prompt(title="claude-merge", body=body, default=default)
 
 
 def test_text_prompt_enter_submits_typed_text() -> None:
@@ -337,3 +342,71 @@ def test_text_prompt_body_renders() -> None:
         with create_app_session(input=pipe, output=out):
             text_prompt(title="T", body="your instruction ⟩")
     assert "your instruction ⟩" in out.captured()
+
+
+# --- default= prefill -------------------------------------------------------
+
+
+def test_text_prompt_default_returned_on_blank_enter() -> None:
+    # A bare Enter with a default returns the default (not "").
+    assert _drive_prompt(b"\r", default="owner/name") == "owner/name"
+
+
+def test_text_prompt_default_cursor_at_end_backspace_edits() -> None:
+    # The default is seeded via the Buffer/Document constructor with the cursor
+    # at end-of-text — so the FIRST backspace deletes the default's last char
+    # (a post-construction ``buffer.text = default`` would leave the cursor at 0
+    # and swallow it, returning the full default unchanged).
+    assert _drive_prompt(b"\x7f\r", default="abcd") == "abc"
+
+
+def test_text_prompt_default_is_editable() -> None:
+    # Typing after the seeded default appends at the cursor.
+    assert _drive_prompt(b"X\r", default="ab") == "abX"
+
+
+def test_text_prompt_escape_over_default_still_cancels() -> None:
+    # Esc returns CANCEL even when a default was seeded — never the default.
+    assert _drive_prompt(b"\x1b", default="ignored") is CANCEL
+
+
+# --- real-construction truecolor render (headless build-crash guard) --------
+
+
+def _truecolor_output(buf: io.StringIO) -> Vt100_Output:
+    """A real :class:`Vt100_Output` over ``buf`` forced to 24-bit depth — so the
+    themed DEFAULT style resolves to real ``#rrggbb`` SGR escapes (the render
+    path a mono :class:`DummyOutput` never exercises)."""
+    return Vt100_Output(
+        buf,
+        lambda: Size(rows=24, columns=80),
+        default_color_depth=ColorDepth.DEPTH_24_BIT,
+    )
+
+
+def test_button_bar_renders_under_truecolor() -> None:
+    # Real app.run() with the themed DEFAULT style against a truecolor Vt100
+    # renderer: guards the headless build-crash that callback-scripted tests
+    # miss. The theme's accent hex must reach the byte stream, and selection
+    # still resolves.
+    buf = io.StringIO()
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")
+        with create_app_session(input=pipe, output=_truecolor_output(buf)):
+            result = button_bar(_BUTTONS, title="T", body="body")
+    assert result == "ours"
+    # The "← → move · Enter choose · ? help" legend renders in class:identifier
+    # (#7dcfff) → SGR "38;2;125;207;255" under 24-bit — proof the themed hex
+    # reached the byte stream without a headless render crash.
+    assert "125;207;255" in buf.getvalue()
+
+
+def test_text_prompt_renders_under_truecolor() -> None:
+    buf = io.StringIO()
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\r")
+        with create_app_session(input=pipe, output=_truecolor_output(buf)):
+            result = text_prompt(title="T", body="body", default="d")
+    assert result == "d"
+    # identifier (#7dcfff) → SGR "38;2;125;207;255" drives the hint line.
+    assert "125;207;255" in buf.getvalue()
