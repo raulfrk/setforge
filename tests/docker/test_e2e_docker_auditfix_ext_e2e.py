@@ -155,6 +155,7 @@ def test_ext_remove_no_change_when_absent(
     assert "no change" in rm.stdout, combined
 
 
+@pytest.mark.smoke
 def test_ext_reconcile_live_applies_and_installs(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

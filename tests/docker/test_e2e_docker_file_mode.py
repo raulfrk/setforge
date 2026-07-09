@@ -112,6 +112,7 @@ def test_mode_e2e_install_applies_0o755(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.smoke
 def test_mode_e2e_compare_flags_drift_after_manual_chmod(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

@@ -112,6 +112,7 @@ def test_install_writes_new_meta_fields(
     assert "preserve_user_keys_applied" not in meta, meta
 
 
+@pytest.mark.smoke
 def test_sync_writes_new_meta_fields(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
@@ -156,6 +157,7 @@ def test_sync_writes_new_meta_fields(
     assert "preserve_user_keys_applied" not in meta, meta
 
 
+@pytest.mark.smoke
 def test_revert_writes_new_meta_fields(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

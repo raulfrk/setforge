@@ -83,6 +83,7 @@ def _seed_floored_config(c: ContainerHandle) -> None:
     c.write_text(f"{_CFG_DIR}/tracked/foo.md", "hello\n")
 
 
+@pytest.mark.smoke
 def test_migrate_check_lists_the_stamp(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

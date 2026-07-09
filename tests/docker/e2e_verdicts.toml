@@ -1,0 +1,1435 @@
+# E2E audit-and-prune verdict manifest (E5).
+#
+# One [tests."<node-id>"] row per collected e2e_docker test node id, keyed by
+# FULL node id (path::[Class::]func). Kept in lock-step with the real collected
+# set by scripts/check_e2e_manifest.py (set-equality both directions + uniqueness
+# + superseded-by-liveness + verb-smoke-coverage + fail-closed).
+#
+# Fields per row:
+#   verdict  = keep | change | merge | delete | should-be-integration
+#   smoke    = bool (true == carries a real @pytest.mark.smoke; golden path)
+#   signal   = short why-string (what observable behavior the test pins)
+#   verbs    = the setforge verb(s) / surface the test exercises
+#   superseded_by = [node-ids] REQUIRED on delete/merge; names still-present
+#                   sibling(s) that ASSERT the same observable behavior
+#
+# Audit note: NOTHING is pruned by this manifest. delete/merge rows flag work for
+# a follow-up prune pass; every superseded_by target is still collected today.
+
+[tests."tests/docker/test_auditfix_plugin_add_marketplace.py::test_marketplace_add_binary_failure_does_not_leave_orphan_yaml_entry"]
+verdict = "keep"
+smoke = false
+signal = "plugin/marketplace add-remove audit-fix roundtrip"
+verbs = ["plugin", "marketplace"]
+
+[tests."tests/docker/test_auditfix_plugin_add_marketplace.py::test_marketplace_add_writes_yaml_and_registers"]
+verdict = "keep"
+smoke = false
+signal = "plugin/marketplace add-remove audit-fix roundtrip"
+verbs = ["plugin", "marketplace"]
+
+[tests."tests/docker/test_auditfix_plugin_add_marketplace.py::test_plugin_add_registers_yaml_installs_and_enables"]
+verdict = "keep"
+smoke = false
+signal = "plugin/marketplace add-remove audit-fix roundtrip"
+verbs = ["plugin", "marketplace"]
+
+[tests."tests/docker/test_auditfix_plugin_add_marketplace.py::test_plugin_remove_disables_and_drops_binding"]
+verdict = "keep"
+smoke = false
+signal = "plugin/marketplace add-remove audit-fix roundtrip"
+verbs = ["plugin", "marketplace"]
+
+[tests."tests/docker/test_auditfix_plugins_edges.py::test_plugin_reconcile_dry_run_exits_1_on_drift"]
+verdict = "keep"
+smoke = false
+signal = "plugin reconcile exit-code / read-only policy edge"
+verbs = ["reconcile", "plugin"]
+
+[tests."tests/docker/test_auditfix_plugins_edges.py::test_plugin_reconcile_nothing_to_reconcile_exits_zero"]
+verdict = "keep"
+smoke = false
+signal = "plugin reconcile exit-code / read-only policy edge"
+verbs = ["reconcile", "plugin"]
+
+[tests."tests/docker/test_auditfix_plugins_edges.py::test_plugin_reconcile_report_policy_exits_1_on_drift"]
+verdict = "keep"
+smoke = false
+signal = "plugin reconcile exit-code / read-only policy edge"
+verbs = ["reconcile", "plugin"]
+
+[tests."tests/docker/test_auditfix_revert_order.py::test_install_revert_revert_redoes_install"]
+verdict = "keep"
+smoke = false
+signal = "install/revert/redo transition ordering"
+verbs = ["install", "revert"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_add_no_install_skips_code_invocation"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_add_writes_yaml_and_installs"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_dry_run_exits_1_on_drift"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_live_applies_and_installs"]
+verdict = "keep"
+smoke = true
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["reconcile", "ext"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_reconcile_report_policy_exits_1_on_drift"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_remove_drops_from_include"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_remove_no_change_when_absent"]
+verdict = "keep"
+smoke = false
+signal = "ext add-remove-reconcile audit-fix path"
+verbs = ["ext", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_plugin_synccache_e2e.py::test_e2e_docker_install_local_clone_cache_miss_points_to_sync_cache"]
+verdict = "keep"
+smoke = false
+signal = "plugin marketplace sync-cache behavior"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_plugin_synccache_e2e.py::test_e2e_docker_sync_cache_clones_github_marketplace_into_cache"]
+verdict = "keep"
+smoke = false
+signal = "plugin marketplace sync-cache behavior"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_plugin_synccache_e2e.py::test_e2e_docker_sync_cache_expands_github_shorthand_to_url"]
+verdict = "keep"
+smoke = false
+signal = "plugin marketplace sync-cache behavior"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_plugin_synccache_e2e.py::test_e2e_docker_sync_cache_path_only_reports_no_github"]
+verdict = "keep"
+smoke = false
+signal = "plugin marketplace sync-cache behavior"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_plugin_synccache_e2e.py::test_e2e_docker_sync_cache_regular_mode_warns_no_op"]
+verdict = "keep"
+smoke = false
+signal = "plugin marketplace sync-cache behavior"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_secrets_proceed_e2e.py::test_e2e_docker_install_secrets_scan_allowlist_proceeds"]
+verdict = "keep"
+smoke = false
+signal = "secrets-scan proceed / allowlist path"
+verbs = ["secrets", "install"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_secrets_proceed_e2e.py::test_e2e_docker_install_secrets_scan_silence_one_shot_proceeds"]
+verdict = "keep"
+smoke = false
+signal = "secrets-scan proceed / allowlist path"
+verbs = ["secrets", "install"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_snapshot_e2e.py::test_snapshot_create_keep_prunes"]
+verdict = "keep"
+smoke = false
+signal = "snapshot create/list/restore/prune"
+verbs = ["snapshot"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_snapshot_e2e.py::test_snapshot_create_then_list_shows_row"]
+verdict = "keep"
+smoke = false
+signal = "snapshot create/list/restore/prune"
+verbs = ["snapshot"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_snapshot_e2e.py::test_snapshot_restore_non_tty_no_yes_refuses"]
+verdict = "keep"
+smoke = false
+signal = "snapshot create/list/restore/prune"
+verbs = ["snapshot"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_snapshot_e2e.py::test_snapshot_restore_yes_overlays_live_additively"]
+verdict = "keep"
+smoke = false
+signal = "snapshot create/list/restore/prune"
+verbs = ["snapshot"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_status_e2e.py::test_status_after_install_reports_clean_human_and_json"]
+verdict = "keep"
+smoke = false
+signal = "status clean/drift reporting"
+verbs = ["status"]
+
+[tests."tests/docker/test_e2e_docker_auditfix_status_e2e.py::test_status_reports_drift_after_live_edit"]
+verdict = "keep"
+smoke = false
+signal = "status clean/drift reporting"
+verbs = ["status"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_accept_live_non_tty_no_yes_exit_1"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_accept_live_with_yes"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_accept_tracked_non_tty_no_yes_exit_1"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_accept_tracked_with_yes"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_keep_live_no_confirm"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_use_tracked_live_only_edit_is_noop"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_bare_no_auto_no_confirm"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_empty_drift_with_auto_no_confirm_no_op"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_sync_auto_keep_tracked_no_confirm"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_sync_auto_use_live_non_tty_no_yes_exit_1"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_sync_auto_use_live_with_yes"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_sync_bare_no_auto_no_confirm"]
+verdict = "keep"
+smoke = false
+signal = "auto-confirm / --yes gate on install & sync"
+verbs = ["install", "sync"]
+
+[tests."tests/docker/test_e2e_docker_button_bar.py::test_button_bar_arrow_select"]
+verdict = "keep"
+smoke = false
+signal = "button-bar widget render + selection under real TTY"
+verbs = ["ui"]
+
+[tests."tests/docker/test_e2e_docker_button_bar.py::test_button_bar_double_esc_cancels"]
+verdict = "keep"
+smoke = false
+signal = "button-bar widget render + selection under real TTY"
+verbs = ["ui"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_bash_completion_install_falls_back"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_fish_completion_install_falls_back"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_happy_path_uses_typer_generated"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_rc_file_atomic_under_sigint"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_vendored_bash_passes_shellcheck"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_vendored_zsh_passes_syntax_check"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_completion.py::test_zsh_completion_install_falls_back"]
+verdict = "keep"
+smoke = false
+signal = "shell-completion install / fallback / vendored syntax"
+verbs = ["completion"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_invalid_pty_validates_before_write"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_invalid_value_refuses_write_non_pty"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_local_list_duplicate_raises_non_pty"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_local_list_new_value_pty_confirm_yes"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_local_round_trip_preserves_comments"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_local_scalar_pty_confirm_no"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_local_scalar_pty_confirm_yes"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_marketplaces_pty_interactive"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_non_tty_without_yes_raises"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_non_tty_without_yes_raises_non_pty"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_tracked_dirty_repo_refuses_non_pty"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_add_tracked_pty_git_check_aborts"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_completion_path_works"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_completion_value_callback_contract"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_completion_value_works"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_remove_local_list_pty_confirm_yes"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_config_cli.py::test_config_show_effective_smoke_non_pty"]
+verdict = "keep"
+smoke = false
+signal = "config add/remove/show CLI surface"
+verbs = ["config"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_auto_use_live_no_prompt"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_auto_use_tracked_no_prompt"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_covers_all_phases"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_drift_gate_reports_no_apply"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_final_line_marker"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_fresh_host_no_state_dir_created"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_no_confirm_substring"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_predicts_real_install"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_reports_ext_reconcile"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_reports_plugin_reconcile"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_respects_profile_flag"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_dry_run_zero_filesystem_diff"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_dry_run.py::test_would_prefix_only_on_mutating_verbs"]
+verdict = "keep"
+smoke = false
+signal = "--dry-run zero-mutation / WOULD-prefix contract"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSetforgeFetchGitSource::test_fetch_aborts_on_dirty_tracked"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSetforgeFetchGitSource::test_fetch_checks_out_pinned_ref"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSetforgeFetchGitSource::test_fetch_clones_missing_source"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSetforgeFetchGitSource::test_fetch_twice_idempotent"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSetforgeFetchPathSource::test_fetch_path_source_is_noop"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_fetch.py::TestSourceLayerIntegration::test_install_uses_source_flag"]
+verdict = "keep"
+smoke = false
+signal = "setforge fetch git/path source behavior"
+verbs = ["fetch"]
+
+[tests."tests/docker/test_e2e_docker_file_mode.py::test_mode_e2e_auto_accept_without_yes_gates_non_tty"]
+verdict = "keep"
+smoke = false
+signal = "file-mode bits apply / drift / validate"
+verbs = ["install", "compare"]
+
+[tests."tests/docker/test_e2e_docker_file_mode.py::test_mode_e2e_compare_flags_drift_after_manual_chmod"]
+verdict = "keep"
+smoke = true
+signal = "file-mode bits apply / drift / validate"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_file_mode.py::test_mode_e2e_install_applies_0o755"]
+verdict = "keep"
+smoke = false
+signal = "file-mode bits apply / drift / validate"
+verbs = ["install", "compare"]
+
+[tests."tests/docker/test_e2e_docker_file_mode.py::test_mode_e2e_install_reapplies_mode_after_manual_chmod"]
+verdict = "keep"
+smoke = false
+signal = "file-mode bits apply / drift / validate"
+verbs = ["install", "compare"]
+
+[tests."tests/docker/test_e2e_docker_file_mode.py::test_mode_e2e_validate_rejects_yaml_1_1_octal"]
+verdict = "keep"
+smoke = false
+signal = "file-mode bits apply / drift / validate"
+verbs = ["install", "compare"]
+
+[tests."tests/docker/test_e2e_docker_fresh_host.py::test_auto_on_fresh_host_rejected"]
+verdict = "keep"
+smoke = false
+signal = "fresh-host welcome gate / --yes bypass"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_fresh_host.py::test_no_tty_raises"]
+verdict = "keep"
+smoke = false
+signal = "fresh-host welcome gate / --yes bypass"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_fresh_host.py::test_welcome_panel_rendered_on_tty"]
+verdict = "keep"
+smoke = false
+signal = "fresh-host welcome gate / --yes bypass"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_fresh_host.py::test_yes_skips_welcome_in_docker"]
+verdict = "keep"
+smoke = false
+signal = "fresh-host welcome gate / --yes bypass"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_init_source.py::test_init_path_source_writes_source_block"]
+verdict = "keep"
+smoke = false
+signal = "init writes source block interactively"
+verbs = ["init"]
+
+[tests."tests/docker/test_e2e_docker_interactive_conflict.py::test_interactive_conflict_keep_ours_keeps_host"]
+verdict = "keep"
+smoke = false
+signal = "interactive conflict wizard theirs/ours"
+verbs = ["install", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_interactive_conflict.py::test_interactive_conflict_take_theirs_writes_upstream"]
+verdict = "keep"
+smoke = false
+signal = "interactive conflict wizard theirs/ours"
+verbs = ["install", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_compare_footer_summary_correct_counts"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_compare_lists_skipped_overlay_entries"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_compare_shows_from_local_yaml_tag_on_adds"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_compare_shows_removed_via_local_yaml_tag_on_removes"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_install_extensions_add_remove"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_install_marketplace_cross_ref_failure_defensive"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_install_marketplaces_add_lands"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_install_plugins_add_appears_in_effective"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_install_plugins_remove_drops_from_effective"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_validate_add_intersect_remove_collision_errors"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_validate_marketplace_cross_ref_failure_offline"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_validate_orphan_overlay_off_profile_id_notes_exit_zero"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_validate_orphan_overlay_unknown_id_errors_with_did_you_mean"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_local_overlay.py::test_validate_remove_not_in_profile_errors"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml overlay add/remove/compare/validate"
+verbs = ["install", "compare", "validate"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_cargo_missing_toolchain_warns_and_exits_zero"]
+verdict = "keep"
+smoke = false
+signal = "MCP register + cargo-binary install/skip"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_cargo_skip_if_present_does_not_invoke_install"]
+verdict = "keep"
+smoke = false
+signal = "MCP register + cargo-binary install/skip"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_mcp_cargo.py::test_mcp_register_revert_reinstall"]
+verdict = "keep"
+smoke = false
+signal = "MCP register + cargo-binary install/skip"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_byte_identical_roundtrip"]
+verdict = "keep"
+smoke = false
+signal = "transition meta.json schema fields"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_command_line_redacts_secrets"]
+verdict = "keep"
+smoke = false
+signal = "transition meta.json schema fields"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_install_writes_new_meta_fields"]
+verdict = "keep"
+smoke = false
+signal = "transition meta.json schema fields"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_pre_bump_meta_revert_works"]
+verdict = "keep"
+smoke = false
+signal = "transition meta.json schema fields"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_revert_writes_new_meta_fields"]
+verdict = "keep"
+smoke = true
+signal = "transition meta.json schema fields"
+verbs = ["revert"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_sync_writes_new_meta_fields"]
+verdict = "keep"
+smoke = true
+signal = "transition meta.json schema fields"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_meta_schema.py::test_wizard_writes_new_meta_fields"]
+verdict = "keep"
+smoke = false
+signal = "transition meta.json schema fields"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_downgrade_across_marker_retire_refuses"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_finalize_blocked_below_floor"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_finalize_permitted_above_floor_strips_markers"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_finalize_round_trip_revert_restores_markers"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_frozen_pre_bump_config_still_installs"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_install_cross_major_config_refuses_clean"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_install_forward_tolerant_warns_on_unknown_key"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_2_1_to_3_0_strips_disposition_and_reverts"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_apply_is_revertible"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_apply_stamps_schema_version_with_backup"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_check_lists_the_stamp"]
+verdict = "keep"
+smoke = true
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_pin_round_trips_to_from_version"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_migrate_to_downgrade_round_trip"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_migrate.py::test_sub_floor_engine_refuses_all_config_verbs"]
+verdict = "keep"
+smoke = false
+signal = "schema migrate apply/pin/finalize/downgrade"
+verbs = ["migrate"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_already_absent_path_not_listed"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_apply_non_tty_no_yes_raises"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_apply_yes_deletes_and_writes_transition"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_compare_surfaces_orphan_after_remove"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_deploy_remove_cleanup_revert_restored"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_dry_run_default_no_mutation"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_ignore_writes_local_yaml_not_tracked"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_orphans.py::test_orphan_e2e_tracked_source_never_listed"]
+verdict = "keep"
+smoke = false
+signal = "cleanup-orphans detect/apply/ignore/revert"
+verbs = ["compare"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_accepts_dangling_symlink_target"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_applies_host_local_dst_retarget"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_applies_host_local_mode_chmod"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_creates_symlink_when_symlink_target_set"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_fails_when_symlink_target_dst_is_directory"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_install_refuses_regular_file_collision_with_symlink"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_revert_after_install_with_host_local_overrides"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_sync_does_not_capture_host_local_mode_into_tracked"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_validate_rejects_mode_and_symlink_target_together"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_overlay_fields.py::test_validate_rejects_typo_in_host_local_overlay"]
+verdict = "keep"
+smoke = false
+signal = "host-local overlay mode/symlink/dst-retarget"
+verbs = ["install", "validate"]
+
+[tests."tests/docker/test_e2e_docker_plugin_errors.py::test_marketplace_update_unregistered_no_traceback"]
+verdict = "keep"
+smoke = false
+signal = "plugin subprocess error surfaces cleanly"
+verbs = ["plugin"]
+
+[tests."tests/docker/test_e2e_docker.py::test_compare_after_install_clean_no_drift_for_new_agents_and_skill"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_compare_after_install_clean_no_drift_for_workflows"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_compare_reports_drift_exit_nonzero"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_init_check_readonly"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_init_config_repo_scaffolds_and_validates"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_init_force_with_backup"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_init_fresh"]
+verdict = "keep"
+smoke = true
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["init"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_init_reinit_idempotent"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_git_source_cache_behind_remote_warns"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_no_gitleaks_warns_and_continues"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_path_source_clean_no_warn"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_path_source_dirty_no_git_check_bypasses"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_path_source_dirty_warns_abort"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_plugin_failure_abort_no_regression_under_yes"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_plugin_failure_retry_success"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_plugin_failure_skip"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_retry_failed_flag"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_secrets_scan_clean"]
+verdict = "keep"
+smoke = true
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["secrets"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_install_secrets_scan_finds_and_aborts"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_migrate_check_no_migrations_available"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_migrate_multi_file_fake"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_revert_confirm_aborted"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_revert_confirm_applied"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_e2e_docker_upgrade_check_mode"]
+verdict = "keep"
+smoke = true
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["upgrade"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_chain_resolution_and_bootstrap"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_comprehensive_plugins_extensions"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_deploys_new_reviewing_markdown_skill"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_deploys_three_new_prose_reviewer_agents"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_deploys_workflows_category_file"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_directory_copy"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_idempotent_second_run_noop"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_json_byte_copy"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_jsonc_deep_preserve_overlay"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_jsonc_shallow_no_live"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_jsonc_shallow_preserve_overlay"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_minimal_floor"]
+verdict = "keep"
+smoke = true
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_template_dst_jinja2"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_text_sections_no_live"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_then_revert_restores_state"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_verbose_emits_setforge_debug"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_yaml_deep_preserve_overlay"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_install_yaml_shallow_preserve_overlay"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_revert_after_install_removes_new_agents_and_skill"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_revert_after_install_removes_workflows_file"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_sync_auto_use_live_silent_absorb"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_sync_markdown_frontmatter_no_crash"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_sync_no_drift_noop"]
+verdict = "keep"
+smoke = false
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker.py::test_validate_clean_yaml_exit_zero"]
+verdict = "keep"
+smoke = true
+signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_share_draft.py::test_share_draft_adopt_rewrites_live_and_tracked"]
+verdict = "keep"
+smoke = false
+signal = "stage draft share keep-local / adopt"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_share_draft.py::test_share_draft_keep_local_shares_draft_keeps_host_live"]
+verdict = "keep"
+smoke = false
+signal = "stage draft share keep-local / adopt"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_source_layer.py::test_ext_list_resolves_source_layer_from_wrong_cwd"]
+verdict = "keep"
+smoke = false
+signal = "source-layer resolution from wrong CWD"
+verbs = ["ext"]
+
+[tests."tests/docker/test_e2e_docker_source_layer.py::test_marketplace_update_needs_no_source"]
+verdict = "keep"
+smoke = false
+signal = "source-layer resolution from wrong CWD"
+verbs = ["ext"]
+
+[tests."tests/docker/test_e2e_docker_source_layer.py::test_plugin_list_resolves_source_layer_from_wrong_cwd"]
+verdict = "keep"
+smoke = false
+signal = "source-layer resolution from wrong CWD"
+verbs = ["ext"]
+
+[tests."tests/docker/test_e2e_docker_stage_structured.py::test_structured_walk_draft_type_confined_scalar"]
+verdict = "keep"
+smoke = false
+signal = "structured (per-key) stage walk share/demote"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_stage_structured.py::test_structured_walk_shares_one_key_then_demotes"]
+verdict = "keep"
+smoke = false
+signal = "structured (per-key) stage walk share/demote"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_list_json_projection"]
+verdict = "merge"
+smoke = false
+signal = "stage --list JSON envelope (command/name/counts) overlaps the --list assert in the skip-then-quit walk test; fold the envelope-shape check into that sibling"
+verbs = ["sync"]
+superseded_by = ["tests/docker/test_e2e_docker_stage_walk.py::test_stage_walk_skip_then_quit_classifies_nothing"]
+
+[tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_non_tty_exits_2"]
+verdict = "keep"
+smoke = false
+signal = "stage (per-hunk) walk share/skip/quit/list"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_walk_shares_one_hunk_then_demotes"]
+verdict = "keep"
+smoke = false
+signal = "stage (per-hunk) walk share/skip/quit/list"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_stage_walk.py::test_stage_walk_skip_then_quit_classifies_nothing"]
+verdict = "keep"
+smoke = false
+signal = "stage (per-hunk) walk share/skip/quit/list"
+verbs = ["sync"]
+
+[tests."tests/docker/test_e2e_docker_state_snapshots.py::test_install_revert_reinstall_repeats_first_run_verbatim"]
+verdict = "keep"
+smoke = false
+signal = "install/revert/reinstall state-snapshot verbatim"
+verbs = ["install", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_compare_detects_broken_link"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_compare_detects_regular_file_at_dst"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_install_creates_link_and_target"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_readlink_preserves_raw_target"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_revert_reverses_target_content"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_revert_unlinks_symlink"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_symlinks.py::test_symlink_e2e_validate_rejects_self_loop"]
+verdict = "keep"
+smoke = false
+signal = "symlink create/compare/validate/revert"
+verbs = ["install", "compare", "revert"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_clean_exits_zero"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_extensions_typo_suggests_extensions"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_host_local_sections_is_tolerated_retired_key"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_marketplaces_typo_suggests_marketplaces"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_multi_error_reports_all_then_refuses"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_parse_error_emits_yaml_parse_category"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_plugins_typo_suggests_plugins"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_tracked_files_nested_typo_suggests"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean.py::test_validate_local_yaml_typo_top_level_key_emits_mockup_d"]
+verdict = "keep"
+smoke = false
+signal = "local.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean_yaml.py::test_validate_setforge_yaml_cycle_error_not_routed_to_did_you_mean"]
+verdict = "keep"
+smoke = false
+signal = "setforge.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean_yaml.py::test_validate_setforge_yaml_missing_profile_not_routed_to_did_you_mean"]
+verdict = "keep"
+smoke = false
+signal = "setforge.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean_yaml.py::test_validate_setforge_yaml_profile_nested_typo_suggests"]
+verdict = "keep"
+smoke = false
+signal = "setforge.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean_yaml.py::test_validate_setforge_yaml_top_level_typo_suggests"]
+verdict = "keep"
+smoke = false
+signal = "setforge.yaml did-you-mean typo routing"
+verbs = ["validate"]
+
+[tests."tests/docker/test_e2e_docker_validate_did_you_mean_yaml.py::test_validate_setforge_yaml_tracked_files_nested_typo_suggests"]
+verdict = "keep"
+smoke = false
+signal = "setforge.yaml did-you-mean typo routing"
+verbs = ["validate"]
+

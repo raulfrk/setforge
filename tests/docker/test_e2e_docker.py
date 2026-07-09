@@ -993,6 +993,7 @@ def test_compare_with_legacy_my_setup_yaml_surfaces_migration_hint(
 # --- Variant: scan clean (gitleaks present, no findings) -------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_install_secrets_scan_clean(
     docker_container: Callable[..., ContainerHandle],
@@ -1461,6 +1462,7 @@ def _init(
     return result
 
 
+@pytest.mark.smoke
 @pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_init_fresh(
     docker_container: Callable[..., ContainerHandle],
@@ -1648,6 +1650,7 @@ def test_e2e_docker_init_check_readonly(
 # --- Variant U (setforge upgrade --check via fake PyPI) ---------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.xdist_group("docker_daemon")
 def test_e2e_docker_upgrade_check_mode(
     docker_container: Callable[..., ContainerHandle],

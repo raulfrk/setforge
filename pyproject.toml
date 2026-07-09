@@ -133,7 +133,7 @@ markers = [
 # --ignore=mutants keeps a leftover mutmut sandbox (gitignored mutants/, with its
 # copied mutants/tests/) from breaking a local `uv run pytest` with an
 # ImportPathMismatchError. (mutmut's own runs clear addopts via `-o addopts=`.)
-addopts = "-m 'not e2e_docker' --cov=setforge --cov-branch --cov-report=term-missing --ignore=mutants"
+addopts = "-m 'not e2e_docker' --strict-markers --cov=setforge --cov-branch --cov-report=term-missing --ignore=mutants"
 
 [tool.coverage.run]
 source = ["setforge"]
