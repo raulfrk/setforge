@@ -11,13 +11,14 @@ actions when gitleaks flags a tracked file during ``install``:
 * ``SILENCE_ONE_SHOT`` (row 2) — continue THIS run only, WITHOUT writing the
   allowlist; a later install re-scans and aborts again.
 
-The wizard renders through prompt_toolkit's full-screen ``radiolist_dialog``,
-which only paints under a TTY (non-TTY stdin short-circuits to ABORT). The
-existing suite (``test_e2e_docker.py``) covers only the non-TTY ABORT path and
-the missing-gitleaks warn path; neither PROCEED branch had end-to-end coverage.
-Per the project's e2e conventions for full-screen prompt panels these drive the
-wizard through :func:`pyte_pty_session`, anchoring on the EMULATED screen
-(``.display``) rather than the raw pexpect byte stream.
+The wizard renders through the themed full-screen ``button_bar`` widget
+(:func:`setforge.ui.widgets.button_bar`), which only paints under a TTY (non-TTY
+stdin short-circuits to ABORT). The existing suite (``test_e2e_docker.py``)
+covers only the non-TTY ABORT path and the missing-gitleaks warn path; neither
+PROCEED branch had end-to-end coverage. Per the project's e2e conventions for
+full-screen prompt panels these drive the wizard through
+:func:`pyte_pty_session`, anchoring on the EMULATED screen (``.display``) rather
+than the raw pexpect byte stream.
 
 Secret recipe (mirrors ``test_e2e_docker_install_secrets_scan_finds_and_aborts``)
 ---------------------------------------------------------------------------------
@@ -27,11 +28,12 @@ assembled by string concat so pre-commit's own gitleaks hook does NOT trip on
 this test file at commit time — only the runtime gitleaks invocation inside the
 container sees the fully-formed pattern.
 
-radiolist row order
--------------------
-``values=[(ABORT, ...), (ALLOWLIST, ...), (SILENCE_ONE_SHOT, ...)]`` with
-``default=ABORT`` selected on entry, so one ``\\x1b[B`` (arrow down) moves the
-selection to ALLOWLIST and two move it to SILENCE_ONE_SHOT. ``\\r`` confirms.
+button_bar button order
+-----------------------
+``buttons=[Button(ABORT, ...), Button(ALLOWLIST, ...), Button(SILENCE_ONE_SHOT,
+...)]`` with ``initial=0`` focusing ABORT on entry, so one ``\\x1b[C`` (arrow
+right) moves focus to ALLOWLIST and two move it to SILENCE_ONE_SHOT. ``\\r``
+selects the focused button (no OK button / Tab step, unlike the old radiolist).
 """
 
 from __future__ import annotations
@@ -83,17 +85,15 @@ def _plant_secret(c: ContainerHandle) -> None:
 def _drive_wizard(
     pyte_pty_session: Callable[..., PyteSession],
     c: ContainerHandle,
-    downs: int,
+    rights: int,
 ) -> PyteSession:
-    """Spawn the interactive install under pyte, select a radiolist row, confirm.
+    """Spawn the interactive install under pyte, focus a button, select it.
 
-    ``downs`` arrow-down presses move the selection off the default ABORT
-    row (0): ``downs=1`` selects ALLOWLIST, ``downs=2`` selects
-    SILENCE_ONE_SHOT. Submitting a ``radiolist_dialog`` requires the full
-    sequence — arrow to highlight, Enter to commit the radio, Tab to focus
-    the OK button, Enter to submit — after which the install proceeds to
-    deploy, exiting 0. (A bare trailing Enter only toggles the radio and
-    leaves the dialog open, hanging the process.)
+    ``rights`` arrow-right presses move focus off the default ABORT
+    button (0): ``rights=1`` focuses ALLOWLIST, ``rights=2`` focuses
+    SILENCE_ONE_SHOT. Selecting a ``button_bar`` button is a single Enter
+    on the focused button (no Enter-to-commit / Tab-to-OK / Enter-to-submit
+    radiolist dance) — after which the install proceeds to deploy, exiting 0.
     """
     session = pyte_pty_session(
         container=c.cid,
@@ -101,10 +101,8 @@ def _drive_wizard(
         timeout=120.0,
     )
     session.expect_in_display(_DIALOG_ANCHOR, timeout=60.0)
-    session.send_keys("\x1b[B" * downs)  # move selection off ABORT
-    session.send_keys("\r")  # commit the radio
-    session.send_keys("\t")  # focus the OK button
-    session.send_keys("\r")  # submit the dialog
+    session.send_keys("\x1b[C" * rights)  # move focus off ABORT
+    session.send_keys("\r")  # select the focused button
     session.wait_for_exit(timeout=60, expected_code=0)
     return session
 
@@ -121,7 +119,7 @@ def test_e2e_docker_install_secrets_scan_allowlist_proceeds(
 ) -> None:
     """ALLOWLIST: deploy proceeds, snippet hash persists, re-scan stays silent.
 
-    Drive the radiolist down one row (ABORT → ALLOWLIST) + Enter. Then:
+    Focus the button bar right one (ABORT → ALLOWLIST) + Enter. Then:
 
     1. The live dst IS written (the flagged file deployed).
     2. The host-local allowlist file exists and is non-empty (a sha256 hash
@@ -133,7 +131,7 @@ def test_e2e_docker_install_secrets_scan_allowlist_proceeds(
     c = docker_container()
     _plant_secret(c)
 
-    _drive_wizard(pyte_pty_session, c, downs=1)
+    _drive_wizard(pyte_pty_session, c, rights=1)
 
     # 1: flagged file deployed.
     assert c.read_text(_LIVE_TXT) == _PLANTED, (
@@ -174,7 +172,7 @@ def test_e2e_docker_install_secrets_scan_silence_one_shot_proceeds(
 ) -> None:
     """SILENCE_ONE_SHOT: deploy proceeds once, NO allowlist, next scan aborts.
 
-    Drive the radiolist down two rows (ABORT → ALLOWLIST → SILENCE_ONE_SHOT)
+    Focus the button bar right twice (ABORT → ALLOWLIST → SILENCE_ONE_SHOT)
     + Enter. Then:
 
     1. The live dst IS written (the flagged file deployed this run).
@@ -186,7 +184,7 @@ def test_e2e_docker_install_secrets_scan_silence_one_shot_proceeds(
     c = docker_container()
     _plant_secret(c)
 
-    _drive_wizard(pyte_pty_session, c, downs=2)
+    _drive_wizard(pyte_pty_session, c, rights=2)
 
     # 1: flagged file deployed this run.
     assert c.read_text(_LIVE_TXT) == _PLANTED, (

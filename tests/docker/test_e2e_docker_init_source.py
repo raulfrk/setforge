@@ -1,11 +1,12 @@
 """Docker E2E: interactive ``setforge init`` GIT/PATH source entry.
 
 Before the audit fix, selecting GIT or PATH in the init source-config
-radiolist silently collapsed back to SKIP. The fix collects the URL /
-directory via a follow-up ``input_dialog`` and writes the matching
+picker silently collapsed back to SKIP. The fix collects the URL /
+directory via a follow-up ``text_prompt`` and writes the matching
 ``source:`` block to ``local.yaml``. This drives the full-screen
-prompt_toolkit dialogs through the pyte PTY harness and asserts the
-``source: kind: path`` block lands in the written ``local.yaml``.
+themed ``button_bar`` / ``text_prompt`` widgets through the pyte PTY
+harness and asserts the ``source: kind: path`` block lands in the
+written ``local.yaml``.
 """
 
 from __future__ import annotations
@@ -30,10 +31,11 @@ def test_init_path_source_writes_source_block(
 ) -> None:
     """Selecting PATH + typing a directory writes a path source block.
 
-    Drives prompt_toolkit dialogs via the pyte harness (per the
-    radiolist convention: arrow to highlight, Enter commits the radio,
-    Tab to OK, Enter submits). Sequence: source radiolist → pick PATH →
-    input_dialog → type the directory → apply-confirm radiolist → proceed.
+    Drives the themed ``button_bar`` / ``text_prompt`` widgets via the
+    pyte harness (button_bar convention: ←/→ moves focus, Enter selects
+    the focused button; text_prompt: type then Enter submits the buffer).
+    Sequence: source button_bar → focus PATH → text_prompt → type the
+    directory → apply-confirm button_bar → proceed.
     """
     c = docker_container()
     session = pyte_pty_session(
@@ -42,27 +44,25 @@ def test_init_path_source_writes_source_block(
         timeout=60.0,
     )
 
-    # 1) Source-config radiolist. Default is SKIP (first item); arrow
-    #    down twice to PATH ("local path"), Enter to commit the radio.
+    # 1) Source-config button_bar. skip is button 0 (focused, initial=0),
+    #    git URL is button 1, local path is button 2. Two right-arrows move
+    #    focus onto "local path"; Enter selects it and exits the widget.
     session.expect_in_display("configure your config-repo source?", timeout=30.0)
     session.expect_in_display("local path", timeout=10.0)
-    session.send_keys("\x1b[B")  # SKIP -> git URL
-    session.send_keys("\x1b[B")  # git URL -> local path
-    session.send_keys("\r")  # commit the PATH radio
-    session.expect_in_display("(*) local path", timeout=10.0)
-    session.send_keys("\t")  # focus OK
-    session.send_keys("\r")  # submit the radiolist
+    session.send_keys("\x1b[C")  # skip -> git URL
+    session.send_keys("\x1b[C")  # git URL -> local path
+    session.expect_in_display("«local path»", timeout=10.0)
+    session.send_keys("\r")  # select the focused (local path) button
 
-    # 2) input_dialog for the directory. Type the path, Tab to OK, Enter.
+    # 2) text_prompt for the directory. Type the path, Enter submits the
+    #    buffer directly (no OK button / Tab step, unlike the old input_dialog).
     session.expect_in_display("local config-repo source", timeout=15.0)
     session.send_keys(_CHOSEN_PATH)
-    session.send_keys("\t")
     session.send_keys("\r")
 
-    # 3) apply-confirm radiolist. Default PROCEED (first item); Tab to OK,
-    #    Enter submits with the default selection.
+    # 3) apply-confirm button_bar. proceed is button 0 (focused, initial=0);
+    #    a bare Enter selects the focused (proceed) button.
     session.expect_in_display("ready to apply?", timeout=15.0)
-    session.send_keys("\t")
     session.send_keys("\r")
 
     session.wait_for_exit(timeout=60.0, expected_code=0)

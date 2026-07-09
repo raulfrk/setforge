@@ -316,43 +316,44 @@ def test_config_add_non_tty_without_yes_raises_non_pty(
 # ``session.send_keys(seq)`` / ``session.wait_for_exit(timeout=...,
 # expected_code=...)``.
 #
-# The confirm radiolist is the full-screen prompt_toolkit
-# ``radiolist_dialog`` with title=``setforge config`` and prompt
-# ``Apply the mutation above?``. Labels render as ``( ) abort (no
-# change)`` and ``( ) write``; the asterisk marks the currently-selected
-# radio item. The dialog CLEARS THE SCREEN on first paint, so anchor on
-# the DIALOG content (``setforge config`` / ``Apply the mutation`` /
-# ``(*) abort``), NOT on the diff-panel preamble (``About to update``)
-# which is wiped from the display by the time the dialog appears.
-# Submitting requires arrow→to select + Enter (commit radio) + Tab
-# (focus OK button) + Enter (submit) — see the auto-confirm reference tests.
+# The confirm prompt is the themed full-screen ``button_bar`` widget
+# (:func:`setforge.ui.widgets.button_bar`) with title=``setforge config``
+# and body ``Apply the mutation above?``. The two buttons render on the
+# button row as ``«abort (no change)»`` (focused) and ``[ write ]``
+# (idle); ``«…»`` marks the FOCUSED button, ``[ … ]`` an idle one. The
+# widget CLEARS THE SCREEN on first paint, so anchor on the DIALOG content
+# (``Apply the mutation`` / ``«abort (no change)»``), NOT on the diff-panel
+# preamble (``About to update``) which is wiped from the display by the
+# time the widget appears.
+# Navigation: ←/→ (or Tab/S-Tab) moves focus between buttons; Enter selects
+# the focused button; Esc / Ctrl-C cancel. ``abort`` is focused first
+# (``initial=0``), so a bare Enter aborts; one right-arrow then Enter
+# selects ``write`` — see the button-bar reference test
+# ``test_e2e_docker_button_bar.py``.
 # ---------------------------------------------------------------------------
 
 
-def _confirm_radiolist_write(session: PyteSession) -> None:
-    """Arrow-down to select ``write``, commit, Tab to OK, submit.
+def _confirm_button_bar_write(session: PyteSession) -> None:
+    """Right-arrow to focus ``write``, then Enter to select it.
 
-    The radiolist default is ``abort``. Sending arrow-down moves the
-    cursor onto ``write``; the inner Enter commits the radio selection;
-    Tab moves focus to the ``Ok`` button; the final Enter submits the
-    dialog. Mirrors the auto-confirm confirm-yes ``send_keys`` sequence.
+    ``abort`` is focused on open (``initial=0``). One right-arrow moves
+    focus onto ``write`` (rendered ``«write»``); Enter selects it and
+    exits the widget with the ``write`` value. Mirrors the button-bar
+    reference test's arrow-then-Enter sequence.
     """
-    session.send_keys("\x1b[B")
-    session.send_keys("\r")
-    session.expect_in_display("(*) write", timeout=5.0)
-    session.send_keys("\t")
-    session.send_keys("\r")
+    session.send_keys("\x1b[C")  # focus abort -> write
+    session.expect_in_display("«write»", timeout=5.0)
+    session.send_keys("\r")  # select the focused (write) button
 
 
-def _confirm_radiolist_abort(session: PyteSession) -> None:
-    """Default-abort: leave the radio on ``abort``, Tab to OK, submit.
+def _confirm_button_bar_abort(session: PyteSession) -> None:
+    """Default-abort: ``abort`` is focused on open, so a bare Enter selects it.
 
-    The radiolist default is ``abort``. Tab moves focus to the ``Ok``
-    button without changing the radio selection; the final Enter
-    submits with the default value. Mirrors the auto-confirm confirm-no shape.
+    ``initial=0`` focuses ``abort`` (rendered ``«abort (no change)»``);
+    pressing Enter selects the focused button without moving focus,
+    yielding the abort value.
     """
-    session.send_keys("\t")
-    session.send_keys("\r")
+    session.send_keys("\r")  # select the focused (abort) button
 
 
 def test_config_add_local_scalar_pty_confirm_yes(
@@ -376,8 +377,8 @@ def test_config_add_local_scalar_pty_confirm_yes(
         ],
     )
     session.expect_in_display("Apply the mutation above?", timeout=30.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_write(session)
+    session.expect_in_display("«abort (no change)»", timeout=10.0)
+    _confirm_button_bar_write(session)
     session.expect_in_display("writing", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     after = c.read_text(_HOME_LOCAL_YAML)
@@ -406,8 +407,8 @@ def test_config_add_local_scalar_pty_confirm_no(
         ],
     )
     session.expect_in_display("Apply the mutation above?", timeout=30.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_abort(session)
+    session.expect_in_display("«abort (no change)»", timeout=10.0)
+    _confirm_button_bar_abort(session)
     session.expect_in_display("aborted", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     assert c.read_text(_HOME_LOCAL_YAML) == initial
@@ -500,7 +501,7 @@ def test_config_add_local_list_new_value_pty_confirm_yes(
     docker_container: Callable[..., ContainerHandle],
     pyte_pty_session: Callable[..., PyteSession],
 ) -> None:
-    """PTY: tracked list-add of a fresh value exercises the radiolist write path.
+    """PTY: tracked list-add of a fresh value exercises the button_bar write path.
 
     The ``--local`` schema has no list-shaped paths today (binaries +
     source + claude are scalars / dicts), so the list-add behavior is
@@ -531,8 +532,8 @@ def test_config_add_local_list_new_value_pty_confirm_yes(
         ],
     )
     session.expect_in_display("Apply the mutation above?", timeout=30.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_write(session)
+    session.expect_in_display("«abort (no change)»", timeout=10.0)
+    _confirm_button_bar_write(session)
     session.expect_in_display("writing", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     after = c.read_text("/tmp/track/setforge.yaml")
@@ -565,8 +566,8 @@ def test_config_remove_local_list_pty_confirm_yes(
         ],
     )
     session.expect_in_display("Apply the mutation above?", timeout=30.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_write(session)
+    session.expect_in_display("«abort (no change)»", timeout=10.0)
+    _confirm_button_bar_write(session)
     session.expect_in_display("writing", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     after = c.read_text("/tmp/track/setforge.yaml")
@@ -594,20 +595,20 @@ def test_config_add_marketplaces_pty_interactive(
             "my-mp",
         ],
     )
-    # Source-kind radiolist (github is the default per _prompt_marketplace_kind).
+    # Source-kind button_bar (github is the focused default per
+    # _prompt_marketplace_kind → button initial=0).
     session.expect_in_display("Pick the source kind", timeout=30.0)
-    # Default selection is github — Tab to OK and Enter accepts it.
-    session.send_keys("\t")
+    # github is focused on open — a bare Enter selects it.
     session.send_keys("\r")
-    # owner/name input dialog for github.
+    # owner/name text_prompt for github. text_prompt's Enter submits the
+    # buffer directly (no OK button / Tab step, unlike the old input_dialog).
     session.expect_in_display("owner/name", timeout=15.0)
     session.send_keys("owner/repo")
-    session.send_keys("\t")
     session.send_keys("\r")
-    # Final diff-preview confirm radiolist.
+    # Final diff-preview confirm button_bar.
     session.expect_in_display("Apply the mutation above?", timeout=15.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_write(session)
+    session.expect_in_display("«abort (no change)»", timeout=10.0)
+    _confirm_button_bar_write(session)
     session.expect_in_display("writing", timeout=15.0)
     session.wait_for_exit(timeout=60.0, expected_code=0)
     after = c.read_text(_HOME_LOCAL_YAML)
@@ -719,7 +720,7 @@ def test_config_add_tracked_pty_git_check_aborts(
 
     Seeds a clean git repo (valid setforge.yaml) and dirties a committed
     tracked file, so the git-clean gate — not source-validate — is what trips.
-    On a TTY the gate renders its pre-deploy radiolist; selecting the default
+    On a TTY the gate renders its pre-deploy button_bar; selecting the default
     ABORT exits 1 before any mutation.
     """
     c = docker_container()
@@ -741,11 +742,13 @@ def test_config_add_tracked_pty_git_check_aborts(
     )
     # The git-clean gate renders its pre-deploy dialog — proof THIS gate fired
     # (source-validate would never reach a dialog). Confirm the default ABORT
-    # radio is rendered+selected, then submit it (Tab→OK→Enter) so a label/
+    # button is rendered+focused, then select it (a bare Enter) so a label/
     # default regression fails at the dialog rather than silently mis-selecting.
+    # The abort button is button 0 (initial=0), rendered focused as
+    # ``«abort and let me commit first …»``.
     session.expect_in_display("pre-deploy git check", timeout=30.0)
-    session.expect_in_display("(*) abort", timeout=10.0)
-    _confirm_radiolist_abort(session)
+    session.expect_in_display("«abort and let me commit first", timeout=10.0)
+    session.send_keys("\r")  # select the focused (abort) button → exit 1
     session.wait_for_exit(timeout=60.0, expected_code=1)
 
 
