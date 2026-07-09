@@ -389,7 +389,7 @@ def test_install_auto_use_tracked_genuine_conflict_writes_and_reverts(
     exists to prove).
     """
     c = docker_container()
-    _install(c, "test-reconcile-sections")  # base == tracked == live
+    _install(c, "test-reconcile-sections")
 
     live_body = (
         "# test-reconcile-sections fixture (shared)\n\n"
@@ -414,9 +414,7 @@ def test_install_auto_use_tracked_genuine_conflict_writes_and_reverts(
         c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"]
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    # A real conflict resolved non-interactively emits the revert hint —
-    # its absence would mean the engine treated this as a no-op instead
-    # of a genuine WRITE.
+    # revert hint's presence discriminates a genuine WRITE from a no-op.
     assert "↩  revert with" in result.stdout
     assert c.read_text(_TRACKED_SHARED) == tracked_body
     assert c.read_text(_LIVE_SHARED) == tracked_body
