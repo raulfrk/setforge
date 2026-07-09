@@ -134,8 +134,8 @@ def test_status_after_install_reports_clean_human_and_json(
     # last-install section: a transition was recorded (not the empty form).
     assert "last install:" in stdout, combined
     assert "no transitions recorded" not in stdout, combined
-    # drift section: nothing diverged → all zeros.
-    assert "drift:          0 unexpected, 0 user-section drift" in stdout, combined
+    # drift section: nothing diverged → zero drifted.
+    assert "drift:          0 drifted" in stdout, combined
 
     rc, stdout, stderr = _status(c, json_mode=True)
     combined = stdout + stderr
@@ -156,9 +156,7 @@ def test_status_after_install_reports_clean_human_and_json(
     assert data["last_install"]["command"] == "install", data
     # drift all-zero and the capability rows are present.
     assert data["drift"] == {
-        "unexpected": 0,
-        "user_section": 0,
-        "expected": 0,
+        "drifted": 0,
     }, data
     assert isinstance(data["capabilities"], list), data
     assert data["capabilities"], data
@@ -172,7 +170,7 @@ def test_status_reports_drift_after_live_edit(
     After a clean install, overwrite the deployed live file so it diverges
     from tracked. ``status`` (still exit 0 — it is informational) must now
     count the divergence: the human ``drift:`` line shows a non-zero
-    unexpected count and the JSON ``drift.unexpected`` field increments
+    drifted count and the JSON ``drift.drifted`` field increments
     from 0. This guards the real ``compare``-driven drift computation that
     a mocked unit test cannot exercise.
     """
@@ -180,10 +178,10 @@ def test_status_reports_drift_after_live_edit(
     _bootstrap_git_source(c)
     _install(c)
 
-    # Clean baseline: zero unexpected drift in JSON.
+    # Clean baseline: zero drifted in JSON.
     rc, stdout, _ = _status(c, json_mode=True)
     assert rc == 0, stdout
-    assert json.loads(stdout)["data"]["drift"]["unexpected"] == 0, stdout
+    assert json.loads(stdout)["data"]["drift"]["drifted"] == 0, stdout
 
     # Diverge the deployed live file from tracked.
     c.write_text(_LIVE_DST, "tampered live content\n")
@@ -191,10 +189,10 @@ def test_status_reports_drift_after_live_edit(
     rc, stdout, stderr = _status(c)
     combined = stdout + stderr
     assert rc == 0, combined  # status stays informational on drift.
-    assert "drift:          0 unexpected" not in stdout, combined
+    assert "drift:          0 drifted" not in stdout, combined
 
     rc, stdout, stderr = _status(c, json_mode=True)
     combined = stdout + stderr
     assert rc == 0, combined
     drift = json.loads(stdout)["data"]["drift"]
-    assert drift["unexpected"] >= 1, drift
+    assert drift["drifted"] >= 1, drift

@@ -257,7 +257,7 @@ $ setforge status --profile=default
 === setforge status — default on myhost ===
 config-repo:    ~/projects/dotfiles @ (no HEAD)
 last install:   2s ago (transition 20260615T083640Z-install-default)
-drift:          0 unexpected, 0 user-section drift, 0 expected (preserve_user_keys)
+drift:          0 drifted
 overlay:        (no overlays in local.yaml)
 capabilities:   ✓ tracked-file deploy + sync  ✓ claude_plugins reconcile  ✗ vscode_extensions reconcile (code binary missing)
 === ready: run install if any drift surfaces or after fetch ===

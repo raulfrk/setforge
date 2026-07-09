@@ -123,14 +123,14 @@ def test_read_overlay_counts_parses_lists_and_mappings(tmp_path: Path) -> None:
     local.write_text(
         "extensions:\n  include:\n    - foo\n    - bar\n"
         "marketplaces:\n  work-internal: github:co/internal\n"
-        "host_local_sections:\n  doc:\n    - per-host\n",
+        "tracked_files:\n  doc:\n    src: doc.md\n",
         encoding="utf-8",
     )
     counts = status_mod._read_overlay_counts(local)
     # `extensions` here is a mapping → count = 1 (the `include` key).
     assert counts["extensions"] == 1
     assert counts["marketplaces"] == 1
-    assert counts["host_local_sections"] == 1
+    assert counts["tracked_files"] == 1
 
 
 def test_read_overlay_counts_ignores_scalar_blocks(tmp_path: Path) -> None:

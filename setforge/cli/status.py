@@ -4,9 +4,7 @@ Renders five sections per the mockup (section O):
 
 1. config-repo — HEAD short-sha, commits since last install, commits vs ``origin/main``.
 2. last install — age and transition id of the most recent install transition.
-3. drift — counts of unexpected and user-section drift (the
-   ``expected`` bucket is retired with the preserve-overlay model;
-   it renders as a stable 0).
+3. drift — count of DRIFTED entries in the compare report.
 4. overlay — counts of overlay entries declared in ``~/.config/setforge/local.yaml``.
 5. capabilities — three rows from :func:`setforge.cli._init_helpers.probe_environment`.
 
@@ -61,8 +59,6 @@ _OVERLAY_KEYS: tuple[str, ...] = (
     "extensions",
     "marketplaces",
     "plugins",
-    "host_local_sections",
-    "preserve_user_keys",
     "tracked_files",
 )
 
@@ -85,11 +81,9 @@ class _GitInfo:
 
 @dataclass(slots=True, frozen=True)
 class _DriftCounts:
-    """Aggregated drift counts for the report."""
+    """Aggregated drift count for the report."""
 
-    unexpected: int
-    user_section: int
-    expected: int
+    drifted: int
 
 
 def _git_run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -248,33 +242,20 @@ def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
 
 
 def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
-    """Compute approximate drift counts for status rendering.
+    """Compute the drift count for status rendering.
 
-    Counts are split into three buckets:
-
-    - ``user_section``: diff-bearing entries on a tracked_file under the
-      unified reconcile model (a disposition or any span).
-    - ``unexpected``: every other DRIFTED entry (including mode-only
-      drift and diff-bearing entries without a reconcile model).
-    - ``expected``: retired with the preserve-overlay model — always 0,
-      kept so the render shape is stable.
-
-    This is an approximation — precise section-reconcile
-    classification requires a full reconcile pass which status
-    deliberately skips for cost. Use ``setforge compare`` for the
-    authoritative drift state.
+    Counts every DRIFTED entry in the compare report. This is an
+    approximation — status deliberately skips the full reconcile pass
+    for cost. Use ``setforge compare`` for the authoritative per-unit
+    drift state.
     """
     report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
-    unexpected = 0
+    drifted = 0
     for entry in report.entries:
         if entry.status is not CompareStatus.DRIFTED:
             continue
-        # The disposition/spans "section-bearing" categorization was retired
-        # with the file-level disposition model; status now reports every
-        # DRIFTED entry as unexpected. Use ``setforge compare`` for the
-        # authoritative per-unit reconcile drift state.
-        unexpected += 1
-    return _DriftCounts(unexpected=unexpected, user_section=0, expected=0)
+        drifted += 1
+    return _DriftCounts(drifted=drifted)
 
 
 def _read_overlay_counts(local_yaml: Path) -> dict[str, int]:
@@ -351,11 +332,7 @@ def _render_last_install(
 
 def _render_drift(drift: _DriftCounts) -> None:
     """Print the ``drift`` section."""
-    typer.echo(
-        f"drift:          {drift.unexpected} unexpected, "
-        f"{drift.user_section} user-section drift, "
-        f"{drift.expected} expected (preserve_user_keys)"
-    )
+    typer.echo(f"drift:          {drift.drifted} drifted")
 
 
 def _render_overlay(overlay_counts: Mapping[str, int]) -> None:
@@ -481,9 +458,7 @@ def _status_json_data(
         },
         "last_install": last_install,
         "drift": {
-            "unexpected": drift.unexpected,
-            "user_section": drift.user_section,
-            "expected": drift.expected,
+            "drifted": drift.drifted,
         },
         "overlay": dict(overlay_counts),
         "capabilities": [
