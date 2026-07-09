@@ -14,9 +14,17 @@ import textwrap
 
 import pytest
 
+import scripts.mutmut_diff_gate as gate
 from scripts.mutmut_diff_gate import (
+    EXIT_BLOCKED,
+    EXIT_CLEAN,
+    EXIT_FAILCLOSED,
+    GateFailClosed,
+    MutmutRun,
     Survivor,
+    catastrophic_run,
     changed_lines_from_diff,
+    count_mutants,
     decide,
     function_spans,
     parse_results,
@@ -280,6 +288,151 @@ def test_empty_core_intersection_is_a_noop() -> None:
     ]
     kept = survivors_on_changed_lines(survivors, {}, {})
     assert kept == []
+
+
+# --- count_mutants (total, any status) ----------------------------------------
+
+
+def test_count_mutants_counts_every_status() -> None:
+    # 7 data lines across killed/survived/timeout/suspicious/no-tests/not-checked.
+    assert count_mutants(_RESULTS) == 7
+
+
+def test_count_mutants_zero_on_empty_results() -> None:
+    assert count_mutants("") == 0
+    # A banner-only / no-data-line output also parses to zero.
+    assert count_mutants("Failed to run clean test\n") == 0
+
+
+# --- catastrophic_run (pure fail-closed detector) -----------------------------
+
+
+def test_catastrophic_when_nonzero_exit_with_baseline_abort_signature() -> None:
+    run = MutmutRun(returncode=1, output="...\nFailed to run clean test\n")
+    # Even if results happen to be non-empty, the abort signature is decisive.
+    assert catastrophic_run(run, _RESULTS, expected=True) is True
+
+
+def test_catastrophic_on_failed_to_collect_stats_signature() -> None:
+    run = MutmutRun(returncode=1, output="failed to collect stats. runner ...")
+    assert catastrophic_run(run, "", expected=True) is True
+
+
+def test_catastrophic_when_zero_mutants_parsed_and_expected() -> None:
+    # Clean-baseline abort: mutmut wrote no results, so `mutmut results` is empty.
+    run = MutmutRun(returncode=0, output="")
+    assert catastrophic_run(run, "", expected=True) is True
+
+
+def test_not_catastrophic_when_zero_mutants_but_not_expected() -> None:
+    # A diff-scoped no-op path never gets here, but guard the semantics anyway:
+    # if no mutants were expected, an empty results file is not catastrophic.
+    run = MutmutRun(returncode=0, output="")
+    assert catastrophic_run(run, "", expected=False) is False
+
+
+def test_not_catastrophic_on_survivors_present_nonzero() -> None:
+    # `mutmut run` exits nonzero merely because survivors remain — NOT an abort.
+    run = MutmutRun(returncode=2, output="Running mutation testing\n... done\n")
+    assert catastrophic_run(run, _RESULTS, expected=True) is False
+
+
+def test_not_catastrophic_on_clean_pass_zero_survivors() -> None:
+    # N mutants, all killed -> 0 survivors but count > 0 -> a clean pass, exit 0.
+    all_killed = "\n".join(
+        f"    setforge.scalar_merge.x_f__mutmut_{i}: killed" for i in range(5)
+    )
+    run = MutmutRun(returncode=0, output="... done\n")
+    assert catastrophic_run(run, all_killed, expected=True) is False
+    assert parse_results(all_killed) == []  # zero survivors
+    assert count_mutants(all_killed) == 5  # but N mutants parsed
+
+
+# --- main() fail-closed + no-double-run (impure edge, injected seams) ----------
+
+
+def _stub_edge(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    mutmut_run=None,
+    results: str,
+    diff: str | None = "",
+) -> dict[str, int]:
+    """Patch the gate's impure edge with in-memory stand-ins and return a call
+    counter so tests can assert e.g. that ``--full`` never invokes mutmut run.
+
+    ``diff=None`` leaves the REAL ``_git_diff_core`` in place (so a stubbed
+    ``_git_merge_base`` raise can propagate as :class:`GateFailClosed`)."""
+    calls = {"run": 0}
+
+    def fake_run_mutmut(patterns):
+        calls["run"] += 1
+        return mutmut_run if mutmut_run is not None else MutmutRun(0, "")
+
+    monkeypatch.setattr(gate, "_run_mutmut", fake_run_mutmut)
+    monkeypatch.setattr(gate, "_mutmut_results", lambda: results)
+    monkeypatch.setattr(gate, "read_allowlist", lambda: set())
+    if diff is not None:
+        monkeypatch.setattr(gate, "_git_diff_core", lambda: diff)
+    return calls
+
+
+def test_full_mode_does_not_rerun_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The nightly workflow already ran `mutmut run`; --full must only read results.
+    calls = _stub_edge(monkeypatch, results=_RESULTS)
+    code = gate.main(["--full"])
+    assert calls["run"] == 0  # NO second whole-engine pass
+    assert code == EXIT_BLOCKED  # _RESULTS carries unkilled survivors
+
+
+def test_full_mode_failclosed_on_empty_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Nightly baseline abort: workflow's `|| true` hid the exit, results empty.
+    _stub_edge(monkeypatch, results="")
+    assert gate.main(["--full"]) == EXIT_FAILCLOSED
+
+
+def test_diff_mode_failclosed_on_baseline_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A changed core file -> mutmut runs -> it aborts on a red clean baseline.
+    diff = (
+        "--- a/setforge/scalar_merge.py\n"
+        "+++ b/setforge/scalar_merge.py\n"
+        "@@ -1 +1 @@ def f():\n"
+        "+x = 1\n"
+    )
+    calls = _stub_edge(
+        monkeypatch,
+        mutmut_run=MutmutRun(1, "Failed to run clean test"),
+        results="",  # aborted before writing results
+        diff=diff,
+    )
+    assert gate.main([]) == EXIT_FAILCLOSED
+    assert calls["run"] == 1  # it did attempt the scoped run
+
+
+def test_diff_mode_failclosed_on_missing_origin_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom() -> str:
+        raise GateFailClosed("origin/main not found")
+
+    # diff=None keeps the REAL _git_diff_core, which calls the stubbed
+    # _git_merge_base and lets the GateFailClosed propagate through main().
+    _stub_edge(monkeypatch, results="", diff=None)
+    monkeypatch.setattr(gate, "_git_merge_base", boom)
+    assert gate.main([]) == EXIT_FAILCLOSED
+
+
+def test_diff_mode_noop_exits_clean_without_running_mutmut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No core file in the diff -> fast no-op, mutmut never invoked.
+    calls = _stub_edge(monkeypatch, results="", diff="")
+    assert gate.main([]) == EXIT_CLEAN
+    assert calls["run"] == 0
 
 
 if __name__ == "__main__":

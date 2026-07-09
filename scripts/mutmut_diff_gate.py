@@ -39,11 +39,17 @@ Chosen mutmut-3.6 scoping mechanism (verified by hand):
   ``source_paths`` stays the whole package (imports must resolve in the sandbox);
   narrowing happens at selection time, not by editing ``source_paths``.
 
-Clean-baseline safety: ``mutmut run`` runs the clean (unmutated) test suite in
-its sandbox first and aborts with a nonzero exit + ``Failed to run clean test``
-(or ``failed to collect stats``) if that suite is red. This gate treats a
-mutmut-run failure that is NOT the expected survivors-present nonzero as a
-fail-closed exit 2 — a red sandbox suite can never be read as "0 survivors".
+Clean-baseline safety (fail-closed, exit 2): ``mutmut run`` runs the clean
+(unmutated) test suite in its sandbox first and aborts with a nonzero exit +
+``Failed to run clean test`` (or ``failed to collect stats``) BEFORE writing
+any results if that suite is red. The gate refuses to read that as "0
+survivors". :func:`catastrophic_run` detects it two ways — the run exited
+nonzero with a baseline-abort signature in its output, OR ``mutmut results``
+parses ZERO TOTAL mutants when mutants were expected (distinct from "0
+survivors of N", a clean pass) — and :func:`main` returns exit 2 for it. A
+missing ``origin/main`` (no diff base) is likewise a :class:`GateFailClosed`
+exit 2, never a traceback. This mirrors the 0/1/2 fail-closed convention of the
+sibling gates ``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
 
 Statuses collected as survivors: ``survived``, ``timeout``, ``suspicious``
 (NOT ``survived`` alone — a timeout or suspicious mutant is unkilled too, and
@@ -105,6 +111,19 @@ _DIFF_NEWFILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 _MUTMUT_SUFFIX_RE = re.compile(r"__mutmut_\d+$")
 _METHOD_SEP = "ǁ"  # ǁ — mutmut's class/method mangling separator
 
+# Gate exit codes (mirrors the sibling gates' 0/1/2 fail-closed convention:
+# scripts/check_policy_lints.py, scripts/check_schema_gates.py).
+EXIT_CLEAN = 0
+EXIT_BLOCKED = 1
+EXIT_FAILCLOSED = 2
+
+# Substrings mutmut prints when the clean (unmutated) sandbox suite is red and
+# the run aborts BEFORE writing results. Matching either is a catastrophic run.
+_BASELINE_ABORT_SIGNATURES: tuple[str, ...] = (
+    "Failed to run clean test",
+    "failed to collect stats",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Survivor:
@@ -158,7 +177,11 @@ class Survivor:
 
         mutmut prefixes the function/method with ``x_`` / ``xǁ``; the module
         dotted-path never contains ``ǁ`` and never has an ``x_``-prefixed final
-        segment, so the local part begins at the last ``.x`` boundary."""
+        segment, so the local part begins at the last ``.x`` boundary. SAFETY:
+        this relies on no CORE_FILES module component itself being named
+        ``x*`` (which would make ``.x`` match inside the module path). The core
+        is the merge/reconcile/store modules — none is x-prefixed — so the last
+        ``.x`` is always the mutant marker, never a module segment."""
         idx = stem.rfind(".x")
         return stem[idx + 1 :] if idx != -1 else stem
 
@@ -184,12 +207,14 @@ def changed_lines_from_diff(diff_text: str) -> dict[str, set[int]]:
     return {path: lines for path, lines in changed.items() if lines}
 
 
-def parse_results(results_text: str) -> list[Survivor]:
-    """Parse ``mutmut results`` stdout into the unkilled :class:`Survivor` set.
+def _result_lines(results_text: str) -> list[tuple[str, str]]:
+    """Every ``    <mutant_name>: <status>`` data line as ``(name, status)``.
 
-    Each data line is ``    <mutant_name>: <status>``. Only the three unkilled
-    statuses (:data:`UNKILLED_STATUSES`) are retained."""
-    out: list[Survivor] = []
+    Non-data lines (blanks, banners) yield nothing. This is the total-mutant
+    view — every status, not just the unkilled ones — so callers can tell
+    "0 survivors of N mutants" (a clean pass) from "0 mutants parsed" (a
+    baseline abort that wrote no results)."""
+    out: list[tuple[str, str]] = []
     for raw in results_text.splitlines():
         line = raw.strip()
         if ": " not in line:
@@ -197,18 +222,42 @@ def parse_results(results_text: str) -> list[Survivor]:
         name, _, status = line.rpartition(": ")
         name = name.strip()
         status = status.strip()
-        if status in UNKILLED_STATUSES and name:
-            out.append(Survivor(name, status))
+        if name and status:
+            out.append((name, status))
     return out
+
+
+def count_mutants(results_text: str) -> int:
+    """Total number of mutants ``mutmut results`` reported, in ANY status.
+
+    Zero means mutmut wrote no usable results (e.g. a clean-baseline abort),
+    which is distinct from "0 survivors of N" and is the fail-closed signal."""
+    return len(_result_lines(results_text))
+
+
+def parse_results(results_text: str) -> list[Survivor]:
+    """Parse ``mutmut results`` stdout into the unkilled :class:`Survivor` set.
+
+    Each data line is ``    <mutant_name>: <status>``. Only the three unkilled
+    statuses (:data:`UNKILLED_STATUSES`) are retained."""
+    return [
+        Survivor(name, status)
+        for name, status in _result_lines(results_text)
+        if status in UNKILLED_STATUSES
+    ]
 
 
 def function_spans(source: str) -> dict[str, tuple[int, int]]:
     """Map every function/method name in ``source`` to its ``(start, end)``
     line span (1-based, inclusive) via AST.
 
-    Nested/duplicate names collapse to the LAST definition seen; mutmut targets
-    a function by bare name, and the core modules do not reuse names across
-    scopes, so this is unambiguous for the gate's purpose."""
+    ``ast.walk`` visits ALL depths, and duplicate names collapse to the LAST
+    definition seen. ASSUMPTION (holds for the core): mutmut mutates only
+    top-level functions and one-level-deep methods, and the merge/reconcile/
+    store modules do not reuse a function/method name across scopes — so the
+    bare-name lookup a mutant needs is unambiguous. If a future core module
+    reused a name, the last-wins collapse could pick the wrong span; the
+    modules are small and name-unique today, so this is safe."""
     spans: dict[str, tuple[int, int]] = {}
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -265,10 +314,42 @@ def read_allowlist(path: Path = ALLOWLIST_PATH) -> set[str]:
 def decide(
     survivors: list[Survivor], allowlist: set[str]
 ) -> tuple[list[Survivor], int]:
-    """Subtract the allowlist and pick the exit code: 1 if any survivor remains,
-    else 0. Returns ``(remaining, exit_code)``."""
+    """Subtract the allowlist and pick the exit code: :data:`EXIT_BLOCKED` if any
+    survivor remains, else :data:`EXIT_CLEAN`. Returns ``(remaining, exit_code)``."""
     remaining = [s for s in survivors if s.name not in allowlist]
-    return remaining, (1 if remaining else 0)
+    return remaining, (EXIT_BLOCKED if remaining else EXIT_CLEAN)
+
+
+@dataclass(frozen=True, slots=True)
+class MutmutRun:
+    """The captured outcome of a ``mutmut run`` invocation: its return code and
+    combined stdout+stderr. Kept as data so the catastrophic-run classifier is
+    a PURE function, unit-testable with injected values (no real subprocess)."""
+
+    returncode: int
+    output: str
+
+
+def catastrophic_run(run: MutmutRun, results_text: str, *, expected: bool) -> bool:
+    """True when mutmut did NOT produce usable mutation results — the
+    fail-closed signal (distinct from "clean pass, 0 survivors").
+
+    Two independent detectors, either sufficient:
+
+    * the run exited nonzero AND its output carries a baseline-abort signature
+      (``Failed to run clean test`` / ``failed to collect stats``) — mutmut
+      bailed before mutating anything; and
+    * ``results_text`` parses ZERO total mutants while mutants were ``expected``
+      (a scoped run with patterns, or ``--full``) — the results file is empty /
+      unusable, which a real run over a non-empty core never is.
+
+    A nonzero return code ALONE is NOT catastrophic: ``mutmut run`` exits
+    nonzero whenever survivors remain, which is the normal blocking case."""
+    if run.returncode != 0 and any(
+        sig in run.output for sig in _BASELINE_ABORT_SIGNATURES
+    ):
+        return True
+    return expected and count_mutants(results_text) == 0
 
 
 # --- git / mutmut driving (the impure edge) -----------------------------------
@@ -285,13 +366,35 @@ def _existing_core_files() -> list[str]:
     return [f for f in CORE_FILES if (REPO_ROOT / f).exists()]
 
 
+class GateFailClosed(Exception):
+    """A precondition failed such that the gate cannot compute a verdict (e.g.
+    ``origin/main`` is absent). Carries a user-facing diagnostic; ``main``
+    catches it and returns :data:`EXIT_FAILCLOSED`, never a traceback."""
+
+
+def _git_merge_base() -> str:
+    """The ``git merge-base origin/main HEAD`` fork-point sha.
+
+    A missing ``origin/main`` (common on a fresh local clone that never fetched
+    it) makes ``git merge-base`` exit nonzero; that is surfaced as a
+    :class:`GateFailClosed` with a fix hint, not an uncaught traceback."""
+    proc = _run(["git", "merge-base", "origin/main", "HEAD"], check=False)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise GateFailClosed(
+            "cannot locate the origin/main fork point "
+            "(`git merge-base origin/main HEAD` failed). Fetch it first "
+            "(`git fetch origin main`), or the gate cannot scope the diff."
+        )
+    return proc.stdout.strip()
+
+
 def _git_diff_core() -> str:
     """``git diff --unified=0 <merge-base>...HEAD -- <core files>`` text.
 
-    Three-dot against an explicit ``git merge-base origin/main HEAD`` — never a
-    two-dot ``..HEAD`` (which would diff against origin/main's tip, not the
-    fork point) — so the changed set is exactly what this branch introduced."""
-    base = _run(["git", "merge-base", "origin/main", "HEAD"], check=True).stdout.strip()
+    Three-dot against an explicit :func:`_git_merge_base` — never a two-dot
+    ``..HEAD`` (which would diff against origin/main's tip, not the fork point)
+    — so the changed set is exactly what this branch introduced."""
+    base = _git_merge_base()
     result = _run(
         [
             "git",
@@ -306,16 +409,18 @@ def _git_diff_core() -> str:
     return result.stdout
 
 
-def _run_mutmut(patterns: list[str] | None) -> None:
-    """Run ``mutmut run`` (optionally scoped to ``patterns``).
+def _run_mutmut(patterns: list[str] | None) -> MutmutRun:
+    """Run ``mutmut run`` (optionally scoped to ``patterns``); capture the outcome.
 
-    mutmut exits nonzero when survivors remain — that is EXPECTED and not a
-    gate failure, so its exit code is intentionally ignored here (the gate reads
-    survivors from ``mutmut results`` instead). But a clean-baseline abort prints
-    a diagnostic and produces NO results; that surfaces downstream as an empty /
-    unusable results parse, and :func:`_collect_survivors` fail-closes on it."""
+    mutmut exits nonzero when survivors remain — that is EXPECTED and not a gate
+    failure (the gate reads survivors from ``mutmut results`` instead). But a
+    clean-baseline abort exits nonzero and prints a baseline-abort signature
+    while writing NO results. The returncode + output are captured here so
+    :func:`catastrophic_run` can tell the two nonzero cases apart and fail-closed
+    on the abort."""
     cmd = ["uv", "run", "mutmut", "run", *(patterns or [])]
-    _run(cmd, check=False)
+    proc = _run(cmd, check=False)
+    return MutmutRun(returncode=proc.returncode, output=proc.stdout + proc.stderr)
 
 
 def _mutmut_results() -> str:
@@ -342,6 +447,67 @@ def _print_block(remaining: list[Survivor]) -> None:
     )
 
 
+def _print_failclosed(reason: str) -> None:
+    print(f"Mutation gate FAIL-CLOSED (exit 2): {reason}", file=sys.stderr)
+
+
+def _run_full(allowlist: set[str]) -> int:
+    """Nightly ``--full`` path: gate the results the WORKFLOW already produced.
+
+    The nightly workflow runs ``mutmut run || true`` itself (the ``|| true``
+    swallows mutmut's survivors-present nonzero), so this does NOT re-run the
+    whole-engine pass — it only reads + gates the existing results. Because the
+    workflow's ``|| true`` hides a baseline-abort exit too, the fail-closed
+    protection here rides on the results-side detector: zero total mutants
+    parsed (an empty/unusable results file) is treated as catastrophic."""
+    results_text = _mutmut_results()
+    if catastrophic_run(MutmutRun(0, ""), results_text, expected=True):
+        _print_failclosed(
+            "mutmut produced no usable mutation results (0 mutants parsed) — "
+            "the nightly `mutmut run` likely aborted on a red clean baseline."
+        )
+        return EXIT_FAILCLOSED
+    survivors = parse_results(results_text)
+    remaining, code = decide(survivors, allowlist)
+    if remaining:
+        _print_block(remaining)
+    return code
+
+
+def _run_diff(allowlist: set[str]) -> int:
+    """PR diff-scoped path: run mutmut over only the changed core modules and
+    gate survivors whose function overlaps a changed line."""
+    diff_text = _git_diff_core()
+    changed = changed_lines_from_diff(diff_text)
+    # Restrict to the core files that exist (defence against a stale nominal scope).
+    core = set(_existing_core_files())
+    changed = {p: lines for p, lines in changed.items() if p in core}
+    if not changed:
+        # No core line changed by this PR — fast no-op.
+        return EXIT_CLEAN
+
+    # Scope mutmut to exactly the changed core modules via fnmatch globs.
+    patterns = [p[: -len(".py")].replace("/", ".") + ".*" for p in sorted(changed)]
+    run = _run_mutmut(patterns)
+
+    results_text = _mutmut_results()
+    if catastrophic_run(run, results_text, expected=True):
+        _print_failclosed(
+            "mutmut did not produce usable mutation results for the changed "
+            "core modules — a red clean baseline or an aborted run. Refusing "
+            "to read this as '0 survivors'."
+        )
+        return EXIT_FAILCLOSED
+
+    survivors = parse_results(results_text)
+    sources = _read_sources(set(changed))
+    on_diff = survivors_on_changed_lines(survivors, changed, sources)
+    remaining, code = decide(on_diff, allowlist)
+    if remaining:
+        _print_block(remaining)
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -353,39 +519,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     allowlist = read_allowlist()
-
-    if args.full:
-        # Nightly: the caller runs `mutmut run` over the whole core first; here
-        # we just read + gate the results. (Running it here too is harmless but
-        # the nightly workflow already did it, so we only re-run if no results.)
-        _run_mutmut(None)
-        survivors = parse_results(_mutmut_results())
-        remaining, code = decide(survivors, allowlist)
-        if remaining:
-            _print_block(remaining)
-        return code
-
-    # PR diff-scoped path.
-    diff_text = _git_diff_core()
-    changed = changed_lines_from_diff(diff_text)
-    # Restrict to the core files that exist (defence against a stale nominal scope).
-    core = set(_existing_core_files())
-    changed = {p: lines for p, lines in changed.items() if p in core}
-    if not changed:
-        # No core line changed by this PR — fast no-op.
-        return 0
-
-    # Scope mutmut to exactly the changed core modules via fnmatch globs.
-    patterns = [p[: -len(".py")].replace("/", ".") + ".*" for p in sorted(changed)]
-    _run_mutmut(patterns)
-
-    survivors = parse_results(_mutmut_results())
-    sources = _read_sources(set(changed))
-    on_diff = survivors_on_changed_lines(survivors, changed, sources)
-    remaining, code = decide(on_diff, allowlist)
-    if remaining:
-        _print_block(remaining)
-    return code
+    try:
+        return _run_full(allowlist) if args.full else _run_diff(allowlist)
+    except GateFailClosed as exc:
+        _print_failclosed(str(exc))
+        return EXIT_FAILCLOSED
 
 
 if __name__ == "__main__":
