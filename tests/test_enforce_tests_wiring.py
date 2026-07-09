@@ -21,7 +21,7 @@ CLAUDE = REPO / "CLAUDE.md"
 GATE_SCRIPTS = ["check_policy_lints.py", "check_schema_gates.py", "check-no-bd-refs.sh"]
 AGENTS = ["test-quality-reviewer", "design-invariant-reviewer"]
 GLOBAL_FANS = ["reviewing-python-code", "reviewing-bd-leaks"]
-BASE_REF = "merge-base HEAD origin/main"
+BASE_REF = "merge-base HEAD main"
 
 
 def _frontmatter(text: str) -> dict[str, str]:

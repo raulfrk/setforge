@@ -140,7 +140,7 @@ What it dispatches, and the contract it owns:
   the fan on failure, and consolidates **one two-axis verdict** (BLOCKING:
   Tier-1 + bd-leak / ADVISORY: the LLM fan).
 - All reviewers receive the **same once-computed range**, base pinned to
-  `git merge-base HEAD origin/main` — see the skill for the full input contract.
+  `git merge-base HEAD main` — see the skill for the full input contract.
 
 **Cross-host wiring.** The generic hook that makes session-flow Phase 5/7 honor
 this manifest is one project-agnostic line in the global `session-flow` skill
