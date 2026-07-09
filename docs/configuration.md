@@ -88,11 +88,6 @@ Optional per-entry keys:
 - `mode` — file mode, written as a **YAML-1.2 octal literal** (`0o755`, not
   `0755` or `755`). Omit to preserve the source file's mode.
 - `symlink` — deploy as a symlink instead of copying.
-- `disposition` — file-level reconciliation policy (`shared` / `forked` /
-  `pinned`): opt into the stored-base 3-way merge instead of a verbatim deploy
-  (see below).
-- `spans` — sub-file pinned/forked regions (the schema-2.0 model that
-  superseded the legacy `preserve_*` family). See below.
 
 `src` must exist on disk under `<config-repo>/tracked/` — `setforge validate`
 checks this.
@@ -139,19 +134,18 @@ markers need a `host-local` or `shared` semantics keyword:
 <!-- setforge:user-section end shared NAME -->
 ```
 
-**The deployed file is markerless.** Under the schema-2.0 unified-span contract,
-`install` strips the tracked-authored markers and resolves each section through
-the span model rather than letting markers survive in the live file:
+**The deployed file is markerless.** `install` strips the tracked-authored
+markers so they never reach the live file, and reconciles each section by its
+semantics:
 
 - **host-local** → the per-host body is injected *markerless* into the live file
-  and kept as an OVERLAY span in `local.yaml` (nothing host-specific reaches the
-  config repo).
-- **shared** → the region becomes a stored-base 3-way merge (`disposition:
-  shared`); the end marker's `hash=<sha256-hex>` segment lets the reconciler
-  distinguish pending-tracked drift from live edits.
+  and preserved across re-installs (nothing host-specific reaches the config
+  repo).
+- **shared** → the region is reconciled as a stored-base 3-way merge against
+  live edits; the reconcile wizard surfaces any conflict.
 
-Configs predating schema 2.0 (no `schema_version`, or an older one) that relied
-on marker *survival* in the live file are migrated to this span model by
+Configs predating the current schema (no `schema_version`, or an older one) that
+relied on marker *survival* in the live file are migrated forward by
 `setforge migrate` (and transparently on
 `install`). The project-root [CLAUDE.md](../CLAUDE.md) documents the full marker
 grammar. Marker pairs are **hand-authored** — there is no `section` subcommand;
@@ -174,17 +168,6 @@ already has content is left untouched (the host owns it), so later template
 edits do not propagate to a host that has already adopted the section. This is a
 convenience layer on top of hand-authored markers — the marker pair is still
 what declares the section.
-
-### YAML / JSON: preserved keys → spans
-
-Schema 2.0 replaced the per-key `preserve_user_keys` / `preserve_user_keys_deep`
-flags with the unified **span** model. To keep host-local values out of the
-config repo while still deploying a tracked file, give the file
-`disposition: forked` and declare PINNED `spans` at the structural paths you
-want preserved (a deep span pins a whole subtree). The `setforge override` CLI
-(`fork` / `pin` / `list` / `show`) manages these; legacy
-`preserve_user_keys[_deep]` configs are auto-translated to PINNED spans by
-`setforge migrate`.
 
 ## Host-local, never-tracked files
 

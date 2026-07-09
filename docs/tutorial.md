@@ -30,7 +30,6 @@ a realistic terminal mockup, and a note on when to reach for it.
   - [Config repo: init, fetch, migrate, upgrade](#config-repo-commands)
   - [cleanup-orphans](#cleanup-orphans)
   - [User sections (host-local vs shared) + the reconcile wizard](#user-sections--the-reconcile-wizard)
-  - [Overrides: fork / pin + the conflict wizard](#overrides--the-conflict-wizard)
   - [Plugins, marketplaces, extensions](#plugins-marketplaces-extensions)
   - [Snapshots](#snapshots)
   - [Profiles, transitions, config](#profiles-transitions-config)
@@ -60,11 +59,11 @@ a realistic terminal mockup, and a note on when to reach for it.
   what's deployed on the host. `install` pushes tracked → live; `sync`/`capture`
   pull live → tracked; `compare` reports the difference.
 - **User sections.** A region you mark in a tracked *source* file as
-  **host-local** (per-machine; body kept in `local.yaml`, never shared) or
-  **shared** (travels in the config repo). The markers are the source-side
-  declaration only — under schema 2.0 the live file is driven by spans, not
-  marker survival: host-local bodies deploy *markerless*, and shared-section
-  drift is reconciled by a stored-base 3-way merge (the reconcile wizard).
+  **host-local** (per-machine, never shared) or **shared** (travels in the
+  config repo). The markers are the source-side declaration only — they never
+  survive into the deployed file: host-local bodies deploy *markerless* and are
+  preserved across re-installs, and shared-section drift is reconciled by a
+  stored-base 3-way merge (the reconcile wizard).
 
 For the precise schema and every field, see **[configuration.md](configuration.md)**.
 
@@ -489,23 +488,21 @@ cleaned up.
 A **user section** is a region you mark in a tracked *source* markdown file with
 HTML-comment markers. The marker pair is the **authoring syntax** — it is *not*
 what ends up in the deployed file. A section is either **host-local**
-(per-machine; the body lives in `local.yaml` and is never shared) or **shared**
-(travels in the config repo). This lets one tracked file carry both shared and
-per-machine content.
+(per-machine, never shared) or **shared** (travels in the config repo). This lets
+one tracked file carry both shared and per-machine content.
 
-**The deployed file is markerless.** As of schema 2.0 (the unified-span
-contract), `install` no longer relies on markers surviving in the live file — it
-strips the tracked-authored markers and resolves each section through the span
-model instead:
+**The deployed file is markerless.** `install` strips the tracked-authored
+markers so they never survive in the live file, and reconciles each section by
+its semantics:
 
 - **host-local** → the per-host body is injected *markerless* into the live file
-  and stored as an OVERLAY span in `local.yaml` (nothing host-specific in the
-  config repo, no markers in the live file).
-- **shared** → the region becomes a stored-base 3-way merge (`disposition:
-  shared`); tracked-side updates reconcile against live edits via the wizard.
+  and preserved across re-installs (nothing host-specific in the config repo, no
+  markers in the live file).
+- **shared** → the region is reconciled as a stored-base 3-way merge; tracked-side
+  updates reconcile against live edits via the wizard.
 
-Legacy `version: 1` configs that relied on marker *survival* are migrated to
-this span model by `setforge migrate` (and on `install`).
+Legacy configs that relied on marker *survival* are migrated forward by
+`setforge migrate` (and on `install`).
 
 Declare a section by hand-authoring the marker pair in the tracked source (there
 is no `section` subcommand). The `host-local` / `shared` keyword is required on
@@ -551,54 +548,8 @@ The options:
 - **Skip** — keep live for this region and re-surface it on the next install
   (the file is not re-baselined).
 
-A worked example of the host-local vs shared model and the `disposition` /
-`spans` preservation model is in **[configuration.md](configuration.md)**.
-
-<a id="overrides--the-conflict-wizard"></a>
-### Overrides: fork / pin + the conflict wizard
-
-An **override** changes a tracked file's *disposition* — how setforge reconciles
-it:
-
-- **fork** — three-way merge tracked changes into the live file (live edits are
-  preserved; upstream changes still flow in). The file is never blindly
-  overwritten.
-- **pin** — live always wins; the file is never merged or clobbered.
-
-```console
-$ setforge override fork notes --profile=default      # merge upstream, keep live edits
-$ setforge override pin gitconfig --profile=default   # freeze live, ignore tracked changes
-$ setforge override list --profile=default
-$ setforge override show notes --profile=default      # spans + annotations for one file
-$ setforge override unfork notes --profile=default    # drop a FORKED override
-$ setforge override unpin gitconfig --profile=default # drop a PINNED override
-$ setforge override reset notes --profile=default     # clear ALL override state for one file
-```
-
-When a forked file's merge hits a real conflict (both sides changed the same
-place), install opens the conflict wizard — one prompt per conflict:
-
-```
-───────────────────────────────────────────────────────────
- line conflict
-───────────────────────────────────────────────────────────
- ours (live):
-   editor = vim
- theirs (tracked):
-   editor = nano
-
-  [k] keep ours (live)      preserve the live side
-  [t] take theirs (tracked) overwrite with the tracked side
-  [e] edit                  open $EDITOR seeded with ours
-  [s] skip                  keep live, ask again next install
-
-  Choice (k/t/e/s): _
-```
-
-*(conflict wizard rendered from `setforge/conflict_wizard.py`)*
-
-*When:* `fork` a file you hand-edit per machine but still want upstream updates
-for; `pin` a file you've fully taken over locally.
+A worked example of the host-local vs shared model is in
+**[configuration.md](configuration.md)**.
 
 <a id="plugins-marketplaces-extensions"></a>
 ### Plugins, marketplaces, extensions
