@@ -174,7 +174,7 @@ After editing the config repo, commit + push there. On the next `setforge instal
 
 `~/.claude/additional-content.md` is intentionally untracked per host. `setforge install` creates a stub if missing. Never commit its content.
 
-`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Those keys stay host-local through the reconcile engine's per-key staging: on `install` each top-level key in the JSONC file is classified SHARED (merged into tracked) or LOCAL (kept host-only); `sync` promotes only the SHARED keys back to tracked. Comments in the JSONC settings file are preserved end-to-end (json5 AST round-trip).
+`~/.vscode-server/data/Machine/settings.json` may carry host-local keys (e.g. `claudeCode.allowDangerouslySkipPermissions`) that are intentionally not in tracked. Those keys stay host-local without manual intervention: an unclassified key defaults to host-only (`PENDING`) and is never promoted into tracked; only a key explicitly classified `SHARED` is promoted into tracked on `sync`, and `install` merges tracked → live at key granularity, honoring existing classifications rather than creating them. Comments in the JSONC settings file are preserved end-to-end (json5 AST round-trip).
 
 ## Don't-do list
 
