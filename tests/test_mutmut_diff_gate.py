@@ -435,5 +435,34 @@ def test_diff_mode_noop_exits_clean_without_running_mutmut(
     assert calls["run"] == 0
 
 
+def test_full_mode_failclosed_on_mutmut_results_infra_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An infra-level `mutmut results` failure (nonzero exit) must fail-closed
+    # (exit 2), not traceback — same error model as a missing origin/main.
+    monkeypatch.setattr(gate, "read_allowlist", lambda: set())
+
+    def boom() -> str:
+        raise GateFailClosed("`mutmut results` failed — cannot read outcomes")
+
+    monkeypatch.setattr(gate, "_mutmut_results", boom)
+    assert gate.main(["--full"]) == EXIT_FAILCLOSED
+
+
+def test_mutmut_results_raises_gatefailclosed_on_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The real _mutmut_results converts a nonzero `mutmut results` exit into
+    # GateFailClosed (which main maps to exit 2), never a CalledProcessError.
+    import subprocess
+
+    def fake_run(cmd, *, check):
+        return subprocess.CompletedProcess(cmd, returncode=3, stdout="", stderr="boom")
+
+    monkeypatch.setattr(gate, "_run", fake_run)
+    with pytest.raises(GateFailClosed):
+        gate._mutmut_results()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

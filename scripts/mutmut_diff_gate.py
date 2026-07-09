@@ -424,7 +424,16 @@ def _run_mutmut(patterns: list[str] | None) -> MutmutRun:
 
 
 def _mutmut_results() -> str:
-    return _run(["uv", "run", "mutmut", "results"], check=True).stdout
+    """``mutmut results`` stdout. An infra-level failure (nonzero exit) is
+    surfaced as a :class:`GateFailClosed` (exit 2), matching :func:`_git_merge_base`
+    — never an uncaught ``CalledProcessError`` traceback."""
+    proc = _run(["uv", "run", "mutmut", "results"], check=False)
+    if proc.returncode != 0:
+        raise GateFailClosed(
+            "`mutmut results` failed — cannot read mutation outcomes "
+            f"(exit {proc.returncode})."
+        )
+    return proc.stdout
 
 
 def _read_sources(paths: set[str]) -> dict[str, str]:
