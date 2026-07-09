@@ -23,15 +23,15 @@ Dispatch inputs:
 Your aspects to check:
 
 1. **Meta-twist compliance** — every doc edit goes to `tracked/claude/...`, NEVER to `~/.claude/...` directly. Edits to live files are CRITICAL (they'll be clobbered on next `setforge install`).
-2. **User-section markers preserved** — when editing inside `user-section start KEYWORD NAME` / `user-section end KEYWORD NAME` HTML-comment markers (where `KEYWORD` is `host-local` or `shared`) in tracked CLAUDE.md, the markers must remain intact and well-formed. Both start and end MUST carry the `host-local|shared` semantics keyword and the same keyword on both sides (untagged or mismatched markers raise `MarkerError` at install). Broken markers are CRITICAL (host-local edits won't survive install; `shared` rules won't reconcile via the install wizard).
+2. **User-section markers preserved** — when editing inside `<setforge:user-section ... hash=...>` start/end tags in tracked CLAUDE.md, the markers must remain intact and well-formed, with matching `hash=` values on both the start and end tag. Broken or hash-stripped markers are CRITICAL (host-local edits won't survive install).
 3. **Enforcement-layer correctness** — a rule lands in the file whose enforcement properties match its scope:
    - Cross-project critical rules → `tracked/claude/CLAUDE.md` (OVERRIDE wrapper, always loaded).
-   - Workflow-flow detail → `tracked/claude/superpowers-prefs.md` (OVERRIDE via @import).
-   - Project-specific tool conventions → `my-setup/CLAUDE.md` (project root) (project-scope).
+   - Workflow flow → `tracked/claude/skills/session-flow/SKILL.md` (loaded on demand).
    - Per-tool operational details → relevant skill (`bd-reference`, `wt-reference`).
+   - Host-local conventions → user-section blocks in CLAUDE.md or skills.
    - Automatable enforcement → settings.json hooks.
-   Misplaced rules (e.g., a workflow detail in CLAUDE.md instead of superpowers-prefs.md, or a tool detail inline instead of in the skill) are IMPORTANT.
-4. **Observation / acceptance coverage** — for every observation listed in the spec (e.g., A through L), confirm one of: (a) codified in a file per the placement map; (b) explicitly cross-referenced to a deferred bd issue; (c) explicitly marked out-of-scope in the spec with reason. Missing observations are CRITICAL (the spec is the contract).
+   Misplaced rules (e.g., a workflow detail in CLAUDE.md instead of session-flow, or a tool detail inline instead of in the skill) are IMPORTANT.
+4. **Observation / acceptance coverage** — for every observation listed in the spec (e.g., A through L for setforge-23k), confirm one of: (a) codified in a file per the placement map; (b) explicitly cross-referenced to a deferred bd issue; (c) explicitly marked out-of-scope in the spec with reason. Missing observations are CRITICAL (the spec is the contract).
 5. **`setforge.yaml` schema integrity** — if the diff touches `setforge.yaml`, the additions match the existing pattern (e.g., tracked file entries follow `{name}: { src: ..., dst: ... }` shape; profile references follow snake_case names). Schema drift is IMPORTANT.
 
 Output format (strictly):
@@ -48,7 +48,11 @@ Definition of done:
 
 - [ ] Verified every edit lands in `tracked/claude/...` or another tracked location, not `~/.claude/...`.
 - [ ] Confirmed user-section markers in tracked CLAUDE.md remain intact.
-- [ ] For each new rule, validated its file matches the enforcement-layer match: cross-project critical → CLAUDE.md; workflow flow → superpowers-prefs.md; project tool → setforge/CLAUDE.md; per-tool → skill.
+- [ ] For each new rule, validated its file matches the enforcement-layer match: cross-project critical → CLAUDE.md; workflow flow → session-flow skill; per-tool → skill.
 - [ ] For every observation listed in the spec, traced its codification or its deferral.
 - [ ] If `setforge.yaml` touched: confirmed new entries match existing `tracked_files:` pattern and profile names are valid.
 - [ ] Validated cross-references to skills (bd-reference, wt-reference) point at real skill content.
+
+## Self-improvement
+
+If doing this job reveals a *generic* way THIS agent's instructions could be clearer or more correct, append a one-line `self_improvement:` note to your return (what + why). Do not act on it — the orchestrator surfaces it at the session-end pause for atelier approval. Generic only; never touch this file's frontmatter; off-limits: hard rails, the `## Environment` / safety sections, system paths, `setforge:user-section` marker lines or their `hash=`, and this self-improvement protocol itself.

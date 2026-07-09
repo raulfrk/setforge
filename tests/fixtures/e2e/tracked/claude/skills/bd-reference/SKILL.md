@@ -1,13 +1,13 @@
 ---
 name: bd-reference
-description: Beads task-tracking command reference. Invoke at the first sign of bd involvement in a session (other than `bd prime`, which the SessionStart hook fires). Triggers include: any `bd` command (create/update/show/list/ready/close/note/comment/dep/search/recall), claiming an issue when work begins, looking up flag syntax, deciding which persistence layer (memory/note/comment/structured field) to use, lifecycle verbs (defer/supersede/stale/orphans), quality flags (--validate/--acceptance/--design/--notes), or handoff patterns between sessions or agents. If the next action involves creating, updating, claiming, closing, or querying a bd issue, invoke this skill first.
+description: Beads task-tracking command reference. Invoke at the first sign of bd involvement in a session (other than `bd prime`, which the PreCompact hook fires). Triggers include: any `bd` command (create/update/show/list/ready/close/note/comment/dep/search/recall), claiming an issue when work begins, looking up flag syntax, deciding which persistence layer (memory/note/comment/structured field) to use, lifecycle verbs (defer/supersede/stale/orphans), quality flags (--validate/--acceptance/--design/--notes), or handoff patterns between sessions or agents. If the next action involves creating, updating, claiming, closing, or querying a bd issue, invoke this skill first.
 ---
 
 # Beads command reference
 
-The beads home is at `~/.beads/` (set via `BEADS_DIR`); each project gets its own database inside it (`~/.beads/embeddeddolt/<project>/`), auto-created on first write, with the issue prefix derived from the repo name. Issues do NOT cross databases unless `bd repo add` (multi-repo hydration) or `bd federation` is configured. Memories are cross-project (separate storage from issues).
+Each project has its own beads database at `<project-root>/.beads/`, created by `bd init --stealth` (which also configures `.git/info/exclude` to keep beads invisible to git). The issue prefix is derived from the repo name. Issues do NOT cross databases unless `bd repo add` (multi-repo hydration) or `bd federation` is configured. Memories are cross-project (stored separately from issues).
 
-All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect. `bd worktree list` shows the redirect state per worktree. Default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry; prefer `wt switch --create <slug>` which lands the worktree at `~/projects/worktrees/<slug>` (the configured location for this VM; see `tracked/wt/config.toml`). `git worktree add ~/projects/worktrees/<slug>` also works and is auto-discovered.
+All git worktrees of the same repo share the parent's beads database via git common-directory discovery — no manual `--db` redirect. `bd worktree list` shows the redirect state per worktree. Default `bd worktree create <name>` form nests at `./<name>` and writes a `.gitignore` entry; prefer `wt switch --create <slug>` which lands the worktree at `~/projects/worktrees/<slug>` (the configured location for this VM; see `tracked/wt/config.toml`). Never raw `git worktree add` — see `wt-reference` for the sanctioned command surface.
 
 ## Starting work on an issue
 
@@ -41,7 +41,7 @@ assignment stand; the comment thread is the handoff signal.
 
 **Multi-line text:** `bd note` / `bd comment` / `bd update --description` all accept `--stdin` or `--file <path>` — use these instead of long quoted CLI args. Note: `--design` uses `--design-file <path>` (not `--file`); `--acceptance` has no file variant — use shell expansion (`--acceptance "$(cat /tmp/path)"`).
 
-**Spec vs bd contract:** The spec file archived at `~/.claude/projects/{cwd-slug}/specs/...` is a snapshot of what was agreed at brainstorm time. The bd issue's `--design` / `--acceptance` / `--notes` is the **durable contract** — update it when scope changes; treat the spec file as a historical record, not a living document. *(empirical observation I.)*
+**Spec vs bd contract:** The spec file archived at `~/.claude/projects/{cwd-slug}/specs/...` is a snapshot of what was agreed at brainstorm time. The bd issue's `--design` / `--acceptance` / `--notes` is the **durable contract** — update it when scope changes; treat the spec file as a historical record, not a living document. *(empirical observation A from setforge-23k.)*
 
 ## Handoffs (between sessions, agents, or to a human)
 
@@ -65,7 +65,7 @@ assignment stand; the comment thread is the handoff signal.
 ## Quality flags on `create` / `update`
 
 - `--validate` — fail if required sections are missing for the type.
-- `--acceptance "..."` — acceptance criteria (checked by `--validate`). Prefer **concrete commands that exit 0** over abstract counts. "lint count drops to zero in non-deferred categories" is hard to verify; "`uv run ruff check` exits 0 in CI" is binary. *(empirical observation B: abstract count acceptance passed spec review but CI still broke on first push because the criterion didn't specify command-level success.)* See also: `superpowers-prefs.md` observation L for command-shape robustness (avoid `rg -A1` / `awk [^a-z]` brittle ranges).
+- `--acceptance "..."` — acceptance criteria (checked by `--validate`). Prefer **concrete commands that exit 0** over abstract counts. "lint count drops to zero in non-deferred categories" is hard to verify; "`uv run ruff check` exits 0 in CI" is binary. *(empirical observation B from setforge-23k: abstract count acceptance passed spec review but CI still broke on first push because the criterion didn't specify command-level success.)* See also: the session-flow skill Phase 2 for command-shape robustness (avoid `rg -A1` / `awk [^a-z]` brittle ranges).
 - `--design "..."` — design notes.
 - `--notes "..."` (initial) or `bd note <id>` later — supplementary context.
 - `--parent <id>` — file as hierarchical child.
@@ -73,7 +73,7 @@ assignment stand; the comment thread is the handoff signal.
 
 ## Sizing follow-up beads
 
-When measure-then-decide work surfaces follow-up beads with concrete counts (e.g., "fix N sites of category X"), measure **post-auto-fix**, not pre-fix. Tooling like `ruff check --fix --unsafe-fixes` can materially change the count before you file. *(empirical observation C: cxj originally sized ANN201 follow-up at 34 sites; auto-fix collapsed it to 2. RUF059 was 38 → 0. Three of seven planned bead categories materially changed.)*
+When measure-then-decide work surfaces follow-up beads with concrete counts (e.g., "fix N sites of category X"), measure **post-auto-fix**, not pre-fix. Tooling like `ruff check --fix --unsafe-fixes` can materially change the count before you file. *(empirical observation C from setforge-23k: cxj originally sized ANN201 follow-up at 34 sites; auto-fix collapsed it to 2. RUF059 was 38 → 0. Three of seven planned bead categories materially changed.)*
 
 ## Lifecycle
 
@@ -81,3 +81,20 @@ When measure-then-decide work surfaces follow-up beads with concrete counts (e.g
 - `bd undefer <id>` / `bd reopen <id>` — restore deferred / reopen closed.
 - `bd supersede <id> --with=<new-id>` — mark replaced by a newer issue.
 - `bd stale` / `bd orphans` — find untouched issues / broken-dependency issues.
+
+## Self-improvement
+
+While using this skill, stay alert for any *generic* way it could be better — clearer wording, a missing case, a smoother step, a recurring friction it should prevent. Not only failures; any worthwhile improvement, noticed anytime.
+
+- **At a completion checkpoint** (a finished unit of work before the next, or session end), pause and, if anything surfaced, propose it as a diff to THIS file via atelier — one edit per idea, citing what prompted it.
+<!-- si-core:start -->
+- **Don't edit mid-task.** Capture the observation; keep working.
+- **Generic only.** Global config used across every project; never bake in project-specific detail (paths, repo/profile names, bead IDs) unless the artifact is itself project-scoped.
+- **Never auto-apply.** Propose via atelier; the user approves every edit. Never write it yourself.
+- **Off-limits — never propose edits to:** hard rails, the `## Environment` / safety sections, system paths, `setforge:user-section` marker lines or their `hash=`, and *this self-improvement protocol itself* (the mechanism may not rewrite its own leash).
+- **Substantive, not noise.** Rare and load-bearing; not cosmetic rewording; never re-propose a declined idea.
+<!-- si-core:end -->
+
+Levers (this artifact):
+- If you reach for `-p` intending to set priority on `bd create`/`update` and the command is rejected or files under an unexpected parent, note the trap in the Quality-flags section: `-p` is the shorthand for `--parent`, NOT priority — priority is `--priority 0-3`.  [mem:bd_create_p_is_parent]
+- If an inline `--design`/`--acceptance` body with backticks or multiple lines breaks on shell quoting (heredoc/pipe mangles it), codify the Write-to-temp-file-then-`"$(cat /tmp/...)"` pattern in the Multi-line-text section as the reliable path for backtick-heavy contracts that scales past a handful of beads.  [mem:bd_multiline_contract_via_temp_files]

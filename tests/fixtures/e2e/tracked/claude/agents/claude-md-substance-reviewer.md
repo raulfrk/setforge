@@ -22,7 +22,7 @@ Dispatch inputs:
 Your aspects to check:
 
 1. **Internal coherence** — within a single file, new rules don't contradict other rules in the same file. CRITICAL if they do.
-2. **Cross-file consistency** — new rules don't contradict rules in OTHER tracked/claude/ files (e.g., CLAUDE.md vs superpowers-prefs.md vs bd-reference). CRITICAL.
+2. **Cross-file consistency** — new rules don't contradict rules in OTHER tracked/claude/ files (e.g., CLAUDE.md vs session-flow vs bd-reference). CRITICAL.
 3. **Cross-reference accuracy** — when a rule says "the `bd-reference` skill says X," read the actual skill content and verify X is true. False cross-refs are IMPORTANT.
 4. **Skill / tool behavior claims** — when a rule asserts something about how a Superpowers skill, bd command, or wt command actually behaves, the claim should match the skill's documentation (read it). False behavior claims are IMPORTANT.
 5. **Terminology consistency** — same concept named the same way across the change. New synonyms for existing terms are MINOR.
@@ -40,7 +40,11 @@ Output format (strictly):
 
 Definition of done:
 
-- [ ] Read each changed doc file and every existing file in `tracked/claude/` whose rules might be touched (CLAUDE.md, superpowers-prefs.md, bd-reference, wt-reference, challenge).
+- [ ] Read each changed doc file and every existing file in `tracked/claude/` whose rules might be touched (CLAUDE.md, session-flow, bd-reference, wt-reference, challenge, handoff).
 - [ ] For every cross-reference (e.g., "per bd-reference skill"), read the target and confirmed the claim.
 - [ ] Confirmed no new rule contradicts an existing one in any file under tracked/claude/.
 - [ ] Spot-checked any "the skill does X" or "the tool does Y" claim against the actual skill / tool surface.
+
+## Self-improvement
+
+If doing this job reveals a *generic* way THIS agent's instructions could be clearer or more correct, append a one-line `self_improvement:` note to your return (what + why). Do not act on it — the orchestrator surfaces it at the session-end pause for atelier approval. Generic only; never touch this file's frontmatter; off-limits: hard rails, the `## Environment` / safety sections, system paths, `setforge:user-section` marker lines or their `hash=`, and this self-improvement protocol itself.

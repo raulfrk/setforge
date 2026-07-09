@@ -5,7 +5,7 @@ description: worktrunk (binary `wt`) command reference and Beads integration pat
 
 # worktrunk (`wt`) command reference
 
-worktrunk manages git worktrees for parallel agent workflows. Default location: `~/projects/worktrees/<slug>` per wt's `worktree-path` template (see `tracked/wt/config.toml`) — bd auto-discovers via git common-directory regardless of location.
+worktrunk manages git worktrees for parallel agent workflows. Default location: `~/projects/worktrees/<slug>` per wt's `worktree-path` template (see `~/.config/worktrunk/config.toml`) — bd auto-discovers via git common-directory regardless of location.
 
 *Footnote on `<slug>`: throughout this doc, `<slug>` is the user-facing placeholder for the worktree-path suffix. wt's actual template variable is `{{ branch | sanitize }}` — the sanitized branch name. In practice the two collapse because `wt switch --create <slug>` creates a branch literally named `<slug>`, so `<slug>` == `branch` at worktree-creation time. They diverge only if you rename the branch after creation (e.g. `git branch -m`); the worktree path keeps the original sanitized branch name while the branch itself has the new name.*
 
@@ -16,7 +16,7 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 - `wt list` — list all worktrees and their status (clean / dirty / merged).
 - `wt remove [<slug>]` — remove the current worktree (or named one); auto-deletes the branch if merged.
 - `wt merge [<branch>]` — merge the current worktree's branch into target (default = main).
-  - **Deployed default on this VM**: `--no-squash --ff-only` (set by `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `setforge install`). Bare `wt merge` runs this mode: preserves the branch's commits on target, fast-forward only. This is what satisfies observation F (`Never squash review-fix commits into the implementation commit`) operationally, not just in intent. See `tracked/claude/superpowers-prefs.md` Phase 6.
+  - **Deployed default on this VM**: `--no-squash --ff-only` (set by `~/.config/worktrunk/config.toml`'s `[merge]` block — `squash = false`, `ff = true` — deployed by `setforge install`). Bare `wt merge` runs this mode: preserves the branch's commits on target, fast-forward only. This is what satisfies observation F (`Never squash review-fix commits into the implementation commit`) operationally, not just in intent. See the session-flow skill Phase 6.
   - **Upstream wt default**: `--squash` (collapse the branch into one commit on target). Reachable on this VM only by explicitly overriding the deployed config; use only when the branch's history is genuinely throwaway (e.g., a noisy WIP history collapsed for a leaf feature).
   - `wt merge --no-squash` — explicit form of the deployed default. Identical to bare `wt merge` on this VM; spell it out when documenting flows so the intent (preserve separate commits) survives a config change.
 - `wt step <name>` — run an individual operation (used when scripting partial flows).
@@ -25,14 +25,14 @@ worktrunk manages git worktrees for parallel agent workflows. Default location: 
 
 ## Beads integration
 
-- One bd issue = one worktree. Slug should match or include the bd issue ID (`wt switch --create <bd-id>-py-rewrite`).
-- After `wt switch --create`, `bd update <id> --claim` locks the issue. Combo gives: isolated tree + claimed issue + atomic ownership.
+- One bd issue = one worktree. Slug should match or include the bd issue ID (`wt switch --create setforge-g20-py-rewrite`).
+- Before `wt switch --create`, run `bd update <id> --claim`, then create the worktree. Combo gives: claimed issue + isolated tree + atomic ownership.
 - bd auto-discovers the worktree's database via git common-directory — no `--db` redirect.
 - After `wt merge`: `bd close <id>`, then `wt remove` to clean both layers.
 
 ## Sibling-from-parent rebase pattern
 
-When N sibling worktrees branch from a common parent (typical multi-bead batch shape) and the parent receives a review-fix commit during Phase 6 of the canonical flow (see `superpowers-prefs.md`), each sibling must rebase onto the updated parent before `wt merge --no-squash`:
+When N sibling worktrees branch from a common parent (typical multi-bead batch shape) and the parent receives a review-fix commit during Phase 6 of the canonical flow (see the session-flow skill), each sibling must rebase onto the updated parent before `wt merge --no-squash`:
 
 ```
 # In each sibling worktree:
@@ -48,7 +48,7 @@ wt merge --no-squash
 
 **Convention when planning multi-worktree batches:** size sibling worktrees so their file footprints don't overlap with the parent's review-fix surface. If overlap is unavoidable, document the rebase plan up front.
 
-*(empirical observation G: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
+*(empirical observation G from setforge-23k: the cxj/2rs/d6g/g4h May 2026 batch's rebases were conflict-free because no sibling touched the parent's review-fix files — `pyproject.toml`, `tests/test_capture_wizard.py` — but future batches with overlap will produce conflicts.)*
 
 ## Parallel dispatch via pre-prepared worktrees
 
@@ -71,14 +71,32 @@ wt switch --create setforge-<id>-<slug>
 
 For multi-bead waves: run `wt switch --create` N times serially (avoids git index lock races), then dispatch the N subagents in a single message of parallel Agent calls.
 
-*(empirical 2026-05-12)*
+*(empirical 2026-05-12; see bd setforge-7gf)*
 
 ## Anti-patterns
 
 - Don't use raw `git worktree add` when `wt` is available — bypasses configured location, hooks, and merge tracking.
-- Don't create worktrees inside the repo — always use wt's configured location at `~/projects/worktrees/<slug>` (per `tracked/wt/config.toml`).
+- Don't create worktrees inside the repo — always use wt's configured location at `~/projects/worktrees/<slug>` (per `~/.config/worktrunk/config.toml`).
 - Don't `wt merge` without verifying tests pass and the bd issue's acceptance criteria are met.
 - Don't squash review-fix commits — use `wt merge --no-squash` when merging a branch with separate implementation + review-fix commits (observation F / Phase 6).
 - Don't `wt remove` an unmerged worktree without explicit user confirmation — destructive.
 - Don't run multiple agents in the same worktree — the whole point is isolation.
-- Don't use `Agent` tool's `isolation: worktree` parameter for parallel dispatch in this build — auto-worktrees branch from a stale base AND their sandboxes deny git ops + file edits (empirical 2026-05-12).
+- Don't use `Agent` tool's `isolation: worktree` parameter for parallel dispatch in this build — auto-worktrees branch from a stale base AND their sandboxes deny git ops + file edits (empirical 2026-05-12; see bd setforge-7gf).
+
+## Self-improvement
+
+While using this skill, stay alert for any *generic* way it could be better — clearer wording, a missing case, a smoother step, a recurring friction it should prevent. Not only failures; any worthwhile improvement, noticed anytime.
+
+- **At a completion checkpoint** (a finished unit of work before the next, or session end), pause and, if anything surfaced, propose it as a diff to THIS file via atelier — one edit per idea, citing what prompted it.
+<!-- si-core:start -->
+- **Don't edit mid-task.** Capture the observation; keep working.
+- **Generic only.** Global config used across every project; never bake in project-specific detail (paths, repo/profile names, bead IDs) unless the artifact is itself project-scoped.
+- **Never auto-apply.** Propose via atelier; the user approves every edit. Never write it yourself.
+- **Off-limits — never propose edits to:** hard rails, the `## Environment` / safety sections, system paths, `setforge:user-section` marker lines or their `hash=`, and *this self-improvement protocol itself* (the mechanism may not rewrite its own leash).
+- **Substantive, not noise.** Rare and load-bearing; not cosmetic rewording; never re-propose a declined idea.
+<!-- si-core:end -->
+
+Levers (this artifact):
+- If EnterWorktree rejects a wt-created worktree path (error like 'not a git repo' or the bg isolation guard refuses it), don't retry it a second time — record it as the known EnterWorktree-vs-wt-worktree mismatch and fall back to operating via the absolute worktree path (Bash git/sed, absolute-path Edits), then propose adding a one-line caveat to this skill's parallel-dispatch / worktree section naming that EnterWorktree only manages its own `.claude/worktrees` trees and rejects wt-created paths.  [incident] [incident] [incident]
+- If a `git commit` is rejected by a pre-commit / formatter hook and you then run `wt merge --no-squash`, stop and check `git status -s` first — if the tree is dirty, wt merge will auto-commit the leftover changes with a generic subject and destroy your authored message; propose adding this pre-format-then-commit / verify-clean-before-merge caveat to this skill's `wt merge --no-squash` entry.  [mem:wt_merge_auto_commit_on_hook_reject.md — when git commit is rejected by a pre-commit formatter, wt merge auto-commits leftover modifications with a generic message and destroys your authored commit message]
+- If a command fails cryptically immediately after a `wt merge` or `wt remove` (no-such-directory, git errors from a path that no longer exists), don't debug the command — check whether cwd is inside the just-removed worktree first, and propose adding a caveat to this skill's `wt merge` / `wt remove` entries that auto-remove leaves cwd dangling inside the deleted tree so ExitWorktree / cd-to-main is required before any further command.  [mem:worktree_exit_after_auto_remove_merge.md — wt merge auto-remove leaves cwd inside the deleted worktree; ExitWorktree/cd to main before further commands or they fail cryptically] [incident]
