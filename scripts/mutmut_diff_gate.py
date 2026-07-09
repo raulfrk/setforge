@@ -77,10 +77,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The merge/reconcile/store core — the mutation scope (mirrors
-# ``[tool.mutmut].only_mutate``). Files listed here that are absent on disk are
-# skipped: the mutmut config predates the disposition/sections retirement, so
-# the gate must tolerate a stale-but-larger nominal scope and act on what exists.
+# Mirrors [tool.mutmut].only_mutate; absent files are skipped (config predates
+# the disposition/sections retirement, so the nominal scope is stale-but-larger).
 CORE_FILES: tuple[str, ...] = (
     "setforge/disposition_merge.py",
     "setforge/markdown_merge.py",
@@ -95,30 +93,24 @@ CORE_FILES: tuple[str, ...] = (
 
 ALLOWLIST_PATH = REPO_ROOT / "tests" / "mutmut_allowlist.txt"
 
-# The three unkilled statuses. mutmut prints `    <name>: <status>` from
-# `mutmut results`; a mutant is unkilled unless it is `killed` / `no tests` /
-# `caught by type check` / `not checked` etc.
 UNKILLED_STATUSES: frozenset[str] = frozenset({"survived", "timeout", "suspicious"})
 
-# `@@ -old +new @@` unified-diff hunk header. With --unified=0 each changed
-# region is its own hunk; the `+N[,M]` side gives the NEW-file start line and
-# (optional) count. M defaults to 1; M == 0 means a pure deletion (no new line).
+# --unified=0 gives one hunk per changed region; `+N[,M]` is the new-file start
+# + count (M omitted means 1, M==0 means a pure deletion, no new line).
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _DIFF_NEWFILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 
-# mutmut mutant-name grammar (3.6): trailing `__mutmut_<N>`, a leading module
-# dotted-path, and an `x_`-prefixed function OR an `xǁClassǁmethod` method form.
+# mutmut 3.6 mutant-name grammar: trailing `__mutmut_<N>`, module dotted-path,
+# then an `x_`-prefixed function or an `xǁClassǁmethod` method form.
 _MUTMUT_SUFFIX_RE = re.compile(r"__mutmut_\d+$")
-_METHOD_SEP = "ǁ"  # ǁ — mutmut's class/method mangling separator
+_METHOD_SEP = "ǁ"  # mutmut's class/method mangling separator
 
-# Gate exit codes (mirrors the sibling gates' 0/1/2 fail-closed convention:
-# scripts/check_policy_lints.py, scripts/check_schema_gates.py).
-EXIT_CLEAN = 0
+EXIT_CLEAN = 0  # mirrors check_policy_lints.py / check_schema_gates.py 0/1/2
 EXIT_BLOCKED = 1
 EXIT_FAILCLOSED = 2
 
-# Substrings mutmut prints when the clean (unmutated) sandbox suite is red and
-# the run aborts BEFORE writing results. Matching either is a catastrophic run.
+# Substrings mutmut prints when it aborts on a red clean baseline before
+# writing results — matching either is the fail-closed "catastrophic" signal.
 _BASELINE_ABORT_SIGNATURES: tuple[str, ...] = (
     "Failed to run clean test",
     "failed to collect stats",
@@ -145,8 +137,6 @@ class Survivor:
     def module_dotted(self) -> str:
         """The dotted module path, e.g. ``setforge.scalar_merge``."""
         stem = self._stem
-        # The local part starts at the first `x_` / `xǁ` segment; everything
-        # before the last dot preceding it is the module.
         local = self._local_part(stem)
         module = stem[: len(stem) - len(local)].rstrip(".")
         return module
@@ -166,9 +156,7 @@ class Survivor:
         not the class)."""
         local = self._local_part(self._stem)
         if _METHOD_SEP in local:
-            # xǁClassǁmethod -> take the final ǁ-delimited segment.
             return local.rsplit(_METHOD_SEP, 1)[-1]
-        # x_funcname -> drop the single leading `x_`.
         return local[2:] if local.startswith("x_") else local
 
     @staticmethod
@@ -203,7 +191,6 @@ def changed_lines_from_diff(diff_text: str) -> dict[str, set[int]]:
             count = int(m_hunk.group(2)) if m_hunk.group(2) is not None else 1
             for offset in range(count):
                 changed[current].add(start + offset)
-    # Drop files that ended up with no added lines (deletion-only).
     return {path: lines for path, lines in changed.items() if lines}
 
 
@@ -304,7 +291,6 @@ def read_allowlist(path: Path = ALLOWLIST_PATH) -> set[str]:
         return set()
     out: set[str] = set()
     for raw in path.read_text(encoding="utf-8").splitlines():
-        # Strip an inline `# reason` comment, then the whole-line case.
         line = raw.split("#", 1)[0].strip()
         if line:
             out.add(line)
@@ -350,9 +336,6 @@ def catastrophic_run(run: MutmutRun, results_text: str, *, expected: bool) -> bo
     ):
         return True
     return expected and count_mutants(results_text) == 0
-
-
-# --- git / mutmut driving (the impure edge) -----------------------------------
 
 
 def _run(cmd: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
@@ -488,14 +471,11 @@ def _run_diff(allowlist: set[str]) -> int:
     gate survivors whose function overlaps a changed line."""
     diff_text = _git_diff_core()
     changed = changed_lines_from_diff(diff_text)
-    # Restrict to the core files that exist (defence against a stale nominal scope).
     core = set(_existing_core_files())
     changed = {p: lines for p, lines in changed.items() if p in core}
     if not changed:
-        # No core line changed by this PR — fast no-op.
         return EXIT_CLEAN
 
-    # Scope mutmut to exactly the changed core modules via fnmatch globs.
     patterns = [p[: -len(".py")].replace("/", ".") + ".*" for p in sorted(changed)]
     run = _run_mutmut(patterns)
 
