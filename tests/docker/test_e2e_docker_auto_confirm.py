@@ -365,6 +365,78 @@ def test_install_auto_use_tracked_live_only_edit_is_noop(
     assert c.read_text(_LIVE_SHARED) == pre
 
 
+@pytest.mark.xdist_group("docker_daemon")
+def test_install_auto_use_tracked_genuine_conflict_writes_and_reverts(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A GENUINE 3-way conflict (base != live != tracked, same line) resolved
+    by --auto=use-tracked WRITEs tracked over live and emits a revertible
+    transition; a follow-up ``revert`` restores the pre-write live content.
+
+    Unlike the live-only-edit NOOP sibling, this mutates BOTH live and
+    tracked away from the recorded base on the SAME line ("- rule A"), so
+    the diff3 engine reports a real conflict instead of a clean one-sided
+    change. Everything OUTSIDE that line is left byte-identical to the
+    recorded base on both sides, so the only non-clean region is the
+    conflicting line itself — --auto=use-tracked collapses it to the
+    tracked side, and the result equals ``tracked_body`` exactly. This
+    restores real coverage of the tracked-over-live WRITE + revert
+    round-trip (a prior version of this test used the marker-wrapped
+    ``_shared_section`` helper for the live body, which changes the
+    surrounding prose too and turns the header line into ANOTHER
+    live-only clean region — silently passing through live's wording
+    instead of tracked's and breaking the byte-equality this test
+    exists to prove).
+    """
+    c = docker_container()
+    _install(c, "test-reconcile-sections")  # base == tracked == live
+
+    live_body = (
+        "# test-reconcile-sections fixture (shared)\n\n"
+        "Global text above the section.\n\n"
+        "- rule A (live edit)\n"
+        "- rule B (new in tracked)\n\n"
+        "Trailing tracked content.\n"
+    )
+    c.write_text(_LIVE_SHARED, live_body)
+    pre = c.read_text(_LIVE_SHARED)
+
+    tracked_body = (
+        "# test-reconcile-sections fixture (shared)\n\n"
+        "Global text above the section.\n\n"
+        "- rule A (tracked edit)\n"
+        "- rule B (new in tracked)\n\n"
+        "Trailing tracked content.\n"
+    )
+    c.write_text(_TRACKED_SHARED, tracked_body)
+
+    result = _install(
+        c, "test-reconcile-sections", extra=["--auto=use-tracked", "--yes"]
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    # A real conflict resolved non-interactively emits the revert hint —
+    # its absence would mean the engine treated this as a no-op instead
+    # of a genuine WRITE.
+    assert "↩  revert with" in result.stdout
+    assert c.read_text(_TRACKED_SHARED) == tracked_body
+    assert c.read_text(_LIVE_SHARED) == tracked_body
+
+    revert = c.exec(
+        [
+            "uv",
+            "run",
+            "setforge",
+            "revert",
+            "--profile=test-reconcile-sections",
+            f"--config={CONFIG_FIXTURE}",
+            "--yes",
+        ],
+        check=False,
+    )
+    assert revert.returncode == 0, revert.stdout + revert.stderr
+    assert c.read_text(_LIVE_SHARED) == pre
+
+
 def test_install_empty_drift_with_auto_no_confirm_no_op(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:

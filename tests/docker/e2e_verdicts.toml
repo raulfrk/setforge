@@ -214,6 +214,12 @@ smoke = false
 signal = "auto-confirm / --yes gate on install & sync"
 verbs = ["install", "sync"]
 
+[tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_use_tracked_genuine_conflict_writes_and_reverts"]
+verdict = "keep"
+smoke = false
+signal = "use-tracked resolves a genuine 3-way conflict (WRITE + revert)"
+verbs = ["install", "revert"]
+
 [tests."tests/docker/test_e2e_docker_auto_confirm.py::test_install_auto_use_tracked_live_only_edit_is_noop"]
 verdict = "keep"
 smoke = false
