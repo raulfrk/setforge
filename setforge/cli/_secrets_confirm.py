@@ -6,12 +6,6 @@ the user via the themed ``button_bar`` widget for one of three actions
 :data:`SecretAction.ABORT` — consistent with
 :func:`setforge.cli._confirm.confirm_auto_operation`'s :data:`CANCEL`-as-abort
 treatment.
-
-The ``button_bar`` symbol is imported lazily via the module-level
-``__getattr__`` so the cold path of non-wizard commands does not pay
-the ~140ms ``prompt_toolkit`` import cost. Tests monkeypatch
-``setforge.cli._secrets_confirm.button_bar`` via this same
-attribute-access seam (mirrors :mod:`setforge.cli._confirm`).
 """
 
 from __future__ import annotations

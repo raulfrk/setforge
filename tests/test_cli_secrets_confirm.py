@@ -34,13 +34,6 @@ def _make_finding(snippet: str = "ghp_xxxxxxxxxxxx") -> SecretFinding:
 
 
 class _DialogRecorder:
-    """Callable replacing ``button_bar`` to record + control returns.
-
-    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
-    no ``.run()`` indirection — so the recorder yields ``return_value`` on
-    call.
-    """
-
     def __init__(self, *, return_value: object) -> None:
         self._return_value = return_value
         self.call_count = 0
@@ -109,7 +102,6 @@ def test_dialog_silence_one_shot_returns_silence(
 
 
 def test_dialog_cancel_treated_as_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc / Ctrl-C (widget returns CANCEL) maps to ABORT (mockup-T default)."""
     _force_tty(monkeypatch)
     _patch_dialog(monkeypatch, return_value=CANCEL)
 
@@ -201,41 +193,33 @@ def test_yes_short_circuit_emits_no_warning(
 
 
 def test_button_bar_attribute_resolves_lazily() -> None:
-    """The module-level ``__getattr__`` exposes ``button_bar`` on demand."""
     obj = _secrets_confirm.button_bar
     assert callable(obj)
 
 
 def test_button_bar_unknown_attribute_raises() -> None:
-    """``__getattr__`` raises ``AttributeError`` for unknown names."""
     with pytest.raises(AttributeError):
         _ = _secrets_confirm.nonexistent_attribute
 
 
-# ---------------------------------------------------------------------------
-# Real-widget construction — drive the actual button_bar (no monkeypatch).
-# Guards the headless truecolor crash that a stubbed recorder cannot see:
-# construction-only unit tests bypass the real prompt_toolkit widget build.
-# ---------------------------------------------------------------------------
+# Real-widget construction (no monkeypatch) — see tests/test_ui_widgets.py.
 
 
 def test_real_widget_enter_selects_initial_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Enter on the freshly-built widget selects the initial button (ABORT)."""
     _force_tty(monkeypatch)
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\r")  # Enter → initial focus = ABORT (index 0)
+        pipe.send_bytes(b"\r")
         with create_app_session(input=pipe, output=DummyOutput()):
             action = _secrets_confirm.prompt_secret_action(_make_finding())
     assert action is SecretAction.ABORT
 
 
 def test_real_widget_escape_returns_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc through the real widget yields CANCEL → mapped to ABORT."""
     _force_tty(monkeypatch)
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\x1b")  # Esc → CANCEL
+        pipe.send_bytes(b"\x1b")
         with create_app_session(input=pipe, output=DummyOutput()):
             action = _secrets_confirm.prompt_secret_action(_make_finding())
     assert action is SecretAction.ABORT

@@ -21,15 +21,6 @@ from rich.panel import Panel
 
 from setforge.errors import ConfirmRequiresInteractive
 
-# The themed ``button_bar`` widget is imported lazily via the module-level
-# ``__getattr__`` below so non-interactive callers (and the cold-start path
-# of ``setforge --help`` / ``validate`` / ``compare``) never pay the ~140ms
-# prompt_toolkit cost. The TUI fires only when ``yes=False`` and stdin is a
-# TTY. Module-level ``__getattr__`` keeps the attribute-on-module access
-# path that the test suite's ``monkeypatch.setattr(
-# "setforge.cli._revert_confirm.button_bar", ...)`` relies on.
-# Mirrors the trampoline in ``setforge/cli/_confirm.py``.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":
@@ -272,8 +263,6 @@ def _prompt_choice(plan: RevertPlan) -> RevertChoice:
     stub could still return ``False`` — both map to :attr:`RevertChoice.ABORT`
     per the wizard-discipline invariant.
     """
-    # Resolve through the module-level ``__getattr__`` (lazy prompt_toolkit
-    # import); tests monkeypatch the same attribute path.
     from setforge.cli import _revert_confirm as _self
     from setforge.ui.widgets import CANCEL, Button
 
@@ -293,7 +282,6 @@ def _prompt_choice(plan: RevertPlan) -> RevertChoice:
     if choice is CANCEL or choice is False:
         return RevertChoice.ABORT
     if not isinstance(choice, RevertChoice):
-        # Defensive: a monkeypatched widget could return a stray value.
         return RevertChoice.ABORT
     return choice
 

@@ -98,16 +98,7 @@ def _build_ctx(fixture_repo: Path, profile: str = "test-minimal") -> ProfileCont
 
 
 class _DialogRecorder:
-    """Records ``button_bar`` invocations; returns a configured value directly.
-
-    ``button_bar`` returns its result inline (no ``.run()`` indirection, unlike
-    the old ``radiolist_dialog``), so the recorder yields the configured value
-    itself — a :class:`WelcomeChoice` or the :data:`CANCEL` sentinel (Esc)."""
-
     def __init__(self, *returns: object) -> None:
-        # ``returns`` is consumed in order — each call pulls the next configured
-        # return value. Useful for the dry-run-first reprompt case where one
-        # test exercises two dialog invocations with different responses.
         self._returns = list(returns) or [WelcomeChoice.PROCEED]
         self.call_count = 0
 
@@ -119,7 +110,6 @@ class _DialogRecorder:
 
 
 def _patch_dialog(monkeypatch: pytest.MonkeyPatch, *returns: object) -> _DialogRecorder:
-    """Replace ``button_bar`` with a recorder; return it for assertions."""
     recorder = _DialogRecorder(*returns)
     monkeypatch.setattr("setforge.cli._welcome.button_bar", recorder)
     return recorder
@@ -361,7 +351,6 @@ def test_tty_abort_show_docs_prints_hint(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_tty_esc_falls_back_to_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc on the dialog (``CANCEL`` sentinel return) → ABORT."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, CANCEL)
     console = Console(record=True)
@@ -370,13 +359,6 @@ def test_tty_esc_falls_back_to_abort(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_run_dialog_real_construction_selects(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drive the REAL themed button_bar through ``_run_dialog`` headlessly.
-
-    Not a scripted-callback stub — a genuine ``app.run()`` over a pipe input,
-    so the widget is actually constructed and rendered. Guards the truecolor
-    headless build crash that the callback-recorder tests cannot see. Enter on
-    the default focus (index 0 = PROCEED) selects it.
-    """
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -385,7 +367,7 @@ def test_run_dialog_real_construction_selects(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\r")  # Enter → focused (initial) button
+        pipe.send_bytes(b"\r")
         with create_app_session(input=pipe, output=DummyOutput()):
             choice = _run_dialog(
                 values=_PROMPT_VALUES_FULL, default=WelcomeChoice.PROCEED
@@ -396,7 +378,6 @@ def test_run_dialog_real_construction_selects(monkeypatch: pytest.MonkeyPatch) -
 def test_run_dialog_real_construction_esc_aborts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc through the REAL widget → CANCEL → ABORT fallback."""
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -405,7 +386,7 @@ def test_run_dialog_real_construction_esc_aborts(
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\x1b")  # Esc → CANCEL
+        pipe.send_bytes(b"\x1b")
         with create_app_session(input=pipe, output=DummyOutput()):
             choice = _run_dialog(
                 values=_PROMPT_VALUES_FULL, default=WelcomeChoice.ABORT

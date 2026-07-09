@@ -35,12 +35,6 @@ from setforge.config import load_config, resolve_profile
 from setforge.errors import SetforgeError
 from setforge.transitions import now_utc as _now_utc
 
-# ``setforge.ui.widgets.button_bar`` resolves through this module's
-# lazy ``__getattr__`` below so cold-start commands (``setforge --help``,
-# ``snapshot create``, ``snapshot list``) skip the ~140ms prompt_toolkit
-# import. Tests monkeypatch ``setforge.cli.snapshot.button_bar``
-# directly through the same attribute path; mirror :mod:`setforge.cli.init`.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":
@@ -221,9 +215,6 @@ def _prompt_restore_choice(
         "  [yellow]additive overlay[/yellow]: live-only files NOT in this "
         "snapshot will be left alone"
     )
-    # ``button_bar`` resolves through the module-level ``__getattr__``
-    # (lazy prompt_toolkit import); tests monkeypatch the same attribute
-    # path.
     from setforge.cli import snapshot as _self  # local alias for monkeypatch
     from setforge.ui.widgets import CANCEL, Button
 

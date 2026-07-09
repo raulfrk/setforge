@@ -49,13 +49,6 @@ __all__ = [
     "cleanup_orphans",
 ]
 
-# ``setforge.ui.widgets.button_bar`` is imported lazily via the
-# module-level ``__getattr__`` below so non-interactive callers never pay
-# the ~140ms cost. The TUI fires only when ``apply=True`` and stdin is a
-# TTY. Module-level ``__getattr__`` keeps the attribute-on-module path
-# that tests' ``monkeypatch.setattr("setforge.cli.orphans.button_bar", ...)``
-# relies on (same pattern as :mod:`setforge.cli._confirm`).
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":

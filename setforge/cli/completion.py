@@ -34,11 +34,6 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 # practice, so a 10s wait is generous slack for a healthy install.
 _SHOW_COMPLETION_TIMEOUT_SECONDS = 10.0
 
-# The themed ``button_bar`` widget resolves through this module's PEP 562
-# ``__getattr__`` so cold-start commands (``setforge --help``, ``setforge
-# validate``) skip the ~140ms prompt_toolkit import that
-# :mod:`setforge.ui.widgets` pulls in.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":

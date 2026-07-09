@@ -1,13 +1,3 @@
-"""Themed-widget prompt helpers in ``setforge.cli.config``.
-
-Covers ``_prompt_confirm`` (button_bar) and ``_prompt_marketplace_kind``
-(button_bar + text_prompt) — in particular the :data:`CANCEL`-sentinel
-paths introduced when the radiolist / input dialogs were replaced with the
-themed ``button_bar`` / ``text_prompt`` widgets. The widgets return their
-chosen value (or ``CANCEL``) directly — there is no ``.run()`` indirection —
-so the fakes here are plain callables patched onto the live module object.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,13 +28,7 @@ def _patch_text_prompt(monkeypatch: pytest.MonkeyPatch, *values: object) -> None
     monkeypatch.setattr(config_mod, "text_prompt", _fake)
 
 
-# ---------------------------------------------------------------------------
-# _prompt_confirm — button_bar
-# ---------------------------------------------------------------------------
-
-
 def test_prompt_confirm_yes_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
-    # No TTY needed; ``yes`` returns True without touching the widget.
     def _boom(*_a: Any, **_k: Any) -> object:
         raise AssertionError("button_bar must not run when yes=True")
 
@@ -93,7 +77,6 @@ def test_prompt_confirm_false_button_aborts(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_prompt_confirm_cancel_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc on the button bar returns CANCEL → treated as abort (no write)."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_button_bar(monkeypatch, CANCEL)
     console = Console(record=True)
@@ -107,11 +90,6 @@ def test_prompt_confirm_cancel_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
         is False
     )
     assert "aborted" in console.export_text()
-
-
-# ---------------------------------------------------------------------------
-# _prompt_marketplace_kind — button_bar + text_prompt
-# ---------------------------------------------------------------------------
 
 
 def test_marketplace_kind_github_happy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,14 +111,12 @@ def test_marketplace_kind_path_happy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_marketplace_kind_cancel_at_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc at the source-kind bar → CANCEL → SetforgeError abort."""
     _patch_button_bar(monkeypatch, CANCEL)
     with pytest.raises(SetforgeError, match="no source picked"):
         config_mod._prompt_marketplace_kind()
 
 
 def test_marketplace_kind_cancel_at_repo(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc at the repo-slug text prompt → CANCEL → SetforgeError abort."""
     _patch_button_bar(monkeypatch, MarketplaceSourceKind.GITHUB.value)
     _patch_text_prompt(monkeypatch, CANCEL)
     with pytest.raises(SetforgeError, match="no repo entered"):
@@ -148,7 +124,6 @@ def test_marketplace_kind_cancel_at_repo(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_marketplace_kind_empty_repo_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Blank submit (empty string, distinct from CANCEL) still aborts."""
     _patch_button_bar(monkeypatch, MarketplaceSourceKind.GITHUB.value)
     _patch_text_prompt(monkeypatch, "")
     with pytest.raises(SetforgeError, match="no repo entered"):
@@ -156,7 +131,6 @@ def test_marketplace_kind_empty_repo_aborts(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_marketplace_kind_cancel_at_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Esc at the path text prompt → CANCEL → SetforgeError abort."""
     _patch_button_bar(monkeypatch, MarketplaceSourceKind.PATH.value)
     _patch_text_prompt(monkeypatch, CANCEL)
     with pytest.raises(SetforgeError, match="no path entered"):

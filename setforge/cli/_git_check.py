@@ -38,12 +38,6 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 _GIT_TIMEOUT_SECONDS: int = 30
 _GIT_LOCALE_ENV: Mapping[str, str] = {"LANG": "C", "LC_ALL": "C"}
 
-# The themed ``button_bar`` widget resolves through this module's lazy
-# ``__getattr__`` below — mirrors :mod:`setforge.cli._confirm` and
-# :mod:`setforge.cli.init` so cold-start commands (``setforge --help``)
-# never pay the ~140ms prompt_toolkit import. Tests monkeypatch
-# ``setforge.cli._git_check.button_bar`` through this same path.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":

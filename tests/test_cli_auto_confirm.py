@@ -21,15 +21,7 @@ from setforge.ui.widgets import CANCEL
 
 
 class _DialogRecorder:
-    """Callable that records invocation and returns a configured value.
-
-    Replaces ``setforge.cli._confirm.button_bar`` so tests can assert the
-    widget was/was-not invoked without ``unittest.mock.MagicMock``
-    semantics. ``button_bar`` returns the chosen value (or :data:`CANCEL`)
-    directly — no ``.run()`` indirection — so the recorder yields
-    ``return_value`` on call, or raises ``side_effect`` (e.g. to simulate a
-    Ctrl-C propagating out of the widget).
-    """
+    """Fake for ``button_bar`` (returns its value/CANCEL directly, no ``.run()``)."""
 
     def __init__(
         self,
@@ -54,7 +46,6 @@ def _patch_dialog(
     return_value: object = True,
     side_effect: type[BaseException] | None = None,
 ) -> _DialogRecorder:
-    """Replace ``button_bar`` with a recorder; return it for assertions."""
     recorder = _DialogRecorder(return_value=return_value, side_effect=side_effect)
     monkeypatch.setattr("setforge.cli._confirm.button_bar", recorder)
     return recorder
@@ -225,7 +216,6 @@ def test_tty_no_response_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tty_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns CANCEL from button_bar → abort."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_value=CANCEL)
     assert (

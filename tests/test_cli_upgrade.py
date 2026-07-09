@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`setforge.cli.upgrade` (button_bar + subprocess mocked)."""
+"""Unit tests for :mod:`setforge.cli.upgrade`."""
 
 from __future__ import annotations
 
@@ -109,13 +109,6 @@ def _make_plan(
 
 
 class _DialogRecorder:
-    """Stand-in for ``setforge.ui.widgets.button_bar``.
-
-    Records each call's positional buttons + keyword args and returns a
-    preset value (a button ``value`` or the ``CANCEL`` sentinel). The CLI
-    calls ``button_bar(buttons, ..., initial=i)`` directly (no ``.run()``).
-    """
-
     def __init__(self, return_value: object) -> None:
         self._return_value = return_value
         self.call_count = 0
@@ -129,7 +122,6 @@ class _DialogRecorder:
         return self._return_value
 
     def initial_value(self, call: int = 0) -> object:
-        """The ``value`` of the button the ``initial=`` index selects."""
         buttons = self.args[call][0]
         return buttons[self.kwargs[call]["initial"]].value
 
@@ -567,7 +559,6 @@ def test_cli_upgrade_pypi_fetch_error_exits_one(
 def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-TTY + no ``--no-prompt`` must raise before any button bar opens."""
     from setforge.errors import ConfirmRequiresInteractive
 
     _patch_pypi(monkeypatch, version=_NEXT_VERSION)
@@ -575,7 +566,6 @@ def test_cli_upgrade_non_tty_without_no_prompt_raises_and_skips_button_bar(
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    # Seam guard: the button bar must never be constructed on a non-TTY.
     recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.UPGRADE)
 
     def fail_run(*_args: Any, **_kwargs: Any) -> Any:
@@ -600,7 +590,6 @@ def test_cli_upgrade_no_prompt_non_tty_still_auto_applies(
     monkeypatch.setattr("setforge.cli.upgrade.shutil.which", lambda _b: "/u/bin/uv")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    # The button bar must never run on the automation path either.
     recorder = _patch_button_bar(monkeypatch, return_value=UpgradeChoice.ABORT)
 
     responses = [

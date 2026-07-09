@@ -292,7 +292,6 @@ def test_snapshot_restore_choice_abort_via_button_bar(
         "button_bar",
         lambda *_a, **_kw: cli_snap.RestoreChoice.ABORT,
     )
-    # Pretend stdin is a TTY so the prompt path is reached.
     monkeypatch.setattr(cli_snap, "_stdin_is_tty", lambda: True)
     result = _invoke(
         [
@@ -312,7 +311,6 @@ def test_snapshot_restore_choice_cancel_via_button_bar(
     config_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc (CANCEL sentinel) from the button bar is treated as ABORT (exit 1)."""
     from setforge.ui.widgets import CANCEL
 
     _seed_live_file(fake_home)

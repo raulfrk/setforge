@@ -2,9 +2,8 @@
 
 Mockup J (user-approved 2026-05-18). Three themed ``button_bar`` prompts:
 source-config (skip/git/path), apply-confirm (proceed/abort),
-``--force`` confirm (abort/overwrite+backup/overwrite+no-backup).
-Interactive GIT/PATH selections collect their URL / directory via a
-follow-up ``text_prompt``.
+``--force`` confirm (abort/overwrite+backup/overwrite+no-backup); GIT/PATH
+selections collect their URL/directory via a follow-up ``text_prompt``.
 Reinit is idempotent and content-aware — re-running without
 ``--force`` rechecks the environment and surfaces newly-enabled
 capabilities (mockup scenario 2) without overwriting local.yaml.
@@ -46,13 +45,6 @@ from setforge.cli._init_helpers import (
     probe_environment,
 )
 from setforge.errors import ConfirmRequiresInteractive
-
-# The themed ``button_bar`` / ``text_prompt`` widgets resolve through this
-# module's lazy ``__getattr__`` below so cold-start commands (``setforge
-# --help``, ``setforge validate``) skip the ~140ms prompt_toolkit import that
-# :mod:`setforge.ui.widgets` pulls in. Tests monkeypatch
-# ``setforge.cli.init.button_bar`` / ``setforge.cli.init.text_prompt`` directly
-# through the same attribute path; mirror :mod:`setforge.cli._confirm` exactly.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -273,19 +265,11 @@ def _prompt_source_config(
         if path_str is None:
             return SourceSpec(choice=SourceChoice.SKIP)
         return SourceSpec(choice=SourceChoice.PATH, path=Path(path_str))
-    # SKIP selection or CANCEL (Esc / Ctrl-C).
     return SourceSpec(choice=SourceChoice.SKIP)
 
 
 def _collect_source_entry(*, title: str, body: str) -> str | None:
-    """Run the GIT/PATH follow-up :func:`text_prompt` → a usable string or None.
-
-    Returns the stripped entry, or ``None`` when the user gave nothing usable —
-    a cancel (Esc → :data:`CANCEL`), an empty submit, or a whitespace-only entry.
-    A whitespace-only value is truthy but would write a ``path:``/``url:`` plain
-    scalar that YAML re-reads as null (a half-written stub), so it collapses to
-    ``None`` exactly like cancel/empty — the caller maps that to SKIP.
-    """
+    # Whitespace is truthy but writes a null path:/url: scalar; collapse to None.
     from setforge.cli import init as _self
     from setforge.ui.widgets import CANCEL
 

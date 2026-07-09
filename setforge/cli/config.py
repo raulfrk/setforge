@@ -71,11 +71,6 @@ from setforge.local_config import LocalConfig
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
 from setforge.source import get_resolved_source, validate_source_dir
 
-# The themed prompt_toolkit widgets are resolved lazily via PEP 562 so
-# ``setforge config --help`` and the shell-completion callbacks stay
-# fast (the prompt_toolkit cold-start is ~140 ms). Tests monkeypatch
-# attributes on this module to intercept the widgets.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":

@@ -727,7 +727,6 @@ class _TtyStdin:
 
 
 def test_apply_tty_button_bar_returns_choice(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Interactive TTY: the button bar's chosen value flows straight through."""
     monkeypatch.setattr("sys.stdin", _TtyStdin)
     monkeypatch.setattr(
         orphans_mod,
@@ -741,7 +740,6 @@ def test_apply_tty_button_bar_returns_choice(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_apply_tty_button_bar_cancel_is_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Interactive TTY: Esc (CANCEL sentinel) maps to ABORT."""
     from setforge.ui.widgets import CANCEL
 
     monkeypatch.setattr("sys.stdin", _TtyStdin)

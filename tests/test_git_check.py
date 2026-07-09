@@ -345,7 +345,6 @@ class TestPromptGitCheckChoice:
     def test_tty_dispatches_to_button_bar(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """TTY caller invokes ``button_bar`` and returns its choice."""
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(
             "setforge.cli._git_check.button_bar",
@@ -362,7 +361,6 @@ class TestPromptGitCheckChoice:
     def test_dialog_returns_cancel_treated_as_abort(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """User pressing Esc (CANCEL from button_bar) → ABORT."""
         monkeypatch.setattr("setforge.cli._git_check.sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(
             "setforge.cli._git_check.button_bar",

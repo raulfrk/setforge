@@ -23,13 +23,7 @@ from rich.table import Table
 
 from setforge.errors import ConfirmRequiresInteractive
 
-# The themed ``button_bar`` widget is imported lazily via the module-level
-# ``__getattr__`` below so non-interactive callers (and the cold-start path
-# of ``setforge --help`` / ``validate`` / ``compare``) never pay the ~140ms
-# prompt_toolkit cost. The TUI fires only when ``yes=False`` and stdin is a
-# TTY. Module-level ``__getattr__`` keeps the attribute-on-module access path
-# that the test suite's ``monkeypatch.setattr(
-# "setforge.cli._confirm.button_bar", ...)`` relies on.
+# Lazy PEP 562 import so cold-start commands skip the ~140ms prompt_toolkit cost.
 
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
@@ -120,9 +114,6 @@ def prompt_failure_action(
     ]
     _initial = next((i for i, b in enumerate(_rows) if b.value == default), 0)
     while True:
-        # ``button_bar`` resolves through the module-level ``__getattr__``
-        # (lazy prompt_toolkit import); tests monkeypatch the same attribute
-        # path.
         from setforge.cli import _confirm as _self  # local alias for monkeypatch
 
         choice = _self.button_bar(
@@ -248,12 +239,9 @@ def confirm_auto_operation(
     if console is None:
         console = Console(stderr=True)
     _render_panel(command=command, profile=profile, plan=plan, console=console)
-    # ``button_bar`` resolves through the module-level ``__getattr__`` (lazy
-    # prompt_toolkit import); tests monkeypatch the same attribute path.
     from setforge.cli import _confirm as _self  # local alias for monkeypatch path
     from setforge.ui.widgets import CANCEL, Button
 
-    # ``initial=0`` focuses the No button first — default-No behavior.
     choice = _self.button_bar(
         [
             Button("No  — abort, no mutations", False),

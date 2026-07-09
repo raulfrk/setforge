@@ -28,13 +28,6 @@ from setforge.errors import ConfirmRequiresInteractive
 
 
 class _DialogRecorder:
-    """Callable replacing the themed ``button_bar`` widget.
-
-    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
-    there is no ``.run()`` indirection — so the recorder returns
-    ``return_value`` from ``__call__`` and raises ``side_effect`` inline.
-    """
-
     def __init__(
         self,
         *,
@@ -213,7 +206,6 @@ def test_tty_dialog_apply_with_editor_returns_apply_with_editor(
 def test_tty_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns CANCEL from button_bar → ABORT."""
     from setforge.ui.widgets import CANCEL
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
@@ -225,8 +217,6 @@ def test_tty_dialog_returns_cancel_treated_as_abort(
 def test_tty_dialog_returns_false_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Defensive: a monkeypatched widget could return False; treat as
-    ABORT same as CANCEL."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_value=False)
     choice = confirm_revert_operation(plan=_make_plan(), yes=False)
@@ -241,8 +231,7 @@ def test_keyboard_interrupt_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_default_dialog_value_is_abort(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Safe-default invariant per acceptance #5: the initially-focused
-    button (``initial=0``) is the ABORT button."""
+    # Safe-default invariant per acceptance #5: initial=0 is the ABORT button.
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     recorder = _patch_dialog(monkeypatch, return_value=RevertChoice.ABORT)
     confirm_revert_operation(plan=_make_plan(), yes=False)
@@ -395,15 +384,9 @@ def test_panel_shows_transition_age(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "42 minutes ago" in console.export_text()
 
 
-# ---------------------------------------------------------------------------
-# Multi-step wizard: CANCEL path
-# ---------------------------------------------------------------------------
-
-
 def test_multi_step_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc on the multi-step button bar returns CANCEL → ABORT."""
     from setforge.cli._revert_confirm import (
         MultiStepRevertPlan,
         confirm_multi_step_revert_operation,

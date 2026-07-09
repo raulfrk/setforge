@@ -68,12 +68,6 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class _DialogRecorder:
-    """Pluggable replacement for the themed ``button_bar`` / ``text_prompt``.
-
-    The widgets return their chosen value directly (no ``.run()`` indirection):
-    each call pops the next canned return and records the kwargs it was passed.
-    """
-
     def __init__(self, returns: list[object]) -> None:
         self._returns = list(returns)
         self.calls: list[dict[str, Any]] = []
@@ -97,7 +91,6 @@ def _patch_init_dialog(
 
 
 def test_source_prompt_git_collects_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Selecting GIT collects a URL via text_prompt and builds a GIT spec."""
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -118,7 +111,6 @@ def test_source_prompt_git_collects_url(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_source_prompt_path_collects_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Selecting PATH collects a directory via text_prompt and builds a PATH spec."""
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -137,8 +129,6 @@ def test_source_prompt_path_collects_path(monkeypatch: pytest.MonkeyPatch) -> No
 def test_source_prompt_empty_input_falls_back_to_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A blank ('') text_prompt submit collapses to SKIP rather than a
-    half-built GIT/PATH spec."""
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -156,8 +146,6 @@ def test_source_prompt_empty_input_falls_back_to_skip(
 def test_source_prompt_cancelled_input_falls_back_to_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc on the follow-up text_prompt returns CANCEL, which collapses to SKIP
-    (never the CANCEL sentinel reaching the ``.strip()`` path)."""
     import setforge.cli.init as init_mod
     from setforge.ui.widgets import CANCEL
 
@@ -195,7 +183,6 @@ def test_source_prompt_whitespace_input_falls_back_to_skip(
 def test_source_prompt_skip_selection_returns_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SKIP selection returns SKIP without touching text_prompt."""
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -217,8 +204,6 @@ def test_source_prompt_skip_selection_returns_skip(
 def test_source_prompt_cancel_selection_returns_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc on the source button_bar (→ CANCEL) resolves to SKIP, never touching
-    text_prompt."""
     import setforge.cli.init as init_mod
     from setforge.ui.widgets import CANCEL
 
@@ -244,14 +229,12 @@ def test_source_prompt_cancel_selection_returns_skip(
 
 
 def _explode_widget(*_a: object, **_k: object) -> object:
-    """Widget stand-in that fails if the seam is ever reached."""
     raise AssertionError("themed widget must not run on a non-TTY")
 
 
 def test_source_prompt_non_tty_raises_without_opening_dialog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-TTY + no --no-prompt: raise before any button_bar/text_prompt runs."""
     import setforge.cli.init as init_mod
     from setforge.errors import ConfirmRequiresInteractive
 
@@ -267,7 +250,6 @@ def test_source_prompt_non_tty_raises_without_opening_dialog(
 def test_apply_confirm_non_tty_raises_without_opening_dialog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-TTY + no --no-prompt: _prompt_apply_confirm raises, no widget."""
     import setforge.cli.init as init_mod
     from setforge.errors import ConfirmRequiresInteractive
 
@@ -280,7 +262,6 @@ def test_apply_confirm_non_tty_raises_without_opening_dialog(
 def test_force_confirm_non_tty_raises_without_opening_dialog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-TTY + no --no-prompt: _prompt_force_confirm raises, no widget."""
     import setforge.cli.init as init_mod
     from setforge.errors import ConfirmRequiresInteractive
 
@@ -703,25 +684,12 @@ def test_init_no_prompt_path_source_skips_source_prompt(
         ["init", "--no-prompt", "--path-source", str(home / "fake-source")],
     )
     assert result.exit_code == 0, result.output
-    # No button_bar calls under --no-prompt.
     assert recorder.calls == []
-
-
-# ---------------------------------------------------------------------------
-# Real-construction drives (headless truecolor build-crash guard)
-#
-# These do NOT script the widget callbacks — they drive the ACTUAL themed
-# button_bar / text_prompt (resolved through the module's __getattr__) via a
-# real prompt_toolkit Application over a piped input + DummyOutput, the same
-# pattern proven in tests/test_ui_widgets.py. Sending "\r" selects the focused
-# button / submits the buffer; "\x1b" cancels.
-# ---------------------------------------------------------------------------
 
 
 def test_source_prompt_real_widget_git_then_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Real button_bar (right → git) + real text_prompt (type a URL, Enter)."""
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -729,16 +697,13 @@ def test_source_prompt_real_widget_git_then_url(
     import setforge.cli.init as init_mod
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    # Two piped sessions in sequence: the bar (right arrow → "git URL", Enter),
-    # then the follow-up prompt (type the URL, Enter). Each widget runs a real
-    # Application; a shared session across both would replay leftover bytes into
-    # the wrong widget, so drive them turn-by-turn via nested pipes.
+    # Nested pipes: a shared session would replay leftover bytes into the wrong widget.
     real_button_bar = init_mod.button_bar
     real_text_prompt = init_mod.text_prompt
 
     def driven_button_bar(*args: Any, **kwargs: Any) -> object:
         with create_pipe_input() as pipe:
-            pipe.send_bytes(b"\x1b[C\r")  # right → 2nd button (git URL), Enter
+            pipe.send_bytes(b"\x1b[C\r")
             with create_app_session(input=pipe, output=DummyOutput()):
                 return real_button_bar(*args, **kwargs)
 
@@ -760,7 +725,6 @@ def test_source_prompt_real_widget_git_then_url(
 def test_source_prompt_real_widget_escape_is_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Esc on the REAL button_bar returns CANCEL, resolving to SKIP."""
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -772,7 +736,7 @@ def test_source_prompt_real_widget_escape_is_skip(
 
     def driven_button_bar(*args: Any, **kwargs: Any) -> object:
         with create_pipe_input() as pipe:
-            pipe.send_bytes(b"\x1b")  # Esc → CANCEL
+            pipe.send_bytes(b"\x1b")
             with create_app_session(input=pipe, output=DummyOutput()):
                 return real_button_bar(*args, **kwargs)
 

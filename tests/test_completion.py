@@ -77,14 +77,6 @@ def fake_show_completion(
 
 
 def _stub_dialog(monkeypatch: pytest.MonkeyPatch, return_value: object) -> None:
-    """Pin ``setforge.cli.completion.button_bar`` to a canned return value.
-
-    The themed ``button_bar`` returns its chosen value directly (no ``.run()``
-    indirection). Also force ``sys.stdin.isatty`` → True so the mutate-gate
-    inside :func:`completion_install` lets the interactive branch run under
-    pytest (where the test runner's stdin is non-TTY by default).
-    """
-
     def fake_dialog(*args: Any, **kwargs: Any) -> object:
         del args, kwargs
         return return_value
@@ -239,7 +231,7 @@ def test_completion_install_zsh_dialog_escape_treated_as_abort(
 
     rc = home / ".zshrc"
     rc.write_text("# untouched\n")
-    _stub_dialog(monkeypatch, CANCEL)  # Esc / Ctrl-C → CANCEL sentinel → ABORT
+    _stub_dialog(monkeypatch, CANCEL)
 
     result = _RUNNER.invoke(app, ["completion", "install", "zsh"])
 
@@ -368,7 +360,6 @@ def test_completion_install_bash_idempotent_source_line(
     assert "source " in after_first
     assert "setforge.bash" in after_first
 
-    # Re-stub the confirm bar for the second install invocation.
     _stub_dialog(monkeypatch, CompletionChoice.YES_AND_WIRE)
     second = _RUNNER.invoke(app, ["completion", "install", "bash"])
     assert second.exit_code == 0, second.output
@@ -457,7 +448,6 @@ def test_script_path_fish(home: Path) -> None:
 
 
 def test_completion_module_lazy_button_bar_attr_resolves() -> None:
-    """The PEP 562 __getattr__ exposes the themed button_bar widget."""
     from setforge.ui.widgets import button_bar
 
     resolved = completion_mod.button_bar

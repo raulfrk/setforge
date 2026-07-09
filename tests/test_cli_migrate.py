@@ -38,12 +38,6 @@ from setforge.migrations import (
 
 
 def _fake_button_bar(value: Any) -> Any:
-    """Stand-in for ``setforge.ui.widgets.button_bar``.
-
-    The CLI calls ``button_bar(...)`` directly (no ``.run()``) and gets
-    back either a button ``value`` or the ``CANCEL`` sentinel; the stub
-    returns a preset value so the wizard runs headless.
-    """
     return lambda *_args, **_kwargs: value
 
 
@@ -159,7 +153,6 @@ def test_apply_empty_registry_says_nothing_to_apply(
 def test_apply_with_yes_applies_with_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--yes`` collapses to APPLY_WITH_BACKUP without TTY/button bar."""
     # ``migrate --apply`` writes a real transition via transitions_root() →
     # Path.home(); pin SETFORGE_STATE_DIR so the record lands in a per-test
     # tmp tree independent of the autouse HOME-isolation fixture (belt-and-
@@ -192,7 +185,6 @@ def test_apply_with_yes_applies_with_backup(
 def test_apply_button_bar_abort_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the user picks ABORT in the button bar, no files are touched."""
     cfg = tmp_path / "setforge.yaml"
     _write_minimal_setforge_yaml(cfg, with_old_key=True)
     pre_bytes = cfg.read_bytes()
@@ -232,7 +224,6 @@ def test_apply_button_bar_abort_writes_nothing(
 def test_apply_button_bar_cancel_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Esc (CANCEL sentinel) from the button bar aborts — no files touched."""
     from setforge.ui.widgets import CANCEL
 
     cfg = tmp_path / "setforge.yaml"
@@ -285,10 +276,6 @@ def test_apply_button_bar_no_backup_skips_backup_files(
         _fake_button_bar(MigrateChoice.APPLY_NO_BACKUP),
     )
 
-    # CliRunner installs a non-TTY StringIO as sys.stdin; we need the
-    # ``_confirm_migrate`` TTY check to pass through so the button-bar
-    # stub fires. Patch the module's ``sys`` to a stand-in whose
-    # ``stdin.isatty()`` returns True.
     class _TtyStdin:
         @staticmethod
         def isatty() -> bool:

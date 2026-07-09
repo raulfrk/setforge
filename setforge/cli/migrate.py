@@ -67,14 +67,6 @@ from setforge.migrations import (
 # any other payload before a ``--pin`` value can reach ``setforge.yaml``.
 _PIN_VERSION_RE: Final = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 
-# ``setforge.ui.widgets.button_bar`` is imported lazily via the
-# module-level ``__getattr__`` below — non-interactive callers and
-# the cold-start path of ``setforge migrate --check`` / ``--help`` never
-# pay the ~140ms prompt_toolkit cost. The TUI fires only on the
-# ``--apply`` confirm path. The module-attribute access path is preserved
-# so the test suite can ``monkeypatch.setattr(
-# "setforge.cli.migrate.button_bar", ...)`` for headless test runs.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":

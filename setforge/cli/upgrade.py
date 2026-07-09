@@ -50,13 +50,6 @@ from setforge.cli import app
 from setforge.cli._help_examples import UPGRADE_EXAMPLES
 from setforge.errors import ConfirmRequiresInteractive, PyPIFetchError, UpgradeError
 
-# Lazy radiolist import — mirrors ``setforge/cli/_confirm.py:34-39``.
-# Lets ``setforge --help`` / ``setforge upgrade --help`` skip the
-# ~140ms prompt_toolkit cold-start cost; the TUI fires only on the
-# interactive confirm path. The module-attribute path
-# ``setforge.cli.upgrade.button_bar`` is preserved so tests
-# monkeypatch it the same way the ``_confirm`` tests do.
-
 
 def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook returns Any
     if name == "button_bar":
@@ -416,7 +409,7 @@ def _confirm_upgrade(plan: UpgradePlan, *, yes: bool) -> UpgradeChoice:
         ),
     ]
     initial = next(
-        i for i, button in enumerate(buttons) if button.value is default_choice
+        (i for i, button in enumerate(buttons) if button.value is default_choice), 0
     )
     choice = _self.button_bar(
         buttons,

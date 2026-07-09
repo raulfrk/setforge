@@ -23,14 +23,6 @@ from setforge.ui.widgets import CANCEL
 
 
 class _DialogRecorder:
-    """Records each ``button_bar(...)`` invocation for assertions.
-
-    ``button_bar`` returns the chosen value (or :data:`CANCEL`) directly —
-    no ``.run()`` indirection. The recorder consumes one entry from
-    ``return_values`` per call so a DIAGNOSE re-prompt can resolve to a
-    different terminal action than the first invocation.
-    """
-
     def __init__(self, return_values: list[Any]) -> None:
         self._queue = list(return_values)
         self.call_count = 0
@@ -49,7 +41,6 @@ def _patch_dialog(
     *,
     return_values: list[Any],
 ) -> _DialogRecorder:
-    """Replace ``button_bar`` with a recorder; return it for assertions."""
     recorder = _DialogRecorder(return_values)
     monkeypatch.setattr("setforge.cli._confirm.button_bar", recorder)
     return recorder
@@ -174,18 +165,10 @@ def test_tty_abort_response_returns_abort(monkeypatch: pytest.MonkeyPatch) -> No
     assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT
 
 
-# --- Esc / CANCEL handling -----------------------------------------------
-
-
 def test_dialog_returns_cancel_treated_as_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User pressing Esc returns CANCEL from button_bar → ABORT.
-
-    Consistent with :func:`confirm_auto_operation`'s Esc-as-abort
-    handling. Critical for the failure-prompt path: an accidental Esc
-    on a network-flaky mid-reconcile MUST NOT silently skip — it must
-    surface as ABORT so the user knows the install is rolling back."""
+    # An accidental Esc mid-reconcile must surface as ABORT, not silently skip.
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     _patch_dialog(monkeypatch, return_values=[CANCEL])
     assert prompt_failure_action(message="failed: x", yes=False) is FailureAction.ABORT

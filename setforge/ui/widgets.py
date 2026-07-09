@@ -80,10 +80,6 @@ _STACK_THRESHOLD: int = 24
 #: Frame width never exceeds this (mirrors :data:`box._MAX_WIDTH`).
 _MAX_WIDTH: int = 100
 
-# Widget-only classes the theme's semantic roles do NOT cover: the button
-# chrome. ``button`` inherits the ``text`` role's colour by class-name reuse;
-# ``button.focused`` is a reverse-video highlight. ANSI names (not hex) keep
-# this UX-3-clean — the concrete truecolor role values come from the theme.
 _BUTTON_STYLE: Style = Style.from_dict(
     {
         "button.focused": "reverse ansibrightblue",
@@ -93,20 +89,12 @@ _BUTTON_STYLE: Style = Style.from_dict(
 
 
 def _theme_style() -> Style:
-    """The theme's semantic roles as a prompt_toolkit :class:`Style`.
-
-    ``pt_style()`` keys its ``dict`` as ``class:<role>``; :meth:`Style.from_dict`
-    prepends its own ``class:`` and rejects a key that already carries it, so the
-    prefix is stripped here before wrapping.
-    """
+    # Strip pt_style()'s "class:" prefix — Style.from_dict prepends its own.
     return Style.from_dict(
         {key.removeprefix("class:"): value for key, value in pt_style().items()}
     )
 
 
-#: The widgets' DEFAULT style: the theme module's semantic roles (truecolor hex
-#: per role) merged with the widget-only button chrome. A caller's ``style=`` is
-#: merged OVER this (see :func:`button_bar`); ``None`` keeps this default.
 _STYLE: BaseStyle = merge_styles([_theme_style(), _BUTTON_STYLE])
 
 
@@ -450,10 +438,9 @@ def text_prompt(
     return :data:`CANCEL`. ``style`` is merged over the widget's built-in palette
     exactly like ``button_bar``; ``None`` keeps the themed default palette.
 
-    ``default`` pre-fills the buffer *through the* :class:`Buffer` /
-    :class:`Document` *constructor* with the cursor placed at end-of-text — so
-    the first Backspace deletes the last default char (a post-construction
-    ``buffer.text = default`` would leave the cursor at 0 and swallow it).
+    ``default`` is seeded via the :class:`Buffer`/:class:`Document` constructor
+    with the cursor at end-of-text, so the first Backspace deletes its last
+    char (a post-construction ``buffer.text =`` would leave the cursor at 0).
 
     Layout and keybindings are factored into :func:`_text_prompt_layout` /
     :func:`_text_prompt_keybindings`, matching ``button_bar``'s decomposition.
