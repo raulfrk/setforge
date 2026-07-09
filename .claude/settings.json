@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/policy_lint_hook.py\""
+            "command": "f=\"$HOME/setforge/scripts/policy_lint_hook.py\"; [ -f \"$f\" ] && python3 \"$f\""
           }
         ]
       }
