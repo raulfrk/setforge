@@ -174,13 +174,15 @@ source_paths = ["setforge"]
 also_copy = ["scripts"]
 # Restrict which files actually get mutated to the merge/reconcile/store core
 # (RFC §6). Everything else is copied (so imports resolve) but never mutated.
+# (disposition_merge / section_reconcile were retired with the legacy
+# disposition/sections subsystem; their entries + focused suites are gone below,
+# so `mutmut run` collects a clean sandbox suite instead of aborting on a
+# missing test file.)
 only_mutate = [
-    "setforge/disposition_merge.py",
     "setforge/markdown_merge.py",
     "setforge/scalar_merge.py",
     "setforge/structural_merge.py",
     "setforge/yaml_merge.py",
-    "setforge/section_reconcile.py",
     "setforge/base_store.py",
     "setforge/base_store_format.py",
     "setforge/scalar_base_store.py",
@@ -197,15 +199,12 @@ only_mutate = [
 # killed by integration tests not in the mutmut set. The full-suite/CI variant
 # is F2b's job.
 pytest_add_cli_args_test_selection = [
-    "tests/test_disposition_merge.py",
-    "tests/test_disposition_merge_resolver.py",
     "tests/test_markdown_merge.py",
     "tests/test_markdown_merge_segments.py",
     "tests/test_scalar_merge.py",
     "tests/test_structural_merge.py",
     "tests/test_structural_set_at_path.py",
     "tests/test_yaml_merge.py",
-    "tests/test_section_reconcile.py",
     "tests/test_base_store.py",
     "tests/test_base_store_format.py",
     "tests/test_scalar_base_store.py",

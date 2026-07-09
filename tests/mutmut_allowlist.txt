@@ -1,0 +1,20 @@
+# mutmut mutation-gate allowlist.
+#
+# One mutant id per line. `#` starts a comment (whole-line or inline). The
+# function-granular diff gate (scripts/mutmut_diff_gate.py) subtracts every id
+# listed here BEFORE deciding whether to block, in both --diff and --full modes.
+#
+# Only two kinds of survivor belong here, and each entry MUST carry a reason:
+#   * equivalent mutants — the mutation produces behaviour indistinguishable
+#     from the original, so no test can kill it;
+#   * integration-only-covered — the behaviour is exercised only by tests
+#     outside mutmut's focused per-module suite (install / capture / auditfix),
+#     so the mutant survives the scoped run but is not actually a coverage gap.
+#
+# Ids look like: setforge.<module>.x_<function>__mutmut_<N>
+#            or: setforge.<module>.xǁ<Class>ǁ<method>__mutmut_<N>
+#
+# Format (id, then a `#` reason):
+#   setforge.scalar_merge.x_resolve_scalar__mutmut_4  # equivalent: reordered
+#
+# Empty by default — add entries only with a justification above.
