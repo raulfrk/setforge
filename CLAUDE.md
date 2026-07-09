@@ -67,6 +67,16 @@ change honors the standing guarantees in [`COMPATIBILITY.md`](COMPATIBILITY.md)
 (additive-first, expand → contract, up + down migration per `schema_version`
 bump).
 
+When an engine diff touches any of the mutmut core files (the
+`[tool.mutmut].only_mutate` list — the merge/reconcile/store modules), run
+`uv run python scripts/mutmut_diff_gate.py` before merge (Phase 6) as a local
+Tier-1 check. It runs mutation testing scoped to only the changed core lines
+(diff-scoped, so it stays fast) and blocks on any surviving mutant whose
+function overlaps the change. It is deliberately NOT in pre-commit or the
+always-on review fan (a mutmut run is too slow for either), so this is a
+documented manual trigger; CI enforces it non-locally via the `pr-mutmut-diff`
+PR job (diff-scoped) and the `mutmut-full` nightly job (whole core).
+
 **Why `--no-cov` on the Docker e2e invocation:** pytest-cov's controller is
 selected at master `pytest_configure` time (before xdist worker setup). With
 `--cov` in default addopts and the conftest auto-xdist
