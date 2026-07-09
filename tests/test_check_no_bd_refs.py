@@ -53,7 +53,7 @@ def _run(*args: str) -> int:
         ("setforge-deoq.4.15.44 longer final segment\n", 0),  # right guard / magnitude
         ("setforge-deoq.4.15.4-rc2 semver prerelease\n", 0),  # right guard rejects -
         ("post-4.15.4.9 four-segment pin\n", 0),  # right guard rejects trailing .
-        ("post-1.0 depth-1 pin\n", 0),  # not depth-3
+        ("post-1.0 depth-2 pin\n", 0),  # depth-2, below the arm's depth-3 floor
         ("setforge-p5qc-audit worktree slug\n", 0),  # no version tail
     ],
 )

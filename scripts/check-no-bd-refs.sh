@@ -29,7 +29,8 @@
 
 set -euo pipefail
 
-# Structured, high-precision patterns (extended regex). The bd-command verb list
+# Structured, high-precision patterns (extended regex; GNU grep — the `\b`
+# word-boundary is a GNU ERE extension, matching this host's grep). The bd-command verb list
 # tracks the documented surface; new verbs are caught by the agent's fuzzy pass.
 # The epic-child arms are boundary-anchored: a left guard `(^|[^a-z-])` so a
 # longer word tail (`compost-`, `postgres-`) can't back into the `post-`/stem,
