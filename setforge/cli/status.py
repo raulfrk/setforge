@@ -4,7 +4,6 @@ Renders five sections per the mockup (section O):
 
 1. config-repo — HEAD short-sha, commits since last install, commits vs ``origin/main``.
 2. last install — age and transition id of the most recent install transition.
-3. drift — count of DRIFTED entries in the compare report.
 4. overlay — counts of overlay entries declared in ``~/.config/setforge/local.yaml``.
 5. capabilities — three rows from :func:`setforge.cli._init_helpers.probe_environment`.
 
@@ -81,8 +80,6 @@ class _GitInfo:
 
 @dataclass(slots=True, frozen=True)
 class _DriftCounts:
-    """Aggregated drift count for the report."""
-
     drifted: int
 
 
@@ -242,13 +239,6 @@ def _load_last_install_meta(profile: str) -> transitions.TransitionMeta | None:
 
 
 def _compute_drift_counts(ctx: ProfileContext) -> _DriftCounts:
-    """Compute the drift count for status rendering.
-
-    Counts every DRIFTED entry in the compare report. This is an
-    approximation — status deliberately skips the full reconcile pass
-    for cost. Use ``setforge compare`` for the authoritative per-unit
-    drift state.
-    """
     report = compare_mod.compare_profile(ctx.cfg, ctx.profile, ctx.repo_root)
     drifted = 0
     for entry in report.entries:
