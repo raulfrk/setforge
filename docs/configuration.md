@@ -120,12 +120,12 @@ offers two mechanisms.
 
 Wrap a region of a tracked markdown *source* file in HTML-comment markers to
 **declare** it a user section. The marker pair is the authoring syntax in the
-source — as of schema 2.0 it is **not** what gets deployed (see below). Both
+source; it is **not** what gets deployed (see below). Both
 markers need a `host-local` or `shared` semantics keyword:
 
 ```markdown
 <!-- setforge:user-section start host-local NAME -->
-... per-machine body; stored in local.yaml, never shared ...
+... per-machine body; kept live, never shared ...
 <!-- setforge:user-section end host-local NAME -->
 
 <!-- setforge:user-section start shared NAME -->
