@@ -156,6 +156,20 @@ def test_mixed_soft_and_hard_exit_one() -> None:
     assert exit_code(result) == 1
 
 
+def test_plan_is_pure_no_apply_no_writes() -> None:
+    # Acceptance clause (f): plan() must perform NO writes and NO apply_one.
+    # A spy whose apply_one explodes proves plan() never touches it.
+    class _PlanSpy(_FakeProvisioner):
+        def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
+            raise AssertionError("plan() must never call apply_one")
+
+    ids = (Identity(key="a", display="a"),)
+    prov = _PlanSpy(to_install=ids)
+    delta = prov.plan([_item("a")], set())
+    assert isinstance(delta, ProvisionDelta)
+    assert delta.installed == ids
+
+
 def test_report_performs_zero_writes_before_gate() -> None:
     # A provisioner whose apply_one would explode proves the gate returns
     # before ANY apply/write happens under REPORT.
