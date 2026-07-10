@@ -7,6 +7,10 @@ unexpected exceptions bubble with a traceback.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from setforge.provision.protocol import Outcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +153,48 @@ class PluginReconcileItemFailed(SetforgeError):
         self.error_summary = error_summary
         self.full_stderr = full_stderr
         super().__init__(f"plugin reconcile failed for {item_id!r}: {error_summary}")
+
+
+class ProvisionItemFailed(SetforgeError):
+    """Raised by a per-item provisioner apply when the underlying install
+    (or checksum verify) fails.
+
+    Generalizes :class:`PluginReconcileItemFailed` for the uniform
+    provisioner protocol (Epic B). Carries the item ID, a one-line
+    ``error_summary``, the full captured ``full_stderr``, and the
+    :class:`~setforge.provision.protocol.Outcome` ``kind`` (SOFT|HARD) so the
+    driver records a single outcome per item and gates exit on any HARD.
+    ``kind`` is typed under ``TYPE_CHECKING`` only — importing the enum at
+    runtime would cycle through ``provision.protocol`` (which imports
+    :class:`SetforgeError` from here); the ``StrEnum`` value is stored as-is.
+    """
+
+    def __init__(
+        self,
+        *,
+        item_id: str,
+        error_summary: str,
+        full_stderr: str,
+        kind: "Outcome",
+    ) -> None:
+        self.item_id = item_id
+        self.error_summary = error_summary
+        self.full_stderr = full_stderr
+        self.kind = kind
+        super().__init__(f"provision failed for {item_id!r}: {error_summary}")
+
+
+class UnknownProvisionerType(SetforgeError):
+    """Raised by :func:`setforge.provision.registry.build` when a
+    :class:`~setforge.provision.protocol.ProvisionItem`'s ``type`` has no
+    registered provisioner. The message names the unknown type and the known
+    ones so the user can correct the config."""
+
+
+class DuplicateProvisionerType(SetforgeError):
+    """Raised by the :func:`setforge.provision.registry.register` decorator
+    when a ``type`` string is registered twice. Two provisioners claiming the
+    same registry key is a programming error, caught at import time."""
 
 
 class ReconcileAborted(SetforgeError):
