@@ -164,9 +164,12 @@ class ProvisionItemFailed(SetforgeError):
     ``error_summary``, the full captured ``full_stderr``, and the
     :class:`~setforge.provision.protocol.Outcome` ``kind`` (SOFT|HARD) so the
     driver records a single outcome per item and gates exit on any HARD.
-    ``kind`` is typed under ``TYPE_CHECKING`` only — importing the enum at
-    runtime would cycle through ``provision.protocol`` (which imports
-    :class:`SetforgeError` from here); the ``StrEnum`` value is stored as-is.
+    ``kind`` is annotated under ``TYPE_CHECKING`` only to avoid a runtime
+    import of the provision package from this module: ``provision.__init__``
+    eagerly imports ``driver``/``reference``/``registry``, which import
+    ``errors``, so a runtime ``from setforge.provision.protocol import
+    Outcome`` here would pull the provision package ``__init__`` in mid-import
+    of ``errors`` — a cycle. The ``StrEnum`` value is stored as-is.
     """
 
     def __init__(
