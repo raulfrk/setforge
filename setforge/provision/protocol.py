@@ -20,7 +20,7 @@ from pydantic import BaseModel
 class Outcome(StrEnum):
     """The result of attempting one declared item."""
 
-    OK = "ok"  # installed/changed successfully
+    OK = "ok"
     SKIP = "skip"  # already present (idempotent no-op) — writes nothing
     SOFT = "soft"  # couldn't attempt (no toolchain/sudo) — warns, does NOT gate exit
     HARD = "hard"  # attempted and failed (install/checksum error) — gates exit
@@ -62,11 +62,11 @@ class _EmptyConfig(BaseModel):
 class ProvisionItem:
     """One declared thing to provision."""
 
-    type: str  # registry key ("cargo", "reference", …)
+    type: str
     identity: Identity
     desired: DesiredState = DesiredState.ACTIVE
     version: str | None = None  # pin; drift is a REPORT signal only (upgrade is later)
-    checksum: str | None = None  # for marker-based ecosystems
+    checksum: str | None = None
     config: BaseModel = field(default_factory=_EmptyConfig)
 
 
@@ -97,7 +97,7 @@ class ReconcileResult:
 
     delta: ProvisionDelta
     outcomes: tuple[ProvisionOutcome, ...] = ()
-    reported: bool = False  # True when the run stopped at the REPORT gate
+    reported: bool = False
 
 
 class Provisioner(ABC):

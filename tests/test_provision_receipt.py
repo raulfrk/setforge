@@ -42,8 +42,6 @@ def test_re_record_replaces(tmp_path: Path) -> None:
 
 def test_per_item_durability_survives_fresh_store(tmp_path: Path) -> None:
     ReceiptStore(tmp_path).record(_ident("a", "A"), version="1", checksum=None)
-    # B is never recorded (a mid-batch crash). A must still be readable
-    # by a fresh store instance — installed() reads on-disk ground truth.
     assert ReceiptStore(tmp_path).installed() == {_ident("a", "A")}
 
 
@@ -57,8 +55,6 @@ def test_write_is_atomic_no_partial_file(tmp_path: Path) -> None:
 
 
 def test_installed_raises_on_invalid_json(tmp_path: Path) -> None:
-    # A hand-corrupted receipt (not valid JSON) surfaces as CorruptReceiptError
-    # naming the path, never a raw JSONDecodeError aborting reconcile.
     bad = tmp_path / "deadbeef.json"
     bad.write_text("{not json", encoding="utf-8")
     with pytest.raises(CorruptReceiptError) as excinfo:
@@ -67,7 +63,6 @@ def test_installed_raises_on_invalid_json(tmp_path: Path) -> None:
 
 
 def test_installed_raises_on_missing_key(tmp_path: Path) -> None:
-    # Valid JSON but wrong shape (no "key") is corruption too.
     bad = tmp_path / "deadbeef.json"
     bad.write_text('{"display": "X"}', encoding="utf-8")
     with pytest.raises(CorruptReceiptError) as excinfo:
@@ -76,8 +71,6 @@ def test_installed_raises_on_missing_key(tmp_path: Path) -> None:
 
 
 def test_installed_ignores_stray_tmp_file(tmp_path: Path) -> None:
-    # A stray .tmp from a crashed atomic write is IGNORED, not parsed — only
-    # final *.json receipts are read.
     store = ReceiptStore(tmp_path)
     store.record(_ident(), version="1", checksum=None)
     (tmp_path / "orphan.json.tmp").write_text("garbage-not-json", encoding="utf-8")

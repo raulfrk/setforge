@@ -38,8 +38,6 @@ def test_hard_failure_gates_exit_others_applied() -> None:
 
 
 def test_genuine_install_is_ok_already_present_is_skip() -> None:
-    # A real install returns OK (installed/changed); a second apply of the
-    # same item, now present, returns SKIP (no-op). Both leave exit at 0.
     prov = InMemoryProvisioner()
     item = _item("a")
     first = prov.apply_one(item)

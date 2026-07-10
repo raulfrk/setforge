@@ -68,7 +68,7 @@ class _FakeProvisioner(Provisioner):
         outcome = self._outcomes.get(item.identity.key, Outcome.SKIP)
         return ProvisionOutcome(item=item, outcome=outcome)
 
-    def uninstall_one(self, identity: Identity) -> None:  # pragma: no cover
+    def uninstall_one(self, identity: Identity) -> None:
         raise AssertionError("driver must never call uninstall_one")
 
 

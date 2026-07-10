@@ -38,9 +38,6 @@ def test_identity_is_frozen() -> None:
 
 
 def test_identity_matches_on_key_only() -> None:
-    # Two identities with the same normalized key but a different display
-    # form MUST be equal AND hash-equal: matching is on .key, display only
-    # carries the original form for subprocess invocation.
     a = Identity(key="k", display="A")
     b = Identity(key="k", display="B")
     assert a == b
@@ -57,7 +54,6 @@ def test_provision_item_defaults() -> None:
     assert item.desired is DesiredState.ACTIVE
     assert item.version is None
     assert item.checksum is None
-    # config defaults to a validated pydantic model, never a raw dict.
     assert isinstance(item.config, BaseModel)
 
 

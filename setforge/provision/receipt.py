@@ -86,8 +86,6 @@ class ReceiptStore:
         result: set[Identity] = set()
         if not self._root.is_dir():
             return result
-        # Only final *.json receipts; a stray .tmp from a crashed atomic
-        # write is ignored, never parsed.
         for path in self._root.glob(f"*{_RECEIPT_SUFFIX}"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
