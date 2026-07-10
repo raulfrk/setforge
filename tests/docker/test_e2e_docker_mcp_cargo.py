@@ -1,17 +1,19 @@
 """Docker E2E: MCP-server registration + cargo-binary install.
 
 Three behavior-preservation cases against a fresh Debian 12 container
-that has a REAL ``claude`` binary but NO rust/cargo toolchain (by design
-— see the spec's e2e-coverage note):
+with a REAL ``claude`` binary. The image now ships a real rust toolchain
+(``~/.cargo/bin`` on PATH), so the missing-cargo case (b) explicitly
+scrubs ``.cargo/bin`` from PATH to reproduce a cargo-less host:
 
 (a) MCP register → assert present → revert → assert gone → idempotent
     reinstall. Drives the real ``claude mcp`` surface.
-(b) cargo missing-toolchain: ``install`` emits the missing-cargo warning
-    to stderr and STILL exits 0 (deploy happens). No rust in the image.
+(b) cargo missing-toolchain: with cargo removed from PATH, ``install``
+    emits the missing-cargo warning to stderr and STILL exits 0 (deploy
+    happens).
 (c) cargo skip-if-present: a dummy crate pre-registered with ``cargo``
-    is NOT re-installed. Because the image has no cargo, this case stubs a
-    fake ``cargo`` on PATH whose ``install --list`` reports the crate so
-    the skip path is exercised without a real toolchain.
+    is NOT re-installed. This case stubs a fake ``cargo`` earlier on PATH
+    whose ``install --list`` reports the crate so the skip path is
+    exercised deterministically (independent of the real toolchain).
 
 The real ``cargo install`` subprocess is unit-tested with a mock
 (``tests/test_cargo.py``); bloating the image with a rust toolchain for
@@ -134,8 +136,15 @@ def test_cargo_missing_toolchain_warns_and_exits_zero(
     c = docker_container()
     _write_source(c, body=_CARGO_YAML)
 
-    # Image has no cargo on PATH → install warns and continues to exit 0.
-    res = _install(c, check=False)
+    # The image now ships a real cargo (~/.cargo/bin). Scrub it from PATH
+    # so this case reproduces a cargo-less host → install warns and
+    # continues to exit 0. cargo is resolved via `shutil.which`, so a PATH
+    # without .cargo/bin makes it invisible to the provisioner.
+    res = c.exec(
+        ["uv", "run", "setforge", "install", f"--profile={_PROFILE}", "--yes"],
+        check=False,
+        env={"PATH": "/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin"},
+    )
     assert res.returncode == 0, res.stdout + res.stderr
     assert "skipping cargo binaries" in res.stderr, res.stderr
     assert "ast-grep" in res.stderr, res.stderr

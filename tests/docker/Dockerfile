@@ -19,9 +19,10 @@
 #   1. base image
 #   2. apt deps + Microsoft repo + pinned `code` (root)
 #   3. nodejs + pinned `@anthropic-ai/claude-code` (root)
+#   4b/4c. gitleaks + Go toolchain (root, /usr/local)
 #   4. create non-root user `tester` (open question 3 resolution —
 #      `code --list-extensions` refuses to run as root)
-#   5. uv install + managed Python 3.13 (as tester)
+#   5. uv install + managed Python 3.13, then rustup (as tester)
 #   6. pyproject + uv.lock → uv sync (Python deps; as tester)
 #   7. project source COPY + final uv sync (as tester)
 #
@@ -44,6 +45,12 @@ ARG PYTHON_VERSION=3.13
 # Gitleaks v8.x — used by the pre-deploy secrets scan
 # Docker e2e cases. Pinned to a recent stable release.
 ARG GITLEAKS_VERSION=8.21.2
+# Go toolchain — supports the `go install` package-provisioner e2e
+# cases. Pinned to a recent stable release.
+ARG GO_VERSION=1.22.5
+# Rust toolchain (rustup) — supports the `cargo install`
+# package-provisioner e2e cases. Pinned to a recent stable channel.
+ARG RUST_VERSION=1.79.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -91,6 +98,17 @@ RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEA
     && chmod +x /usr/local/bin/gitleaks
 
 # ----------------------------------------------------------------------
+# Layer 4c: Go toolchain (pinned) — supports the `go install`
+# package-provisioner e2e cases. Extracted to /usr/local/go (root);
+# /usr/local/go/bin is added to PATH below (before the USER switch so
+# both root and tester see it). `go install` binaries land in
+# GOBIN (set to a tester-writable dir on PATH in the tester layer).
+# ----------------------------------------------------------------------
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+        | tar -xz -C /usr/local
+ENV PATH=/usr/local/go/bin:${PATH}
+
+# ----------------------------------------------------------------------
 # Create non-root user; everything from here on runs as `tester`.
 # ----------------------------------------------------------------------
 RUN useradd --create-home --shell /bin/bash tester \
@@ -98,7 +116,11 @@ RUN useradd --create-home --shell /bin/bash tester \
     && chown tester:tester /workspace
 USER tester
 ENV HOME=/home/tester
-ENV PATH=/home/tester/.local/bin:${PATH}
+# `.cargo/bin` — rustup's cargo/rustc (installed in the rust layer below).
+# `go/bin` (GOBIN) — where `go install` drops built binaries; kept
+# tester-writable and on PATH so the go provisioner's binaries resolve.
+ENV GOBIN=/home/tester/go/bin
+ENV PATH=/home/tester/.local/bin:/home/tester/.cargo/bin:${GOBIN}:${PATH}
 WORKDIR /workspace
 
 # ----------------------------------------------------------------------
@@ -106,6 +128,18 @@ WORKDIR /workspace
 # ----------------------------------------------------------------------
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && /home/tester/.local/bin/uv python install ${PYTHON_VERSION}
+
+# ----------------------------------------------------------------------
+# Layer 5b: Rust toolchain via rustup (pinned, as tester). Installs
+# cargo + rustc into /home/tester/.cargo (already on PATH above).
+# `-y` runs rustup non-interactively; `--default-toolchain` pins the
+# channel; `--profile minimal` skips docs/clippy the e2e cases don't
+# need, keeping the image lean.
+# ----------------------------------------------------------------------
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y \
+            --profile minimal \
+            --default-toolchain ${RUST_VERSION}
 
 # ----------------------------------------------------------------------
 # Layer 6: Python deps (changes only when pyproject/uv.lock change).

@@ -1438,3 +1438,21 @@ smoke = false
 signal = "setforge.yaml did-you-mean typo routing"
 verbs = ["validate"]
 
+
+[tests."tests/docker/test_e2e_docker_toolchains.py::test_toolchains_present"]
+verdict = "keep"
+smoke = false
+signal = "image ships working cargo/go/uv toolchains (provisioner infra)"
+verbs = ["infra"]
+
+[tests."tests/docker/test_e2e_docker_toolchains.py::test_rustc_present"]
+verdict = "keep"
+smoke = false
+signal = "rustup image ships a working rustc alongside cargo"
+verbs = ["infra"]
+
+[tests."tests/docker/test_e2e_docker_toolchains.py::test_go_install_lands_on_path"]
+verdict = "keep"
+smoke = false
+signal = "real go install drops a binary on PATH (GOBIN wired)"
+verbs = ["infra"]
