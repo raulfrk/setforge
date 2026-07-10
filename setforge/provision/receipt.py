@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 from setforge.atomicio import atomic_write_text
+from setforge.errors import CorruptReceiptError
 from setforge.provision.protocol import Identity
 from setforge.transitions import state_root
 
@@ -76,12 +77,20 @@ class ReceiptStore:
         """Return every recorded identity, read fresh from disk.
 
         Top-of-run ground truth: never trusts in-memory state. A missing
-        root reads as empty.
+        root reads as empty. Only final ``*.json`` receipts are read, so a
+        stray ``.tmp`` from a crashed atomic write is ignored. A malformed
+        receipt raises :class:`~setforge.errors.CorruptReceiptError` naming
+        the path rather than leaking a raw parse error into reconcile.
         """
         result: set[Identity] = set()
         if not self._root.is_dir():
             return result
+        # Only final *.json receipts; a stray .tmp from a crashed atomic
+        # write is ignored, never parsed.
         for path in self._root.glob(f"*{_RECEIPT_SUFFIX}"):
-            data = json.loads(path.read_text(encoding="utf-8"))
-            result.add(Identity(key=data["key"], display=data["display"]))
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                result.add(Identity(key=data["key"], display=data["display"]))
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise CorruptReceiptError(path) from exc
         return result

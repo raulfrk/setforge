@@ -7,6 +7,9 @@ NOT the B10 lockfile — a distinct directory under the state dir.
 
 from pathlib import Path
 
+import pytest
+
+from setforge.errors import CorruptReceiptError
 from setforge.provision.protocol import Identity
 from setforge.provision.receipt import ReceiptStore, default_receipt_root
 
@@ -49,6 +52,34 @@ def test_write_is_atomic_no_partial_file(tmp_path: Path) -> None:
     store.record(_ident(), version="1.2.3", checksum="abc")
     debris = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
     assert debris == []
+    assert store.installed() == {_ident()}
+
+
+def test_installed_raises_on_invalid_json(tmp_path: Path) -> None:
+    # A hand-corrupted receipt (not valid JSON) surfaces as CorruptReceiptError
+    # naming the path, never a raw JSONDecodeError aborting reconcile.
+    bad = tmp_path / "deadbeef.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(CorruptReceiptError) as excinfo:
+        ReceiptStore(tmp_path).installed()
+    assert str(bad) in str(excinfo.value)
+
+
+def test_installed_raises_on_missing_key(tmp_path: Path) -> None:
+    # Valid JSON but wrong shape (no "key") is corruption too.
+    bad = tmp_path / "deadbeef.json"
+    bad.write_text('{"display": "X"}', encoding="utf-8")
+    with pytest.raises(CorruptReceiptError) as excinfo:
+        ReceiptStore(tmp_path).installed()
+    assert str(bad) in str(excinfo.value)
+
+
+def test_installed_ignores_stray_tmp_file(tmp_path: Path) -> None:
+    # A stray .tmp from a crashed atomic write is IGNORED, not parsed — only
+    # final *.json receipts are read.
+    store = ReceiptStore(tmp_path)
+    store.record(_ident(), version="1", checksum=None)
+    (tmp_path / "orphan.json.tmp").write_text("garbage-not-json", encoding="utf-8")
     assert store.installed() == {_ident()}
 
 

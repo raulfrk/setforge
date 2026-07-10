@@ -184,6 +184,23 @@ class ProvisionItemFailed(SetforgeError):
         super().__init__(f"provision failed for {item_id!r}: {error_summary}")
 
 
+class CorruptReceiptError(SetforgeError):
+    """Raised when an on-disk install receipt is unparseable or wrong-shaped.
+
+    A per-package receipt (:mod:`setforge.provision.receipt`) is JSON carrying
+    ``key``/``display``. A malformed file — invalid JSON, a non-object, or a
+    missing mandatory key — is corruption, NOT a legitimately-absent receipt.
+    :meth:`~setforge.provision.receipt.ReceiptStore.installed` raises this
+    rather than leaking a raw ``JSONDecodeError``/``KeyError``/``TypeError``
+    and aborting reconcile. Carries the offending ``path`` so the user can
+    inspect or delete that one receipt to recover.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        super().__init__(f"corrupt install receipt: {path}")
+
+
 class UnknownProvisionerType(SetforgeError):
     """Raised by :func:`setforge.provision.registry.build` when a
     :class:`~setforge.provision.protocol.ProvisionItem`'s ``type`` has no
