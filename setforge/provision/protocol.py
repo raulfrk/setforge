@@ -4,7 +4,8 @@ Value objects + the :class:`Provisioner` ABC that every ecosystem
 provisioner (cargo, python, go, github_release, …) implements. The
 plan/apply split is the spine: :meth:`Provisioner.plan` is pure and returns
 a typed :class:`ProvisionDelta`; the driver calls :meth:`Provisioner.apply_one`
-only when policy is not REPORT, which makes REPORT-no-writes structural.
+only when policy is not REPORT (or a report-only run), which makes
+REPORT-no-writes structural.
 """
 
 from abc import ABC, abstractmethod
