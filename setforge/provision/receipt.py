@@ -54,13 +54,20 @@ class ReceiptStore:
         self._root = root
 
     def record(
-        self, identity: Identity, *, version: str | None, checksum: str | None
+        self,
+        identity: Identity,
+        *,
+        version: str | None,
+        checksum: str | None,
+        path: Path | str | None = None,
     ) -> None:
         """Write one receipt for ``identity`` atomically, replacing any prior.
 
         Called by a marker-based provisioner immediately after an install
         succeeds. Reuses :func:`~setforge.atomicio.atomic_write_text` so a
-        crash mid-write never leaves a torn file.
+        crash mid-write never leaves a torn file. ``path`` records the
+        installed binary's location (as a string, or null) — the only source
+        of that path for an undeclared item, which cleanup needs to unlink.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -68,6 +75,7 @@ class ReceiptStore:
             "display": identity.display,
             "version": version,
             "checksum": checksum,
+            "path": str(path) if path is not None else None,
         }
         atomic_write_text(
             self._root / _receipt_name(identity),
@@ -93,3 +101,27 @@ class ReceiptStore:
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 raise CorruptReceiptError(path) from exc
         return result
+
+    def path_for(self, identity: Identity) -> Path | None:
+        """Return the install path recorded for ``identity``, else ``None``.
+
+        Cleanup calls this to learn what binary to unlink for an UNDECLARED
+        item, whose path cannot come from config. Returns ``None`` when no
+        receipt exists or the receipt predates the ``path`` field (an old
+        payload with no ``path`` key reads back cleanly, never raising). A
+        receipt missing the REQUIRED ``key``/``display`` still raises
+        :class:`~setforge.errors.CorruptReceiptError`, matching
+        :meth:`installed`.
+        """
+        receipt = self._root / _receipt_name(identity)
+        if not receipt.is_file():
+            return None
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+            # Reconstruct identity so a receipt missing a REQUIRED key raises
+            # here exactly as it would in installed(); path stays optional.
+            Identity(key=data["key"], display=data["display"])
+            recorded = data.get("path")
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise CorruptReceiptError(receipt) from exc
+        return Path(recorded) if recorded is not None else None
