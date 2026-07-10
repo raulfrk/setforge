@@ -6,7 +6,8 @@ provisioner cannot get exit-gating or the REPORT-no-write gate wrong:
 * the REPORT gate is control-flow (an early return before any apply), never
   a boolean threaded into leaf calls;
 * per-item apply failure is contained — one :class:`ProvisionItemFailed`
-  records one HARD outcome and the loop continues;
+  records one outcome of the raised ``kind`` (SOFT or HARD) and the loop
+  continues;
 * :func:`exit_code` is a terminal ``any(HARD)`` reduction, never a scalar
   reassigned per item.
 
@@ -53,8 +54,8 @@ def reconcile(
 
     Probes (read-only), plans (pure), then — unless ``policy`` is REPORT or
     ``report_only`` is set — applies each planned item, containing any
-    per-item failure as one HARD outcome. Returns the delta plus the recorded
-    outcomes.
+    per-item failure as one outcome of the raised ``kind`` (SOFT or HARD).
+    Returns the delta plus the recorded outcomes.
     """
     installed = provisioner.probe()
     delta = provisioner.plan(items, installed)
@@ -66,9 +67,7 @@ def reconcile(
             outcomes.append(provisioner.apply_one(item))
         except ProvisionItemFailed as exc:
             outcomes.append(
-                ProvisionOutcome(
-                    item=item, outcome=Outcome.HARD, detail=exc.error_summary
-                )
+                ProvisionOutcome(item=item, outcome=exc.kind, detail=exc.error_summary)
             )
     return ReconcileResult(delta=delta, outcomes=tuple(outcomes), reported=False)
 

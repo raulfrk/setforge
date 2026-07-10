@@ -125,6 +125,28 @@ def test_soft_only_exit_zero() -> None:
     assert exit_code(result) == 0
 
 
+def test_raised_soft_recorded_soft_exit_zero() -> None:
+    # A provisioner may raise ProvisionItemFailed(kind=SOFT) — the driver must
+    # honor exc.kind and record SOFT (not force HARD), so exit stays 0.
+    ids = (Identity(key="a", display="a"),)
+    prov = _FakeProvisioner(to_install=ids, raises={"a": Outcome.SOFT})
+    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
+    assert by_key["a"] is Outcome.SOFT
+    assert exit_code(result) == 0
+
+
+def test_raised_hard_still_gates_exit() -> None:
+    # A raised HARD is still recorded HARD and gates exit (regression guard for
+    # the exc.kind change).
+    ids = (Identity(key="a", display="a"),)
+    prov = _FakeProvisioner(to_install=ids, raises={"a": Outcome.HARD})
+    result = reconcile(prov, [_item("a")], policy=ReconcilePolicy.ADDITIVE)
+    by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
+    assert by_key["a"] is Outcome.HARD
+    assert exit_code(result) == 1
+
+
 def test_mixed_soft_and_hard_exit_one() -> None:
     ids = tuple(Identity(key=k, display=k) for k in ("a", "b"))
     prov = _FakeProvisioner(
