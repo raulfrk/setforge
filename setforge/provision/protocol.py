@@ -32,7 +32,7 @@ class DesiredState(StrEnum):
     ACTIVE = "active"
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class Identity:
     """A provisioner match key.
 
@@ -56,7 +56,7 @@ class _EmptyConfig(BaseModel):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class ProvisionItem:
     """One declared thing to provision."""
 
@@ -68,7 +68,7 @@ class ProvisionItem:
     config: BaseModel = field(default_factory=_EmptyConfig)
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class ProvisionOutcome:
     """The recorded result of applying (or skipping) one item."""
 
@@ -77,7 +77,7 @@ class ProvisionOutcome:
     detail: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class ProvisionDelta:
     """The success-only delta an install produced (drives revert)."""
 
@@ -89,7 +89,7 @@ class ProvisionDelta:
         return not (self.installed or self.activated)
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class ReconcileResult:
     """The full outcome of one reconcile run."""
 
