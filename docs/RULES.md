@@ -54,7 +54,7 @@ Part 2(b)).
 | INV-4 | Reconcile is idempotent: `install ∘ install == install`. | DETERMINISTIC | `@invariant`; reconcile tests |
 | INV-5 | Migrate is reversible: `revert ∘ migrate == identity`. | DETERMINISTIC | `@invariant`; migrate tests |
 | INV-6 | Merge is non-destructive: every non-conflict region stays byte-identical. | DETERMINISTIC | `@invariant`; merge engine |
-| INV-7 | Provision is idempotent: declared == installed ⇒ no-op. | DETERMINISTIC | `@invariant`; provisioner tests |
+| INV-7 | Provisioner reconcile is exit-gated and idempotent: a re-run that computes an empty delta writes nothing (no subprocess, no receipt, no transition); partial failure sets a nonzero exit; a REPORT/dry-run performs zero writes. | DETERMINISTIC | `@invariant`; provisioner tests |
 | INV-8 | Stage fidelity: install deploys exactly the `share`d hunks, nothing else. | DETERMINISTIC | `@invariant`; staging tests |
 | INV-9 | Bundle DAG is acyclic and `depends_on` order is honored. | DETERMINISTIC | `@invariant` + a cycle/ref lint on the bundle model |
 | INV-10 | Store index ↔ on-disk consistent: no orphan classification. | DETERMINISTIC | `@invariant`; store tests |
