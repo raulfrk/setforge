@@ -11,12 +11,14 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -346,6 +348,220 @@ class SectionTemplateRef(BaseModel):
         return v
 
 
+class PackageKind(StrEnum):
+    """Discriminator for the :data:`Package` tagged union.
+
+    One member per provisioner ecosystem. The values match
+    :attr:`setforge.provision.protocol.ProvisionItem.type` so a
+    :class:`Package` config model maps to a ``ProvisionItem`` without a
+    translation table (that mapping is a later B-wave task). Mirrors the
+    project's established discriminator-enum pattern
+    (:class:`MarketplaceSourceKind`, :class:`setforge.source.SourceKind`).
+    """
+
+    CARGO = "cargo"
+    PYTHON = "python"
+    GO = "go"
+    GITHUB_RELEASE = "github_release"
+    LOCAL = "local"
+
+
+def _reject_path_in_bare_name(value: str, field_name: str) -> str:
+    """Reject a package ``binary`` / ``rename`` that is not a bare name.
+
+    Security defense layer 1: ``binary`` and ``rename`` name a file inside
+    an install/extract directory and must never contain a path separator or
+    a ``..`` component that could redirect a write outside it. A downstream
+    provisioner adds its own confinement check (defense in depth); rejecting
+    at config-parse time turns a traversal attempt into a clean schema error
+    instead of a runtime surprise.
+    """
+    if "/" in value or ".." in value:
+        raise ValueError(
+            f"{field_name} {value!r} must be a bare filename — "
+            f"'/' and '..' are rejected (path-traversal defense)."
+        )
+    return value
+
+
+class CargoPackage(BaseModel):
+    """A crate installed via ``cargo install`` (``type: cargo``)."""
+
+    model_config = _STRICT
+
+    type: Literal[PackageKind.CARGO] = PackageKind.CARGO
+    crate: str
+
+
+class PythonPackage(BaseModel):
+    """A Python distribution installed via a pipx-style tool (``type: python``).
+
+    ``version`` is an optional pin stored verbatim; drift against it is a
+    REPORT-only signal in a later wave (no upgrade action yet), matching
+    :attr:`setforge.provision.protocol.ProvisionItem.version` semantics.
+    """
+
+    model_config = _STRICT
+
+    type: Literal[PackageKind.PYTHON] = PackageKind.PYTHON
+    package: str
+    version: str | None = None
+
+
+class GoPackage(BaseModel):
+    """A module installed via ``go install`` (``type: go``).
+
+    ``version`` is an optional pin stored verbatim (REPORT-only later);
+    see :class:`PythonPackage`.
+    """
+
+    model_config = _STRICT
+
+    type: Literal[PackageKind.GO] = PackageKind.GO
+    module: str
+    version: str | None = None
+
+
+class GitHubReleasePackage(BaseModel):
+    """A binary fetched from a GitHub release asset (``type: github_release``).
+
+    ``binary`` (the file to pull out of the downloaded/extracted asset) and
+    ``rename`` (an optional final name) MUST be bare filenames — a ``/`` or
+    ``..`` is rejected as a path-traversal defense (layer 1). ``checksum`` is
+    an optional integrity pin; ``extract`` and ``chmod`` carry their
+    conventional defaults.
+    """
+
+    model_config = _STRICT
+
+    type: Literal[PackageKind.GITHUB_RELEASE] = PackageKind.GITHUB_RELEASE
+    repo: str
+    tag: str
+    asset: str
+    binary: str
+    install: str
+    checksum: str | None = None
+    rename: str | None = None
+    extract: bool = True
+    chmod: str = "+x"
+
+    @field_validator("binary", "rename")
+    @classmethod
+    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return None
+        return _reject_path_in_bare_name(v, info.field_name or "field")
+
+
+class LocalPackage(BaseModel):
+    """A binary installed from a config-repo ``tracked/``-relative blob
+    (``type: local``).
+
+    ``path`` is relative to the config repo's ``tracked/`` tree (mirroring
+    :attr:`TrackedFile.src`). ``binary`` / ``rename`` MUST be bare filenames
+    (``/`` and ``..`` rejected — path-traversal defense layer 1).
+    """
+
+    model_config = _STRICT
+
+    type: Literal[PackageKind.LOCAL] = PackageKind.LOCAL
+    path: str
+    binary: str
+    install: str
+    checksum: str | None = None
+    rename: str | None = None
+    extract: bool = True
+    chmod: str = "+x"
+
+    @field_validator("binary", "rename")
+    @classmethod
+    def _bare_name(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return None
+        return _reject_path_in_bare_name(v, info.field_name or "field")
+
+
+Package = Annotated[
+    CargoPackage | PythonPackage | GoPackage | GitHubReleasePackage | LocalPackage,
+    Field(discriminator="type"),
+]
+"""The per-ecosystem package tagged union, discriminated on ``type``.
+
+Every entry in :attr:`Config.packages` is one of these validated models —
+never an opaque dict, so a mistyped ``type`` or an unknown key is a
+config-parse error, not a runtime surprise. Mirrors
+:data:`setforge.source.Source` / :data:`setforge.anchors.Anchor`.
+"""
+
+
+class BundleComponent(BaseModel):
+    """One member of a :class:`BundleSpec`.
+
+    A component is EXACTLY ONE of a reference (``package:`` naming a key in
+    :attr:`Config.packages`) OR an inline definition — one of the per-type
+    package models (``cargo``/``python``/``go``/``github_release``/``local``)
+    or a free ``plugin:`` / ``file:`` string form. ``id`` is required (the
+    component's stable handle within the bundle, referenced by
+    ``depends_on``); ``depends_on`` lists sibling ``id``s that must be
+    provisioned first. The exactly-one invariant is enforced by
+    :meth:`_exactly_one_source`.
+    """
+
+    model_config = _STRICT
+
+    id: str
+    depends_on: list[str] = []
+
+    package: str | None = None
+    cargo: CargoPackage | None = None
+    python: PythonPackage | None = None
+    go: GoPackage | None = None
+    github_release: GitHubReleasePackage | None = None
+    local: LocalPackage | None = None
+    plugin: str | None = None
+    file: str | None = None
+
+    _INLINE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "cargo",
+        "python",
+        "go",
+        "github_release",
+        "local",
+        "plugin",
+        "file",
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> Self:
+        """Require EXACTLY ONE of ``package:`` or an inline definition.
+
+        Counts the reference form plus every inline slot; zero set (an empty
+        component) and more than one set (an ambiguous component) are both
+        refused with a message listing what was found.
+        """
+        set_fields = [
+            name
+            for name in ("package", *self._INLINE_FIELDS)
+            if getattr(self, name) is not None
+        ]
+        if len(set_fields) != 1:
+            found = ", ".join(set_fields) if set_fields else "(none)"
+            raise ValueError(
+                f"bundle component {self.id!r}: set EXACTLY ONE of package/"
+                f"cargo/python/go/github_release/local/plugin/file — found: "
+                f"{found}"
+            )
+        return self
+
+
+class BundleSpec(BaseModel):
+    """A named group of components provisioned together (``bundles:`` value)."""
+
+    model_config = _STRICT
+
+    components: list[BundleComponent]
+
+
 class Extensions(BaseModel):
     model_config = _STRICT
 
@@ -365,6 +581,8 @@ class Profile(BaseModel):
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
     cargo_binaries: list[str] = []
+    packages: list[str] = []
+    bundles: list[str] = []
     section_slots: dict[str, str] = {}
     """Map a host-local user-section NAME → a template name in the
     top-level :attr:`Config.section_templates` registry.
@@ -394,6 +612,8 @@ class ResolvedProfile(BaseModel):
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
     cargo_binaries: list[str] = []
+    packages: list[str] = []
+    bundles: list[str] = []
     section_slots: dict[str, str] = {}
 
 
@@ -435,6 +655,8 @@ class Config(BaseModel):
     claude_plugins: dict[str, ClaudePluginRef] = {}
     mcp_servers: dict[str, McpServerRef] = {}
     section_templates: dict[str, SectionTemplateRef] = {}
+    packages: dict[str, Package] = {}
+    bundles: dict[str, BundleSpec] = {}
     profiles: dict[str, Profile]
 
 
@@ -518,6 +740,8 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
             bootstrap=_merge_list(resolved.bootstrap, profile.bootstrap),
             mcp_servers=_merge_list(resolved.mcp_servers, profile.mcp_servers),
             cargo_binaries=_merge_list(resolved.cargo_binaries, profile.cargo_binaries),
+            packages=_merge_list(resolved.packages, profile.packages),
+            bundles=_merge_list(resolved.bundles, profile.bundles),
             extensions=_merge_extensions(resolved.extensions, profile.extensions),
             section_slots=_merge_dict(resolved.section_slots, profile.section_slots),
             plugins_reconcile=(

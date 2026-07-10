@@ -25,12 +25,19 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from setforge.config import (
+    BundleComponent,
+    BundleSpec,
+    CargoPackage,
     ClaudePluginRef,
     Config,
     Extensions,
+    GitHubReleasePackage,
+    GoPackage,
+    LocalPackage,
     MarketplaceSource,
     McpServerRef,
     Profile,
+    PythonPackage,
     ResolvedProfile,
     SectionTemplateRef,
     TrackedFile,
@@ -49,6 +56,13 @@ _MODELS: tuple[type[BaseModel], ...] = (
     McpServerRef,
     SectionTemplateRef,
     ResolvedProfile,
+    CargoPackage,
+    PythonPackage,
+    GoPackage,
+    GitHubReleasePackage,
+    LocalPackage,
+    BundleComponent,
+    BundleSpec,
 )
 
 
@@ -93,6 +107,14 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "claude_plugins": "dict[str, setforge.config.ClaudePluginRef]",
         "mcp_servers": "dict[str, setforge.config.McpServerRef]",
         "section_templates": "dict[str, setforge.config.SectionTemplateRef]",
+        "packages": (
+            "dict[str, typing.Annotated[setforge.config.CargoPackage | "
+            "setforge.config.PythonPackage | setforge.config.GoPackage | "
+            "setforge.config.GitHubReleasePackage | setforge.config.LocalPackage, "
+            "FieldInfo(annotation=NoneType, required=True, "
+            "discriminator='type')]]"
+        ),
+        "bundles": "dict[str, setforge.config.BundleSpec]",
         "profiles": "dict[str, setforge.config.Profile]",
     },
     "Profile": {
@@ -104,6 +126,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
         "cargo_binaries": "list[str]",
+        "packages": "list[str]",
+        "bundles": "list[str]",
         "section_slots": "dict[str, str]",
     },
     "TrackedFile": {
@@ -138,7 +162,60 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
         "cargo_binaries": "list[str]",
+        "packages": "list[str]",
+        "bundles": "list[str]",
         "section_slots": "dict[str, str]",
+    },
+    "CargoPackage": {
+        "type": "typing.Literal[<PackageKind.CARGO: 'cargo'>]",
+        "crate": "<class 'str'>",
+    },
+    "PythonPackage": {
+        "type": "typing.Literal[<PackageKind.PYTHON: 'python'>]",
+        "package": "<class 'str'>",
+        "version": "str | None",
+    },
+    "GoPackage": {
+        "type": "typing.Literal[<PackageKind.GO: 'go'>]",
+        "module": "<class 'str'>",
+        "version": "str | None",
+    },
+    "GitHubReleasePackage": {
+        "type": "typing.Literal[<PackageKind.GITHUB_RELEASE: 'github_release'>]",
+        "repo": "<class 'str'>",
+        "tag": "<class 'str'>",
+        "asset": "<class 'str'>",
+        "binary": "<class 'str'>",
+        "install": "<class 'str'>",
+        "checksum": "str | None",
+        "rename": "str | None",
+        "extract": "<class 'bool'>",
+        "chmod": "<class 'str'>",
+    },
+    "LocalPackage": {
+        "type": "typing.Literal[<PackageKind.LOCAL: 'local'>]",
+        "path": "<class 'str'>",
+        "binary": "<class 'str'>",
+        "install": "<class 'str'>",
+        "checksum": "str | None",
+        "rename": "str | None",
+        "extract": "<class 'bool'>",
+        "chmod": "<class 'str'>",
+    },
+    "BundleComponent": {
+        "id": "<class 'str'>",
+        "depends_on": "list[str]",
+        "package": "str | None",
+        "cargo": "setforge.config.CargoPackage | None",
+        "python": "setforge.config.PythonPackage | None",
+        "go": "setforge.config.GoPackage | None",
+        "github_release": "setforge.config.GitHubReleasePackage | None",
+        "local": "setforge.config.LocalPackage | None",
+        "plugin": "str | None",
+        "file": "str | None",
+    },
+    "BundleSpec": {
+        "components": "list[setforge.config.BundleComponent]",
     },
 }
 
