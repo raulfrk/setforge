@@ -6,8 +6,9 @@ atomically and immediately after the install succeeds. :meth:`installed`
 reads every receipt at call time so the skip decision rests on on-disk
 ground truth, never in-memory state.
 
-This is NOT the B10 lockfile (a resolved graph + CI drift-gate — a different
-file, location, and schema). The default root is ``receipts/`` under the
+This is NOT the future resolved-graph lockfile (``setforge.lock`` — a resolved
+dependency graph + CI drift-gate, a different file, location, and schema). The
+default root is ``receipts/`` under the
 setforge state dir, deliberately distinct from the ``locks/`` directory and
 any ``.lock`` filename.
 """
@@ -27,9 +28,9 @@ _RECEIPT_SUFFIX = ".json"
 def default_receipt_root() -> Path:
     """Return the real per-host receipt directory.
 
-    ``state_root() / "receipts"`` — NOT the B10 lockfile and NOT the
-    ``locks/`` lock directory. A caller passing an explicit ``root`` (tests)
-    bypasses this entirely.
+    ``state_root() / "receipts"`` — NOT the future resolved-graph lockfile
+    (``setforge.lock``) and NOT the ``locks/`` lock directory. A caller
+    passing an explicit ``root`` (tests) bypasses this entirely.
     """
     return state_root() / "receipts"
 

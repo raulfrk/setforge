@@ -2,7 +2,8 @@
 
 The receipt is a per-package marker (identity + version + checksum) for
 list-less ecosystems, written atomically after each install success. It is
-NOT the B10 lockfile — a distinct directory under the state dir.
+NOT the future resolved-graph lockfile (setforge.lock) — a distinct directory
+under the state dir.
 """
 
 from pathlib import Path
