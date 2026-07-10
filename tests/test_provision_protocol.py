@@ -19,6 +19,7 @@ from setforge.provision.protocol import (
 
 
 def test_outcome_values() -> None:
+    assert Outcome.OK == "ok"
     assert Outcome.SKIP == "skip"
     assert Outcome.SOFT == "soft"
     assert Outcome.HARD == "hard"

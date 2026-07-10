@@ -13,6 +13,7 @@ from setforge.provision.driver import exit_code, reconcile
 from setforge.provision.protocol import (
     DesiredState,
     Identity,
+    Outcome,
     ProvisionItem,
 )
 from setforge.provision.receipt import ReceiptStore
@@ -34,6 +35,17 @@ def test_hard_failure_gates_exit_others_applied() -> None:
     assert exit_code(result) == 1
     installed = {ident.key for ident in prov.probe()}
     assert installed == {"a", "c"}
+
+
+def test_genuine_install_is_ok_already_present_is_skip() -> None:
+    # A real install returns OK (installed/changed); a second apply of the
+    # same item, now present, returns SKIP (no-op). Both leave exit at 0.
+    prov = InMemoryProvisioner()
+    item = _item("a")
+    first = prov.apply_one(item)
+    assert first.outcome is Outcome.OK
+    second = prov.apply_one(item)
+    assert second.outcome is Outcome.SKIP
 
 
 def test_soft_only_exits_zero() -> None:

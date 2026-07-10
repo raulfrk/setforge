@@ -7,10 +7,10 @@ receipt. It fully exercises the acceptance — partial HARD → nonzero exit,
 REPORT → zero writes, a second identical run → an empty delta (INV-7) — so the
 driver contract is proven once here rather than once per ecosystem.
 
-Modeling a *successful install*: the ``Outcome`` enum is ``{SKIP, SOFT, HARD}``
-and the driver gates exit on HARD alone, so any non-HARD outcome counts as
-success. A genuine install and an already-present no-op both return
-``Outcome.SKIP`` (distinguished by ``detail``); the enum is left untouched.
+Modeling a *successful install*: the driver gates exit on HARD alone, so any
+non-HARD outcome counts as success. A genuine install returns ``Outcome.OK``;
+an already-present no-op returns ``Outcome.SKIP`` (writes nothing). Both leave
+exit at 0.
 """
 
 from collections.abc import Sequence
@@ -89,7 +89,7 @@ class InMemoryProvisioner(Provisioner):
         if item.identity in self.probe():
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
         self._install(item)
-        return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="installed")
+        return ProvisionOutcome(item=item, outcome=Outcome.OK, detail="installed")
 
     def uninstall_one(self, identity: Identity) -> None:
         """Remove one identity from the in-memory set (revert path).

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 class Outcome(StrEnum):
     """The result of attempting one declared item."""
 
+    OK = "ok"  # installed/changed successfully
     SKIP = "skip"  # already present (idempotent no-op) — writes nothing
     SOFT = "soft"  # couldn't attempt (no toolchain/sudo) — warns, does NOT gate exit
     HARD = "hard"  # attempted and failed (install/checksum error) — gates exit
