@@ -14,6 +14,8 @@ import stat
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from setforge.config import GitHubReleasePackage
 from setforge.provision import github_release as gh
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
@@ -197,6 +199,82 @@ def test_download_url_shape(tmp_path: Path) -> None:
     pkg = _pkg(install_dir, checksum=None)
     url = gh._asset_url(pkg)
     assert url == "https://github.com/owner/tool/releases/download/v1.0.0/tool.tar.gz"
+
+
+# --- download guard: the REAL _download (no monkeypatch of the method) ---
+#
+# Every OTHER test replaces prov._download with a stub, so the HTTPS-only
+# guard and the wire cap have no coverage. These exercise the real method;
+# the scheme check precedes urlopen, so no network is touched, and the
+# wire-cap / redirect cases stub urlopen (not _download) to stay offline.
+
+
+class _FakeResponse:
+    """Minimal urlopen()-return stand-in: a context manager streaming bytes."""
+
+    def __init__(self, *, chunks: list[bytes], final_url: str) -> None:
+        self._chunks = list(chunks)
+        self._final_url = final_url
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def geturl(self) -> str:
+        return self._final_url
+
+    def read(self, _n: int) -> bytes:
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def _real_download_prov(tmp_path: Path) -> gh.GitHubReleaseProvisioner:
+    return gh.GitHubReleaseProvisioner(receipts=ReceiptStore(tmp_path / "receipts"))
+
+
+def test_download_rejects_http_scheme(tmp_path: Path) -> None:
+    prov = _real_download_prov(tmp_path)
+    with pytest.raises(gh.DownloadError):
+        prov._download("http://github.com/owner/tool/releases/download/v1/tool.tar.gz")
+
+
+def test_download_rejects_non_http_scheme(tmp_path: Path) -> None:
+    prov = _real_download_prov(tmp_path)
+    with pytest.raises(gh.DownloadError):
+        prov._download("ftp://example.com/tool.tar.gz")
+
+
+def test_download_rejects_http_redirect_downgrade(tmp_path: Path, monkeypatch) -> None:
+    # urlopen's default opener follows a https→http redirect silently; the
+    # re-check on the FINAL resolved URL must reject the downgraded target.
+    prov = _real_download_prov(tmp_path)
+    fake = _FakeResponse(chunks=[b"data"], final_url="http://evil.example/tool")
+
+    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+        return fake
+
+    monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
+    with pytest.raises(gh.DownloadError):
+        prov._download("https://github.com/owner/tool/releases/download/v1/tool.tar.gz")
+
+
+def test_download_wire_cap_aborts_oversize_stream(tmp_path: Path, monkeypatch) -> None:
+    # Stream more than the wire cap in chunks; the running-total guard must
+    # raise before buffering the whole (hostile) payload. No real network.
+    prov = _real_download_prov(tmp_path)
+    monkeypatch.setattr(gh, "_MAX_WIRE_BYTES", 4)
+    monkeypatch.setattr(gh, "_CHUNK", 4)
+    fake = _FakeResponse(
+        chunks=[b"aaaa", b"bbbb", b"cccc"], final_url="https://github.com/x"
+    )
+
+    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+        return fake
+
+    monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
+    with pytest.raises(gh.DownloadError):
+        prov._download("https://github.com/owner/tool/releases/download/v1/tool.tar.gz")
 
 
 # --- probe / skip-before-download --------------------------------------

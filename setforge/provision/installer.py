@@ -252,7 +252,7 @@ def _extract_zip(
         infos = zf.infolist()
         _guard_total_size(sum(i.file_size for i in infos), max_uncompressed)
         for info in infos:
-            _check_zip_member(info.filename, staging)
+            _check_zip_member(info, staging)
         # No zipfile equivalent of tar's data filter — the per-member check is
         # the ONLY defense, so extract members one at a time after validation.
         for info in infos:
@@ -278,9 +278,16 @@ def _check_tar_member(member: tarfile.TarInfo, dest: Path) -> None:
     _reject_escape(member.name, dest)
 
 
-def _check_zip_member(name: str, dest: Path) -> None:
-    """Reject a zip entry whose resolved path escapes ``dest``."""
-    _reject_escape(name, dest)
+def _check_zip_member(info: zipfile.ZipInfo, dest: Path) -> None:
+    """Reject a zip entry that is a symlink or whose path escapes ``dest``.
+
+    Zip has no tar-style link *type*; a symlink is encoded in the Unix mode
+    bits carried in the high half of ``external_attr``. Reject those
+    symmetrically with :func:`_check_tar_member`'s link rejection.
+    """
+    if (info.external_attr >> 16) & 0o170000 == 0o120000:
+        raise InstallError(f"archive member {info.filename!r} is a symlink — rejected")
+    _reject_escape(info.filename, dest)
 
 
 def _reject_escape(name: str, dest: Path) -> None:

@@ -158,10 +158,12 @@ class GitHubReleaseProvisioner(Provisioner):
     def _download(self, url: str) -> bytes:
         """Fetch ``url`` over HTTPS with NO auth, streamed under a wire cap.
 
-        HTTPS-only (rejects any other scheme). Attaching no credentials
-        sidesteps the redirect-auth-leak class outright. Reads in chunks and
-        aborts once the running total exceeds :data:`_MAX_WIRE_BYTES`. Any
-        network/HTTP/oversize condition raises :class:`DownloadError` (SOFT).
+        HTTPS-only (rejects any other scheme), re-checked on the FINAL resolved
+        URL so a ``https→http`` redirect downgrade cannot slip through the
+        default opener. Attaching no credentials sidesteps the redirect-auth-leak
+        class outright. Reads in chunks and aborts once the running total exceeds
+        :data:`_MAX_WIRE_BYTES`. Any network/HTTP/oversize condition raises
+        :class:`DownloadError` (SOFT).
         """
         if not url.startswith("https://"):
             raise DownloadError(f"refusing non-HTTPS asset URL: {url!r}")
@@ -170,6 +172,11 @@ class GitHubReleaseProvisioner(Provisioner):
             with urllib.request.urlopen(
                 request, timeout=_DOWNLOAD_TIMEOUT_S
             ) as response:
+                final_url = response.geturl()
+                if not final_url.startswith("https://"):
+                    raise DownloadError(
+                        f"refusing non-HTTPS redirect target: {final_url!r}"
+                    )
                 chunks: list[bytes] = []
                 total = 0
                 while True:

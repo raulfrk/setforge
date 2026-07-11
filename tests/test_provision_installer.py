@@ -267,6 +267,25 @@ def test_zip_member_with_dotdot_escape_is_rejected(tmp_path: Path) -> None:
     assert not (tmp_path / "escape").exists()
 
 
+def test_zip_symlink_member_is_rejected(tmp_path: Path) -> None:
+    install_dir = tmp_path / "bin"
+    # A zip has no link type; a symlink is encoded in the Unix mode bits held
+    # in the high half of external_attr (S_IFLNK == 0o120000).
+    info = zipfile.ZipInfo("tool")
+    info.external_attr = (0o120777 & 0xFFFF) << 16
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(info, b"/etc/passwd")
+    data = buf.getvalue()
+    spec = _spec(install_dir, asset="tool.zip", checksum=_sha256(data))
+
+    with pytest.raises(InstallError) as exc:
+        install_from_bytes(data, spec, checksum_required=True)
+
+    assert exc.value.kind is Outcome.HARD
+    assert not install_dir.exists() or not any(install_dir.iterdir())
+
+
 # --- (c) decompression-bomb guard ---------------------------------------
 
 
