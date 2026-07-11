@@ -146,7 +146,7 @@ def test_cargo_missing_toolchain_warns_and_exits_zero(
         env={"PATH": "/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin"},
     )
     assert res.returncode == 0, res.stdout + res.stderr
-    assert "skipping cargo binaries" in res.stderr, res.stderr
+    assert "cargo not found on PATH" in res.stderr, res.stderr
     assert "ast-grep" in res.stderr, res.stderr
     # Deploy still happened.
     deployed = c.read_text("/tmp/out/foo.md")
@@ -190,6 +190,7 @@ def test_cargo_skip_if_present_does_not_invoke_install(
     )
     assert res.returncode == 0, res.stdout + res.stderr
     combined = res.stdout + res.stderr
-    # The skip path ran: no real `cargo install ast-grep` was invoked.
+    # The skip path ran: an already-present crate is filtered at plan time, so
+    # no real `cargo install ast-grep` runs and nothing is (re)provisioned.
     assert "FAKE_CARGO_INSTALL_INVOKED" not in combined, combined
-    assert "already installed (skip)" in combined, combined
+    assert "provisioned ast-grep" not in combined, combined
