@@ -1,10 +1,3 @@
-"""Tests for the local provisioner (installs from a config-repo tracked/ file).
-
-The source bytes come from a real tracked-root tmp dir — no network. The
-tracked_root is injected explicitly (tests bypass the source-layer resolution
-that the CLI path uses).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -100,7 +93,7 @@ def test_installs_bare_binary_from_tracked_file(tmp_path: Path) -> None:
     assert outcome.outcome is Outcome.OK, outcome.detail
     dest = install_dir / "tool"
     assert dest.read_bytes() == payload
-    assert dest.stat().st_mode & stat.S_IXUSR  # +x applied
+    assert dest.stat().st_mode & stat.S_IXUSR
 
 
 def test_installs_from_archive(tmp_path: Path) -> None:
@@ -120,7 +113,6 @@ def test_installs_from_archive(tmp_path: Path) -> None:
 def test_source_path_escaping_tracked_root_is_rejected(tmp_path: Path) -> None:
     tracked = tmp_path / "tracked"
     tracked.mkdir()
-    # A real secret sitting OUTSIDE tracked/ that the escape would exfiltrate.
     outside = tmp_path / "secret"
     outside.write_bytes(b"top-secret")
     install_dir = tmp_path / "out"
@@ -153,7 +145,6 @@ def test_symlink_escape_source_is_rejected(tmp_path: Path) -> None:
     tracked.mkdir()
     outside = tmp_path / "secret"
     outside.write_bytes(b"top-secret")
-    # A symlink INSIDE tracked/ that points OUTSIDE — realpath must catch it.
     (tracked / "evil").symlink_to(outside)
     install_dir = tmp_path / "out"
     pkg = _pkg(install_dir, path="evil", binary="tool", extract=False)
@@ -174,8 +165,6 @@ def test_missing_source_file_is_reported_not_crashes(tmp_path: Path) -> None:
 
     outcome = prov.apply_one(_item(pkg))
 
-    # A missing tracked file is a config error the operator can fix — a
-    # HARD (attempted+failed) is defensible; it must NOT crash.
     assert outcome.outcome is Outcome.HARD, outcome.detail
     assert not (install_dir / "tool").exists()
 
@@ -235,7 +224,6 @@ def test_checksum_present_and_wrong_is_hard_nothing_installed(tmp_path: Path) ->
 
 def test_malicious_archive_member_is_rejected(tmp_path: Path) -> None:
     tracked = tmp_path / "tracked"
-    # A symlink member inside the archive — the shared core rejects it.
     _write(tracked, "assets/evil.tar.gz", _symlink_tar_gz("tool", "/etc/passwd"))
     install_dir = tmp_path / "out"
     pkg = _pkg(install_dir, path="assets/evil.tar.gz", binary="tool", extract=True)
@@ -257,14 +245,12 @@ def test_rerun_no_ops_when_receipt_present(tmp_path: Path) -> None:
     first = prov.apply_one(_item(pkg))
     assert first.outcome is Outcome.OK, first.detail
 
-    # Second run: receipt present -> SKIP without touching the source.
     second = prov.apply_one(_item(pkg))
     assert second.outcome is Outcome.SKIP, second.detail
     assert second.detail == "present"
 
 
 def test_reproducible_from_committed_file(tmp_path: Path) -> None:
-    # Same tracked bytes -> byte-identical install output across two runs.
     tracked = tmp_path / "tracked"
     payload = b"deterministic"
     _write(tracked, "bin/tool", payload)
@@ -290,14 +276,7 @@ def test_reproducible_from_committed_file(tmp_path: Path) -> None:
 def test_lazy_tracked_root_resolves_via_source_layer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Production wires the tracked root LAZILY: registry.build() constructs
-    # LocalProvisioner() with NO args, so apply_one resolves the root via the
-    # source layer as `resolve_source_dir(get_resolved_source()) / "tracked"`.
-    # Every other test injects tracked_root=, so this shipping wiring — the
-    # source call AND the `/ "tracked"` join — is otherwise untested. Drive
-    # the lazy branch and prove the join: the fixture sits under `source/tracked/`
-    # (NOT directly under `source/`), so an install only succeeds if line 173
-    # appends `tracked` to what resolve_source_dir returns.
+    # Fixture sits under source/tracked/: proves apply_one joins via the source layer.
     source_dir = tmp_path / "source"
     payload = b"#!/bin/sh\necho lazy\n"
     _write(source_dir / "tracked", "bin/tool", payload)
@@ -306,14 +285,13 @@ def test_lazy_tracked_root_resolves_via_source_layer(
     monkeypatch.setattr(loc, "get_resolved_source", lambda: sentinel)
 
     def fake_resolve(arg: object) -> Path:
-        assert arg is sentinel  # the resolved source is threaded through
+        assert arg is sentinel
         return source_dir
 
     monkeypatch.setattr(loc, "resolve_source_dir", fake_resolve)
 
     install_dir = tmp_path / "out"
     pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
-    # No tracked_root= -> forces the lazy source-layer path.
     prov = loc.LocalProvisioner(receipts=ReceiptStore(tmp_path / "receipts"))
 
     outcome = prov.apply_one(_item(pkg))
@@ -321,7 +299,7 @@ def test_lazy_tracked_root_resolves_via_source_layer(
     assert outcome.outcome is Outcome.OK, outcome.detail
     dest = install_dir / "tool"
     assert dest.read_bytes() == payload
-    assert dest.stat().st_mode & stat.S_IXUSR  # +x applied
+    assert dest.stat().st_mode & stat.S_IXUSR
 
 
 def test_uninstall_removes_binary_and_receipt(tmp_path: Path) -> None:
@@ -345,15 +323,10 @@ def test_uninstall_removes_binary_and_receipt(tmp_path: Path) -> None:
 
 
 def test_install_path_confinement_end_to_end(tmp_path: Path) -> None:
-    # rename carrying a traversal is rejected by the shared core (nothing
-    # written) — proves install-side confinement is wired through local too.
     tracked = tmp_path / "tracked"
     _write(tracked, "bin/tool", b"content")
     install_dir = tmp_path / "out"
     install_dir.mkdir()
-    # binary/rename path-rejection is enforced at LocalPackage construction,
-    # so a core-level confinement escape is unreachable via a valid config;
-    # assert the config validator rejects the traversal at construction.
     with pytest.raises(ValidationError):
         _pkg(
             install_dir,
@@ -362,6 +335,5 @@ def test_install_path_confinement_end_to_end(tmp_path: Path) -> None:
             rename="../escape",
             extract=False,
         )
-    # Guard the escape did not create a file outside the install dir.
     assert not (tmp_path / "escape").exists()
     assert os.listdir(install_dir) == []
