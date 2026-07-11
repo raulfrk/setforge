@@ -25,6 +25,7 @@ through this explicit, confirmation-gated wizard.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -183,24 +184,32 @@ def _confined_unlink(path: Path, *, confine_root: Path, console: Console) -> Non
 
     Safety, in order:
 
-    1. ``is_relative_to(confine_root)`` — a path escaping confinement
-       raises :class:`ConfinementError` BEFORE any filesystem touch.
+    1. Confinement on the RESOLVED parent directory — ``realpath`` on both
+       ``confine_root`` and ``path.parent`` collapses any ``..`` and defeats
+       a parent-directory symlink swap, so a lexical ``<home>/../../etc``
+       escape (which bare ``is_relative_to`` would pass) raises
+       :class:`ConfinementError` BEFORE any filesystem touch. The FINAL
+       component is deliberately NOT resolved — it is the link we unlink,
+       never follow.
     2. ``lstat`` existence probe — a missing binary logs a warning and
        returns (the caller still reaps the receipt); NEVER
        ``unlink(missing_ok=True)`` — the race is handled explicitly.
     3. ``unlink()`` removes the LINK, never a symlink's target; single
        file only (no ``rmtree`` / ``removedirs`` / parent walk).
     """
-    if not path.is_relative_to(confine_root):
+    root = Path(os.path.realpath(confine_root))
+    parent = Path(os.path.realpath(path.parent))
+    if not (parent == root or root in parent.parents):
         raise ConfinementError(
             f"refusing to delete {path}: outside confinement root {confine_root}"
         )
-    if not _lstat_safe(path):
+    target = parent / path.name
+    if not _lstat_safe(target):
         console.print(
             f"[yellow]warning:[/yellow] binary missing, reaping receipt only: {path}"
         )
         return
-    path.unlink()
+    target.unlink()
     console.print(f"  deleted  {path}")
 
 

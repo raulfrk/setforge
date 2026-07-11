@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 from setforge import binaries as binaries_mod
 from setforge.cli import app
 from setforge.cli import cleanup as cleanup_mod
+from setforge.local_config import LocalConfig
 from setforge.provision.protocol import Identity
 from setforge.provision.receipt import ReceiptStore
 
@@ -117,7 +118,7 @@ def test_delete_removes_binary_and_receipt_under_confinement(
 
 
 def test_delete_path_none_drops_only_receipt(
-    tmp_path: Path, confine_root: Path
+    tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An old receipt with path=None: skip the binary-unlink, drop the
     receipt + warn."""
@@ -126,9 +127,11 @@ def test_delete_path_none_drops_only_receipt(
     item = cleanup_mod.CleanupItem(identity=_ident("old"), path=None)
 
     cleanup_mod.delete_provisioned(
-        store, item, confine_root=confine_root, console=Console()
+        store, item, confine_root=confine_root, console=Console(stderr=True)
     )
     assert store.installed() == set()
+    err = capsys.readouterr().err
+    assert "no recorded path" in err  # the path=None warning was emitted
 
 
 def test_delete_missing_binary_warns_and_reaps_receipt(
@@ -167,6 +170,32 @@ def test_delete_refuses_path_escaping_confinement(
             store, item, confine_root=confine_root, console=Console()
         )
     assert escaped.exists()  # never unlinked
+    assert store.installed() == {_ident("evil")}  # receipt untouched
+
+
+def test_delete_refuses_dotdot_escaping_confinement(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    """A recorded path that uses ``..`` to escape the confinement root is
+    refused: ``is_relative_to`` is purely lexical and would PASS the raw
+    path, but resolving the parent collapses the ``..`` and the out-of-tree
+    target survives — no unlink, no receipt drop."""
+    outside = tmp_path / "outside" / "target.txt"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("keep me\n", encoding="utf-8")
+    # A lexical escape rooted at confine_root: <home>/../outside/target.txt.
+    escaped = confine_root / ".." / "outside" / "target.txt"
+    assert escaped.is_relative_to(confine_root)  # lexical check WRONGLY passes
+
+    store = ReceiptStore(tmp_path / "receipts")
+    store.record(_ident("evil"), version="1", checksum=None, path=escaped)
+    item = cleanup_mod.CleanupItem(identity=_ident("evil"), path=escaped)
+
+    with pytest.raises(cleanup_mod.ConfinementError):
+        cleanup_mod.delete_provisioned(
+            store, item, confine_root=confine_root, console=Console()
+        )
+    assert outside.exists()  # out-of-tree target never unlinked
     assert store.installed() == {_ident("evil")}  # receipt untouched
 
 
@@ -383,3 +412,19 @@ def test_local_yaml_shape_for_provision_ignore(
     assert payload == {"provision_ignore": ["some_tool"]}
     # And it round-trips as JSON-serializable plain data (no ruamel objects leak).
     json.dumps(list(cleanup_mod.load_ignored_provisioned()))
+
+
+def test_mark_orphan_output_validates_under_local_config(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    """The local.yaml ``mark_orphan`` writes must VALIDATE CLEAN under the
+    shared ``LocalConfig`` model — the model is ``extra="forbid"``, so an
+    undeclared ``provision_ignore`` key would make ``setforge validate``
+    (and CI ``validate --all``) fail. Validate the WRITTEN file, not just
+    cleanup's own ruamel loader — that gap let a green suite miss this."""
+    cleanup_mod.mark_orphan(_ident("some_tool"), console=Console())
+    payload = YAML(typ="safe").load(
+        binaries_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    )
+    model = LocalConfig.model_validate(payload)  # raises if extra_forbidden
+    assert model.provision_ignore == ["some_tool"]
