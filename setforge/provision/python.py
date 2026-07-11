@@ -1,7 +1,4 @@
-"""The python (``uv tool``) :class:`Provisioner`.
-
-Missing uv and install failures are SOFT, never HARD.
-"""
+"""The python (``uv tool``) :class:`Provisioner`. Failures are SOFT, never HARD."""
 
 from __future__ import annotations
 
@@ -30,13 +27,10 @@ _LIST_TIMEOUT_S = 30
 _INSTALL_TIMEOUT_S = 600
 _UNINSTALL_TIMEOUT_S = 60
 
-# `uv tool list` colors the package name with ANSI (bold); strip it before
-# matching so the escape bytes don't leak into the parsed name.
+# `uv tool list` colors the package name with ANSI (bold); strip before matching.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
-# A package line names the tool at line-start followed by whitespace (the
-# version column): `ruff v0.5.0`. Anchoring on `^name\s+` keeps `foo` from
-# prefix-matching `foobar`. Entry-point lines start with `- ` and are skipped.
+# Anchored so `foo` never prefix-matches an installed `foobar`.
 _PACKAGE_LINE = re.compile(r"^(\S+)\s")
 
 
@@ -88,8 +82,7 @@ class PythonProvisioner(Provisioner):
                     "https://docs.astral.sh/uv/ to enable this package"
                 ),
             )
-        # SKIP by NAME before any subprocess. A version pin is REPORT-only this
-        # wave, so a mismatch on an already-present tool is NOT a reinstall.
+        # Version pin is REPORT-only: present-by-name skips even on a mismatch.
         if item.identity in self.probe():
             return ProvisionOutcome(item=item, outcome=Outcome.SKIP, detail="present")
         package = item.identity.display
@@ -146,7 +139,6 @@ def _parse_tools(stdout: str) -> set[str]:
     tools: set[str] = set()
     for raw in stdout.splitlines():
         line = _ANSI.sub("", raw)
-        # Entry-point lines start with "- "; blank/indented lines carry no name.
         if not line or line[0].isspace() or line.startswith("- "):
             continue
         match = _PACKAGE_LINE.match(line)

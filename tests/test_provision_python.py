@@ -1,16 +1,3 @@
-"""Tests for the python (uv tool) :class:`Provisioner` (``setforge.provision.python``).
-
-``subprocess.run`` and binary resolution are monkeypatched so no real
-``uv`` is invoked — mirroring :mod:`tests.test_provision_cargo`'s ``FakeCargo``
-pattern. Covers the two-tier ``uv tool list`` parse (package lines are
-un-indented, anchored on ``^name\\s+`` so ``foo`` never prefix-matches
-``foobar``; the indented entry-point lines are skipped), fail-open probe,
-pure ``plan``, the OK / SKIP / SOFT ``apply_one`` outcomes (install failure
-is SOFT, never HARD), the ``--`` separator guard, the generous install
-timeout, the empty-delta second run (INV-7), the report-only version pin,
-and uninstall.
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -29,14 +16,7 @@ from setforge.provision.protocol import (
 
 
 class FakeUv:
-    """Scripted ``uv`` driver recording argv lists.
-
-    ``installed`` is the set of package names ``uv tool list`` reports (each
-    rendered as an un-indented ``name vX.Y.Z`` line followed by an indented
-    entry-point line). ``install_errors`` maps a package -> stderr to raise on
-    its ``uv tool install``. ``list_error`` (when set) makes the ``tool list``
-    probe raise, exercising the fail-open path.
-    """
+    """Scripted ``uv`` driver recording argv lists."""
 
     def __init__(
         self,
@@ -54,23 +34,17 @@ class FakeUv:
     def run(self, argv, **kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(argv))
         self.timeouts.append(kwargs.get("timeout"))
-        # [uv, tool, list] | [uv, tool, install, --, <package>]
-        #   | [uv, tool, uninstall, --, <package>]
         if argv[1] == "tool" and argv[2] == "list":
             if self.list_error is not None:
                 raise self.list_error
             lines = []
             for name in sorted(self.installed):
-                # Faithful to real `uv tool list`: the package line is ANSI-bold
-                # `<name> vX.Y.Z`; each entry-point is a following `- <ep>` line.
                 lines.append(f"\x1b[1m{name} v1.0.0\x1b[0m")
                 lines.append(f"- {name}")
             return subprocess.CompletedProcess(argv, 0, stdout="\n".join(lines) + "\n")
         if argv[1] == "tool" and argv[2] == "install":
             assert argv[3] == "--", f"expected literal -- separator, got {argv[3]!r}"
             package = argv[4]
-            # A version pin arrives as `<package>==<version>`; the match key is
-            # the bare package name.
             name = package.split("==", 1)[0]
             if name in self.install_errors:
                 raise subprocess.CalledProcessError(
@@ -101,7 +75,6 @@ def fake_uv(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _item(package: str, *, version: str | None = None) -> ProvisionItem:
-    """Build a python :class:`ProvisionItem` for ``package`` (key=display=package)."""
     return ProvisionItem(
         type="python",
         identity=Identity(key=package, display=package),
@@ -111,9 +84,6 @@ def _item(package: str, *, version: str | None = None) -> ProvisionItem:
 
 def _install_calls(cli: FakeUv) -> list[list[str]]:
     return [c for c in cli.calls if c[1] == "tool" and c[2] == "install"]
-
-
-# --- probe -----------------------------------------------------------------
 
 
 def test_probe_parses_two_tier_list(fake_uv) -> None:
@@ -126,8 +96,6 @@ def test_probe_parses_two_tier_list(fake_uv) -> None:
 
 
 def test_probe_no_prefix_false_match(fake_uv) -> None:
-    # `^name\s+` anchoring: a declared `foo` must NOT match an installed
-    # `foobar` line. Only `foobar` is present; probing must report exactly it.
     fake_uv(installed={"foobar"})
     installed = prov_python.PythonProvisioner().probe()
     assert installed == {Identity(key="foobar", display="foobar")}
@@ -135,7 +103,6 @@ def test_probe_no_prefix_false_match(fake_uv) -> None:
 
 
 def test_probe_skips_entrypoint_lines(fake_uv) -> None:
-    # Entry-point lines ("- ruff") must never be parsed as packages.
     fake_uv(installed={"ruff"})
     installed = prov_python.PythonProvisioner().probe()
     assert installed == {Identity(key="ruff", display="ruff")}
@@ -151,7 +118,6 @@ def test_probe_fails_open_on_list_error(fake_uv) -> None:
         installed={"ruff"},
         list_error=subprocess.CalledProcessError(1, ["uv"], stderr="boom"),
     )
-    # Fail OPEN — assume nothing installed, never fail-closed/assume-all.
     assert prov_python.PythonProvisioner().probe() == set()
 
 
@@ -162,9 +128,6 @@ def test_probe_uses_list_timeout(fake_uv) -> None:
     assert prov_python._LIST_TIMEOUT_S == 30
 
 
-# --- plan (PURE) -----------------------------------------------------------
-
-
 def test_plan_excludes_present_and_is_pure(fake_uv) -> None:
     cli = fake_uv(installed={"ruff"})
     prov = prov_python.PythonProvisioner()
@@ -172,11 +135,7 @@ def test_plan_excludes_present_and_is_pure(fake_uv) -> None:
     installed = {Identity(key="ruff", display="ruff")}
     delta = prov.plan(items, installed)
     assert delta.installed == (Identity(key="pre-commit", display="pre-commit"),)
-    # PURE — plan touched no subprocess.
     assert cli.calls == []
-
-
-# --- apply_one -------------------------------------------------------------
 
 
 def test_apply_installs_absent_package(fake_uv) -> None:
@@ -191,21 +150,19 @@ def test_apply_skips_present_package_without_install(fake_uv) -> None:
     cli = fake_uv(installed={"ruff"})
     outcome = prov_python.PythonProvisioner().apply_one(_item("ruff"))
     assert outcome.outcome is Outcome.SKIP
-    # SKIP before any install subprocess — no needless reinstall.
     assert _install_calls(cli) == []
 
 
 def test_apply_soft_when_uv_missing(fake_uv) -> None:
     fake_uv(present=False)
     outcome = prov_python.PythonProvisioner().apply_one(_item("ruff"))
-    assert outcome.outcome is Outcome.SOFT  # warn-and-skip, NEVER HARD
+    assert outcome.outcome is Outcome.SOFT
     assert "uv" in outcome.detail.lower()
 
 
 def test_apply_soft_on_install_failure_with_stderr_detail(fake_uv) -> None:
     fake_uv(installed=set(), install_errors={"bad": "resolution error boom"})
     outcome = prov_python.PythonProvisioner().apply_one(_item("bad"))
-    # Install failure is SOFT and RECORDED, never HARD, never discarded.
     assert outcome.outcome is Outcome.SOFT
     assert "resolution error boom" in outcome.detail
 
@@ -233,8 +190,6 @@ def test_apply_uses_generous_install_timeout(fake_uv) -> None:
 
 
 def test_apply_passes_version_pin_on_initial_install(fake_uv) -> None:
-    # REPORT-only version: a pin MAY be passed on the INITIAL install as
-    # `<package>==<version>`, but the match key stays the bare name.
     cli = fake_uv(installed=set())
     outcome = prov_python.PythonProvisioner().apply_one(_item("ruff", version="0.5.0"))
     assert outcome.outcome is Outcome.OK
@@ -242,8 +197,6 @@ def test_apply_passes_version_pin_on_initial_install(fake_uv) -> None:
 
 
 def test_apply_skips_present_even_on_version_mismatch(fake_uv) -> None:
-    # A version mismatch on an already-present tool is NOT a reinstall trigger
-    # (REPORT-only). Skip is by NAME; the pin is ignored once present.
     cli = fake_uv(installed={"ruff"})
     outcome = prov_python.PythonProvisioner().apply_one(_item("ruff", version="99.0.0"))
     assert outcome.outcome is Outcome.SKIP
@@ -251,16 +204,12 @@ def test_apply_skips_present_even_on_version_mismatch(fake_uv) -> None:
 
 
 def test_second_run_yields_empty_delta(fake_uv) -> None:
-    # INV-7: after installing, a re-plan against the fresh probe is empty.
     fake_uv(installed=set())
     prov = prov_python.PythonProvisioner()
     item = _item("ruff")
     assert prov.apply_one(item).outcome is Outcome.OK
     delta = prov.plan([item], prov.probe())
     assert delta.is_empty()
-
-
-# --- uninstall -------------------------------------------------------------
 
 
 def test_uninstall_calls_uv_uninstall(fake_uv) -> None:
@@ -271,13 +220,11 @@ def test_uninstall_calls_uv_uninstall(fake_uv) -> None:
 
 
 def test_uninstall_tolerates_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    # uv tool uninstall of an absent package exits non-zero; must be swallowed.
     def _raise(argv, **kwargs: Any) -> subprocess.CompletedProcess:
         raise subprocess.CalledProcessError(1, argv, stderr="not installed")
 
     monkeypatch.setattr(prov_python, "resolve_binary", lambda _n: Path("/fake/uv"))
     monkeypatch.setattr(prov_python.subprocess, "run", _raise)
-    # Should not raise.
     prov_python.PythonProvisioner().uninstall_one(
         Identity(key="absent", display="absent")
     )
@@ -285,11 +232,7 @@ def test_uninstall_tolerates_not_installed(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_uninstall_noop_when_uv_missing(fake_uv) -> None:
     fake_uv(present=False)
-    # No uv -> nothing to uninstall, must not raise.
     prov_python.PythonProvisioner().uninstall_one(Identity(key="ruff", display="ruff"))
-
-
-# --- T2 integration: real reconcile() --------------------------------------
 
 
 def test_reconcile_installs_and_is_idempotent(fake_uv) -> None:
@@ -301,7 +244,6 @@ def test_reconcile_installs_and_is_idempotent(fake_uv) -> None:
     first = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
     assert {o.outcome for o in first.outcomes} == {Outcome.OK}
     assert cli.installed == {"ruff", "pre-commit"}
-    # Second reconcile: everything present -> empty delta, no install calls.
     calls_before = len(_install_calls(cli))
     second = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE)
     assert second.delta.is_empty()
@@ -317,7 +259,6 @@ def test_reconcile_report_only_writes_nothing(fake_uv) -> None:
     result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE, report_only=True)
     assert result.reported is True
     assert result.delta.installed == (Identity(key="ruff", display="ruff"),)
-    # REPORT-no-write: not a single install subprocess ran.
     assert _install_calls(cli) == []
     assert cli.installed == set()
 
@@ -332,5 +273,4 @@ def test_reconcile_partial_failure_is_isolated(fake_uv) -> None:
     by_name = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert by_name["good"] is Outcome.OK
     assert by_name["bad"] is Outcome.SOFT
-    # The good package still landed despite the sibling failure.
     assert "good" in cli.installed
