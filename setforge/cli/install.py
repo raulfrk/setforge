@@ -285,14 +285,7 @@ def install(
             transitions.ensure_state_dir_writable()
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
-        # Package provisioning runs during install, BEFORE deploy, through the
-        # uniform provisioner protocol (declared ``packages:`` PLUS the legacy
-        # ``cargo_binaries:`` list). A missing toolchain / build failure is SOFT
-        # (warns yellow, does NOT gate — a crate that won't build is a
-        # host-specific outcome); a HARD outcome (e.g. a checksum mismatch)
-        # gates the exit via ``_gate_on_provisioning_failures`` below, after the
-        # MCP gate. No revert tracking — provisioned binaries are not cleanly
-        # reversible.
+        # SOFT failures warn but never gate; HARD gates. No revert tracking.
         provision_results = reconcile_packages(cfg, resolved)
 
         # P4.3: check for unexpected drift before deploying.
@@ -503,17 +496,6 @@ def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
 
 
 def _gate_on_provisioning_failures(results: list[ReconcileResult]) -> None:
-    """Exit non-zero when any provisioned item recorded a HARD outcome.
-
-    Mirrors :func:`_gate_on_mcp_failures`. SOFT outcomes (missing toolchain,
-    a crate that won't build) already warned during
-    :func:`~setforge.cli._provision_helpers.reconcile_packages` and do NOT
-    gate — a host-specific failure is not a config error. A HARD outcome (e.g.
-    a github_release checksum mismatch, once that provisioner lands) IS a hard
-    reconcile failure and gates the exit. The aggregate is future-proof: today
-    only cargo is wired and cargo never produces HARD, so this is a no-op
-    until a HARD-capable provisioner (e.g. a github_release checksum) lands.
-    """
     if not has_hard_failure(results):
         return
     names = ", ".join(

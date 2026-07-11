@@ -349,15 +349,7 @@ class SectionTemplateRef(BaseModel):
 
 
 class PackageKind(StrEnum):
-    """Discriminator for the :data:`Package` tagged union.
-
-    One member per provisioner ecosystem. The values match
-    :attr:`setforge.provision.protocol.ProvisionItem.type` so a
-    :class:`Package` config model maps to a ``ProvisionItem`` without a
-    translation table (that mapping lands with the dispatch layer). Mirrors the
-    project's established discriminator-enum pattern
-    (:class:`MarketplaceSourceKind`, :class:`setforge.source.SourceKind`).
-    """
+    """Discriminator for the :data:`Package` tagged union."""
 
     CARGO = "cargo"
     PYTHON = "python"
@@ -367,22 +359,7 @@ class PackageKind(StrEnum):
 
 
 def _reject_path_in_bare_name(value: str, field_name: str) -> str:
-    """Reject a package ``binary`` / ``rename`` that is not a bare name.
-
-    Security defense layer 1: ``binary`` and ``rename`` name a file inside
-    an install/extract directory and must never contain a path separator or
-    a ``..`` component that could redirect a write outside it. A downstream
-    provisioner adds its own confinement check (defense in depth); rejecting
-    at config-parse time turns a traversal attempt into a clean schema error
-    instead of a runtime surprise.
-
-    Degenerate names are rejected too: an empty string, a whitespace-only
-    string, or a lone ``.`` (or ``..``) name no real file — they are certain
-    typos, and sanitizing them is exactly this validator's job.
-    """
-    # Validate the whitespace-stripped form throughout so a padded name like
-    # " ../x " is judged by its real content (the traversal check still sees
-    # the '..' and '/'), not by incidental surrounding spaces.
+    """Path-traversal defense (layer 1): reject ``/`` or ``..`` in a bare name."""
     stripped = value.strip()
     if not stripped or stripped == ".":
         raise ValueError(
@@ -398,8 +375,6 @@ def _reject_path_in_bare_name(value: str, field_name: str) -> str:
 
 
 class CargoPackage(BaseModel):
-    """A crate installed via ``cargo install`` (``type: cargo``)."""
-
     model_config = _STRICT
 
     type: Literal[PackageKind.CARGO] = PackageKind.CARGO
@@ -407,13 +382,6 @@ class CargoPackage(BaseModel):
 
 
 class PythonPackage(BaseModel):
-    """A Python distribution installed via a pipx-style tool (``type: python``).
-
-    ``version`` is an optional pin stored verbatim; drift against it is a
-    REPORT-only signal in a later wave (no upgrade action yet), matching
-    :attr:`setforge.provision.protocol.ProvisionItem.version` semantics.
-    """
-
     model_config = _STRICT
 
     type: Literal[PackageKind.PYTHON] = PackageKind.PYTHON
@@ -422,12 +390,6 @@ class PythonPackage(BaseModel):
 
 
 class GoPackage(BaseModel):
-    """A module installed via ``go install`` (``type: go``).
-
-    ``version`` is an optional pin stored verbatim (REPORT-only later);
-    see :class:`PythonPackage`.
-    """
-
     model_config = _STRICT
 
     type: Literal[PackageKind.GO] = PackageKind.GO
@@ -436,15 +398,6 @@ class GoPackage(BaseModel):
 
 
 class GitHubReleasePackage(BaseModel):
-    """A binary fetched from a GitHub release asset (``type: github_release``).
-
-    ``binary`` (the file to pull out of the downloaded/extracted asset) and
-    ``rename`` (an optional final name) MUST be bare filenames — a ``/`` or
-    ``..`` is rejected as a path-traversal defense (layer 1). ``checksum`` is
-    an optional integrity pin; ``extract`` and ``chmod`` carry their
-    conventional defaults.
-    """
-
     model_config = _STRICT
 
     type: Literal[PackageKind.GITHUB_RELEASE] = PackageKind.GITHUB_RELEASE
@@ -467,14 +420,6 @@ class GitHubReleasePackage(BaseModel):
 
 
 class LocalPackage(BaseModel):
-    """A binary installed from a config-repo ``tracked/``-relative blob
-    (``type: local``).
-
-    ``path`` is relative to the config repo's ``tracked/`` tree (mirroring
-    :attr:`TrackedFile.src`). ``binary`` / ``rename`` MUST be bare filenames
-    (``/`` and ``..`` rejected — path-traversal defense layer 1).
-    """
-
     model_config = _STRICT
 
     type: Literal[PackageKind.LOCAL] = PackageKind.LOCAL
@@ -498,28 +443,9 @@ Package = Annotated[
     CargoPackage | PythonPackage | GoPackage | GitHubReleasePackage | LocalPackage,
     Field(discriminator="type"),
 ]
-"""The per-ecosystem package tagged union, discriminated on ``type``.
-
-Every entry in :attr:`Config.packages` is one of these validated models —
-never an opaque dict, so a mistyped ``type`` or an unknown key is a
-config-parse error, not a runtime surprise. Mirrors
-:data:`setforge.source.Source` / :data:`setforge.anchors.Anchor`.
-"""
 
 
 class BundleComponent(BaseModel):
-    """One member of a :class:`BundleSpec`.
-
-    A component is EXACTLY ONE of a reference (``package:`` naming a key in
-    :attr:`Config.packages`) OR an inline definition — one of the per-type
-    package models (``cargo``/``python``/``go``/``github_release``/``local``)
-    or a free ``plugin:`` / ``file:`` string form. ``id`` is required (the
-    component's stable handle within the bundle, referenced by
-    ``depends_on``); ``depends_on`` lists sibling ``id``s that must be
-    provisioned first. The exactly-one invariant is enforced by
-    :meth:`_exactly_one_source`.
-    """
-
     model_config = _STRICT
 
     id: str
@@ -546,12 +472,6 @@ class BundleComponent(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> Self:
-        """Require EXACTLY ONE of ``package:`` or an inline definition.
-
-        Counts the reference form plus every inline slot; zero set (an empty
-        component) and more than one set (an ambiguous component) are both
-        refused with a message listing what was found.
-        """
         set_fields = [
             name
             for name in ("package", *self._INLINE_FIELDS)
@@ -568,8 +488,6 @@ class BundleComponent(BaseModel):
 
 
 class BundleSpec(BaseModel):
-    """A named group of components provisioned together (``bundles:`` value)."""
-
     model_config = _STRICT
 
     components: list[BundleComponent]
@@ -1347,18 +1265,6 @@ def _validate_mcp_references(config: Config) -> None:
 
 
 def _validate_package_references(config: Config) -> None:
-    """Verify every ``profile.packages`` / ``profile.bundles`` entry exists.
-
-    Each ``packages`` entry must name a key in the top-level
-    :attr:`Config.packages` registry, and each ``bundles`` entry a key in
-    :attr:`Config.bundles`. Mirrors :func:`_validate_plugin_references`:
-    collects every offender across every profile into a single
-    :class:`ConfigError` so the user fixes all typos in one round-trip. A
-    typo'd reference must fail config load rather than load silently and
-    surface only at install time. Empty / whitespace refs are skipped (a
-    blank entry never matches the registry, so skipping keeps the message
-    focused on genuine typos).
-    """
     package_registry = set(config.packages)
     bundle_registry = set(config.bundles)
     offenders: list[str] = []

@@ -107,7 +107,6 @@ class InMemoryProvisioner(Provisioner):
     def _install(self, item: ProvisionItem) -> None:
         """Commit the install — the receipt write is the last step (marker mode)."""
         if self._receipts is not None:
-            # The in-memory/marker reference has no real install path.
             self._receipts.record(
                 item.identity,
                 version=item.version,
