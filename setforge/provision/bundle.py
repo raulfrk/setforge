@@ -5,8 +5,9 @@ module owns the three phases:
 
 1. :func:`validate_bundle` — a deterministic lint (INV-9): reject a duplicate
    id, a ``depends_on`` that references an unknown id, an unknown ``package:``
-   reference, and any cycle (a self-edge or a back-edge). A diamond
-   (``a→b, a→c, b→d, c→d``) is NOT a cycle and passes.
+   reference, a ``plugin`` / ``file`` source (no provisioner yet), and any cycle
+   (a self-edge or a back-edge). A diamond (``a→b, a→c, b→d, c→d``) is NOT a
+   cycle and passes.
 2. :func:`topo_order` — order the components so every prerequisite precedes its
    dependents, with declaration order as the stable tiebreak (deterministic
    output).
@@ -43,20 +44,6 @@ from setforge.provision.protocol import (
 )
 from setforge.provision.registry import build
 
-# Inline typed-source field name → the ProvisionItem ``type`` its provisioner
-# is registered under. package-ref components resolve their type from the
-# referenced Package model; plugin/file have no provisioner yet and surface as
-# UnknownProvisionerType at build() time if a bundle actually declares one.
-_INLINE_TYPE: dict[str, str] = {
-    "cargo": "cargo",
-    "python": "python",
-    "go": "go",
-    "github_release": "github_release",
-    "local": "local",
-    "plugin": "plugin",
-    "file": "file",
-}
-
 
 def _package_identity(pkg: Package) -> Identity:
     """Return the match identity for a resolved :class:`Package` model.
@@ -73,21 +60,19 @@ def _package_identity(pkg: Package) -> Identity:
     return Identity(key=name, display=name)
 
 
-def _component_source(component: BundleComponent) -> tuple[str, Package | None]:
-    """Return ``(inline_field_name_or_"package", package_model_or_None)``.
+def _inline_model(component: BundleComponent) -> Package | None:
+    """Return the resolved inline :class:`Package` model for a component.
 
-    ``package_model`` is the resolved inline :class:`Package` for a typed
-    inline source, or ``None`` for a ``package:`` reference (resolved against
-    the config registry at item-build time) and for the not-yet-provisioner
-    -backed ``plugin`` / ``file`` sources.
+    A typed inline source (``cargo`` / ``python`` / …) yields its Package model;
+    a ``plugin`` / ``file`` source yields ``None`` (raw ``str`` ref, no
+    provisioner). ``package:`` references are handled by the caller. Assumes the
+    exactly-one-source validator has passed.
     """
-    if component.package is not None:
-        return "package", None
-    for field in _INLINE_TYPE:
+    for field in BundleComponent._INLINE_FIELDS:
         value = getattr(component, field)
         if value is not None:
             # plugin / file are raw ``str`` refs; the rest are Package models.
-            return field, None if isinstance(value, str) else value
+            return None if isinstance(value, str) else value
     # Guarded by the model's exactly-one validator, so unreachable in practice.
     raise AssertionError(  # pragma: no cover
         f"bundle component {component.id!r} declares no source"
@@ -95,7 +80,11 @@ def _component_source(component: BundleComponent) -> tuple[str, Package | None]:
 
 
 def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
-    """Resolve one component to the :class:`ProvisionItem` to provision."""
+    """Resolve one component to the :class:`ProvisionItem` to provision.
+
+    Assumes :func:`validate_bundle` has passed, so ``plugin`` / ``file``
+    sources — which have no provisioner — have already been rejected.
+    """
     if component.package is not None:
         pkg = cfg.packages[component.package]
         return ProvisionItem(
@@ -105,21 +94,17 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
             version=getattr(pkg, "version", None),
             checksum=getattr(pkg, "checksum", None),
         )
-    field, model = _component_source(component)
-    if model is not None:
-        return ProvisionItem(
-            type=model.type.value,
-            identity=_package_identity(model),
-            config=model,
-            version=getattr(model, "version", None),
-            checksum=getattr(model, "checksum", None),
+    model = _inline_model(component)
+    if model is None:  # pragma: no cover - plugin/file rejected in validate_bundle
+        raise AssertionError(
+            f"bundle component {component.id!r} has no provisioner-backed source"
         )
-    # plugin / file: no Package model, no provisioner yet — key on the raw ref
-    # so an eventual build() surfaces UnknownProvisionerType rather than a
-    # silent skip.
-    ref = getattr(component, field)
     return ProvisionItem(
-        type=_INLINE_TYPE[field], identity=Identity(key=ref, display=ref)
+        type=model.type.value,
+        identity=_package_identity(model),
+        config=model,
+        version=getattr(model, "version", None),
+        checksum=getattr(model, "checksum", None),
     )
 
 
@@ -127,8 +112,10 @@ def validate_bundle(bundle: BundleSpec, cfg: Config) -> None:
     """Lint a bundle's DAG and references (INV-9); raise :class:`ConfigError`.
 
     Rejects, in order: a duplicate component id; a ``depends_on`` that names an
-    unknown id (dangling edge); an unknown ``package:`` reference; and any
-    cycle (self-edge or back-edge), found by a three-color DFS.
+    unknown id (dangling edge); an unknown ``package:`` reference; a ``plugin``
+    or ``file`` source (banked as future work — no provisioner, so it would
+    otherwise fail mid-install at build() after earlier components applied); and
+    any cycle (self-edge or back-edge), found by a three-color DFS.
     """
     ids: list[str] = [c.id for c in bundle.components]
     seen: set[str] = set()
@@ -148,6 +135,12 @@ def validate_bundle(bundle: BundleSpec, cfg: Config) -> None:
             raise ConfigError(
                 f"bundle component {component.id!r} references unknown "
                 f"package {component.package!r}"
+            )
+        if component.plugin is not None or component.file is not None:
+            source = "plugin" if component.plugin is not None else "file"
+            raise ConfigError(
+                f"bundle component {component.id!r} uses a {source!r} source, "
+                f"which is not yet supported for bundle components"
             )
 
     _reject_cycle(bundle, by_id)

@@ -105,6 +105,21 @@ def test_known_package_ref_accepted() -> None:
     validate_bundle(bundle, cfg)  # must not raise
 
 
+def test_plugin_source_rejected() -> None:
+    # plugin has no provisioner (banked future work) → reject at validation,
+    # not mid-install at build().
+    bundle = BundleSpec(components=[BundleComponent(id="a", plugin="some-plugin")])
+    with pytest.raises(ConfigError, match="plugin"):
+        validate_bundle(bundle, _cfg())
+
+
+def test_file_source_rejected() -> None:
+    # file has no provisioner (banked future work) → reject at validation.
+    bundle = BundleSpec(components=[BundleComponent(id="a", file="/etc/thing")])
+    with pytest.raises(ConfigError, match="file"):
+        validate_bundle(bundle, _cfg())
+
+
 def test_duplicate_id_rejected() -> None:
     bundle = BundleSpec(
         components=[
