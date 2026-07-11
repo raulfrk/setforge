@@ -193,14 +193,36 @@ def test_report_only_applies_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Identity(key="ast-grep", display="ast-grep") in results[0].delta.installed
 
 
-def test_bundles_skipped_with_notice(capsys: pytest.CaptureFixture[str]) -> None:
-    cfg = _cfg()
+def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A declared bundle resolves to its BundleSpec and executes through the
+    # sequential DAG executor, folding one ReconcileResult into the results so
+    # the exit gate still sees its outcomes. Stub cargo apply so no real cargo
+    # runs; assert the component was applied.
+    import setforge.provision.cargo as cargo_prov
+    from setforge.config import BundleComponent, BundleSpec
+
+    applied: list[str] = []
+
+    def _apply(self: object, item: ProvisionItem) -> ProvisionOutcome:
+        applied.append(item.identity.key)
+        return ProvisionOutcome(item=item, outcome=Outcome.OK, detail="installed")
+
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
+    monkeypatch.setattr(cargo_prov.CargoProvisioner, "apply_one", _apply)
+    cfg = _cfg(
+        bundles={
+            "dev": BundleSpec(
+                components=[
+                    BundleComponent(id="rg", cargo=CargoPackage(crate="ripgrep"))
+                ]
+            )
+        }
+    )
     resolved = ResolvedProfile(bundles=["dev"])
     results = run_provisioning(cfg, resolved)
-    assert results == []
-    err = capsys.readouterr().err
-    assert "bundles not yet supported" in err
-    assert "dev" in err
+    assert len(results) == 1  # the bundle's ReconcileResult
+    assert applied == ["ripgrep"]
+    assert has_hard_failure(results) is False
 
 
 def test_unknown_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:

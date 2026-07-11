@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from itertools import groupby
 
-import typer
-
 import setforge.provision.cargo as _cargo  # noqa: F401
 import setforge.provision.github_release as _github_release  # noqa: F401
 import setforge.provision.go as _go  # noqa: F401
@@ -22,6 +20,7 @@ from setforge.config import (
     ReconcilePolicy,
     ResolvedProfile,
 )
+from setforge.provision.bundle import execute_bundle
 from setforge.provision.driver import reconcile
 from setforge.provision.protocol import (
     Identity,
@@ -91,16 +90,10 @@ def run_provisioning(
     *,
     report_only: bool = False,
 ) -> list[ReconcileResult]:
-    if resolved.bundles:
-        typer.secho(
-            "note: bundles not yet supported (coming with the bundle model); "
-            f"skipping {len(resolved.bundles)} declared bundle(s): "
-            f"{', '.join(resolved.bundles)}",
-            err=True,
-            fg=typer.colors.YELLOW,
-        )
-    items = resolve_provision_items(cfg, resolved)
     results: list[ReconcileResult] = []
+    for name in resolved.bundles:
+        results.append(execute_bundle(cfg.bundles[name], cfg, report_only=report_only))
+    items = resolve_provision_items(cfg, resolved)
     items.sort(key=lambda it: it.type)
     for _type, group_iter in groupby(items, key=lambda it: it.type):
         group = list(group_iter)
