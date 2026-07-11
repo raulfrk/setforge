@@ -6,8 +6,9 @@ the container. ``uv`` was already baked in; this test asserts the image
 now also ships a working ``cargo`` (rustup) and ``go`` toolchain and that
 ``go install``-produced binaries land on PATH.
 
-Kept fast + hermetic: version probes are offline. The one real
-``go install`` builds a trivially small, well-known module and is gated
+Kept fast + hermetic: version probes are offline. The two real-install
+cases (a ``go install`` of a tiny module, and a ``cargo install`` of a
+locally-generated trivial crate that exercises the C linker) are gated
 behind ``SETFORGE_E2E_NETWORK`` the same way other network-touching e2e
 cases are, so the offline smoke assertions always run.
 """
@@ -23,14 +24,14 @@ from tests.docker.conftest import ContainerHandle
 
 pytestmark = pytest.mark.e2e_docker
 
-# Opt-in gate for the case that reaches the network (a real
-# ``go install``). Mirrors the convention other network-touching e2e
-# cases follow: default-off so the suite stays hermetic, flip the env
-# var on to exercise the real download+build path.
+# Opt-in gate for the cases that reach the network (a real ``go install``
+# and a real ``cargo install``). Mirrors the convention other
+# network-touching e2e cases follow: default-off so the suite stays
+# hermetic, flip the env var on to exercise the real build paths.
 _NETWORK_ENV = "SETFORGE_E2E_NETWORK"
 _network_only = pytest.mark.skipif(
     os.environ.get(_NETWORK_ENV, "") == "",
-    reason=f"set {_NETWORK_ENV}=1 to run the real `go install` network case",
+    reason=f"set {_NETWORK_ENV}=1 to run the real toolchain-install network cases",
 )
 
 
@@ -96,3 +97,44 @@ def test_go_install_lands_on_path(
     which = c.exec(["which", "hello"], check=False)
     assert which.returncode == 0, which.stdout + which.stderr
     assert which.stdout.strip().endswith("/hello"), which.stdout
+
+
+@_network_only
+def test_cargo_install_compiles_links_and_lands_on_path(
+    docker_container: Callable[..., ContainerHandle],
+) -> None:
+    """A real ``cargo install`` compiles + links + lands on ``~/.cargo/bin``.
+
+    Even a pure-Rust crate needs a system C toolchain (``cc``) for the
+    final link step; this case proves the image's ``build-essential``
+    makes a real compile+link succeed, which the cargo provisioner
+    relies on. Uses a locally-generated trivial binary crate
+    (``cargo new`` + ``cargo install --path``) so the compile stays fast
+    and doesn't depend on any specific crates.io crate/version — but it
+    is still network-gated because cargo fetches its registry index on
+    first run. Asserts the installed binary lands on ``~/.cargo/bin``
+    (on PATH) and actually runs.
+    """
+    c = docker_container()
+
+    crate_dir = "/home/tester/hello-crate"
+    new = c.exec(["cargo", "new", "--bin", crate_dir], check=False)
+    assert new.returncode == 0, new.stdout + new.stderr
+
+    # Install from the local path: this compiles AND links (exercising
+    # `cc` from build-essential) and drops the binary into ~/.cargo/bin.
+    inst = c.exec(
+        ["cargo", "install", "--path", crate_dir],
+        check=False,
+    )
+    assert inst.returncode == 0, inst.stdout + inst.stderr
+
+    # `cargo new` names the crate after the dir → binary is `hello-crate`.
+    which = c.exec(["which", "hello-crate"], check=False)
+    assert which.returncode == 0, which.stdout + which.stderr
+    assert which.stdout.strip() == "/home/tester/.cargo/bin/hello-crate", which.stdout
+
+    # The linked binary actually runs (cargo new's default prints Hello).
+    run = c.exec(["hello-crate"], check=False)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Hello, world!" in run.stdout, run.stdout

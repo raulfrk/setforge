@@ -1456,3 +1456,9 @@ verdict = "keep"
 smoke = false
 signal = "real go install drops a binary on PATH (GOBIN wired)"
 verbs = ["infra"]
+
+[tests."tests/docker/test_e2e_docker_toolchains.py::test_cargo_install_compiles_links_and_lands_on_path"]
+verdict = "keep"
+smoke = false
+signal = "real cargo install compiles+links (C toolchain) onto ~/.cargo/bin"
+verbs = ["infra"]
