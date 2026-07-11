@@ -122,6 +122,8 @@ class ReceiptStore:
             # here exactly as it would in installed(); path stays optional.
             Identity(key=data["key"], display=data["display"])
             recorded = data.get("path")
+            # Convert inside the try so a wrong-typed path (e.g. an int) is
+            # caught as CorruptReceiptError rather than leaking a raw TypeError.
+            return Path(recorded) if recorded is not None else None
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise CorruptReceiptError(receipt) from exc
-        return Path(recorded) if recorded is not None else None

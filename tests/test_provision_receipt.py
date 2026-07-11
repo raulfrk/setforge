@@ -138,6 +138,18 @@ def test_path_for_raises_on_missing_key(tmp_path: Path) -> None:
         ReceiptStore(tmp_path).path_for(ident)
 
 
+def test_path_for_raises_on_wrong_typed_path(tmp_path: Path) -> None:
+    # A syntactically-valid receipt whose path value is the wrong type must
+    # surface as CorruptReceiptError, not a raw TypeError from Path().
+    ident = _ident()
+    payload = {"key": ident.key, "display": ident.display, "path": 123}
+    (tmp_path / _receipt_name(ident)).write_text(
+        json.dumps(payload) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(CorruptReceiptError):
+        ReceiptStore(tmp_path).path_for(ident)
+
+
 def test_receipt_root_distinct_from_lockfile(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     from setforge.locking import state_root
