@@ -287,6 +287,43 @@ def test_reproducible_from_committed_file(tmp_path: Path) -> None:
     )
 
 
+def test_lazy_tracked_root_resolves_via_source_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Production wires the tracked root LAZILY: registry.build() constructs
+    # LocalProvisioner() with NO args, so apply_one resolves the root via the
+    # source layer as `resolve_source_dir(get_resolved_source()) / "tracked"`.
+    # Every other test injects tracked_root=, so this shipping wiring — the
+    # source call AND the `/ "tracked"` join — is otherwise untested. Drive
+    # the lazy branch and prove the join: the fixture sits under `source/tracked/`
+    # (NOT directly under `source/`), so an install only succeeds if line 173
+    # appends `tracked` to what resolve_source_dir returns.
+    source_dir = tmp_path / "source"
+    payload = b"#!/bin/sh\necho lazy\n"
+    _write(source_dir / "tracked", "bin/tool", payload)
+
+    sentinel = object()
+    monkeypatch.setattr(loc, "get_resolved_source", lambda: sentinel)
+
+    def fake_resolve(arg: object) -> Path:
+        assert arg is sentinel  # the resolved source is threaded through
+        return source_dir
+
+    monkeypatch.setattr(loc, "resolve_source_dir", fake_resolve)
+
+    install_dir = tmp_path / "out"
+    pkg = _pkg(install_dir, path="bin/tool", binary="tool", extract=False)
+    # No tracked_root= -> forces the lazy source-layer path.
+    prov = loc.LocalProvisioner(receipts=ReceiptStore(tmp_path / "receipts"))
+
+    outcome = prov.apply_one(_item(pkg))
+
+    assert outcome.outcome is Outcome.OK, outcome.detail
+    dest = install_dir / "tool"
+    assert dest.read_bytes() == payload
+    assert dest.stat().st_mode & stat.S_IXUSR  # +x applied
+
+
 def test_uninstall_removes_binary_and_receipt(tmp_path: Path) -> None:
     tracked = tmp_path / "tracked"
     _write(tracked, "bin/tool", b"content")
