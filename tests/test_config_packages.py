@@ -152,6 +152,39 @@ def test_local_rejects_bad_binary() -> None:
         LocalPackage(path="p.tgz", binary="../evil", install="~/bin/x")
 
 
+@pytest.mark.parametrize("bad", ["", ".", "   "])
+def test_github_release_rejects_degenerate_binary(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        GitHubReleasePackage(
+            repo="o/r", tag="v1", asset="a.tgz", binary=bad, install="~/bin/x"
+        )
+
+
+@pytest.mark.parametrize("bad", ["", ".", "   "])
+def test_github_release_rejects_degenerate_rename(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        GitHubReleasePackage(
+            repo="o/r",
+            tag="v1",
+            asset="a.tgz",
+            binary="fd",
+            install="~/bin/x",
+            rename=bad,
+        )
+
+
+@pytest.mark.parametrize("bad", ["", ".", "   "])
+def test_local_rejects_degenerate_binary(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        LocalPackage(path="p.tgz", binary=bad, install="~/bin/x")
+
+
+@pytest.mark.parametrize("bad", ["", ".", "   "])
+def test_local_rejects_degenerate_rename(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        LocalPackage(path="p.tgz", binary="mytool", install="~/bin/x", rename=bad)
+
+
 def test_bare_binary_name_accepted() -> None:
     pkg = LocalPackage(path="p.tgz", binary="my-tool", install="~/bin/x")
     assert pkg.binary == "my-tool"

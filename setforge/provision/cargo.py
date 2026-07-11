@@ -18,7 +18,7 @@ Two deliberate softnesses carry over from the imperative path:
   rather than gating the install exit. A binary the user cannot build is not
   a hard failure.
 - **A build failure is SOFT and RECORDED.** ``cargo install`` compiling and
-  failing returns :attr:`Outcome.SOFT` with the captured stderr tail as
+  failing returns :attr:`Outcome.SOFT` with the captured stderr as
   ``detail`` — surfaced to the user, never discarded, never escalated to
   HARD. One bad crate does not gate the whole reconcile.
 
@@ -65,6 +65,12 @@ class CargoProvisioner(Provisioner):
     crate); the install/uninstall subprocess is invoked with that name after
     a literal ``--`` end-of-options separator so a leading-dash crate name
     can never be parsed as a cargo flag.
+
+    :meth:`apply_one` intentionally re-probes per item (a freshness-vs-cost
+    trade): the driver probes once before planning, and ``apply_one``
+    re-probes so a concurrently-changed installed set is seen — cheap for
+    cargo's ``--list``, but a copier whose ecosystem has an EXPENSIVE probe
+    should weigh caching instead.
     """
 
     type = "cargo"
@@ -121,7 +127,7 @@ class CargoProvisioner(Provisioner):
         so a current crate is never needlessly recompiled). Otherwise
         ``cargo install -- <crate>``: success → :attr:`Outcome.OK`; a build
         failure / timeout / exec error → :attr:`Outcome.SOFT` with the
-        captured stderr tail as ``detail`` (RECORDED, never HARD, never
+        captured stderr as ``detail`` (RECORDED, never HARD, never
         discarded, never ``shell=True``).
         """
         cargo = self._resolve()

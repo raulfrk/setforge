@@ -375,7 +375,17 @@ def _reject_path_in_bare_name(value: str, field_name: str) -> str:
     provisioner adds its own confinement check (defense in depth); rejecting
     at config-parse time turns a traversal attempt into a clean schema error
     instead of a runtime surprise.
+
+    Degenerate names are rejected too: an empty string, a whitespace-only
+    string, or a lone ``.`` (or ``..``) name no real file — they are certain
+    typos, and sanitizing them is exactly this validator's job.
     """
+    stripped = value.strip()
+    if not stripped or stripped == ".":
+        raise ValueError(
+            f"{field_name} {value!r} must be a non-empty bare filename — "
+            f"empty, whitespace-only, and '.' are rejected."
+        )
     if "/" in value or ".." in value:
         raise ValueError(
             f"{field_name} {value!r} must be a bare filename — "
