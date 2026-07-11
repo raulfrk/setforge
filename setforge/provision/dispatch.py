@@ -7,7 +7,8 @@ from itertools import groupby
 
 import typer
 
-import setforge.provision.cargo  # noqa: F401  (registers the cargo provisioner)
+import setforge.provision.cargo as _cargo  # noqa: F401  (registers the cargo provisioner)
+import setforge.provision.python as _python  # noqa: F401  (registers the python provisioner)
 from setforge.config import (
     CargoPackage,
     Config,
