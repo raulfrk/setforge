@@ -1,15 +1,4 @@
-"""The go :class:`Provisioner` — marker-based, hybrid probe (spec §6).
-
-``go`` has no native "list installed" command, so installs are tracked by
-:class:`~setforge.provision.receipt.ReceiptStore` markers. The probe is
-HYBRID: an identity counts as installed only if BOTH its receipt is present
-AND its GOBIN binary file exists on disk. A manually-deleted binary (receipt
-present, file gone) reads as absent and self-heals into a reinstall.
-
-Missing toolchain and any install failure are SOFT, never HARD (go never
-gates exit). The receipt is written only after ``go install`` exits 0, and
-records the resolved GOBIN binary path so the revert path can unlink it.
-"""
+"""The go :class:`Provisioner`: hybrid receipt+GOBIN-binary probe, self-heals."""
 
 from __future__ import annotations
 
@@ -42,12 +31,6 @@ _LATEST = "latest"
 
 
 def _binary_name(module: str) -> str:
-    """Derive the installed binary name from a go module path.
-
-    The last path segment names the binary, EXCEPT a ``cmd/<tool>`` leaf
-    (``…/cmd/foo`` → ``foo``) or a trailing ``/vN`` major-version suffix
-    (``…/mod/v2`` → ``mod``, stripped before taking the last segment).
-    """
     parts = [p for p in module.split("/") if p]
     if len(parts) >= 2 and parts[-2] == "cmd":
         return parts[-1]
@@ -57,7 +40,6 @@ def _binary_name(module: str) -> str:
 
 
 def _is_major_version_suffix(segment: str) -> bool:
-    """Return True for a ``vN`` (N >= 2) semantic major-version path segment."""
     return (
         len(segment) >= 2
         and segment[0] == "v"
@@ -68,27 +50,15 @@ def _is_major_version_suffix(segment: str) -> bool:
 
 @register("go")
 class GoProvisioner(Provisioner):
-    """Marker-based go provisioner with a hybrid receipt+binary probe."""
-
     type = "go"
 
     def __init__(self, *, receipts: ReceiptStore | None = None) -> None:
-        """Bind to a :class:`ReceiptStore` (defaults to the real per-host root).
-
-        ``build()`` instantiates provisioners with no args, so the default
-        wires the production receipt directory; tests inject a ``tmp_path`` one.
-        """
         self._receipts = (
             receipts if receipts is not None else ReceiptStore(default_receipt_root())
         )
 
     def probe(self) -> set[Identity]:
-        """Return identities with BOTH a receipt AND a present GOBIN binary.
-
-        Fails OPEN (empty) when ``go`` is missing. Receipts are read fresh
-        from disk each call (no cache); a receipt whose binary was manually
-        deleted is treated absent so the next reconcile reinstalls it.
-        """
+        # Fails OPEN (empty) when go is missing — never assume-installed.
         if self._resolve() is None:
             return set()
         gobin = self._gobin_dir()
@@ -154,11 +124,6 @@ class GoProvisioner(Provisioner):
         return ProvisionOutcome(item=item, outcome=Outcome.OK, detail="installed")
 
     def uninstall_one(self, identity: Identity) -> None:
-        """Revert one install: drop the receipt and unlink the binary.
-
-        Best-effort on the binary (a missing or unremovable file warns and is
-        tolerated); the receipt removal is idempotent.
-        """
         recorded = self._receipts.path_for(identity)
         binary = (
             recorded
@@ -172,11 +137,7 @@ class GoProvisioner(Provisioner):
         self._receipts.remove(identity)
 
     def _gobin_dir(self) -> Path:
-        """Resolve the install directory go drops binaries into.
-
-        ``go env GOBIN`` if non-empty, else the FIRST ``go env GOPATH`` entry
-        (``os.pathsep``-split) + ``/bin``, else ``~/go/bin``.
-        """
+        # Precedence: GOBIN, else first GOPATH entry + /bin, else ~/go/bin.
         gobin = self._go_env("GOBIN")
         if gobin:
             return Path(gobin)
@@ -188,7 +149,6 @@ class GoProvisioner(Provisioner):
         return Path.home() / "go" / "bin"
 
     def _go_env(self, var: str) -> str:
-        """Return ``go env <var>`` stripped, or "" if go is missing / errors."""
         go = self._resolve()
         if go is None:
             return ""

@@ -161,7 +161,6 @@ def test_remove_deletes_receipt(tmp_path: Path) -> None:
 
 
 def test_remove_is_idempotent_when_absent(tmp_path: Path) -> None:
-    # Removing a never-recorded identity is a silent no-op (revert re-run).
     ReceiptStore(tmp_path).remove(_ident())
 
 

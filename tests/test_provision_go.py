@@ -1,15 +1,4 @@
-"""Tests for the go :class:`Provisioner` (``setforge.provision.go``).
-
-``subprocess.run`` and binary resolution are monkeypatched so no real ``go``
-is invoked. The go provisioner is MARKER-based (no native list command): its
-probe is HYBRID — an identity counts installed only if its receipt exists AND
-its GOBIN binary file is present on disk (a manually-deleted binary self-heals
-into a reinstall). Covers GOBIN resolution precedence (GOBIN → GOPATH first
-entry → ~/go/bin), binary-name derivation (/vN strip, cmd/<tool> leaf, plain),
-the hybrid-probe self-heal, receipt-written-only-after-exit-0, SKIP-before-
-subprocess (INV-7), SOFT on missing-go and on install failure, pure plan, and
-the receipt+binary uninstall (revert) path.
-"""
+"""Tests for the go :class:`Provisioner` (``setforge.provision.go``)."""
 
 from __future__ import annotations
 
@@ -29,15 +18,6 @@ from setforge.provision.receipt import ReceiptStore
 
 
 class FakeGo:
-    """Scripted ``go`` driver recording argv lists.
-
-    ``env`` maps a ``go env <VAR>`` name to its printed value (e.g.
-    ``{"GOBIN": "", "GOPATH": "/home/u/go"}``). ``install_errors`` maps a
-    ``module@version`` token -> stderr to raise on its ``go install``. On a
-    successful ``go install`` the fake writes an empty binary file into the
-    resolved GOBIN so the hybrid probe can see it (mirroring a real install).
-    """
-
     def __init__(
         self,
         *,
@@ -54,7 +34,6 @@ class FakeGo:
     def run(self, argv, **kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(argv))
         self.timeouts.append(kwargs.get("timeout"))
-        # [go, env, GOBIN] | [go, env, GOPATH] | [go, install, --, mod@ver]
         if argv[1] == "env":
             return subprocess.CompletedProcess(
                 argv, 0, stdout=self.env.get(argv[2], "") + "\n"
@@ -67,8 +46,6 @@ class FakeGo:
                     1, argv, stderr=self.install_errors[spec]
                 )
             if self.gobin_dir is not None:
-                # Real go install drops the binary into GOBIN; mimic that so the
-                # hybrid probe's file-exists check passes.
                 module = spec.rsplit("@", 1)[0]
                 name = prov_go._binary_name(module)
                 self.gobin_dir.mkdir(parents=True, exist_ok=True)
@@ -79,12 +56,6 @@ class FakeGo:
 
 @pytest.fixture
 def fake_go(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
-    """Install a :class:`FakeGo` + a tmp :class:`ReceiptStore`.
-
-    Returns ``(provisioner, cli, store, gobin_dir)``. ``present=False`` makes
-    ``resolve_binary`` return ``None`` (go missing); ``cli`` is then ``None``.
-    """
-
     def _install(
         *, present: bool = True, env: dict[str, str] | None = None, **kwargs: Any
     ) -> tuple[Any, Any, ReceiptStore, Path]:
@@ -107,7 +78,6 @@ def fake_go(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
 
 
 def _item(module: str, version: str | None = None) -> ProvisionItem:
-    """Build a go :class:`ProvisionItem`; key=display=module, version separate."""
     return ProvisionItem(
         type="go",
         identity=Identity(key=module, display=module),
@@ -117,9 +87,6 @@ def _item(module: str, version: str | None = None) -> ProvisionItem:
 
 def _install_calls(cli: FakeGo) -> list[list[str]]:
     return [c for c in cli.calls if c[1] == "install"]
-
-
-# --- binary-name derivation ------------------------------------------------
 
 
 def test_binary_name_plain_last_segment() -> None:
@@ -135,11 +102,7 @@ def test_binary_name_honors_cmd_leaf() -> None:
 
 
 def test_binary_name_cmd_leaf_with_vN() -> None:
-    # cmd/<tool> wins even when a /vN sits above it.
     assert prov_go._binary_name("github.com/owner/proj/v3/cmd/foo") == "foo"
-
-
-# --- GOBIN resolution ------------------------------------------------------
 
 
 def test_gobin_prefers_go_env_gobin(fake_go) -> None:
@@ -154,7 +117,6 @@ def test_gobin_falls_back_to_gopath_first_entry(fake_go) -> None:
 
     gopath = os.pathsep.join(["/first/go", "/second/go"])
     prov, _cli, _store, _gobin = fake_go(env={"GOBIN": "", "GOPATH": gopath})
-    # FIRST entry wins, "/bin" appended.
     assert prov._gobin_dir() == Path("/first/go/bin")
 
 
@@ -163,14 +125,10 @@ def test_gobin_final_fallback_home_go_bin(fake_go) -> None:
     assert prov._gobin_dir() == Path.home() / "go" / "bin"
 
 
-# --- probe (HYBRID) --------------------------------------------------------
-
-
 def test_probe_requires_both_receipt_and_binary(fake_go) -> None:
     prov, _cli, store, gobin = fake_go()
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
     store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
-    # Receipt present but binary file absent -> NOT installed (self-heal).
     assert prov.probe() == set()
     gobin.mkdir(parents=True, exist_ok=True)
     (gobin / "tool").write_text("", encoding="utf-8")
@@ -183,7 +141,6 @@ def test_probe_empty_when_go_missing(fake_go) -> None:
     (gobin / "tool").write_text("", encoding="utf-8")
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
     store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
-    # go missing -> fail OPEN (empty), never assume-installed.
     assert prov.probe() == set()
 
 
@@ -194,11 +151,7 @@ def test_probe_reads_receipts_fresh_from_disk(fake_go) -> None:
     gobin.mkdir(parents=True, exist_ok=True)
     (gobin / "tool").write_text("", encoding="utf-8")
     store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
-    # No cache: the second probe sees the just-written receipt.
     assert prov.probe() == {ident}
-
-
-# --- plan (PURE) -----------------------------------------------------------
 
 
 def test_plan_excludes_present_and_is_pure(fake_go) -> None:
@@ -208,10 +161,7 @@ def test_plan_excludes_present_and_is_pure(fake_go) -> None:
     installed = {a.identity}
     delta = prov.plan([a, b], installed)
     assert delta.installed == (b.identity,)
-    assert cli.calls == []  # PURE — plan touched no subprocess.
-
-
-# --- apply_one -------------------------------------------------------------
+    assert cli.calls == []
 
 
 def test_apply_installs_absent_module_and_writes_receipt(fake_go) -> None:
@@ -220,7 +170,6 @@ def test_apply_installs_absent_module_and_writes_receipt(fake_go) -> None:
     assert outcome.outcome is Outcome.OK
     assert ["/fake/go", "install", "--", "github.com/o/tool@1.2.3"] in cli.calls
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
-    # Receipt written AFTER success, recording the resolved GOBIN binary path.
     assert store.installed() == {ident}
     assert store.path_for(ident) == gobin / "tool"
 
@@ -239,12 +188,10 @@ def test_apply_skips_present_module_without_install(fake_go) -> None:
     store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
     outcome = prov.apply_one(_item("github.com/o/tool", version="1"))
     assert outcome.outcome is Outcome.SKIP
-    # SKIP before any install subprocess (INV-7).
     assert _install_calls(cli) == []
 
 
 def test_apply_skip_writes_no_receipt(fake_go) -> None:
-    # INV-7: a SKIP must not (re)write a receipt.
     prov, _cli, store, gobin = fake_go()
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
     gobin.mkdir(parents=True, exist_ok=True)
@@ -259,10 +206,10 @@ def test_apply_skip_writes_no_receipt(fake_go) -> None:
 def test_apply_soft_when_go_missing(fake_go) -> None:
     prov, _cli, store, _gobin = fake_go(present=False)
     outcome = prov.apply_one(_item("github.com/o/tool"))
-    assert outcome.outcome is Outcome.SOFT  # NEVER HARD
+    assert outcome.outcome is Outcome.SOFT
     assert "go" in outcome.detail.lower()
     assert "go.dev" in outcome.detail
-    assert store.installed() == set()  # no receipt on a SOFT
+    assert store.installed() == set()
 
 
 def test_apply_soft_on_install_failure_with_stderr_detail(fake_go) -> None:
@@ -270,10 +217,8 @@ def test_apply_soft_on_install_failure_with_stderr_detail(fake_go) -> None:
         install_errors={"github.com/o/bad@latest": "build failed boom"}
     )
     outcome = prov.apply_one(_item("github.com/o/bad"))
-    # Install failure is SOFT and RECORDED, never HARD.
     assert outcome.outcome is Outcome.SOFT
     assert "build failed boom" in outcome.detail
-    # No receipt written on failure.
     assert store.installed() == set()
 
 
@@ -294,15 +239,11 @@ def test_apply_uses_generous_install_timeout(fake_go) -> None:
 
 
 def test_second_run_yields_empty_delta(fake_go) -> None:
-    # INV-7: after installing, a re-plan against the fresh hybrid probe is empty.
     prov, _cli, _store, _gobin = fake_go()
     item = _item("github.com/o/tool", version="1")
     assert prov.apply_one(item).outcome is Outcome.OK
     delta = prov.plan([item], prov.probe())
     assert delta.is_empty()
-
-
-# --- uninstall (revert) ----------------------------------------------------
 
 
 def test_uninstall_removes_receipt_and_binary(fake_go) -> None:
@@ -321,7 +262,6 @@ def test_uninstall_tolerates_missing_binary(fake_go) -> None:
     prov, _cli, store, gobin = fake_go()
     ident = Identity(key="github.com/o/tool", display="github.com/o/tool")
     store.record(ident, version="1", checksum=None, path=str(gobin / "tool"))
-    # Binary already gone; must not raise and must still drop the receipt.
     prov.uninstall_one(ident)
     assert store.installed() == set()
 
@@ -329,11 +269,7 @@ def test_uninstall_tolerates_missing_binary(fake_go) -> None:
 def test_uninstall_tolerates_no_receipt(fake_go) -> None:
     prov, _cli, _store, _gobin = fake_go()
     ident = Identity(key="github.com/o/absent", display="github.com/o/absent")
-    # No receipt at all; idempotent no-op.
     prov.uninstall_one(ident)
-
-
-# --- integration: real reconcile() -----------------------------------------
 
 
 def test_reconcile_idempotent_second_run_empty(fake_go) -> None:
@@ -358,8 +294,8 @@ def test_reconcile_report_only_writes_nothing(fake_go) -> None:
     result = reconcile(prov, items, policy=ReconcilePolicy.ADDITIVE, report_only=True)
     assert result.reported is True
     assert result.delta.installed == (items[0].identity,)
-    assert _install_calls(cli) == []  # REPORT touched no install
-    assert store.installed() == set()  # and wrote no receipt
+    assert _install_calls(cli) == []
+    assert store.installed() == set()
 
 
 def test_reconcile_partial_failure_isolated(fake_go) -> None:
@@ -375,6 +311,5 @@ def test_reconcile_partial_failure_isolated(fake_go) -> None:
     outcomes = {o.item.identity.key: o.outcome for o in result.outcomes}
     assert outcomes["github.com/o/good"] is Outcome.OK
     assert outcomes["github.com/o/bad"] is Outcome.SOFT
-    # The good module's receipt landed; the failed one wrote nothing.
     assert good.identity in store.installed()
     assert bad.identity not in store.installed()

@@ -81,13 +81,7 @@ class ReceiptStore:
         )
 
     def remove(self, identity: Identity) -> None:
-        """Delete ``identity``'s receipt file (revert path). Idempotent.
-
-        The receipt-removal verb the marker ecosystems' ``uninstall_one``
-        needs: a missing file is a silent no-op, so a re-run of revert never
-        errors. Mirrors :func:`_receipt_name` hashing so it targets the exact
-        file :meth:`record` wrote.
-        """
+        # Idempotent: a missing file is a silent no-op, so revert can re-run safely.
         (self._root / _receipt_name(identity)).unlink(missing_ok=True)
 
     def installed(self) -> set[Identity]:
@@ -117,6 +111,8 @@ class ReceiptStore:
             return None
         try:
             data = json.loads(receipt.read_text(encoding="utf-8"))
+            # Discarded: validates key/display shape only, to raise CorruptReceiptError
+            # on a malformed receipt before returning a path from it.
             Identity(key=data["key"], display=data["display"])
             recorded = data.get("path")
             return Path(recorded) if recorded is not None else None
