@@ -1,4 +1,4 @@
-"""B2 Task 4: package-provisioning dispatch + its wiring into ``install``.
+"""Package-provisioning dispatch and its wiring into ``install``.
 
 Two layers:
 

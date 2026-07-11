@@ -354,7 +354,7 @@ class PackageKind(StrEnum):
     One member per provisioner ecosystem. The values match
     :attr:`setforge.provision.protocol.ProvisionItem.type` so a
     :class:`Package` config model maps to a ``ProvisionItem`` without a
-    translation table (that mapping is a later B-wave task). Mirrors the
+    translation table (that mapping lands with the dispatch layer). Mirrors the
     project's established discriminator-enum pattern
     (:class:`MarketplaceSourceKind`, :class:`setforge.source.SourceKind`).
     """
@@ -380,15 +380,18 @@ def _reject_path_in_bare_name(value: str, field_name: str) -> str:
     string, or a lone ``.`` (or ``..``) name no real file — they are certain
     typos, and sanitizing them is exactly this validator's job.
     """
+    # Validate the whitespace-stripped form throughout so a padded name like
+    # " ../x " is judged by its real content (the traversal check still sees
+    # the '..' and '/'), not by incidental surrounding spaces.
     stripped = value.strip()
     if not stripped or stripped == ".":
         raise ValueError(
-            f"{field_name} {value!r} must be a non-empty bare filename — "
+            f"{field_name} {stripped!r} must be a non-empty bare filename — "
             f"empty, whitespace-only, and '.' are rejected."
         )
-    if "/" in value or ".." in value:
+    if "/" in stripped or ".." in stripped:
         raise ValueError(
-            f"{field_name} {value!r} must be a bare filename — "
+            f"{field_name} {stripped!r} must be a bare filename — "
             f"'/' and '..' are rejected (path-traversal defense)."
         )
     return value

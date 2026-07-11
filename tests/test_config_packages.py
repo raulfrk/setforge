@@ -1,4 +1,4 @@
-"""Tests for the ``packages:`` / ``bundles:`` config surfaces (B-wave)."""
+"""Tests for the ``packages:`` / ``bundles:`` config surfaces."""
 
 from pathlib import Path
 

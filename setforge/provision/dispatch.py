@@ -17,7 +17,7 @@ protocol (:mod:`setforge.provision.driver`). It:
 A declared package naming a ``type`` with no registered provisioner surfaces
 as :class:`~setforge.errors.UnknownProvisionerType` from ``build()`` — a real
 config error, not silently skipped. ``bundles:`` are NOT executed here (the
-bundle executor is a later bead); a non-empty ``bundles:`` list only emits a
+bundle executor lands separately); a non-empty ``bundles:`` list only emits a
 "not yet supported" notice.
 
 REPORT-no-write is honored via ``report_only`` threaded straight to
@@ -32,6 +32,7 @@ from itertools import groupby
 
 import typer
 
+import setforge.provision.cargo  # noqa: F401  (registers the cargo provisioner)
 from setforge.config import (
     CargoPackage,
     Config,
@@ -142,8 +143,8 @@ def run_provisioning(
     """Reconcile every declared package / cargo binary through its provisioner.
 
     Resolves the items (:func:`resolve_provision_items`), notices any
-    ``bundles:`` (skipped with a message — the bundle executor is a later
-    bead), then groups by ``type`` and reconciles each group under the
+    ``bundles:`` (skipped with a message — the bundle executor lands
+    separately), then groups by ``type`` and reconciles each group under the
     ADDITIVE policy (packages install declared, prune nothing). ``report_only``
     threads to :func:`~setforge.provision.driver.reconcile` so a ``--dry-run``
     computes each delta without applying.

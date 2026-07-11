@@ -512,7 +512,7 @@ def _gate_on_provisioning_failures(results: list[ReconcileResult]) -> None:
     a github_release checksum mismatch, once that provisioner lands) IS a hard
     reconcile failure and gates the exit. The aggregate is future-proof: today
     only cargo is wired and cargo never produces HARD, so this is a no-op
-    until a HARD-capable provisioner (B5) lands.
+    until a HARD-capable provisioner (e.g. a github_release checksum) lands.
     """
     if not has_hard_failure(results):
         return
