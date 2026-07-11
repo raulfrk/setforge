@@ -83,10 +83,28 @@ RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
 # ----------------------------------------------------------------------
 # Layer 4: nodejs + pinned @anthropic-ai/claude-code via npm -g
 # ----------------------------------------------------------------------
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+# claude-code ships its native binary as a platform optionalDependency wired in
+# by its postinstall. npm treats an optional-dep fetch miss as NON-fatal, so a
+# flaky-network build silently produces a stub `claude` that only errors at
+# runtime (and the broken layer then caches). Defenses: bound npm's own retry
+# window so a bad window fails fast instead of hanging ~30 min; retry the whole
+# install+verify loop so a good window on a later attempt lands the native
+# binary; and `claude --version` fails the build loudly if it's still absent, so
+# a broken image never ships silently. `curl --retry` covers the nodesource hop.
+RUN curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL \
+        "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+    && npm config set fetch-retries 2 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && for attempt in 1 2 3 4 5 6; do \
+         echo "claude-code install attempt ${attempt}" \
+         && npm install -g --include=optional \
+              "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+         && claude --version && break \
+         || { echo "attempt ${attempt} failed; retrying"; sleep 15; }; \
+       done \
+    && claude --version
 
 # ----------------------------------------------------------------------
 # Layer 4b: gitleaks (pinned) — supports setforge install's pre-deploy
