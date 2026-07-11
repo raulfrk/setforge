@@ -1,32 +1,4 @@
-"""The shared archive→verify→extract→pick-binary→install core.
-
-The security-critical pipeline every asset-install provisioner reuses. It
-takes raw archive BYTES plus an :class:`InstallSpec` and never sources those
-bytes itself: github_release downloads them over HTTPS, ``local`` reads them
-from a tracked file. Keeping the source out of the core is what lets both
-callers share one hardened pipeline.
-
-The pipeline, in order:
-
-1. Verify the checksum (``hmac.compare_digest``) BEFORE any extract or read.
-   Whether a MISSING checksum is fatal is the caller's policy, passed as
-   ``checksum_required`` — github_release requires one; ``local`` does not.
-   The core never bakes a single null-policy in.
-2. Extract into a private :class:`~tempfile.TemporaryDirectory` that encloses
-   every subsequent step, so any error path leaves nothing behind.
-3. Independently re-validate every archive member (this is NOT delegated to
-   ``tarfile``'s ``filter="data"`` alone — see the loop for why): reject
-   absolute paths, ``..`` escapes, symlink and hardlink members, and cap the
-   summed DECOMPRESSED size (decompression-bomb guard).
-4. Pick the requested binary, re-confirm the composed destination resolves
-   inside the install dir (two-layer path confinement), and atomically
-   install it with the exec bit via :func:`~setforge.atomicio.atomic_write_bytes`.
-
-Every failure raises :class:`InstallError` carrying an
-:class:`~setforge.provision.protocol.Outcome` ``kind`` (always ``HARD`` here —
-these are safety-gate failures; a transient download failure is the caller's
-concern, mapped to ``SOFT`` there).
-"""
+"""The shared archive→verify→extract→pick-binary→install core."""
 
 from __future__ import annotations
 
@@ -51,9 +23,7 @@ __all__ = [
     "install_from_bytes",
 ]
 
-# Cap on the summed DECOMPRESSED payload (not wire bytes) — a
-# decompression-bomb guard. A release binary is comfortably under this; a
-# member set that sums past it is rejected before a single byte is written.
+# Cap on summed DECOMPRESSED size (not wire bytes) — decompression-bomb guard.
 DEFAULT_MAX_UNCOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB
 
 _ALLOWED_CHECKSUM_ALGOS: frozenset[str] = frozenset({"sha256"})
@@ -62,15 +32,6 @@ _SHA256_HEX_LEN = 64
 
 @dataclass(frozen=True, slots=True)
 class InstallSpec:
-    """The install request the core acts on (source-agnostic).
-
-    ``asset`` is the asset FILENAME (its suffix selects tar/zip/no-extract).
-    ``binary`` is the bare name to pick out of the archive (or the asset
-    itself when ``extract`` is false). ``install_dir`` is the resolved target
-    directory; ``rename`` optionally renames the installed file. ``checksum``
-    is ``sha256:<hex>`` or ``None``.
-    """
-
     asset: str
     binary: str
     install_dir: Path
@@ -81,14 +42,6 @@ class InstallSpec:
 
 
 class InstallError(Exception):
-    """A safety-gate or install failure. Carries an ``Outcome`` ``kind``.
-
-    ``kind`` is ``Outcome.HARD`` for every failure this core raises — a bad
-    checksum, an unsafe archive member, or a path-confinement breach are all
-    attempted-and-failed safety gates that must gate the run's exit. Transient
-    causes (network) never reach here; the caller maps those to ``SOFT``.
-    """
-
     def __init__(self, message: str, *, kind: Outcome = Outcome.HARD) -> None:
         super().__init__(message)
         self.kind = kind
@@ -101,16 +54,8 @@ def install_from_bytes(
     checksum_required: bool,
     max_uncompressed: int = DEFAULT_MAX_UNCOMPRESSED,
 ) -> Path:
-    """Verify ``data``, extract safely, and atomically install the binary.
-
-    Returns the installed :class:`Path` on success. Raises
-    :class:`InstallError` (``kind=HARD``) on any checksum, archive-safety, or
-    path-confinement failure. Nothing is written on any failure path — the
-    only write is the final ``atomic_write_bytes`` after every gate passes.
-    """
     _verify_checksum(data, spec.checksum, required=checksum_required)
 
-    # Resolve the install mode BEFORE any write so a bad chmod fails closed.
     mode = _resolve_mode(spec.chmod)
     install_dir = spec.install_dir.expanduser().resolve()
     target_name = spec.rename if spec.rename is not None else spec.binary
@@ -128,17 +73,8 @@ def install_from_bytes(
     return dest
 
 
-# --- (a) checksum -------------------------------------------------------
-
-
 def _verify_checksum(data: bytes, checksum: str | None, *, required: bool) -> None:
-    """Verify ``data`` against ``checksum`` BEFORE any extract/read.
-
-    ``checksum`` is ``<algo>:<hex>``. The algo must be in the allowlist and
-    the hex the exact expected length; comparison is constant-time via
-    :func:`hmac.compare_digest`. A ``None`` checksum is fatal only when
-    ``required`` — that policy split is the caller's, never baked in here.
-    """
+    # required is the caller's policy (github_release=True, local=False).
     if checksum is None:
         if required:
             raise InstallError("a checksum is required but none was provided")
@@ -170,16 +106,7 @@ def _is_hex(s: str) -> bool:
     return True
 
 
-# --- (e) install-path confinement (compose layer) -----------------------
-
-
 def _confine(install_dir: Path, name: str) -> Path:
-    """Compose ``install_dir / name`` and confirm it stays inside ``install_dir``.
-
-    Re-rejects ``/`` and ``..`` in the bare name (config validation is the
-    first layer; this is the independent second) AND realpaths the composed
-    destination to assert containment.
-    """
     if not name or "/" in name or ".." in name:
         raise InstallError(
             f"install target {name!r} must be a bare filename "
@@ -193,9 +120,6 @@ def _confine(install_dir: Path, name: str) -> Path:
     return dest
 
 
-# --- (b)(c) safe extraction + pick --------------------------------------
-
-
 def _extract_and_pick(
     data: bytes,
     spec: InstallSpec,
@@ -203,12 +127,6 @@ def _extract_and_pick(
     *,
     max_uncompressed: int,
 ) -> bytes:
-    """Safely extract ``data`` into ``staging`` and return the picked binary's bytes.
-
-    Dispatches on the asset suffix. Every member is independently validated
-    (see :func:`_check_tar_member` / :func:`_check_zip_member`) before any
-    write, and the summed decompressed size is capped.
-    """
     if _is_tar(spec.asset):
         return _extract_tar(data, spec, staging, max_uncompressed=max_uncompressed)
     if spec.asset.endswith(".zip"):
@@ -235,10 +153,7 @@ def _extract_tar(
         _guard_total_size(sum(m.size for m in members if m.isreg()), max_uncompressed)
         for member in members:
             _check_tar_member(member, staging)
-        # filter="data" is defense in depth ON TOP of the per-member loop
-        # above; the loop is the primary defense because the stdlib filter has
-        # had realpath/PATH_MAX bypasses (CVE-2025-4517) and zip has no filter
-        # at all, so we never rely on it alone.
+        # defense in depth only: filter="data" has had bypasses (CVE-2025-4517)
         tar.extractall(path=staging, filter="data")
     return _read_picked(staging, spec.binary)
 
@@ -255,8 +170,6 @@ def _extract_zip(
         _guard_total_size(sum(i.file_size for i in infos), max_uncompressed)
         for info in infos:
             _check_zip_member(info, staging)
-        # No zipfile equivalent of tar's data filter — the per-member check is
-        # the ONLY defense, so extract members one at a time after validation.
         for info in infos:
             zf.extract(info, path=staging)
     return _read_picked(staging, spec.binary)
@@ -271,7 +184,6 @@ def _guard_total_size(total: int, cap: int) -> None:
 
 
 def _check_tar_member(member: tarfile.TarInfo, dest: Path) -> None:
-    """Reject a tar member that could escape ``dest`` or plant a link."""
     if member.issym() or member.islnk():
         raise InstallError(
             f"archive member {member.name!r} is a "
@@ -281,12 +193,6 @@ def _check_tar_member(member: tarfile.TarInfo, dest: Path) -> None:
 
 
 def _check_zip_member(info: zipfile.ZipInfo, dest: Path) -> None:
-    """Reject a zip entry that is a symlink or whose path escapes ``dest``.
-
-    Zip has no tar-style link *type*; a symlink is encoded in the Unix mode
-    bits carried in the high half of ``external_attr``. Reject those
-    symmetrically with :func:`_check_tar_member`'s link rejection.
-    """
     if (info.external_attr >> 16) & 0o170000 == 0o120000:
         raise InstallError(f"archive member {info.filename!r} is a symlink — rejected")
     _reject_escape(info.filename, dest)
@@ -303,11 +209,6 @@ def _reject_escape(name: str, dest: Path) -> None:
 
 
 def _read_picked(staging: Path, binary: str) -> bytes:
-    """Return the bytes of ``binary`` under ``staging``, confined to it.
-
-    ``binary`` may name a nested path inside the archive; the resolved path is
-    re-confined to ``staging`` and must be a regular file.
-    """
     if binary.startswith("/") or ".." in Path(binary).parts:
         raise InstallError(f"binary path {binary!r} must stay inside the archive")
     picked = (staging / binary).resolve()
@@ -318,30 +219,12 @@ def _read_picked(staging: Path, binary: str) -> bytes:
     return picked.read_bytes()
 
 
-# --- (f) atomic install -------------------------------------------------
-
-
 def _atomic_install(binary_bytes: bytes, dest: Path, mode: int) -> None:
-    """Atomically write ``binary_bytes`` to ``dest`` with ``mode`` set.
-
-    ``mode`` is applied to the temp fd BEFORE the rename (the deploy
-    fchmod-before-replace idiom, via :func:`atomic_write_bytes`'s ``mode=``),
-    so the published file never briefly carries the wrong bits and the write is
-    never a partial in-place mutation.
-    """
+    # fchmod-before-replace: mode set on the temp fd before the rename.
     atomic_write_bytes(dest, binary_bytes, mode=mode)
 
 
 def _resolve_mode(chmod: str) -> int:
-    """Resolve the spec's ``chmod`` string to the file mode to install with.
-
-    The config field is a free-form string with no validator, so honor exactly
-    the two shapes the config surface documents — reject anything else rather
-    than parse arbitrary symbolic modes:
-
-    * ``"+x"`` (the default / documented convention) → 0755.
-    * a bare octal string (``"755"``, ``"0755"``, ``"0o700"``) → that mode.
-    """
     if chmod == "+x":
         return _exec_mode()
     try:
@@ -354,12 +237,10 @@ def _resolve_mode(chmod: str) -> int:
 
 
 def _exec_mode() -> int:
-    """0755 — owner rwx, group/other rx (the ``+x`` binary convention)."""
     return stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
-    """``Path.is_relative_to`` — spelled out for an explicit boolean return."""
     try:
         path.relative_to(base)
     except ValueError:

@@ -105,13 +105,7 @@ class ReceiptStore:
         return result
 
     def remove(self, identity: Identity) -> None:
-        """Delete ``identity``'s receipt file, if present (idempotent).
-
-        The receipt-side half of the revert/uninstall path for a marker
-        ecosystem: a missing file is a no-op, so a double uninstall never
-        raises. Best-effort unlink of the recorded binary is the caller's
-        concern; this touches only the receipt.
-        """
+        """Delete ``identity``'s receipt file, if present (idempotent)."""
         self._root.joinpath(_receipt_name(identity)).unlink(missing_ok=True)
 
     def path_for(self, identity: Identity) -> Path | None:

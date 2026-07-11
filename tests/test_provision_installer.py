@@ -1,14 +1,5 @@
-"""Tests for the shared archive→verify→extract→install core.
-
-The core takes raw archive BYTES plus an :class:`InstallSpec` and performs a
-security-hardened install (checksum verify → safe extract → pick binary →
-atomic install with the exec bit). The download/read SOURCE lives in the
-caller (github_release downloads; local reads a tracked file), so this module
-never touches the network or the config.
-
-Every security gate in the checklist is exercised here against BAKED in-memory
-fixture archives - no network, no real assets.
-"""
+"""Tests for the shared archive→verify→extract→install core (baked in-memory
+fixture archives only — no network, no real assets)."""
 
 from __future__ import annotations
 
@@ -80,9 +71,6 @@ def _spec(
     )
 
 
-# --- happy path ---------------------------------------------------------
-
-
 def test_happy_path_installs_binary_with_exec_bit(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
     payload = b"#!/bin/sh\necho hi\n"
@@ -152,9 +140,6 @@ def test_no_extract_installs_the_asset_bytes_directly(tmp_path: Path) -> None:
     assert dest.stat().st_mode & stat.S_IXUSR
 
 
-# --- (a) checksum verified BEFORE extract -------------------------------
-
-
 def test_bad_checksum_is_hard_and_installs_nothing(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
     data = _tar_gz({"tool": b"payload"})
@@ -203,15 +188,12 @@ def test_unknown_checksum_algo_is_hard(tmp_path: Path) -> None:
 def test_malformed_checksum_length_is_hard(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
     data = _tar_gz({"tool": b"payload"})
-    spec = _spec(install_dir, checksum="sha256:deadbeef")  # too short
+    spec = _spec(install_dir, checksum="sha256:deadbeef")
 
     with pytest.raises(InstallError) as exc:
         install_from_bytes(data, spec, checksum_required=True)
 
     assert exc.value.kind is Outcome.HARD
-
-
-# --- (b) path escape / symlink / hardlink rejects -----------------------
 
 
 def test_tar_member_with_dotdot_escape_is_rejected(tmp_path: Path) -> None:
@@ -292,8 +274,6 @@ def test_zip_member_with_dotdot_escape_is_rejected(tmp_path: Path) -> None:
 
 def test_zip_symlink_member_is_rejected(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
-    # A zip has no link type; a symlink is encoded in the Unix mode bits held
-    # in the high half of external_attr (S_IFLNK == 0o120000).
     info = zipfile.ZipInfo("tool")
     info.external_attr = (0o120777 & 0xFFFF) << 16
     buf = io.BytesIO()
@@ -309,13 +289,9 @@ def test_zip_symlink_member_is_rejected(tmp_path: Path) -> None:
     assert not install_dir.exists() or not any(install_dir.iterdir())
 
 
-# --- (c) decompression-bomb guard ---------------------------------------
-
-
 def test_decompression_bomb_over_cap_is_rejected(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
-    # A single member whose real (and declared) size exceeds the cap.
-    big = b"\0" * (2 * 1024 * 1024)  # 2 MiB, compresses to ~nothing
+    big = b"\0" * (2 * 1024 * 1024)
     data = _tar_gz({"tool": big})
     spec = _spec(install_dir, checksum=_sha256(data))
 
@@ -326,13 +302,9 @@ def test_decompression_bomb_over_cap_is_rejected(tmp_path: Path) -> None:
     assert not install_dir.exists() or not any(install_dir.iterdir())
 
 
-# --- (e) install-path confinement ---------------------------------------
-
-
 def test_binary_name_escaping_install_dir_is_rejected(tmp_path: Path) -> None:
     install_dir = tmp_path / "bin"
     data = _tar_gz({"tool": b"payload"})
-    # A binary that resolves outside install_dir must be rejected at compose.
     spec = _spec(install_dir, binary="../evil", checksum=_sha256(data))
 
     with pytest.raises(InstallError) as exc:
