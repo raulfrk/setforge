@@ -153,25 +153,26 @@ def test_path_for_raises_on_wrong_typed_path(tmp_path: Path) -> None:
 def test_remove_deletes_receipt(tmp_path: Path) -> None:
     store = ReceiptStore(tmp_path)
     ident = _ident()
-    store.record(ident, version="1", checksum=None)
+    store.record(ident, version="1", checksum=None, path="/opt/bin/pkg")
     assert store.installed() == {ident}
     store.remove(ident)
     assert store.installed() == set()
+    assert store.path_for(ident) is None
     assert list(tmp_path.iterdir()) == []
 
 
-def test_remove_is_idempotent_when_absent(tmp_path: Path) -> None:
-    ReceiptStore(tmp_path).remove(_ident())
-
-
-def test_remove_only_targets_named_identity(tmp_path: Path) -> None:
+def test_remove_is_idempotent(tmp_path: Path) -> None:
+    """Removing an absent receipt is a no-op, never a raise (crash-safe reap)."""
     store = ReceiptStore(tmp_path)
-    keep = _ident("keep", "Keep")
-    drop = _ident("drop", "Drop")
-    store.record(keep, version="1", checksum=None)
-    store.record(drop, version="1", checksum=None)
-    store.remove(drop)
-    assert store.installed() == {keep}
+    store.remove(_ident("never-recorded"))  # must not raise
+
+
+def test_remove_only_targets_named_receipt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    store.record(_ident("a", "A"), version="1", checksum=None)
+    store.record(_ident("b", "B"), version="1", checksum=None)
+    store.remove(_ident("a", "A"))
+    assert store.installed() == {_ident("b", "B")}
 
 
 def test_receipt_root_distinct_from_lockfile(tmp_path: Path, monkeypatch) -> None:

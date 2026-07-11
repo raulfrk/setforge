@@ -15,6 +15,8 @@ any ``.lock`` filename.
 
 import hashlib
 import json
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from setforge.atomicio import atomic_write_text
@@ -23,6 +25,23 @@ from setforge.provision.protocol import Identity
 from setforge.transitions import state_root
 
 _RECEIPT_SUFFIX = ".json"
+
+
+@dataclass(slots=True, frozen=True)
+class ReceiptEntry:
+    """One receipt read off disk, or a marker that its file was corrupt.
+
+    A fault-tolerant read result for :meth:`ReceiptStore.iter_receipts`.
+    Exactly one of ``identity`` / ``corrupt_path`` is set: a good read
+    carries the parsed ``identity`` + recorded ``path`` (``None`` for an
+    old pre-path receipt); a corrupt read carries the offending
+    ``corrupt_path`` so the caller can name + skip that one file and
+    continue reading the rest.
+    """
+
+    identity: Identity | None
+    path: Path | None
+    corrupt_path: Path | None
 
 
 def default_receipt_root() -> Path:
@@ -81,8 +100,19 @@ class ReceiptStore:
         )
 
     def remove(self, identity: Identity) -> None:
-        # Idempotent: a missing file is a silent no-op, so revert can re-run safely.
-        (self._root / _receipt_name(identity)).unlink(missing_ok=True)
+        """Delete ``identity``'s receipt file (idempotent).
+
+        The receipt-unlink step of the ``cleanup`` wizard's crash-consistent
+        ordering (binary-unlink → receipt-unlink). Removing an absent receipt
+        is a no-op — a crash that already reaped the file must not turn a
+        re-run into a raise. Only the one named receipt is touched; the store
+        never walks or recurses.
+        """
+        receipt = self._root / _receipt_name(identity)
+        try:
+            receipt.unlink()
+        except FileNotFoundError:
+            return
 
     def installed(self) -> set[Identity]:
         """Return every recorded identity, read fresh from disk.
@@ -104,9 +134,27 @@ class ReceiptStore:
                 raise CorruptReceiptError(path) from exc
         return result
 
-    def remove(self, identity: Identity) -> None:
-        """Delete ``identity``'s receipt file, if present (idempotent)."""
-        self._root.joinpath(_receipt_name(identity)).unlink(missing_ok=True)
+    def iter_receipts(self) -> Iterator[ReceiptEntry]:
+        """Yield one :class:`ReceiptEntry` per receipt file, fault-tolerantly.
+
+        Unlike :meth:`installed` (which aborts the whole scan on the first
+        corrupt receipt), a bad file yields a ``corrupt_path``-only entry so
+        the caller can name + skip that one and keep reading the rest — the
+        ``cleanup`` wizard's discovery must not be taken down by a single
+        malformed receipt. A missing root yields nothing.
+        """
+        if not self._root.is_dir():
+            return
+        for path in sorted(self._root.glob(f"*{_RECEIPT_SUFFIX}")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                identity = Identity(key=data["key"], display=data["display"])
+                recorded = data.get("path")
+            except (json.JSONDecodeError, KeyError, TypeError):
+                yield ReceiptEntry(identity=None, path=None, corrupt_path=path)
+                continue
+            bin_path = Path(recorded) if recorded is not None else None
+            yield ReceiptEntry(identity=identity, path=bin_path, corrupt_path=None)
 
     def path_for(self, identity: Identity) -> Path | None:
         # Only source of an UNDECLARED item's install path (needed to unlink it).
