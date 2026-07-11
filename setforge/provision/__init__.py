@@ -14,6 +14,7 @@ from setforge.provision.installer import (
     InstallSpec,
     install_from_bytes,
 )
+from setforge.provision.local import LocalProvisioner
 from setforge.provision.protocol import (
     DesiredState,
     Identity,
@@ -37,6 +38,7 @@ __all__ = [
     "InMemoryProvisioner",
     "InstallError",
     "InstallSpec",
+    "LocalProvisioner",
     "Outcome",
     "ProvisionDelta",
     "ProvisionItem",
