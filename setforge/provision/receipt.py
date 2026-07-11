@@ -29,16 +29,6 @@ _RECEIPT_SUFFIX = ".json"
 
 @dataclass(slots=True, frozen=True)
 class ReceiptEntry:
-    """One receipt read off disk, or a marker that its file was corrupt.
-
-    A fault-tolerant read result for :meth:`ReceiptStore.iter_receipts`.
-    Exactly one of ``identity`` / ``corrupt_path`` is set: a good read
-    carries the parsed ``identity`` + recorded ``path`` (``None`` for an
-    old pre-path receipt); a corrupt read carries the offending
-    ``corrupt_path`` so the caller can name + skip that one file and
-    continue reading the rest.
-    """
-
     identity: Identity | None
     path: Path | None
     corrupt_path: Path | None
@@ -100,14 +90,7 @@ class ReceiptStore:
         )
 
     def remove(self, identity: Identity) -> None:
-        """Delete ``identity``'s receipt file (idempotent).
-
-        The receipt-unlink step of the ``cleanup`` wizard's crash-consistent
-        ordering (binary-unlink → receipt-unlink). Removing an absent receipt
-        is a no-op — a crash that already reaped the file must not turn a
-        re-run into a raise. Only the one named receipt is touched; the store
-        never walks or recurses.
-        """
+        # Idempotent: cleanup's crash-consistent retry must not raise if already reaped.
         receipt = self._root / _receipt_name(identity)
         try:
             receipt.unlink()
@@ -135,14 +118,7 @@ class ReceiptStore:
         return result
 
     def iter_receipts(self) -> Iterator[ReceiptEntry]:
-        """Yield one :class:`ReceiptEntry` per receipt file, fault-tolerantly.
-
-        Unlike :meth:`installed` (which aborts the whole scan on the first
-        corrupt receipt), a bad file yields a ``corrupt_path``-only entry so
-        the caller can name + skip that one and keep reading the rest — the
-        ``cleanup`` wizard's discovery must not be taken down by a single
-        malformed receipt. A missing root yields nothing.
-        """
+        # Unlike installed(), a corrupt file yields a corrupt_path entry, not a raise.
         if not self._root.is_dir():
             return
         for path in sorted(self._root.glob(f"*{_RECEIPT_SUFFIX}")):

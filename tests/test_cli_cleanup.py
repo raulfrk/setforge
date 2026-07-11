@@ -1,13 +1,3 @@
-"""Unit tests for the ``setforge cleanup`` provisioned-binary wizard.
-
-Covers :mod:`setforge.cli.cleanup` — receipt-scoped discovery of
-undeclared provisioned binaries, the confined delete path (binary +
-receipt), the mark-orphan bookkeeping path (zero filesystem writes to
-the binary), the dry-run default (no auto-prune), and the safety
-invariants (confinement, corrupt-receipt skip, missing-binary warn,
-path=None receipt). Mirrors ``tests/test_orphans.py``.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -26,10 +16,6 @@ from setforge.local_config import LocalConfig
 from setforge.provision.protocol import Identity
 from setforge.provision.receipt import ReceiptStore
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def runner() -> CliRunner:
@@ -38,7 +24,6 @@ def runner() -> CliRunner:
 
 @pytest.fixture
 def confine_root(tmp_path: Path) -> Path:
-    """A confinement root under which fake binaries live."""
     root = tmp_path / "home"
     root.mkdir()
     return root
@@ -49,21 +34,13 @@ def _ident(key: str) -> Identity:
 
 
 def _write_binary(confine_root: Path, name: str) -> Path:
-    """Create a fake installed binary file under the confinement root."""
     binpath = confine_root / ".local" / "bin" / name
     binpath.parent.mkdir(parents=True, exist_ok=True)
     binpath.write_text("#!/bin/sh\n", encoding="utf-8")
     return binpath
 
 
-# ---------------------------------------------------------------------------
-# Discovery: receipt-scoped, undeclared-only
-# ---------------------------------------------------------------------------
-
-
 def test_discovery_lists_undeclared_only(tmp_path: Path, confine_root: Path) -> None:
-    """An item still in the declared set is never offered for delete; an
-    undeclared receipt is."""
     store = ReceiptStore(tmp_path / "receipts")
     declared_bin = _write_binary(confine_root, "kept")
     undeclared_bin = _write_binary(confine_root, "gone")
@@ -80,13 +57,11 @@ def test_discovery_lists_undeclared_only(tmp_path: Path, confine_root: Path) -> 
 def test_discovery_skips_corrupt_receipt_not_fatal(
     tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A corrupt receipt is named + skipped, discovery continues."""
     receipts = tmp_path / "receipts"
     receipts.mkdir(parents=True)
     good_bin = _write_binary(confine_root, "good")
     store = ReceiptStore(receipts)
     store.record(_ident("good"), version="1", checksum=None, path=good_bin)
-    # A corrupt receipt file alongside the good one.
     (receipts / "deadbeef.json").write_text("{not json", encoding="utf-8")
 
     items = cleanup_mod.discover_cleanup_items(
@@ -95,11 +70,6 @@ def test_discovery_skips_corrupt_receipt_not_fatal(
     assert {it.identity.key for it in items} == {"good"}
     err = capsys.readouterr().err
     assert "corrupt" in err.lower()
-
-
-# ---------------------------------------------------------------------------
-# DELETE: confined unlink of binary + receipt
-# ---------------------------------------------------------------------------
 
 
 def test_delete_removes_binary_and_receipt_under_confinement(
@@ -120,8 +90,6 @@ def test_delete_removes_binary_and_receipt_under_confinement(
 def test_delete_path_none_drops_only_receipt(
     tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An old receipt with path=None: skip the binary-unlink, drop the
-    receipt + warn."""
     store = ReceiptStore(tmp_path / "receipts")
     store.record(_ident("old"), version="1", checksum=None, path=None)
     item = cleanup_mod.CleanupItem(identity=_ident("old"), path=None)
@@ -131,14 +99,12 @@ def test_delete_path_none_drops_only_receipt(
     )
     assert store.installed() == set()
     err = capsys.readouterr().err
-    assert "no recorded path" in err  # the path=None warning was emitted
+    assert "no recorded path" in err
 
 
 def test_delete_missing_binary_warns_and_reaps_receipt(
     tmp_path: Path, confine_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A missing binary → warn + continue, still reap the receipt (no raise,
-    no missing_ok crutch)."""
     store = ReceiptStore(tmp_path / "receipts")
     binpath = confine_root / ".local" / "bin" / "vanished"
     store.record(_ident("vanished"), version="1", checksum=None, path=binpath)
@@ -148,7 +114,7 @@ def test_delete_missing_binary_warns_and_reaps_receipt(
     cleanup_mod.delete_provisioned(
         store, item, confine_root=confine_root, console=Console(stderr=True)
     )
-    assert store.installed() == set()  # receipt reaped despite missing binary
+    assert store.installed() == set()
     err = capsys.readouterr().err
     assert "vanished" in err or "missing" in err.lower()
 
@@ -156,8 +122,6 @@ def test_delete_missing_binary_warns_and_reaps_receipt(
 def test_delete_refuses_path_escaping_confinement(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """A recorded path outside the confinement root is refused: no unlink,
-    no receipt drop."""
     store = ReceiptStore(tmp_path / "receipts")
     escaped = tmp_path / "outside" / "evil"
     escaped.parent.mkdir(parents=True, exist_ok=True)
@@ -169,23 +133,18 @@ def test_delete_refuses_path_escaping_confinement(
         cleanup_mod.delete_provisioned(
             store, item, confine_root=confine_root, console=Console()
         )
-    assert escaped.exists()  # never unlinked
-    assert store.installed() == {_ident("evil")}  # receipt untouched
+    assert escaped.exists()
+    assert store.installed() == {_ident("evil")}
 
 
 def test_delete_refuses_dotdot_escaping_confinement(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """A recorded path that uses ``..`` to escape the confinement root is
-    refused: ``is_relative_to`` is purely lexical and would PASS the raw
-    path, but resolving the parent collapses the ``..`` and the out-of-tree
-    target survives — no unlink, no receipt drop."""
     outside = tmp_path / "outside" / "target.txt"
     outside.parent.mkdir(parents=True, exist_ok=True)
     outside.write_text("keep me\n", encoding="utf-8")
-    # A lexical escape rooted at confine_root: <home>/../outside/target.txt.
     escaped = confine_root / ".." / "outside" / "target.txt"
-    assert escaped.is_relative_to(confine_root)  # lexical check WRONGLY passes
+    assert escaped.is_relative_to(confine_root)
 
     store = ReceiptStore(tmp_path / "receipts")
     store.record(_ident("evil"), version="1", checksum=None, path=escaped)
@@ -195,15 +154,13 @@ def test_delete_refuses_dotdot_escaping_confinement(
         cleanup_mod.delete_provisioned(
             store, item, confine_root=confine_root, console=Console()
         )
-    assert outside.exists()  # out-of-tree target never unlinked
-    assert store.installed() == {_ident("evil")}  # receipt untouched
+    assert outside.exists()
+    assert store.installed() == {_ident("evil")}
 
 
 def test_delete_uses_lstat_never_dereferences_symlink(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """The recorded path is a symlink under confinement: unlink removes the
-    LINK, never the target."""
     target = tmp_path / "real" / "important"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("DO NOT DELETE\n", encoding="utf-8")
@@ -220,20 +177,13 @@ def test_delete_uses_lstat_never_dereferences_symlink(
     )
     assert not link.exists()
     assert not link.is_symlink()
-    assert target.exists()  # target untouched
+    assert target.exists()
     assert target.read_text(encoding="utf-8") == "DO NOT DELETE\n"
-
-
-# ---------------------------------------------------------------------------
-# MARK-ORPHAN: config-only bookkeeping, zero FS writes to the binary
-# ---------------------------------------------------------------------------
 
 
 def test_mark_orphan_keeps_binary_zero_binary_writes(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """Mark-orphan keeps the binary + its receipt; it only appends to the
-    host-local ignore list."""
     store = ReceiptStore(tmp_path / "receipts")
     binpath = _write_binary(confine_root, "keepme")
     before = binpath.read_bytes()
@@ -242,14 +192,12 @@ def test_mark_orphan_keeps_binary_zero_binary_writes(
     cleanup_mod.mark_orphan(_ident("keepme"), console=Console())
 
     assert binpath.exists()
-    assert binpath.read_bytes() == before  # binary untouched
-    assert store.installed() == {_ident("keepme")}  # receipt untouched
+    assert binpath.read_bytes() == before
+    assert store.installed() == {_ident("keepme")}
     assert "keepme" in cleanup_mod.load_ignored_provisioned()
 
 
 def test_mark_orphan_drops_from_flagged_set(tmp_path: Path, confine_root: Path) -> None:
-    """A marked-orphan item is excluded from the next discovery's flagged
-    set (declared includes it only via the ignore list)."""
     store = ReceiptStore(tmp_path / "receipts")
     binpath = _write_binary(confine_root, "ign")
     store.record(_ident("ign"), version="1", checksum=None, path=binpath)
@@ -268,14 +216,7 @@ def test_mark_orphan_is_idempotent(tmp_path: Path, confine_root: Path) -> None:
     assert list(cleanup_mod.load_ignored_provisioned()).count("x") == 1
 
 
-# ---------------------------------------------------------------------------
-# CLI: dry-run default makes no changes (no auto-prune)
-# ---------------------------------------------------------------------------
-
-
 def _write_cleanup_yaml(tmp_path: Path) -> Path:
-    """Minimal setforge.yaml with no declared cargo binaries — so any
-    recorded receipt is undeclared."""
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(
         "version: 1\ntracked_files: {}\nprofiles:\n  p:\n    tracked_files: []\n",
@@ -290,7 +231,6 @@ def test_cli_default_is_dry_run(
     confine_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without ``--apply`` nothing is deleted (no auto-prune)."""
     receipts = tmp_path / "receipts"
     store = ReceiptStore(receipts)
     binpath = _write_binary(confine_root, "gone")
@@ -301,13 +241,8 @@ def test_cli_default_is_dry_run(
     cfg = _write_cleanup_yaml(tmp_path)
     result = runner.invoke(app, ["cleanup", "--profile", "p", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
-    assert binpath.exists()  # CRITICAL: not deleted under dry-run
+    assert binpath.exists()
     assert store.installed() == {_ident("gone")}
-
-
-# ---------------------------------------------------------------------------
-# ReceiptStore.remove (the receipt-unlink verb)
-# ---------------------------------------------------------------------------
 
 
 def test_receipt_remove_deletes_then_idempotent(tmp_path: Path) -> None:
@@ -316,19 +251,11 @@ def test_receipt_remove_deletes_then_idempotent(tmp_path: Path) -> None:
     assert store.installed() == {_ident("a")}
     store.remove(_ident("a"))
     assert store.installed() == set()
-    # Idempotent: removing again is a no-op, not a raise.
     store.remove(_ident("a"))
 
 
-# ---------------------------------------------------------------------------
-# Widget/theme construction guard (callback-injection bypasses real build)
-# ---------------------------------------------------------------------------
-
-
 def test_cleanup_button_bar_constructs_without_crashing() -> None:
-    """Construct the real selection widget once — callback-injection in the
-    other tests bypasses prompt_toolkit widget/theme construction, so this
-    guards the style/build path directly."""
+    # Other tests inject the choice callback; this guards the real widget build once.
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -336,7 +263,7 @@ def test_cleanup_button_bar_constructs_without_crashing() -> None:
     from setforge.ui.widgets import Button, button_bar
 
     with create_pipe_input() as pipe:
-        pipe.send_text("\r")  # Enter → select first button
+        pipe.send_text("\r")
         with create_app_session(input=pipe, output=DummyOutput()):
             result = button_bar(
                 [
@@ -350,18 +277,12 @@ def test_cleanup_button_bar_constructs_without_crashing() -> None:
     assert result == "delete"
 
 
-# ---------------------------------------------------------------------------
-# Anti-pattern structural asserts (mirror tests/test_orphans.py)
-# ---------------------------------------------------------------------------
-
-
 def _cleanup_module_ast() -> ast.Module:
     src = Path(cleanup_mod.__file__).read_text(encoding="utf-8")
     return ast.parse(src)
 
 
 def test_no_unlink_missing_ok_in_cleanup_module() -> None:
-    """``unlink(missing_ok=True)`` swallows the missing-binary race; forbidden."""
     for node in ast.walk(_cleanup_module_ast()):
         if not isinstance(node, ast.Call):
             continue
@@ -385,8 +306,6 @@ def test_no_rmtree_or_removedirs_in_cleanup_module() -> None:
 
 
 def test_no_resolve_in_cleanup_delete_helpers() -> None:
-    """``.resolve()`` on a symlink before ``.unlink()`` torches the target;
-    forbidden in the delete helpers."""
     helper_names = {"delete_provisioned", "_confined_unlink", "_lstat_safe"}
     for node in ast.walk(_cleanup_module_ast()):
         if not isinstance(node, ast.FunctionDef) or node.name not in helper_names:
@@ -404,27 +323,21 @@ def test_no_resolve_in_cleanup_delete_helpers() -> None:
 def test_local_yaml_shape_for_provision_ignore(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """mark_orphan writes a ``provision_ignore:`` list to local.yaml only."""
     cleanup_mod.mark_orphan(_ident("some_tool"), console=Console())
     payload = YAML(typ="safe").load(
         binaries_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
     )
     assert payload == {"provision_ignore": ["some_tool"]}
-    # And it round-trips as JSON-serializable plain data (no ruamel objects leak).
     json.dumps(list(cleanup_mod.load_ignored_provisioned()))
 
 
 def test_mark_orphan_output_validates_under_local_config(
     tmp_path: Path, confine_root: Path
 ) -> None:
-    """The local.yaml ``mark_orphan`` writes must VALIDATE CLEAN under the
-    shared ``LocalConfig`` model — the model is ``extra="forbid"``, so an
-    undeclared ``provision_ignore`` key would make ``setforge validate``
-    (and CI ``validate --all``) fail. Validate the WRITTEN file, not just
-    cleanup's own ruamel loader — that gap let a green suite miss this."""
+    # A ruamel-only check missed an undeclared key that broke `validate --all`.
     cleanup_mod.mark_orphan(_ident("some_tool"), console=Console())
     payload = YAML(typ="safe").load(
         binaries_mod.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
     )
-    model = LocalConfig.model_validate(payload)  # raises if extra_forbidden
+    model = LocalConfig.model_validate(payload)
     assert model.provision_ignore == ["some_tool"]

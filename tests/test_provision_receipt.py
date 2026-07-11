@@ -162,9 +162,8 @@ def test_remove_deletes_receipt(tmp_path: Path) -> None:
 
 
 def test_remove_is_idempotent(tmp_path: Path) -> None:
-    """Removing an absent receipt is a no-op, never a raise (crash-safe reap)."""
     store = ReceiptStore(tmp_path)
-    store.remove(_ident("never-recorded"))  # must not raise
+    store.remove(_ident("never-recorded"))
 
 
 def test_remove_only_targets_named_receipt(tmp_path: Path) -> None:

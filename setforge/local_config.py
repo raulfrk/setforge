@@ -66,9 +66,4 @@ class LocalConfig(BaseModel):
     # :mod:`setforge.compare.load_ignored_orphans` does the deeper
     # validation.
     orphan_ignore: list[str] = Field(default_factory=list)
-    # ``provision_ignore:`` is a list of provisioned-binary identity keys
-    # the user flagged "keep orphan" via ``cleanup``'s mark-orphan action.
-    # Free-form list-of-strings at this layer; the runtime loader in
-    # :func:`setforge.cli.cleanup.load_ignored_provisioned` does the deeper
-    # validation.
     provision_ignore: list[str] = Field(default_factory=list)
