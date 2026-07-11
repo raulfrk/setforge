@@ -110,6 +110,8 @@ def install_from_bytes(
     """
     _verify_checksum(data, spec.checksum, required=checksum_required)
 
+    # Resolve the install mode BEFORE any write so a bad chmod fails closed.
+    mode = _resolve_mode(spec.chmod)
     install_dir = spec.install_dir.expanduser().resolve()
     target_name = spec.rename if spec.rename is not None else spec.binary
     dest = _confine(install_dir, target_name)
@@ -122,7 +124,7 @@ def install_from_bytes(
             )
         else:
             binary_bytes = data
-        _atomic_install(binary_bytes, dest)
+        _atomic_install(binary_bytes, dest, mode)
     return dest
 
 
@@ -319,15 +321,36 @@ def _read_picked(staging: Path, binary: str) -> bytes:
 # --- (f) atomic install -------------------------------------------------
 
 
-def _atomic_install(binary_bytes: bytes, dest: Path) -> None:
-    """Atomically write ``binary_bytes`` to ``dest`` with the exec bit set.
+def _atomic_install(binary_bytes: bytes, dest: Path, mode: int) -> None:
+    """Atomically write ``binary_bytes`` to ``dest`` with ``mode`` set.
 
-    The exec bit is applied to the temp fd BEFORE the rename (the deploy
+    ``mode`` is applied to the temp fd BEFORE the rename (the deploy
     fchmod-before-replace idiom, via :func:`atomic_write_bytes`'s ``mode=``),
-    so the published file is never briefly non-executable and the write is
+    so the published file never briefly carries the wrong bits and the write is
     never a partial in-place mutation.
     """
-    atomic_write_bytes(dest, binary_bytes, mode=_exec_mode())
+    atomic_write_bytes(dest, binary_bytes, mode=mode)
+
+
+def _resolve_mode(chmod: str) -> int:
+    """Resolve the spec's ``chmod`` string to the file mode to install with.
+
+    The config field is a free-form string with no validator, so honor exactly
+    the two shapes the config surface documents — reject anything else rather
+    than parse arbitrary symbolic modes:
+
+    * ``"+x"`` (the default / documented convention) → 0755.
+    * a bare octal string (``"755"``, ``"0755"``, ``"0o700"``) → that mode.
+    """
+    if chmod == "+x":
+        return _exec_mode()
+    try:
+        return int(chmod, 8)
+    except ValueError:
+        raise InstallError(
+            f"unsupported chmod {chmod!r}: expected '+x' or a bare octal mode "
+            "(e.g. '755' or '0755')"
+        ) from None
 
 
 def _exec_mode() -> int:

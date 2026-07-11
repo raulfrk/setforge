@@ -67,6 +67,7 @@ def _spec(
     rename: str | None = None,
     extract: bool = True,
     checksum: str | None = None,
+    chmod: str = "+x",
 ) -> InstallSpec:
     return InstallSpec(
         asset=asset,
@@ -74,7 +75,7 @@ def _spec(
         install_dir=install_dir,
         rename=rename,
         extract=extract,
-        chmod="+x",
+        chmod=chmod,
         checksum=checksum,
     )
 
@@ -93,6 +94,28 @@ def test_happy_path_installs_binary_with_exec_bit(tmp_path: Path) -> None:
     assert dest == install_dir / "tool"
     assert dest.read_bytes() == payload
     assert dest.stat().st_mode & stat.S_IXUSR
+
+
+def test_chmod_octal_is_honored_on_installed_file(tmp_path: Path) -> None:
+    install_dir = tmp_path / "bin"
+    data = _tar_gz({"tool": b"payload"})
+    spec = _spec(install_dir, chmod="0700", checksum=_sha256(data))
+
+    dest = install_from_bytes(data, spec, checksum_required=True)
+
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o700
+
+
+def test_unsupported_chmod_is_rejected(tmp_path: Path) -> None:
+    install_dir = tmp_path / "bin"
+    data = _tar_gz({"tool": b"payload"})
+    spec = _spec(install_dir, chmod="u+rwx,g+r", checksum=_sha256(data))
+
+    with pytest.raises(InstallError) as exc:
+        install_from_bytes(data, spec, checksum_required=True)
+
+    assert exc.value.kind is Outcome.HARD
+    assert not install_dir.exists() or not any(install_dir.iterdir())
 
 
 def test_rename_targets_the_renamed_filename(tmp_path: Path) -> None:
