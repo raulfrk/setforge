@@ -789,6 +789,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     )
     _validate_plugin_references(config)
     _validate_mcp_references(config)
+    _validate_package_references(config)
     _validate_section_slot_references(config)
     _warn_on_schema_mismatch(config)
     return config
@@ -1329,6 +1330,37 @@ def _validate_mcp_references(config: Config) -> None:
         raise ConfigError(
             f"profile mcp_servers reference undeclared server(s): "
             f"{details} (add to top-level mcp_servers:)"
+        )
+
+
+def _validate_package_references(config: Config) -> None:
+    """Verify every ``profile.packages`` / ``profile.bundles`` entry exists.
+
+    Each ``packages`` entry must name a key in the top-level
+    :attr:`Config.packages` registry, and each ``bundles`` entry a key in
+    :attr:`Config.bundles`. Mirrors :func:`_validate_plugin_references`:
+    collects every offender across every profile into a single
+    :class:`ConfigError` so the user fixes all typos in one round-trip. A
+    typo'd reference must fail config load rather than load silently and
+    surface only at install time. Empty / whitespace refs are skipped (a
+    blank entry never matches the registry, so skipping keeps the message
+    focused on genuine typos).
+    """
+    package_registry = set(config.packages)
+    bundle_registry = set(config.bundles)
+    offenders: list[str] = []
+    for profile_name, profile in config.profiles.items():
+        for ref in profile.packages:
+            if ref.strip() and ref not in package_registry:
+                offenders.append(f"{profile_name}.packages[{ref}]")
+        for ref in profile.bundles:
+            if ref.strip() and ref not in bundle_registry:
+                offenders.append(f"{profile_name}.bundles[{ref}]")
+    if offenders:
+        details = ", ".join(offenders)
+        raise ConfigError(
+            f"profile packages/bundles reference undeclared name(s): "
+            f"{details} (add to top-level packages:/bundles:)"
         )
 
 

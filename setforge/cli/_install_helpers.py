@@ -58,6 +58,7 @@ from setforge.cli._helpers import (
     _refuse_duplicate_section_names,
     _resolve_drift_paths,
 )
+from setforge.cli._provision_helpers import dry_run_packages
 from setforge.compare import (
     CompareStatus,
     DriftClass,
@@ -1138,6 +1139,7 @@ def _dry_run_pipeline(
     _dry_run_emit_host_local_inject(ctx)
     _dry_run_emit_plugin_reconcile(ctx)
     _dry_run_emit_extension_reconcile(ctx)
+    dry_run_packages(ctx.cfg, ctx.resolved)
     _dry_run_emit_transition_path(ctx)
     typer.echo(_DRY_RUN_FINAL_LINE)
 
@@ -1164,6 +1166,8 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
     typer.echo(f"  claude_plugins: {len(ctx.resolved.claude_plugins)}")
     typer.echo(f"  mcp_servers:    {len(ctx.resolved.mcp_servers)}")
     typer.echo(f"  cargo_binaries: {len(ctx.resolved.cargo_binaries)}")
+    typer.echo(f"  packages:       {len(ctx.resolved.packages)}")
+    typer.echo(f"  bundles:        {len(ctx.resolved.bundles)}")
     typer.echo(f"  bootstrap:      {len(ctx.resolved.bootstrap)}")
     typer.echo("  host overlay:   none (host-local layer not yet enabled)")
 

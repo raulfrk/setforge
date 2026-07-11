@@ -13,9 +13,6 @@ from typing import assert_never
 import typer
 
 from setforge import (
-    cargo as cargo_mod,
-)
-from setforge import (
     compare as compare_mod,
 )
 from setforge import (
@@ -55,6 +52,7 @@ from setforge.cli._plugin_helpers import (
     _reconcile_extensions,
     _reconcile_plugins,
 )
+from setforge.cli._provision_helpers import reconcile_packages
 from setforge.cli._secrets_confirm import prompt_secret_action
 from setforge.cli._welcome import (
     WelcomeChoice,
@@ -72,6 +70,8 @@ from setforge.config import (
 )
 from setforge.errors import SetforgeError
 from setforge.locking import profile_lock
+from setforge.provision.dispatch import has_hard_failure
+from setforge.provision.protocol import Outcome, ReconcileResult
 from setforge.reconcile import host_local_record
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
 from setforge.transitions import (
@@ -285,13 +285,15 @@ def install(
             transitions.ensure_state_dir_writable()
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
-        # Cargo binaries install during install, BEFORE deploy. A missing
-        # cargo toolchain warns once and continues (soft); per-crate
-        # build failures warn (yellow) but do NOT gate the exit code — a
-        # crate that won't build is a host-specific outcome, not a config
-        # error. No revert tracking — cargo binaries are not cleanly
+        # Package provisioning runs during install, BEFORE deploy, through the
+        # uniform provisioner protocol (declared ``packages:`` PLUS the legacy
+        # ``cargo_binaries:`` list). A missing toolchain / build failure is SOFT
+        # (warns yellow, does NOT gate — a crate that won't build is a
+        # host-specific outcome); a HARD outcome (e.g. a checksum mismatch)
+        # gates the exit via ``_gate_on_provisioning_failures`` below, after the
+        # MCP gate. No revert tracking — provisioned binaries are not cleanly
         # reversible.
-        cargo_mod.install_cargo_binaries(resolved.cargo_binaries)
+        provision_results = reconcile_packages(cfg, resolved)
 
         # P4.3: check for unexpected drift before deploying.
         # Only DRIFTED entries (existing live files that diverge from tracked
@@ -421,6 +423,7 @@ def install(
             typer.echo(f"↩  revert with: setforge revert --profile={profile}")
 
         _gate_on_mcp_failures(mcp_failed)
+        _gate_on_provisioning_failures(provision_results)
         _gate_on_deferred_reconcile(deploy_outcome.deferred_reconcile, interactive)
 
 
@@ -493,6 +496,34 @@ def _gate_on_mcp_failures(mcp_failed: list[tuple[str, str]]) -> None:
     names = ", ".join(name for name, _err in mcp_failed)
     typer.secho(
         f"install completed with MCP server failures: {names}",
+        err=True,
+        fg=typer.colors.RED,
+    )
+    raise typer.Exit(code=1)
+
+
+def _gate_on_provisioning_failures(results: list[ReconcileResult]) -> None:
+    """Exit non-zero when any provisioned item recorded a HARD outcome.
+
+    Mirrors :func:`_gate_on_mcp_failures`. SOFT outcomes (missing toolchain,
+    a crate that won't build) already warned during
+    :func:`~setforge.cli._provision_helpers.reconcile_packages` and do NOT
+    gate — a host-specific failure is not a config error. A HARD outcome (e.g.
+    a github_release checksum mismatch, once that provisioner lands) IS a hard
+    reconcile failure and gates the exit. The aggregate is future-proof: today
+    only cargo is wired and cargo never produces HARD, so this is a no-op
+    until a HARD-capable provisioner (B5) lands.
+    """
+    if not has_hard_failure(results):
+        return
+    names = ", ".join(
+        outcome.item.identity.display
+        for result in results
+        for outcome in result.outcomes
+        if outcome.outcome is Outcome.HARD
+    )
+    typer.secho(
+        f"install completed with package-provisioning failures: {names}",
         err=True,
         fg=typer.colors.RED,
     )
