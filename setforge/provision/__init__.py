@@ -8,6 +8,12 @@ skip) once instead of once per ecosystem.
 
 from setforge.provision.cargo import CargoProvisioner
 from setforge.provision.driver import exit_code, reconcile
+from setforge.provision.github_release import GitHubReleaseProvisioner
+from setforge.provision.installer import (
+    InstallError,
+    InstallSpec,
+    install_from_bytes,
+)
 from setforge.provision.protocol import (
     DesiredState,
     Identity,
@@ -26,8 +32,11 @@ from setforge.provision.registry import build, register
 __all__ = [
     "CargoProvisioner",
     "DesiredState",
+    "GitHubReleaseProvisioner",
     "Identity",
     "InMemoryProvisioner",
+    "InstallError",
+    "InstallSpec",
     "Outcome",
     "ProvisionDelta",
     "ProvisionItem",
@@ -38,6 +47,7 @@ __all__ = [
     "ReconcileResult",
     "build",
     "exit_code",
+    "install_from_bytes",
     "reconcile",
     "register",
 ]

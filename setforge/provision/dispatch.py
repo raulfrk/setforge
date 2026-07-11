@@ -8,6 +8,7 @@ from itertools import groupby
 import typer
 
 import setforge.provision.cargo as _cargo  # noqa: F401
+import setforge.provision.github_release as _github_release  # noqa: F401
 import setforge.provision.go as _go  # noqa: F401
 import setforge.provision.python as _python  # noqa: F401
 from setforge.config import (
