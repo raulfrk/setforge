@@ -194,10 +194,6 @@ def test_report_only_applies_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A declared bundle resolves to its BundleSpec and executes through the
-    # sequential DAG executor, folding one ReconcileResult into the results so
-    # the exit gate still sees its outcomes. Stub cargo apply so no real cargo
-    # runs; assert the component was applied.
     import setforge.provision.cargo as cargo_prov
     from setforge.config import BundleComponent, BundleSpec
 
@@ -220,7 +216,7 @@ def test_declared_bundle_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     resolved = ResolvedProfile(bundles=["dev"])
     results = run_provisioning(cfg, resolved)
-    assert len(results) == 1  # the bundle's ReconcileResult
+    assert len(results) == 1
     assert applied == ["ripgrep"]
     assert has_hard_failure(results) is False
 
