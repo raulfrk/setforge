@@ -41,6 +41,7 @@ SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "gitleaks",
     "patch",
     "cargo",
+    "go",
 )
 _ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"

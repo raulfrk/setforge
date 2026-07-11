@@ -150,6 +150,31 @@ def test_path_for_raises_on_wrong_typed_path(tmp_path: Path) -> None:
         ReceiptStore(tmp_path).path_for(ident)
 
 
+def test_remove_deletes_receipt(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    ident = _ident()
+    store.record(ident, version="1", checksum=None)
+    assert store.installed() == {ident}
+    store.remove(ident)
+    assert store.installed() == set()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_remove_is_idempotent_when_absent(tmp_path: Path) -> None:
+    # Removing a never-recorded identity is a silent no-op (revert re-run).
+    ReceiptStore(tmp_path).remove(_ident())
+
+
+def test_remove_only_targets_named_identity(tmp_path: Path) -> None:
+    store = ReceiptStore(tmp_path)
+    keep = _ident("keep", "Keep")
+    drop = _ident("drop", "Drop")
+    store.record(keep, version="1", checksum=None)
+    store.record(drop, version="1", checksum=None)
+    store.remove(drop)
+    assert store.installed() == {keep}
+
+
 def test_receipt_root_distinct_from_lockfile(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path))
     from setforge.locking import state_root
