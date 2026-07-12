@@ -1,4 +1,4 @@
-"""Shared HTTPS fetch helper for resolvers (spec §B2 / §C anti-pitfalls).
+"""Shared HTTPS fetch helper for resolvers.
 
 The cargo/python/github_release/plugin resolvers all need the SAME urllib
 discipline: HTTPS-only on the request URL, an explicit timeout, a

@@ -1,4 +1,4 @@
-"""Tests for the plugin resolver (spec §B3).
+"""Tests for the plugin resolver.
 
 A plugin key is ``name@marketplace``; the marketplace is a git repo. The
 resolver pins the marketplace repo's commit SHA (the strong git-commit pin) via
@@ -8,8 +8,8 @@ kind — a CONCRETE commit, never a moving ref name.
 
 The subprocess boundary is INJECTABLE (a ``runner`` callable receiving the
 literal argv) so these unit tests never spawn ``git`` — the real invocation is
-Task-6's docker e2e. The argv MUST carry a ``--`` options-terminator before the
-attacker-influenced marketplace URL / ref positionals.
+exercised by the docker e2e. The argv MUST carry a ``--`` options-terminator
+before the attacker-influenced marketplace URL / ref positionals.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Tests for the cargo resolver (spec §B3).
+"""Tests for the cargo resolver.
 
 Resolves the concrete version + ``.crate`` sha256 from the crates.io SPARSE
 INDEX (``https://index.crates.io/{prefix}/{name}``). The path prefix is
@@ -8,7 +8,7 @@ version; the resolver picks the MAX non-yanked version and builds a
 ``sha256:{cksum}`` checksum pin.
 
 The network boundary is INJECTABLE (a ``fetch`` callable) so these unit tests
-never hit crates.io — the real fetch is Task-6's docker e2e.
+never hit crates.io — the real fetch is exercised by the docker e2e.
 """
 
 from __future__ import annotations

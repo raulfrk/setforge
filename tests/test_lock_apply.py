@@ -1,6 +1,6 @@
 """Lock CONSUMPTION at install — the lock overrides ProvisionItems offline.
 
-Task 6: when ``setforge.lock`` is present, ``run_provisioning`` overrides each
+When ``setforge.lock`` is present, ``run_provisioning`` overrides each
 :class:`ProvisionItem`'s version/integrity from the matching lock pin
 (matched by ``(type, key)``) BEFORE reconcile, with ZERO resolver/network
 calls. These unit tests cover the pure override (:mod:`setforge.provision.lock_apply`)
@@ -177,7 +177,7 @@ def test_unlocked_item_passes_through_unchanged() -> None:
 
 
 def test_lock_apply_imports_no_resolver() -> None:
-    # The offline invariant (spec §C) is STRUCTURAL: lock_apply must not import
+    # The offline invariant is STRUCTURAL: lock_apply must not import
     # the resolver registry, so a locked install physically cannot re-resolve.
     # Assert it directly — a future `from ...resolve.registry import get_resolver`
     # added to the module fails here, unlike a monkeypatch that could dangle.

@@ -1,13 +1,13 @@
-"""Tests for the go resolver (spec §B3).
+"""Tests for the go resolver.
 
 Resolves via ``go mod download -json <module>@<version>`` run in a SCRATCH
-module dir (GOFLAGS + GONOSUMCHECK-free env) so it can NEVER mutate a host
-go.mod/go.sum. Parses ``.Version`` (concrete) + ``.Sum`` (the ``h1:...`` module
-hash) into a ``sum``-kind pin.
+module dir (GOFLAGS=-mod=mod) so it can NEVER mutate a host go.mod/go.sum.
+Parses ``.Version`` (concrete) + ``.Sum`` (the ``h1:...`` module hash) into a
+``sum``-kind pin.
 
 The subprocess boundary is INJECTABLE (a ``runner`` callable receiving the
 literal argv) so these unit tests never spawn ``go`` — the real invocation is
-Task-6's docker e2e. The tests assert the argv carries a ``--``
+exercised by the docker e2e. The tests assert the argv carries a ``--``
 options-terminator before the attacker-influenced ``module@version`` positional.
 """
 

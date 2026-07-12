@@ -1,18 +1,19 @@
-"""``setforge install --locked`` — spec→lock coverage gate (Task 6, spec §B4).
+"""``setforge install --locked`` — spec→lock coverage gate.
 
 ``--locked`` is FAIL-CLOSED: every package in the LOCKABLE surface
-(:func:`setforge.cli.lock.enumerate_lock_items`) MUST have a matching lock
-entry, else the install exits non-zero naming the missing package(s). It does
-NOT re-resolve (no network) — it is a spec↔lock coverage check + the normal
+(:func:`setforge.cli._lock_enumerate.enumerate_lock_items`) MUST have a matching
+lock entry, else the install exits non-zero naming the missing package(s). It
+does NOT re-resolve (no network) — it is a spec↔lock coverage check + the normal
 locked install.
 
 Two invariants under test:
 
 - a lockable package (a top-level cargo package here) with no lock entry ⇒
   non-zero exit that names it;
-- the KEY scoping regression: a ``cargo_binaries`` entry (NOT lockable — B10
-  never writes it) absent from the lock MUST NOT fail ``--locked``. The gate is
-  scoped to ``enumerate_lock_items``, not install's full dispatch item set.
+- the KEY scoping regression: a ``cargo_binaries`` entry (NOT lockable — the
+  lock never writes it) absent from the lock MUST NOT fail ``--locked``. The
+  gate is scoped to ``enumerate_lock_items``, not install's full dispatch item
+  set.
 """
 
 from __future__ import annotations

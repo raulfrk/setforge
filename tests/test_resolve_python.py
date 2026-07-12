@@ -1,4 +1,4 @@
-"""Tests for the python resolver (spec §B3).
+"""Tests for the python resolver.
 
 Resolves version + wheel sha256 from PyPI JSON (latest or pinned). A compiled
 tool ships MANY wheels (platform/abi tags); a tag mismatch pins the WRONG hash,
@@ -8,7 +8,7 @@ match exists. This suite pins that selection rule with a multi-wheel fixture.
 
 The PyPI-fetch boundary is INJECTABLE (a ``fetch_json`` callable returning the
 parsed PyPI body) so these unit tests never hit pypi.org — the real fetch reuses
-``_pypi_client`` in Task 6's docker e2e.
+``_pypi_client`` and is exercised by the docker e2e.
 """
 
 from __future__ import annotations

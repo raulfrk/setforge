@@ -1,4 +1,4 @@
-"""Tests for the setforge.lock model + (de)serialization (spec §B1, §C).
+"""Tests for the setforge.lock model + (de)serialization.
 
 Covers the three integrity kinds' round-trips, byte-for-byte determinism
 (including input-order independence), the parse/dump round-trip, atomic write,

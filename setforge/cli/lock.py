@@ -5,7 +5,7 @@ profile X declares, resolves each to a concrete version + integrity via the
 resolver registry, and writes the pins into the committed ``setforge.lock``.
 ``local`` packages are NOT lockable (nothing resolves upstream) and are skipped.
 
-The write is FAIL-CLOSED (spec §C): all pins are resolved FIRST; if ANY package
+The write is FAIL-CLOSED: all pins are resolved FIRST; if ANY package
 raises, the whole write aborts and no partial lock ever lands. It is also a
 per-profile MERGE — an existing lock's other-profile entries are preserved, this
 profile is added to a shared ``(type, key)``'s back-ref, and a shared package
@@ -48,7 +48,7 @@ from setforge.provision.resolve.registry import get_resolver
 def resolve_pins(items: list[_LockItem], profile: str) -> list[ResolvedPin]:
     """Resolve every item to a pin, FAIL-CLOSED, tagging each with ``profile``.
 
-    Resolves ALL items first (spec §C): a single resolver failure aborts the
+    Resolves ALL items first: a single resolver failure aborts the
     whole batch by propagating the :class:`~setforge.errors.ResolveError`, so the
     caller never writes a partial lock. Each returned pin carries this run's
     ``profile`` as its sole back-ref entry; the merge step unions it with any
@@ -69,8 +69,8 @@ def merge_lock(existing: LockFile | None, new_pins: list[ResolvedPin]) -> LockFi
     ``(type, key)`` present in both must resolve to the SAME version AND the SAME
     integrity — the merged pin then unions the two ``profiles`` back-refs. Either
     a version mismatch OR a same-version/different-integrity mismatch is a hard
-    :class:`~setforge.errors.LockConflict` (spec §C: never silently drop one
-    profile's pin). Catching same-version/different-hash is the supply-chain
+    :class:`~setforge.errors.LockConflict` (never silently drop one profile's
+    pin). Catching same-version/different-hash is the supply-chain
     signal a lockfile exists to surface. ``dump_lock`` re-imposes deterministic
     ordering, so the merged pin insertion order does not affect the written
     bytes.

@@ -136,7 +136,7 @@ def _prepare_lock(
 def _gate_on_lock_coverage(
     cfg: Config, resolved: ResolvedProfile, lock: LockFile | None
 ) -> None:
-    """Fail-closed (spec §B4) unless every LOCKABLE package has a lock entry.
+    """Fail-closed unless every LOCKABLE package has a lock entry.
 
     ``--locked`` is a spec→lock COVERAGE check, NOT a re-resolve: the lockable
     surface is exactly

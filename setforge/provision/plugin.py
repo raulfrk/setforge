@@ -39,7 +39,7 @@ class PluginProvisioner(Provisioner):
         When :meth:`apply_one` finds a target for the plugin it is installing,
         it hard-resets that marketplace cache to the PINNED commit BEFORE
         ``claude plugin install`` runs, so ``claude`` reads the plugin from the
-        pinned commit rather than ``origin/HEAD`` (spec §B3 strong install).
+        pinned commit rather than ``origin/HEAD`` (the strong install).
         The registry's :func:`~setforge.provision.registry.build` constructs
         this with no args, so ``checkouts`` defaults to empty — an unpinned
         plugin, a REGULAR-mode install, or a no-lock install all keep today's
@@ -126,11 +126,11 @@ class PluginProvisioner(Provisioner):
         (only for a LOCKED plugin under LOCAL_CLONE). When present, the cache is
         reset to the PINNED sha so the ensuing ``claude plugin install`` reads
         the plugin from that commit, not ``origin/HEAD`` — the git
-        content-addressing IS the integrity guarantee (spec §B3). A checkout
+        content-addressing IS the integrity guarantee. A checkout
         failure raises :class:`MarketplaceCacheMiss`, caught by
         :meth:`apply_one` as a HARD failure.
 
-        RESIDUAL (spec §C, "disable plugin autoUpdate on a pinned plugin"):
+        RESIDUAL (disabling plugin autoUpdate on a pinned plugin):
         Claude Code has NO hook to disable per-plugin auto-update — no
         ``autoUpdate`` config field, no ``--no-auto-update`` flag, and
         ``DISABLE_AUTOUPDATER`` gates only the CLI self-updater, not plugins

@@ -1,4 +1,4 @@
-"""Tests for the extension (VS Code) resolver (spec §B3).
+"""Tests for the extension (VS Code) resolver.
 
 An extension key is ``publisher.name`` (e.g. ``esbenp.prettier-vscode``). The
 resolver produces the CONCRETE version + the VSIX sha256 (TOFU — the marketplace
@@ -13,9 +13,9 @@ Two marketplace API calls:
 
 The POST + GET boundary is INJECTABLE (a ``(url, *, ...) -> bytes`` callable) so
 these unit tests never hit marketplace.visualstudio.com — the real fetch is
-Task-6's docker e2e. The extensionquery body/response shape is the cleanest
-plausible one built from the documented field names; Task-6's e2e corrects it
-against the live API if it drifts.
+exercised by the docker e2e. The extensionquery body/response shape is built
+from the documented field names and is validated against the live API by that
+e2e.
 """
 
 from __future__ import annotations

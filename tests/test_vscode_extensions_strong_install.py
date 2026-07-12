@@ -1,4 +1,4 @@
-"""Byte-strong VSIX install path (Task 7 / acceptance item 5).
+"""Byte-strong VSIX install path.
 
 When a loaded ``setforge.lock`` pins an extension, ``install_one`` must:
 

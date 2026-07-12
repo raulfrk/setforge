@@ -1,4 +1,4 @@
-"""Lock → extension reconcile threading (Task 7).
+"""Lock → extension reconcile threading.
 
 Verifies the pin reaches the install path two ways:
 

@@ -1,23 +1,23 @@
 """The plugin :class:`Resolver` — pins the marketplace repo's commit SHA.
 
 A Claude plugin key is ``name@marketplace``; the marketplace is a git repo.
-The strong pin (spec §B3) is that repo's concrete commit SHA, resolved via
+The strong pin is that repo's concrete commit SHA, resolved via
 ``git ls-remote <marketplace-git-url> <ref>`` — WITHOUT cloning or checking out
-(that host mutation is the install path's job, Task 6). The pin carries
+(that host mutation is the install path's job). The pin carries
 ``version = sha`` and ``sha`` integrity kind; a moving ref (``HEAD``, a branch)
 is resolved to the 40-hex commit it points at and NEVER stored verbatim.
 
 The marketplace git URL is NOT derivable from the plugin key alone — the key's
 ``@marketplace`` segment is a YAML registry name, and the git URL lives in the
 config's ``marketplaces:`` map. :func:`marketplace_git_url` reuses
-``claude_marketplace_cache``'s shorthand expansion so the caller (Task 6's lock
+``claude_marketplace_cache``'s shorthand expansion so the caller (the ``lock``
 verb) derives the URL from a :class:`~setforge.config.MarketplaceSource` in one
 place; the resolver itself takes an already-derived :class:`PluginResolveItem`.
 
 The subprocess boundary is injected (the ``runner`` callable) so unit tests
 never spawn git; the default uses literal-argv ``subprocess.run`` (no
 ``shell=True``) with a ``--`` options-terminator before the URL/ref positionals
-(arg-injection guard, spec §C) and an explicit timeout.
+(arg-injection guard) and an explicit timeout.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ class PluginResolver:
                 "marketplace commit pins"
             )
         # `--` terminates options so the URL/ref positionals can never be read
-        # as flags (arg-injection guard, spec §C).
+        # as flags (arg-injection guard).
         argv = [git, "ls-remote", "--", item.git_url, item.ref]
         sha = self._ls_remote_sha(argv, item.git_url, item.ref)
         return ResolvedPin(

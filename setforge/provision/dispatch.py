@@ -98,7 +98,7 @@ def run_provisioning(
     for name in resolved.bundles:
         results.append(execute_bundle(cfg.bundles[name], cfg, report_only=report_only))
     items = resolve_provision_items(cfg, resolved)
-    # Lock consumption (spec §B4): when a committed lock is present, override
+    # Lock consumption: when a committed lock is present, override
     # each item's version/integrity from its pin BEFORE reconcile — offline, no
     # resolver call. A None lock (no file, or the report-only path) is a no-op.
     if lock is not None:

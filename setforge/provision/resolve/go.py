@@ -5,12 +5,12 @@ dir (a tempdir seeded with a throwaway ``go.mod`` and ``GOFLAGS=-mod=mod``) so
 it can NEVER read or mutate a host ``go.mod``/``go.sum``. Parses ``.Version``
 (the concrete resolved version) + ``.Sum`` (the ``h1:...`` module-sumdb hash)
 into a ``sum``-kind pin — recorded for drift-detection; the actual install stays
-``go install`` (PRAGMATIC, spec §B3).
+``go install`` (PRAGMATIC).
 
 The subprocess boundary is injected (the ``runner`` callable) so unit tests mock
 it. The default runner uses literal-argv ``subprocess.run`` (no ``shell=True``)
 with a ``--`` options-terminator before the attacker-influenced ``module@ver``
-positional (arg-injection guard, spec §C) and an explicit timeout.
+positional (arg-injection guard) and an explicit timeout.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ class GoResolver:
         version = item.version or _LATEST
         spec = f"{item.module}@{version}"
         # `--` terminates options so the attacker-influenced spec can never be
-        # read as a flag (arg-injection guard, spec §C).
+        # read as a flag (arg-injection guard).
         argv = [str(go), "mod", "download", "-json", "--", spec]
         out = self._run_in_scratch(argv, spec)
         parsed = _parse_download_json(out, spec)

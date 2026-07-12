@@ -1,14 +1,14 @@
-"""The committed ``setforge.lock`` model + (de)serialization (spec §B1).
+"""The committed ``setforge.lock`` model + (de)serialization.
 
 The lock is a resolved-graph artifact — one pin per ``(type, key)`` with the
-ecosystem-natural integrity value + a ``profiles`` back-ref (D8) — committed at
+ecosystem-natural integrity value + a ``profiles`` back-ref — committed at
 the CONFIG-REPO ROOT (``config.resolve().parent / "setforge.lock"``), NOT under
 the host-local state dir (that is the receipt store). It carries its own
-``version`` independent of the config ``schema_version`` (D8), so it is a
+``version`` independent of the config ``schema_version``, so it is a
 SEPARATE file with a SEPARATE schema and does not go through the config-schema
 gates.
 
-``dump_lock`` is DETERMINISTIC (spec §C anti-pitfall): pins are sorted by
+``dump_lock`` is DETERMINISTIC: pins are sorted by
 ``(type, key)`` and ``profiles`` lists are sorted, so shuffling the input pin
 list yields byte-identical output; there is no timestamp/host/duration field.
 ``write_lock`` lands the bytes via :func:`setforge.atomicio.atomic_write_text`
@@ -58,9 +58,9 @@ class LockFile(BaseModel):
 def lock_path(config_path: Path) -> Path:
     """Return the committed lock path for a given config file.
 
-    ``config.resolve().parent / "setforge.lock"`` — the config-repo root, per
-    spec §B1. Resolving first collapses symlinks so the lock lands beside the
-    real config, not beside a symlink to it.
+    ``config.resolve().parent / "setforge.lock"`` — the config-repo root.
+    Resolving first collapses symlinks so the lock lands beside the real
+    config, not beside a symlink to it.
     """
     return config_path.resolve().parent / LOCK_FILENAME
 
@@ -110,7 +110,7 @@ def parse_lock(text: str) -> LockFile:
 
 
 def write_lock(lockfile: LockFile, path: Path) -> None:
-    """Atomically write ``lockfile`` to ``path`` (spec §B1 atomic write).
+    """Atomically write ``lockfile`` to ``path``.
 
     Delegates to :func:`~setforge.atomicio.atomic_write_text` so a crash
     mid-write never leaves a torn lock — the same discipline the receipt store
@@ -182,7 +182,7 @@ def _parse_pin(entry: object) -> ResolvedPin:
 
 
 def _expected_kind(pkg_type: PackageType) -> IntegrityKind:
-    """The integrity kind an ecosystem's pin must carry (spec §B3).
+    """The integrity kind an ecosystem's pin must carry.
 
     go uses the sumdb ``h1:`` hash; plugin uses a git-commit ``sha``; every
     other ecosystem uses a ``sha256:`` ``checksum``.

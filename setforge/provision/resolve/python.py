@@ -3,7 +3,7 @@
 Fetches ``https://pypi.org/pypi/{name}/json`` (latest) or
 ``/{name}/{version}/json`` (pinned) and reads the concrete ``info.version`` plus
 the correct wheel's ``digests.sha256``. This is a RECORD+DRIFT pin: the actual
-install stays ``uv tool install`` (PRAGMATIC, spec §B3); the lock records the
+install stays ``uv tool install`` (PRAGMATIC); the lock records the
 hash for drift-detection.
 
 **Wheel-selection rule** (:func:`_select_wheel`). A compiled tool ships many
@@ -21,7 +21,7 @@ fails closed rather than pinning an arbitrary hash.
 
 The PyPI-fetch boundary is injected (the ``fetch_json`` callable) so unit tests
 mock it; the default fetch mirrors ``_pypi_client``'s HTTPS-only, timed-out
-urllib discipline (spec §C anti-pitfall: explicit timeout, reject downgrade).
+urllib discipline (explicit timeout, reject downgrade).
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ def _cpython_tag() -> str:
 def _is_linux_x86_64_wheel(filename: str) -> bool:
     """True when ``filename``'s platform tag targets linux x86_64."""
     lower = filename.lower()
+    # The `and "x86_64"` is load-bearing: `manylinux`/`musllinux` also tag
+    # aarch64 wheels, so the platform family alone would over-match the arch.
     return (
         "manylinux" in lower or "musllinux" in lower or "linux_x86_64" in lower
     ) and "x86_64" in lower

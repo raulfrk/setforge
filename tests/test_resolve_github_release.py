@@ -1,4 +1,4 @@
-"""Tests for the github_release resolver (spec §B3).
+"""Tests for the github_release resolver.
 
 Resolves the concrete tag (from the spec's ``tag:`` or, when ``tag == latest``,
 the GitHub releases API ``/repos/{repo}/releases/latest``) plus the asset
@@ -7,8 +7,8 @@ sha256 — computed by fetching the asset ONCE and hashing it. The pin carries
 computed hash, exactly as the install-side provisioner already does).
 
 The fetch boundary is INJECTABLE (a ``(url, *, user_agent) -> bytes`` callable)
-so these unit tests never hit github.com — the real fetch is Task-6's docker
-e2e. Fixtures use a realistic releases-API JSON and raw asset bytes.
+so these unit tests never hit github.com — the real fetch is exercised by the
+docker e2e. Fixtures use a realistic releases-API JSON and raw asset bytes.
 """
 
 from __future__ import annotations

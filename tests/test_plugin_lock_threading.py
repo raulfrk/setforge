@@ -1,4 +1,4 @@
-"""Lock → plugin reconcile threading (Task 8, spec §B3 plugin strong install).
+"""Lock → plugin reconcile threading (the plugin strong install).
 
 When a loaded ``setforge.lock`` pins a plugin, the LOCAL_CLONE marketplace cache
 ``claude`` reads the plugin from must be hard-reset to the PINNED commit sha
@@ -94,7 +94,7 @@ def test_plugin_pins_none_is_empty() -> None:
 
 
 def test_plugin_pins_imports_no_resolver() -> None:
-    # The offline invariant (spec §C) is STRUCTURAL: lock_apply must not reach a
+    # The offline invariant is STRUCTURAL: lock_apply must not reach a
     # resolver, so a locked install physically cannot re-resolve.
     import setforge.provision.lock_apply as lock_apply
 

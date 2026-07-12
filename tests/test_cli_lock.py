@@ -1,10 +1,10 @@
-"""Tests for the ``setforge lock`` subcommand (spec §B4 / Task 5).
+"""Tests for the ``setforge lock`` subcommand.
 
 The resolver boundary is the registry: each test registers STUB resolvers that
 return canned pins (or raise) via the autouse ``_isolate_registry`` fixture, so
 no test touches the network. Determinism, atomicity, and the (de)serialization
-round-trip come from :mod:`setforge.lockfile` (Task 1) and are asserted here at
-the verb level (byte-stable output, one pin per ``(type, key)``).
+round-trip come from :mod:`setforge.lockfile` and are asserted here at the verb
+level (byte-stable output, one pin per ``(type, key)``).
 """
 
 from __future__ import annotations

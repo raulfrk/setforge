@@ -1,10 +1,10 @@
-"""Tests for the shared resolver fetch helper (spec §B2 / §C anti-pitfalls).
+"""Tests for the shared resolver fetch helper.
 
 :func:`setforge.provision.resolve._fetch.fetch_bytes` centralizes the urllib
 discipline every resolver needs: HTTPS-only on the request URL, an explicit
 timeout, a redirect-downgrade re-check on the FINAL url, and a HARD wire-size
 cap. These tests mock ``urllib.request.urlopen`` with a fake response so they
-never touch the network — the real fetch is Task-6's docker e2e.
+never touch the network — the real fetch is exercised by the docker e2e.
 """
 
 from __future__ import annotations

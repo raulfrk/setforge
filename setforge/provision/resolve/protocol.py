@@ -1,4 +1,4 @@
-"""The resolver protocol surface (spec §B2).
+"""The resolver protocol surface.
 
 Mirrors :mod:`setforge.provision.protocol` (the ``Provisioner`` ABC) but for
 the read-only resolution half of the split (D6): a :class:`Resolver` queries
@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PackageType(StrEnum):
-    """The ecosystems a resolver + lock pin can cover (spec §B3).
+    """The ecosystems a resolver + lock pin can cover.
 
     These are the registry keys for the resolver registry, matching the
     ``@register("type")`` strings the provisioners already use. ``local`` and
@@ -79,7 +79,7 @@ class ResolvedPin(BaseModel):
     profiles: tuple[str, ...] = Field(default_factory=tuple)
 
     def sort_key(self) -> tuple[str, str]:
-        """The stable ``(type, key)`` ordering key (spec §B1 determinism)."""
+        """The stable ``(type, key)`` ordering key (lock determinism)."""
         return (self.type.value, self.key)
 
     def to_lock_entry(self) -> dict[str, object]:
@@ -116,6 +116,6 @@ class Resolver(Protocol):
 
         ``item`` is the declared package (a ``ProvisionItem``-shaped value);
         typed ``object`` here because the concrete per-ecosystem resolvers
-        (later tasks) narrow it themselves. Must not write to the host.
+        narrow it themselves. Must not write to the host.
         """
         ...

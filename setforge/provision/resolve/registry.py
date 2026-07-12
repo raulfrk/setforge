@@ -1,4 +1,4 @@
-"""Type-dispatch registry for resolvers (spec §B2).
+"""Type-dispatch registry for resolvers.
 
 A dedicated registry — SEPARATE from :mod:`setforge.provision.registry` — so
 resolution and provisioning stay decoupled (D6). A per-ecosystem resolver

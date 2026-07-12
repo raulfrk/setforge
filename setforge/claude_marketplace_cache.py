@@ -443,13 +443,13 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 def checkout_marketplace_at(cache_dir: Path, sha: str) -> None:
     """Hard-reset an existing marketplace cache to the PINNED commit ``sha``.
 
-    The strong-install counterpart to :func:`_refresh_marketplace_cache` (spec
-    §B3, anti-pitfall "sha-pin defeated"): a locked plugin must be installed
-    from its pinned marketplace commit, NOT ``origin/HEAD``. ``fetch`` first so
+    The strong-install counterpart to :func:`_refresh_marketplace_cache`: a
+    locked plugin must be installed from its pinned marketplace commit, NOT
+    ``origin/HEAD`` (otherwise the sha pin is defeated). ``fetch`` first so
     a pinned sha newer than the last clone is present locally, then
     ``reset --hard <sha> --`` pins the checkout to it. The trailing ``--``
     terminates the pathspec list so ``sha`` is always read as a revision, never
-    as a flag even if it began with ``-`` (arg-injection guard, spec §C);
+    as a flag even if it began with ``-`` (arg-injection guard);
     ``_run_git`` already uses literal-argv (``shell=False``) with explicit
     timeouts.
 

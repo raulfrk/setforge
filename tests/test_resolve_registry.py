@@ -1,4 +1,4 @@
-"""Tests for the resolver registry (spec §B2).
+"""Tests for the resolver registry.
 
 A ``@register(PackageType.X)`` decorator records a Resolver in a module-level
 dict SEPARATE from the provisioner registry; ``get_resolver(type)`` instantiates

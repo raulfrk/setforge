@@ -1,4 +1,4 @@
-"""Apply a parsed ``setforge.lock`` onto resolved provision items (spec §B4).
+"""Apply a parsed ``setforge.lock`` onto resolved provision items.
 
 The lock-CONSUMPTION half of B10: given the items ``resolve_provision_items``
 produced from the spec, override each one's version/integrity from the matching

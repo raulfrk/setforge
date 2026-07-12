@@ -13,21 +13,20 @@ what ``code --install-extension`` would consume. Two marketplace calls:
    concrete latest is ``versions[0].version`` (or the spec's pinned version).
 2. **Download + hash the VSIX** — a ``vspackage`` GET built with the CONCRETE
    version (NEVER the ``latest`` alias — the marketplace serves a different
-   sha256 for ``latest`` vs a concrete version, pitfall B10-latest). The
-   response may be gzip transfer-encoded; the hash is computed on the DECODED
-   VSIX bytes.
+   sha256 for ``latest`` vs a concrete version). The response may be gzip
+   transfer-encoded; the hash is computed on the DECODED VSIX bytes.
 
 The POST + GET boundary is injected (the ``fetch`` callable) so unit tests never
 touch marketplace.visualstudio.com; the default delegates the HTTPS-only +
 redirect-downgrade + timeout + wire-cap discipline to
 :func:`~setforge.provision.resolve._fetch.fetch_bytes` (extended with a POST /
-gzip-decode path). TOFU discipline (pitfall B10-tofu-unverified-hash): the hash
-is computed ONLY on bytes returned through that guarded path — a downgraded or
-redirected fetch raises before any hashing.
+gzip-decode path). TOFU discipline: the hash is computed ONLY on bytes returned
+through that guarded path — a downgraded or redirected fetch raises before any
+hashing.
 
-The extensionquery body/response shape is the cleanest plausible one built from
-the documented field names; if it drifts from the live API, Task-6's docker e2e
-(a real ``setforge lock`` for a real extension) corrects it.
+The extensionquery body/response shape is built from the documented field
+names; it is validated against the live VS Marketplace by the docker e2e
+(a real ``setforge lock`` for a real extension).
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ _LATEST = "latest"
 _FETCH_TIMEOUT_S = 30.0
 # The extensionquery JSON is small; the VSIX can be MB-scale (mirror the
 # github_release asset ceiling, big enough for any real VSIX but bounded so a
-# runaway/hostile response cannot exhaust memory — pitfall B10 wire cap).
+# runaway/hostile response cannot exhaust memory — the wire cap).
 _MAX_QUERY_BYTES = 16 * 1024 * 1024
 _MAX_VSIX_BYTES = 512 * 1024 * 1024
 # Marketplace deployments occasionally 400 a UA-less / client-id-less request;
@@ -178,8 +177,7 @@ class ExtensionResolver:
         Delegates the CONCRETE-version fetch to :func:`download_vsix` (shared with
         the strong-install path so the vspackage fetch lives in one place). The
         fetch runs through the guarded path, so a downgraded/redirected response
-        raises BEFORE any bytes are hashed (TOFU discipline, pitfall
-        B10-tofu-unverified-hash).
+        raises BEFORE any bytes are hashed (TOFU discipline).
         """
         data = download_vsix(publisher, name, version, fetch=self._fetch)
         return hashlib.sha256(data).hexdigest()
@@ -189,8 +187,8 @@ def vsix_url(publisher: str, name: str, version: str) -> str:
     """Build the ``vspackage`` download URL for a CONCRETE extension version.
 
     Never the ``latest`` alias — the marketplace serves a different sha256 for
-    ``latest`` vs a concrete version (pitfall B10-latest), so callers must pass
-    the resolved/pinned version.
+    ``latest`` vs a concrete version, so callers must pass the resolved/pinned
+    version.
     """
     return (
         f"{_GALLERY_BASE}/publishers/{publisher}/vsextensions/"
@@ -245,8 +243,8 @@ def _query_body(ext_id: str) -> bytes:
 
     A single ``filters`` page whose ``criteria`` carries the ``publisher.name``
     id under ``filterType 7``, plus the version-requesting ``flags``. This is the
-    documented gallery-query shape; Task-6's e2e confirms it against the live
-    API.
+    documented gallery-query shape, confirmed against the live API by the
+    docker e2e.
     """
     payload = {
         "filters": [
