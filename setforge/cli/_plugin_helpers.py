@@ -23,9 +23,10 @@ from typing import Any, Final
 
 import typer
 
+from setforge import claude_marketplace_cache, transitions, vscode_extensions
 from setforge import claude_plugins as claude_plugins_mod
-from setforge import transitions, vscode_extensions
 from setforge._redact import redact_argv
+from setforge.binaries import load_host_local_config
 from setforge.cli._confirm import FailureAction, prompt_failure_action
 from setforge.cli._mcp_helpers import _reverse_mcp
 from setforge.config import (
@@ -37,6 +38,7 @@ from setforge.config import (
 from setforge.errors import (
     ExtensionInstallFailed,
     ExtensionToolMissing,
+    MarketplaceCacheMiss,
     PluginToolMissing,
     ReconcileAborted,
 )
@@ -508,8 +510,15 @@ def _reconcile_plugins(
     *,
     retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
+    pins: dict[str, ResolvedPin] | None = None,
 ) -> tuple[transitions.PluginDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
     """Reconcile Claude plugins with per-item skip / retry / abort UX.
+
+    ``pins`` (from a loaded ``setforge.lock``, keyed by the case-sensitive
+    ``name@marketplace`` id) routes a pinned plugin under LOCAL_CLONE through the
+    strong-install path: its marketplace cache is hard-reset to the PINNED commit
+    before ``claude plugin install`` runs. Without pins (or for an unpinned
+    plugin / REGULAR mode) the install is today's marketplace call, unchanged.
 
     On per-plugin failure, surfaces :func:`prompt_failure_action`. SKIP
     records a :class:`~transitions.ReconcileOutcome` with
@@ -544,7 +553,7 @@ def _reconcile_plugins(
         _warn_skip_reconcile(exc)
         return None, ()
     try:
-        plugin_report = claude_plugins_mod.reconcile(cfg, resolved)
+        plugin_report = claude_plugins_mod.reconcile(cfg, resolved, pins=pins)
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
         return None, ()
@@ -584,6 +593,7 @@ def _reconcile_plugins(
             error_summary=err,
             op_kind=op_kind,
             yes=yes,
+            pins=pins or {},
             delta_so_far=delta_first,
             retried=retried_delta_pieces,
         )
@@ -659,6 +669,8 @@ def _retry_plugin_op(
     cfg: Config,
     failed_id: str,
     op_kind: str,
+    *,
+    pins: dict[str, ResolvedPin] | None = None,
 ) -> str | None:
     """Re-attempt one per-plugin op; return error string on failure, None on success.
 
@@ -667,10 +679,18 @@ def _retry_plugin_op(
     other kinds parse ``name@marketplace`` from ``failed_id``.
     ``"unknown"`` returns a placeholder error string so the outcome
     records ``"skipped"`` rather than a misleading ``"retried_ok"``.
+
+    A ``pins`` entry for ``failed_id`` keeps a retried install strong: the
+    marketplace cache is re-pinned to the locked commit (via the same
+    :func:`~setforge.claude_plugins.checkout_marketplace_at` seam the first pass
+    used) before ``plugin_install`` re-runs, so a retry can never silently
+    install from ``origin/HEAD`` past the pin. A checkout failure surfaces as
+    the retry's error string (recorded SKIPPED), not a traceback.
     """
     try:
         if op_kind == "install":
             name, mp = failed_id.split("@", 1)
+            _retry_pin_marketplace(cfg, failed_id, pins or {})
             claude_plugins_mod.plugin_install(name, mp)
         elif op_kind == "enable":
             claude_plugins_mod.plugin_enable(failed_id)
@@ -685,9 +705,37 @@ def _retry_plugin_op(
             return f"unknown op kind {op_kind!r} for retry"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         return claude_plugins_mod.stderr_of(exc)
-    except PluginToolMissing as exc:
+    except (PluginToolMissing, MarketplaceCacheMiss) as exc:
         return str(exc)
     return None
+
+
+def _retry_pin_marketplace(
+    cfg: Config, failed_id: str, pins: dict[str, ResolvedPin]
+) -> None:
+    """Re-pin ``failed_id``'s marketplace cache to its locked commit, if pinned.
+
+    A no-op unless a lock pins ``failed_id`` AND the host is in LOCAL_CLONE mode
+    — the only case where ``claude`` reads the plugin from a setforge-managed
+    cache. Reuses :func:`~setforge.claude_plugins._plugin_checkout_targets` so
+    the retry pins the SAME ``(cache_dir, sha)`` the first pass did, then hard-
+    resets via :func:`~setforge.claude_plugins.checkout_marketplace_at`. Raises
+    :class:`MarketplaceCacheMiss` on a checkout failure (caught by the caller).
+    """
+    if not pins:
+        return
+    install_mode = load_host_local_config().claude.install_mode
+    targets = claude_plugins_mod._plugin_checkout_targets(
+        cfg,
+        {failed_id},
+        pins,
+        install_mode,
+        claude_marketplace_cache.MARKETPLACE_CACHE_ROOT,
+    )
+    target = targets.get(failed_id)
+    if target is not None:
+        cache_dir, sha = target
+        claude_marketplace_cache.checkout_marketplace_at(cache_dir, sha)
 
 
 # Maps a retried op_kind from _classify_plugin_failure to the
@@ -711,14 +759,17 @@ def _handle_plugin_failure(
     error_summary: str,
     op_kind: str,
     yes: bool,
+    pins: dict[str, ResolvedPin],
     delta_so_far: transitions.PluginDelta,
     retried: _PluginRetriedPieces,
 ) -> transitions.ReconcileOutcome:
     """Surface the failure prompt for one plugin; return the outcome.
 
     On RETRY, mutates ``retried`` to record the second-attempt success
-    so the caller can fold it into the final :class:`PluginDelta`. On
-    ABORT, calls :func:`_abort_reverse_reconcile_plugins` with the
+    so the caller can fold it into the final :class:`PluginDelta`. A
+    ``pins`` entry for ``failed_id`` keeps the RETRY install strong (the
+    marketplace cache is re-pinned to the locked commit), matching the first
+    pass. On ABORT, calls :func:`_abort_reverse_reconcile_plugins` with the
     plugins/marketplaces landed so far this install, then raises
     :class:`ReconcileAborted`.
     """
@@ -735,7 +786,7 @@ def _handle_plugin_failure(
             error_summary=error_summary,
         )
     if action is FailureAction.RETRY:
-        retry_err = _retry_plugin_op(cfg, failed_id, op_kind)
+        retry_err = _retry_plugin_op(cfg, failed_id, op_kind, pins=pins)
         if retry_err is None:
             # Record the retry success in the appropriate piece so the
             # final delta reflects ground truth. ``op_kind == "unknown"``

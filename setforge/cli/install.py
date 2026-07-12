@@ -75,7 +75,7 @@ from setforge.errors import SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import profile_lock
 from setforge.provision.dispatch import has_hard_failure
-from setforge.provision.lock_apply import extension_pins
+from setforge.provision.lock_apply import extension_pins, plugin_pins
 from setforge.provision.protocol import Outcome, ReconcileResult
 from setforge.reconcile import host_local_record
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
@@ -464,7 +464,11 @@ def install(
             pins=extension_pins(active_lock),
         )
         plugin_delta, plugin_outcomes = _reconcile_plugins(
-            cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes
+            cfg,
+            resolved,
+            retry_failed_ids=retry_failed_ids,
+            yes=yes,
+            pins=plugin_pins(active_lock),
         )
         mcp_delta, mcp_failed = reconcile_mcp_servers(cfg, resolved)
 

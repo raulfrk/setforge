@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from enum import StrEnum
@@ -38,6 +39,11 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 _TIMEOUT_S = 30
 _CLONE_TIMEOUT_S = 120
 
+#: A resolved plugin marketplace pin is a 40-hex git commit (never a moving
+#: ref); :func:`checkout_marketplace_at` rejects anything else fail-closed so a
+#: branch name / ``HEAD`` can never slip past the pin.
+_SHA_RE: Final = re.compile(r"^[0-9a-f]{40}$")
+
 #: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
 #: clones into ``MARKETPLACE_CACHE_ROOT / <repo-basename>`` (the segment
 #: after the final ``/`` of ``MarketplaceSource.repo``). Tests monkeypatch
@@ -58,6 +64,7 @@ MARKETPLACE_ALIAS_SIDECAR: Final[str] = ".aliases.json"
 __all__ = [
     "MARKETPLACE_ALIAS_SIDECAR",
     "MARKETPLACE_CACHE_ROOT",
+    "checkout_marketplace_at",
     "read_cache_aliases",
     "resolve_marketplace_source",
     "sync_marketplace_cache",
@@ -431,6 +438,35 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
         raise MarketplaceCacheMiss(
             _marketplace_refresh_failure_message(source.repo, str(exc), cache_dir)
         ) from exc
+
+
+def checkout_marketplace_at(cache_dir: Path, sha: str) -> None:
+    """Hard-reset an existing marketplace cache to the PINNED commit ``sha``.
+
+    The strong-install counterpart to :func:`_refresh_marketplace_cache` (spec
+    §B3, anti-pitfall "sha-pin defeated"): a locked plugin must be installed
+    from its pinned marketplace commit, NOT ``origin/HEAD``. ``fetch`` first so
+    a pinned sha newer than the last clone is present locally, then
+    ``reset --hard <sha> --`` pins the checkout to it. The trailing ``--``
+    terminates the pathspec list so ``sha`` is always read as a revision, never
+    as a flag even if it began with ``-`` (arg-injection guard, spec §C);
+    ``_run_git`` already uses literal-argv (``shell=False``) with explicit
+    timeouts.
+
+    Preconditions: ``cache_dir`` exists and holds a git repo whose ``origin``
+    matches the marketplace (the caller — the reconcile path — has already
+    resolved/cloned it via :func:`resolve_marketplace_source`). Raises
+    :class:`MarketplaceCacheMiss` on any git failure (a bad/unknown sha, a
+    detached-head problem, network down for the fetch), so the caller surfaces a
+    clean typed error rather than a traceback and installs nothing partial.
+    """
+    if not _SHA_RE.match(sha):
+        raise MarketplaceCacheMiss(
+            f"refusing to pin marketplace cache {cache_dir} to non-SHA ref "
+            f"{sha!r}; a plugin pin must be a 40-hex git commit"
+        )
+    _run_git("fetch", "origin", cwd=cache_dir, timeout=_CLONE_TIMEOUT_S)
+    _run_git("reset", "--hard", sha, "--", cwd=cache_dir, timeout=_TIMEOUT_S)
 
 
 def _cache_origin_url(cache_dir: Path) -> str | None:

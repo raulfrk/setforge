@@ -42,6 +42,7 @@ from setforge.config import (
 from setforge.errors import ConfigError, MarketplaceCacheMiss, PluginToolMissing
 from setforge.provision import driver
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
+from setforge.provision.resolve.protocol import ResolvedPin
 
 __all__ = [
     "ReconcileReport",
@@ -585,11 +586,51 @@ def _read_only_report(
     return _build_report(to_install, to_enable, to_disable, mps_to_add, dry_run=True)
 
 
+def _plugin_checkout_targets(
+    cfg: Config,
+    declared: set[str],
+    pins: dict[str, ResolvedPin],
+    install_mode: ClaudeInstallMode,
+    cache_root: Path,
+) -> dict[str, tuple[Path, str]]:
+    """Map each LOCKED declared plugin to its ``(cache_dir, pinned_sha)``.
+
+    The strong-install seam (spec §B3): only under
+    :data:`ClaudeInstallMode.LOCAL_CLONE` does ``claude`` read a plugin from an
+    on-disk marketplace cache setforge controls, so pinning the cache to the
+    locked commit only bites there. For each declared ``name@marketplace`` that
+    has a plugin pin, resolve its marketplace's cache dir (via
+    :func:`_source_identity`, which honors the BOTH-collision alias sidecar) and
+    pair it with the pin's ``sha``. A REGULAR-mode install, or a plugin with no
+    pin, is absent from the map — :class:`PluginProvisioner` then installs it
+    unchanged. Offline: reads only the loaded config + the pins map, no network.
+
+    A pin whose marketplace is undeclared / a PATH source is skipped (a PATH
+    marketplace is not a setforge-managed cache to reset); the plugin then
+    installs unpinned rather than erroring the whole reconcile.
+    """
+    if install_mode is not ClaudeInstallMode.LOCAL_CLONE:
+        return {}
+    targets: dict[str, tuple[Path, str]] = {}
+    for pid in declared:
+        pin = pins.get(pid)
+        if pin is None:
+            continue
+        _name, _, mp_name = pid.partition("@")
+        src = cfg.marketplaces.get(mp_name)
+        if src is None or src.source is not MarketplaceSourceKind.GITHUB:
+            continue
+        cache_dir = Path(_source_identity(src, install_mode, cache_root))
+        targets[pid] = (cache_dir, pin.version)
+    return targets
+
+
 def reconcile(
     cfg: Config,
     profile: ResolvedProfile,
     *,
     dry_run: bool = False,
+    pins: dict[str, ResolvedPin] | None = None,
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
 
@@ -612,6 +653,13 @@ def reconcile(
     ``dry_run=True`` logs intended actions and returns without running any
     write subprocess. ``REPORT`` policy behaves identically to
     ``dry_run=True`` for write suppression.
+
+    ``pins`` (from a loaded ``setforge.lock``, keyed by the case-sensitive
+    ``name@marketplace`` id) drives the STRONG install (spec §B3): a pinned
+    plugin under LOCAL_CLONE gets its marketplace cache hard-reset to the pinned
+    commit before ``claude plugin install`` (see :func:`_plugin_checkout_targets`
+    + :class:`PluginProvisioner`). Without pins — or in REGULAR mode — the
+    install is byte-identical to today (cache at ``origin/HEAD``).
     """
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
@@ -663,8 +711,16 @@ def reconcile(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
     )
 
+    # Pinned-marketplace checkout targets (strong install, spec §B3): a LOCKED
+    # plugin under LOCAL_CLONE gets its marketplace cache reset to the pinned
+    # commit inside apply_one, BEFORE `claude plugin install`. Empty without a
+    # lock / in REGULAR mode, so the install stays byte-identical there.
+    checkouts = _plugin_checkout_targets(
+        cfg, declared, pins or {}, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
+    )
+
     result = driver.reconcile(
-        PluginProvisioner(),
+        PluginProvisioner(checkouts=checkouts),
         items,
         policy=ReconcilePolicy.ADDITIVE,
         report_only=False,

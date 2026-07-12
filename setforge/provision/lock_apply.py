@@ -57,6 +57,27 @@ def extension_pins(lock: LockFile | None) -> dict[str, ResolvedPin]:
     }
 
 
+def plugin_pins(lock: LockFile | None) -> dict[str, ResolvedPin]:
+    """Return the lock's plugin pins keyed by their ``name@marketplace`` id.
+
+    Plugins do NOT flow through the dispatch ``ProvisionItem`` path (they go
+    through :func:`setforge.claude_plugins.reconcile`), so
+    :func:`apply_lock_to_items` never reaches them — this is the parallel
+    consumption hook for the plugin reconcile (mirrors :func:`extension_pins`).
+
+    The key is the pin's ``key`` VERBATIM (case-SENSITIVE): a plugin id is
+    ``name@marketplace`` and both segments are case-sensitive YAML registry
+    names, matching the ``identity.key`` the reconcile builds — so no casefold
+    here, unlike extensions (VS Code ids are case-insensitive). ``None`` / no
+    plugin pins yields an empty map, and the reconcile then keeps today's
+    ``origin/HEAD`` marketplace install. Offline-safe: no resolver import, no
+    network.
+    """
+    if lock is None:
+        return {}
+    return {pin.key: pin for pin in lock.packages if pin.type is PackageType.PLUGIN}
+
+
 def apply_lock_to_items(
     items: list[ProvisionItem], lock: LockFile
 ) -> list[ProvisionItem]:

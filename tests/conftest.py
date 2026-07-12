@@ -465,6 +465,7 @@ class FakeGit:
         self,
         *,
         known_repos: set[str] | None = None,
+        unknown_shas: set[str] | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
         self.cloned: dict[Path, str] = {}
@@ -474,6 +475,12 @@ class FakeGit:
         # tests can exercise the cache-miss + offline path. An empty set
         # therefore means "every clone fails."
         self.known_repos: set[str] | None = known_repos
+        # ``reset --hard <sha> --`` targets recorded in order, so a test can
+        # assert the cache was pinned to the LOCKED sha (not ``origin/HEAD``).
+        self.reset_targets: list[str] = []
+        # Shas that a ``reset --hard`` must FAIL on (a bad/unknown pin), so
+        # tests can exercise the clean-typed-error path.
+        self.unknown_shas: set[str] | None = unknown_shas
         self._real_run: Callable[..., Any] | None = None
 
     def run(self, args, **kwargs: Any) -> subprocess.CompletedProcess:
@@ -528,6 +535,23 @@ class FakeGit:
         ):
             return subprocess.CompletedProcess(args, 0, "", "")
 
+        # git -C <dir> reset --hard <sha> --  (the pinned-plugin checkout)
+        if (
+            len(cmd) >= 6
+            and cmd[0] == "-C"
+            and cmd[2:4] == ["reset", "--hard"]
+            and cmd[5] == "--"
+        ):
+            target = cmd[4]
+            self.reset_targets.append(target)
+            if self.unknown_shas is not None and target in self.unknown_shas:
+                raise subprocess.CalledProcessError(
+                    128,
+                    args,
+                    stderr=f"fatal: could not resolve {target}",
+                )
+            return subprocess.CompletedProcess(args, 0, "", "")
+
         raise AssertionError(f"unexpected git invocation: {args!r}")
 
     @staticmethod
@@ -566,8 +590,12 @@ def fake_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., F
     namespace attributes that previously sat on ``claude_plugins``.
     """
 
-    def factory(*, known_repos: set[str] | None = None) -> FakeGit:
-        fake = FakeGit(known_repos=known_repos)
+    def factory(
+        *,
+        known_repos: set[str] | None = None,
+        unknown_shas: set[str] | None = None,
+    ) -> FakeGit:
+        fake = FakeGit(known_repos=known_repos, unknown_shas=unknown_shas)
         fake._real_run = subprocess.run
         cache_root = tmp_path / "marketplaces"
         monkeypatch.setattr(_mp_cache, "MARKETPLACE_CACHE_ROOT", cache_root)
