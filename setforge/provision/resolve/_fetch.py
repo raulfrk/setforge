@@ -17,8 +17,10 @@ exceeds it without buffering the whole (possibly huge) stream.
 
 from __future__ import annotations
 
+import gzip
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 
 from setforge.errors import ResolveError
 
@@ -31,6 +33,9 @@ def fetch_bytes(
     timeout: float,
     max_bytes: int,
     user_agent: str | None = None,
+    data: bytes | None = None,
+    headers: Mapping[str, str] | None = None,
+    decode_gzip: bool = False,
 ) -> bytes:
     """Fetch ``url`` over HTTPS with an explicit timeout + hard wire cap.
 
@@ -41,11 +46,27 @@ def fetch_bytes(
     ``user_agent`` header is added when supplied (the GitHub API rejects
     request without one). Every network/OS failure surfaces as a clean
     :class:`ResolveError`, never a raw traceback.
+
+    When ``data`` is supplied the request is a POST (urllib infers the method
+    from a non-``None`` body) carrying that body — the VS Marketplace
+    ``extensionquery`` endpoint (extension resolver) needs a POST + JSON body,
+    and duplicating the guarded urllib dance there would be a footgun, so the
+    same HTTPS-only + redirect-downgrade + timeout + wire-cap discipline covers
+    it here. ``headers`` adds request headers (e.g. ``Accept`` /
+    ``Content-Type``) on top of the ``user_agent`` convenience.
+
+    ``decode_gzip`` gunzips the response body before returning it. The VSIX
+    ``vspackage`` download arrives gzip-transfer-encoded; the TOFU hash must
+    cover the DECODED VSIX bytes (what ``code --install-extension`` consumes),
+    not the compressed wire bytes. The wire cap is enforced on the ON-THE-WIRE
+    bytes (pre-decode), so a hostile response cannot inflate past the cap.
     """
     if not url.startswith("https://"):
         raise ResolveError(f"refusing non-HTTPS URL: {url!r}")
-    headers = {"User-Agent": user_agent} if user_agent is not None else {}
-    request = urllib.request.Request(url, method="GET", headers=headers)
+    merged: dict[str, str] = dict(headers) if headers is not None else {}
+    if user_agent is not None:
+        merged["User-Agent"] = user_agent
+    request = urllib.request.Request(url, data=data, headers=merged)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             final_url = response.geturl()
@@ -58,4 +79,11 @@ def fetch_bytes(
         raise ResolveError(f"network error fetching {url}: {exc}") from exc
     if len(body) > max_bytes:
         raise ResolveError(f"response for {url} exceeds the {max_bytes}-byte wire cap")
+    if decode_gzip:
+        try:
+            body = gzip.decompress(body)
+        except (OSError, EOFError) as exc:
+            raise ResolveError(
+                f"failed to gzip-decode response for {url}: {exc}"
+            ) from exc
     return body
