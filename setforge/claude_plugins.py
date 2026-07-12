@@ -41,7 +41,6 @@ from setforge.config import (
 )
 from setforge.errors import ConfigError, MarketplaceCacheMiss, PluginToolMissing
 from setforge.provision import driver
-from setforge.provision.plugin import PluginProvisioner
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 
 __all__ = [
@@ -625,6 +624,9 @@ def reconcile(
     the driver has no marketplace or removal path — and their failures append
     to ``report.failed`` exactly as before.
     """
+    # Lazy import breaks a module-scope cycle (plugin.py imports this module).
+    from setforge.provision.plugin import PluginProvisioner
+
     declared = _declared_plugin_ids(cfg, profile)
 
     # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
@@ -655,10 +657,14 @@ def reconcile(
     ]
 
     # to_disable stays local: the driver only does additive. ADDITIVE
-    # suppresses the diff entirely ([]); PRUNE/REPORT compute
-    # enabled-not-declared. A second `list_installed()` here is acceptable
-    # (the driver has no removal path).
-    _, _, to_disable = _plugin_state_diff(declared, profile.plugins_reconcile)
+    # suppresses the diff entirely ([]) and skips the extra live-list;
+    # PRUNE/REPORT compute enabled-not-declared (the driver has no removal
+    # path). Missing-binary still raises earlier via _marketplaces_to_add.
+    to_disable = (
+        []
+        if profile.plugins_reconcile is ReconcilePolicy.ADDITIVE
+        else _plugin_state_diff(declared, profile.plugins_reconcile)[2]
+    )
 
     if report_only:
         # Plan only (no apply, no marketplace writes) so the report lists the
@@ -695,12 +701,12 @@ def reconcile(
     # to_install = absent (fresh installs); to_enable = declared-but-disabled.
     # Freshly-installed plugins are enabled INSIDE apply_one but reported under
     # to_install only, keeping to_enable the clean `declared ∩ disabled` set —
-    # exactly the pre-driver `_reconcile_install` semantics.
+    # exactly the pre-driver install-loop semantics.
     to_install = [i.display for i in result.delta.installed]
     to_enable = [i.display for i in result.delta.activated]
     # HARD apply outcomes (a real plugin_install / plugin_enable failure)
     # become `(display, detail)` failures so the CLI still gates exit —
-    # matching the pre-driver behavior where `_reconcile_install` appended to
+    # matching the pre-driver behavior where the install loop appended to
     # `failed`.
     failed += [
         (o.item.identity.display, o.detail)

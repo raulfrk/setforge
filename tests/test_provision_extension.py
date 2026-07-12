@@ -1,7 +1,8 @@
 """Tests for the extension :class:`Provisioner` (``setforge.provision.extension``).
 
 ``vscode_extensions`` is patched so no real ``code`` CLI is invoked. Covers
-the casefold-key / display-preserve probe, fail-open on a missing binary,
+the casefold-key / display-preserve probe, fail-open on a missing binary
+or a failed list command,
 the pure additive ``plan`` (no subprocess), the empty-delta second run, the
 original-casing ``apply_one``, and the HARD failure wrap.
 """

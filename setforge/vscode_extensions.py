@@ -42,7 +42,6 @@ from setforge.errors import (
     ProfileNotFound,
 )
 from setforge.provision import driver
-from setforge.provision.extension import ExtensionProvisioner
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -146,6 +145,9 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
     driver has no removal path — and its failures append to ``report.failed``
     exactly as before.
     """
+    # Lazy import breaks a module-scope cycle (extension.py imports this module).
+    from setforge.provision.extension import ExtensionProvisioner
+
     code = _ensure_code()
     # `exclude` always wins, and VSCode treats extension IDs
     # case-insensitively, so subtract on casefolded keys — otherwise a

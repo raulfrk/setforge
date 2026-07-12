@@ -1,6 +1,6 @@
 """The plugin :class:`Provisioner`: 3-state reconcile via the ``claude`` CLI.
 
-``probe`` memoizes the enabled/disabled split so ``plan`` stays pure — a
+``probe`` records the enabled/disabled split so ``plan`` stays pure — a
 disabled plugin plans as an activation, an absent one as an install.
 """
 
@@ -68,7 +68,7 @@ class PluginProvisioner(Provisioner):
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
         try:
-            name, marketplace = claude_plugins._split_id(item.identity.display)
+            name, marketplace = item.identity.display.split("@", 1)
             if item.identity not in self._disabled:
                 claude_plugins.plugin_install(name, marketplace)
             claude_plugins.plugin_enable(item.identity.display)
