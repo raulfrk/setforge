@@ -175,7 +175,7 @@ def _parse_pin(entry: object) -> ResolvedPin:
         type=pkg_type,
         key=key,
         version=version,
-        integrity=entry[field],
+        integrity=_require(entry, field),
         integrity_kind=_FIELD_KIND[field],
         profiles=tuple(profiles_raw),
     )

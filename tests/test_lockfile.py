@@ -175,6 +175,23 @@ def test_reject_multiple_integrity_fields() -> None:
         parse_lock(text)
 
 
+@pytest.mark.parametrize(
+    "integrity_literal",
+    ["12345", '["a"]'],
+    ids=["scalar-int", "array"],
+)
+def test_reject_non_string_integrity(integrity_literal: str) -> None:
+    # A hand-edited lock whose integrity value is not a string is valid TOML
+    # and passes the presence guards, but must be rejected as a malformed lock
+    # — never leak a raw pydantic ValidationError past the CLI boundary.
+    text = (
+        'version = 1\n[[package]]\ntype = "cargo"\nkey = "x"\n'
+        f'version = "1"\nchecksum = {integrity_literal}\n'
+    )
+    with pytest.raises(MalformedLockError):
+        parse_lock(text)
+
+
 def test_reject_missing_key() -> None:
     text = 'version = 1\n[[package]]\ntype = "go"\nversion = "1"\nsum = "h1:a"\n'
     with pytest.raises(MalformedLockError, match="'key'"):
