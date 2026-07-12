@@ -1474,3 +1474,15 @@ verdict = "keep"
 smoke = false
 signal = "real cargo install compiles+links (C toolchain) onto ~/.cargo/bin"
 verbs = ["infra"]
+
+[tests."tests/docker/test_e2e_docker_lock.py::test_lock_writes_concrete_pins_across_ecosystems"]
+verdict = "keep"
+smoke = false
+signal = "real lock pins cargo+github_release+extension concretely (marketplace shape validated)"
+verbs = ["lock"]
+
+[tests."tests/docker/test_e2e_docker_lock.py::test_install_locked_passes_on_match_and_fails_on_drift"]
+verdict = "keep"
+smoke = false
+signal = "install --locked passes on match, fails on a drifted checksum"
+verbs = ["install", "lock"]
