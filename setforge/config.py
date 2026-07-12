@@ -166,6 +166,28 @@ def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
     return int(value)
 
 
+def _validate_mode_policy(v: object) -> int | None:
+    """Full ``mode`` policy: type cascade + range + setuid/setgid refusal.
+
+    The single source of truth shared by :class:`TrackedFile` and
+    :class:`FileComponent` (bundle ``file`` components carry the same
+    file-mode semantics as a tracked_file). Delegates the ruamel.yaml
+    type cascade to :func:`_check_yaml_octal_mode`, then applies the
+    ``0o0..0o7777`` range bound and refuses the setuid/setgid bits
+    (``mode & 0o6000``) — the launcher-file security guard.
+    """
+    mode = _check_yaml_octal_mode(v, "mode")
+    if mode is None:
+        return None
+    if not (0o0 <= mode <= 0o7777):
+        raise ValueError(f"mode {oct(mode)} out of range 0o0..0o7777")
+    if mode & 0o6000:
+        raise ValueError(
+            f"mode {oct(mode)} sets setuid/setgid bit — refusing for security."
+        )
+    return mode
+
+
 class TrackedFile(BaseModel):
     model_config = _STRICT
 
@@ -229,19 +251,11 @@ class TrackedFile(BaseModel):
         :func:`_check_yaml_octal_mode` for the ruamel.yaml round-trip
         semantics it guards) is shared with
         :class:`setforge.source._LocalTrackedFileOverlay`; the range and
-        setuid/setgid policy below stays here because the overlay
-        enforces its own bounds in its ``model_validator``.
+        setuid/setgid policy lives in :func:`_validate_mode_policy`,
+        also reused by :class:`FileComponent`. (The overlay enforces its
+        own bounds in its ``model_validator``.)
         """
-        mode = _check_yaml_octal_mode(v, "mode")
-        if mode is None:
-            return None
-        if not (0o0 <= mode <= 0o7777):
-            raise ValueError(f"mode {oct(mode)} out of range 0o0..0o7777")
-        if mode & 0o6000:
-            raise ValueError(
-                f"mode {oct(mode)} sets setuid/setgid bit — refusing for security."
-            )
-        return mode
+        return _validate_mode_policy(v)
 
     @field_validator("src", "dst", mode="before")
     @classmethod
@@ -445,6 +459,37 @@ Package = Annotated[
 ]
 
 
+class FileComponent(BaseModel):
+    """A bundle ``file`` source: a tracked-file defined inline in a bundle.
+
+    Carries the same file-deploy fields as :class:`TrackedFile`
+    (``src``/``dst``/``mode``/``template``/``symlink``) and reuses its
+    mode policy (:func:`_validate_mode_policy`) so setuid/setgid bits and
+    out-of-range values are refused identically. Unlike a package/plugin
+    component this is NOT provisioner-backed — at deploy time it expands
+    into a synthetic tracked-file that rides the tracked-file path.
+
+    There is deliberately NO ``disposition``/``share`` field: host-local
+    (live edits survive re-install) is the reconcile engine's uniform
+    keep-live default that every tracked-file already gets, not a
+    per-file toggle.
+    """
+
+    model_config = _STRICT
+
+    src: Path
+    dst: str
+    mode: int | None = None
+    template: bool = False
+    symlink: str | None = None
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, v: object) -> int | None:
+        """Reuse :class:`TrackedFile`'s mode policy (shared function)."""
+        return _validate_mode_policy(v)
+
+
 class BundleComponent(BaseModel):
     model_config = _STRICT
 
@@ -458,7 +503,7 @@ class BundleComponent(BaseModel):
     github_release: GitHubReleasePackage | None = None
     local: LocalPackage | None = None
     plugin: str | None = None
-    file: str | None = None
+    file: FileComponent | None = None
 
     _INLINE_FIELDS: ClassVar[tuple[str, ...]] = (
         "cargo",

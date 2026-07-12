@@ -7,6 +7,7 @@ from setforge.config import (
     BundleSpec,
     CargoPackage,
     Config,
+    FileComponent,
     Profile,
     TrackedFile,
 )
@@ -88,10 +89,44 @@ def test_plugin_source_rejected() -> None:
         validate_bundle(bundle, _cfg())
 
 
-def test_file_source_rejected() -> None:
-    bundle = BundleSpec(components=[BundleComponent(id="a", file="/etc/thing")])
-    with pytest.raises(ConfigError, match="file"):
-        validate_bundle(bundle, _cfg())
+def _file_comp(id_: str, *, dst: str = "~/.local/bin/x") -> BundleComponent:
+    return BundleComponent(
+        id=id_, file=FileComponent(src=__import__("pathlib").Path("launcher"), dst=dst)
+    )
+
+
+def test_file_source_accepted() -> None:
+    """A ``file`` component is no longer rejected by ``validate_bundle``."""
+    bundle = BundleSpec(components=[_file_comp("a")])
+    validate_bundle(bundle, _cfg())
+
+
+def test_execute_bundle_skips_file_component() -> None:
+    """A file component is deploy-only: it must NOT reach the provisioner
+    driver (would AssertionError in ``_resolve_item``). Execution succeeds
+    and the file produces no provisioner outcome.
+    """
+    bundle = BundleSpec(components=[_file_comp("launcher")])
+    prov = InMemoryProvisioner()
+    result = execute_bundle(bundle, _cfg(), provisioner=prov)
+    assert result.outcomes == ()
+    assert result.delta.installed == ()
+    assert exit_code(result) == 0
+
+
+def test_execute_bundle_mixed_package_and_file() -> None:
+    """A bundle mixing a package and a file component still provisions the
+    package unchanged; the file component is skipped.
+    """
+    bundle = BundleSpec(
+        components=[
+            _comp("pkg", crate="ripgrep"),
+            _file_comp("launcher"),
+        ]
+    )
+    result = execute_bundle(bundle, _cfg(), provisioner=InMemoryProvisioner())
+    ok_keys = [o.item.identity.key for o in result.outcomes if o.outcome is Outcome.OK]
+    assert ok_keys == ["ripgrep"]
 
 
 def test_duplicate_id_rejected() -> None:

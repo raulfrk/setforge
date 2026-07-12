@@ -39,6 +39,16 @@ def _inline_model(component: BundleComponent) -> Package | None:
     )
 
 
+def _is_file_component(component: BundleComponent) -> bool:
+    """File components are deploy-only (tracked-file path), not provisioner-driven.
+
+    They must be skipped by the executor before :func:`_resolve_item`, which
+    would otherwise hit an ``AssertionError`` (a :class:`FileComponent` has no
+    provisioner-backed identity).
+    """
+    return component.file is not None
+
+
 def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
     if component.package is not None:
         pkg = cfg.packages[component.package]
@@ -49,8 +59,11 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
             version=getattr(pkg, "version", None),
             checksum=getattr(pkg, "checksum", None),
         )
+    # File components are skipped by the executor before reaching here; a
+    # plugin source is rejected in validate_bundle. So _inline_model only
+    # ever returns a provisioner-backed Package on this path.
     model = _inline_model(component)
-    if model is None:  # pragma: no cover - plugin/file rejected in validate_bundle
+    if model is None:  # pragma: no cover - plugin rejected in validate_bundle
         raise AssertionError(
             f"bundle component {component.id!r} has no provisioner-backed source"
         )
@@ -83,10 +96,9 @@ def validate_bundle(bundle: BundleSpec, cfg: Config) -> None:
                 f"bundle component {component.id!r} references unknown "
                 f"package {component.package!r}"
             )
-        if component.plugin is not None or component.file is not None:
-            source = "plugin" if component.plugin is not None else "file"
+        if component.plugin is not None:
             raise ConfigError(
-                f"bundle component {component.id!r} uses a {source!r} source, "
+                f"bundle component {component.id!r} uses a 'plugin' source, "
                 f"which is not yet supported for bundle components"
             )
 
@@ -158,6 +170,12 @@ def execute_bundle(
     applied_keys: set[str] = set()
 
     for component in topo_order(bundle):
+        if _is_file_component(component):
+            # Deploy-only: handled by the tracked-file path, never the
+            # provisioner driver. Treat as satisfied so package/plugin
+            # dependents downstream still proceed.
+            satisfied.add(component.id)
+            continue
         blocked = any(dep not in satisfied for dep in component.depends_on)
         item = _resolve_item(component, cfg)
         if blocked:
@@ -195,6 +213,8 @@ def _report_bundle(bundle: BundleSpec, cfg: Config) -> ReconcileResult:
     installed: list[Identity] = []
     seen: set[str] = set()
     for component in topo_order(bundle):
+        if _is_file_component(component):
+            continue
         identity = _resolve_item(component, cfg).identity
         if identity.key in seen:
             continue
