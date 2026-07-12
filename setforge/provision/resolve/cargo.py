@@ -16,8 +16,6 @@ redirect-downgrade-rejecting, explicitly-timed-out urllib discipline.
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import ClassVar
 
@@ -25,6 +23,7 @@ from packaging.version import InvalidVersion, Version
 
 from setforge.config import CargoPackage
 from setforge.errors import ResolveError
+from setforge.provision.resolve._fetch import fetch_bytes
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
@@ -63,26 +62,15 @@ def _index_path(name: str) -> str:
 
 
 def _default_fetch(url: str) -> str:
-    """Fetch ``url`` over HTTPS with an explicit timeout, rejecting downgrades.
+    """Fetch the crates.io sparse-index body over HTTPS, decoded to text.
 
-    Mirrors :meth:`GitHubReleaseProvisioner._download` (github_release.py
-    ~:122-135): refuses a non-HTTPS URL up front AND re-checks the final URL so a
-    silent https->http redirect cannot smuggle the fetch onto plaintext.
+    Delegates the HTTPS-only + redirect-downgrade + timeout + wire-cap dance to
+    the shared :func:`~setforge.provision.resolve._fetch.fetch_bytes`; only the
+    UTF-8 decode of the returned bytes is cargo-specific.
     """
-    if not url.startswith("https://"):
-        raise ResolveError(f"refusing non-HTTPS crates.io index URL: {url!r}")
-    request = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT_S) as response:
-            final_url = response.geturl()
-            if not final_url.startswith("https://"):
-                raise ResolveError(f"refusing non-HTTPS redirect target: {final_url!r}")
-            body = response.read(_MAX_INDEX_BYTES + 1)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ResolveError(f"network error fetching {url}: {exc}") from exc
-    if len(body) > _MAX_INDEX_BYTES:
-        raise ResolveError(f"crates.io index for {url} exceeds the wire cap")
-    return body.decode("utf-8")
+    return fetch_bytes(
+        url, timeout=_FETCH_TIMEOUT_S, max_bytes=_MAX_INDEX_BYTES
+    ).decode("utf-8")
 
 
 @register(PackageType.CARGO)

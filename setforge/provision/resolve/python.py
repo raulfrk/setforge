@@ -28,13 +28,12 @@ from __future__ import annotations
 
 import json
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import Any, ClassVar
 
 from setforge.config import PythonPackage
 from setforge.errors import ResolveError
+from setforge.provision.resolve._fetch import fetch_bytes
 from setforge.provision.resolve.protocol import (
     IntegrityKind,
     PackageType,
@@ -48,6 +47,10 @@ _PYPI_BASE = "https://pypi.org/pypi"
 # ``_pypi_client`` uses a (connect, read) tuple; urllib takes one scalar, so we
 # reuse its max() convention as a single timeout here.
 _FETCH_TIMEOUT_S = 10.0
+# PyPI's per-project JSON is metadata (not the artifact), so a few MiB is a
+# generous ceiling — a project with a pathological release history stays well
+# under it, while a runaway/hostile body is still capped.
+_MAX_JSON_BYTES = 32 * 1024 * 1024  # 32 MiB
 
 # A fetch_json takes (name, version|None) and returns the parsed PyPI JSON body.
 FetchJson = Callable[[str, "str | None"], "dict[str, Any]"]
@@ -110,26 +113,17 @@ def _sha256_of(entry: dict[str, Any]) -> str | None:
 def _default_fetch_json(name: str, version: str | None) -> dict[str, Any]:
     """Fetch the PyPI JSON body for ``name`` (optionally pinned to ``version``).
 
-    HTTPS-only with a redirect-downgrade re-check and an explicit timeout,
-    mirroring ``_pypi_client``/``github_release`` discipline.
+    The HTTPS-only + redirect-downgrade + timeout + wire-cap fetch is delegated
+    to the shared :func:`~setforge.provision.resolve._fetch.fetch_bytes` (which
+    supplies the wire cap this fetcher previously lacked); only the JSON
+    decode/shape check on top is PyPI-specific.
     """
     url = (
         f"{_PYPI_BASE}/{name}/json"
         if version is None
         else f"{_PYPI_BASE}/{name}/{version}/json"
     )
-    if not url.startswith("https://"):  # pragma: no cover - constant base
-        raise ResolveError(f"refusing non-HTTPS PyPI URL: {url!r}")
-    request = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT_S) as response:
-            if not response.geturl().startswith("https://"):
-                raise ResolveError(
-                    f"refusing non-HTTPS redirect target: {response.geturl()!r}"
-                )
-            body = response.read()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ResolveError(f"network error fetching {url}: {exc}") from exc
+    body = fetch_bytes(url, timeout=_FETCH_TIMEOUT_S, max_bytes=_MAX_JSON_BYTES)
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
