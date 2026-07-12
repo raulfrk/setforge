@@ -46,6 +46,7 @@ from setforge.cli._install_helpers import (
     _want_interactive_reconcile,
     _write_install_transition,
 )
+from setforge.cli._lock_enumerate import enumerate_lock_items
 from setforge.cli._mcp_helpers import reconcile_mcp_servers
 from setforge.cli._plugin_helpers import (
     _emit_reconcile_summary,
@@ -61,7 +62,6 @@ from setforge.cli._welcome import (
     prompt_welcome,
     reject_auto_on_fresh_host,
 )
-from setforge.cli.lock import enumerate_lock_items
 from setforge.config import (
     Config,
     ResolvedProfile,
@@ -139,7 +139,8 @@ def _gate_on_lock_coverage(
     """Fail-closed (spec §B4) unless every LOCKABLE package has a lock entry.
 
     ``--locked`` is a spec→lock COVERAGE check, NOT a re-resolve: the lockable
-    surface is exactly :func:`~setforge.cli.lock.enumerate_lock_items` (top-level
+    surface is exactly
+    :func:`~setforge.cli._lock_enumerate.enumerate_lock_items` (top-level
     packages + plugins + extensions), so ``cargo_binaries`` and bundle-inline
     packages — which B10 deliberately never locks — are OUT of scope and never
     false-fail. Every lockable item whose ``(type, key)`` is absent from the lock
