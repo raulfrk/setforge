@@ -21,8 +21,10 @@ from setforge.config import (
     ReconcilePolicy,
     ResolvedProfile,
 )
+from setforge.lockfile import LockFile
 from setforge.provision.bundle import execute_bundle
 from setforge.provision.driver import reconcile
+from setforge.provision.lock_apply import apply_lock_to_items
 from setforge.provision.protocol import (
     Identity,
     Outcome,
@@ -90,11 +92,17 @@ def run_provisioning(
     resolved: ResolvedProfile,
     *,
     report_only: bool = False,
+    lock: LockFile | None = None,
 ) -> list[ReconcileResult]:
     results: list[ReconcileResult] = []
     for name in resolved.bundles:
         results.append(execute_bundle(cfg.bundles[name], cfg, report_only=report_only))
     items = resolve_provision_items(cfg, resolved)
+    # Lock consumption (spec §B4): when a committed lock is present, override
+    # each item's version/integrity from its pin BEFORE reconcile — offline, no
+    # resolver call. A None lock (no file, or the report-only path) is a no-op.
+    if lock is not None:
+        items = apply_lock_to_items(items, lock)
     items.sort(key=lambda it: it.type)
     for _type, group_iter in groupby(items, key=lambda it: it.type):
         group = list(group_iter)

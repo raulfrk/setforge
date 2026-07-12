@@ -415,7 +415,10 @@ def test_install_hard_failure_gates_exit_one(
     from setforge.provision.driver import reconcile
 
     def _fake_reconcile_packages(
-        cfg: Config, resolved: ResolvedProfile
+        cfg: Config,
+        resolved: ResolvedProfile,
+        *,
+        lock: object = None,
     ) -> list[ReconcileResult]:
         items = [
             ProvisionItem(

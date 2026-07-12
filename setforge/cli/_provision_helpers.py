@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from setforge.config import Config, ResolvedProfile
+from setforge.lockfile import LockFile
 from setforge.provision.dispatch import run_provisioning
 from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResult
 
@@ -12,8 +13,10 @@ from setforge.provision.protocol import Outcome, ProvisionOutcome, ReconcileResu
 def reconcile_packages(
     cfg: Config,
     resolved: ResolvedProfile,
+    *,
+    lock: LockFile | None = None,
 ) -> list[ReconcileResult]:
-    results = run_provisioning(cfg, resolved)
+    results = run_provisioning(cfg, resolved, lock=lock)
     for result in results:
         for outcome in result.outcomes:
             _echo_outcome(outcome)
