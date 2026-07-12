@@ -122,3 +122,17 @@ def test_expansion_only_inactive_bundle_not_expanded() -> None:
     expand_bundle_file_components(cfg, resolved)
     assert "revdiff.launcher" not in resolved.tracked_files
     assert "revdiff.launcher" not in cfg.tracked_files
+
+
+def test_expansion_is_idempotent() -> None:
+    """A second call must NOT duplicate the synthetic id in the resolved list.
+
+    Task 3 will call the expansion from validate/compare too, so the same
+    ``(config, resolved)`` pair can see it twice. ``_iter_all_tracked_files``
+    has no dedup — a duplicated id would deploy + snapshot the file twice.
+    """
+    cfg = _cfg_with_bundle(BundleSpec(components=[_file_comp("launcher")]))
+    resolved = resolve_profile(cfg, _PROFILE)
+    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved)
+    assert resolved.tracked_files.count("revdiff.launcher") == 1

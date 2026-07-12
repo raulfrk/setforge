@@ -752,8 +752,10 @@ def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> 
     ``config`` is freshly loaded per invocation), mirroring the local-overlay
     plugin/extension injectors (:func:`_apply_plugin_mutations`). Called AFTER
     :func:`resolve_profile` and BEFORE the install revert snapshot so the
-    synthetic entry is revertable. Idempotent per (bundle, component): the
-    synthetic key is unique.
+    synthetic entry is revertable. Idempotent: a repeated call overwrites the
+    same ``config.tracked_files`` entry and skips a duplicate append to
+    ``resolved.tracked_files``, so calling it twice on the same ``(config,
+    resolved)`` pair leaves both unchanged after the first.
 
     Bundles declared in ``config.bundles`` but NOT active in ``resolved.bundles``
     are skipped — an inactive bundle's file components never deploy.
@@ -774,7 +776,13 @@ def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> 
                 template=fc.template,
                 symlink=fc.symlink,
             )
-            resolved.tracked_files.append(synthetic_id)
+            # Guard the append (the dict assignment above is a safe overwrite):
+            # a second call — e.g. once Task 3 wires expansion into
+            # validate/compare on the same resolved profile — must not push a
+            # duplicate id into the list, which `_iter_all_tracked_files` would
+            # deploy + snapshot twice.
+            if synthetic_id not in resolved.tracked_files:
+                resolved.tracked_files.append(synthetic_id)
 
 
 def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
