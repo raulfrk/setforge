@@ -75,6 +75,7 @@ from setforge.errors import SetforgeError
 from setforge.lockfile import LockFile, lock_path, parse_lock
 from setforge.locking import profile_lock
 from setforge.provision.dispatch import has_hard_failure
+from setforge.provision.lock_apply import extension_pins
 from setforge.provision.protocol import Outcome, ReconcileResult
 from setforge.reconcile import host_local_record
 from setforge.secrets import SecretAction, SecretFinding, SecretsScanResult
@@ -457,7 +458,10 @@ def install(
             _collect_retry_failed_ids(profile) if retry_failed else frozenset()
         )
         ext_delta, ext_outcomes = _reconcile_extensions(
-            resolved, retry_failed_ids=retry_failed_ids, yes=yes
+            resolved,
+            retry_failed_ids=retry_failed_ids,
+            yes=yes,
+            pins=extension_pins(active_lock),
         )
         plugin_delta, plugin_outcomes = _reconcile_plugins(
             cfg, resolved, retry_failed_ids=retry_failed_ids, yes=yes

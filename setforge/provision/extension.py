@@ -20,6 +20,7 @@ from setforge.provision.protocol import (
     ProvisionOutcome,
 )
 from setforge.provision.registry import register
+from setforge.provision.resolve.protocol import ResolvedPin
 
 __all__ = ["ExtensionProvisioner"]
 
@@ -27,6 +28,18 @@ __all__ = ["ExtensionProvisioner"]
 @register("extension")
 class ExtensionProvisioner(Provisioner):
     type = "extension"
+
+    def __init__(self, *, pins: dict[str, ResolvedPin] | None = None) -> None:
+        """Optionally carry lock pins keyed by casefolded ``publisher.name``.
+
+        A pin for the item under reconcile routes :meth:`apply_one` through the
+        BYTE-STRONG install path (download + verify the locked VSIX). The
+        registry's :func:`~setforge.provision.registry.build` constructs this
+        with no args, so ``pins`` defaults to empty — dispatch-built extension
+        provisioners (which are never on the lock path today) keep today's
+        marketplace-id install.
+        """
+        self._pins: dict[str, ResolvedPin] = pins or {}
 
     def probe(self) -> set[Identity]:
         try:
@@ -46,8 +59,9 @@ class ExtensionProvisioner(Provisioner):
         )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
+        pin = self._pins.get(item.identity.key)
         try:
-            vscode_extensions.install_one(item.identity.display)
+            vscode_extensions.install_one(item.identity.display, pin=pin)
         except (
             ExtensionInstallFailed,
             subprocess.CalledProcessError,

@@ -34,6 +34,8 @@ from setforge.provision.resolve.extension import (
     _QUERY_URL,
     ExtensionResolveItem,
     ExtensionResolver,
+    download_vsix,
+    vsix_url,
 )
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 
@@ -127,6 +129,19 @@ def _fetcher(
 
 def _item(key: str = "esbenp.prettier-vscode", version: str | None = None):
     return ExtensionResolveItem(key=key, version=version)
+
+
+def test_download_vsix_builds_concrete_url_and_decodes_gzip() -> None:
+    """The shared helper the resolver + strong-installer both call."""
+    url = _vspackage_url("esbenp", "prettier-vscode", "10.4.0")
+    record: list[tuple[str, bytes | None]] = []
+    fetch = _fetcher({url: _VSIX}, record=record, gzip_urls=frozenset({url}))
+    data = download_vsix("esbenp", "prettier-vscode", "10.4.0", fetch=fetch)
+    # decoded bytes returned (helper requested decode_gzip) over the concrete URL
+    assert data == _VSIX
+    assert [u for u, _ in record] == [url]
+    assert vsix_url("esbenp", "prettier-vscode", "10.4.0") == url
+    assert "latest" not in url
 
 
 def test_resolve_picks_latest_version_and_hashes_vsix() -> None:

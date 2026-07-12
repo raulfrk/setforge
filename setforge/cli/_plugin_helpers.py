@@ -40,6 +40,7 @@ from setforge.errors import (
     PluginToolMissing,
     ReconcileAborted,
 )
+from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.transitions import ReconcileKind, ReconcileStatus
 
 
@@ -130,6 +131,7 @@ def _walk_extension_failures(
     outcomes: list[transitions.ReconcileOutcome],
     final_added: list[str],
     final_removed: list[str],
+    pins: dict[str, ResolvedPin] | None = None,
 ) -> None:
     """Walk ``report.failed`` and surface the per-item failure prompt.
 
@@ -153,6 +155,7 @@ def _walk_extension_failures(
             yes=yes,
             successful_added=tuple(final_added),
             successful_removed=tuple(final_removed),
+            pin=(pins or {}).get(ext_id.casefold()),
         )
         outcomes.append(outcome)
         if retry_ok:
@@ -167,6 +170,7 @@ def _reconcile_extensions(
     *,
     retry_failed_ids: frozenset[str] = frozenset(),
     yes: bool = False,
+    pins: dict[str, ResolvedPin] | None = None,
 ) -> tuple[transitions.ExtensionDelta | None, tuple[transitions.ReconcileOutcome, ...]]:
     """Reconcile VSCode extensions with per-item skip / retry / abort UX.
 
@@ -192,9 +196,15 @@ def _reconcile_extensions(
     the set is non-empty. Today's full-pass behavior is restored when
     the set is empty (the default). ``yes=True`` short-circuits the
     prompt to its default :attr:`FailureAction.SKIP`.
+
+    ``pins`` (from a loaded ``setforge.lock``, keyed by casefolded
+    ``publisher.name``) routes any pinned extension through the BYTE-STRONG
+    install path — both the first pass and a RETRY. Without pins (or for an
+    unpinned extension) the install is the marketplace-id call, unchanged.
     """
+    pins = pins or {}
     try:
-        report = vscode_extensions.reconcile(resolved.extensions)
+        report = vscode_extensions.reconcile(resolved.extensions, pins=pins)
     except ExtensionToolMissing as exc:
         typer.secho(
             f"warning: skipping extension reconcile — {exc}",
@@ -223,6 +233,7 @@ def _reconcile_extensions(
         outcomes=outcomes,
         final_added=final_added,
         final_removed=final_removed,
+        pins=pins,
     )
 
     if not report:
@@ -234,16 +245,20 @@ def _reconcile_extensions(
     return delta, tuple(outcomes)
 
 
-def _retry_extension_op(ext_id: str, *, is_install: bool) -> str | None:
+def _retry_extension_op(
+    ext_id: str, *, is_install: bool, pin: ResolvedPin | None = None
+) -> str | None:
     """Re-attempt one per-extension op; return error string on failure, None on success.
 
     Mirrors :func:`_retry_plugin_op`'s signature shape so the RETRY
     branch in :func:`_handle_extension_failure` has the same
-    ``retry_err is None`` predicate as :func:`_handle_plugin_failure`.
+    ``retry_err is None`` predicate as :func:`_handle_plugin_failure`. A
+    ``pin`` keeps the RETRY install BYTE-STRONG (download + verify the locked
+    VSIX), matching the first pass.
     """
     try:
         if is_install:
-            vscode_extensions.install_one(ext_id)
+            vscode_extensions.install_one(ext_id, pin=pin)
         else:
             vscode_extensions.uninstall_one(ext_id)
     except (ExtensionInstallFailed, ExtensionToolMissing) as exc:
@@ -259,6 +274,7 @@ def _handle_extension_failure(
     yes: bool,
     successful_added: tuple[str, ...],
     successful_removed: tuple[str, ...],
+    pin: ResolvedPin | None = None,
 ) -> tuple[transitions.ReconcileOutcome, bool]:
     """Surface the failure prompt for one extension; return (outcome, retry_ok).
 
@@ -289,7 +305,7 @@ def _handle_extension_failure(
             False,
         )
     if action is FailureAction.RETRY:
-        retry_err = _retry_extension_op(ext_id, is_install=is_install)
+        retry_err = _retry_extension_op(ext_id, is_install=is_install, pin=pin)
         if retry_err is not None:
             typer.secho(
                 f"FAILED  retry {ext_id} — {retry_err}",

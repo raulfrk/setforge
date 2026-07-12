@@ -71,8 +71,30 @@ def test_apply_one_installs_with_original_casing() -> None:
     prov = ExtensionProvisioner()
     with patch(_INSTALL) as ins:
         out = prov.apply_one(_item("GitHub.copilot"))
-    ins.assert_called_once_with("GitHub.copilot")
+    # No lock pins -> pin=None keeps the marketplace-id install unchanged.
+    ins.assert_called_once_with("GitHub.copilot", pin=None)
     assert out.outcome is Outcome.OK
+
+
+def test_apply_one_passes_matched_pin_to_install() -> None:
+    """A pin (keyed by casefolded id) reaches install_one for the strong path."""
+    from setforge.provision.resolve.protocol import (
+        IntegrityKind,
+        PackageType,
+        ResolvedPin,
+    )
+
+    pin = ResolvedPin(
+        type=PackageType.EXTENSION,
+        key="github.copilot",
+        version="1.2.3",
+        integrity="sha256:" + "a" * 64,
+        integrity_kind=IntegrityKind.CHECKSUM,
+    )
+    prov = ExtensionProvisioner(pins={"github.copilot": pin})
+    with patch(_INSTALL) as ins:
+        prov.apply_one(_item("GitHub.copilot"))
+    ins.assert_called_once_with("GitHub.copilot", pin=pin)
 
 
 def test_apply_one_failure_is_hard() -> None:

@@ -48,7 +48,7 @@ from setforge.provision.resolve.protocol import (
 )
 from setforge.provision.resolve.registry import register
 
-__all__ = ["ExtensionResolveItem", "ExtensionResolver"]
+__all__ = ["ExtensionResolveItem", "ExtensionResolver", "download_vsix", "vsix_url"]
 
 _GALLERY_BASE = "https://marketplace.visualstudio.com/_apis/public/gallery"
 _QUERY_URL = f"{_GALLERY_BASE}/extensionquery"
@@ -175,18 +175,54 @@ class ExtensionResolver:
     def _hash_vsix(self, publisher: str, name: str, version: str) -> str:
         """Fetch the VSIX ONCE (gzip-decoded) and return its sha256 hex digest.
 
-        The URL is built with the CONCRETE ``version`` (never ``latest``). The
+        Delegates the CONCRETE-version fetch to :func:`download_vsix` (shared with
+        the strong-install path so the vspackage fetch lives in one place). The
         fetch runs through the guarded path, so a downgraded/redirected response
         raises BEFORE any bytes are hashed (TOFU discipline, pitfall
-        B10-tofu-unverified-hash). ``decode_gzip`` ensures the hash covers the
-        VSIX bytes ``code --install-extension`` consumes, not the wire bytes.
+        B10-tofu-unverified-hash).
         """
-        url = (
-            f"{_GALLERY_BASE}/publishers/{publisher}/vsextensions/"
-            f"{name}/{version}/vspackage"
-        )
-        data = self._fetch(url, user_agent=_USER_AGENT, decode_gzip=True)
+        data = download_vsix(publisher, name, version, fetch=self._fetch)
         return hashlib.sha256(data).hexdigest()
+
+
+def vsix_url(publisher: str, name: str, version: str) -> str:
+    """Build the ``vspackage`` download URL for a CONCRETE extension version.
+
+    Never the ``latest`` alias — the marketplace serves a different sha256 for
+    ``latest`` vs a concrete version (pitfall B10-latest), so callers must pass
+    the resolved/pinned version.
+    """
+    return (
+        f"{_GALLERY_BASE}/publishers/{publisher}/vsextensions/"
+        f"{name}/{version}/vspackage"
+    )
+
+
+def download_vsix(
+    publisher: str,
+    name: str,
+    version: str,
+    *,
+    fetch: Fetch | None = None,
+) -> bytes:
+    """Download the gzip-decoded VSIX bytes for a CONCRETE extension version.
+
+    The single vspackage fetch shared by the resolver (which hashes the bytes
+    for TOFU) and the strong install path (which verifies them against the
+    locked hash before handing the file to ``code``). ``decode_gzip=True``
+    yields the VSIX bytes ``code --install-extension`` consumes — the same
+    bytes the resolver hashed — not the compressed wire bytes, so the install
+    hash matches the locked hash. The fetch runs through the guarded
+    :func:`~setforge.provision.resolve._fetch.fetch_bytes` (HTTPS-only,
+    redirect-downgrade re-check, timeout, wire cap); ``fetch`` is injectable so
+    unit tests never touch the marketplace.
+    """
+    do_fetch = fetch if fetch is not None else _default_fetch
+    return do_fetch(
+        vsix_url(publisher, name, version),
+        user_agent=_USER_AGENT,
+        decode_gzip=True,
+    )
 
 
 def _split_ext_id(ext_id: str) -> tuple[str, str]:

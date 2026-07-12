@@ -33,7 +33,28 @@ import dataclasses
 from setforge.config import GitHubReleasePackage
 from setforge.lockfile import LockFile
 from setforge.provision.protocol import ProvisionItem
-from setforge.provision.resolve.protocol import ResolvedPin
+from setforge.provision.resolve.protocol import PackageType, ResolvedPin
+
+
+def extension_pins(lock: LockFile | None) -> dict[str, ResolvedPin]:
+    """Return the lock's extension pins keyed by casefolded ``publisher.name``.
+
+    Extensions do NOT flow through the dispatch ``ProvisionItem`` path (they go
+    through :func:`setforge.vscode_extensions.reconcile`), so
+    :func:`apply_lock_to_items` never reaches them. This is the parallel
+    consumption hook for the extension reconcile: the key is casefolded to match
+    the reconcile's identity keys (VS Code treats extension ids
+    case-insensitively). ``None`` / no extension pins yields an empty map, and
+    the reconcile then keeps today's marketplace-id install. Offline-safe: no
+    resolver import, no network.
+    """
+    if lock is None:
+        return {}
+    return {
+        pin.key.casefold(): pin
+        for pin in lock.packages
+        if pin.type is PackageType.EXTENSION
+    }
 
 
 def apply_lock_to_items(
