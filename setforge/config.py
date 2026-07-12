@@ -157,10 +157,10 @@ def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
     ``isinstance(True, int)`` is True, so without an explicit check
     ``mode: true`` would silently mean ``0o1``.
 
-    Range and setuid/setgid policy are NOT enforced here — each
-    consumer applies its own bounds with its own message
-    (:func:`TrackedFile._validate_mode` inline; the overlay in its
-    ``model_validator``).
+    Range and setuid/setgid policy are NOT enforced here — the shared
+    :func:`_validate_mode_policy` (used by both :class:`TrackedFile` and
+    :class:`FileComponent`) applies those bounds; the overlay enforces its
+    own in its ``model_validator``.
     """
     if value is None:
         return None
@@ -1048,12 +1048,13 @@ def expand_bundle_file_components(
 def resolve_and_expand(config: Config, name: str, repo_root: Path) -> ResolvedProfile:
     """Resolve ``name``'s profile then expand its bundle ``file`` components.
 
-    The one-call shape every deploy-facing caller (``install``, ``validate``,
-    ``compare``) needs, so none can forget the expansion + gates that make
-    bundle file components visible and safe. Migrations and other callers that
-    need the PURE resolution result keep calling :func:`resolve_profile`
-    directly — expansion mutates ``config`` and is only wanted where the
-    synthetic tracked-files must appear.
+    The one-call shape used by ``install``, ``validate``, and ``compare``, so
+    those callers cannot forget the expansion + gates that make bundle file
+    components visible and safe. Not exhaustive: ``sync`` and ``revert`` (and
+    the orphan-status ``cli/compare.py`` path) intentionally keep calling
+    :func:`resolve_profile` directly — expansion mutates ``config`` and is only
+    wanted where the synthetic tracked-files must appear. Wiring those into the
+    expanded path is deferred follow-up.
     """
     resolved = resolve_profile(config, name)
     expand_bundle_file_components(config, resolved, repo_root)

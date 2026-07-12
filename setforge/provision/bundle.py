@@ -43,8 +43,8 @@ def _is_file_component(component: BundleComponent) -> bool:
     """File components are deploy-only (tracked-file path), not provisioner-driven.
 
     They must be skipped by the executor before :func:`_resolve_item`, which
-    would otherwise hit an ``AssertionError`` (a :class:`FileComponent` has no
-    provisioner-backed identity).
+    would otherwise crash (a :class:`FileComponent` has no provisioner-backed
+    identity/type).
     """
     return component.file is not None
 
