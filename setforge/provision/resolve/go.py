@@ -16,6 +16,7 @@ positional (arg-injection guard, spec §C) and an explicit timeout.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -66,8 +67,6 @@ def _default_runner(argv: list[str], *, cwd: str, timeout: float) -> _CompletedR
     :class:`ResolveError` with the captured stderr, not a raised
     ``CalledProcessError``.
     """
-    import os
-
     env = {**os.environ, "GOFLAGS": "-mod=mod"}
     completed = subprocess.run(
         argv,

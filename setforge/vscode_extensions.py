@@ -48,6 +48,7 @@ from setforge.errors import (
     ProfileNotFound,
 )
 from setforge.provision import driver
+from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.resolve.protocol import ResolvedPin
 
@@ -319,8 +320,14 @@ def _verify_vsix_hash(ext_id: str, data: bytes, pin: ResolvedPin) -> None:
             f"install of {ext_id!r} failed: unsupported lock integrity "
             f"{pin.integrity!r}; expected 'sha256:<hex>'"
         )
+    expected_hex = expected_hex.strip().lower()
+    if len(expected_hex) != _SHA256_HEX_LEN or not _is_hex(expected_hex):
+        raise ExtensionInstallFailed(
+            f"install of {ext_id!r} failed: malformed lock integrity "
+            f"{pin.integrity!r}; expected 'sha256:' + {_SHA256_HEX_LEN} hex chars"
+        )
     actual_hex = hashlib.sha256(data).hexdigest()
-    if not hmac.compare_digest(actual_hex, expected_hex.strip().lower()):
+    if not hmac.compare_digest(actual_hex, expected_hex):
         raise ExtensionInstallFailed(
             f"install of {ext_id!r} failed: VSIX checksum mismatch — the "
             f"downloaded {pin.version} bytes do not match the locked hash "

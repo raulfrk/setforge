@@ -130,6 +130,26 @@ def test_pinned_install_hash_mismatch_fails_and_does_not_install(
     assert fake_code.install_args == []
 
 
+def test_pinned_install_rejects_non_sha256_integrity(
+    fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A lock integrity that is not sha256: fails closed BEFORE hashing —
+    # `code --install-extension` never runs.
+    _patch_download(monkeypatch, _VSIX)
+    non_sha256 = ResolvedPin(
+        type=PackageType.EXTENSION,
+        key="esbenp.prettier-vscode",
+        version="1.2.3",
+        integrity=f"sha512:{_VSIX_SHA}",
+        integrity_kind=IntegrityKind.CHECKSUM,
+    )
+
+    with pytest.raises(ExtensionInstallFailed, match="unsupported lock integrity"):
+        install_one("esbenp.prettier-vscode", pin=non_sha256)
+
+    assert fake_code.install_args == []
+
+
 def test_pinned_install_cleans_up_temp_on_verify_failure(
     fake_code: _FakeCode, monkeypatch: pytest.MonkeyPatch
 ) -> None:

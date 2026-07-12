@@ -78,7 +78,7 @@ def marketplace_git_url(source: MarketplaceSource) -> str:
     :class:`ResolveError` for a GITHUB source missing its ``repo`` field.
     """
     if source.source is MarketplaceSourceKind.PATH:
-        return str(source.path or "")
+        return str(source.path)
     if not source.repo:
         raise ResolveError(
             "GITHUB marketplace source missing 'repo' field; cannot resolve "

@@ -87,7 +87,7 @@ def _select_wheel(urls: list[dict[str, Any]]) -> str | None:
         if not isinstance(filename, str) or digest is None:
             continue
         lower = filename.lower()
-        if "py3-none-any" in lower or "none-any" in lower:
+        if "none-any" in lower:
             pure = pure or digest
             continue
         # First matching compiled wheel wins; any linux/cpython (or abi3) match

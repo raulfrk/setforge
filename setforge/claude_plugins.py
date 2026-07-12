@@ -621,7 +621,7 @@ def _plugin_checkout_targets(
         if src is None or src.source is not MarketplaceSourceKind.GITHUB:
             continue
         cache_dir = Path(_source_identity(src, install_mode, cache_root))
-        targets[pid] = (cache_dir, pin.version)
+        targets[pid] = (cache_dir, pin.integrity)
     return targets
 
 

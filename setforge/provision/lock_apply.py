@@ -7,10 +7,11 @@ spec's (possibly floating) one. Matched by ``(type, key)`` — the pin ``key`` a
 the item ``identity.key`` are the same ecosystem-natural id (cargo→crate,
 python→package, go→module, github_release→repo).
 
-OFFLINE-SAFE (spec §C, the load-bearing invariant): applying a lock touches NO
-resolver and NO network. This module imports neither the resolver registry nor
-any ``resolve/*`` module — a locked install just copies the locked scalars onto
-the items. The per-ecosystem field mapping:
+OFFLINE-SAFE (the load-bearing invariant): applying a lock touches NO resolver
+and NO network. This module imports neither the resolver registry nor any
+resolver implementation — only ``resolve.protocol`` for its pure types — so a
+locked install just copies the locked scalars onto the items. The per-ecosystem
+field mapping:
 
 * python / go — the provisioner reads ``item.version``; the locked version lands
   there. The checksum is recorded on ``item.checksum`` for drift visibility; the
