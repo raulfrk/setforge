@@ -729,7 +729,256 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     return resolved
 
 
-def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> None:
+_BAD_ID_SUBSTRINGS: tuple[str, ...] = ("/", "..")
+
+
+def _reject_bad_id(kind: str, value: str) -> None:
+    """Reject an id that would let the synthetic ``<bundle>.<component>`` file-id
+    escape :func:`setforge.base_store._resolve_target`'s traversal guard.
+
+    A ``/`` or ``..`` component, or a leading dot, in either half of the
+    synthetic key turns it into a path traversal (``../x`` writes a base
+    outside ``base/<profile>/``; a leading dot yields a hidden id). ``.``
+    is a legal SEPARATOR between the two halves, so this only screens the
+    two id halves individually — never the joined key.
+    """
+    if value.startswith(".") or any(bad in value for bad in _BAD_ID_SUBSTRINGS):
+        raise ConfigError(
+            f"bundle {kind} id {value!r} is unsafe for a file component: "
+            "must not contain '/' or '..' or start with '.' — the synthetic "
+            "tracked-file id <bundle>.<component> must survive the base-store "
+            "traversal guard."
+        )
+
+
+def _resolve_confined_dst(dst: str, *, template: bool) -> Path:
+    """Render (if templated), expand ``~``, and ``.resolve()`` a dst path.
+
+    ``.resolve()`` collapses ``..`` AND intermediate symlinks, so the caller's
+    ``$HOME`` prefix test catches a ``~/../etc`` escape and a symlinked-parent
+    escape that a raw string ``startswith`` would miss.
+    """
+    from setforge.paths import template_context  # deferred: avoid import cost
+
+    raw = dst
+    if template:
+        from jinja2 import Template
+
+        raw = Template(raw).render(**template_context())
+    return Path(raw).expanduser().resolve()
+
+
+def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
+    """Build the synthetic :class:`TrackedFile` a ``file`` component expands to.
+
+    Single source of truth shared by :func:`validate_bundle_file_components`
+    (byte-identity check for its idempotent re-entry detection) and
+    :func:`expand_bundle_file_components` (the actual injection), so the two can
+    never drift.
+    """
+    return TrackedFile(
+        src=fc.src,
+        dst=fc.dst,
+        mode=fc.mode,
+        template=fc.template,
+        symlink=fc.symlink,
+    )
+
+
+def _own_prior_injections(config: Config, resolved: ResolvedProfile) -> set[str]:
+    """Synthetic ids already injected into ``config.tracked_files`` by a prior
+    :func:`expand_bundle_file_components` on this same ``config``.
+
+    An id qualifies iff a tracked_file stored under the synthetic key is
+    BYTE-IDENTICAL to the synthetic body we would mint. Expansion mutates
+    ``config.tracked_files`` in place, so a second call — install runs it once,
+    then ``compare_profile`` runs it again on the same ``config`` — sees its own
+    injections; those must be treated as idempotent no-op re-entries, NOT as a
+    user-declared collision. A key that exists but DIFFERS is a genuine collision
+    (a user pre-declared the same id with other content).
+    """
+    return {
+        synth_id
+        for bundle_id in resolved.bundles
+        if (bundle := config.bundles.get(bundle_id)) is not None
+        for component in bundle.components
+        if component.file is not None
+        if (synth_id := f"{bundle_id}.{component.id}")
+        and config.tracked_files.get(synth_id)
+        == _synthetic_tracked_file(component.file)
+    }
+
+
+def _seed_real_dst_owners(
+    config: Config, resolved: ResolvedProfile, own_injections: set[str]
+) -> dict[Path, str]:
+    """Map each REAL tracked-file's resolved dst to its id (skipping our own
+    prior synthetic injections), seeding the gate-3 dst-collision check.
+
+    A real tracked-file with a MALFORMED Jinja dst template is skipped here, not
+    raised: an unrenderable ``dst`` is the dedicated ``_check_jinja_templates``
+    validate check's concern, and raising its ``TemplateError`` from this gate
+    (which runs earlier, inside ``resolve_and_expand``) would crash validate
+    instead of letting it report the template error cleanly. It cannot mask a
+    real collision — a template that will not render deploys nothing.
+    """
+    from jinja2 import TemplateError
+
+    dst_owner: dict[Path, str] = {}
+    for name in resolved.tracked_files:
+        if name in own_injections:
+            continue
+        real = config.tracked_files.get(name)
+        if real is None:
+            continue
+        try:
+            resolved_dst = _resolve_confined_dst(real.dst, template=real.template)
+        except TemplateError:
+            continue
+        dst_owner.setdefault(resolved_dst, name)
+    return dst_owner
+
+
+def _gate_component_paths(
+    synthetic_id: str,
+    fc: "FileComponent",
+    tracked_root: Path,
+    home: Path,
+    dst_owner: dict[Path, str],
+) -> Path:
+    """Run the path gates (dst-confinement, dst-collision, src-under-tracked/)
+    for one file component and return its resolved dst.
+
+    - **dst-confinement** (gate 4): the resolved dst must live under ``$HOME``.
+    - **dst-collision** (gate 3): the resolved dst must not already own a target
+      in ``dst_owner`` (real plus synthetic seen so far).
+    - **src-under-tracked** (gate 5): the resolved src must live under
+      ``tracked_root`` so the gitleaks pre-deploy sweep covers it.
+
+    A bundle-file dst whose Jinja template will not render is a hard
+    :class:`ConfigError` (an unconfinable dst can't be safety-checked), surfaced
+    as a clean validate failure rather than an uncaught ``TemplateError``.
+    """
+    from jinja2 import TemplateError
+
+    try:
+        resolved_dst = _resolve_confined_dst(fc.dst, template=fc.template)
+    except TemplateError as exc:
+        raise ConfigError(
+            f"bundle file component {synthetic_id!r} dst {fc.dst!r} is not a "
+            f"renderable Jinja2 template: {exc}"
+        ) from exc
+    if resolved_dst != home and home not in resolved_dst.parents:
+        raise ConfigError(
+            f"bundle file component {synthetic_id!r} dst {fc.dst!r} resolves to "
+            f"{resolved_dst} — outside $HOME ({home}); refusing (dst must stay "
+            "under the home directory)."
+        )
+
+    prior = dst_owner.get(resolved_dst)
+    if prior is not None:
+        raise ConfigError(
+            f"bundle file component {synthetic_id!r} and {prior!r} both target "
+            f"{resolved_dst} — duplicate deploy dst; last-writer would silently "
+            "clobber. Give them distinct dst paths."
+        )
+
+    resolved_src = (tracked_root / fc.src).resolve()
+    if resolved_src != tracked_root and tracked_root not in resolved_src.parents:
+        raise ConfigError(
+            f"bundle file component {synthetic_id!r} src {fc.src} resolves to "
+            f"{resolved_src} — outside {tracked_root}; a src outside tracked/ "
+            "bypasses the gitleaks secrets sweep."
+        )
+    return resolved_dst
+
+
+def validate_bundle_file_components(
+    config: Config, resolved: ResolvedProfile, repo_root: Path
+) -> None:
+    """Run the security-critical gates for every active bundle ``file`` component.
+
+    Raises :class:`ConfigError` (a :class:`~setforge.errors.SetforgeError`, so
+    the CLI maps it to a non-zero exit) on the FIRST violation. Runs BEFORE any
+    synthetic tracked-file is minted, so it fires identically on the ``install``
+    and ``validate``/``compare`` paths, ahead of any write. Five gates:
+
+    1. **id charset** — bundle-id / component-id may not contain ``/``, ``..``,
+       or a leading dot (:func:`_reject_bad_id`).
+    2. **name-collision** — the synthetic ``<bundle>.<component>`` key must not
+       collide with a real ``config.tracked_files`` key or another bundle's
+       synthetic key. This MUST precede the clobbering overwrite in
+       :func:`expand_bundle_file_components` so a real body is never silently
+       replaced.
+    3. **dst-collision** — no two resolved dst targets (real ``tracked_files``
+       plus all synthetics) may coincide (last-writer-wins clobber otherwise).
+    4. **dst-confinement** — every dst must ``.resolve()`` under ``$HOME``.
+    5. **src-under-tracked** — every ``src`` must resolve under ``repo_root/
+       tracked/`` so the gitleaks pre-deploy sweep (which only scans that root)
+       covers it.
+
+    ``repo_root`` is the config-repo root (``config.resolve().parent``); its
+    ``tracked/`` subtree anchors gate 5.
+    """
+    tracked_root = (repo_root / "tracked").resolve()
+    home = Path.home().resolve()
+
+    own_injections = _own_prior_injections(config, resolved)
+    # dst union — seed with the tracked_files that are NOT our own re-injection
+    # (see _own_prior_injections), so a synthetic dst colliding with a REAL one is
+    # caught without a synthetic colliding with its own prior injection.
+    dst_owner = _seed_real_dst_owners(config, resolved, own_injections)
+    # Real tracked-file ids the synthetic key must not clash with (again minus
+    # our own re-injections).
+    real_ids = set(config.tracked_files) - own_injections
+    seen_synthetic: set[str] = set()
+
+    for bundle_id in resolved.bundles:
+        bundle = config.bundles.get(bundle_id)
+        if bundle is None:
+            continue
+        for component in bundle.components:
+            fc = component.file
+            if fc is None:
+                continue
+            # Gate 1: id charset (both halves of the synthetic key).
+            _reject_bad_id("bundle", bundle_id)
+            _reject_bad_id("component", component.id)
+            synthetic_id = f"{bundle_id}.{component.id}"
+
+            if synthetic_id in own_injections:
+                # Idempotent re-entry: this exact synthetic was already injected
+                # by a prior call. Skip every collision check for it (its dst was
+                # excluded from `dst_owner` above too).
+                seen_synthetic.add(synthetic_id)
+                continue
+
+            # Gate 2: name-collision — the synthetic key must not equal a real
+            # user-declared tracked-file id, nor another bundle's synthetic key.
+            colliding = None
+            if synthetic_id in real_ids:
+                colliding = "an existing tracked-file id"
+            elif synthetic_id in seen_synthetic:
+                colliding = "another bundle file component's synthetic id"
+            if colliding is not None:
+                raise ConfigError(
+                    f"bundle file component {bundle_id}.{component.id!r} mints "
+                    f"synthetic tracked-file id {synthetic_id!r}, which collides "
+                    f"with {colliding} {synthetic_id!r} — rename the component "
+                    "or the colliding entry."
+                )
+            seen_synthetic.add(synthetic_id)
+
+            # Gates 3/4/5: dst-confinement, dst-collision, src-under-tracked/.
+            resolved_dst = _gate_component_paths(
+                synthetic_id, fc, tracked_root, home, dst_owner
+            )
+            dst_owner[resolved_dst] = synthetic_id
+
+
+def expand_bundle_file_components(
+    config: Config, resolved: ResolvedProfile, repo_root: Path
+) -> None:
     """Expand each active bundle's ``file`` components into synthetic tracked-files.
 
     A bundle ``file`` component is NOT provisioner-backed — it deploys like a
@@ -748,6 +997,10 @@ def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> 
     snapshot for free — no new deploy code, no new provisioner. The ``mode``
     threads through so a launcher stays executable.
 
+    Runs :func:`validate_bundle_file_components` FIRST — the name-collision gate
+    there MUST precede the ``config.tracked_files[synthetic_id] = ...`` overwrite
+    below, or a real body would be silently clobbered before the check.
+
     Mutates ``config`` and ``resolved`` in place (both are per-command values —
     ``config`` is freshly loaded per invocation), mirroring the local-overlay
     plugin/extension injectors (:func:`_apply_plugin_mutations`). Called AFTER
@@ -760,6 +1013,7 @@ def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> 
     Bundles declared in ``config.bundles`` but NOT active in ``resolved.bundles``
     are skipped — an inactive bundle's file components never deploy.
     """
+    validate_bundle_file_components(config, resolved, repo_root)
     for bundle_id in resolved.bundles:
         bundle = config.bundles.get(bundle_id)
         if bundle is None:
@@ -769,20 +1023,28 @@ def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> 
             if fc is None:
                 continue
             synthetic_id = f"{bundle_id}.{component.id}"
-            config.tracked_files[synthetic_id] = TrackedFile(
-                src=fc.src,
-                dst=fc.dst,
-                mode=fc.mode,
-                template=fc.template,
-                symlink=fc.symlink,
-            )
+            config.tracked_files[synthetic_id] = _synthetic_tracked_file(fc)
             # Guard the append (the dict assignment above is a safe overwrite):
-            # a second call — e.g. once Task 3 wires expansion into
-            # validate/compare on the same resolved profile — must not push a
-            # duplicate id into the list, which `_iter_all_tracked_files` would
-            # deploy + snapshot twice.
+            # a second call — e.g. once validate/compare wire expansion into
+            # the same resolved profile — must not push a duplicate id into the
+            # list, which `_iter_all_tracked_files` would deploy + snapshot twice.
             if synthetic_id not in resolved.tracked_files:
                 resolved.tracked_files.append(synthetic_id)
+
+
+def resolve_and_expand(config: Config, name: str, repo_root: Path) -> ResolvedProfile:
+    """Resolve ``name``'s profile then expand its bundle ``file`` components.
+
+    The one-call shape every deploy-facing caller (``install``, ``validate``,
+    ``compare``) needs, so none can forget the expansion + gates that make
+    bundle file components visible and safe. Migrations and other callers that
+    need the PURE resolution result keep calling :func:`resolve_profile`
+    directly — expansion mutates ``config`` and is only wanted where the
+    synthetic tracked-files must appear.
+    """
+    resolved = resolve_profile(config, name)
+    expand_bundle_file_components(config, resolved, repo_root)
+    return resolved
 
 
 def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:

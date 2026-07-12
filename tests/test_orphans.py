@@ -23,7 +23,7 @@ from setforge import transitions
 from setforge.cli import app
 from setforge.cli import orphans as orphans_mod
 from setforge.compare import OrphanEntry, detect_orphans, load_ignored_orphans
-from setforge.config import Config, Profile, TrackedFile
+from setforge.config import Config, Profile, TrackedFile, resolve_profile
 from setforge.errors import OrphanCleanupRequiresInteractive
 
 _ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
@@ -311,7 +311,7 @@ def test_detect_orphans_retains_dangling_symlink_drops_absent(tmp_path: Path) ->
 
 def resolve_profile_wrap(config: Config, name: str) -> Any:
     """Wrap ``resolve_profile`` so the helper above stays single-line."""
-    return compare_mod.resolve_profile(config, name)
+    return resolve_profile(config, name)
 
 
 # ---------------------------------------------------------------------------

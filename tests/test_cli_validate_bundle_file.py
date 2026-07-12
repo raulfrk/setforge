@@ -1,0 +1,147 @@
+"""``setforge validate`` sees bundle ``file`` components and enforces their gates.
+
+Task 3, Part A wires ``expand_bundle_file_components`` into the validate path,
+so a bundle launcher's synthetic tracked-file is visible to validate (its src /
+Jinja dst are linted) AND Part B's security gates run there — a name/dst
+collision or an out-of-``$HOME`` dst makes ``validate`` exit non-zero, ahead of
+any deploy. These drive the real CLI so the reachability is proven end-to-end.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from click.testing import Result
+from typer.testing import CliRunner
+
+from setforge.cli import app
+
+_PROFILE = "vbf"
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    # Keep validate from reading a real local.yaml.
+    monkeypatch.setattr(
+        "setforge.cli.validate._LOCAL_CONFIG_PATH", tmp_path / "local.yaml"
+    )
+
+
+def _repo_with_launcher(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    (repo / "tracked" / "launch.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    return repo
+
+
+def _write(repo: Path, body: str) -> Path:
+    cfg = repo / "setforge.yaml"
+    cfg.write_text(body, encoding="utf-8")
+    return cfg
+
+
+def _validate(cfg: Path) -> Result:
+    return CliRunner().invoke(
+        app, ["validate", f"--profile={_PROFILE}", f"--config={cfg}"]
+    )
+
+
+def _good_bundle_block(dst: str = "~/.claude/plugins/data/rd/launch.sh") -> str:
+    return (
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        f"          dst: {dst}\n"
+        "          mode: 0o755\n"
+    )
+
+
+def _profile_block() -> str:
+    return f"profiles:\n  {_PROFILE}:\n    bundles:\n      - revdiff\n"
+
+
+def test_validate_passes_valid_file_component(tmp_path: Path) -> None:
+    repo = _repo_with_launcher(tmp_path)
+    cfg = _write(
+        repo,
+        "version: 1\ntracked_files: {}\n" + _good_bundle_block() + _profile_block(),
+    )
+    result = _validate(cfg)
+    assert result.exit_code == 0, result.output
+
+
+def test_validate_rejects_name_collision(tmp_path: Path) -> None:
+    repo = _repo_with_launcher(tmp_path)
+    # A real tracked_file id equal to the synthetic key `revdiff.launcher`.
+    cfg = _write(
+        repo,
+        "version: 1\n"
+        "tracked_files:\n"
+        "  revdiff.launcher:\n"
+        "    src: launch.sh\n"
+        "    dst: ~/other\n"
+        + _good_bundle_block()
+        + f"profiles:\n  {_PROFILE}:\n    tracked_files:\n      - revdiff.launcher\n"
+        "    bundles:\n      - revdiff\n",
+    )
+    result = _validate(cfg)
+    assert result.exit_code != 0, result.output
+    assert "revdiff.launcher" in result.output
+
+
+def test_validate_rejects_dst_collision(tmp_path: Path) -> None:
+    repo = _repo_with_launcher(tmp_path)
+    cfg = _write(
+        repo,
+        "version: 1\ntracked_files: {}\n"
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: one\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/.claude/dup\n"
+        "      - id: two\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/.claude/dup\n" + _profile_block(),
+    )
+    result = _validate(cfg)
+    assert result.exit_code != 0, result.output
+
+
+def test_validate_rejects_out_of_home_dst(tmp_path: Path) -> None:
+    repo = _repo_with_launcher(tmp_path)
+    cfg = _write(
+        repo,
+        "version: 1\ntracked_files: {}\n"
+        + _good_bundle_block(dst="~/../etc/evil")
+        + _profile_block(),
+    )
+    result = _validate(cfg)
+    assert result.exit_code != 0, result.output
+
+
+def test_validate_sees_synthetic_entry_and_lints_missing_src(tmp_path: Path) -> None:
+    """Proof validate now SEES the synthetic entry: a file-component src that
+    does not exist under tracked/ is caught by validate's tracked-src check
+    (which only runs over resolved tracked_files) — impossible unless the
+    synthetic entry was injected into the resolved profile."""
+    repo = tmp_path / "repo"
+    (repo / "tracked").mkdir(parents=True)
+    # NOTE: launch.sh intentionally NOT created.
+    cfg = _write(
+        repo,
+        "version: 1\ntracked_files: {}\n" + _good_bundle_block() + _profile_block(),
+    )
+    result = _validate(cfg)
+    assert result.exit_code != 0, result.output
+    # The missing-src failure names the synthetic tracked_file id.
+    assert "revdiff.launcher" in result.output

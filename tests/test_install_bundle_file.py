@@ -133,3 +133,62 @@ def test_no_bundle_file_profile_unchanged(repo: Path) -> None:
     assert live.read_text(encoding="utf-8") == "hello\n"
     # The synthetic launcher must NOT appear.
     assert not _launcher_live().exists()
+
+
+def test_install_refuses_out_of_home_dst(repo: Path) -> None:
+    """The security gates run on the install path too: an out-of-$HOME dst
+    refuses to deploy (non-zero exit), nothing is written."""
+    _write_launcher(repo)
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/../etc/evil\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    bundles:\n"
+        "      - revdiff\n",
+        encoding="utf-8",
+    )
+    result = _install(config)
+    assert result.exit_code != 0, result.output
+
+
+def test_install_refuses_name_collision(repo: Path) -> None:
+    """A synthetic key colliding with a real tracked-file id refuses to deploy,
+    so the real body is never silently clobbered."""
+    _write_launcher(repo)
+    (repo / "tracked" / "real.md").write_text("real body\n", encoding="utf-8")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  revdiff.launcher:\n"
+        "    src: real.md\n"
+        "    dst: ~/.local/share/rd/real.md\n"
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/.local/share/rd/launch.sh\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - revdiff.launcher\n"
+        "    bundles:\n"
+        "      - revdiff\n",
+        encoding="utf-8",
+    )
+    result = _install(config)
+    assert result.exit_code != 0, result.output
+    # The real body must be untouched — install refused before any deploy.
+    live_real = Path.home() / ".local" / "share" / "rd" / "real.md"
+    assert not live_real.exists()

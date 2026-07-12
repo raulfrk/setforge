@@ -40,7 +40,7 @@ from setforge.config import (
     Config,
     ResolvedProfile,
     TrackedFile,
-    resolve_profile,
+    resolve_and_expand,
 )
 from setforge.errors import BaseStoreError
 from setforge.paths import template_context
@@ -544,7 +544,11 @@ def compare_profile(
     :class:`ResolvedProfile` parameter so the overlay's mutations
     survive.
     """
-    resolved = resolve_profile(config, profile_name)
+    # resolve_and_expand injects each active bundle's `file` components as
+    # synthetic tracked-files (and runs their security gates), so compare sees
+    # a bundle launcher's drift like any tracked-file rather than being blind
+    # to it.
+    resolved = resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
     overlay = host_local_sections or {}

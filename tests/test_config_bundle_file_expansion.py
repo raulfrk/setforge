@@ -48,14 +48,14 @@ def _file_comp(id_: str, **fc_kw: object) -> BundleComponent:
 def test_expansion_adds_synthetic_id_to_resolved() -> None:
     cfg = _cfg_with_bundle(BundleSpec(components=[_file_comp("launcher")]))
     resolved = resolve_profile(cfg, _PROFILE)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     assert "revdiff.launcher" in resolved.tracked_files
 
 
 def test_expansion_registers_body_in_config() -> None:
     cfg = _cfg_with_bundle(BundleSpec(components=[_file_comp("launcher", mode=0o755)]))
     resolved = resolve_profile(cfg, _PROFILE)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     tf = cfg.tracked_files["revdiff.launcher"]
     assert isinstance(tf, TrackedFile)
     assert tf.src == Path("launch.sh")
@@ -72,7 +72,7 @@ def test_expansion_threads_all_fields() -> None:
         )
     )
     resolved = resolve_profile(cfg, _PROFILE)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     tf = cfg.tracked_files["revdiff.launcher"]
     assert tf.mode == 0o755
     assert tf.template is True
@@ -91,7 +91,7 @@ def test_expansion_skips_non_file_components() -> None:
     )
     resolved = resolve_profile(cfg, _PROFILE)
     before = list(resolved.tracked_files)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     assert resolved.tracked_files == before
     assert "revdiff.bin" not in cfg.tracked_files
 
@@ -105,7 +105,7 @@ def test_expansion_no_bundles_is_noop() -> None:
     resolved = resolve_profile(cfg, _PROFILE)
     before = list(resolved.tracked_files)
     before_cfg = dict(cfg.tracked_files)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     assert resolved.tracked_files == before
     assert cfg.tracked_files == before_cfg
 
@@ -119,7 +119,7 @@ def test_expansion_only_inactive_bundle_not_expanded() -> None:
         profiles={_PROFILE: Profile(tracked_files=["real"])},
     )
     resolved = resolve_profile(cfg, _PROFILE)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     assert "revdiff.launcher" not in resolved.tracked_files
     assert "revdiff.launcher" not in cfg.tracked_files
 
@@ -133,6 +133,6 @@ def test_expansion_is_idempotent() -> None:
     """
     cfg = _cfg_with_bundle(BundleSpec(components=[_file_comp("launcher")]))
     resolved = resolve_profile(cfg, _PROFILE)
-    expand_bundle_file_components(cfg, resolved)
-    expand_bundle_file_components(cfg, resolved)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
     assert resolved.tracked_files.count("revdiff.launcher") == 1

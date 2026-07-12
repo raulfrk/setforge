@@ -31,6 +31,7 @@ from setforge.config import (
     ClaudePluginRef,
     Config,
     Extensions,
+    FileComponent,
     GitHubReleasePackage,
     GoPackage,
     LocalPackage,
@@ -63,6 +64,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     LocalPackage,
     BundleComponent,
     BundleSpec,
+    FileComponent,
 )
 
 
@@ -212,10 +214,17 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "github_release": "setforge.config.GitHubReleasePackage | None",
         "local": "setforge.config.LocalPackage | None",
         "plugin": "str | None",
-        "file": "str | None",
+        "file": "setforge.config.FileComponent | None",
     },
     "BundleSpec": {
         "components": "list[setforge.config.BundleComponent]",
+    },
+    "FileComponent": {
+        "src": "<class 'pathlib.Path'>",
+        "dst": "<class 'str'>",
+        "mode": "int | None",
+        "template": "<class 'bool'>",
+        "symlink": "str | None",
     },
 }
 

@@ -64,10 +64,9 @@ from setforge.cli._welcome import (
 from setforge.config import (
     apply_host_local_tracked_file_overrides,
     apply_local_overlay,
-    expand_bundle_file_components,
     load_config,
     refuse_unmigrated_host_local_leak,
-    resolve_profile,
+    resolve_and_expand,
 )
 from setforge.errors import SetforgeError
 from setforge.locking import profile_lock
@@ -221,13 +220,14 @@ def install(
     # Refuse before mutation: unmigrated host-local content could leak.
     refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
     repo_root = config.resolve().parent
-    resolved = resolve_profile(cfg, profile)
-    # Expand bundle `file` components into synthetic tracked-files BEFORE the
-    # revert snapshot (and before every downstream tracked-file walk), so a
-    # bundle launcher deploys via the existing tracked-file path and is
-    # revertable — the synthetic entry must be in `_iter_all_tracked_files`
-    # ahead of install's `file_pre = snapshot_paths(dst_paths)` capture.
-    expand_bundle_file_components(cfg, resolved)
+    # Resolve, then expand bundle `file` components into synthetic tracked-files
+    # BEFORE the revert snapshot (and before every downstream tracked-file walk),
+    # so a bundle launcher deploys via the existing tracked-file path and is
+    # revertable — the synthetic entry must be in `_iter_all_tracked_files` ahead
+    # of install's `file_pre = snapshot_paths(dst_paths)` capture. The helper
+    # also runs the security gates (name/dst collision, dst-confinement,
+    # id-charset, src-under-tracked/) before any synthetic body is minted.
+    resolved = resolve_and_expand(cfg, profile, repo_root)
     # Both overlays below must apply AFTER profile resolution.
     apply_host_local_tracked_file_overrides(cfg)
     # STAGE B: sections live in the reconcile store now, threaded read-only.
