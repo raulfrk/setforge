@@ -64,6 +64,18 @@ smoke = false
 signal = "install/revert/redo transition ordering"
 verbs = ["install", "revert"]
 
+[tests."tests/docker/test_e2e_docker_bundle_file.py::test_bundle_file_e2e_deploys_executable"]
+verdict = "keep"
+smoke = false
+signal = "bundle file component deploys at dst with +x mode"
+verbs = ["install"]
+
+[tests."tests/docker/test_e2e_docker_bundle_file.py::test_bundle_file_e2e_hand_edit_survives_reinstall"]
+verdict = "keep"
+smoke = false
+signal = "bundle file synthetic tracked-file rides keep-live reconcile default"
+verbs = ["install"]
+
 [tests."tests/docker/test_e2e_docker_auditfix_ext_e2e.py::test_ext_add_no_install_skips_code_invocation"]
 verdict = "keep"
 smoke = false
