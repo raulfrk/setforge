@@ -79,13 +79,13 @@ def test_checksum_pin_serializes_under_checksum_column() -> None:
 
 def test_sum_pin_serializes_under_sum_column() -> None:
     text = dump_lock(LockFile(packages=(_sum_pin(),)))
-    assert "sum = " in text
+    assert "\nsum = " in text
     assert "checksum = " not in text
 
 
 def test_sha_pin_serializes_under_sha_column() -> None:
     text = dump_lock(LockFile(packages=(_sha_pin(),)))
-    assert "sha = " in text
+    assert "\nsha = " in text
     assert "checksum = " not in text
 
 

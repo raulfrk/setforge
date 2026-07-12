@@ -6,6 +6,8 @@ by ``PackageType``. Registering a new resolver must touch ONLY the new resolver
 file, never the registry module.
 """
 
+from typing import ClassVar
+
 import pytest
 
 from setforge.errors import (
@@ -24,7 +26,7 @@ from setforge.provision.resolve.protocol import (
 class _DummyResolver:
     """Minimal Resolver-shaped class for exercising the registry."""
 
-    type = PackageType.CARGO
+    type: ClassVar[PackageType] = PackageType.CARGO
 
     def resolve(self, item: object) -> ResolvedPin:
         return ResolvedPin(

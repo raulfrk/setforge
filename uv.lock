@@ -1339,6 +1339,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "rich" },
     { name = "ruamel-yaml" },
+    { name = "tomli-w" },
     { name = "typer" },
 ]
 
@@ -1382,6 +1383,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7" },
+    { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["dev"]

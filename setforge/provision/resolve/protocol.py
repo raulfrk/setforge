@@ -16,7 +16,7 @@ and the TOML column name is derived from ``kind`` (:data:`_KIND_FIELD`):
 """
 
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -109,7 +109,7 @@ class Resolver(Protocol):
     touching the install path.
     """
 
-    type: PackageType
+    type: ClassVar[PackageType]
 
     def resolve(self, item: object) -> ResolvedPin:
         """Query upstream and return the resolved pin for ``item``.
