@@ -1,8 +1,4 @@
-"""The plugin :class:`Provisioner`: 3-state reconcile via the ``claude`` CLI.
-
-``probe`` records the enabled/disabled split so ``plan`` stays pure — a
-disabled plugin plans as an activation, an absent one as an install.
-"""
+"""The plugin :class:`Provisioner`: 3-state reconcile via ``claude``."""
 
 from __future__ import annotations
 

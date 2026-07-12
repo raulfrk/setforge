@@ -136,16 +136,7 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
       return a non-empty report.
 
     ``dry_run=True`` logs intended actions without invoking subprocess.
-
-    The ADDITIVE install path is routed through
-    :func:`setforge.provision.driver.reconcile` +
-    :class:`~setforge.provision.extension.ExtensionProvisioner` (the single
-    reconcile choke point that owns the REPORT-no-write gate and the
-    ``any(HARD)`` exit-gating). The PRUNE uninstall loop stays local — the
-    driver has no removal path — and its failures append to ``report.failed``
-    exactly as before.
     """
-    # Lazy import breaks a module-scope cycle (extension.py imports this module).
     from setforge.provision.extension import ExtensionProvisioner
 
     code = _ensure_code()
@@ -156,12 +147,6 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
     exclude_keys = {e.casefold() for e in ext.exclude}
     effective = {i for i in ext.include if i.casefold() not in exclude_keys}
 
-    # Route the additive install through the driver. The provisioner probes
-    # (`code --list-extensions`), plans the casefolded diff (a declared
-    # `github.copilot` matches an installed `GitHub.copilot`, so it is not
-    # re-installed), and — unless report-only — applies each planned install,
-    # containing any per-item failure as one HARD outcome. The plan delta is
-    # what installs / would install; `.display` preserves the declared casing.
     items = [
         ProvisionItem(type="extension", identity=Identity(key=e.casefold(), display=e))
         for e in effective
@@ -174,19 +159,12 @@ def reconcile(ext: Extensions, *, dry_run: bool = False) -> ReconcileReport:
         report_only=report_only,
     )
     to_install = sorted(i.display for i in result.delta.installed)
-    # Translate each HARD apply outcome into a `(display, detail)` failure so
-    # a failed `code --install-extension` still lands in `report.failed` and
-    # the CLI gates exit — matching the pre-driver behavior exactly.
     failed: list[tuple[str, str]] = [
         (o.item.identity.display, o.detail)
         for o in result.outcomes
         if o.outcome is Outcome.HARD
     ]
 
-    # `to_uninstall` and the PRUNE loop stay local: the driver only does
-    # additive, so the config policy governs whether we ALSO prune. A second
-    # `list_installed()` under PRUNE is acceptable (the driver has no removal
-    # path to reuse).
     if ext.reconcile is ReconcilePolicy.ADDITIVE:
         to_uninstall: list[str] = []
     else:
