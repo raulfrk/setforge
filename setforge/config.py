@@ -65,6 +65,26 @@ Cross-major refusal is handled by :func:`_guard_schema_version`.
 _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"})
 
 
+def _reject_control_chars_in_path(v: object) -> object:
+    """Reject a path value containing C0 control characters or DEL.
+
+    The single source of truth for the ``src``/``dst`` control-char field
+    validators on :class:`TrackedFile`, :class:`CustomExtension`, and
+    :class:`FileComponent`. Tab and newline corrupt unified-diff field
+    separators; DEL and other C0 controls are similarly hostile to most
+    tooling. Cleaner to fail at config load than to silently emit malformed
+    transitions or ``patch``-rejected diffs.
+    """
+    s = str(v)
+    bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
+    if bad:
+        escaped = ", ".join(f"\\x{ord(c):02x}" for c in bad)
+        raise ValueError(
+            f"path contains forbidden control character(s) [{escaped}]: {s!r}"
+        )
+    return v
+
+
 class ReconcilePolicy(StrEnum):
     ADDITIVE = "additive"
     PRUNE = "prune"
@@ -262,19 +282,9 @@ class TrackedFile(BaseModel):
     def _no_control_chars_in_path(cls, v: object) -> object:
         """Reject paths containing C0 control characters or DEL.
 
-        Tab and newline corrupt unified-diff field separators; DEL
-        and other C0 controls are similarly hostile to most tooling.
-        Cleaner to fail at config load than to silently emit malformed
-        transitions or ``patch``-rejected diffs.
+        Delegates to the shared :func:`_reject_control_chars_in_path`.
         """
-        s = str(v)
-        bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
-        if bad:
-            escaped = ", ".join(f"\\x{ord(c):02x}" for c in bad)
-            raise ValueError(
-                f"path contains forbidden control character(s) [{escaped}]: {s!r}"
-            )
-        return v
+        return _reject_control_chars_in_path(v)
 
 
 class MarketplaceSource(BaseModel):
@@ -347,19 +357,9 @@ class SectionTemplateRef(BaseModel):
     def _no_control_chars_in_path(cls, v: object) -> object:
         """Reject paths containing C0 control characters or DEL.
 
-        Mirrors :meth:`TrackedFile._no_control_chars_in_path`: tab and
-        newline corrupt unified-diff field separators, and DEL / other C0
-        controls are hostile to most tooling. Cleaner to fail at config
-        load than to silently emit a malformed transition.
+        Delegates to the shared :func:`_reject_control_chars_in_path`.
         """
-        s = str(v)
-        bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
-        if bad:
-            escaped = ", ".join(f"\\x{ord(c):02x}" for c in bad)
-            raise ValueError(
-                f"path contains forbidden control character(s) [{escaped}]: {s!r}"
-            )
-        return v
+        return _reject_control_chars_in_path(v)
 
 
 class PackageKind(StrEnum):
@@ -488,6 +488,19 @@ class FileComponent(BaseModel):
     def _validate_mode(cls, v: object) -> int | None:
         """Reuse :class:`TrackedFile`'s mode policy (shared function)."""
         return _validate_mode_policy(v)
+
+    @field_validator("src", "dst", mode="before")
+    @classmethod
+    def _no_control_chars_in_path(cls, v: object) -> object:
+        """Reject paths containing C0 control characters or DEL.
+
+        Reuses :class:`TrackedFile`'s contract via the shared
+        :func:`_reject_control_chars_in_path` — without it a control char
+        would only fail later inside :func:`_synthetic_tracked_file`'s
+        ``TrackedFile`` construction as a raw ``ValidationError``, escaping
+        the clean domain-gate path.
+        """
+        return _reject_control_chars_in_path(v)
 
 
 class BundleComponent(BaseModel):

@@ -129,6 +129,24 @@ def test_execute_bundle_mixed_package_and_file() -> None:
     assert ok_keys == ["ripgrep"]
 
 
+def test_execute_bundle_package_depends_on_file_proceeds() -> None:
+    """A package that ``depends_on`` a file component still provisions.
+
+    ``execute_bundle`` marks the deploy-only file component as satisfied so
+    the downstream package is not blocked. Guards the ``satisfied.add`` line
+    for the file branch (a mutant dropping it would leave the package SKIP).
+    """
+    bundle = BundleSpec(
+        components=[
+            _file_comp("launcher"),
+            _comp("pkg", depends_on=["launcher"], crate="ripgrep"),
+        ]
+    )
+    result = execute_bundle(bundle, _cfg(), provisioner=InMemoryProvisioner())
+    by_key = {o.item.identity.key: o.outcome for o in result.outcomes}
+    assert by_key["ripgrep"] is Outcome.OK
+
+
 def test_duplicate_id_rejected() -> None:
     bundle = BundleSpec(
         components=[
