@@ -1,0 +1,135 @@
+"""Integration: a bundle ``file`` component deploys via the tracked-file path.
+
+Drives the real ``install`` CLI against a sandboxed ``$HOME`` +
+``$SETFORGE_STATE_DIR``. A bundle ``file`` component must expand into a
+synthetic tracked-file and write to its ``dst`` with the declared ``mode``
+(``+x`` for ``0o755``), riding the existing deploy path with no bundle-driver
+provisioning. A profile with no bundle file components is unchanged.
+"""
+
+from __future__ import annotations
+
+import stat
+from pathlib import Path
+
+import pytest
+from click.testing import Result
+from typer.testing import CliRunner
+
+from setforge.cli import app
+
+_PROFILE = "bundle-file-test"
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "repo"
+    target.mkdir()
+    return target
+
+
+def _write_launcher(repo: Path, body: str = "#!/bin/sh\necho hi\n") -> None:
+    tracked = repo / "tracked"
+    tracked.mkdir(parents=True, exist_ok=True)
+    (tracked / "launch.sh").write_text(body, encoding="utf-8")
+
+
+def _write_config(repo: Path) -> Path:
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/.local/share/rd/launch.sh\n"
+        "          mode: 0o755\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    bundles:\n"
+        "      - revdiff\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def _write_config_no_bundle(repo: Path) -> Path:
+    """A profile with a plain tracked-file and NO bundle (regression baseline)."""
+    (repo / "tracked").mkdir(parents=True, exist_ok=True)
+    (repo / "tracked" / "note.md").write_text("hello\n", encoding="utf-8")
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  note:\n"
+        "    src: note.md\n"
+        "    dst: ~/.local/share/rd/note.md\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - note\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def _launcher_live() -> Path:
+    return Path.home() / ".local" / "share" / "rd" / "launch.sh"
+
+
+def _install(config: Path, *extra: str) -> Result:
+    return CliRunner().invoke(
+        app,
+        [
+            "install",
+            f"--profile={_PROFILE}",
+            f"--config={config}",
+            "--no-secrets-scan",
+            "--no-git-check",
+            "--yes",
+            *extra,
+        ],
+    )
+
+
+def test_bundle_file_deploys_with_mode(repo: Path) -> None:
+    _write_launcher(repo)
+    config = _write_config(repo)
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    live = _launcher_live()
+    assert live.exists()
+    assert live.read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
+    # mode 0o755 → owner/group/other execute bits set.
+    mode = stat.S_IMODE(live.stat().st_mode)
+    assert mode == 0o755, oct(mode)
+    assert mode & stat.S_IXUSR, "launcher must be executable"
+
+
+def test_bundle_file_hand_edit_survives_reinstall(repo: Path) -> None:
+    """The synthetic tracked-file rides the keep-live reconcile default."""
+    _write_launcher(repo)
+    config = _write_config(repo)
+    assert _install(config).exit_code == 0
+    live = _launcher_live()
+    live.write_text("#!/bin/sh\necho EDITED\n", encoding="utf-8")
+    assert _install(config).exit_code == 0
+    assert "EDITED" in live.read_text(encoding="utf-8")
+
+
+def test_no_bundle_file_profile_unchanged(repo: Path) -> None:
+    """Regression: a profile with no bundle file components deploys normally."""
+    config = _write_config_no_bundle(repo)
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    live = Path.home() / ".local" / "share" / "rd" / "note.md"
+    assert live.read_text(encoding="utf-8") == "hello\n"
+    # The synthetic launcher must NOT appear.
+    assert not _launcher_live().exists()

@@ -729,6 +729,54 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     return resolved
 
 
+def expand_bundle_file_components(config: Config, resolved: ResolvedProfile) -> None:
+    """Expand each active bundle's ``file`` components into synthetic tracked-files.
+
+    A bundle ``file`` component is NOT provisioner-backed — it deploys like a
+    tracked-file. For every bundle active in ``resolved.bundles``, mint one
+    synthetic :class:`TrackedFile` per ``file`` component (its
+    ``src``/``dst``/``mode``/``template``/``symlink`` lifted verbatim), keyed
+    ``<bundle-id>.<component-id>``, and inject it into BOTH:
+
+    - ``resolved.tracked_files`` — the id list the install-time walk
+      (:func:`setforge.cli._install_helpers._deploy_all_tracked_files` via
+      :func:`setforge.cli._helpers._iter_all_tracked_files`) iterates, and
+    - ``config.tracked_files`` — where that same walk resolves the body.
+
+    So the synthetic entry rides the existing tracked-file deploy path (chmod
+    before replace, 3-way reconcile keep-live default) AND the install revert
+    snapshot for free — no new deploy code, no new provisioner. The ``mode``
+    threads through so a launcher stays executable.
+
+    Mutates ``config`` and ``resolved`` in place (both are per-command values —
+    ``config`` is freshly loaded per invocation), mirroring the local-overlay
+    plugin/extension injectors (:func:`_apply_plugin_mutations`). Called AFTER
+    :func:`resolve_profile` and BEFORE the install revert snapshot so the
+    synthetic entry is revertable. Idempotent per (bundle, component): the
+    synthetic key is unique.
+
+    Bundles declared in ``config.bundles`` but NOT active in ``resolved.bundles``
+    are skipped — an inactive bundle's file components never deploy.
+    """
+    for bundle_id in resolved.bundles:
+        bundle = config.bundles.get(bundle_id)
+        if bundle is None:
+            continue
+        for component in bundle.components:
+            fc = component.file
+            if fc is None:
+                continue
+            synthetic_id = f"{bundle_id}.{component.id}"
+            config.tracked_files[synthetic_id] = TrackedFile(
+                src=fc.src,
+                dst=fc.dst,
+                mode=fc.mode,
+                template=fc.template,
+                symlink=fc.symlink,
+            )
+            resolved.tracked_files.append(synthetic_id)
+
+
 def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     """Parse ``setforge.yaml`` from disk and validate against the schema.
 
