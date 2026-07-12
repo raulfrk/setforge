@@ -28,6 +28,8 @@ the items. The per-ecosystem field mapping:
 
 from __future__ import annotations
 
+import dataclasses
+
 from setforge.config import GitHubReleasePackage
 from setforge.lockfile import LockFile
 from setforge.provision.protocol import ProvisionItem
@@ -61,21 +63,13 @@ def _override(item: ProvisionItem, pin: ResolvedPin) -> ProvisionItem:
     reach the provisioner's URL/verify path; every other ecosystem records the
     locked version + checksum on the item scalars.
     """
-    updates: dict[str, object] = {"version": pin.version, "checksum": pin.integrity}
     if isinstance(item.config, GitHubReleasePackage):
-        updates["config"] = item.config.model_copy(
-            update={"tag": pin.version, "checksum": pin.integrity}
+        return dataclasses.replace(
+            item,
+            version=pin.version,
+            checksum=pin.integrity,
+            config=item.config.model_copy(
+                update={"tag": pin.version, "checksum": pin.integrity}
+            ),
         )
-    return _replace(item, updates)
-
-
-def _replace(item: ProvisionItem, updates: dict[str, object]) -> ProvisionItem:
-    """Return a copy of the frozen ``ProvisionItem`` with ``updates`` applied."""
-    return ProvisionItem(
-        type=item.type,
-        identity=item.identity,
-        desired=item.desired,
-        version=updates.get("version", item.version),  # type: ignore[arg-type]
-        checksum=updates.get("checksum", item.checksum),  # type: ignore[arg-type]
-        config=updates.get("config", item.config),  # type: ignore[arg-type]
-    )
+    return dataclasses.replace(item, version=pin.version, checksum=pin.integrity)

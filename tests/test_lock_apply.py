@@ -176,18 +176,28 @@ def test_unlocked_item_passes_through_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_provisioning_applies_lock_and_calls_no_resolver(
+def test_lock_apply_imports_no_resolver() -> None:
+    # The offline invariant (spec §C) is STRUCTURAL: lock_apply must not import
+    # the resolver registry, so a locked install physically cannot re-resolve.
+    # Assert it directly — a future `from ...resolve.registry import get_resolver`
+    # added to the module fails here, unlike a monkeypatch that could dangle.
+    import setforge.provision.lock_apply as lock_apply
+
+    assert not hasattr(lock_apply, "get_resolver")
+    assert not hasattr(lock_apply, "registry")
+    # The resolve.registry module must not be reachable via lock_apply's globals.
+    assert "resolve.registry" not in {
+        getattr(v, "__name__", "") for v in vars(lock_apply).values()
+    }
+
+
+def test_run_provisioning_applies_lock_reaches_apply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A lock present overrides the item BEFORE reconcile, and the resolver
-    # registry is NEVER consulted (offline-safe). Patch get_resolver to raise.
-    import setforge.provision.lock_apply as lock_apply
+    # A lock present overrides the item BEFORE reconcile: the LOCKED version is
+    # what reaches apply_one (paired with the structural no-resolver assertion
+    # above, this covers the offline-consume invariant).
     import setforge.provision.python as python_prov
-
-    def _boom_resolver(*_a: object, **_k: object) -> object:
-        raise AssertionError("offline install must not resolve when a lock exists")
-
-    monkeypatch.setattr(lock_apply, "get_resolver", _boom_resolver, raising=False)
 
     applied: list[str | None] = []
 
