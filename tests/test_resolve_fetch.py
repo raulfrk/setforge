@@ -9,6 +9,7 @@ never touch the network — the real fetch is Task-6's docker e2e.
 
 from __future__ import annotations
 
+import gzip
 from types import TracebackType
 
 import pytest
@@ -147,3 +148,75 @@ def test_network_error_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_fetch.urllib.request, "urlopen", _boom)
     with pytest.raises(ResolveError, match="network error"):
         _fetch.fetch_bytes("https://example.com/x", timeout=5, max_bytes=1024)
+
+
+def test_post_body_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A non-None `data` makes the Request a POST carrying that body — the
+    # extensionquery call depends on this.
+    captured: dict[str, object] = {}
+    _patch_urlopen(
+        monkeypatch,
+        _FakeResponse(b"resp", final_url="https://example.com/q"),
+        captured=captured,
+    )
+    out = _fetch.fetch_bytes(
+        "https://example.com/q", timeout=5, max_bytes=1024, data=b'{"q": 1}'
+    )
+    assert out == b"resp"
+    request = captured["request"]
+    assert request.data == b'{"q": 1}'  # type: ignore[attr-defined]
+    # urllib infers POST from a non-None body.
+    assert request.get_method() == "POST"  # type: ignore[attr-defined]
+
+
+def test_decode_gzip_returns_decoded_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"decoded VSIX payload bytes" * 4
+    wire = gzip.compress(payload)
+    _patch_urlopen(
+        monkeypatch, _FakeResponse(wire, final_url="https://example.com/vsix")
+    )
+    out = _fetch.fetch_bytes(
+        "https://example.com/vsix",
+        timeout=5,
+        max_bytes=len(wire) + 10,
+        decode_gzip=True,
+    )
+    assert out == payload
+
+
+def test_wire_cap_fires_before_gzip_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A gzip "bomb": the DECODED payload is huge, but we assert the cap is
+    # enforced on the ON-THE-WIRE (compressed) bytes BEFORE gzip.decompress runs.
+    # gzip.compress on 2 MiB of zeros is tiny, so choose a cap BELOW the wire
+    # size to force the wire-cap branch. A sentinel patched over gzip.decompress
+    # proves decode never ran.
+    huge = b"\x00" * (2 * 1024 * 1024)
+    wire = gzip.compress(huge)
+    assert len(wire) > 8  # sanity: there ARE wire bytes to cap on
+
+    def _explode(_data: bytes) -> bytes:  # pragma: no cover - must NOT be called
+        raise AssertionError("gzip.decompress ran before the wire cap")
+
+    monkeypatch.setattr(_fetch.gzip, "decompress", _explode)
+    _patch_urlopen(
+        monkeypatch, _FakeResponse(wire, final_url="https://example.com/bomb")
+    )
+    # Cap strictly below the wire size -> the over-cap check must fire first.
+    with pytest.raises(ResolveError, match="wire cap"):
+        _fetch.fetch_bytes(
+            "https://example.com/bomb",
+            timeout=5,
+            max_bytes=len(wire) - 1,
+            decode_gzip=True,
+        )
+
+
+def test_non_gzip_body_with_decode_gzip_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_urlopen(
+        monkeypatch,
+        _FakeResponse(b"not gzip at all", final_url="https://example.com/x"),
+    )
+    with pytest.raises(ResolveError, match="failed to gzip-decode"):
+        _fetch.fetch_bytes(
+            "https://example.com/x", timeout=5, max_bytes=1024, decode_gzip=True
+        )

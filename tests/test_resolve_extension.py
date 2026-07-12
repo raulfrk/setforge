@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import zipfile
+from collections.abc import Mapping
 
 import pytest
 
@@ -104,7 +105,7 @@ def _fetcher(
         *,
         user_agent: str | None = None,
         data: bytes | None = None,
-        headers: object = None,
+        headers: Mapping[str, str] | None = None,
         decode_gzip: bool = False,
     ) -> bytes:
         if record is not None:
@@ -227,6 +228,17 @@ def test_empty_version_list_raises() -> None:
         resolver.resolve(_item())
 
 
+def test_version_entry_missing_version_field_raises() -> None:
+    # versions[0] is a dict but its "version" is absent (not a str) -> the
+    # fail-closed isinstance(latest, str) guard fires rather than pinning noise.
+    query = json.dumps(
+        {"results": [{"extensions": [{"versions": [{"assetUri": "https://…/x"}]}]}]}
+    ).encode()
+    resolver = ExtensionResolver(fetch=_fetcher({_QUERY_URL: query}))
+    with pytest.raises(ResolveError, match="'version' field"):
+        resolver.resolve(_item())
+
+
 def test_extension_not_found_raises() -> None:
     query = json.dumps({"results": [{"extensions": []}]}).encode()
     resolver = ExtensionResolver(fetch=_fetcher({_QUERY_URL: query}))
@@ -248,7 +260,7 @@ def test_tofu_hash_not_computed_when_fetch_guard_rejects() -> None:
         *,
         user_agent: str | None = None,
         data: bytes | None = None,
-        headers: object = None,
+        headers: Mapping[str, str] | None = None,
         decode_gzip: bool = False,
     ) -> bytes:
         if url == _QUERY_URL:

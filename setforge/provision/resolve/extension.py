@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict
@@ -97,7 +97,7 @@ def _default_fetch(
     *,
     user_agent: str | None = None,
     data: bytes | None = None,
-    headers: object = None,
+    headers: Mapping[str, str] | None = None,
     decode_gzip: bool = False,
 ) -> bytes:
     """Fetch ``url`` via the shared capped fetch helper (GET or POST).
@@ -108,6 +108,9 @@ def _default_fetch(
     :func:`~setforge.provision.resolve._fetch.fetch_bytes`. The wire cap differs
     per call (tiny query JSON vs MB-scale VSIX), so the caller picks it.
     """
+    # data is None -> the VSIX GET (MB-scale cap); a POST body -> the small
+    # query JSON. A future third call site must pick its cap explicitly rather
+    # than silently inheriting the 512 MiB VSIX ceiling.
     max_bytes = _MAX_VSIX_BYTES if data is None else _MAX_QUERY_BYTES
     return fetch_bytes(
         url,
@@ -115,7 +118,7 @@ def _default_fetch(
         max_bytes=max_bytes,
         user_agent=user_agent,
         data=data,
-        headers=headers if isinstance(headers, dict) else None,
+        headers=headers,
         decode_gzip=decode_gzip,
     )
 
