@@ -1,21 +1,4 @@
-"""The github_release :class:`Resolver` — resolves tag + asset sha256.
-
-The github_release PROVISIONER (:mod:`setforge.provision.github_release`)
-already downloads+verifies the asset at install; this resolver only produces
-the pin the lock records:
-
-* the concrete TAG — the spec's ``tag:`` verbatim when concrete, or (when
-  ``tag == "latest"``) the ``tag_name`` from the GitHub releases API
-  ``/repos/{repo}/releases/latest`` — never the moving ``latest`` token.
-* the asset SHA256 — computed by fetching the release asset ONCE and hashing
-  it (TOFU: setforge records its OWN computed hash, exactly as the provisioner
-  already does at install).
-
-The fetch boundary is injected (the ``fetch`` callable) so unit tests never
-touch github.com; the default delegates the HTTPS-only + timeout + wire-cap
-discipline to :func:`~setforge.provision.resolve._fetch.fetch_bytes`. The
-GitHub API rejects requests without a ``User-Agent``, so one is always sent.
-"""
+"""The github_release :class:`Resolver`: TOFU tag + asset sha256, never ``latest``."""
 
 from __future__ import annotations
 
@@ -40,23 +23,13 @@ _API_BASE = "https://api.github.com"
 _DOWNLOAD_BASE = "https://github.com"
 _LATEST = "latest"
 _FETCH_TIMEOUT_S = 30.0
-# One cap covers both fetches: the release-metadata JSON is tiny, so the asset
-# ceiling (mirroring the install-side provisioner's 512 MiB) bounds it too.
 _MAX_WIRE_BYTES = 512 * 1024 * 1024
-# GitHub's REST API returns 403 to requests without a User-Agent.
 _USER_AGENT = "setforge-lock-resolver"
 
-# A fetch takes the URL + an optional UA and returns the raw bytes.
 Fetch = Callable[..., bytes]
 
 
 def _default_fetch(url: str, *, user_agent: str | None = None) -> bytes:
-    """Fetch ``url`` over HTTPS via the shared capped fetch helper.
-
-    A thin wrapper matching the injected test double's ``(url, *, user_agent)``
-    signature; delegates HTTPS-only + timeout + wire-cap to
-    :func:`~setforge.provision.resolve._fetch.fetch_bytes`.
-    """
     return fetch_bytes(
         url, timeout=_FETCH_TIMEOUT_S, max_bytes=_MAX_WIRE_BYTES, user_agent=user_agent
     )
@@ -64,8 +37,6 @@ def _default_fetch(url: str, *, user_agent: str | None = None) -> bytes:
 
 @register(PackageType.GITHUB_RELEASE)
 class GitHubReleaseResolver:
-    """Resolve a github_release package to its concrete tag + asset sha256."""
-
     type: ClassVar[PackageType] = PackageType.GITHUB_RELEASE
 
     def __init__(self, *, fetch: Fetch | None = None) -> None:
@@ -88,12 +59,6 @@ class GitHubReleaseResolver:
         )
 
     def _resolve_tag(self, repo: str, tag: str) -> str:
-        """Return the concrete tag, querying the releases API for ``latest``.
-
-        A concrete ``tag`` is used verbatim (no network). ``latest`` is
-        resolved via ``/repos/{repo}/releases/latest`` to its ``tag_name`` —
-        the moving token is NEVER stored in the pin.
-        """
         if tag != _LATEST:
             return tag
         url = f"{_API_BASE}/repos/{repo}/releases/latest"
@@ -112,7 +77,6 @@ class GitHubReleaseResolver:
         return tag_name
 
     def _hash_asset(self, repo: str, tag: str, asset: str) -> str:
-        """Fetch the release asset ONCE and return its sha256 hex digest."""
         url = f"{_DOWNLOAD_BASE}/{repo}/releases/download/{tag}/{asset}"
         data = self._fetch(url, user_agent=_USER_AGENT)
         return hashlib.sha256(data).hexdigest()

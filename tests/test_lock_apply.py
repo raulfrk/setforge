@@ -1,19 +1,5 @@
-"""Lock CONSUMPTION at install — the lock overrides ProvisionItems offline.
-
-When ``setforge.lock`` is present, ``run_provisioning`` overrides each
-:class:`ProvisionItem`'s version/integrity from the matching lock pin
-(matched by ``(type, key)``) BEFORE reconcile, with ZERO resolver/network
-calls. These unit tests cover the pure override (:mod:`setforge.provision.lock_apply`)
-and its wiring into ``run_provisioning``:
-
-- python/go: the locked ``version`` lands on ``item.version``.
-- cargo: the locked version/checksum are recorded on the item (native index
-  handles bytes) — no crash, values visible.
-- github_release: the locked CONCRETE tag flows into ``item.config.tag`` (so
-  the download URL uses ``v1.2.3``, never literal ``latest``) AND the locked
-  checksum lands on ``item.config.checksum``.
-- offline: a lock present means NO resolver is instantiated/called.
-"""
+"""Lock CONSUMPTION at install: overrides ProvisionItems offline, zero
+resolver/network calls."""
 
 from __future__ import annotations
 
@@ -61,11 +47,6 @@ def _pin(
         integrity_kind=kind,
         profiles=("p",),
     )
-
-
-# ---------------------------------------------------------------------------
-# apply_lock_to_items — the pure override
-# ---------------------------------------------------------------------------
 
 
 def test_python_locked_version_lands_on_item_version() -> None:
@@ -125,9 +106,6 @@ def test_cargo_locked_values_recorded_no_crash() -> None:
 
 
 def test_github_release_latest_spec_gets_pinned_concrete_tag() -> None:
-    # The KEY github_release regression: a `tag: latest` spec must install the
-    # PINNED concrete tag — the provisioner builds .../download/<tag>/... and
-    # `latest` is not a valid download path.
     pkg = GitHubReleasePackage(
         repo="owner/tool",
         tag="latest",
@@ -152,8 +130,6 @@ def test_github_release_latest_spec_gets_pinned_concrete_tag() -> None:
     out = apply_lock_to_items(items, lock)
     locked_pkg = out[0].config
     assert isinstance(locked_pkg, GitHubReleasePackage)
-    # The concrete tag replaced literal `latest` — the download URL is built
-    # from pkg.tag, so this is what makes install hit .../download/v1.2.3/... .
     assert locked_pkg.tag == "v1.2.3"
     assert locked_pkg.checksum == "sha256:9f3c"
     from setforge.provision.github_release import _asset_url
@@ -163,29 +139,18 @@ def test_github_release_latest_spec_gets_pinned_concrete_tag() -> None:
 
 
 def test_unlocked_item_passes_through_unchanged() -> None:
-    # A package with NO lock entry is left exactly as resolved (no lock forces
-    # partial coverage; --locked is the fail-closed coverage gate, not apply).
     cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
     items = resolve_provision_items(cfg, ResolvedProfile(packages=["rg"]))
     out = apply_lock_to_items(items, LockFile(packages=()))
     assert out[0] == items[0]
 
 
-# ---------------------------------------------------------------------------
-# run_provisioning wiring — lock present ⇒ apply, no resolver ⇒ offline
-# ---------------------------------------------------------------------------
-
-
 def test_lock_apply_imports_no_resolver() -> None:
-    # The offline invariant is STRUCTURAL: lock_apply must not import
-    # the resolver registry, so a locked install physically cannot re-resolve.
-    # Assert it directly — a future `from ...resolve.registry import get_resolver`
-    # added to the module fails here, unlike a monkeypatch that could dangle.
+    # Structural: a locked install physically cannot re-resolve.
     import setforge.provision.lock_apply as lock_apply
 
     assert not hasattr(lock_apply, "get_resolver")
     assert not hasattr(lock_apply, "registry")
-    # The resolve.registry module must not be reachable via lock_apply's globals.
     assert "resolve.registry" not in {
         getattr(v, "__name__", "") for v in vars(lock_apply).values()
     }
@@ -194,9 +159,6 @@ def test_lock_apply_imports_no_resolver() -> None:
 def test_run_provisioning_applies_lock_reaches_apply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A lock present overrides the item BEFORE reconcile: the LOCKED version is
-    # what reaches apply_one (paired with the structural no-resolver assertion
-    # above, this covers the offline-consume invariant).
     import setforge.provision.python as python_prov
 
     applied: list[str | None] = []
@@ -222,4 +184,4 @@ def test_run_provisioning_applies_lock_reaches_apply(
         )
     )
     run_provisioning(cfg, resolved, lock=lock)
-    assert applied == ["9.9.9"]  # the LOCKED version flowed into apply
+    assert applied == ["9.9.9"]

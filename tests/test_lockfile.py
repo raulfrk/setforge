@@ -1,9 +1,4 @@
-"""Tests for the setforge.lock model + (de)serialization.
-
-Covers the three integrity kinds' round-trips, byte-for-byte determinism
-(including input-order independence), the parse/dump round-trip, atomic write,
-and clean rejection of malformed locks.
-"""
+"""Tests for the setforge.lock model + (de)serialization: determinism, round-trips."""
 
 import random
 from pathlib import Path
@@ -71,8 +66,6 @@ def test_pin_round_trips_through_lock_entry(pin: ResolvedPin) -> None:
 def test_checksum_pin_serializes_under_checksum_column() -> None:
     text = dump_lock(LockFile(packages=(_checksum_pin(),)))
     assert "checksum = " in text
-    # `sum`/`sha` are their own columns; anchor on line-start to avoid matching
-    # the `sum` substring inside `checksum`.
     assert "\nsum = " not in text
     assert "\nsha = " not in text
 
@@ -93,7 +86,6 @@ def test_parse_dump_round_trip_equal() -> None:
     lf = LockFile(version=1, packages=(_checksum_pin(), _sum_pin(), _sha_pin()))
     assert parse_lock(dump_lock(lf)) == LockFile(
         version=1,
-        # sorted by (type, key): github_release, go, plugin
         packages=(_checksum_pin(), _sum_pin(), _sha_pin()),
     )
 
@@ -157,7 +149,6 @@ def test_reject_missing_integrity() -> None:
 
 
 def test_reject_wrong_integrity_column_for_ecosystem() -> None:
-    # go must use `sum`, not `checksum`.
     text = (
         'version = 1\n[[package]]\ntype = "go"\nkey = "x"\n'
         'version = "1"\nchecksum = "sha256:a"\n'
@@ -181,9 +172,7 @@ def test_reject_multiple_integrity_fields() -> None:
     ids=["scalar-int", "array"],
 )
 def test_reject_non_string_integrity(integrity_literal: str) -> None:
-    # A hand-edited lock whose integrity value is not a string is valid TOML
-    # and passes the presence guards, but must be rejected as a malformed lock
-    # — never leak a raw pydantic ValidationError past the CLI boundary.
+    # Valid TOML, passes presence guards, but must not leak a raw pydantic error.
     text = (
         'version = 1\n[[package]]\ntype = "cargo"\nkey = "x"\n'
         f'version = "1"\nchecksum = {integrity_literal}\n'

@@ -1,14 +1,5 @@
-"""Lock → extension reconcile threading.
-
-Verifies the pin reaches the install path two ways:
-
-* :func:`extension_pins` extracts ONLY extension pins from a lock, casefold-keyed.
-* :func:`vscode_extensions.reconcile` with ``pins`` routes a pinned, missing
-  extension through the BYTE-STRONG path (a temp ``.vsix`` file argv), while an
-  unpinned one in the same pass keeps the marketplace-id install.
-
-The vspackage download is mocked; no marketplace contact.
-"""
+"""Lock -> extension reconcile threading: pinned routes through the
+byte-strong VSIX path."""
 
 from __future__ import annotations
 
@@ -62,7 +53,7 @@ def test_extension_pins_filters_and_casefolds() -> None:
 
     pins = extension_pins(lock)
 
-    assert set(pins) == {"esbenp.prettier-vscode"}  # cargo excluded, key casefolded
+    assert set(pins) == {"esbenp.prettier-vscode"}
     assert pins["esbenp.prettier-vscode"].version == "1.2.3"
 
 
@@ -110,7 +101,6 @@ def test_reconcile_routes_pinned_ext_through_strong_path(
     reconcile(ext, pins=pins)
 
     installs = fake.install_args
-    # pinned one -> a .vsix FILE path; unpinned one -> the marketplace id.
     vsix_installs = [a for a in installs if a.endswith(".vsix")]
     id_installs = [a for a in installs if not a.endswith(".vsix")]
     assert len(vsix_installs) == 1

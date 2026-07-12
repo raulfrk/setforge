@@ -1,15 +1,4 @@
-"""Tests for the go resolver.
-
-Resolves via ``go mod download -json <module>@<version>`` run in a SCRATCH
-module dir (GOFLAGS=-mod=mod) so it can NEVER mutate a host go.mod/go.sum.
-Parses ``.Version`` (concrete) + ``.Sum`` (the ``h1:...`` module hash) into a
-``sum``-kind pin.
-
-The subprocess boundary is INJECTABLE (a ``runner`` callable receiving the
-literal argv) so these unit tests never spawn ``go`` — the real invocation is
-exercised by the docker e2e. The tests assert the argv carries a ``--``
-options-terminator before the attacker-influenced ``module@version`` positional.
-"""
+"""Tests for the go resolver (runner injected; never spawns ``go``)."""
 
 from __future__ import annotations
 
@@ -23,8 +12,6 @@ from setforge.errors import ResolveError
 from setforge.provision.resolve.go import GoResolver, _CompletedRun
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 
-# A realistic `go mod download -json` payload (real output also carries Path/
-# Info/GoMod/Zip/Dir file paths, which the resolver must ignore).
 _GOLANG_X_TEXT = {
     "Path": "golang.org/x/text",
     "Version": "v0.14.0",
@@ -48,7 +35,6 @@ def test_resolve_parses_version_and_sum() -> None:
     assert pin.type is PackageType.GO
     assert pin.key == "golang.org/x/text"
     assert pin.version == "v0.14.0"
-    # The sum kind stores the h1: value verbatim (no sha256: reformatting).
     assert pin.integrity == "h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ="
     assert pin.integrity_kind is IntegrityKind.SUM
 
@@ -60,9 +46,7 @@ def test_argv_has_options_terminator_before_positional() -> None:
     argv = captured[0]
     assert "--" in argv
     dd = argv.index("--")
-    # The module@version positional sits AFTER the terminator (arg-injection guard).
-    assert argv[dd + 1] == "golang.org/x/text@v0.14.0"
-    # Nothing dashy is passed as a positional after the terminator.
+    assert argv[dd + 1] == "golang.org/x/text@v0.14.0"  # after the terminator
     assert all(not a.startswith("-") for a in argv[dd + 1 :])
 
 

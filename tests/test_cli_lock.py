@@ -1,11 +1,4 @@
-"""Tests for the ``setforge lock`` subcommand.
-
-The resolver boundary is the registry: each test registers STUB resolvers that
-return canned pins (or raise) via the autouse ``_isolate_registry`` fixture, so
-no test touches the network. Determinism, atomicity, and the (de)serialization
-round-trip come from :mod:`setforge.lockfile` and are asserted here at the verb
-level (byte-stable output, one pin per ``(type, key)``).
-"""
+"""Tests for the ``setforge lock`` subcommand: stub resolvers, no network."""
 
 from __future__ import annotations
 
@@ -25,18 +18,9 @@ from setforge.provision.resolve.protocol import (
     ResolvedPin,
 )
 
-# ---------------------------------------------------------------------------
-# Registry isolation + stub resolvers
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> object:
-    """Snapshot + clear + restore the resolver registry around each test.
-
-    Clears the real (network-hitting) resolvers so the stubs below own the
-    dispatch surface, then restores the real set on exit.
-    """
     saved = dict(registry._REGISTRY)
     registry._REGISTRY.clear()
     try:
@@ -47,7 +31,6 @@ def _isolate_registry() -> object:
 
 
 def _pin(pkg_type: PackageType, key: str, version: str) -> ResolvedPin:
-    """A canned pin with an ecosystem-appropriate integrity shape."""
     if pkg_type is PackageType.GO:
         integrity, kind = "h1:deadbeef", IntegrityKind.SUM
     elif pkg_type is PackageType.PLUGIN:
@@ -66,7 +49,6 @@ def _pin(pkg_type: PackageType, key: str, version: str) -> ResolvedPin:
 def _register_stub(
     pkg_type: PackageType, key: str, version: str, *, raises: bool = False
 ) -> None:
-    """Register a stub resolver for ``pkg_type`` returning ``_pin`` (or raising)."""
 
     class _Stub:
         type: ClassVar[PackageType] = pkg_type
@@ -78,10 +60,6 @@ def _register_stub(
 
     registry.register(pkg_type)(_Stub)
 
-
-# ---------------------------------------------------------------------------
-# Config fixture builders
-# ---------------------------------------------------------------------------
 
 _FULL_YAML = """\
 version: 1
@@ -141,13 +119,7 @@ def _register_full_stubs() -> None:
     _register_stub(PackageType.EXTENSION, "esbenp.prettier-vscode", "10.1.0")
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 def test_lock_writes_one_pin_per_package(tmp_path: Path) -> None:
-    """lock resolves cargo+python+github_release+plugin+extension; local skipped."""
     cfg = _write_config(tmp_path)
     _register_full_stubs()
 
@@ -167,7 +139,6 @@ def test_lock_writes_one_pin_per_package(tmp_path: Path) -> None:
 
 
 def test_lock_output_is_deterministic(tmp_path: Path) -> None:
-    """Two lock runs on the same config produce byte-identical setforge.lock."""
     cfg = _write_config(tmp_path)
     _register_full_stubs()
     lock_file = tmp_path / "setforge.lock"
@@ -180,7 +151,6 @@ def test_lock_output_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_lock_fail_closed_leaves_no_partial_lock(tmp_path: Path) -> None:
-    """One resolver raising aborts the whole write: NO setforge.lock is created."""
     cfg = _write_config(tmp_path)
     _register_stub(PackageType.CARGO, "ripgrep", "14.0.0")
     _register_stub(PackageType.PYTHON, "black", "24.1.0", raises=True)
@@ -196,7 +166,6 @@ def test_lock_fail_closed_leaves_no_partial_lock(tmp_path: Path) -> None:
 
 
 def test_lock_merges_other_profile_entries(tmp_path: Path) -> None:
-    """Locking profile B preserves profile A's entries and unions a shared key."""
     yaml = """\
 version: 1
 tracked_files:
@@ -221,13 +190,11 @@ profiles:
     lock = parse_lock((tmp_path / "setforge.lock").read_text(encoding="utf-8"))
     by_key = {(p.type.value, p.key): p for p in lock.packages}
     assert set(by_key) == {("cargo", "ripgrep"), ("python", "black")}
-    # ripgrep is shared: both profiles in the back-ref.
     assert by_key[("cargo", "ripgrep")].profiles == ("a", "b")
     assert by_key[("python", "black")].profiles == ("b",)
 
 
 def test_lock_version_conflict_across_profiles_errors(tmp_path: Path) -> None:
-    """A shared key resolving to a DIFFERENT version is a clean conflict error."""
     yaml = """\
 version: 1
 tracked_files:
@@ -243,27 +210,21 @@ profiles:
     CliRunner().invoke(app, ["lock", "--profile=a", f"--config={cfg}"])
     before = (tmp_path / "setforge.lock").read_text(encoding="utf-8")
 
-    # Profile b resolves the SAME key to a different version.
     registry._REGISTRY.clear()
     _register_stub(PackageType.CARGO, "ripgrep", "99.0.0")
     result = CliRunner().invoke(app, ["lock", "--profile=b", f"--config={cfg}"])
     assert result.exit_code != 0
-    # The LockConflict propagates through the app callback; its message names
-    # both versions (CliRunner surfaces it as result.exception, not stdout).
     message = str(result.exception)
     assert "14.0.0" in message
     assert "99.0.0" in message
-    # The pre-existing lock is left unchanged.
     assert (tmp_path / "setforge.lock").read_text(encoding="utf-8") == before
 
 
 def test_lock_update_reresolves_only_named_package(tmp_path: Path) -> None:
-    """lock --update <key> rewrites just that pin, preserving the rest."""
     cfg = _write_config(tmp_path)
     _register_full_stubs()
     CliRunner().invoke(app, ["lock", "--profile=p", f"--config={cfg}"])
 
-    # Re-register cargo to a new version; --update=ripgrep should pick it up.
     registry._REGISTRY.clear()
     _register_stub(PackageType.CARGO, "ripgrep", "15.0.0")
     _register_stub(PackageType.PYTHON, "black", "99.9.9")
@@ -283,7 +244,6 @@ def test_lock_update_reresolves_only_named_package(tmp_path: Path) -> None:
 
 
 def test_lock_update_without_existing_lock_errors(tmp_path: Path) -> None:
-    """lock --update with no lock file present exits non-zero cleanly."""
     cfg = _write_config(tmp_path)
     _register_full_stubs()
     result = CliRunner().invoke(
@@ -294,12 +254,7 @@ def test_lock_update_without_existing_lock_errors(tmp_path: Path) -> None:
 
 
 def test_lock_update_skips_unrelated_broken_package(tmp_path: Path) -> None:
-    """--update resolves ONLY the target; an earlier broken package is untouched.
-
-    ``black`` is enumerated BEFORE ``ripgrep`` and its resolver raises. The old
-    resolve-in-order-until-match loop would resolve ``black`` first and fail;
-    filtering by lock key before resolving must skip it and update ``ripgrep``.
-    """
+    # black raises but is enumerated BEFORE ripgrep; --update must filter by key first.
     yaml = """\
 version: 1
 tracked_files:
@@ -312,12 +267,10 @@ profiles:
     packages: [black, ripgrep]
 """
     cfg = _write_config(tmp_path, yaml)
-    # Seed a lock with a working black + ripgrep so --update has a base.
     _register_stub(PackageType.PYTHON, "black", "24.1.0")
     _register_stub(PackageType.CARGO, "ripgrep", "14.0.0")
     CliRunner().invoke(app, ["lock", "--profile=p", f"--config={cfg}"])
 
-    # Now break black; --update=ripgrep must NOT touch black.
     registry._REGISTRY.clear()
     _register_stub(PackageType.PYTHON, "black", "0", raises=True)
     _register_stub(PackageType.CARGO, "ripgrep", "15.0.0")
@@ -332,7 +285,6 @@ profiles:
 
 
 def test_merge_lock_same_version_different_integrity_conflicts() -> None:
-    """A shared (type,key) at the SAME version but DIFFERENT hash is a conflict."""
     from setforge.cli.lock import merge_lock
     from setforge.errors import LockConflict
     from setforge.lockfile import LockFile
@@ -355,7 +307,6 @@ def test_merge_lock_same_version_different_integrity_conflicts() -> None:
 
 
 def test_lock_help_lists_flags(tmp_path: Path) -> None:
-    """setforge lock --help renders and mentions --profile and --update."""
     result = CliRunner().invoke(app, ["lock", "--help"])
     assert result.exit_code == 0
     assert "--profile" in result.output

@@ -475,11 +475,7 @@ class FakeGit:
         # tests can exercise the cache-miss + offline path. An empty set
         # therefore means "every clone fails."
         self.known_repos: set[str] | None = known_repos
-        # ``reset --hard <sha> --`` targets recorded in order, so a test can
-        # assert the cache was pinned to the LOCKED sha (not ``origin/HEAD``).
-        self.reset_targets: list[str] = []
-        # Shas that a ``reset --hard`` must FAIL on (a bad/unknown pin), so
-        # tests can exercise the clean-typed-error path.
+        self.reset_targets: list[str] = []  # `reset --hard <sha>` targets, in order
         self.unknown_shas: set[str] | None = unknown_shas
         self._real_run: Callable[..., Any] | None = None
 
@@ -535,7 +531,6 @@ class FakeGit:
         ):
             return subprocess.CompletedProcess(args, 0, "", "")
 
-        # git -C <dir> reset --hard <sha> --  (the pinned-plugin checkout)
         if (
             len(cmd) >= 6
             and cmd[0] == "-C"

@@ -1,20 +1,5 @@
-"""The committed ``setforge.lock`` model + (de)serialization.
-
-The lock is a resolved-graph artifact — one pin per ``(type, key)`` with the
-ecosystem-natural integrity value + a ``profiles`` back-ref — committed at
-the CONFIG-REPO ROOT (``config.resolve().parent / "setforge.lock"``), NOT under
-the host-local state dir (that is the receipt store). It carries its own
-``version`` independent of the config ``schema_version``, so it is a
-SEPARATE file with a SEPARATE schema and does not go through the config-schema
-gates.
-
-``dump_lock`` is DETERMINISTIC: pins are sorted by
-``(type, key)`` and ``profiles`` lists are sorted, so shuffling the input pin
-list yields byte-identical output; there is no timestamp/host/duration field.
-``write_lock`` lands the bytes via :func:`setforge.atomicio.atomic_write_text`
-(never a raw ``write_text``), mirroring the receipt store's durability
-discipline but for TOML.
-"""
+"""The committed ``setforge.lock`` model + (de)serialization: DETERMINISTIC
+(pins/profiles sorted, no timestamp/host field)."""
 
 import tomllib
 from pathlib import Path
@@ -34,21 +19,10 @@ from setforge.provision.resolve.protocol import (
 LOCK_FILENAME = "setforge.lock"
 LOCK_VERSION = 1
 
-# The TOML column -> integrity kind, inverted from _KIND_FIELD so the parser
-# can discover which single integrity field a pin table carries.
 _FIELD_KIND: dict[str, IntegrityKind] = {v: k for k, v in _KIND_FIELD.items()}
 
 
 class LockFile(BaseModel):
-    """The parsed ``setforge.lock``: a format ``version`` + a set of pins.
-
-    Equality is structural (frozen pydantic model), so the round-trip test
-    ``parse_lock(dump_lock(lf)) == lf`` compares by value. Pins are held in the
-    order supplied; :meth:`dump` imposes the deterministic ordering, so two
-    ``LockFile``s with the same pins in a different order are NOT ``==`` but
-    serialize identically.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: int = LOCK_VERSION
@@ -56,23 +30,10 @@ class LockFile(BaseModel):
 
 
 def lock_path(config_path: Path) -> Path:
-    """Return the committed lock path for a given config file.
-
-    ``config.resolve().parent / "setforge.lock"`` — the config-repo root.
-    Resolving first collapses symlinks so the lock lands beside the real
-    config, not beside a symlink to it.
-    """
     return config_path.resolve().parent / LOCK_FILENAME
 
 
 def dump_lock(lockfile: LockFile) -> str:
-    """Serialize ``lockfile`` to deterministic TOML text.
-
-    Pins are sorted by ``(type, key)`` and each pin's ``profiles`` is sorted,
-    so the output is byte-identical for equal pin SETS regardless of input
-    order. No timestamp/host/duration is emitted. ``tomli_w`` does the
-    canonical formatting.
-    """
     packages = [
         pin.to_lock_entry()
         for pin in sorted(lockfile.packages, key=ResolvedPin.sort_key)
@@ -82,14 +43,6 @@ def dump_lock(lockfile: LockFile) -> str:
 
 
 def parse_lock(text: str) -> LockFile:
-    """Parse ``setforge.lock`` TOML text into a :class:`LockFile`.
-
-    Raises :class:`~setforge.errors.MalformedLockError` (a clean message, never
-    a raw traceback) on: unparseable TOML, a missing/non-int ``version``, a
-    non-array ``package``, a pin missing ``type``/``key``/``version``, an
-    unknown ``type``, or an integrity shape that is absent, doubled, or does
-    not match the ecosystem's expected column.
-    """
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -110,23 +63,10 @@ def parse_lock(text: str) -> LockFile:
 
 
 def write_lock(lockfile: LockFile, path: Path) -> None:
-    """Atomically write ``lockfile`` to ``path``.
-
-    Delegates to :func:`~setforge.atomicio.atomic_write_text` so a crash
-    mid-write never leaves a torn lock — the same discipline the receipt store
-    uses, but for the committed TOML lock. The bytes are the deterministic
-    :func:`dump_lock` output.
-    """
     atomic_write_text(path, dump_lock(lockfile))
 
 
 def _parse_pin(entry: object) -> ResolvedPin:
-    """Parse one ``[[package]]`` table into a :class:`ResolvedPin`.
-
-    Enforces the integrity discipline: exactly ONE of ``checksum``/``sum``/
-    ``sha`` must be present, and it must be the column the pin's ecosystem
-    uses. All failures raise :class:`~setforge.errors.MalformedLockError`.
-    """
     if not isinstance(entry, dict):
         raise MalformedLockError(
             f"setforge.lock: each 'package' must be a table, got {type(entry).__name__}"
@@ -182,11 +122,6 @@ def _parse_pin(entry: object) -> ResolvedPin:
 
 
 def _expected_kind(pkg_type: PackageType) -> IntegrityKind:
-    """The integrity kind an ecosystem's pin must carry.
-
-    go uses the sumdb ``h1:`` hash; plugin uses a git-commit ``sha``; every
-    other ecosystem uses a ``sha256:`` ``checksum``.
-    """
     if pkg_type is PackageType.GO:
         return IntegrityKind.SUM
     if pkg_type is PackageType.PLUGIN:
@@ -195,11 +130,6 @@ def _expected_kind(pkg_type: PackageType) -> IntegrityKind:
 
 
 def _require(entry: dict[str, object], field: str) -> str:
-    """Return ``entry[field]`` as a non-empty ``str`` or raise.
-
-    A mandatory scalar field that is missing, non-string, or empty is a
-    malformed lock, not a legitimately-absent value.
-    """
     value = entry.get(field)
     if not isinstance(value, str) or not value:
         raise MalformedLockError(

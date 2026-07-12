@@ -1,16 +1,4 @@
-"""Tests for the plugin resolver.
-
-A plugin key is ``name@marketplace``; the marketplace is a git repo. The
-resolver pins the marketplace repo's commit SHA (the strong git-commit pin) via
-``git ls-remote <marketplace-git-url> <ref>``, parsing the leading 40-char SHA
-of the matching line. The pin carries ``version = sha`` and ``sha`` integrity
-kind — a CONCRETE commit, never a moving ref name.
-
-The subprocess boundary is INJECTABLE (a ``runner`` callable receiving the
-literal argv) so these unit tests never spawn ``git`` — the real invocation is
-exercised by the docker e2e. The argv MUST carry a ``--`` options-terminator
-before the attacker-influenced marketplace URL / ref positionals.
-"""
+"""Tests for the plugin resolver (runner injected; never spawns ``git``)."""
 
 from __future__ import annotations
 
@@ -30,8 +18,6 @@ from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 
 _SHA = "4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f"
 
-# A realistic `git ls-remote` HEAD line: "<40-hex>\tHEAD" (real output has one
-# such tab-separated line per ref; the resolver keys off the requested ref).
 _LS_REMOTE_HEAD = f"{_SHA}\tHEAD\n"
 
 
@@ -53,7 +39,6 @@ def test_resolve_parses_sha_from_ls_remote() -> None:
     pin = resolver.resolve(_item())
     assert pin.type is PackageType.PLUGIN
     assert pin.key == "revdiff@revdiff"
-    # version IS the concrete sha (per spec: the pin is the sha).
     assert pin.version == _SHA
     assert pin.integrity == _SHA
     assert pin.integrity_kind is IntegrityKind.SHA
@@ -67,14 +52,12 @@ def test_argv_has_options_terminator_before_url() -> None:
     assert "ls-remote" in argv
     assert "--" in argv
     dd = argv.index("--")
-    # The URL + ref positionals sit AFTER the terminator (arg-injection guard).
-    assert argv[dd + 1 :] == ["https://github.com/owner/mp", "HEAD"]
+    assert argv[dd + 1 :] == ["https://github.com/owner/mp", "HEAD"]  # after terminator
 
 
 def test_resolve_concrete_sha_not_ref_name() -> None:
     resolver = PluginResolver(runner=_runner_ok())
     pin = resolver.resolve(_item(ref="HEAD"))
-    # The stored value is the 40-hex commit, NOT the moving ref name.
     assert pin.version != "HEAD"
     assert len(pin.version) == 40
     assert all(c in "0123456789abcdef" for c in pin.version)

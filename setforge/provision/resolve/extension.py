@@ -1,33 +1,5 @@
-"""The extension (VS Code) :class:`Resolver` — resolves version + VSIX sha256.
-
-The most complex resolver. An extension key is ``publisher.name`` (e.g.
-``esbenp.prettier-vscode``). Unlike the other ecosystems, the VS Marketplace
-publishes NO per-version checksum, so the pin's integrity is Trust-On-First-Use:
-setforge downloads the VSIX ONCE, sha256s it, and records ITS OWN hash — exactly
-what ``code --install-extension`` would consume. Two marketplace calls:
-
-1. **Resolve the concrete version** — an ``extensionquery`` POST to
-   ``…/gallery/extensionquery`` with a ``filters → criteria`` body (``filterType
-   7`` = the ``publisher.name`` id) and a ``flags`` requesting the version list.
-   The response's ``results[0].extensions[0].versions[]`` is newest-first; the
-   concrete latest is ``versions[0].version`` (or the spec's pinned version).
-2. **Download + hash the VSIX** — a ``vspackage`` GET built with the CONCRETE
-   version (NEVER the ``latest`` alias — the marketplace serves a different
-   sha256 for ``latest`` vs a concrete version). The response may be gzip
-   transfer-encoded; the hash is computed on the DECODED VSIX bytes.
-
-The POST + GET boundary is injected (the ``fetch`` callable) so unit tests never
-touch marketplace.visualstudio.com; the default delegates the HTTPS-only +
-redirect-downgrade + timeout + wire-cap discipline to
-:func:`~setforge.provision.resolve._fetch.fetch_bytes` (extended with a POST /
-gzip-decode path). TOFU discipline: the hash is computed ONLY on bytes returned
-through that guarded path — a downgraded or redirected fetch raises before any
-hashing.
-
-The extensionquery body/response shape is built from the documented field
-names; it is validated against the live VS Marketplace by the docker e2e
-(a real ``setforge lock`` for a real extension).
-"""
+"""The extension (VS Code) :class:`Resolver`: TOFU VSIX sha256, hashed only on
+bytes that passed the guarded fetch, never on the ``latest`` alias."""
 
 from __future__ import annotations
 
@@ -53,38 +25,18 @@ _GALLERY_BASE = "https://marketplace.visualstudio.com/_apis/public/gallery"
 _QUERY_URL = f"{_GALLERY_BASE}/extensionquery"
 _LATEST = "latest"
 _FETCH_TIMEOUT_S = 30.0
-# The extensionquery JSON is small; the VSIX can be MB-scale (mirror the
-# github_release asset ceiling, big enough for any real VSIX but bounded so a
-# runaway/hostile response cannot exhaust memory — the wire cap).
 _MAX_QUERY_BYTES = 16 * 1024 * 1024
 _MAX_VSIX_BYTES = 512 * 1024 * 1024
-# Marketplace deployments occasionally 400 a UA-less / client-id-less request;
-# send a User-Agent defensively (harmless when unneeded).
 _USER_AGENT = "setforge-lock-resolver"
-# extensionquery negotiates its JSON shape via an api-version'd Accept header.
 _ACCEPT = "application/json;api-version=7.2-preview.1"
 _CONTENT_TYPE = "application/json"
-# extensionquery flag bits: IncludeVersions (0x1) | IncludeFiles (0x2) |
-# IncludeVersionProperties (0x10) — enough to get the versions[] list back.
 _QUERY_FLAGS = 0x1 | 0x2 | 0x10
-# filterType 7 = "extension name" (the publisher.name id) in the gallery API.
 _FILTER_TYPE_EXTENSION_NAME = 7
 
-# A fetch takes the URL + optional UA/POST-body/headers/gzip-decode and returns
-# the raw (or decoded) bytes.
 Fetch = Callable[..., bytes]
 
 
 class ExtensionResolveItem(BaseModel):
-    """The input an :class:`ExtensionResolver` resolves.
-
-    ``key`` is the ``publisher.name`` extension id (the lock key). ``version``
-    optionally pins a concrete version; when ``None`` the resolver picks the
-    marketplace's latest. Distinct from the raw config ``include:`` string so a
-    future ``@version`` pin syntax has a typed home without reusing
-    ``vscode_extensions._EXT_ID_RE`` (which would drop a suffix).
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     key: str
@@ -99,17 +51,6 @@ def _default_fetch(
     headers: Mapping[str, str] | None = None,
     decode_gzip: bool = False,
 ) -> bytes:
-    """Fetch ``url`` via the shared capped fetch helper (GET or POST).
-
-    A thin wrapper matching the injected test double's signature; delegates
-    HTTPS-only + redirect-downgrade + timeout + wire-cap (and the POST body /
-    gzip-decode paths) to
-    :func:`~setforge.provision.resolve._fetch.fetch_bytes`. The wire cap differs
-    per call (tiny query JSON vs MB-scale VSIX), so the caller picks it.
-    """
-    # data is None -> the VSIX GET (MB-scale cap); a POST body -> the small
-    # query JSON. A future third call site must pick its cap explicitly rather
-    # than silently inheriting the 512 MiB VSIX ceiling.
     max_bytes = _MAX_VSIX_BYTES if data is None else _MAX_QUERY_BYTES
     return fetch_bytes(
         url,
@@ -124,8 +65,6 @@ def _default_fetch(
 
 @register(PackageType.EXTENSION)
 class ExtensionResolver:
-    """Resolve a VS Code extension to its concrete version + VSIX sha256 (TOFU)."""
-
     type: ClassVar[PackageType] = PackageType.EXTENSION
 
     def __init__(self, *, fetch: Fetch | None = None) -> None:
@@ -149,13 +88,6 @@ class ExtensionResolver:
         )
 
     def _resolve_version(self, ext_id: str, pinned: str | None) -> str:
-        """Return the concrete version: the pin verbatim, or the query's latest.
-
-        A concrete pin is used as-is (no assumption it is ``latest``); ``latest``
-        is NEVER a valid stored value, so a pin literally equal to ``latest`` is
-        rejected. Otherwise the extensionquery response's first (newest) version
-        is picked.
-        """
         if pinned is not None:
             if pinned == _LATEST:
                 raise ResolveError(
@@ -172,24 +104,12 @@ class ExtensionResolver:
         return _pick_latest_version(body, ext_id)
 
     def _hash_vsix(self, publisher: str, name: str, version: str) -> str:
-        """Fetch the VSIX ONCE (gzip-decoded) and return its sha256 hex digest.
-
-        Delegates the CONCRETE-version fetch to :func:`download_vsix` (shared with
-        the strong-install path so the vspackage fetch lives in one place). The
-        fetch runs through the guarded path, so a downgraded/redirected response
-        raises BEFORE any bytes are hashed (TOFU discipline).
-        """
         data = download_vsix(publisher, name, version, fetch=self._fetch)
         return hashlib.sha256(data).hexdigest()
 
 
 def vsix_url(publisher: str, name: str, version: str) -> str:
-    """Build the ``vspackage`` download URL for a CONCRETE extension version.
-
-    Never the ``latest`` alias — the marketplace serves a different sha256 for
-    ``latest`` vs a concrete version, so callers must pass the resolved/pinned
-    version.
-    """
+    """Build the ``vspackage`` download URL for a CONCRETE extension version."""
     return (
         f"{_GALLERY_BASE}/publishers/{publisher}/vsextensions/"
         f"{name}/{version}/vspackage"
@@ -205,15 +125,9 @@ def download_vsix(
 ) -> bytes:
     """Download the gzip-decoded VSIX bytes for a CONCRETE extension version.
 
-    The single vspackage fetch shared by the resolver (which hashes the bytes
-    for TOFU) and the strong install path (which verifies them against the
-    locked hash before handing the file to ``code``). ``decode_gzip=True``
-    yields the VSIX bytes ``code --install-extension`` consumes — the same
-    bytes the resolver hashed — not the compressed wire bytes, so the install
-    hash matches the locked hash. The fetch runs through the guarded
-    :func:`~setforge.provision.resolve._fetch.fetch_bytes` (HTTPS-only,
-    redirect-downgrade re-check, timeout, wire cap); ``fetch`` is injectable so
-    unit tests never touch the marketplace.
+    Shared by the resolver (hashes for TOFU) and the strong install path
+    (verifies against the locked hash) — the same decoded bytes ``code``
+    consumes, so the install hash matches the locked hash.
     """
     do_fetch = fetch if fetch is not None else _default_fetch
     return do_fetch(
@@ -224,12 +138,6 @@ def download_vsix(
 
 
 def _split_ext_id(ext_id: str) -> tuple[str, str]:
-    """Split ``publisher.name`` on the FIRST ``.`` into ``(publisher, name)``.
-
-    VS Code ids are ``publisher.name`` where each part is ``[a-z0-9][a-z0-9-]*``
-    (no dots inside a part), so the first dot is the boundary. A missing dot or
-    an empty publisher/name is a malformed id -> clean :class:`ResolveError`.
-    """
     publisher, sep, name = ext_id.partition(".")
     if not sep or not publisher or not name:
         raise ResolveError(
@@ -239,13 +147,6 @@ def _split_ext_id(ext_id: str) -> tuple[str, str]:
 
 
 def _query_body(ext_id: str) -> bytes:
-    """Build the ``extensionquery`` POST body for ``ext_id`` (UTF-8 JSON).
-
-    A single ``filters`` page whose ``criteria`` carries the ``publisher.name``
-    id under ``filterType 7``, plus the version-requesting ``flags``. This is the
-    documented gallery-query shape, confirmed against the live API by the
-    docker e2e.
-    """
     payload = {
         "filters": [
             {
@@ -265,13 +166,6 @@ def _query_body(ext_id: str) -> bytes:
 
 
 def _pick_latest_version(body: bytes, ext_id: str) -> str:
-    """Return the newest concrete version from an extensionquery response.
-
-    Walks ``results[0].extensions[0].versions[0].version`` (the list is
-    newest-first). A missing extension, an empty version list, or a non-string
-    version fails closed with :class:`ResolveError` — a resolver must never guess
-    or store ``latest``.
-    """
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

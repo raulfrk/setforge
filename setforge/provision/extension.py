@@ -30,15 +30,7 @@ class ExtensionProvisioner(Provisioner):
     type = "extension"
 
     def __init__(self, *, pins: dict[str, ResolvedPin] | None = None) -> None:
-        """Optionally carry lock pins keyed by casefolded ``publisher.name``.
-
-        A pin for the item under reconcile routes :meth:`apply_one` through the
-        BYTE-STRONG install path (download + verify the locked VSIX). The
-        registry's :func:`~setforge.provision.registry.build` constructs this
-        with no args, so ``pins`` defaults to empty — dispatch-built extension
-        provisioners (which are never on the lock path today) keep today's
-        marketplace-id install.
-        """
+        # A pin routes apply_one through the byte-verified VSIX path.
         self._pins: dict[str, ResolvedPin] = pins or {}
 
     def probe(self) -> set[Identity]:

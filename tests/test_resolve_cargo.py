@@ -1,15 +1,4 @@
-"""Tests for the cargo resolver.
-
-Resolves the concrete version + ``.crate`` sha256 from the crates.io SPARSE
-INDEX (``https://index.crates.io/{prefix}/{name}``). The path prefix is
-LENGTH-BUCKETED on the LOWERCASED crate name — the known trap this suite pins
-across all four buckets. The response is newline-delimited JSON, one object per
-version; the resolver picks the MAX non-yanked version and builds a
-``sha256:{cksum}`` checksum pin.
-
-The network boundary is INJECTABLE (a ``fetch`` callable) so these unit tests
-never hit crates.io — the real fetch is exercised by the docker e2e.
-"""
+"""Tests for the cargo resolver (fetch injected; never hits crates.io)."""
 
 from __future__ import annotations
 
@@ -20,9 +9,6 @@ from setforge.errors import ResolveError
 from setforge.provision.resolve.cargo import CargoResolver, _index_path
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 
-# A realistic crates.io sparse-index body: newline-delimited JSON, one object
-# per version, each with vers/cksum/yanked (real index lines carry more fields —
-# name/deps/features — which the resolver must ignore).
 _SERDE_INDEX = "\n".join(
     [
         '{"name":"serde","vers":"1.0.0","cksum":"aaa0","yanked":false,"deps":[]}',
@@ -49,8 +35,7 @@ def _resolver(body: str, *, record: list[str] | None = None) -> CargoResolver:
         ("ab", "2/ab"),
         ("abc", "3/a/abc"),
         ("serde", "se/rd/serde"),
-        # Uppercase must lowercase for the bucket path but keep the name segment.
-        ("Serde", "se/rd/serde"),
+        ("Serde", "se/rd/serde"),  # must lowercase
     ],
 )
 def test_index_path_buckets(name: str, expected: str) -> None:
@@ -63,11 +48,9 @@ def test_resolve_picks_max_non_yanked_and_builds_checksum() -> None:
     pin = resolver.resolve(CargoPackage(crate="serde"))
     assert pin.type is PackageType.CARGO
     assert pin.key == "serde"
-    # 1.0.101 is yanked, so 1.0.100 wins (NOT lexicographic max 1.0.99).
-    assert pin.version == "1.0.100"
+    assert pin.version == "1.0.100"  # 1.0.101 is yanked; not lexicographic 1.0.99
     assert pin.integrity == "sha256:c100"
     assert pin.integrity_kind is IntegrityKind.CHECKSUM
-    # The fetch hit the length-bucketed sparse-index URL.
     assert record == ["https://index.crates.io/se/rd/serde"]
 
 

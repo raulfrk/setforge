@@ -595,19 +595,10 @@ def _plugin_checkout_targets(
 ) -> dict[str, tuple[Path, str]]:
     """Map each LOCKED declared plugin to its ``(cache_dir, pinned_sha)``.
 
-    The strong-install seam: only under
-    :data:`ClaudeInstallMode.LOCAL_CLONE` does ``claude`` read a plugin from an
-    on-disk marketplace cache setforge controls, so pinning the cache to the
-    locked commit only bites there. For each declared ``name@marketplace`` that
-    has a plugin pin, resolve its marketplace's cache dir (via
-    :func:`_source_identity`, which honors the BOTH-collision alias sidecar) and
-    pair it with the pin's ``sha``. A REGULAR-mode install, or a plugin with no
-    pin, is absent from the map — :class:`PluginProvisioner` then installs it
-    unchanged. Offline: reads only the loaded config + the pins map, no network.
-
-    A pin whose marketplace is undeclared / a PATH source is skipped (a PATH
-    marketplace is not a setforge-managed cache to reset); the plugin then
-    installs unpinned rather than erroring the whole reconcile.
+    Only :data:`ClaudeInstallMode.LOCAL_CLONE` reads a plugin from an on-disk
+    cache setforge controls, so the strong install only bites there. A pin
+    whose marketplace is undeclared or a PATH source is skipped, and the
+    plugin installs unpinned rather than erroring the whole reconcile.
     """
     if install_mode is not ClaudeInstallMode.LOCAL_CLONE:
         return {}
@@ -654,12 +645,10 @@ def reconcile(
     write subprocess. ``REPORT`` policy behaves identically to
     ``dry_run=True`` for write suppression.
 
-    ``pins`` (from a loaded ``setforge.lock``, keyed by the case-sensitive
-    ``name@marketplace`` id) drives the STRONG install: a pinned
-    plugin under LOCAL_CLONE gets its marketplace cache hard-reset to the pinned
-    commit before ``claude plugin install`` (see :func:`_plugin_checkout_targets`
-    + :class:`PluginProvisioner`). Without pins — or in REGULAR mode — the
-    install is byte-identical to today (cache at ``origin/HEAD``).
+    ``pins`` drives the strong install: a pinned plugin under LOCAL_CLONE gets
+    its marketplace cache hard-reset to the pinned commit before ``claude
+    plugin install`` (see :func:`_plugin_checkout_targets`); otherwise
+    byte-identical to today.
     """
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
@@ -711,10 +700,6 @@ def reconcile(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
     )
 
-    # Pinned-marketplace checkout targets (strong install): a LOCKED
-    # plugin under LOCAL_CLONE gets its marketplace cache reset to the pinned
-    # commit inside apply_one, BEFORE `claude plugin install`. Empty without a
-    # lock / in REGULAR mode, so the install stays byte-identical there.
     checkouts = _plugin_checkout_targets(
         cfg, declared, pins or {}, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
     )

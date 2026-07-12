@@ -1,30 +1,5 @@
-"""Docker E2E: real ``setforge lock`` + ``install --locked`` across ecosystems.
-
-The Tier-3 half of the lockfile subsystem — the ONLY place the resolvers hit
-their REAL
-upstreams inside a fresh Debian 12 container:
-
-- **cargo** → the real crates.io sparse index (concrete version + ``checksum``).
-- **github_release** → the real GitHub releases API + a real asset
-  download-and-hash (concrete tag + ``checksum``).
-- **extension** → the real Visual Studio Marketplace ``extensionquery`` +
-  ``vspackage`` download-and-hash (concrete version + ``checksum``). This is the
-  case that VALIDATES the marketplace query/response shape end-to-end: a
-  plausible-but-wrong ``extensionquery`` body would fail here, not in the mocked
-  unit tests.
-
-Cases (per the lockfile acceptance):
-
-1. ``setforge lock`` writes a ``setforge.lock`` whose cargo / github_release /
-   extension pins carry CONCRETE versions + a ``checksum`` field, no ``latest``.
-2. ``install --locked`` exits 0 on that matching lock, and NON-ZERO on a drifted
-   lock (a tampered github_release checksum the install-side verify rejects).
-
-Network gate: these hit crates.io / github.com / the marketplace, so they are
-opt-in behind ``SETFORGE_E2E_NETWORK`` (the same convention
-``test_e2e_docker_toolchains.py`` uses) — the suite stays hermetic by default.
-Same-daemon lifecycle ⇒ ``xdist_group("docker_daemon")``.
-"""
+"""Docker E2E: real ``setforge lock`` + ``install --locked``, opt-in behind
+``SETFORGE_E2E_NETWORK`` — the only place resolvers hit real upstreams."""
 
 from __future__ import annotations
 
@@ -49,15 +24,10 @@ _CONFIG = f"{_SRC_REPO}/setforge.yaml"
 _LOCK = f"{_SRC_REPO}/setforge.lock"
 _PROFILE = "lock-e2e"
 
-# A small, permanently-stable extension (concrete pin keeps the version + hash
-# deterministic across marketplace re-publishes).
 _EXT_ID = "esbenp.prettier-vscode"
-# jqlang/jq at a concrete tag with a ~1.7 MB linux asset — a real, stable
-# github_release asset the resolver downloads + hashes.
 _GHR_REPO = "jqlang/jq"
 _GHR_TAG = "jq-1.7.1"
 _GHR_ASSET = "jq-linux-amd64"
-# A tiny, ubiquitous crate.
 _CRATE = "cfg-if"
 
 _CONFIG_YAML = f"""\
@@ -132,14 +102,6 @@ def _install_locked(c: ContainerHandle, *, check: bool = False):
 def test_lock_writes_concrete_pins_across_ecosystems(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``setforge lock`` pins cargo + github_release + extension concretely.
-
-    Hits crates.io, github.com, and the REAL marketplace. Asserts the written
-    lock carries a concrete (non-``latest``) version + a ``checksum`` field for
-    each of the three ecosystems — the marketplace-shape validation is implicit:
-    a wrong ``extensionquery`` body makes the extension pin fail to resolve and
-    this test go red.
-    """
     c = docker_container()
     _write_source(c)
 
@@ -158,7 +120,6 @@ def test_lock_writes_concrete_pins_across_ecosystems(
     assert ghr_pin["checksum"].startswith("sha256:"), ghr_pin
 
     ext_pin = _pin_table(lock_text, pkg_type="extension", key=_EXT_ID)
-    # Marketplace-shape proof: a concrete semver-ish version came back.
     assert re.match(r"\d+\.\d+", ext_pin["version"]), ext_pin
     assert ext_pin["checksum"].startswith("sha256:"), ext_pin
 
@@ -168,12 +129,6 @@ def test_lock_writes_concrete_pins_across_ecosystems(
 def test_install_locked_passes_on_match_and_fails_on_drift(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``install --locked`` accepts a matching lock and rejects a drifted one.
-
-    A tampered github_release checksum makes the install-side verify reject the
-    downloaded asset → non-zero exit. Proves the lock's integrity value is
-    load-bearing at install, not decorative.
-    """
     c = docker_container()
     _write_source(c)
 
@@ -181,12 +136,9 @@ def test_install_locked_passes_on_match_and_fails_on_drift(
 
     ok = _install_locked(c, check=False)
     assert ok.returncode == 0, ok.stdout + ok.stderr
-    # The pinned github_release binary landed (checksum matched).
     installed = c.exec(["test", "-f", "/tmp/lock-out/bin/jq"], check=False)
     assert installed.returncode == 0, ok.stdout + ok.stderr
 
-    # Tamper the github_release checksum in the lock, wipe the receipt + binary
-    # so the item is not SKIP-present, then re-install: the verify must fail.
     lock_text = c.read_text(_LOCK)
     tampered = _tamper_checksum(lock_text, key=_GHR_REPO)
     assert tampered != lock_text, "tamper did not alter the lock"
@@ -204,19 +156,7 @@ def test_install_locked_passes_on_match_and_fails_on_drift(
     )
 
 
-# ---------------------------------------------------------------------------
-# TOML lock helpers (tomllib is stdlib, but the container may not expose it to
-# a host-side parse; we parse the copied-out text on the host instead).
-# ---------------------------------------------------------------------------
-
-
 def _pin_table(lock_text: str, *, pkg_type: str, key: str) -> dict[str, str]:
-    """Return the ``[[package]]`` table matching ``(type, key)`` as a dict.
-
-    Parses the lock with the host's stdlib ``tomllib`` (the text was read out of
-    the container) — a real parse, not a regex scrape, so a malformed lock fails
-    loudly here.
-    """
     import tomllib
 
     doc = tomllib.loads(lock_text)
@@ -227,11 +167,7 @@ def _pin_table(lock_text: str, *, pkg_type: str, key: str) -> dict[str, str]:
 
 
 def _tamper_checksum(lock_text: str, *, key: str) -> str:
-    """Flip one hex nibble of the ``checksum`` on the pin whose ``key`` matches.
-
-    A minimal, targeted mutation (not a blanket replace) so only the intended
-    pin drifts and the rest of the lock stays byte-valid.
-    """
+    """Flip one hex nibble of the ``checksum`` on the pin whose ``key`` matches."""
     import tomllib
 
     doc = tomllib.loads(lock_text)

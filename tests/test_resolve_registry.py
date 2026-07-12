@@ -1,10 +1,4 @@
-"""Tests for the resolver registry.
-
-A ``@register(PackageType.X)`` decorator records a Resolver in a module-level
-dict SEPARATE from the provisioner registry; ``get_resolver(type)`` instantiates
-by ``PackageType``. Registering a new resolver must touch ONLY the new resolver
-file, never the registry module.
-"""
+"""Tests for the resolver registry: separate from the provisioner registry."""
 
 from typing import ClassVar
 
@@ -24,8 +18,6 @@ from setforge.provision.resolve.protocol import (
 
 
 class _DummyResolver:
-    """Minimal Resolver-shaped class for exercising the registry."""
-
     type: ClassVar[PackageType] = PackageType.CARGO
 
     def resolve(self, item: object) -> ResolvedPin:
@@ -40,12 +32,6 @@ class _DummyResolver:
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> object:
-    """Snapshot + restore the module-level registry around each test.
-
-    Clears the registry for the duration of the test so real resolver modules
-    (cargo/go/python) that self-register at import time do not collide with the
-    dummy registrations these tests make, then restores the real set on exit.
-    """
     saved = dict(registry._REGISTRY)
     registry._REGISTRY.clear()
     try:
@@ -82,8 +68,6 @@ def test_unknown_type_raises_and_names_it() -> None:
 def test_registry_is_separate_from_provisioner_registry() -> None:
     from setforge.provision import registry as prov_registry
 
-    # Distinct dict objects: registering a resolver never mutates the
-    # provisioner registry, and get_resolver never resolves a provisioner.
     assert registry._REGISTRY is not prov_registry._REGISTRY
     before = dict(prov_registry._REGISTRY)
     registry.register(PackageType.PYTHON)(_DummyResolver)

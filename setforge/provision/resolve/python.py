@@ -1,28 +1,5 @@
-"""The python :class:`Resolver` — resolves the correct wheel's sha256 from PyPI.
-
-Fetches ``https://pypi.org/pypi/{name}/json`` (latest) or
-``/{name}/{version}/json`` (pinned) and reads the concrete ``info.version`` plus
-the correct wheel's ``digests.sha256``. This is a RECORD+DRIFT pin: the actual
-install stays ``uv tool install`` (PRAGMATIC); the lock records the
-hash for drift-detection.
-
-**Wheel-selection rule** (:func:`_select_wheel`). A compiled tool ships many
-wheels (per platform/abi/interpreter); a tag mismatch would pin the WRONG hash.
-The rule, in priority order:
-
-1. A wheel whose tags match the TARGET — linux ``x86_64`` (manylinux/musllinux
-   or a bare ``linux_x86_64``) built for the RUNNING CPython major (``cp3X``) or
-   the abi3 stable ABI (``abi3``/``cp3``).
-2. The pure-python universal wheel (``py3-none-any`` / ``none-any``) — a pure
-   tool ships exactly this.
-
-If neither matches (sdist-only, or only foreign-platform wheels) the resolve
-fails closed rather than pinning an arbitrary hash.
-
-The PyPI-fetch boundary is injected (the ``fetch_json`` callable) so unit tests
-mock it; the default fetch mirrors ``_pypi_client``'s HTTPS-only, timed-out
-urllib discipline (explicit timeout, reject downgrade).
-"""
+"""The python :class:`Resolver`: wheel selection prefers linux-x86_64/CPython,
+else pure, else fails closed."""
 
 from __future__ import annotations
 
@@ -44,40 +21,25 @@ from setforge.provision.resolve.registry import register
 __all__ = ["PythonResolver"]
 
 _PYPI_BASE = "https://pypi.org/pypi"
-# ``_pypi_client`` uses a (connect, read) tuple; urllib takes one scalar, so we
-# reuse its max() convention as a single timeout here.
 _FETCH_TIMEOUT_S = 10.0
-# PyPI's per-project JSON is metadata (not the artifact), so a few MiB is a
-# generous ceiling — a project with a pathological release history stays well
-# under it, while a runaway/hostile body is still capped.
-_MAX_JSON_BYTES = 32 * 1024 * 1024  # 32 MiB
+_MAX_JSON_BYTES = 32 * 1024 * 1024
 
-# A fetch_json takes (name, version|None) and returns the parsed PyPI JSON body.
 FetchJson = Callable[[str, "str | None"], "dict[str, Any]"]
 
 
 def _cpython_tag() -> str:
-    """The running interpreter's CPython tag, e.g. ``cp311``."""
     return f"cp{sys.version_info.major}{sys.version_info.minor}"
 
 
 def _is_linux_x86_64_wheel(filename: str) -> bool:
-    """True when ``filename``'s platform tag targets linux x86_64."""
     lower = filename.lower()
-    # The `and "x86_64"` is load-bearing: `manylinux`/`musllinux` also tag
-    # aarch64 wheels, so the platform family alone would over-match the arch.
+    # and "x86_64": manylinux/musllinux also tag aarch64, so family alone over-matches.
     return (
         "manylinux" in lower or "musllinux" in lower or "linux_x86_64" in lower
     ) and "x86_64" in lower
 
 
 def _select_wheel(urls: list[dict[str, Any]]) -> str | None:
-    """Return the chosen wheel's sha256, or ``None`` if no wheel matches.
-
-    Priority: a linux-x86_64 wheel for the running CPython major (or an abi3
-    stable-ABI wheel), then the pure ``py3-none-any`` wheel. ``None`` means the
-    caller must fail closed (sdist-only or foreign-platform-only).
-    """
     cp = _cpython_tag()
     compiled: str | None = None
     pure: str | None = None
@@ -92,8 +54,6 @@ def _select_wheel(urls: list[dict[str, Any]]) -> str | None:
         if "none-any" in lower:
             pure = pure or digest
             continue
-        # First matching compiled wheel wins; any linux/cpython (or abi3) match
-        # for THIS release is correct, so the first is as good as any.
         if (
             compiled is None
             and _is_linux_x86_64_wheel(filename)
@@ -104,7 +64,6 @@ def _select_wheel(urls: list[dict[str, Any]]) -> str | None:
 
 
 def _sha256_of(entry: dict[str, Any]) -> str | None:
-    """Extract ``digests.sha256`` from a PyPI url/file entry, or ``None``."""
     digests = entry.get("digests")
     if not isinstance(digests, dict):
         return None
@@ -113,13 +72,6 @@ def _sha256_of(entry: dict[str, Any]) -> str | None:
 
 
 def _default_fetch_json(name: str, version: str | None) -> dict[str, Any]:
-    """Fetch the PyPI JSON body for ``name`` (optionally pinned to ``version``).
-
-    The HTTPS-only + redirect-downgrade + timeout + wire-cap fetch is delegated
-    to the shared :func:`~setforge.provision.resolve._fetch.fetch_bytes` (which
-    supplies the wire cap this fetcher previously lacked); only the JSON
-    decode/shape check on top is PyPI-specific.
-    """
     url = (
         f"{_PYPI_BASE}/{name}/json"
         if version is None
@@ -137,8 +89,6 @@ def _default_fetch_json(name: str, version: str | None) -> dict[str, Any]:
 
 @register(PackageType.PYTHON)
 class PythonResolver:
-    """Resolve a Python package to its version + correct-wheel sha256."""
-
     type: ClassVar[PackageType] = PackageType.PYTHON
 
     def __init__(self, *, fetch_json: FetchJson | None = None) -> None:
@@ -178,12 +128,6 @@ def _concrete_version(body: dict[str, Any], name: str) -> str:
 
 
 def _wheel_entries(body: dict[str, Any], name: str) -> list[dict[str, Any]]:
-    """Return the file list to select a wheel from.
-
-    Prefers ``urls`` (present on both the latest and pinned endpoints for the
-    selected release). Falls back to ``releases[version]`` if a caller supplies a
-    latest-endpoint body without ``urls``.
-    """
     urls = body.get("urls")
     if isinstance(urls, list) and urls:
         return [e for e in urls if isinstance(e, dict)]

@@ -1,15 +1,4 @@
-"""Tests for the github_release resolver.
-
-Resolves the concrete tag (from the spec's ``tag:`` or, when ``tag == latest``,
-the GitHub releases API ``/repos/{repo}/releases/latest``) plus the asset
-sha256 — computed by fetching the asset ONCE and hashing it. The pin carries
-``version=tag`` and ``checksum=sha256:{digest}`` (TOFU: setforge records its own
-computed hash, exactly as the install-side provisioner already does).
-
-The fetch boundary is INJECTABLE (a ``(url, *, user_agent) -> bytes`` callable)
-so these unit tests never hit github.com — the real fetch is exercised by the
-docker e2e. Fixtures use a realistic releases-API JSON and raw asset bytes.
-"""
+"""Tests for the github_release resolver (fetch injected; never hits github.com)."""
 
 from __future__ import annotations
 
@@ -26,8 +15,6 @@ from setforge.provision.resolve.protocol import IntegrityKind, PackageType
 _ASSET_BYTES = b"\x7fELF fake-binary-tarball payload"
 _ASSET_SHA = hashlib.sha256(_ASSET_BYTES).hexdigest()
 
-# A realistic /repos/{repo}/releases/latest response (real API bodies carry many
-# more fields — author, assets[], body — which the resolver must ignore).
 _LATEST_API_JSON = json.dumps(
     {
         "tag_name": "v0.8.9",
@@ -63,7 +50,6 @@ def _fetcher(
 
 
 def test_resolve_concrete_tag_hashes_asset() -> None:
-    # A concrete tag in the spec: NO releases-API call, just fetch+hash the asset.
     asset_url = (
         "https://github.com/owner/tool/releases/download/v0.8.9/tool-linux.tar.gz"
     )
@@ -77,7 +63,6 @@ def test_resolve_concrete_tag_hashes_asset() -> None:
     assert pin.version == "v0.8.9"
     assert pin.integrity == f"sha256:{_ASSET_SHA}"
     assert pin.integrity_kind is IntegrityKind.CHECKSUM
-    # Only the asset was fetched — no releases-API round-trip for a concrete tag.
     assert [u for u, _ in record] == [asset_url]
 
 
@@ -93,10 +78,8 @@ def test_resolve_latest_queries_api_then_hashes_asset() -> None:
         )
     )
     pin = resolver.resolve(_pkg("latest"))
-    # `latest` resolved to the concrete tag from the API — never stored verbatim.
     assert pin.version == "v0.8.9"
     assert pin.integrity == f"sha256:{_ASSET_SHA}"
-    # The API call carried a User-Agent (GitHub rejects UA-less requests).
     api_calls = [(u, ua) for u, ua in record if u == api_url]
     assert api_calls
     assert api_calls[0][1] is not None
@@ -115,8 +98,6 @@ def test_resolve_never_returns_latest_token() -> None:
 
 
 def test_resolve_missing_asset_raises_clean_error() -> None:
-    # The releases API resolves, but the asset URL is absent (404-shaped) -> the
-    # injected fetch raises ResolveError, which must surface cleanly.
     api_url = "https://api.github.com/repos/owner/tool/releases/latest"
     resolver = GitHubReleaseResolver(fetch=_fetcher({api_url: _LATEST_API_JSON}))
     with pytest.raises(ResolveError):

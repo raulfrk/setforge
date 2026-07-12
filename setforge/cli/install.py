@@ -117,12 +117,8 @@ def _prepare_lock(
 ) -> LockFile | None:
     """Load the committed lock and, under ``--locked``, gate on its coverage.
 
-    Returns the parsed lock (or ``None`` when no file exists) for install to
-    consume offline. When ``locked`` is set, runs the fail-closed spec→lock
-    coverage check FIRST (before any mutation), so a missing lockable entry
-    aborts here. A malformed on-disk lock propagates
-    :class:`~setforge.errors.MalformedLockError` (caught at the CLI boundary),
-    never a silent degrade to a spec-resolved install.
+    The coverage check runs FIRST (before any mutation), so a missing lockable
+    entry aborts here.
     """
     path = lock_path(config)
     active_lock = (
@@ -138,14 +134,9 @@ def _gate_on_lock_coverage(
 ) -> None:
     """Fail-closed unless every LOCKABLE package has a lock entry.
 
-    ``--locked`` is a spec→lock COVERAGE check, NOT a re-resolve: the lockable
-    surface is exactly
-    :func:`~setforge.cli._lock_enumerate.enumerate_lock_items` (top-level
-    packages + plugins + extensions), so ``cargo_binaries`` and bundle-inline
-    packages — which B10 deliberately never locks — are OUT of scope and never
-    false-fail. Every lockable item whose ``(type, key)`` is absent from the lock
-    is reported and exits non-zero; a missing lock file means the whole surface
-    is missing.
+    ``--locked`` is a spec→lock COVERAGE check, NOT a re-resolve, scoped to
+    exactly :func:`~setforge.cli._lock_enumerate.enumerate_lock_items` — NOT
+    the full plan, so ``cargo_binaries``/bundle-inline packages never false-fail.
     """
     present = (
         {(pin.type.value, pin.key) for pin in lock.packages}
@@ -294,10 +285,6 @@ def install(
     # Must expand bundle file components BEFORE the revert snapshot below, so
     # the synthetic entry is in `_iter_all_tracked_files` ahead of capture.
     resolved = resolve_and_expand(cfg, profile, repo_root)
-    # Load the committed lock (if any). Present ⇒ install consumes it offline:
-    # every ProvisionItem's version/integrity is overridden from its pin with NO
-    # resolver/network call. --locked adds a fail-closed spec→lock coverage gate,
-    # scoped to the LOCKABLE surface (enumerate_lock_items), run BEFORE mutation.
     active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
     # Both overlays below must apply AFTER profile resolution.
     apply_host_local_tracked_file_overrides(cfg)
@@ -364,8 +351,6 @@ def install(
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
         # SOFT failures warn but never gate; HARD gates. No revert tracking.
-        # active_lock (when present) overrides each item's version/integrity
-        # offline — no resolver call — inside run_provisioning.
         provision_results = reconcile_packages(cfg, resolved, lock=active_lock)
 
         # P4.3: check for unexpected drift before deploying.

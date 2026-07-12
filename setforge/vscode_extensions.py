@@ -150,10 +150,7 @@ def reconcile(
 
     ``dry_run=True`` logs intended actions without invoking subprocess.
 
-    ``pins`` (from a loaded ``setforge.lock``) maps a casefolded ``publisher.name``
-    to its :class:`ResolvedPin`; a pinned extension takes the BYTE-STRONG install
-    path (download + verify the locked VSIX). Without pins, or for an extension
-    with no pin, install falls back to ``code --install-extension <id>`` unchanged.
+    ``pins`` routes a pinned extension through the byte-verified VSIX path.
     """
     from setforge.provision.extension import ExtensionProvisioner
 
@@ -235,17 +232,7 @@ def reconcile(
 def install_one(ext_id: str, *, pin: ResolvedPin | None = None) -> None:
     """Install a single extension via ``code --install-extension``.
 
-    Without ``pin`` (no lock, or no lock entry for this extension), runs the
-    marketplace-id install unchanged: ``code --install-extension <publisher.name>``.
-
-    With ``pin`` (the lock pins this extension), takes the BYTE-STRONG path:
-    download the VSIX for the pinned CONCRETE version, verify its sha256 against
-    the locked integrity (fail-closed — a mismatch NEVER installs), write the
-    verified bytes to a temp ``.vsix``, and install THAT file path so ``code``
-    consumes exactly the locked bytes rather than re-resolving the latest.
-
-    Raises :class:`ExtensionInstallFailed` on non-zero exit, timeout, a hash
-    mismatch, or a download failure (with the captured stderr in the message).
+    With ``pin``: download + sha256-verify BEFORE install, fail-closed on mismatch.
     """
     if pin is not None:
         _install_pinned(ext_id, pin)
@@ -254,11 +241,6 @@ def install_one(ext_id: str, *, pin: ResolvedPin | None = None) -> None:
 
 
 def _run_install(ext_id: str, install_arg: str) -> None:
-    """Run ``code --install-extension <install_arg>`` (an id OR a .vsix path).
-
-    ``ext_id`` names the extension in error messages; ``install_arg`` is what
-    ``code`` actually installs.
-    """
     code = _ensure_code()
     try:
         subprocess.run(
@@ -279,18 +261,7 @@ def _run_install(ext_id: str, install_arg: str) -> None:
 
 
 def _install_pinned(ext_id: str, pin: ResolvedPin) -> None:
-    """Download + verify the pinned VSIX, then install it from a temp file.
-
-    Fail-closed: the sha256 of the downloaded bytes must equal the locked
-    integrity BEFORE any ``code --install-extension`` runs; a mismatch raises
-    and installs nothing. The download itself goes through the guarded fetch
-    (HTTPS-only, timeout, wire cap) inside :func:`download_vsix`.
-
-    Dependency-ordering note: a VSIX whose manifest declares an as-yet
-    uninstalled dependency extension can make ``code`` exit non-zero; that
-    surfaces cleanly as :class:`ExtensionInstallFailed` (dep resolution is not
-    solved here) rather than crashing.
-    """
+    # Verify BEFORE install; a mismatch installs nothing.
     from setforge.provision.resolve.extension import _split_ext_id, download_vsix
 
     publisher, name = _split_ext_id(ext_id)
@@ -307,13 +278,7 @@ def _install_pinned(ext_id: str, pin: ResolvedPin) -> None:
 
 
 def _verify_vsix_hash(ext_id: str, data: bytes, pin: ResolvedPin) -> None:
-    """Fail-closed sha256 check of downloaded VSIX bytes against the locked hash.
-
-    Uses :func:`hmac.compare_digest` (constant-time, same discipline as
-    :func:`setforge.provision.installer._verify_checksum`). Any mismatch, or a
-    non-``sha256:`` integrity, raises :class:`ExtensionInstallFailed` so the
-    caller never hands unverified bytes to ``code``.
-    """
+    # Constant-time via hmac.compare_digest (same as installer._verify_checksum).
     algo, _, expected_hex = pin.integrity.partition(":")
     if algo != "sha256" or not expected_hex:
         raise ExtensionInstallFailed(
@@ -337,13 +302,7 @@ def _verify_vsix_hash(ext_id: str, data: bytes, pin: ResolvedPin) -> None:
 
 @contextmanager
 def _temp_vsix(data: bytes) -> Iterator[Path]:
-    """Yield a Path to a temp file holding ``data`` with a ``.vsix`` suffix.
-
-    ``code --install-extension`` only treats a path as a VSIX when it ends in
-    ``.vsix``, so the suffix is mandatory. The file is unlinked on BOTH the
-    success and the exception path (``finally``), so a failed install leaks no
-    temp file.
-    """
+    # .vsix suffix required: code only treats such a path as a VSIX.
     fd, raw_path = tempfile.mkstemp(prefix="setforge-ext-", suffix=".vsix")
     path = Path(raw_path)
     try:

@@ -39,9 +39,7 @@ LOGGER: logging.Logger = logging.getLogger(__name__)
 _TIMEOUT_S = 30
 _CLONE_TIMEOUT_S = 120
 
-#: A resolved plugin marketplace pin is a 40-hex git commit (never a moving
-#: ref); :func:`checkout_marketplace_at` rejects anything else fail-closed so a
-#: branch name / ``HEAD`` can never slip past the pin.
+#: A plugin pin is a 40-hex git commit, never a moving ref; validated fail-closed.
 _SHA_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 
 #: Default root for ``LOCAL_CLONE`` marketplace mirrors. Each marketplace
@@ -441,25 +439,7 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 
 
 def checkout_marketplace_at(cache_dir: Path, sha: str) -> None:
-    """Hard-reset an existing marketplace cache to the PINNED commit ``sha``.
-
-    The strong-install counterpart to :func:`_refresh_marketplace_cache`: a
-    locked plugin must be installed from its pinned marketplace commit, NOT
-    ``origin/HEAD`` (otherwise the sha pin is defeated). ``fetch`` first so
-    a pinned sha newer than the last clone is present locally, then
-    ``reset --hard <sha> --`` pins the checkout to it. The trailing ``--``
-    terminates the pathspec list so ``sha`` is always read as a revision, never
-    as a flag even if it began with ``-`` (arg-injection guard);
-    ``_run_git`` already uses literal-argv (``shell=False``) with explicit
-    timeouts.
-
-    Preconditions: ``cache_dir`` exists and holds a git repo whose ``origin``
-    matches the marketplace (the caller — the reconcile path — has already
-    resolved/cloned it via :func:`resolve_marketplace_source`). Raises
-    :class:`MarketplaceCacheMiss` on any git failure (a bad/unknown sha, a
-    detached-head problem, network down for the fetch), so the caller surfaces a
-    clean typed error rather than a traceback and installs nothing partial.
-    """
+    # Hard-resets to the PINNED sha, NOT origin/HEAD (otherwise the pin is defeated).
     if not _SHA_RE.match(sha):
         raise MarketplaceCacheMiss(
             f"refusing to pin marketplace cache {cache_dir} to non-SHA ref "

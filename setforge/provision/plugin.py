@@ -31,20 +31,7 @@ class PluginProvisioner(Provisioner):
     type = "plugin"
 
     def __init__(self, *, checkouts: dict[str, tuple[Path, str]] | None = None) -> None:
-        """Optionally carry pinned-marketplace checkout targets.
-
-        ``checkouts`` maps a ``name@marketplace`` plugin id to its
-        ``(cache_dir, sha)`` — present only for a LOCKED plugin under
-        LOCAL_CLONE mode (built by :func:`setforge.claude_plugins.reconcile`).
-        When :meth:`apply_one` finds a target for the plugin it is installing,
-        it hard-resets that marketplace cache to the PINNED commit BEFORE
-        ``claude plugin install`` runs, so ``claude`` reads the plugin from the
-        pinned commit rather than ``origin/HEAD`` (the strong install).
-        The registry's :func:`~setforge.provision.registry.build` constructs
-        this with no args, so ``checkouts`` defaults to empty — an unpinned
-        plugin, a REGULAR-mode install, or a no-lock install all keep today's
-        marketplace-id install unchanged.
-        """
+        # checkouts: plugin id -> (cache_dir, sha), for LOCKED LOCAL_CLONE plugins.
         self._enabled: set[Identity] = set()
         self._disabled: set[Identity] = set()
         self._checkouts: dict[str, tuple[Path, str]] = checkouts or {}
@@ -98,10 +85,7 @@ class PluginProvisioner(Provisioner):
                 kind=Outcome.HARD,
             ) from exc
         except MarketplaceCacheMiss as exc:
-            # A pinned-checkout failure (bad sha, detached-head issue, fetch
-            # down) is a clean typed error — surface it as a HARD item failure
-            # so nothing partial installs, rather than letting it escape as a
-            # traceback or falling through to an unpinned install.
+            # Fail closed as HARD rather than falling through to an unpinned install.
             summary = str(exc)
             raise ProvisionItemFailed(
                 item_id=item.identity.display,
@@ -120,26 +104,9 @@ class PluginProvisioner(Provisioner):
         return ProvisionOutcome(item=item, outcome=Outcome.OK)
 
     def _pin_marketplace(self, plugin_id: str) -> None:
-        """Hard-reset the plugin's marketplace cache to its pinned commit.
-
-        A no-op unless a ``(cache_dir, sha)`` was threaded in for ``plugin_id``
-        (only for a LOCKED plugin under LOCAL_CLONE). When present, the cache is
-        reset to the PINNED sha so the ensuing ``claude plugin install`` reads
-        the plugin from that commit, not ``origin/HEAD`` — the git
-        content-addressing IS the integrity guarantee. A checkout
-        failure raises :class:`MarketplaceCacheMiss`, caught by
-        :meth:`apply_one` as a HARD failure.
-
-        RESIDUAL (disabling plugin autoUpdate on a pinned plugin):
-        Claude Code has NO hook to disable per-plugin auto-update — no
-        ``autoUpdate`` config field, no ``--no-auto-update`` flag, and
-        ``DISABLE_AUTOUPDATER`` gates only the CLI self-updater, not plugins
-        (verified against current claude-code behavior). So this pins the cache
-        at install time, but a later background auto-update can still re-pull the
-        marketplace past the pin. There is no clean way to prevent that today;
-        re-running ``setforge install`` re-pins. Left as a documented residual
-        rather than faked.
-        """
+        # RESIDUAL: Claude Code has no hook to disable per-plugin auto-update, so a
+        # later background auto-update can still re-pull past this pin (verified: no
+        # autoUpdate field/flag; DISABLE_AUTOUPDATER only gates the CLI self-updater).
         target = self._checkouts.get(plugin_id)
         if target is None:
             return

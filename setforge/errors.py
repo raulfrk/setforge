@@ -218,49 +218,23 @@ class DuplicateProvisionerType(SetforgeError):
 
 
 class UnknownResolverType(SetforgeError):
-    """Raised by :func:`setforge.provision.resolve.registry.get_resolver` when a
-    :class:`~setforge.provision.resolve.protocol.PackageType` has no registered
-    resolver. The message names the unknown type and the known ones. Sibling of
-    :class:`UnknownProvisionerType` — resolution is a separate registry from
-    provisioning (the lock path runs without the install path)."""
+    pass
 
 
 class DuplicateResolverType(SetforgeError):
-    """Raised by the :func:`setforge.provision.resolve.registry.register`
-    decorator when a resolver type is registered twice. A programming error,
-    caught at import time — the sibling of :class:`DuplicateProvisionerType`."""
+    pass
 
 
 class ResolveError(SetforgeError):
-    """Raised by a :class:`~setforge.provision.resolve.protocol.Resolver` when
-    upstream resolution fails: an unparseable index/JSON body, a non-HTTPS or
-    redirect-downgraded fetch, a non-zero resolver subprocess, a timeout, or no
-    surviving concrete version. Carries a human message naming the package and
-    defect so the ``lock`` verb (later task) can abort the whole write cleanly
-    rather than surfacing a raw traceback."""
+    pass
 
 
 class MalformedLockError(SetforgeError):
-    """Raised when ``setforge.lock`` cannot be parsed into a
-    :class:`~setforge.lockfile.LockFile`.
-
-    A missing/wrong-typed ``version``, a non-array ``package`` table, a pin
-    missing a mandatory field (``type``/``key``/``version``), or a pin whose
-    integrity shape does not match its ecosystem is corruption — NOT a merely
-    absent lock. Carries a human message naming the defect so the user can
-    repair the file rather than seeing a raw ``tomllib``/``KeyError`` traceback."""
+    pass
 
 
 class LockConflict(SetforgeError):
-    """Raised when a per-profile ``setforge lock`` run cannot merge cleanly.
-
-    The lock holds ONE pin per ``(type, key)`` shared across every profile that
-    declares the package (the ``profiles`` back-ref). If profile B resolves a
-    package to a DIFFERENT version than the entry an earlier profile A already
-    wrote, merging would silently drop one — so the merge fails closed and the
-    message names both the conflicting versions. Distinct from
-    :class:`MalformedLockError` (a corrupt on-disk file) and
-    :class:`ResolveError` (an upstream-resolution failure)."""
+    """A shared pin resolves to a DIFFERENT version/integrity — fails closed."""
 
 
 class ReconcileAborted(SetforgeError):

@@ -1,28 +1,5 @@
-"""Integration tier: the real ``lock`` → ``install`` → ``install --locked`` flow.
-
-Unlike the per-unit tests (``test_cli_lock`` / ``test_install_locked`` /
-``test_lock_apply``), this exercises the WHOLE command chain end-to-end through
-the real CLI against a real git-backed config repo, with only the two network
-boundaries mocked:
-
-- the resolver registry (so ``setforge lock`` writes a real ``setforge.lock``
-  from canned pins without touching crates.io / GitHub / the marketplace), and
-- ``GitHubReleaseProvisioner._download`` (so ``install`` verifies the locked
-  checksum against known bytes OFFLINE — the drift signal is real, not stubbed).
-
-The load-bearing observables are all POST-PARSE (CLI exit code + the on-disk
-``setforge.lock`` bytes + the installed binary), never registered fake stdout:
-
-1. ``lock`` writes a concrete-version, integrity-bearing lock for a config with
-   multiple ecosystems (cargo + github_release); no ``latest`` in the file.
-2. ``install`` consumes that lock with NO resolver/network call (the registry is
-   emptied for the install step — a re-resolve would raise), landing the pinned
-   github_release binary whose bytes match the locked checksum.
-3. ``install --locked`` exits 0 on a fully-covered lock and non-zero when a
-   declared lockable package has no lock entry.
-4. A TAMPERED lock checksum makes ``install`` fail non-zero (the github_release
-   verify path rejects the mismatched bytes) — drift is caught offline.
-"""
+"""Integration tier: the real lock->install->install --locked flow, only the
+registry + ``_download`` mocked."""
 
 from __future__ import annotations
 
@@ -47,9 +24,6 @@ from setforge.provision.resolve.protocol import (
 
 pytestmark = pytest.mark.integration
 
-# The github_release asset bytes the mocked download returns. ``extract: false``
-# in the config means install treats these verbatim as the binary, so the
-# locked checksum is simply the sha256 of THESE bytes.
 _ASSET_BYTES = b"#!/bin/sh\necho locked-tool\n"
 _ASSET_SHA = hashlib.sha256(_ASSET_BYTES).hexdigest()
 
@@ -106,13 +80,6 @@ def _pin(pkg_type: PackageType, key: str, version: str, integrity: str) -> Resol
 
 
 def _register_lock_stubs() -> None:
-    """Register canned resolvers so ``lock`` resolves without the network.
-
-    cargo → the crate name + a sha256 checksum; github_release → the CONCRETE
-    tag (never the ``latest`` spec alias) + the sha256 of the bytes the mocked
-    download will return, so the written lock and the install path agree.
-    """
-
     class _CargoStub:
         type: ClassVar[PackageType] = PackageType.CARGO
 
@@ -140,14 +107,7 @@ def _register_lock_stubs() -> None:
 def lockflow_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Iterator[Callable[..., Result]]:
-    """A git-backed config repo + sandboxed HOME/state + a CLI runner.
-
-    Mirrors ``tests/integration/conftest.py``'s hardening (host HOME/state
-    redirected, welcome suppressed), but the config carries real ``packages:``
-    entries. The resolver registry is snapshotted and restored around the test;
-    the github_release download is mocked to return fixed bytes so the whole
-    install runs offline.
-    """
+    """A git-backed config repo + sandboxed HOME/state + a CLI runner."""
     home = tmp_path / "home"
     state = tmp_path / "state"
     repo = tmp_path / "repo"
@@ -188,7 +148,6 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
     config = tmp_path / "repo" / "setforge.yaml"
     lock_file = lock_path(config)
 
-    # --- lock: resolve (stubbed) → write a concrete, integrity-bearing lock ---
     _register_lock_stubs()
     lock_res = lockflow_env(["lock"])
     assert lock_res.exit_code == 0, lock_res.output
@@ -204,7 +163,6 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
     assert ghr.version == _GHR_TAG, "concrete tag must replace the 'latest' spec alias"
     assert ghr.integrity == f"sha256:{_ASSET_SHA}"
 
-    # --- install: consume the lock OFFLINE (empty registry ⇒ re-resolve raises) ---
     registry._REGISTRY.clear()
     install_res = lockflow_env(["install", "--yes"])
     assert install_res.exit_code == 0, install_res.output
@@ -214,11 +172,9 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
     )
     assert installed.read_bytes() == _ASSET_BYTES
 
-    # --- install --locked: passes on a fully-covered lock (idempotent reinstall) ---
     locked_ok = lockflow_env(["install", "--locked", "--yes"])
     assert locked_ok.exit_code == 0, locked_ok.output
 
-    # --- install --locked: FAILS when a declared lockable package is missing ---
     trimmed = parse_lock(text)
     kept = tuple(p for p in trimmed.packages if p.key != "acme/toolbin")
     lock_file.write_text(_dump_pins(kept, trimmed.version), encoding="utf-8")
@@ -226,11 +182,9 @@ def test_lock_write_offline_consume_locked_pass_and_drift(
     assert locked_missing.exit_code != 0, locked_missing.output
     assert "no setforge.lock entry" in locked_missing.output
 
-    # --- install: a TAMPERED checksum makes install FAIL offline (drift caught) ---
     tampered = text.replace(_ASSET_SHA, "b" * 64)
     assert tampered != text, "tamper did not alter the lock"
     lock_file.write_text(tampered, encoding="utf-8")
-    # Fresh receipt store so the github_release item is not SKIP-present.
     for receipt in (Path(os.environ["SETFORGE_STATE_DIR"]) / "receipts").glob("*"):
         receipt.unlink()
     installed.unlink()

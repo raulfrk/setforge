@@ -1,20 +1,5 @@
-"""``setforge install --locked`` — spec→lock coverage gate.
-
-``--locked`` is FAIL-CLOSED: every package in the LOCKABLE surface
-(:func:`setforge.cli._lock_enumerate.enumerate_lock_items`) MUST have a matching
-lock entry, else the install exits non-zero naming the missing package(s). It
-does NOT re-resolve (no network) — it is a spec↔lock coverage check + the normal
-locked install.
-
-Two invariants under test:
-
-- a lockable package (a top-level cargo package here) with no lock entry ⇒
-  non-zero exit that names it;
-- the KEY scoping regression: a ``cargo_binaries`` entry (NOT lockable — the
-  lock never writes it) absent from the lock MUST NOT fail ``--locked``. The
-  gate is scoped to ``enumerate_lock_items``, not install's full dispatch item
-  set.
-"""
+"""``setforge install --locked``: fail-closed coverage gate scoped to
+:func:`enumerate_lock_items`, NOT install's full dispatch item set."""
 
 from __future__ import annotations
 
@@ -97,8 +82,6 @@ def _pin(pkg_type: PackageType, key: str, version: str) -> ResolvedPin:
 def test_locked_fails_when_lockable_package_missing_from_lock(
     install_repo: Path,
 ) -> None:
-    # A top-level cargo package (lockable) with an EMPTY lock ⇒ non-zero exit
-    # that names the missing package.
     config = _write_config(
         install_repo,
         packages_block=("packages:\n  rg:\n    type: cargo\n    crate: ripgrep\n"),
@@ -113,10 +96,7 @@ def test_locked_fails_when_lockable_package_missing_from_lock(
 def test_locked_does_not_fail_on_cargo_binaries_absent_from_lock(
     install_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # THE scoping regression: cargo_binaries is NOT lockable — B10 never writes
-    # it. A config with a cargo_binaries entry + a lock that LACKS it must still
-    # pass --locked (the gate is scoped to enumerate_lock_items). Stub cargo
-    # apply so no real cargo runs.
+    # cargo_binaries is NOT lockable; absent from the lock must NOT fail --locked.
     import setforge.provision.cargo as cargo_prov
 
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
@@ -132,7 +112,6 @@ def test_locked_does_not_fail_on_cargo_binaries_absent_from_lock(
         packages_block="",
         profile_body="    cargo_binaries:\n      - ast-grep\n",
     )
-    # Lock lacks any entry for the cargo_binary — must NOT false-fail.
     write_lock(LockFile(packages=()), lock_path(config))
     result = _install(config, "--locked")
     assert result.exit_code == 0, result.output
@@ -167,8 +146,6 @@ def test_locked_passes_when_lockable_package_present(
 def test_no_lock_present_installs_from_spec_unchanged(
     install_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Regression: with NO lock file, install behaves as today (resolves from
-    # spec, no --locked). No lock ⇒ the lock override is a no-op.
     import setforge.provision.cargo as cargo_prov
 
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
@@ -185,5 +162,5 @@ def test_no_lock_present_installs_from_spec_unchanged(
         profile_body="    cargo_binaries:\n      - ast-grep\n",
     )
     assert not lock_path(config).exists()
-    result = _install(config)  # no --locked
+    result = _install(config)
     assert result.exit_code == 0, result.output
