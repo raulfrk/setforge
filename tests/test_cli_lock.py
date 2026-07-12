@@ -265,8 +265,6 @@ def test_lock_update_reresolves_only_named_package(tmp_path: Path) -> None:
 
     # Re-register cargo to a new version; --update=ripgrep should pick it up.
     registry._REGISTRY.clear()
-    _register_full_stubs()
-    registry._REGISTRY.clear()
     _register_stub(PackageType.CARGO, "ripgrep", "15.0.0")
     _register_stub(PackageType.PYTHON, "black", "99.9.9")
     _register_stub(PackageType.GITHUB_RELEASE, "owner/tool", "v9.9.9")
@@ -293,6 +291,67 @@ def test_lock_update_without_existing_lock_errors(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert not (tmp_path / "setforge.lock").exists()
+
+
+def test_lock_update_skips_unrelated_broken_package(tmp_path: Path) -> None:
+    """--update resolves ONLY the target; an earlier broken package is untouched.
+
+    ``black`` is enumerated BEFORE ``ripgrep`` and its resolver raises. The old
+    resolve-in-order-until-match loop would resolve ``black`` first and fail;
+    filtering by lock key before resolving must skip it and update ``ripgrep``.
+    """
+    yaml = """\
+version: 1
+tracked_files:
+  d: {src: tracked_file.txt, dst: ~/.some-tracked_file}
+packages:
+  black: {type: python, package: black}
+  ripgrep: {type: cargo, crate: ripgrep}
+profiles:
+  p:
+    packages: [black, ripgrep]
+"""
+    cfg = _write_config(tmp_path, yaml)
+    # Seed a lock with a working black + ripgrep so --update has a base.
+    _register_stub(PackageType.PYTHON, "black", "24.1.0")
+    _register_stub(PackageType.CARGO, "ripgrep", "14.0.0")
+    CliRunner().invoke(app, ["lock", "--profile=p", f"--config={cfg}"])
+
+    # Now break black; --update=ripgrep must NOT touch black.
+    registry._REGISTRY.clear()
+    _register_stub(PackageType.PYTHON, "black", "0", raises=True)
+    _register_stub(PackageType.CARGO, "ripgrep", "15.0.0")
+    result = CliRunner().invoke(
+        app, ["lock", "--profile=p", "--update=ripgrep", f"--config={cfg}"]
+    )
+    assert result.exit_code == 0, result.output
+    lock = parse_lock((tmp_path / "setforge.lock").read_text(encoding="utf-8"))
+    by_key = {p.key: p for p in lock.packages}
+    assert by_key["ripgrep"].version == "15.0.0"
+    assert by_key["black"].version == "24.1.0", "broken earlier package untouched"
+
+
+def test_merge_lock_same_version_different_integrity_conflicts() -> None:
+    """A shared (type,key) at the SAME version but DIFFERENT hash is a conflict."""
+    from setforge.cli.lock import merge_lock
+    from setforge.errors import LockConflict
+    from setforge.lockfile import LockFile
+
+    def _cargo_pin(integrity: str, profile: str) -> ResolvedPin:
+        return ResolvedPin(
+            type=PackageType.CARGO,
+            key="ripgrep",
+            version="14.0.0",
+            integrity=integrity,
+            integrity_kind=IntegrityKind.CHECKSUM,
+            profiles=(profile,),
+        )
+
+    existing = LockFile(packages=(_cargo_pin("sha256:aaaa", "a"),))
+    with pytest.raises(LockConflict) as exc:
+        merge_lock(existing, [_cargo_pin("sha256:bbbb", "b")])
+    assert "sha256:aaaa" in str(exc.value)
+    assert "sha256:bbbb" in str(exc.value)
 
 
 def test_lock_help_lists_flags(tmp_path: Path) -> None:

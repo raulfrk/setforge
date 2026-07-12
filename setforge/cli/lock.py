@@ -39,8 +39,12 @@ import setforge.provision.resolve.python as _python_resolver  # noqa: F401
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import LOCK_EXAMPLES
 from setforge.config import (
+    CargoPackage,
     Config,
+    GitHubReleasePackage,
+    GoPackage,
     LocalPackage,
+    PythonPackage,
     ResolvedProfile,
     load_config,
     resolve_and_expand,
@@ -64,6 +68,31 @@ class _LockItem:
 
     pkg_type: PackageType
     resolve_input: object
+
+    def lock_key(self) -> str:
+        """The pin key this item WILL resolve to — known without a network call.
+
+        Every resolver derives its pin ``key`` deterministically from the input
+        (cargo→``crate``, python→``package``, go→``module``, github_release→
+        ``repo``, plugin/extension→the item's own ``key``), so ``lock --update``
+        can select the target BEFORE resolving — matching this against the CLI
+        key resolves only the one item, never the packages enumerated before it.
+        """
+        match self.resolve_input:
+            case CargoPackage():
+                return self.resolve_input.crate
+            case PythonPackage():
+                return self.resolve_input.package
+            case GoPackage():
+                return self.resolve_input.module
+            case GitHubReleasePackage():
+                return self.resolve_input.repo
+            case PluginResolveItem() | ExtensionResolveItem():
+                return self.resolve_input.key
+            case _:  # pragma: no cover - exhaustive over the lockable inputs
+                raise AssertionError(
+                    f"no lock-key mapping for resolve input {self.resolve_input!r}"
+                )
 
 
 def enumerate_lock_items(cfg: Config, resolved: ResolvedProfile) -> list[_LockItem]:
@@ -110,8 +139,11 @@ def _plugin_item(cfg: Config, bare_name: str) -> PluginResolveItem:
     marketplace's git URL via ``cfg.marketplaces`` + :func:`marketplace_git_url`.
     The lock key is ``name@marketplace`` (matching the plugin id shape used
     elsewhere). An undeclared plugin or an unknown marketplace is a
-    :class:`~setforge.errors.ConfigError` (load_config already cross-checks these,
-    but re-guarding keeps this helper total).
+    :class:`~setforge.errors.ConfigError`. ``load_config`` cross-checks the
+    plugin NAME against the top-level ``claude_plugins:`` registry, but its
+    marketplace-reference check runs only inside ``apply_local_overlay`` — which
+    the lock path never calls — so the ``.get(ref.marketplace)`` guard below is
+    the SOLE marketplace-existence check on this path, not defensive redundancy.
     """
     ref = cfg.claude_plugins.get(bare_name)
     if ref is None:
@@ -152,10 +184,12 @@ def merge_lock(existing: LockFile | None, new_pins: list[ResolvedPin]) -> LockFi
     """Merge freshly-resolved ``new_pins`` into ``existing`` (or a fresh lock).
 
     Keyed on ``(type, key)``. A pin present only in one side survives as-is; a
-    ``(type, key)`` present in both must resolve to the SAME version — the merged
-    pin unions the two ``profiles`` back-refs. A version mismatch is a hard
-    :class:`~setforge.errors.LockConflict` naming both versions (spec §C: never
-    silently drop one profile's pin). ``dump_lock`` re-imposes deterministic
+    ``(type, key)`` present in both must resolve to the SAME version AND the SAME
+    integrity — the merged pin then unions the two ``profiles`` back-refs. Either
+    a version mismatch OR a same-version/different-integrity mismatch is a hard
+    :class:`~setforge.errors.LockConflict` (spec §C: never silently drop one
+    profile's pin). Catching same-version/different-hash is the supply-chain
+    signal a lockfile exists to surface. ``dump_lock`` re-imposes deterministic
     ordering, so the merged pin insertion order does not affect the written
     bytes.
     """
@@ -177,6 +211,15 @@ def merge_lock(existing: LockFile | None, new_pins: list[ResolvedPin]) -> LockFi
                 f"lock already pins {prior.version!r} for profile(s) "
                 f"{sorted(prior.profiles)}; a shared package must resolve to one "
                 f"version across profiles"
+            )
+        if prior.integrity != pin.integrity:
+            raise LockConflict(
+                f"package {pin.key!r} (type {pin.type.value!r}) at version "
+                f"{pin.version!r} resolves to integrity {pin.integrity!r} for "
+                f"profile(s) {sorted(pin.profiles)} but the lock already pins "
+                f"{prior.integrity!r} for profile(s) {sorted(prior.profiles)}; a "
+                f"same-version package must resolve to one integrity across "
+                f"profiles"
             )
         merged[key] = prior.model_copy(
             update={"profiles": _union_profiles(prior.profiles, pin.profiles)}
@@ -271,26 +314,24 @@ def _run_update(
 ) -> None:
     """Handle ``lock --update <key>``: re-resolve one package, rewrite its entry.
 
-    ``update_key`` is matched against each item's RESOLVED pin key (the same key
-    the lock stores). No existing lock, or a key that matches no declared
-    package, is a clean :class:`~setforge.errors.ResolveError` (exit 1) rather
-    than a silent no-op.
+    ``update_key`` is matched against each item's lock key WITHOUT a network call
+    (:meth:`_LockItem.lock_key`), so ONLY the matched item is resolved — an
+    unrelated (even broken) package enumerated earlier is never touched. No
+    existing lock, or a key that matches no declared package, is a clean
+    :class:`~setforge.errors.ResolveError` (exit 1) rather than a silent no-op.
     """
     if existing is None:
         raise ResolveError(
             f"cannot --update {update_key!r}: no {path.name} exists yet; run "
             f"'setforge lock --profile={profile}' first"
         )
-    for item in items:
-        resolver = get_resolver(item.pkg_type)
-        pin = resolver.resolve(item.resolve_input)
-        if pin.key == update_key:
-            updated = pin.model_copy(update={"profiles": (profile,)})
-            lockfile = apply_update(existing, updated)
-            write_lock(lockfile, path)
-            typer.echo(f"updated {update_key!r} in {path.name}")
-            return
-    raise ResolveError(
-        f"cannot --update {update_key!r}: no package with that lock key is "
-        f"declared in profile {profile!r}"
-    )
+    target = next((item for item in items if item.lock_key() == update_key), None)
+    if target is None:
+        raise ResolveError(
+            f"cannot --update {update_key!r}: no package with that lock key is "
+            f"declared in profile {profile!r}"
+        )
+    pin = get_resolver(target.pkg_type).resolve(target.resolve_input)
+    updated = pin.model_copy(update={"profiles": (profile,)})
+    write_lock(apply_update(existing, updated), path)
+    typer.echo(f"updated {update_key!r} in {path.name}")
