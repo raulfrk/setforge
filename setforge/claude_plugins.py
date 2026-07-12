@@ -40,6 +40,9 @@ from setforge.config import (
     ResolvedProfile,
 )
 from setforge.errors import ConfigError, MarketplaceCacheMiss, PluginToolMissing
+from setforge.provision import driver
+from setforge.provision.plugin import PluginProvisioner
+from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 
 __all__ = [
     "ReconcileReport",
@@ -610,11 +613,19 @@ def reconcile(
     ``dry_run=True`` logs intended actions and returns without running any
     write subprocess. ``REPORT`` policy behaves identically to
     ``dry_run=True`` for write suppression.
+
+    The ADDITIVE install+enable path is routed through
+    :func:`setforge.provision.driver.reconcile` +
+    :class:`~setforge.provision.plugin.PluginProvisioner` (the single
+    reconcile choke point that owns the REPORT-no-write gate and the
+    ``any(HARD)`` exit-gating). ``to_install`` / ``to_enable`` are derived
+    from the plan delta (absent → install pair, declared-but-disabled →
+    enable), matching the pre-driver ``_plugin_state_diff`` semantics. The
+    always-on MARKETPLACE pre-step and the PRUNE (disable) loop stay local —
+    the driver has no marketplace or removal path — and their failures append
+    to ``report.failed`` exactly as before.
     """
     declared = _declared_plugin_ids(cfg, profile)
-    to_install, to_enable, to_disable = _plugin_state_diff(
-        declared, profile.plugins_reconcile
-    )
 
     # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
     # for on-disk cache paths; see _add_declared_marketplaces). Loaded
@@ -630,60 +641,79 @@ def reconcile(
         cfg, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
     )
 
-    if dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT:
+    report_only = dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT
+
+    # Build the always-ADDITIVE item set once; the config policy governs the
+    # LOCAL PRUNE loop below, never the driver call. The provisioner plans the
+    # 3-state diff (absent → install, disabled → activate) so to_install /
+    # to_enable derive from the plan delta — matching pre-driver
+    # `_plugin_state_diff` semantics. `.display` preserves the
+    # `name@marketplace` id form.
+    items = [
+        ProvisionItem(type="plugin", identity=Identity(key=pid, display=pid))
+        for pid in sorted(declared)
+    ]
+
+    # to_disable stays local: the driver only does additive. ADDITIVE
+    # suppresses the diff entirely ([]); PRUNE/REPORT compute
+    # enabled-not-declared. A second `list_installed()` here is acceptable
+    # (the driver has no removal path).
+    _, _, to_disable = _plugin_state_diff(declared, profile.plugins_reconcile)
+
+    if report_only:
+        # Plan only (no apply, no marketplace writes) so the report lists the
+        # diffs without any write subprocess. The driver's REPORT gate is
+        # control-flow, so report_only=True guarantees the no-write invariant.
+        result = driver.reconcile(
+            PluginProvisioner(),
+            items,
+            policy=ReconcilePolicy.ADDITIVE,
+            report_only=True,
+        )
+        to_install = [i.display for i in result.delta.installed]
+        to_enable = [i.display for i in result.delta.activated]
         return _read_only_report(to_install, to_enable, to_disable, mps_to_add)
 
     failed: list[tuple[str, str]] = []
 
+    # Marketplaces pre-step FIRST (mutates `failed`): a plugin install needs
+    # its marketplace registered, so this must precede the additive apply —
+    # preserving the pre-driver call order.
     _add_declared_marketplaces(
         cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
     )
 
-    _reconcile_install(to_install, to_enable, failed)
+    # Additive install+enable via the driver. Unless report-only (handled
+    # above), it applies each planned item (install then enable inside
+    # apply_one), containing any per-item failure as one HARD outcome.
+    result = driver.reconcile(
+        PluginProvisioner(),
+        items,
+        policy=ReconcilePolicy.ADDITIVE,
+        report_only=False,
+    )
+    # to_install = absent (fresh installs); to_enable = declared-but-disabled.
+    # Freshly-installed plugins are enabled INSIDE apply_one but reported under
+    # to_install only, keeping to_enable the clean `declared ∩ disabled` set —
+    # exactly the pre-driver `_reconcile_install` semantics.
+    to_install = [i.display for i in result.delta.installed]
+    to_enable = [i.display for i in result.delta.activated]
+    # HARD apply outcomes (a real plugin_install / plugin_enable failure)
+    # become `(display, detail)` failures so the CLI still gates exit —
+    # matching the pre-driver behavior where `_reconcile_install` appended to
+    # `failed`.
+    failed += [
+        (o.item.identity.display, o.detail)
+        for o in result.outcomes
+        if o.outcome is Outcome.HARD
+    ]
+
     if profile.plugins_reconcile is ReconcilePolicy.PRUNE:
         _reconcile_remove(to_disable, failed)
 
     return _build_report(
         to_install, to_enable, to_disable, mps_to_add, dry_run=False, failed=failed
     )
-
-
-def _reconcile_install(
-    to_install: list[str],
-    to_enable: list[str],
-    failed: list[tuple[str, str]],
-) -> None:
-    """Run the install + enable loop, appending subprocess failures to ``failed``.
-
-    Per spec § Algorithm β2: freshly-installed plugins
-    land disabled in ``installed_plugins.json`` — ``claude plugin install``
-    never touches ``enabledPlugins``. To make a single reconcile run land
-    each plugin active, successful installs are routed through the enable
-    loop via a separate working list, leaving the report's ``to_enable``
-    field semantically clean (the original ``declared intersect disabled``
-    set, NOT freshly-installed plugins). Failed installs are NOT enabled.
-    """
-    runtime_to_enable: list[str] = list(to_enable)
-    for pid in to_install:
-        name, mp = _split_id(pid)
-        LOGGER.info("installing plugin: %s @ %s", name, mp)
-        try:
-            plugin_install(name, mp)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = stderr_of(exc)
-            LOGGER.warning("plugin_install failed for %s: %s", pid, msg)
-            failed.append((pid, msg))
-        else:
-            runtime_to_enable.append(pid)
-
-    for pid in runtime_to_enable:
-        LOGGER.info("enabling plugin: %s", pid)
-        try:
-            plugin_enable(pid)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            msg = stderr_of(exc)
-            LOGGER.warning("plugin_enable failed for %s: %s", pid, msg)
-            failed.append((pid, msg))
 
 
 def _reconcile_remove(
