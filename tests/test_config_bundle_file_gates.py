@@ -18,7 +18,6 @@ CLI maps it to a non-zero exit). The five gates:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -29,6 +28,7 @@ from setforge.config import (
     Config,
     FileComponent,
     Profile,
+    ResolvedProfile,
     TrackedFile,
     expand_bundle_file_components,
     resolve_profile,
@@ -64,7 +64,7 @@ def _cfg(
     )
 
 
-def _resolved(cfg: Config):
+def _resolved(cfg: Config) -> ResolvedProfile:
     return resolve_profile(cfg, _PROFILE)
 
 
@@ -176,7 +176,9 @@ def test_dst_confinement_accepts_under_home() -> None:
     validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
 
 
-def test_dst_confinement_rejects_symlink_parent_escape(tmp_path: Path) -> None:
+def test_dst_confinement_rejects_symlink_parent_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A dst whose parent is a symlink pointing outside ``$HOME`` must be
     rejected — the check runs on ``.resolve()`` (collapses the symlink), not a
     string ``startswith($HOME)``."""
@@ -193,14 +195,9 @@ def test_dst_confinement_rejects_symlink_parent_escape(tmp_path: Path) -> None:
             )
         },
     )
-    old = os.environ.get("HOME")
-    os.environ["HOME"] = str(home)
-    try:
-        with pytest.raises(ConfigError):
-            validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-    finally:
-        if old is not None:
-            os.environ["HOME"] = old
+    monkeypatch.setenv("HOME", str(home))
+    with pytest.raises(ConfigError):
+        validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
 
 
 # --- gate 4: id charset -----------------------------------------------------

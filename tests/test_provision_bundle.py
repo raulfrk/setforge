@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from setforge.config import (
@@ -22,7 +24,7 @@ _PROFILE = "bundle-test"
 
 def _cfg(**kw: object) -> Config:
     return Config(
-        tracked_files={"d": TrackedFile(src=__import__("pathlib").Path("a"), dst="b")},
+        tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
         profiles={_PROFILE: Profile()},
         **kw,  # type: ignore[arg-type]
     )
@@ -90,9 +92,7 @@ def test_plugin_source_rejected() -> None:
 
 
 def _file_comp(id_: str, *, dst: str = "~/.local/bin/x") -> BundleComponent:
-    return BundleComponent(
-        id=id_, file=FileComponent(src=__import__("pathlib").Path("launcher"), dst=dst)
-    )
+    return BundleComponent(id=id_, file=FileComponent(src=Path("launcher"), dst=dst))
 
 
 def test_file_source_accepted() -> None:
