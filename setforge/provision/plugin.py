@@ -67,11 +67,19 @@ class PluginProvisioner(Provisioner):
         )
 
     def apply_one(self, item: ProvisionItem) -> ProvisionOutcome:
-        name, marketplace = claude_plugins._split_id(item.identity.display)
         try:
+            name, marketplace = claude_plugins._split_id(item.identity.display)
             if item.identity not in self._disabled:
                 claude_plugins.plugin_install(name, marketplace)
             claude_plugins.plugin_enable(item.identity.display)
+        except ValueError as exc:
+            summary = f"malformed plugin id {item.identity.display!r}: {exc}"
+            raise ProvisionItemFailed(
+                item_id=item.identity.display,
+                error_summary=summary,
+                full_stderr=summary,
+                kind=Outcome.HARD,
+            ) from exc
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             summary = stderr_of(exc)
             raise ProvisionItemFailed(

@@ -43,13 +43,19 @@ def test_probe_fails_open_on_missing_binary() -> None:
         assert ExtensionProvisioner().probe() == set()
 
 
+def test_probe_fails_open_on_list_failure() -> None:
+    with patch(_LIST, side_effect=ExtensionInstallFailed("list failed")):
+        assert ExtensionProvisioner().probe() == set()
+
+
 def test_plan_is_pure_and_additive() -> None:
     prov = ExtensionProvisioner()
     installed = {Identity(key="github.copilot", display="GitHub.copilot")}
     items = [_item("GitHub.copilot"), _item("ms-python.python")]
-    with patch("setforge.provision.extension.subprocess") as sp:
+    with patch("setforge.provision.extension.subprocess") as sp, patch(_LIST) as lst:
         delta = prov.plan(items, installed)
     sp.run.assert_not_called()
+    lst.assert_not_called()
     assert {i.key for i in delta.installed} == {"ms-python.python"}
     assert delta.activated == ()
 

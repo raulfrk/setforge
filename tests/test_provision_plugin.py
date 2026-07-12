@@ -52,9 +52,10 @@ def test_plan_pure_absent_to_install_disabled_to_activate() -> None:
     with patch(_LIST, return_value=_live(["a@mk"], ["b@mk"])):
         installed = prov.probe()
     items = [_item("a@mk"), _item("b@mk"), _item("c@mk")]
-    with patch("setforge.provision.plugin.subprocess") as sp:
+    with patch("setforge.provision.plugin.subprocess") as sp, patch(_LIST) as lst:
         delta = prov.plan(items, installed)
     sp.run.assert_not_called()
+    lst.assert_not_called()
     assert {i.key for i in delta.installed} == {"c@mk"}
     assert {i.key for i in delta.activated} == {"b@mk"}
 
@@ -96,4 +97,13 @@ def test_apply_one_install_failure_is_hard() -> None:
         pytest.raises(ProvisionItemFailed) as excinfo,
     ):
         prov.apply_one(_item("c@mk"))
+    assert excinfo.value.kind is Outcome.HARD
+
+
+def test_apply_one_malformed_id_is_hard_not_valueerror() -> None:
+    prov = PluginProvisioner()
+    with patch(_LIST, return_value={}):
+        prov.probe()
+    with pytest.raises(ProvisionItemFailed) as excinfo:
+        prov.apply_one(_item("no-at-sign"))
     assert excinfo.value.kind is Outcome.HARD

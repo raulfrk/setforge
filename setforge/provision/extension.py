@@ -31,7 +31,7 @@ class ExtensionProvisioner(Provisioner):
     def probe(self) -> set[Identity]:
         try:
             installed = vscode_extensions.list_installed()
-        except ExtensionToolMissing:
+        except (ExtensionToolMissing, ExtensionInstallFailed):
             return set()
         return {Identity(key=e.casefold(), display=e) for e in installed}
 
