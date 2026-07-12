@@ -217,6 +217,31 @@ class DuplicateProvisionerType(SetforgeError):
     same registry key is a programming error, caught at import time."""
 
 
+class UnknownResolverType(SetforgeError):
+    """Raised by :func:`setforge.provision.resolve.registry.get_resolver` when a
+    :class:`~setforge.provision.resolve.protocol.PackageType` has no registered
+    resolver. The message names the unknown type and the known ones. Sibling of
+    :class:`UnknownProvisionerType` — resolution is a separate registry from
+    provisioning (the lock path runs without the install path)."""
+
+
+class DuplicateResolverType(SetforgeError):
+    """Raised by the :func:`setforge.provision.resolve.registry.register`
+    decorator when a resolver type is registered twice. A programming error,
+    caught at import time — the sibling of :class:`DuplicateProvisionerType`."""
+
+
+class MalformedLockError(SetforgeError):
+    """Raised when ``setforge.lock`` cannot be parsed into a
+    :class:`~setforge.lockfile.LockFile`.
+
+    A missing/wrong-typed ``version``, a non-array ``package`` table, a pin
+    missing a mandatory field (``type``/``key``/``version``), or a pin whose
+    integrity shape does not match its ecosystem is corruption — NOT a merely
+    absent lock. Carries a human message naming the defect so the user can
+    repair the file rather than seeing a raw ``tomllib``/``KeyError`` traceback."""
+
+
 class ReconcileAborted(SetforgeError):
     """Raised by the per-item reconcile loop when the user selects
     ABORT from the failure-prompt arrow-key picker.
