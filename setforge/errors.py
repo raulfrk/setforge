@@ -231,6 +231,15 @@ class DuplicateResolverType(SetforgeError):
     caught at import time — the sibling of :class:`DuplicateProvisionerType`."""
 
 
+class ResolveError(SetforgeError):
+    """Raised by a :class:`~setforge.provision.resolve.protocol.Resolver` when
+    upstream resolution fails: an unparseable index/JSON body, a non-HTTPS or
+    redirect-downgraded fetch, a non-zero resolver subprocess, a timeout, or no
+    surviving concrete version. Carries a human message naming the package and
+    defect so the ``lock`` verb (later task) can abort the whole write cleanly
+    rather than surfacing a raw traceback."""
+
+
 class MalformedLockError(SetforgeError):
     """Raised when ``setforge.lock`` cannot be parsed into a
     :class:`~setforge.lockfile.LockFile`.

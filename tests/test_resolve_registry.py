@@ -40,8 +40,14 @@ class _DummyResolver:
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> object:
-    """Snapshot + restore the module-level registry around each test."""
+    """Snapshot + restore the module-level registry around each test.
+
+    Clears the registry for the duration of the test so real resolver modules
+    (cargo/go/python) that self-register at import time do not collide with the
+    dummy registrations these tests make, then restores the real set on exit.
+    """
     saved = dict(registry._REGISTRY)
+    registry._REGISTRY.clear()
     try:
         yield
     finally:
