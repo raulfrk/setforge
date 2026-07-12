@@ -411,3 +411,16 @@ Examples:
   # Read-only: per-file share/local/pending hunk counts (no prompts)
   setforge stage --list --profile=<profile>
 """
+
+
+LOCK_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Resolve every lockable package in a profile and write setforge.lock
+  setforge lock --profile=<profile>
+
+\b
+  # Re-resolve a single package by its lock key, preserving the rest
+  setforge lock --profile=<profile> --update=<key>
+"""

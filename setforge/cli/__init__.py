@@ -278,6 +278,7 @@ from setforge.cli import revert as _revert  # noqa: E402, F401 (revert + transit
 from setforge.cli import ext as _ext  # noqa: E402, F401
 from setforge.cli import plugins as _plugins  # noqa: E402, F401 (plugin + marketplace subgroups)
 from setforge.cli import validate as _validate  # noqa: E402, F401 (validate + fetch)
+from setforge.cli import lock as _lock  # noqa: E402, F401
 from setforge.cli import init as _init  # noqa: E402, F401
 from setforge.cli import upgrade as _upgrade  # noqa: E402, F401
 from setforge.cli import migrate as _migrate  # noqa: E402, F401 (schema migration)

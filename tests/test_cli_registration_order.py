@@ -29,6 +29,7 @@ EXPECTED_DIRECT_COMMANDS: tuple[str, ...] = (
     "revert",
     "validate",
     "fetch",
+    "lock",
     "init",
     "upgrade",
     "migrate",

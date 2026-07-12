@@ -251,6 +251,18 @@ class MalformedLockError(SetforgeError):
     repair the file rather than seeing a raw ``tomllib``/``KeyError`` traceback."""
 
 
+class LockConflict(SetforgeError):
+    """Raised when a per-profile ``setforge lock`` run cannot merge cleanly.
+
+    The lock holds ONE pin per ``(type, key)`` shared across every profile that
+    declares the package (the ``profiles`` back-ref). If profile B resolves a
+    package to a DIFFERENT version than the entry an earlier profile A already
+    wrote, merging would silently drop one — so the merge fails closed and the
+    message names both the conflicting versions. Distinct from
+    :class:`MalformedLockError` (a corrupt on-disk file) and
+    :class:`ResolveError` (an upstream-resolution failure)."""
+
+
 class ReconcileAborted(SetforgeError):
     """Raised by the per-item reconcile loop when the user selects
     ABORT from the failure-prompt arrow-key picker.
