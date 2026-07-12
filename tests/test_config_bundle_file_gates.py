@@ -1,20 +1,4 @@
-"""Security-critical validation gates for bundle ``file`` components.
-
-Every gate runs BEFORE any synthetic tracked-file is minted (so it fires on
-BOTH ``setforge validate`` and ``setforge install``, ahead of any deploy) and
-raises :class:`~setforge.errors.ConfigError` (a :class:`SetforgeError`, so the
-CLI maps it to a non-zero exit). The five gates:
-
-1. name-collision — a synthetic ``<bundle>.<component>`` key must not collide
-   with a real ``tracked_files`` key or another bundle's synthetic key.
-2. dst-collision — no two resolved dst targets (real + synthetic) may coincide.
-3. dst-confinement — every dst must ``.resolve()`` under ``$HOME`` (collapses
-   ``..`` and intermediate symlinks, so a symlink-escape is caught).
-4. id charset — bundle-id / component-id may not contain ``/``, ``..``, or a
-   leading dot (else the synthetic id defeats the base-store traversal guard).
-5. src-under-tracked — every file-component ``src`` must resolve under the
-   config repo's ``tracked/`` dir (else it bypasses the gitleaks sweep).
-"""
+"""Security-critical validation gates for bundle ``file`` components."""
 
 from __future__ import annotations
 
@@ -68,12 +52,7 @@ def _resolved(cfg: Config) -> ResolvedProfile:
     return resolve_profile(cfg, _PROFILE)
 
 
-# --- gate 1: name-collision -------------------------------------------------
-
-
 def test_name_collision_synthetic_vs_real_tracked_file() -> None:
-    """A synthetic key equal to a real ``tracked_files`` key is rejected,
-    naming the colliding id."""
     cfg = _cfg(
         bundles={"revdiff": BundleSpec(components=[_file_comp("launcher")])},
         tracked_files={"revdiff.launcher": TrackedFile(src=Path("x"), dst="~/x")},
@@ -85,9 +64,6 @@ def test_name_collision_synthetic_vs_real_tracked_file() -> None:
 
 
 def test_name_collision_fires_before_clobbering_overwrite() -> None:
-    """The collision must be raised by ``expand_bundle_file_components`` itself,
-    BEFORE it overwrites ``config.tracked_files[synthetic_id]`` — else the real
-    body is silently clobbered."""
     real = TrackedFile(src=Path("real-src"), dst="~/real")
     cfg = _cfg(
         bundles={"revdiff": BundleSpec(components=[_file_comp("launcher")])},
@@ -96,28 +72,18 @@ def test_name_collision_fires_before_clobbering_overwrite() -> None:
     )
     with pytest.raises(ConfigError):
         expand_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-    # The real body must be untouched (not clobbered by the synthetic overwrite).
     assert cfg.tracked_files["revdiff.launcher"].src == Path("real-src")
 
 
 def test_name_collision_synthetic_vs_synthetic_is_charset_guarded() -> None:
-    """Two DISTINCT bundles can only mint the same ``<bundle>.<component>`` key
-    if a dot is embedded in a bundle/component id (e.g. bundle ``a`` comp ``b.c``
-    vs bundle ``a.b`` comp ``c`` -> both ``a.b.c``). The id-charset gate rejects
-    such an id first, so a genuine synthetic-vs-synthetic collision across
-    distinct bundle keys is unreachable — assert the charset gate catches the
-    only route to it."""
     cfg = _cfg(
         bundles={
-            "a": BundleSpec(components=[_file_comp("b.c")]),  # component id has a dot
-            "a.b": BundleSpec(components=[_file_comp("c")]),  # bundle id has a dot
+            "a": BundleSpec(components=[_file_comp("b.c")]),
+            "a.b": BundleSpec(components=[_file_comp("c")]),
         },
     )
     with pytest.raises(ConfigError):
         validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-
-
-# --- gate 2: dst-collision --------------------------------------------------
 
 
 def test_dst_collision_two_synthetics_same_target() -> None:
@@ -148,9 +114,6 @@ def test_dst_collision_synthetic_vs_real() -> None:
         validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
 
 
-# --- gate 3: dst-confinement ------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "bad_dst",
     ["~/../etc/passwd", "/etc/cronjob", "/tmp/outside"],
@@ -172,21 +135,16 @@ def test_dst_confinement_accepts_under_home() -> None:
             )
         },
     )
-    # Must NOT raise.
     validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
 
 
 def test_dst_confinement_rejects_symlink_parent_escape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A dst whose parent is a symlink pointing outside ``$HOME`` must be
-    rejected — the check runs on ``.resolve()`` (collapses the symlink), not a
-    string ``startswith($HOME)``."""
     home = tmp_path / "home"
     home.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    # ~/escape -> /outside ; dst ~/escape/file resolves to /outside/file.
     (home / "escape").symlink_to(outside)
     cfg = _cfg(
         bundles={
@@ -198,9 +156,6 @@ def test_dst_confinement_rejects_symlink_parent_escape(
     monkeypatch.setenv("HOME", str(home))
     with pytest.raises(ConfigError):
         validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-
-
-# --- gate 4: id charset -----------------------------------------------------
 
 
 @pytest.mark.parametrize("bad_component", ["a/b", "..", ".hidden", "x/../y"])
@@ -222,8 +177,6 @@ def test_id_charset_rejects_bad_bundle_id(bad_bundle: str) -> None:
 
 
 def test_id_charset_only_applies_to_file_bundles() -> None:
-    """A bundle WITHOUT file components with an otherwise odd id is not gated
-    here (charset only matters for the synthetic tracked-file id path)."""
     cfg = Config(
         tracked_files={},
         bundles={
@@ -233,11 +186,7 @@ def test_id_charset_only_applies_to_file_bundles() -> None:
         },
         profiles={_PROFILE: Profile(bundles=["no-file"])},
     )
-    # No file component -> the gate is a no-op regardless of ids.
     validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-
-
-# --- gate 5: src-under-tracked/ ---------------------------------------------
 
 
 def test_src_must_resolve_under_tracked(tmp_path: Path) -> None:
@@ -262,9 +211,6 @@ def test_src_under_tracked_accepts_normal_src(tmp_path: Path) -> None:
         bundles={"b": BundleSpec(components=[_file_comp("one", src=Path("sub/l.sh"))])},
     )
     validate_bundle_file_components(cfg, _resolved(cfg), repo)
-
-
-# --- regression: a clean bundle passes + expands ----------------------------
 
 
 def test_valid_bundle_passes_gates_and_expands(tmp_path: Path) -> None:

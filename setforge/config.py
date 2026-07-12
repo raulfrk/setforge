@@ -66,15 +66,6 @@ _FORBIDDEN_PATH_CHARS = frozenset(chr(c) for c in range(32)) | frozenset({"\x7f"
 
 
 def _reject_control_chars_in_path(v: object) -> object:
-    """Reject a path value containing C0 control characters or DEL.
-
-    The single source of truth for the ``src``/``dst`` control-char field
-    validators on :class:`TrackedFile`, :class:`CustomExtension`, and
-    :class:`FileComponent`. Tab and newline corrupt unified-diff field
-    separators; DEL and other C0 controls are similarly hostile to most
-    tooling. Cleaner to fail at config load than to silently emit malformed
-    transitions or ``patch``-rejected diffs.
-    """
     s = str(v)
     bad = sorted({c for c in s if c in _FORBIDDEN_PATH_CHARS})
     if bad:
@@ -157,10 +148,7 @@ def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
     ``isinstance(True, int)`` is True, so without an explicit check
     ``mode: true`` would silently mean ``0o1``.
 
-    Range and setuid/setgid policy are NOT enforced here — the shared
-    :func:`_validate_mode_policy` (used by both :class:`TrackedFile` and
-    :class:`FileComponent`) applies those bounds; the overlay enforces its
-    own in its ``model_validator``.
+    Range and setuid/setgid policy: see :func:`_validate_mode_policy`.
     """
     if value is None:
         return None
@@ -187,15 +175,6 @@ def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
 
 
 def _validate_mode_policy(v: object) -> int | None:
-    """Full ``mode`` policy: type cascade + range + setuid/setgid refusal.
-
-    The single source of truth shared by :class:`TrackedFile` and
-    :class:`FileComponent` (bundle ``file`` components carry the same
-    file-mode semantics as a tracked_file). Delegates the ruamel.yaml
-    type cascade to :func:`_check_yaml_octal_mode`, then applies the
-    ``0o0..0o7777`` range bound and refuses the setuid/setgid bits
-    (``mode & 0o6000``) — the launcher-file security guard.
-    """
     mode = _check_yaml_octal_mode(v, "mode")
     if mode is None:
         return None
@@ -265,25 +244,11 @@ class TrackedFile(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def _validate_mode(cls, v: object) -> int | None:
-        """Reject every shape EXCEPT YAML-1.2 octal (``0o755``) or a plain int.
-
-        The type cascade (bool / ScalarInt / OctalInt — see
-        :func:`_check_yaml_octal_mode` for the ruamel.yaml round-trip
-        semantics it guards) is shared with
-        :class:`setforge.source._LocalTrackedFileOverlay`; the range and
-        setuid/setgid policy lives in :func:`_validate_mode_policy`,
-        also reused by :class:`FileComponent`. (The overlay enforces its
-        own bounds in its ``model_validator``.)
-        """
         return _validate_mode_policy(v)
 
     @field_validator("src", "dst", mode="before")
     @classmethod
     def _no_control_chars_in_path(cls, v: object) -> object:
-        """Reject paths containing C0 control characters or DEL.
-
-        Delegates to the shared :func:`_reject_control_chars_in_path`.
-        """
         return _reject_control_chars_in_path(v)
 
 
@@ -355,10 +320,6 @@ class SectionTemplateRef(BaseModel):
     @field_validator("src", mode="before")
     @classmethod
     def _no_control_chars_in_path(cls, v: object) -> object:
-        """Reject paths containing C0 control characters or DEL.
-
-        Delegates to the shared :func:`_reject_control_chars_in_path`.
-        """
         return _reject_control_chars_in_path(v)
 
 
@@ -460,21 +421,6 @@ Package = Annotated[
 
 
 class FileComponent(BaseModel):
-    """A bundle ``file`` source: a tracked-file defined inline in a bundle.
-
-    Carries the same file-deploy fields as :class:`TrackedFile`
-    (``src``/``dst``/``mode``/``template``/``symlink``) and reuses its
-    mode policy (:func:`_validate_mode_policy`) so setuid/setgid bits and
-    out-of-range values are refused identically. Unlike a package/plugin
-    component this is NOT provisioner-backed — at deploy time it expands
-    into a synthetic tracked-file that rides the tracked-file path.
-
-    There is deliberately NO ``disposition``/``share`` field: host-local
-    (live edits survive re-install) is the reconcile engine's uniform
-    keep-live default that every tracked-file already gets, not a
-    per-file toggle.
-    """
-
     model_config = _STRICT
 
     src: Path
@@ -486,20 +432,11 @@ class FileComponent(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def _validate_mode(cls, v: object) -> int | None:
-        """Reuse :class:`TrackedFile`'s mode policy (shared function)."""
         return _validate_mode_policy(v)
 
     @field_validator("src", "dst", mode="before")
     @classmethod
     def _no_control_chars_in_path(cls, v: object) -> object:
-        """Reject paths containing C0 control characters or DEL.
-
-        Reuses :class:`TrackedFile`'s contract via the shared
-        :func:`_reject_control_chars_in_path` — without it a control char
-        would only fail later inside :func:`_synthetic_tracked_file`'s
-        ``TrackedFile`` construction as a raw ``ValidationError``, escaping
-        the clean domain-gate path.
-        """
         return _reject_control_chars_in_path(v)
 
 
@@ -746,15 +683,6 @@ _BAD_ID_SUBSTRINGS: tuple[str, ...] = ("/", "..")
 
 
 def _reject_bad_id(kind: str, value: str) -> None:
-    """Reject an id that would let the synthetic ``<bundle>.<component>`` file-id
-    escape :func:`setforge.base_store._resolve_target`'s traversal guard.
-
-    A ``/`` or ``..`` component, or a leading dot, in either half of the
-    synthetic key turns it into a path traversal (``../x`` writes a base
-    outside ``base/<profile>/``; a leading dot yields a hidden id). ``.``
-    is a legal SEPARATOR between the two halves, so this only screens the
-    two id halves individually — never the joined key.
-    """
     if value.startswith(".") or any(bad in value for bad in _BAD_ID_SUBSTRINGS):
         raise ConfigError(
             f"bundle {kind} id {value!r} is unsafe for a file component: "
@@ -765,13 +693,9 @@ def _reject_bad_id(kind: str, value: str) -> None:
 
 
 def _resolve_confined_dst(dst: str, *, template: bool) -> Path:
-    """Render (if templated), expand ``~``, and ``.resolve()`` a dst path.
-
-    ``.resolve()`` collapses ``..`` AND intermediate symlinks, so the caller's
-    ``$HOME`` prefix test catches a ``~/../etc`` escape and a symlinked-parent
-    escape that a raw string ``startswith`` would miss.
-    """
-    from setforge.paths import template_context  # deferred: avoid import cost
+    # .resolve() (not a string prefix) so it collapses ../ AND symlinked
+    # parents, catching a ~/../etc or symlink-escape a startswith() would miss.
+    from setforge.paths import template_context
 
     raw = dst
     if template:
@@ -782,13 +706,6 @@ def _resolve_confined_dst(dst: str, *, template: bool) -> Path:
 
 
 def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
-    """Build the synthetic :class:`TrackedFile` a ``file`` component expands to.
-
-    Single source of truth shared by :func:`validate_bundle_file_components`
-    (byte-identity check for its idempotent re-entry detection) and
-    :func:`expand_bundle_file_components` (the actual injection), so the two can
-    never drift.
-    """
     return TrackedFile(
         src=fc.src,
         dst=fc.dst,
@@ -799,17 +716,8 @@ def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
 
 
 def _own_prior_injections(config: Config, resolved: ResolvedProfile) -> set[str]:
-    """Synthetic ids already injected into ``config.tracked_files`` by a prior
-    :func:`expand_bundle_file_components` on this same ``config``.
-
-    An id qualifies iff a tracked_file stored under the synthetic key is
-    BYTE-IDENTICAL to the synthetic body we would mint. Expansion mutates
-    ``config.tracked_files`` in place, so a second call — install runs it once,
-    then ``compare_profile`` runs it again on the same ``config`` — sees its own
-    injections; those must be treated as idempotent no-op re-entries, NOT as a
-    user-declared collision. A key that exists but DIFFERS is a genuine collision
-    (a user pre-declared the same id with other content).
-    """
+    # BYTE-IDENTICAL match only: a repeat expand on the same mutated config
+    # (install then compare_profile) is an idempotent re-entry, not a collision.
     return {
         synth_id
         for bundle_id in resolved.bundles
@@ -825,16 +733,10 @@ def _own_prior_injections(config: Config, resolved: ResolvedProfile) -> set[str]
 def _seed_real_dst_owners(
     config: Config, resolved: ResolvedProfile, own_injections: set[str]
 ) -> dict[Path, str]:
-    """Map each REAL tracked-file's resolved dst to its id (skipping our own
-    prior synthetic injections), seeding the gate-3 dst-collision check.
-
-    A real tracked-file with a MALFORMED Jinja dst template is skipped here, not
-    raised: an unrenderable ``dst`` is the dedicated ``_check_jinja_templates``
-    validate check's concern, and raising its ``TemplateError`` from this gate
-    (which runs earlier, inside ``resolve_and_expand``) would crash validate
-    instead of letting it report the template error cleanly. It cannot mask a
-    real collision — a template that will not render deploys nothing.
-    """
+    # A malformed Jinja dst is skipped (not raised) here: that's
+    # _check_jinja_templates' concern in validate; raising here would crash
+    # validate early instead of reporting cleanly, and a template that
+    # won't render deploys nothing so it can't mask a real collision.
     from jinja2 import TemplateError
 
     dst_owner: dict[Path, str] = {}
@@ -859,19 +761,6 @@ def _gate_component_paths(
     home: Path,
     dst_owner: dict[Path, str],
 ) -> Path:
-    """Run the path gates (dst-confinement, dst-collision, src-under-tracked/)
-    for one file component and return its resolved dst.
-
-    - **dst-confinement** (gate 4): the resolved dst must live under ``$HOME``.
-    - **dst-collision** (gate 3): the resolved dst must not already own a target
-      in ``dst_owner`` (real plus synthetic seen so far).
-    - **src-under-tracked** (gate 5): the resolved src must live under
-      ``tracked_root`` so the gitleaks pre-deploy sweep covers it.
-
-    A bundle-file dst whose Jinja template will not render is a hard
-    :class:`ConfigError` (an unconfinable dst can't be safety-checked), surfaced
-    as a clean validate failure rather than an uncaught ``TemplateError``.
-    """
     from jinja2 import TemplateError
 
     try:
@@ -909,40 +798,11 @@ def _gate_component_paths(
 def validate_bundle_file_components(
     config: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> None:
-    """Run the security-critical gates for every active bundle ``file`` component.
-
-    Raises :class:`ConfigError` (a :class:`~setforge.errors.SetforgeError`, so
-    the CLI maps it to a non-zero exit) on the FIRST violation. Runs BEFORE any
-    synthetic tracked-file is minted, so it fires identically on the ``install``
-    and ``validate``/``compare`` paths, ahead of any write. Five gates:
-
-    1. **id charset** — bundle-id / component-id may not contain ``/``, ``..``,
-       or a leading dot (:func:`_reject_bad_id`).
-    2. **name-collision** — the synthetic ``<bundle>.<component>`` key must not
-       collide with a real ``config.tracked_files`` key or another bundle's
-       synthetic key. This MUST precede the clobbering overwrite in
-       :func:`expand_bundle_file_components` so a real body is never silently
-       replaced.
-    3. **dst-collision** — no two resolved dst targets (real ``tracked_files``
-       plus all synthetics) may coincide (last-writer-wins clobber otherwise).
-    4. **dst-confinement** — every dst must ``.resolve()`` under ``$HOME``.
-    5. **src-under-tracked** — every ``src`` must resolve under ``repo_root/
-       tracked/`` so the gitleaks pre-deploy sweep (which only scans that root)
-       covers it.
-
-    ``repo_root`` is the config-repo root (``config.resolve().parent``); its
-    ``tracked/`` subtree anchors gate 5.
-    """
     tracked_root = (repo_root / "tracked").resolve()
     home = Path.home().resolve()
 
     own_injections = _own_prior_injections(config, resolved)
-    # dst union — seed with the tracked_files that are NOT our own re-injection
-    # (see _own_prior_injections), so a synthetic dst colliding with a REAL one is
-    # caught without a synthetic colliding with its own prior injection.
     dst_owner = _seed_real_dst_owners(config, resolved, own_injections)
-    # Real tracked-file ids the synthetic key must not clash with (again minus
-    # our own re-injections).
     real_ids = set(config.tracked_files) - own_injections
     seen_synthetic: set[str] = set()
 
@@ -954,20 +814,14 @@ def validate_bundle_file_components(
             fc = component.file
             if fc is None:
                 continue
-            # Gate 1: id charset (both halves of the synthetic key).
             _reject_bad_id("bundle", bundle_id)
             _reject_bad_id("component", component.id)
             synthetic_id = f"{bundle_id}.{component.id}"
 
             if synthetic_id in own_injections:
-                # Idempotent re-entry: this exact synthetic was already injected
-                # by a prior call. Skip every collision check for it (its dst was
-                # excluded from `dst_owner` above too).
                 seen_synthetic.add(synthetic_id)
                 continue
 
-            # Gate 2: name-collision — the synthetic key must not equal a real
-            # user-declared tracked-file id, nor another bundle's synthetic key.
             colliding = None
             if synthetic_id in real_ids:
                 colliding = "an existing tracked-file id"
@@ -982,7 +836,6 @@ def validate_bundle_file_components(
                 )
             seen_synthetic.add(synthetic_id)
 
-            # Gates 3/4/5: dst-confinement, dst-collision, src-under-tracked/.
             resolved_dst = _gate_component_paths(
                 synthetic_id, fc, tracked_root, home, dst_owner
             )
@@ -992,40 +845,8 @@ def validate_bundle_file_components(
 def expand_bundle_file_components(
     config: Config, resolved: ResolvedProfile, repo_root: Path
 ) -> None:
-    """Expand each active bundle's ``file`` components into synthetic tracked-files.
-
-    A bundle ``file`` component is NOT provisioner-backed — it deploys like a
-    tracked-file. For every bundle active in ``resolved.bundles``, mint one
-    synthetic :class:`TrackedFile` per ``file`` component (its
-    ``src``/``dst``/``mode``/``template``/``symlink`` lifted verbatim), keyed
-    ``<bundle-id>.<component-id>``, and inject it into BOTH:
-
-    - ``resolved.tracked_files`` — the id list the install-time walk
-      (:func:`setforge.cli._install_helpers._deploy_all_tracked_files` via
-      :func:`setforge.cli._helpers._iter_all_tracked_files`) iterates, and
-    - ``config.tracked_files`` — where that same walk resolves the body.
-
-    So the synthetic entry rides the existing tracked-file deploy path (chmod
-    before replace, 3-way reconcile keep-live default) AND the install revert
-    snapshot for free — no new deploy code, no new provisioner. The ``mode``
-    threads through so a launcher stays executable.
-
-    Runs :func:`validate_bundle_file_components` FIRST — the name-collision gate
-    there MUST precede the ``config.tracked_files[synthetic_id] = ...`` overwrite
-    below, or a real body would be silently clobbered before the check.
-
-    Mutates ``config`` and ``resolved`` in place (both are per-command values —
-    ``config`` is freshly loaded per invocation), mirroring the local-overlay
-    plugin/extension injectors (:func:`_apply_plugin_mutations`). Called AFTER
-    :func:`resolve_profile` and BEFORE the install revert snapshot so the
-    synthetic entry is revertable. Idempotent: a repeated call overwrites the
-    same ``config.tracked_files`` entry and skips a duplicate append to
-    ``resolved.tracked_files``, so calling it twice on the same ``(config,
-    resolved)`` pair leaves both unchanged after the first.
-
-    Bundles declared in ``config.bundles`` but NOT active in ``resolved.bundles``
-    are skipped — an inactive bundle's file components never deploy.
-    """
+    # Gates run first: name-collision must precede the overwrite below, or a
+    # real tracked-file body would be silently clobbered before it's checked.
     validate_bundle_file_components(config, resolved, repo_root)
     for bundle_id in resolved.bundles:
         bundle = config.bundles.get(bundle_id)
@@ -1037,25 +858,11 @@ def expand_bundle_file_components(
                 continue
             synthetic_id = f"{bundle_id}.{component.id}"
             config.tracked_files[synthetic_id] = _synthetic_tracked_file(fc)
-            # Guard the append (the dict assignment above is a safe overwrite):
-            # a second call — e.g. once validate/compare wire expansion into
-            # the same resolved profile — must not push a duplicate id into the
-            # list, which `_iter_all_tracked_files` would deploy + snapshot twice.
             if synthetic_id not in resolved.tracked_files:
                 resolved.tracked_files.append(synthetic_id)
 
 
 def resolve_and_expand(config: Config, name: str, repo_root: Path) -> ResolvedProfile:
-    """Resolve ``name``'s profile then expand its bundle ``file`` components.
-
-    The one-call shape used by ``install``, ``validate``, and ``compare``, so
-    those callers cannot forget the expansion + gates that make bundle file
-    components visible and safe. Not exhaustive: ``sync`` and ``revert`` (and
-    the orphan-status ``cli/compare.py`` path) intentionally keep calling
-    :func:`resolve_profile` directly — expansion mutates ``config`` and is only
-    wanted where the synthetic tracked-files must appear. Wiring those into the
-    expanded path is deferred follow-up.
-    """
     resolved = resolve_profile(config, name)
     expand_bundle_file_components(config, resolved, repo_root)
     return resolved

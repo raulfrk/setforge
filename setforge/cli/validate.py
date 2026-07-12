@@ -184,15 +184,7 @@ def _check_profile_resolution(
     ctx: str,
     failures: list[ValidationErrorWithContext | str],
 ) -> ResolvedProfile | None:
-    """Check 2: resolve profile + expand bundle ``file`` components.
-
-    Covers missing profiles + cycle detection AND the bundle-file security
-    gates (name/dst collision, dst-confinement, id-charset, src-under-tracked/),
-    which :func:`~setforge.config.resolve_and_expand` raises as
-    :class:`SetforgeError`. Expanding here also makes the synthetic
-    tracked-files visible to the ``tracked_files`` loop the caller runs, so
-    validate lints a bundle launcher's src / Jinja dst like any tracked-file.
-    """
+    """Check 2: resolve profile; expand bundle ``file`` components (runs gates)."""
     try:
         return resolve_and_expand(cfg, prof_name, repo_root)
     except SetforgeError as exc:
@@ -581,14 +573,9 @@ def _check_orphan_overlays(
     seen_unknown: set[str] = set()
     for prof_name in profiles_to_check:
         try:
-            # Expand too, so a bundle-file synthetic id referenced by a
-            # local.yaml overlay is counted in-profile (not mis-flagged
-            # orphan). Idempotent + already-mutated cfg make this cheap.
             resolved = resolve_and_expand(cfg, prof_name, repo_root)
         except SetforgeError:
-            # A broken profile chain (or a bundle-file gate failure) is already
-            # surfaced by _check_profile_resolution; skip the orphan pass for it.
-            continue
+            continue  # already surfaced by _check_profile_resolution
         in_some_profile.update(resolved.tracked_files)
         try:
             orphans = collect_orphan_overlays(

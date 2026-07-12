@@ -1,11 +1,4 @@
-"""Tests for the ``FileComponent`` Pydantic model (bundle ``file`` source).
-
-``FileComponent`` carries the real :class:`TrackedFile` fields
-(``src``/``dst``/``mode``/``template``/``symlink``) and MUST reuse
-:class:`TrackedFile`'s mode validator — so setuid/setgid bits and
-out-of-range values are refused with the same policy, and ``mode: None``
-is accepted (source-mode fallback).
-"""
+"""Tests for the ``FileComponent`` Pydantic model (bundle ``file`` source)."""
 
 from pathlib import Path
 
@@ -66,25 +59,17 @@ def test_file_component_is_strict_extra_forbid() -> None:
 
 
 def test_file_component_has_no_disposition_field() -> None:
-    """The retired ``disposition``/``share`` field must NOT exist."""
     assert "disposition" not in FileComponent.model_fields
     assert "share" not in FileComponent.model_fields
 
 
 def test_file_component_rejects_control_char_in_src() -> None:
-    """Control chars in ``src`` are refused at model load (matches TrackedFile).
-
-    Without this the char slips past FileComponent and only fails later
-    inside the synthetic-TrackedFile construction as a raw ValidationError,
-    escaping the clean domain-gate path.
-    """
     with pytest.raises(ValidationError) as exc_info:
         _make(src=Path("laun\tcher"))
     assert "forbidden control character" in str(exc_info.value)
 
 
 def test_file_component_rejects_control_char_in_dst() -> None:
-    """Control chars in ``dst`` are refused at model load (matches TrackedFile)."""
     with pytest.raises(ValidationError) as exc_info:
         _make(dst="~/.local/\nbin/x")
     assert "forbidden control character" in str(exc_info.value)

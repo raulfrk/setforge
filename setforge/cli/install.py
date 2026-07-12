@@ -220,13 +220,8 @@ def install(
     # Refuse before mutation: unmigrated host-local content could leak.
     refuse_unmigrated_host_local_leak(cfg, verb="install", profile=profile)
     repo_root = config.resolve().parent
-    # Resolve, then expand bundle `file` components into synthetic tracked-files
-    # BEFORE the revert snapshot (and before every downstream tracked-file walk),
-    # so a bundle launcher deploys via the existing tracked-file path and is
-    # revertable — the synthetic entry must be in `_iter_all_tracked_files` ahead
-    # of install's `file_pre = snapshot_paths(dst_paths)` capture. The helper
-    # also runs the security gates (name/dst collision, dst-confinement,
-    # id-charset, src-under-tracked/) before any synthetic body is minted.
+    # Must expand bundle file components BEFORE the revert snapshot below, so
+    # the synthetic entry is in `_iter_all_tracked_files` ahead of capture.
     resolved = resolve_and_expand(cfg, profile, repo_root)
     # Both overlays below must apply AFTER profile resolution.
     apply_host_local_tracked_file_overrides(cfg)

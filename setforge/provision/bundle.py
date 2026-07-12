@@ -40,12 +40,6 @@ def _inline_model(component: BundleComponent) -> Package | None:
 
 
 def _is_file_component(component: BundleComponent) -> bool:
-    """File components are deploy-only (tracked-file path), not provisioner-driven.
-
-    They must be skipped by the executor before :func:`_resolve_item`, which
-    would otherwise crash (a :class:`FileComponent` has no provisioner-backed
-    identity/type).
-    """
     return component.file is not None
 
 
@@ -59,9 +53,6 @@ def _resolve_item(component: BundleComponent, cfg: Config) -> ProvisionItem:
             version=getattr(pkg, "version", None),
             checksum=getattr(pkg, "checksum", None),
         )
-    # File components are skipped by the executor before reaching here; a
-    # plugin source is rejected in validate_bundle. So _inline_model only
-    # ever returns a provisioner-backed Package on this path.
     model = _inline_model(component)
     if model is None:  # pragma: no cover - plugin rejected in validate_bundle
         raise AssertionError(
@@ -171,9 +162,7 @@ def execute_bundle(
 
     for component in topo_order(bundle):
         if _is_file_component(component):
-            # Deploy-only: handled by the tracked-file path, never the
-            # provisioner driver. Treat as satisfied so package/plugin
-            # dependents downstream still proceed.
+            # Deploy-only; mark satisfied so downstream package deps proceed.
             satisfied.add(component.id)
             continue
         blocked = any(dep not in satisfied for dep in component.depends_on)

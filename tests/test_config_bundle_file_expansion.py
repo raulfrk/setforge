@@ -1,14 +1,4 @@
-"""Tests for expanding bundle ``file`` components into synthetic tracked-files.
-
-A bundle ``file`` component does NOT run through the provisioner driver; it
-DEPLOYS like a tracked-file. :func:`expand_bundle_file_components` mints one
-synthetic :class:`TrackedFile` per ``file`` component of every bundle active in
-the resolved profile, keyed ``<bundle-id>.<component-id>``, and injects it into
-BOTH ``resolved.tracked_files`` (the id the install-time walk iterates) AND
-``config.tracked_files`` (where that walk resolves the body) — so the synthetic
-entry rides the existing ``_deploy_all_tracked_files`` / revert-snapshot path
-with no new deploy code.
-"""
+"""Tests for expanding bundle ``file`` components into synthetic tracked-files."""
 
 from __future__ import annotations
 
@@ -80,7 +70,6 @@ def test_expansion_threads_all_fields() -> None:
 
 
 def test_expansion_skips_non_file_components() -> None:
-    """A bundle with only package/plugin components mints nothing."""
     bundle = BundleSpec(
         components=[BundleComponent(id="bin", cargo=CargoPackage(crate="rg"))]
     )
@@ -97,7 +86,6 @@ def test_expansion_skips_non_file_components() -> None:
 
 
 def test_expansion_no_bundles_is_noop() -> None:
-    """A profile with no active bundles is unchanged (regression)."""
     cfg = Config(
         tracked_files={"real": TrackedFile(src=Path("real.md"), dst="~/real.md")},
         profiles={_PROFILE: Profile(tracked_files=["real"])},
@@ -111,11 +99,9 @@ def test_expansion_no_bundles_is_noop() -> None:
 
 
 def test_expansion_only_inactive_bundle_not_expanded() -> None:
-    """A bundle declared in config but NOT in the resolved profile is skipped."""
     cfg = Config(
         tracked_files={"real": TrackedFile(src=Path("real.md"), dst="~/real.md")},
         bundles={"revdiff": BundleSpec(components=[_file_comp("launcher")])},
-        # profile does NOT list the bundle
         profiles={_PROFILE: Profile(tracked_files=["real"])},
     )
     resolved = resolve_profile(cfg, _PROFILE)
@@ -125,12 +111,6 @@ def test_expansion_only_inactive_bundle_not_expanded() -> None:
 
 
 def test_expansion_is_idempotent() -> None:
-    """A second call must NOT duplicate the synthetic id in the resolved list.
-
-    Task 3 will call the expansion from validate/compare too, so the same
-    ``(config, resolved)`` pair can see it twice. ``_iter_all_tracked_files``
-    has no dedup — a duplicated id would deploy + snapshot the file twice.
-    """
     cfg = _cfg_with_bundle(BundleSpec(components=[_file_comp("launcher")]))
     resolved = resolve_profile(cfg, _PROFILE)
     expand_bundle_file_components(cfg, resolved, Path("/repo"))

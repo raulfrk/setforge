@@ -96,16 +96,11 @@ def _file_comp(id_: str, *, dst: str = "~/.local/bin/x") -> BundleComponent:
 
 
 def test_file_source_accepted() -> None:
-    """A ``file`` component is no longer rejected by ``validate_bundle``."""
     bundle = BundleSpec(components=[_file_comp("a")])
     validate_bundle(bundle, _cfg())
 
 
 def test_execute_bundle_skips_file_component() -> None:
-    """A file component is deploy-only: it must NOT reach the provisioner
-    driver (would AssertionError in ``_resolve_item``). Execution succeeds
-    and the file produces no provisioner outcome.
-    """
     bundle = BundleSpec(components=[_file_comp("launcher")])
     prov = InMemoryProvisioner()
     result = execute_bundle(bundle, _cfg(), provisioner=prov)
@@ -115,9 +110,6 @@ def test_execute_bundle_skips_file_component() -> None:
 
 
 def test_execute_bundle_mixed_package_and_file() -> None:
-    """A bundle mixing a package and a file component still provisions the
-    package unchanged; the file component is skipped.
-    """
     bundle = BundleSpec(
         components=[
             _comp("pkg", crate="ripgrep"),
@@ -130,12 +122,6 @@ def test_execute_bundle_mixed_package_and_file() -> None:
 
 
 def test_execute_bundle_package_depends_on_file_proceeds() -> None:
-    """A package that ``depends_on`` a file component still provisions.
-
-    ``execute_bundle`` marks the deploy-only file component as satisfied so
-    the downstream package is not blocked. Guards the ``satisfied.add`` line
-    for the file branch (a mutant dropping it would leave the package SKIP).
-    """
     bundle = BundleSpec(
         components=[
             _file_comp("launcher"),

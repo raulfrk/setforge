@@ -1,11 +1,4 @@
-"""``setforge validate`` sees bundle ``file`` components and enforces their gates.
-
-Task 3, Part A wires ``expand_bundle_file_components`` into the validate path,
-so a bundle launcher's synthetic tracked-file is visible to validate (its src /
-Jinja dst are linted) AND Part B's security gates run there — a name/dst
-collision or an out-of-``$HOME`` dst makes ``validate`` exit non-zero, ahead of
-any deploy. These drive the real CLI so the reachability is proven end-to-end.
-"""
+"""``setforge validate`` sees bundle ``file`` components and enforces their gates."""
 
 from __future__ import annotations
 
@@ -25,7 +18,6 @@ def _sandbox_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    # Keep validate from reading a real local.yaml.
     monkeypatch.setattr(
         "setforge.cli.validate._LOCAL_CONFIG_PATH", tmp_path / "local.yaml"
     )
@@ -79,7 +71,6 @@ def test_validate_passes_valid_file_component(tmp_path: Path) -> None:
 
 def test_validate_rejects_name_collision(tmp_path: Path) -> None:
     repo = _repo_with_launcher(tmp_path)
-    # A real tracked_file id equal to the synthetic key `revdiff.launcher`.
     cfg = _write(
         repo,
         "version: 1\n"
@@ -130,18 +121,12 @@ def test_validate_rejects_out_of_home_dst(tmp_path: Path) -> None:
 
 
 def test_validate_sees_synthetic_entry_and_lints_missing_src(tmp_path: Path) -> None:
-    """Proof validate now SEES the synthetic entry: a file-component src that
-    does not exist under tracked/ is caught by validate's tracked-src check
-    (which only runs over resolved tracked_files) — impossible unless the
-    synthetic entry was injected into the resolved profile."""
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
-    # NOTE: launch.sh intentionally NOT created.
     cfg = _write(
         repo,
         "version: 1\ntracked_files: {}\n" + _good_bundle_block() + _profile_block(),
     )
     result = _validate(cfg)
     assert result.exit_code != 0, result.output
-    # The missing-src failure names the synthetic tracked_file id.
     assert "revdiff.launcher" in result.output

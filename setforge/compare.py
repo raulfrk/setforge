@@ -533,9 +533,7 @@ def compare_profile(
     the orphan-detection and status commands) pass ``None``.
 
     Overlay contract (SPEC 2): this function re-resolves
-    the profile via :func:`resolve_and_expand` (which also expands each
-    active bundle's ``file`` components into synthetic tracked-files and
-    runs their security gates) and intentionally discards
+    the profile via :func:`resolve_profile` and intentionally discards
     any :func:`apply_local_overlay` mutations to
     ``resolved.claude_plugins`` or ``resolved.extensions.include`` that
     callers may have applied upstream. That's safe today because compare
@@ -546,10 +544,6 @@ def compare_profile(
     :class:`ResolvedProfile` parameter so the overlay's mutations
     survive.
     """
-    # resolve_and_expand injects each active bundle's `file` components as
-    # synthetic tracked-files (and runs their security gates), so compare sees
-    # a bundle launcher's drift like any tracked-file rather than being blind
-    # to it.
     resolved = resolve_and_expand(config, profile_name, repo_root)
     entries: list[FileCompare] = []
     has_unexpected = False
