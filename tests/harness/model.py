@@ -62,17 +62,16 @@ class _Snapshot:
     the ``setforge.yaml`` bytes; restoring it is the real
     :func:`transitions.restore_state_snapshots` reverse, so
     ``revert ∘ verb == identity`` on the observable store (INV-3, INV-5).
-    ``live`` is the deployed-body map the harness threads through the verbs;
-    ``profile`` is the active profile at capture time — restored alongside
-    ``live`` so a revert that crosses a ``reconfigure`` profile switch reads the
-    store back under the SAME profile the live map belongs to (else INV-1 would
-    read the current profile's store against the old profile's live).
+    ``profile`` + ``config`` are the active profile / config at capture time,
+    restored so a revert that crosses a ``reconfigure`` profile switch reads the
+    store back under the SAME profile. Live is NOT captured: ``revert`` derives
+    it from the RESTORED store (see :meth:`StubReconcileModel._live_from_store`),
+    which is the byte-exact reality and keeps live ⊆ store-reconstructable.
     """
 
     verb: str
     profile: str
     config: Config | None
-    live: dict[str, str]
     store: tuple[transitions.StateSnapshotEntry, ...]
     config_bytes: str | None
 
@@ -114,18 +113,21 @@ class StubReconcileModel:
 
         Writes the config to ``root/setforge.yaml`` (the migration registry's
         real target) and picks the first profile — the CLI's single-profile
-        ``--profile=`` contract. ``live`` is then pruned to the NEW profile's
-        tracked-file set: it models the deployed state of exactly the files the
-        active profile tracks, so a config change that drops a file (or switches
-        profile) drops it from live too. Carrying a live body the current profile
-        no longer tracks would be a spurious "live file with no store record" —
-        a model artifact, not a real no-silent-loss failure (the file simply
-        isn't a deploy target anymore). Does not reconcile; ``install`` does.
+        ``--profile=`` contract. ``live`` is then RE-DERIVED from the store of
+        the new active profile (:meth:`_live_from_store`), then narrowed to the
+        profile's tracked-file set. Deriving — not carrying the old ``live`` — is
+        what makes the profile-switch case correct: a fid the new profile happens
+        to track by NAME but has never deployed under it has no store record, so
+        it must NOT appear in live (carrying it would be a spurious "live file
+        with no store record", a model artifact — the store is the truth for what
+        is deployed under a profile). Does not reconcile; ``install`` does.
         """
         self.config = config
         self.profile = next(iter(config.profiles))
         tracked = set(resolve_profile(config, self.profile).tracked_files)
-        self.live = {fid: body for fid, body in self.live.items() if fid in tracked}
+        self.live = {
+            fid: body for fid, body in self._live_from_store().items() if fid in tracked
+        }
         self._write_config_yaml()
 
     # -- verbs (the @rule targets) -------------------------------------
@@ -218,14 +220,21 @@ class StubReconcileModel:
             return
         snap = self._transitions.pop()
         # Restore the active profile + config FIRST so the store legs (captured
-        # under the snapshot's profile) and the restored live map are read back
+        # under the snapshot's profile) and the derived live map are read back
         # under the same profile — a revert may cross a reconfigure profile
         # switch, and the restored config's profile chain must match.
         self.profile = snap.profile
         self.config = snap.config
         with profile_lock(self.profile):
             transitions.restore_state_snapshots(snap.store)
-        self.live = dict(snap.live)
+        # Derive live from the RESTORED store, not the captured snap.live: on a
+        # real system the deployed files after a revert are exactly what the
+        # restored base/local store reconstructs. Trusting snap.live instead can
+        # leave a fid in live whose store leg the restore did not re-materialize
+        # (e.g. a leg absent at capture time, restored to absent) — a model
+        # shadow-drift, not a real no-silent-loss failure. Deriving keeps the
+        # model's live ⊆ store-reconstructable by construction.
+        self.live = self._live_from_store()
         if snap.config_bytes is not None:
             self._config_path().write_text(snap.config_bytes, encoding="utf-8")
 
@@ -289,6 +298,21 @@ class StubReconcileModel:
 
     # -- internals -----------------------------------------------------
 
+    def _live_from_store(self) -> dict[str, str]:
+        """Rebuild the live-body map from the store's reconstructable files.
+
+        A file is "deployed" (live) iff the store reconstructs a present,
+        non-absent body for it under the active profile — the byte-exact analog
+        of what a real revert leaves on disk. This is the single source of truth
+        that keeps ``live ⊆ store-reconstructable`` (INV-1) after a revert.
+        """
+        live: dict[str, str] = {}
+        for fid_str in self.indexed_file_ids():
+            body = reconstruct(self.profile, file_id(fid_str))
+            if isinstance(body, bytes):
+                live[fid_str] = body.decode("utf-8", errors="surrogateescape")
+        return live
+
     def _config_path(self) -> Path:
         return self.root / "setforge.yaml"
 
@@ -341,7 +365,6 @@ class StubReconcileModel:
                 verb=verb,
                 profile=self.profile,
                 config=self.config,
-                live=dict(self.live),
                 store=self._capture_store(),
                 config_bytes=config_bytes,
             )
