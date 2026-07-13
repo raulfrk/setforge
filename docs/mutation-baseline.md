@@ -73,6 +73,12 @@ hardens git (devnull global/system config, no network protocols), and mocks
 no `Path(__file__)`/`REPO_ROOT`/repo-file reads, no root-conftest dependency
 (the root `conftest.py` is not copied into the sandbox and holds no fixtures).
 
+Broadening alone regressed the `structural_merge.is_structural` predicate: the
+integration suites *execute* it but never assert its bool, so its 6 mutants
+flipped `no-test` → survived. Targeted unit tests in
+`tests/test_structural_merge.py` now pin the predicate's True/False on each
+branch (`.json`/`.yaml`/`.yml` → True, non-structural → False), killing all 6.
+
 **Excluded — `tests/integration/test_lockflow.py`:** it exercises the lock /
 provision path (`setforge.provision.*`, `lockfile`), which does **not** import
 any of the 7 `only_mutate` core files, so it has no kill power over core mutants

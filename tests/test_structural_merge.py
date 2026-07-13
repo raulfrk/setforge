@@ -7,6 +7,7 @@ delete-vs-edit conflict detection, and byte-stable idempotency.
 """
 
 import io
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -24,6 +25,7 @@ from setforge.structural_merge import (
     append_key_segment,
     encode_key_segment,
     get_at_path,
+    is_structural,
     join_key_segments,
     list_keys_at_path,
     merge_structural,
@@ -697,3 +699,48 @@ def test_merge_flat_dotted_key_and_nested_path_do_not_collide() -> None:
 
     assert not result.clean
     assert {c.path for c in result.conflicts} == {"a\\.b", "a.b"}
+
+
+# --------------------------------------------------------------------------
+# is_structural — the install/capture dispatch predicate. Pure suffix logic;
+# each case pins one branch of ``jsonc.is_jsonc_file(dst) or dst.suffix in
+# {".yaml", ".yml"}`` so a mutation of the ``or``, the set membership, or
+# either literal flips a True/False and gets killed.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "settings.json",  # first operand True (is_jsonc_file), second False
+        "config.yaml",  # first operand False, second True via ".yaml"
+        "config.yml",  # first operand False, second True via ".yml"
+    ],
+)
+def test_is_structural_true_for_json_and_yaml(name: str) -> None:
+    """Structural extensions route through the comment-tree engine.
+
+    Three True cases, one per True-producing branch: ``.json`` fires the
+    ``is_jsonc_file`` operand; ``.yaml`` and ``.yml`` each fire a distinct set
+    member. Mangling either literal, or swapping ``or`` for ``and`` (which turns
+    the single-True ``.json``/``.yaml``/``.yml`` cases False), fails an assert.
+    """
+    assert is_structural(Path("/some/dir") / name) is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "notes.md",  # non-structural suffix
+        "plain.txt",  # non-structural suffix
+        "README",  # no suffix at all
+        "archive.yaml.bak",  # ".yaml" only in a middle component, not the suffix
+    ],
+)
+def test_is_structural_false_for_non_structural(name: str) -> None:
+    """Non-structural paths do NOT route structural.
+
+    Anchors the False side so an ``in`` -> ``not in`` flip (which would make
+    these True) is killed, and confirms only the trailing suffix counts.
+    """
+    assert is_structural(Path("/some/dir") / name) is False
