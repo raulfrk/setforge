@@ -1,16 +1,4 @@
-"""Docker e2e for the A7 ``setforge inspect`` 3-way viewer.
-
-Exercises the themed one-shot render through a real PTY (so the Tokyo-Night
-theme resolves to 256-color and emits SGR escapes) at two widths — a WIDE PTY
-that must lay the panes out 3-column, and a NARROW PTY that must stack them —
-plus a plain ``docker exec`` (non-TTY) ``-o json`` case asserting the envelope
-is stable and ANSI-free in a pipe.
-
-Reuses the ``test-stage`` profile / ``stage_notes`` tracked_file
-(``tests/fixtures/e2e/setforge.test.yaml``): ``install`` seeds the merge base,
-a live edit opens diff hunks, and ``inspect`` renders the base | live |
-merge-preview view over that reconcile state.
-"""
+"""Docker e2e for the A7 ``setforge inspect`` 3-way viewer."""
 
 from __future__ import annotations
 
@@ -52,7 +40,6 @@ def _install(c: ContainerHandle) -> tuple[int, str, str]:
 def _inspect_session(
     pyte_pty_session: Callable[..., PyteSession], c: ContainerHandle, *, cols: int
 ) -> PyteSession:
-    """Spawn a one-shot ``setforge inspect stage_notes`` over a ``cols``-wide PTY."""
     return pyte_pty_session(
         container=c.cid,
         cols=cols,
@@ -74,14 +61,13 @@ def test_inspect_wide_pty_renders_three_pane_panel(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A wide PTY renders the themed base | live | merge-preview panel."""
     c = docker_container()
     assert _install(c)[0] == 0
     c.write_text(_LIVE, _LIVE_BODY)
 
     s = _inspect_session(pyte_pty_session, c, cols=160)
-    s.expect_in_display("base | live | merge", timeout=60.0)  # panel title
-    s.expect_in_display("Prefer zsh over bash.", timeout=30.0)  # live edit surfaces
+    s.expect_in_display("base | live | merge", timeout=60.0)
+    s.expect_in_display("Prefer zsh over bash.", timeout=30.0)
     s.wait_for_exit(timeout=60, expected_code=0)
 
 
@@ -90,7 +76,6 @@ def test_inspect_narrow_pty_stacks(
     pyte_pty_session: Callable[..., PyteSession],
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """A narrow PTY still renders (stacked) without crashing."""
     c = docker_container()
     assert _install(c)[0] == 0
     c.write_text(_LIVE, _LIVE_BODY)
@@ -105,7 +90,6 @@ def test_inspect_narrow_pty_stacks(
 def test_inspect_json_envelope_ansi_free_in_pipe(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``-o json inspect`` (non-TTY) emits a stable, ANSI-free envelope."""
     c = docker_container()
     assert _install(c)[0] == 0
     c.write_text(_LIVE, _LIVE_BODY)
@@ -122,7 +106,7 @@ def test_inspect_json_envelope_ansi_free_in_pipe(
         ],
     )
     assert rc == 0, err
-    assert "\x1b[" not in out  # no ANSI escape into a JSON pipe
+    assert "\x1b[" not in out
     envelope = json.loads(out)
     assert envelope["command"] == "inspect"
     data = envelope["data"]

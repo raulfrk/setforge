@@ -1,11 +1,8 @@
-"""Terminal-display text helpers shared across the UI layer."""
-
 from __future__ import annotations
 
 
 def sanitize_controls(text: str) -> str:
-    """Render control chars as inert caret notation (``^G``, ``^?``) so
-    untrusted bytes can't drive the terminal; newlines pass through."""
+    # Caret notation so untrusted bytes can't drive the terminal.
     out: list[str] = []
     for ch in text:
         code = ord(ch)

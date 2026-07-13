@@ -1,5 +1,3 @@
-"""Tests for the A7 ``setforge inspect`` command (3-way viewer + hunk index)."""
-
 from __future__ import annotations
 
 import json
@@ -37,10 +35,6 @@ def _setup(
     tracked: bytes = _UPSTREAM,
     hunks: list[dict[str, object]] | None = None,
 ) -> tuple[Path, Path]:
-    """Wire a tracked file with a live file, a tracked (upstream) src, and a
-    recorded reconcile base/local. ``base=None`` skips the base recording (the
-    base-absent case). ``hunks`` records per-hunk index classes into the store
-    (the shape the staging layer will produce). Returns ``(cfg_path, dst)``."""
     monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
     from setforge import locking
     from setforge.reconcile import store
@@ -67,7 +61,6 @@ def test_inspect_human_renders_three_panes(
         app, ["inspect", "CLAUDE.md", "--profile=p", f"--config={cfg_path}"]
     )
     assert result.exit_code == 0, result.output
-    # base / live / merge-preview content all surface in the human view.
     assert "live edit" in result.output
     assert "upstream edit" in result.output
 
@@ -87,14 +80,14 @@ def test_inspect_json_envelope_is_ansi_free(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "\x1b[" not in result.stdout  # no ANSI escape into a JSON pipe
+    assert "\x1b[" not in result.stdout
     payload = json.loads(result.stdout)
     assert payload["command"] == "inspect"
     data = payload["data"]
     assert data["base_present"] is True
     assert set(data["panes"]) == {"base", "live", "merge"}
     assert "live edit" in data["panes"]["live"]
-    assert "upstream edit" in data["panes"]["merge"]  # theirs applied cleanly
+    assert "upstream edit" in data["panes"]["merge"]
     assert set(data["index"]) == {"shared", "kept_local", "conflict"}
     assert data.get("errors", []) == []
 
@@ -116,7 +109,7 @@ def test_inspect_no_base_collapses_to_two_pane(
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)["data"]
     assert data["base_present"] is False
-    assert data["panes"]["base"] is None  # no base pane in the 2-pane view
+    assert data["panes"]["base"] is None
 
 
 def test_inspect_untracked_exits_2_structured(
@@ -130,7 +123,7 @@ def test_inspect_untracked_exits_2_structured(
     assert result.exit_code == 2, result.output
     payload = json.loads(result.stdout)
     assert payload["command"] == "inspect"
-    assert payload["errors"]  # structured error rides the envelope
+    assert payload["errors"]
     assert any("nope.md" in e for e in payload["errors"])
 
 
@@ -167,32 +160,26 @@ def test_inspect_binary_degrades_not_crash(
     )
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)["data"]
-    # binary degrades to a stat placeholder in the merge pane, never a crash.
     assert "binary" in data["panes"]["merge"].lower()
 
 
 def test_inspect_non_tty_is_deterministic_stacked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Under CliRunner the output stream is not a tty; the layout must resolve
-    # deterministically (stacked) rather than branch on a live terminal width.
     cfg_path, _ = _setup(tmp_path, monkeypatch)
     result = CliRunner().invoke(
         app, ["inspect", "CLAUDE.md", "--profile=p", f"--config={cfg_path}"]
     )
     assert result.exit_code == 0, result.output
-    # both sides present, stacked in document order — upstream after live edit.
     assert result.output.index("live edit") < result.output.index("upstream edit")
 
 
 def test_inspect_index_shared_kept_local_empty_without_recorded_hunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # shared/kept_local come from the STORE index (FileEntry.hunks), NOT the
-    # merge-conflict sides. With no recorded hunks (today's storage layer) they
-    # are honestly empty — a clean re-merge here would have wrongly reported a
-    # kept-local under the old conflict-side derivation.
-    cfg_path, _ = _setup(tmp_path, monkeypatch)  # base/live diverge, no hunks
+    # shared/kept_local come from the STORE index, not the merge-conflict sides;
+    # the old conflict-side derivation would have wrongly reported a kept-local.
+    cfg_path, _ = _setup(tmp_path, monkeypatch)
     result = CliRunner().invoke(
         app,
         [
@@ -212,9 +199,7 @@ def test_inspect_index_shared_kept_local_empty_without_recorded_hunks(
 def test_inspect_index_reflects_recorded_store_classes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Exercise the read_index path: a recorded index with a SHARED + a LOCAL hunk
-    # must surface as shared / kept_local (the store classification is the
-    # authority, keyed by HunkClass value — not the merge stream).
+    # Store classification (HunkClass) is authoritative, not the merge stream.
     hunks: list[dict[str, object]] = [
         {"cls": "shared", "label": "## Shell", "live_hash": "sha256:a", "anchor": "s"},
         {"cls": "local", "label": "## Host", "live_hash": "sha256:b", "anchor": "h"},

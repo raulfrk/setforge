@@ -1,13 +1,11 @@
-"""Shared terminal-display text helpers (setforge/ui/text.py)."""
-
 from __future__ import annotations
 
 from setforge.ui.text import sanitize_controls
 
 
 def test_c0_control_chars_become_caret_notation() -> None:
-    assert sanitize_controls("a\x07b") == "a^Gb"  # BEL → ^G
-    assert sanitize_controls("\x1b") == "^["  # ESC → ^[
+    assert sanitize_controls("a\x07b") == "a^Gb"
+    assert sanitize_controls("\x1b") == "^["
 
 
 def test_del_becomes_caret_question() -> None:

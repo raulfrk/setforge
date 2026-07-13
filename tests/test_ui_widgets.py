@@ -31,7 +31,6 @@ from setforge.ui.widgets import (
     text_prompt,
 )
 
-#: The ``(style_class, text)`` fragments shape the pager consumes.
 _PagerFragments = list[tuple[str, str]]
 
 # ---------------------------------------------------------------------------
@@ -291,13 +290,7 @@ class _CaptureOutput(DummyOutput):
 
 
 class _ShrinkingOutput(_CaptureOutput):
-    """Reports a tall screen first, then a short one — a SIGWINCH shrink.
-
-    Drives the pager's per-render geometry re-read + offset clamp: the first
-    ``get_size`` (used when scrolling to the bottom) reports 30 rows; every
-    subsequent read reports 6, so a render after the shrink must re-clamp the
-    offset instead of pointing past the last row.
-    """
+    """Reports 30 rows once, then 6 — simulates a mid-session SIGWINCH shrink."""
 
     def __init__(self) -> None:
         super().__init__(columns=80, rows=30)
@@ -415,10 +408,6 @@ def test_text_prompt_renders_under_truecolor() -> None:
     assert "125;207;255" in buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# pager — full-screen scrollable diff viewer (A6)
-# ---------------------------------------------------------------------------
-
 _LONG_LINES: _PagerFragments = [("class:muted", f"line {i}\n") for i in range(60)]
 
 
@@ -429,11 +418,6 @@ def _drive_pager(
     out: DummyOutput | None = None,
     rows: int = 10,
 ) -> object:
-    """Run :func:`pager` with piped input + a size-stubbed output.
-
-    ``rows`` shapes the emulated terminal height so scroll-window maths is
-    exercised deterministically (default 10 → ~7 body rows after chrome).
-    """
     output = out if out is not None else _CaptureOutput(rows=rows)
     with create_pipe_input() as pipe:
         pipe.send_bytes(input_keys)
@@ -450,9 +434,6 @@ def test_pager_enter_returns_none() -> None:
 
 
 def test_pager_escape_returns_cancel() -> None:
-    # Esc in the pager MUST propagate CANCEL so the seed prompt aborts the file.
-    # Doubled Esc resolves the pipe's lone-escape timeout deterministically (a
-    # real TTY flushes on its own; the pipe harness needs the second byte).
     assert _drive_pager(b"\x1b\x1b") is CANCEL
 
 
@@ -465,34 +446,23 @@ def test_pager_renders_first_page() -> None:
     _drive_pager(b"q", out=out)
     rendered = out.captured()
     assert "line 0" in rendered
-    # A row past the visible window is NOT painted before any scroll.
     assert "line 59" not in rendered
 
 
 def test_pager_scrolls_down_reveals_later_rows() -> None:
-    # G jumps to the last page; the final row must now be visible.
     out = _CaptureOutput(rows=10)
     _drive_pager(b"Gq", out=out)
     assert "line 59" in out.captured()
 
 
 def test_pager_shrink_clamps_offset_no_crash() -> None:
-    # Scroll to the bottom under a tall screen, then the render path must clamp
-    # the offset when a subsequent read reports a shorter screen — no crash and
-    # the last row stays in view. _ShrinkingOutput reports rows=30 once, then 6.
     out = _ShrinkingOutput()
     assert _drive_pager(b"Gq", out=out) is None
     assert "line 59" in out.captured()
 
 
 def test_pager_empty_lines_renders() -> None:
-    # A degenerate empty fragments list must not crash the scroll maths.
     assert _drive_pager(b"q", lines=[]) is None
-
-
-# ---------------------------------------------------------------------------
-# _seed_prompt_interactive — real widget construction (A6)
-# ---------------------------------------------------------------------------
 
 
 def test_seed_prompt_keep_live_real_widget() -> None:
@@ -500,21 +470,18 @@ def test_seed_prompt_keep_live_real_widget() -> None:
     from setforge.reconcile_apply import SeedChoice
 
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\r")  # first button (Keep live) focused → Enter
+        pipe.send_bytes(b"\r")
         with create_app_session(input=pipe, output=DummyOutput()):
             choice = _seed_prompt_interactive("~/f", b"a\nb\n", b"a\nc\n")
     assert choice is SeedChoice.KEEP_LIVE
 
 
 def test_seed_prompt_view_diff_then_back_then_choose() -> None:
-    # Press v (view diff) → q (back to bar) → Take upstream. Real pager +
-    # button-bar construction, not a scripted callback — the callback-injected
-    # blind spot a prior style crash slipped through.
+    # Real widget construction — a scripted callback missed a prior style crash.
     from setforge.cli._install_helpers import _seed_prompt_interactive
     from setforge.reconcile_apply import SeedChoice
 
     with create_pipe_input() as pipe:
-        # v opens pager; q closes it; right→ focus "Take upstream"; Enter.
         pipe.send_bytes(b"vq\x1b[C\r")
         with create_app_session(input=pipe, output=DummyOutput()):
             choice = _seed_prompt_interactive("~/f", b"a\nb\n", b"a\nc\n")
@@ -522,11 +489,10 @@ def test_seed_prompt_view_diff_then_back_then_choose() -> None:
 
 
 def test_seed_prompt_view_diff_escape_aborts() -> None:
-    # Esc INSIDE the pager propagates CANCEL → the whole file aborts.
     from setforge.cli._install_helpers import _seed_prompt_interactive
 
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"v\x1b\x1b")  # v opens pager, Esc cancels (doubled)
+        pipe.send_bytes(b"v\x1b\x1b")
         with create_app_session(input=pipe, output=DummyOutput()):
             choice = _seed_prompt_interactive("~/f", b"a\nb\n", b"a\nc\n")
     assert choice is CANCEL

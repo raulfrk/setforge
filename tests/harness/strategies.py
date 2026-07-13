@@ -122,28 +122,16 @@ def profiles(draw: st.DrawFn, tracked_file_ids: list[str]) -> dict[str, Profile]
     return out
 
 
-# The schema versions the NON-destructive version-stamp chain reaches (1.0 →
-# 1.1 → 1.2). Kept below the breaking 1.x → 2.0 contract migration, which needs
-# an operator ``minimum_version`` attestation the harness deliberately does not
-# forge — so ``migrate`` always drives a real, reversible registry chain.
+# Below the breaking 1.x -> 2.0 migration (needs an unforgeable attestation).
 _MIGRATABLE_VERSIONS = ("1.0", "1.1", "1.2")
 
 
 def schema_targets() -> st.SearchStrategy[str]:
-    """A migrate target the real registry can reach reversibly (1.0 / 1.1 / 1.2)."""
     return st.sampled_from(_MIGRATABLE_VERSIONS)
 
 
 @st.composite
 def configs(draw: st.DrawFn) -> Config:
-    """A fully-valid :class:`Config` the state machine can reconcile.
-
-    Guarantees: >= 1 tracked_file, >= 1 profile, every profile's
-    ``tracked_files`` references a declared id. ``schema_version`` is drawn from
-    the reachable version-stamp chain so a generated sequence exercises a real
-    ``migrate`` (the model writes the config at the ``1.0`` on-disk baseline and
-    migrates toward this target).
-    """
     registry = draw(tracked_files())
     profile_map = draw(profiles(list(registry)))
     return Config(
@@ -162,9 +150,7 @@ def minimal_config(schema_version: str = "1.0") -> Config:
     """A deterministic minimal config for non-Hypothesis unit tests.
 
     Not a strategy — a plain fixed value the meta-tests use when they
-    need a known config rather than a generated one. ``schema_version``
-    lets a test target a real, reachable migration (e.g. ``"1.2"`` drives
-    the real 1.0 → 1.1 → 1.2 registry chain).
+    need a known config rather than a generated one.
     """
     return Config(
         tracked_files={

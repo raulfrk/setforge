@@ -109,9 +109,7 @@ class SeedChoice(StrEnum):
     TAKE_UPSTREAM = "take_upstream"
 
 
-# Decide the seed for one divergent file; returns CANCEL to abort the file. The
-# live + tracked (upstream) bytes are passed so an interactive prompt can render
-# a divergence preview / pager over the two sides.
+# Decide the seed for one divergent file; returns CANCEL to abort the file.
 type SeedPrompt = Callable[[str, bytes, bytes], SeedChoice | Cancelled]
 
 

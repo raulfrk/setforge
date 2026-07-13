@@ -187,8 +187,6 @@ class TestSeed:
         assert out.seeded is True  # caller warns
 
     def test_non_interactive_never_calls_seed_prompt(self) -> None:
-        # No TTY: the seed prompt (and therefore the pager Application) must
-        # NEVER be constructed off the interactive branch.
         def _boom(_p: str, _l: bytes, _t: bytes) -> SeedChoice:
             raise AssertionError("seed_prompt must not run non-interactively")
 
@@ -203,7 +201,6 @@ class TestSeed:
         assert out.seeded is True
 
     def test_auto_keep_live_never_calls_seed_prompt(self) -> None:
-        # --auto=keep-live resolves the seed by side without prompting.
         def _boom(_p: str, _l: bytes, _t: bytes) -> SeedChoice:
             raise AssertionError("seed_prompt must not run under --auto")
 
@@ -258,8 +255,6 @@ class TestSeed:
         assert out.kind is ReconcileKind.CANCELLED
 
     def test_seed_prompt_receives_live_and_tracked_bytes(self) -> None:
-        # The callback widened to (display_path, live, tracked) so an
-        # interactive prompt can render a live-vs-upstream divergence preview.
         seen: dict[str, object] = {}
 
         def _capture(display_path: str, live: bytes, tracked: bytes) -> SeedChoice:

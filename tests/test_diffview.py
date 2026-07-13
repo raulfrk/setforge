@@ -88,32 +88,30 @@ def test_three_way_binary_conflict_side() -> None:
 
 
 def test_non_utf8_bytes_do_not_crash() -> None:
-    # Lone 0xff is invalid UTF-8; a bare .decode("utf-8") would raise here.
     m = diffview.two_way_lines(b"", b"\xff\xfe bad\n")
     assert m.binary is False
     joined = "".join(r.text for r in m.rows)
-    assert "�" in joined  # replacement char from errors="replace"
+    assert "�" in joined
 
 
 def test_control_chars_are_sanitized() -> None:
     m = diffview.two_way_lines(b"", b"tab\there\x07bell\n")
     joined = "".join(r.text for r in m.rows)
-    assert "^G" in joined  # BEL (0x07) rendered as caret notation
+    assert "^G" in joined
 
 
 def test_to_fragments_uses_theme_roles() -> None:
     m = diffview.two_way_lines(b"old\n", b"new\n")
     frags = diffview.to_fragments(m)
     classes = {style for style, _ in frags}
-    assert "class:success" in classes  # live/ours = SUCCESS
-    assert "class:warning" in classes  # upstream/theirs = WARNING
+    assert "class:success" in classes
+    assert "class:warning" in classes
     assert all(cls.startswith("class:") for cls, _ in frags)
 
 
 def test_to_fragments_cap_limits_rows() -> None:
     m = diffview.two_way_lines(b"", b"a\nb\nc\nd\ne\n")
     capped = diffview.to_fragments(m, cap=2)
-    # Cap windows the model rows; the uncapped output is strictly longer.
     assert len(capped) < len(diffview.to_fragments(m))
 
 
@@ -122,8 +120,8 @@ def test_to_rich_renders_without_raw_hex() -> None:
     renderable = diffview.to_rich(m, layout=RichLayout.STACKED)
     sink = io.StringIO()
     console = Console(file=sink, force_terminal=True, color_system="truecolor")
-    console.print(renderable)  # must not raise
-    assert sink.getvalue()  # produced something
+    console.print(renderable)
+    assert sink.getvalue()
 
 
 def test_to_rich_side_by_side_layout() -> None:

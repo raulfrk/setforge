@@ -49,9 +49,6 @@ from hypothesis.stateful import invariant as _hypothesis_invariant
 if TYPE_CHECKING:
     from tests.harness.model import StubReconcileModel
 
-# The env var the real engine's ``transitions.state_root`` honors. Set
-# per-example to ``self.model.state_dir`` so every real store / merge / migrate
-# write lands under ``self.root`` and never the dev-host state dir.
 _STATE_ENV = "SETFORGE_STATE_DIR"
 
 # Sentinel attribute stamped on every @invariant-decorated method so the
@@ -163,14 +160,6 @@ class InvariantStateMachine(RuleBasedStateMachine):
             root = Path(tempfile.mkdtemp(prefix="setforge_harness_"))
         self.root: Path = root
         self.model: StubReconcileModel = type(self).model_factory(root)
-        # A machine with @rule methods is one Hypothesis actually DRIVES over a
-        # generated sequence; a rule-less machine is only ever used via the
-        # standalone assert_invariants() path (which the autouse conftest
-        # SETFORGE_STATE_DIR fixture already isolates and which never shells
-        # out). Only the driven machine installs the per-example env redirect +
-        # subprocess guard, and only it reliably reaches teardown() — so the
-        # global-state mutation can never leak from a construct-and-abandon
-        # standalone test.
         self._guarded = bool(self.rules)
         if self._guarded:
             self._prev_state_env = os.environ.get(_STATE_ENV)
@@ -178,13 +167,6 @@ class InvariantStateMachine(RuleBasedStateMachine):
             self._install_subprocess_guard()
 
     def _install_subprocess_guard(self) -> None:
-        """Replace ``subprocess.run`` / ``Popen`` with raisers for this example.
-
-        The wire-ready reconcile path (store + merge + migrate) is
-        subprocess-free, so any shell-out is an unexpected escape — it raises
-        loudly rather than hitting the host ``claude`` / ``code`` / ``gitleaks``.
-        Restored in :meth:`teardown` so the guard never leaks across examples.
-        """
         self._orig_run = subprocess.run
         self._orig_popen = subprocess.Popen
 
@@ -198,13 +180,6 @@ class InvariantStateMachine(RuleBasedStateMachine):
         subprocess.Popen = _blocked  # type: ignore[assignment,misc]
 
     def teardown(self) -> None:
-        """Per-example cleanup — Hypothesis calls this after every example.
-
-        Restores the subprocess guard + state-dir env (only if this machine
-        installed them) and removes the isolation root so no per-example state
-        (store bytes, lockfiles, ``setforge.yaml``) bleeds into the next
-        generated sequence.
-        """
         if self._guarded:
             subprocess.run = self._orig_run
             subprocess.Popen = self._orig_popen  # type: ignore[misc]

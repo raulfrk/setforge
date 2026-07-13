@@ -1,19 +1,3 @@
-"""inspect subcommand — themed 3-way viewer (base | live | merge-preview) (A7).
-
-``setforge inspect <file>`` renders a tracked file's reconcile state as a
-Tokyo-Night-themed three-way view — the merge base, the live bytes, and the
-merge-preview (the resolved merged text, conflict regions marked) — plus a
-per-hunk index (line-range + shared / kept-local / conflict tag). It is a
-one-shot batch render (no Live loop); the layout is responsive, going
-3-column when the console is wide enough and stacked otherwise.
-
-Read-only: it reuses ``compare``'s file resolver + the store's confinement
-guard, reads base / local / index under one ``profile_lock``, and computes
-the 3-way merge via :func:`setforge.reconcile.merge.merge`. An untracked /
-unresolvable file mirrors ``compare``'s exit-2 (a structured error rides the
-JSON envelope's ``errors`` list, never a bare human string in JSON mode).
-"""
-
 from __future__ import annotations
 
 import sys
@@ -48,22 +32,12 @@ from setforge.ui.diffview import (
     two_way_lines,
 )
 
-# Below this width the panes stack; a non-tty Console reports 80, so a piped
-# invocation deterministically resolves to STACKED (never a live terminal width).
 _WIDE_THRESHOLD = 120
 
 
 def _resolve_fid(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, arg: str
 ) -> tuple[FileId, Path, Path] | None:
-    """Resolve ``arg`` to a ``(file-id, live-path, tracked-src-path)`` triple.
-
-    Matches ``arg`` against each expanded tracked file's name / sub-name /
-    live path / live basename — the same match set ``stage`` uses — so a
-    directory member (``name/relpath``) resolves too. Returns ``None`` when
-    nothing matches (the caller maps that to exit 2). Returning the tracked
-    ``src`` here spares a second full walk to fetch the merge ``theirs`` side.
-    """
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
@@ -75,12 +49,6 @@ def _resolve_fid(
 
 
 def _pane_text(data: bytes | None | Absent) -> str | None:
-    """Decode a pane's bytes for the JSON payload; ``None`` when the side is absent.
-
-    Binary / non-UTF8 degrades to a stat placeholder rather than crashing — the
-    same contract the Rich renderer honours. ``None`` / :data:`ABSENT` both mean
-    "no such pane" (base-absent 2-pane view, or a clean deletion).
-    """
     if data is None or data is ABSENT:
         return None
     if b"\x00" in data:
@@ -89,14 +57,6 @@ def _pane_text(data: bytes | None | Absent) -> str | None:
 
 
 def _merge_pane_text(result: MergeResult) -> str:
-    """The merge-preview pane body: resolved bytes when clean, conflict-marked
-    otherwise.
-
-    A clean result renders its merged bytes (or a deletion note for a clean
-    absence); a conflicted result stitches each conflict's ours/theirs between
-    ``<<<<<<<`` / ``=======`` / ``>>>>>>>`` markers so the preview shows exactly
-    what still needs resolving. Binary sides degrade to a stat placeholder.
-    """
     if result.clean:
         merged = result.merged()
         if merged is ABSENT:
@@ -119,18 +79,8 @@ def _merge_pane_text(result: MergeResult) -> str:
 def _index_summary(
     result: MergeResult, entry: FileEntry | None
 ) -> dict[str, list[dict[str, Any]]]:
-    """Per-hunk index summary, drawn from the two authorities that each own a tag.
-
-    ``shared`` / ``kept_local`` are a STORE classification: they come from the
-    recorded index entry's ``hunks`` (``HunkClass.SHARED`` / ``HunkClass.LOCAL``),
-    NOT from a merge-conflict side — a genuinely kept-local hunk re-merges CLEAN,
-    so a conflict-only walk would miss it and report zero. These are honestly
-    empty in the current storage layer (``FileEntry.hunks`` is unpopulated until
-    the staging layer fills it) and auto-correct once it does.
-
-    ``conflict`` is a merge-time fact: each :class:`Conflict` segment, tagged with
-    its line-range in the merged-preview stream.
-    """
+    # shared/kept_local come from the STORE index, not merge conflicts: a
+    # kept-local hunk re-merges CLEAN, so a conflict-only walk would miss it.
     shared: list[dict[str, Any]] = []
     kept_local: list[dict[str, Any]] = []
     for row in entry.hunks if entry is not None else []:
@@ -161,7 +111,6 @@ def inspect(
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
 ) -> None:
-    """Show a tracked file's base | live | merge-preview 3-way view + hunk index."""
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     repo_root = config.resolve().parent
@@ -182,8 +131,7 @@ def inspect(
         recorded = reconcile_store.read_local(profile, fid)
         entry = reconcile_store.read_index(profile).files.get(str(fid))
 
-    # "ours" is the live file; absent-live falls back to the recorded-local
-    # trichotomy (bytes | None | ABSENT), matched on the sentinel not truthiness.
+    # Absent-live falls back to recorded-local; matched on ABSENT, not truthiness.
     if dst.exists():
         live: bytes | Absent = dst.read_bytes()
     elif isinstance(recorded, bytes):
@@ -198,7 +146,7 @@ def inspect(
         merge_pane = _merge_pane_text(result)
         index = _index_summary(result, entry)
         model = three_way_segments(result)
-    else:  # no recorded base → 2-pane live↔upstream diff (no merge to compute)
+    else:
         live_bytes = b"" if live is ABSENT else live
         up_bytes = b"" if upstream is ABSENT else upstream
         model = two_way_lines(live_bytes, up_bytes)
@@ -235,7 +183,6 @@ def inspect(
 
 
 def _render_index(console: Console, index: dict[str, list[dict[str, Any]]]) -> None:
-    """Print the per-hunk index summary (shared / kept-local / conflict tags)."""
     rows = index["conflict"]
     if not rows:
         console.print(
@@ -254,15 +201,6 @@ def _render_index(console: Console, index: dict[str, list[dict[str, Any]]]) -> N
 
 
 def _emit_error(ctx_obj: OutputContext | None, message: str) -> None:
-    """Surface a resolution error on the right surface for the output mode.
-
-    JSON mode writes the versioned envelope with a top-level ``errors`` list
-    (via :func:`wrap_json`'s ``errors`` arg) so a ``| jq`` pipeline sees
-    structured output, never a bare stderr string. Human mode prints a red
-    error to stderr, mirroring ``compare``'s failure UX. Since the JSON body
-    is written directly here (not through :func:`render`), no ``Console`` is
-    ever constructed on the error path.
-    """
     if ctx_obj is not None and ctx_obj.format is OutputFormat.JSON:
         sys.stdout.write(wrap_json("inspect", _empty_data(), errors=[message]))
         sys.stdout.write("\n")
@@ -271,7 +209,6 @@ def _emit_error(ctx_obj: OutputContext | None, message: str) -> None:
 
 
 def _empty_data() -> dict[str, Any]:
-    # ``data.errors`` mirrors the success shape; the message rides the envelope.
     return {
         "file": None,
         "base_present": False,
