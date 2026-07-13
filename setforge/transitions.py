@@ -957,10 +957,9 @@ def snapshot_state_root() -> dict[Path, bytes]:
     mutates specific store legs (keyed off ``state_root``) and commits a
     durable transition, but which legs it touches is known only to the
     migration; the driver cannot recompute them. Snapshotting the entire
-    tree captures both regardless. Files present here but ABSENT after are
-    restored by :func:`restore_state_root`; files created after (a cutover's
-    new leg, its phantom transition) are absent from this map and get
-    removed. Missing root → empty map (nothing to restore to).
+    tree captures both regardless. :func:`restore_state_root` restores this
+    image and sweeps files created after (see its delete-arm contract).
+    Missing root → empty map (nothing to restore to).
     """
     root = state_root()
     if not root.exists():
@@ -971,14 +970,29 @@ def snapshot_state_root() -> dict[Path, bytes]:
 def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
     """Restore the state tree to ``snapshot`` (from :func:`snapshot_state_root`).
 
-    Rewrites every captured file byte-exact, then removes any file now under
-    :func:`state_root` that was NOT in the snapshot — deleting a cutover's
+    Rewrites every captured file byte-exact, then removes files now under
+    :func:`state_root` that were NOT in the snapshot — a cutover's
     freshly-seeded store leg and the phantom durable transition it committed,
     so a later ``revert`` never reverses that transition against an
-    already-rolled-back tree. Best-effort (direct writes / unlinks): migrate
-    holds no ``profile_lock``, and a mid-``apply`` ``KeyboardInterrupt``
-    releases the cutover's own ``ExitStack`` lock before rollback runs, so
-    this restore is unlocked — acceptable for an interactive single-user undo.
+    already-rolled-back tree.
+
+    Delete-arm blast radius (state_root is host-wide, shared across every
+    profile + command):
+
+    * Store legs (everything OUTSIDE ``transitions/``) are swept whole-tree —
+      which leg a cutover mutated is known only to the migration and cannot be
+      enumerated here. A concurrent install's freshly-seeded store leg could be
+      caught in this sweep; that residual window is accepted as documented
+      best-effort for an interactive single-user undo.
+    * Transition records (under ``transitions/``) are swept ONLY for the
+      migrate profile (``MIGRATE_TRANSITION_PROFILE``, by ``meta.json``
+      identity). Every ``writes_own_transition`` cutover commits under that
+      profile, so scoping still removes the phantom while leaving a concurrent
+      ``install``/``sync``'s own-profile transition record untouched.
+
+    Best-effort (direct writes / unlinks): migrate holds no ``profile_lock``,
+    and a mid-``apply`` ``KeyboardInterrupt`` releases the cutover's own
+    ``ExitStack`` lock before rollback runs, so this restore is unlocked.
     """
     for path, payload in snapshot.items():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -986,9 +1000,41 @@ def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
     root = state_root()
     if not root.exists():
         return
+    tx_root = transitions_root()
     for p in root.rglob("*"):
-        if p.is_file() and p not in snapshot:
-            p.unlink(missing_ok=True)
+        if not p.is_file() or p in snapshot:
+            continue
+        if _is_within(p, tx_root) and not _is_migrate_transition_file(p, tx_root):
+            # A concurrent install/sync's own-profile transition record — never
+            # this migrate's phantom. Leave it; the whole-tree sweep is scoped
+            # to migrate-profile transitions only.
+            continue
+        p.unlink(missing_ok=True)
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    """Whether ``path`` is ``parent`` itself or nested under it (lexical)."""
+    return path == parent or parent in path.parents
+
+
+def _is_migrate_transition_file(path: Path, tx_root: Path) -> bool:
+    """Whether ``path`` lives in a MIGRATE-profile transition directory.
+
+    Identity is the transition dir's ``meta.json`` ``profile`` field (not the
+    dirname suffix, which could conflate a real ``migrate``-named profile). A
+    missing/unreadable meta is treated as NOT-migrate — the safe default is to
+    LEAVE the file (never delete another profile's record on ambiguity).
+    """
+    try:
+        tx_dir = path.relative_to(tx_root).parts[0]
+    except (ValueError, IndexError):
+        return False
+    meta_file = tx_root / tx_dir / "meta.json"
+    try:
+        payload = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return payload.get("profile") == MIGRATE_TRANSITION_PROFILE
 
 
 def _stage_state_snapshots(

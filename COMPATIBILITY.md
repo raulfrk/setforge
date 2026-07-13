@@ -134,6 +134,11 @@ zero spurious delta. It differs from the schema class on two axes:
   **and** removes the seeded base in lockstep — returning the file to exactly its
   pre-install state with no stranded base for the next install to mis-merge
   against.
+- **All-or-nothing, no per-step resume.** A failed *or* interrupted `setforge
+  migrate --apply` rolls the whole chain back to its byte-exact origin (files,
+  and the reconcile store for a store-cutover step) and exits. Re-running
+  `--apply` restarts the entire chain from the origin schema — there is no
+  resume from the failed step.
 
 ## User-section marker retirement — a one-way contract step
 

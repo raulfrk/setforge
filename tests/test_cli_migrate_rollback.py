@@ -285,6 +285,99 @@ def test_store_cutover_then_failure_leaves_store_and_log_consistent(
     ), "phantom cutover transition survived rollback"
 
 
+@dataclass(slots=True, frozen=True)
+class _ConcurrentInstallStep:
+    """Simulates a concurrent ``install`` for ANOTHER profile landing a
+    transition record mid-migrate — AFTER the driver's chain-start snapshot,
+    so it is absent from that snapshot and a candidate for the rollback sweep.
+
+    A step (not a pre-seed) because a pre-seeded record IS in the chain-start
+    snapshot and would survive even an unscoped sweep; the cross-profile bug
+    only bites records created after the snapshot.
+    """
+
+    from_version: str = "2.0"
+    to_version: str = "2.1"
+    installed_dir_holder: list[Path] | None = None
+
+    @property
+    def reverse(self) -> _ConcurrentInstallStep:
+        return _ConcurrentInstallStep(
+            from_version=self.to_version, to_version=self.from_version
+        )
+
+    def manifest(self, *, roots: MigrationRoots) -> tuple[ManifestEntry, ...]:
+        return (ManifestEntry(type=ManifestType.NOTE, description="concurrent"),)
+
+    def affected_paths(self, *, roots: MigrationRoots) -> tuple[Path, ...]:
+        return (roots.cfg_path,)
+
+    def apply(self, *, roots: MigrationRoots) -> None:
+        if roots.pre_chain_snapshot is None:
+            return
+        sentinel = roots.cfg_path.parent / "installed-file.txt"
+        tx = transitions.write_transition(
+            transitions.make_meta(
+                transitions.TransitionCommand.INSTALL,
+                "some-other-profile",
+                end_timestamp=transitions.now_utc().isoformat(),
+                command_line=None,
+            ),
+            {sentinel: None},
+            {sentinel: "installed\n"},
+            None,
+        )
+        if self.installed_dir_holder is not None:
+            self.installed_dir_holder.append(Path(tx))
+
+
+def test_rollback_sweep_spares_other_profiles_transition_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent non-migrate transition record (e.g. an install for another
+    profile) landing MID-migrate must SURVIVE the migrate rollback sweep.
+
+    state_root() is host-wide/all-profile. The whole-tree store-leg sweep is
+    accepted best-effort, but the transitions/ deletion is scoped to the
+    MIGRATE profile — a concurrent install/sync's own-profile record is left
+    untouched, while the phantom migrate cutover transition is still removed."""
+    cfg = _write_cfg(tmp_path, _AT_1_0)
+    holder: list[Path] = []
+    monkeypatch.setattr(
+        "setforge.migrations.MIGRATIONS",
+        (
+            _StampStep(),
+            _StoreCutoverStep(),
+            _ConcurrentInstallStep(installed_dir_holder=holder),
+            _RaisingStep(from_version="2.1", to_version="2.2"),
+        ),
+    )
+    result = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "2.2", "--apply", "--yes"]
+    )
+    assert result.exit_code == 1, result.output
+
+    # The concurrent install landed a record mid-migrate (after chain-start).
+    assert holder, "concurrent install step did not run in the real apply"
+    other_dir = holder[0]
+
+    # It is untouched by the sweep — scoping spares non-migrate profiles.
+    assert other_dir.exists(), (
+        "concurrent non-migrate transition record was deleted by migrate rollback"
+    )
+    assert (other_dir / "meta.json").exists()
+
+    # But the phantom migrate transition IS still removed (scoping preserved
+    # phantom removal).
+    assert (
+        transitions.load_latest(
+            transitions.MIGRATE_TRANSITION_PROFILE,
+            command=transitions.TransitionCommand.MIGRATE,
+        )
+        is None
+    ), "phantom cutover transition survived the scoped rollback"
+
+
 def test_store_snapshot_captured_at_chain_start_preserves_prior_leg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

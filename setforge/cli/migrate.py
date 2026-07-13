@@ -884,14 +884,11 @@ def _execute_chain(
         path: (path.read_bytes() if path.exists() else None) for path in affected_paths
     }
     # A ``writes_own_transition`` cutover mutates GLOBAL reconcile-store legs and
-    # commits a durable transition, both keyed off state_root() (SETFORGE_STATE_DIR)
-    # — NOT in the file snapshot above. Capture the WHOLE state tree at chain-start
-    # (BEFORE any cutover mutates) so a mid-chain failure after the cutover restores
-    # the store to its true pre-chain state and removes the phantom transition.
-    # None => not captured (plain chain owns no transition, no store restore). An
-    # empty dict is a LEGITIMATE snapshot (state tree empty at chain-start) that
-    # still drives a restore — deleting everything a cutover creates. The None-vs-{}
-    # distinction is why the sentinel is None.
+    # commits a durable transition, both keyed off state_root() — NOT in the file
+    # snapshot above. Capture the WHOLE state tree at chain-start (BEFORE any cutover
+    # mutates) so a mid-chain failure restores the store + removes the phantom.
+    # None => not captured (plain chain, no store restore); see _rollback for the
+    # None-vs-empty-dict contract.
     store_snapshot: dict[Path, bytes] | None = (
         transitions.snapshot_state_root() if _chain_owns_transition(chain) else None
     )
@@ -956,9 +953,7 @@ def _rollback(
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(original)
-    # None => plain chain, nothing to restore. A captured (even empty) snapshot
-    # DOES restore — an empty map means "the state tree was empty at chain-start"
-    # and the restore then deletes everything a cutover created.
+    # None => nothing to restore; an empty dict still restores (see docstring).
     if store_snapshot is not None:
         transitions.restore_state_root(store_snapshot)
 
