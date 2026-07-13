@@ -233,6 +233,19 @@ class MalformedLockError(SetforgeError):
     pass
 
 
+class LockVersionError(SetforgeError):
+    """Raised when ``setforge.lock`` records a ``version`` NEWER than this
+    engine can read.
+
+    The message names the found-vs-expected versions and the recovery
+    (upgrade setforge — never "run ``setforge lock``", since regenerating
+    reads the existing lock through this same refusing parse path). An
+    older version is accepted as-is (permanent backward-compat); only a
+    forward-incompatible (newer) version is refused — a future format is
+    never best-effort parsed. Sibling of :class:`IndexVersionError`.
+    """
+
+
 class LockConflict(SetforgeError):
     """A shared pin resolves to a DIFFERENT version/integrity — fails closed."""
 

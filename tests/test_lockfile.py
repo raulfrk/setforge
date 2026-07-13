@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from setforge.errors import MalformedLockError
+from setforge.errors import LockVersionError, MalformedLockError
 from setforge.lockfile import (
     LOCK_FILENAME,
+    LOCK_VERSION,
     LockFile,
     dump_lock,
     lock_path,
@@ -185,3 +186,38 @@ def test_reject_missing_key() -> None:
     text = 'version = 1\n[[package]]\ntype = "go"\nversion = "1"\nsum = "h1:a"\n'
     with pytest.raises(MalformedLockError, match="'key'"):
         parse_lock(text)
+
+
+def test_reject_newer_lock_version() -> None:
+    text = "version = 2\n"
+    with pytest.raises(LockVersionError, match="Upgrade setforge"):
+        parse_lock(text)
+
+
+def test_accept_older_lock_version() -> None:
+    text = "version = 0\n"
+    assert parse_lock(text) == LockFile(version=0, packages=())
+
+
+def test_reject_missing_version_unchanged() -> None:
+    with pytest.raises(MalformedLockError, match="version"):
+        parse_lock('[[package]]\ntype = "go"\nkey = "x"\nversion = "1"\nsum = "h1:a"\n')
+
+
+def test_newer_lock_version_refused_before_pin_parsing() -> None:
+    # This package table is missing its integrity field entirely, which
+    # `_parse_pin` would normally reject with MalformedLockError. The
+    # version guard must fire first — refuse-before-construct.
+    text = (
+        f"version = {LOCK_VERSION + 1}\n"
+        '[[package]]\ntype = "go"\nkey = "x"\nversion = "1"\n'
+    )
+    with pytest.raises(LockVersionError, match="Upgrade setforge"):
+        parse_lock(text)
+
+
+def test_newer_lock_version_is_a_setforge_error() -> None:
+    from setforge.errors import SetforgeError
+
+    with pytest.raises(SetforgeError):
+        parse_lock("version = 999\n")

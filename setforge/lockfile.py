@@ -8,7 +8,7 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field
 
 from setforge.atomicio import atomic_write_text
-from setforge.errors import MalformedLockError
+from setforge.errors import LockVersionError, MalformedLockError
 from setforge.provision.resolve.protocol import (
     _KIND_FIELD,
     IntegrityKind,
@@ -52,6 +52,12 @@ def parse_lock(text: str) -> LockFile:
     if not isinstance(version, int) or isinstance(version, bool):
         raise MalformedLockError(
             f"setforge.lock: 'version' must be an integer, got {version!r}"
+        )
+
+    if version > LOCK_VERSION:
+        raise LockVersionError(
+            f"setforge.lock was written by a newer setforge (lock format v{version}; "
+            f"this build reads v{LOCK_VERSION}). Upgrade setforge."
         )
 
     packages_raw = raw.get("package", [])
