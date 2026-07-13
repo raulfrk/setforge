@@ -1252,6 +1252,18 @@ smoke = true
 signal = "core install/sync/compare/revert/validate/init/migrate/upgrade path"
 verbs = ["validate"]
 
+[tests."tests/docker/test_e2e_docker_seed_pager.py::test_seed_pager_escape_aborts_file_unchanged"]
+verdict = "keep"
+smoke = false
+signal = "seed pager Esc aborts file unchanged, no base recorded (INV-1)"
+verbs = ["install", "reconcile"]
+
+[tests."tests/docker/test_e2e_docker_seed_pager.py::test_seed_pager_view_scroll_resize_then_choose"]
+verdict = "keep"
+smoke = false
+signal = "seed divergence pager view/scroll/resize then choice lands"
+verbs = ["install", "reconcile"]
+
 [tests."tests/docker/test_e2e_docker_share_draft.py::test_share_draft_adopt_rewrites_live_and_tracked"]
 verdict = "keep"
 smoke = false

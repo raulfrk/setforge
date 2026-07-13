@@ -120,6 +120,20 @@ class PyteSession:
         )
         return cls(screen=screen, stream=stream, process=process)
 
+    def resize(self, *, cols: int, lines: int) -> None:
+        """Resize the PTY and re-sync the pyte screen geometry to match.
+
+        Drives :meth:`pexpect.spawn.setwinsize` so the child receives a real
+        ``SIGWINCH`` (prompt_toolkit re-renders at the new size), then rebuilds
+        the pyte :class:`HistoryScreen` + :class:`ByteStream` at the new
+        geometry so subsequent :meth:`display` reads line up with the child's
+        new render. ``setwinsize`` takes ``(rows, cols)``; pyte takes
+        ``(cols, lines)``.
+        """
+        self.process.setwinsize(lines, cols)
+        self.screen = pyte.HistoryScreen(cols, lines)
+        self.stream = pyte.ByteStream(self.screen)
+
     def send_keys(self, keys: str) -> None:
         """Send a key sequence to the PTY as UTF-8 bytes.
 

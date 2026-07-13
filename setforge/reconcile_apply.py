@@ -109,8 +109,10 @@ class SeedChoice(StrEnum):
     TAKE_UPSTREAM = "take_upstream"
 
 
-# Decide the seed for one divergent file; returns CANCEL to abort the file.
-type SeedPrompt = Callable[[str], SeedChoice | Cancelled]
+# Decide the seed for one divergent file; returns CANCEL to abort the file. The
+# live + tracked (upstream) bytes are passed so an interactive prompt can render
+# a divergence preview / pager over the two sides.
+type SeedPrompt = Callable[[str, bytes, bytes], SeedChoice | Cancelled]
 
 
 class ReconcileKind(StrEnum):
@@ -137,7 +139,9 @@ class ReconcileOutcome:
     running interactively."""
 
 
-def _default_seed_prompt(_display_path: str) -> SeedChoice:
+def _default_seed_prompt(
+    _display_path: str, _live: bytes, _tracked: bytes
+) -> SeedChoice:
     """Non-interactive seed default: keep live (never destroy a local file)."""
     return SeedChoice.KEEP_LIVE
 
@@ -167,7 +171,7 @@ def _seed_outcome(
         return ReconcileOutcome(
             ReconcileKind.WRITE, content=live, new_base=tracked, seeded=True
         )
-    choice = seed_prompt(display_path or str(fid))
+    choice = seed_prompt(display_path or str(fid), live, tracked)
     if choice is CANCEL:
         return ReconcileOutcome(ReconcileKind.CANCELLED)
     if choice is SeedChoice.KEEP_LIVE:

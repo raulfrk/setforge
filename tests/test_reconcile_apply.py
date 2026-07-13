@@ -186,6 +186,39 @@ class TestSeed:
         assert out.new_base == b"upstream\n"  # base seeded from upstream
         assert out.seeded is True  # caller warns
 
+    def test_non_interactive_never_calls_seed_prompt(self) -> None:
+        # No TTY: the seed prompt (and therefore the pager Application) must
+        # NEVER be constructed off the interactive branch.
+        def _boom(_p: str, _l: bytes, _t: bytes) -> SeedChoice:
+            raise AssertionError("seed_prompt must not run non-interactively")
+
+        out = reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            seed_prompt=_boom,
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.seeded is True
+
+    def test_auto_keep_live_never_calls_seed_prompt(self) -> None:
+        # --auto=keep-live resolves the seed by side without prompting.
+        def _boom(_p: str, _l: bytes, _t: bytes) -> SeedChoice:
+            raise AssertionError("seed_prompt must not run under --auto")
+
+        out = reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            interactive=True,
+            auto=AutoSide.OURS,
+            seed_prompt=_boom,
+        )
+        assert out.kind is ReconcileKind.WRITE
+        assert out.content == b"local\n"
+
     def test_interactive_keep_live(self) -> None:
         out = reconcile_plain_file(
             _PROFILE,
@@ -193,7 +226,7 @@ class TestSeed:
             live=b"local\n",
             tracked=b"upstream\n",
             interactive=True,
-            seed_prompt=lambda _p: SeedChoice.KEEP_LIVE,
+            seed_prompt=lambda _p, _l, _t: SeedChoice.KEEP_LIVE,
         )
         assert out.kind is ReconcileKind.WRITE
         assert out.content == b"local\n"
@@ -207,7 +240,7 @@ class TestSeed:
             live=b"local\n",
             tracked=b"upstream\n",
             interactive=True,
-            seed_prompt=lambda _p: SeedChoice.TAKE_UPSTREAM,
+            seed_prompt=lambda _p, _l, _t: SeedChoice.TAKE_UPSTREAM,
         )
         assert out.kind is ReconcileKind.WRITE
         assert out.content == b"upstream\n"  # live replaced
@@ -220,9 +253,35 @@ class TestSeed:
             live=b"local\n",
             tracked=b"upstream\n",
             interactive=True,
-            seed_prompt=lambda _p: CANCEL,
+            seed_prompt=lambda _p, _l, _t: CANCEL,
         )
         assert out.kind is ReconcileKind.CANCELLED
+
+    def test_seed_prompt_receives_live_and_tracked_bytes(self) -> None:
+        # The callback widened to (display_path, live, tracked) so an
+        # interactive prompt can render a live-vs-upstream divergence preview.
+        seen: dict[str, object] = {}
+
+        def _capture(display_path: str, live: bytes, tracked: bytes) -> SeedChoice:
+            seen["path"] = display_path
+            seen["live"] = live
+            seen["tracked"] = tracked
+            return SeedChoice.KEEP_LIVE
+
+        reconcile_plain_file(
+            _PROFILE,
+            _fid(),
+            live=b"local\n",
+            tracked=b"upstream\n",
+            interactive=True,
+            display_path="~/.claude/CLAUDE.md",
+            seed_prompt=_capture,
+        )
+        assert seen == {
+            "path": "~/.claude/CLAUDE.md",
+            "live": b"local\n",
+            "tracked": b"upstream\n",
+        }
 
     def test_matching_live_no_base_is_not_a_seed(self) -> None:
         # live == tracked with no base: a clean record, not a seed prompt.

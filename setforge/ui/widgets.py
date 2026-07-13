@@ -363,6 +363,167 @@ def button_bar[T](
     return app.run()
 
 
+@dataclass(slots=True)
+class _PagerState:
+    """Mutable pager scroll state: the index of the first visible row."""
+
+    offset: int = 0
+
+
+def _pager_visible_rows() -> int:
+    """Rows the pager body can show: terminal lines minus the chrome.
+
+    Read at render time (never constructor time) so a SIGWINCH resize is
+    honoured. The chrome is the top rule + bottom rule + the one-line legend
+    (:data:`_PAGER_CHROME_ROWS`); a degenerate 0/None height floors to one
+    body row so scrolling maths never divides into an empty window.
+    """
+    try:
+        rows = get_app().output.get_size().rows
+    except Exception:  # any output-size failure → a safe minimal height.
+        rows = _PAGER_CHROME_ROWS + 1
+    return max(1, rows - _PAGER_CHROME_ROWS)
+
+
+#: Top rule + legend + bottom rule surrounding the pager's scrollable body.
+_PAGER_CHROME_ROWS: Final[int] = 3
+
+
+def pager(
+    lines: _Fragments,
+    *,
+    title: str | None = None,
+    style: BaseStyle | None = None,
+) -> None | _Cancelled:
+    """Full-screen ``less``-style pager over a fragments list.
+
+    Renders ``lines`` (``(style_class, text)`` pairs — the shape
+    :func:`~setforge.ui.diffview.to_fragments` returns) inside a framed,
+    scrollable window. Keys: ↑/↓ + j/k scroll one row, PageUp/PageDown +
+    Space scroll a page, g/G jump to top/bottom, q / Enter return ``None`` (go
+    back), Esc / Ctrl-C return :data:`CANCEL`. The two exits are distinct so a
+    caller can propagate an abort — the seed prompt maps a pager :data:`CANCEL`
+    onto a whole-file abort while ``q`` returns to the button bar.
+
+    Scroll geometry is recomputed on every render from ``output.get_size()``
+    (:func:`_pager_visible_rows`), and the offset is clamped to
+    ``max(0, total - visible)`` on every scroll AND every render, so a terminal
+    shrink can never leave the window scrolled past the last row.
+    """
+    if not lines:
+        lines = [("class:muted", "(empty)\n")]
+    total = sum(frag_text.count("\n") or 1 for _cls, frag_text in lines)
+    state = _PagerState()
+
+    def _clamp() -> None:
+        state.offset = max(0, min(state.offset, total - _pager_visible_rows()))
+
+    def _body() -> _Fragments:
+        _clamp()
+        # Window the fragments to the visible slice. Each fragment is a single
+        # logical line (to_fragments emits one row per fragment, newline-
+        # terminated), so row-index slicing over the fragment list is exact.
+        visible = _pager_visible_rows()
+        return list(lines[state.offset : state.offset + visible])
+
+    def _top_rule() -> _Fragments:
+        return [("class:muted", frame([], title=title, width=_frame_width())[0])]
+
+    def _legend() -> _Fragments:
+        return [
+            (
+                "class:identifier",
+                "↑↓/jk scroll · space/PgDn page · g/G top/bottom · q back",
+            )
+        ]
+
+    def _bottom_rule() -> _Fragments:
+        return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
+
+    body_window = Window(
+        content=FormattedTextControl(text=_body, focusable=True),
+        height=Dimension(min=1),
+    )
+    layout = Layout(
+        HSplit(
+            [
+                Window(content=FormattedTextControl(text=_top_rule), height=1),
+                body_window,
+                Window(content=FormattedTextControl(text=_legend), height=1),
+                Window(content=FormattedTextControl(text=_bottom_rule), height=1),
+            ]
+        ),
+        focused_element=body_window,
+    )
+    app: Application[None | _Cancelled] = Application(
+        layout=layout,
+        key_bindings=_pager_keybindings(state, total, _clamp),
+        full_screen=True,
+        style=_STYLE if style is None else merge_styles([_STYLE, style]),
+    )
+    return app.run()
+
+
+def _pager_keybindings(
+    state: _PagerState, total: int, clamp: Callable[[], None]
+) -> KeyBindings:
+    """Scroll + exit bindings for :func:`pager`.
+
+    ↑/↓ + j/k step one row; PageUp/PageDown + Space step a page (the current
+    visible height); g/G jump to the top / the last page; q + Enter exit with
+    ``None`` (back); Esc / Ctrl-C exit with :data:`CANCEL` (abort the file).
+    """
+    kb = KeyBindings()
+
+    def _scroll(delta: int) -> None:
+        state.offset += delta
+        clamp()
+
+    # (keys, step) — step is a callable so a page is sized at press time from
+    # the current visible height (honouring a resize between presses).
+    steppers: list[tuple[tuple[str, ...], Callable[[], int]]] = [
+        (("down", "j"), lambda: 1),
+        (("up", "k"), lambda: -1),
+        (("pagedown", "space"), _pager_visible_rows),
+        (("pageup",), lambda: -_pager_visible_rows()),
+    ]
+    for keys, step in steppers:
+        handler = _make_scroll_handler(_scroll, step)
+        for key in keys:
+            kb.add(key)(handler)
+
+    @kb.add("g")
+    def _(_event: KeyPressEvent) -> None:
+        state.offset = 0
+
+    @kb.add("G")
+    def _(_event: KeyPressEvent) -> None:
+        state.offset = total  # clamped down to the last page on next render.
+        clamp()
+
+    for key in ("q", "enter"):
+        kb.add(key)(_make_exit_handler(None))
+    kb.add("escape", eager=True)(_make_exit_handler(CANCEL))
+    kb.add("c-c")(_make_exit_handler(CANCEL))
+    return kb
+
+
+def _make_scroll_handler(
+    scroll: Callable[[int], None], step: Callable[[], int]
+) -> Callable[[KeyPressEvent], None]:
+    def _handler(_event: KeyPressEvent) -> None:
+        scroll(step())
+
+    return _handler
+
+
+def _make_exit_handler(result: None | _Cancelled) -> Callable[[KeyPressEvent], None]:
+    def _handler(event: KeyPressEvent) -> None:
+        event.app.exit(result=result)
+
+    return _handler
+
+
 def _text_prompt_keybindings() -> KeyBindings:
     """Esc / Ctrl-C cancel; Enter is owned by the buffer's accept handler."""
     kb = KeyBindings()

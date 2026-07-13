@@ -25,6 +25,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC
+from enum import Enum, auto
 from pathlib import Path
 from typing import Final, assert_never
 
@@ -87,7 +88,8 @@ from setforge.source import (
     HostLocalSectionName,
     validate_host_local_sections_file_type,
 )
-from setforge.ui.widgets import Button, Cancelled, button_bar
+from setforge.ui.diffview import to_fragments, two_way_lines
+from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, pager
 
 
 def _load_validated_host_local_sections(
@@ -283,29 +285,57 @@ def _plain_reconcile_content(
     return live.decode("utf-8")
 
 
+class _SeedButton(Enum):
+    """The three seed-prompt buttons — two decisions plus the diff viewer."""
+
+    KEEP_LIVE = auto()
+    TAKE_UPSTREAM = auto()
+    VIEW_DIFF = auto()
+
+
 def _seed_prompt_interactive(
     display_path: str,
+    live: bytes,
+    tracked: bytes,
 ) -> reconcile_apply.SeedChoice | Cancelled:
     """Themed prompt to seed a divergent live file that has no merge base.
 
     The base is recorded from the upstream either way; the choice is whether
     live keeps its local edits (recommended — they become a local change atop
-    the base) or is replaced with the upstream version. Esc / Ctrl-C cancels
-    and aborts the file. A later enrichment adds a divergence diff/preview
-    around this same decision.
+    the base) or is replaced with the upstream version. The body carries a
+    one-line divergence summary (``live vs upstream · +N -M · H hunks``) and a
+    ``View diff`` button opens an in-app pager over the FULL live-vs-upstream
+    diff (:func:`~setforge.ui.diffview.two_way_lines` →
+    :func:`~setforge.ui.diffview.to_fragments`). ``q`` in the pager returns here
+    with the choice still open; Esc / Ctrl-C anywhere (bar or pager) cancels and
+    aborts the file.
+
+    The base is ABSENT at the seed, so the divergence is 2-side (live vs
+    upstream) — never the whole-file conflict-merge model.
     """
-    return button_bar(
-        [
-            Button("Keep live", reconcile_apply.SeedChoice.KEEP_LIVE),
-            Button("Take upstream", reconcile_apply.SeedChoice.TAKE_UPSTREAM),
-        ],
-        title=f"seed merge base — {display_path}",
-        body=(
-            f"{display_path} already exists and differs from upstream, and no "
-            "merge base is recorded. Keep your local edits, or replace them "
-            "with the upstream version?"
-        ),
-    )
+    model = two_way_lines(live, tracked)
+    body = f"{display_path} differs from upstream, no merge base recorded.\n"
+    body += f"live vs upstream · {model.summary}"
+    while True:
+        choice = button_bar(
+            [
+                Button("Keep live", _SeedButton.KEEP_LIVE),
+                Button("Take upstream", _SeedButton.TAKE_UPSTREAM),
+                Button("View diff", _SeedButton.VIEW_DIFF, key="v"),
+            ],
+            title=f"seed merge base — {display_path}",
+            body=body,
+        )
+        if choice is CANCEL:
+            return CANCEL
+        if choice is _SeedButton.KEEP_LIVE:
+            return reconcile_apply.SeedChoice.KEEP_LIVE
+        if choice is _SeedButton.TAKE_UPSTREAM:
+            return reconcile_apply.SeedChoice.TAKE_UPSTREAM
+        # View diff: open the pager; a pager CANCEL (Esc/Ctrl-C) propagates as a
+        # whole-file abort, while q/Enter loops back to the button bar.
+        if pager(to_fragments(model), title=f"diff — {display_path}") is CANCEL:
+            return CANCEL
 
 
 def _auto_side(
