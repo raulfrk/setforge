@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from setforge.errors import LockVersionError, MalformedLockError
+from setforge.errors import LockVersionError, MalformedLockError, SetforgeError
 from setforge.lockfile import (
     LOCK_FILENAME,
     LOCK_VERSION,
@@ -205,9 +205,6 @@ def test_reject_missing_version_unchanged() -> None:
 
 
 def test_newer_lock_version_refused_before_pin_parsing() -> None:
-    # This package table is missing its integrity field entirely, which
-    # `_parse_pin` would normally reject with MalformedLockError. The
-    # version guard must fire first — refuse-before-construct.
     text = (
         f"version = {LOCK_VERSION + 1}\n"
         '[[package]]\ntype = "go"\nkey = "x"\nversion = "1"\n'
@@ -217,7 +214,5 @@ def test_newer_lock_version_refused_before_pin_parsing() -> None:
 
 
 def test_newer_lock_version_is_a_setforge_error() -> None:
-    from setforge.errors import SetforgeError
-
     with pytest.raises(SetforgeError):
         parse_lock("version = 999\n")
