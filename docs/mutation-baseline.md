@@ -20,33 +20,65 @@
 Score = killed ÷ (killed + survived); skipped/timeout/suspicious are excluded
 from the denominator (mutmut's standard reporting).
 
+> **STALE headline — the 2026-06-24 numbers above predate two changes:** (1)
+> the legacy disposition/sections/spans subsystem was retired, dropping
+> `only_mutate` from 10 files to 7 (see below); (2) the test selection was
+> broadened with two hermetic integration suites (this change). The count-drop
+> re-baseline is **DEFERRED to the merge gate** — see "Regenerate" below. The
+> per-module survivor table further down is likewise pre-retirement and no
+> longer authoritative.
+
 ## Provenance
 
 | field | value |
 |---|---|
-| measured | 2026-06-24 |
+| measured | 2026-06-24 (headline; **stale** — see note above) |
 | base commit | `3fafc26` |
-| tool | `mutmut==3.6.0` |
-| mutated (`source_paths` + `only_mutate`) | the 10 core files below |
-| test scope (`pytest_add_cli_args_test_selection`) | the 15 focused per-module unit files |
+| tool | `mutmut` (see the pinned dev extra) |
+| mutated (`source_paths` + `only_mutate`) | the **7** core files below |
+| test scope (`pytest_add_cli_args_test_selection`) | 9 focused per-module unit files **+ 2 hermetic integration suites** |
 
 ## Scope & why the score is a conservative lower bound
 
 Mutation is restricted to the merge/reconcile/store **core** (RFC §6), the
-modules where "coverage ≠ assertion" historically let bugs through:
+modules where "coverage ≠ assertion" historically let bugs through. The current
+7 `only_mutate` files:
 
-`disposition_merge · markdown_merge · scalar_merge · structural_merge ·
-yaml_merge · section_reconcile · base_store · base_store_format ·
-scalar_base_store · spans_store`
+`markdown_merge · scalar_merge · structural_merge · yaml_merge · base_store ·
+base_store_format · scalar_base_store`
 
-The mutmut run executes only the **focused per-module unit tests** (see
+The mutmut run executes a **sandbox-clean test selection** (see
 `pyproject.toml [tool.mutmut]`), because mutmut runs the suite from a copied
-`mutants/` sandbox and the broader suite's repo-file-dependent tests
-(CHANGELOG/docs/migrations) fail there and abort the run. Consequently
-**integration tests that also exercise the core (install / capture / auditfix)
-are out of the mutmut test scope**, so a number of the 509 survivors are in
-fact killed by tests not included here. The true score is therefore **≥ 79%** —
-a deliberate lower bound.
+`mutants/` sandbox and any test that reads uncopied repo files
+(CHANGELOG/docs/migrations) fails there and aborts the run under mutmut's `-x`.
+
+### Broadened selection (this change)
+
+The core is reached at runtime through `deploy.py` / `reconcile/` /
+`transitions.py` / `stage.py`, which the focused per-module unit tests exercise
+directly but the real **install / sync / compare / revert / stage** verbs also
+drive end-to-end. Previously those integration paths were out of the mutmut
+scope, so some survivors were **FALSE survivors** — killed only by integration
+tests not in the set. The selection now adds the two sandbox-clean integration
+suites so those mutants are scored killed:
+
+- **`tests/integration/test_verbs.py`** — per-verb install/sync/compare/revert/
+  stage/plugin/ext/etc.
+- **`tests/integration/test_smoke.py`** — install against a real-git source.
+
+Both are hermetic: the `integration_env` fixture (in the copied
+`tests/integration/conftest.py`) synthesizes the config repo under `tmp_path`,
+hardens git (devnull global/system config, no network protocols), and mocks
+`claude`/`code`/`gitleaks` behind the `integration_subprocess` no-leak guard —
+no `Path(__file__)`/`REPO_ROOT`/repo-file reads, no root-conftest dependency
+(the root `conftest.py` is not copied into the sandbox and holds no fixtures).
+
+**Excluded — `tests/integration/test_lockflow.py`:** it exercises the lock /
+provision path (`setforge.provision.*`, `lockfile`), which does **not** import
+any of the 7 `only_mutate` core files, so it has no kill power over core mutants
+and would add only latency. It also drives the verbs **without** the
+`integration_subprocess` guard (unmocked real subprocess), which is fragile in
+the copied sandbox. Hermetic on paths, but no-kill-power dead weight — left out.
 
 ## Survivors by module
 

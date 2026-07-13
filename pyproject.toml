@@ -189,16 +189,25 @@ only_mutate = [
     "setforge/scalar_base_store.py",
 ]
 # Scope the tests mutmut runs to the focused per-module unit suites for the
-# core. Two reasons: (1) mutmut runs the suite from a mutants/ sandbox that
-# only contains the copied trees, so the broader suite's tests that read repo
-# files (CHANGELOG.md, docs/, migrations) or need uncopied structure fail and
-# mutmut's own `-x` aborts the whole stats run; these focused merge/store/
-# reconcile tests use tmp_path/in-memory data and are sandbox-clean. (2) They
-# are the tests that actually kill core mutants. NOTE: integration tests that
-# also exercise the core (install/capture/auditfix) are out of this scope, so
-# the recorded score is a CONSERVATIVE LOWER BOUND — some survivors here are
-# killed by integration tests not in the mutmut set. The full-suite/CI variant
-# is F2b's job.
+# core PLUS the two hermetic integration suites that drive the core through
+# the real install/sync/compare/revert/stage verbs. Two reasons: (1) mutmut
+# runs the suite from a mutants/ sandbox that only contains the copied trees,
+# so any test that reads uncopied repo files (CHANGELOG.md, docs/, migrations)
+# or needs uncopied structure fails and mutmut's own `-x` aborts the whole
+# stats run; every entry here is sandbox-clean (tmp_path/in-memory data only).
+# (2) They are the tests that actually kill core mutants. The two integration
+# suites tighten the score: the merge/store core is reached via deploy.py /
+# reconcile/ / transitions.py / stage.py, all exercised end-to-end by the
+# install/sync/compare/revert/stage cases in test_verbs.py + test_smoke.py, so
+# survivors that only an integration path kills are no longer FALSE survivors.
+# Both integration suites are hermetic: the `integration_env` fixture (in the
+# copied tests/integration/conftest.py) synthesizes the config repo under
+# tmp_path, hardens git, and mocks claude/code/gitleaks behind the
+# `integration_subprocess` no-leak guard. test_lockflow.py is deliberately
+# EXCLUDED — it exercises the lock/provision path (setforge.provision.*), not
+# the merge/store core, so it adds latency without kill power, and it runs the
+# verbs without the `integration_subprocess` guard (unmocked real subprocess),
+# which is fragile in the sandbox. See docs/mutation-baseline.md.
 pytest_add_cli_args_test_selection = [
     "tests/test_markdown_merge.py",
     "tests/test_markdown_merge_segments.py",
@@ -209,6 +218,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_base_store.py",
     "tests/test_base_store_format.py",
     "tests/test_scalar_base_store.py",
+    "tests/integration/test_verbs.py",
+    "tests/integration/test_smoke.py",
 ]
 # Runner neutralization (load-bearing): mutmut shells out to pytest, which
 # would otherwise inherit our default addopts (`--cov=setforge
