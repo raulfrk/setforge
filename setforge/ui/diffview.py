@@ -28,7 +28,7 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from setforge.reconcile import Clean, MergeResult
-from setforge.reconcile._claude_ui import _sanitize_controls
+from setforge.ui.text import sanitize_controls
 from setforge.ui.theme import Role
 
 _MAX_BYTES = 5 * 1024 * 1024
@@ -102,7 +102,7 @@ def _is_binary(*blobs: bytes) -> bool:
 
 def _text(data: bytes) -> str:
     """Lossy-decode + control-char sanitise, per the wizard display contract."""
-    return _sanitize_controls(data.decode("utf-8", errors="replace"))
+    return sanitize_controls(data.decode("utf-8", errors="replace"))
 
 
 def _stat_model(*blobs: bytes) -> DiffModel:

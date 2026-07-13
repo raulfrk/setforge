@@ -31,21 +31,6 @@ def _strip_fence(text: str) -> str:
     return text
 
 
-def _sanitize_controls(text: str) -> str:
-    out: list[str] = []
-    for ch in text:
-        code = ord(ch)
-        if ch == "\n":
-            out.append(ch)
-        elif code < 0x20:
-            out.append(f"^{chr(code + 0x40)}")
-        elif code == 0x7F:
-            out.append("^?")
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
 def _edit_draft(seed: str) -> bytes | Cancelled:
     with tempfile.NamedTemporaryFile(
         "w", suffix=".txt", encoding="utf-8", delete=False

@@ -42,9 +42,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from setforge._editor import run_editor
-from setforge.reconcile._claude_ui import _sanitize_controls, _themed_style
+from setforge.reconcile._claude_ui import _themed_style
 from setforge.reconcile.merge_model import Clean, Conflict, MergeResult, Segment
 from setforge.reconcile.types import FileId
+from setforge.ui.text import sanitize_controls
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar
 
 __all__ = [
@@ -151,7 +152,7 @@ def _display(side: bytes) -> str:
     """
     if side == b"":
         return "  (empty)\n"
-    text = _sanitize_controls(side.decode("utf-8", errors="replace"))
+    text = sanitize_controls(side.decode("utf-8", errors="replace"))
     if not text.endswith("\n"):
         text += "\n"
     return _truncate(text)

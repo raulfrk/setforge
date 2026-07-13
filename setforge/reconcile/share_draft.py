@@ -32,11 +32,11 @@ from setforge.errors import DraftConfinementError
 from setforge.reconcile._claude_ui import (
     _edit_draft,
     _fenced,
-    _sanitize_controls,
     _strip_fence,
     _themed_style,
 )
 from setforge.reconcile.structured_units import StructuredFormat, parse_scalar_draft
+from setforge.ui.text import sanitize_controls
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
 
 _PROMPT_HEADER: Final = (
@@ -118,7 +118,7 @@ def _validate(draft: str) -> str | None:
 
 
 def _instr_body(note: str) -> str:
-    return f"{_sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
+    return f"{sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
 
 
 def _review(
@@ -132,7 +132,7 @@ def _review(
     yet, so :func:`draft_key_unit` passes ``False`` to omit the button rather than
     offer an inert choice that silently degrades to keep-local.
     """
-    body = f"shareable draft:\n{_sanitize_controls(clean)}"
+    body = f"shareable draft:\n{sanitize_controls(clean)}"
     buttons = [Button("Keep mine local", _Choice.KEEP)]
     if allow_adopt:
         buttons.append(Button("Adopt locally", _Choice.ADOPT))

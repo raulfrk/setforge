@@ -33,12 +33,12 @@ from setforge.claude_session import ClaudeSession, ClaudeSessionError
 from setforge.reconcile._claude_ui import (
     _edit_draft,
     _fenced,
-    _sanitize_controls,
     _strip_fence,
     _themed_style,
 )
 from setforge.reconcile.merge_model import Conflict
 from setforge.reconcile.wizard import ClaudeMergeFn
+from setforge.ui.text import sanitize_controls
 from setforge.ui.widgets import CANCEL, Button, Cancelled, button_bar, text_prompt
 
 _PROMPT_HEADER = (
@@ -120,7 +120,7 @@ def _review(clean: str, *, style: Style) -> _Draft | Cancelled:
     display (mirroring :func:`~setforge.reconcile.wizard._display`); the folded
     bytes on Accept always use the raw ``clean``, never this rendering.
     """
-    body = f"draft:\n{_sanitize_controls(clean)}"
+    body = f"draft:\n{sanitize_controls(clean)}"
     return button_bar(
         [
             Button("Accept", _Draft.ACCEPT),
@@ -140,7 +140,7 @@ def _instr_body(note: str) -> str:
     ``note`` may carry a stderr tail from the untrusted ``claude`` subprocess,
     so it is control-char-sanitized before it reaches the panel.
     """
-    return f"{_sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
+    return f"{sanitize_controls(note)}\n{_INSTR_HINT}" if note else _INSTR_HINT
 
 
 def _merge_one(conflict: Conflict, *, display_path: str) -> bytes | Cancelled:
