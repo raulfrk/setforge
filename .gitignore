@@ -30,6 +30,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+.coverage.*
 *.egg-info/
 
 # mutmut mutation-testing run state (mutated source copies + cache).
