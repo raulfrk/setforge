@@ -133,6 +133,11 @@ def migrate(
     Thin router: each branch delegates to a ``_dispatch_*`` helper so
     the Typer-decorated entry point stays focused on flag-shape and
     mutual-exclusion handling.
+
+    Rollback is all-or-nothing: a failed OR interrupted ``--apply`` restores
+    every mutated file (and the reconcile store, for a store cutover) to its
+    byte-exact pre-migration state, then exits. It does NOT resume per-step —
+    re-running ``--apply`` restarts the whole chain from the origin schema.
     """
     if check and apply_flag:
         raise typer.BadParameter("--check and --apply are mutually exclusive")
@@ -883,6 +888,21 @@ def _execute_chain(
         step = f"{migration.from_version} → {migration.to_version}"
         try:
             migration.apply(roots=roots)
+        except KeyboardInterrupt:
+            # Ctrl-C mid-apply is a BaseException, not caught by the Exception
+            # branch below — without this it would skip rollback and leave a
+            # half-applied chain. Roll back, then RE-RAISE bare so the cancel
+            # propagates as SIGINT (exit 130), never misreported as a migration
+            # error (typer.Exit(1)). A second Ctrl-C during rollback may
+            # propagate mid-restore (best-effort).
+            _rollback(snapshots)
+            typer.secho(
+                f"migration interrupted during step {step}; "
+                f"rolled back to the pre-migration state.",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise
         except Exception as exc:
             _rollback(snapshots)
             typer.secho(
