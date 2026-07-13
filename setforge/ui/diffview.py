@@ -27,12 +27,10 @@ from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.text import Text
 
+from setforge.reconcile import Clean, MergeResult
 from setforge.reconcile._claude_ui import _sanitize_controls
-from setforge.reconcile.merge_model import Clean, MergeResult
 from setforge.ui.theme import Role
 
-# Above this a rendered diff is worthless and risks a memory blow-up; degrade to
-# a stat line (mirrors the merge engine's own degrade ceiling).
 _MAX_BYTES = 5 * 1024 * 1024
 
 _OURS_MARKER = "<<<<<<< OURS (this host)"
@@ -64,8 +62,6 @@ class RichLayout(StrEnum):
     SIDE_BY_SIDE = auto()
 
 
-# SUCCESS=live/ours, WARNING=upstream/theirs, MUTED=context/markers (the colour
-# contract); a conflict's marker lines are MUTED, its ADD/DEL sides recoloured.
 _KIND_ROLE: dict[RowKind, Role] = {
     RowKind.CTX: Role.MUTED,
     RowKind.ADD: Role.WARNING,
@@ -96,7 +92,8 @@ class DiffModel:
     @property
     def summary(self) -> str:
         """The compact ``+N -M · H hunks`` header string."""
-        return f"+{self.added} -{self.removed} · {self.hunks} hunks"
+        unit = "hunk" if self.hunks == 1 else "hunks"
+        return f"+{self.added} -{self.removed} · {self.hunks} {unit}"
 
 
 def _is_binary(*blobs: bytes) -> bool:
@@ -223,9 +220,10 @@ def _row_text(row: DiffRow) -> Text:
 def to_rich(m: DiffModel, *, layout: RichLayout) -> RenderableType:
     """A Rich renderable (A7's ``inspect`` surface).
 
-    ``STACKED`` prints rows in document order; ``SIDE_BY_SIDE`` splits DEL (live)
-    into a left column and ADD (upstream) into a right one. Colours are role
-    class names resolved by the Console's theme — never raw hex here.
+    ``STACKED`` prints rows in document order; ``SIDE_BY_SIDE`` routes ADD
+    (upstream) rows to the right column and everything else — DEL (live),
+    context, and conflict markers — to the left. Colours are role class names
+    resolved by the Console's theme — never raw hex here.
     """
     if layout is RichLayout.SIDE_BY_SIDE:
         left = Text()
