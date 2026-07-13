@@ -288,6 +288,7 @@ from setforge.cli import snapshot as _snapshot  # noqa: E402, F401
 from setforge.cli import completion as _completion  # noqa: E402, F401
 from setforge.cli import config as _config  # noqa: E402, F401
 from setforge.cli import stage as _stage  # noqa: E402, F401 (A5 hunk staging)
+from setforge.cli import inspect as _inspect  # noqa: E402, F401 (A7 3-way viewer)
 # isort: on
 
 

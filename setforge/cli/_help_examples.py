@@ -413,6 +413,19 @@ Examples:
 """
 
 
+INSPECT_EXAMPLES: str = """\
+Examples:
+
+\b
+  # Most common: 3-way view (base | live | merge-preview) + hunk index
+  setforge inspect CLAUDE.md --profile=<profile>
+
+\b
+  # Machine-readable: stable JSON envelope (ANSI-free in a pipe)
+  setforge inspect CLAUDE.md --profile=<profile> --format=json
+"""
+
+
 LOCK_EXAMPLES: str = """\
 Examples:
 

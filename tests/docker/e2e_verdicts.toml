@@ -616,6 +616,24 @@ smoke = false
 signal = "interactive conflict wizard theirs/ours"
 verbs = ["install", "reconcile"]
 
+[tests."tests/docker/test_e2e_docker_inspect.py::test_inspect_json_envelope_ansi_free_in_pipe"]
+verdict = "keep"
+smoke = false
+signal = "inspect JSON envelope is stable + ANSI-free in a non-TTY pipe (base_present/panes/index shape)"
+verbs = ["inspect"]
+
+[tests."tests/docker/test_e2e_docker_inspect.py::test_inspect_narrow_pty_stacks"]
+verdict = "keep"
+smoke = false
+signal = "inspect renders (stacked) on a narrow PTY without crashing — the responsive lower-bound path"
+verbs = ["inspect"]
+
+[tests."tests/docker/test_e2e_docker_inspect.py::test_inspect_wide_pty_renders_three_pane_panel"]
+verdict = "keep"
+smoke = false
+signal = "inspect lays out the themed base | live | merge-preview panel on a wide PTY — the responsive 3-column path"
+verbs = ["inspect"]
+
 [tests."tests/docker/test_e2e_docker_local_overlay.py::test_compare_footer_summary_correct_counts"]
 verdict = "keep"
 smoke = false
