@@ -44,6 +44,22 @@ class IsolatedStateHome:
     state_dir: Path
 
 
+@pytest.fixture(autouse=True)
+def _state_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point ``$SETFORGE_STATE_DIR`` at ``tmp_path/state`` for every harness test.
+
+    The direct-drive meta-tests build a :class:`StubReconcileModel` via
+    ``create(tmp_path)`` (whose state dir is ``tmp_path/state``) WITHOUT going
+    through the machine's ``__init__``, so the real engine would otherwise
+    resolve the dev-host state dir. ``monkeypatch`` restores the prior value at
+    teardown so nothing leaks between tests. The Hypothesis-driven tests set the
+    env themselves per example (in the machine's setup) and restore it in
+    ``teardown``; this autouse fixture is the safety net for the non-Hypothesis
+    paths and is harmless under a machine that re-sets it.
+    """
+    monkeypatch.setenv("SETFORGE_STATE_DIR", str(tmp_path / "state"))
+
+
 @pytest.fixture
 def isolated_state_home(
     tmp_path: Path,

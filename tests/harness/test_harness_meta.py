@@ -72,12 +72,13 @@ def test_verb_strategy_only_emits_known_verbs(data: st.DataObject) -> None:
 
 
 def test_stub_model_drives_four_verbs(tmp_path) -> None:
-    """The seam exposes install / sync / revert / migrate and mutates state."""
+    """The seam drives the REAL install / sync / revert / migrate engine."""
     model = StubReconcileModel.create(tmp_path)
-    model.set_config(hstrat.minimal_config())
+    # Target a real, reachable schema so the migration registry chain fires.
+    model.set_config(hstrat.minimal_config(schema_version="1.2"))
     model.install()
-    assert model.store_index(), "install records a store index"
-    model.sync()
+    assert model.store_index(), "install records a real store index"
+    model.sync()  # runs the engine's own store.verify() over the profile
     schema_before_migrate = model.schema_version()
     model.migrate()
     assert model.schema_version() != schema_before_migrate, "migrate bumps schema"

@@ -1,74 +1,90 @@
-"""The thin reconcile seam the state machine drives (RFC 0001 §6, E1).
+"""The reconcile seam the state machine drives (RFC 0001 §6, E2).
 
-:class:`StubReconcileModel` mimics setforge's install / sync / revert /
-migrate transitions over a tmp_path-isolated store, modeled on the RFC
-§9.3 layout:
+:class:`StubReconcileModel` drives setforge's REAL reconcile engine over a
+``self.root``-isolated store — the base/local/index store, the line-level
+3-way merge, and the schema-version migration registry, per the RFC §9.3
+layout:
 
-    <state_dir>/base/<profile>/<file-id>    last-installed upstream snapshot
+    <state_dir>/base/<profile>/<file-id>    3-way merge base (verbatim bytes)
     <state_dir>/local/<profile>/<file-id>   recorded keep-local content
-    <state_dir>/index/<profile>.json        classification (local/shared/pending)
-    <state_dir>/transitions/                snapshot stack for revert
+    <state_dir>/index/<profile>.json        classification document
+    <state_dir>/locks/<profile>.lock        the per-profile write lock
 
-Why a stub and not the real CLI? Per RFC §4 / §13, the real Epic-A
-reconcile engine (the ``base/`` + ``local/`` + ``index/`` store and the
-line-level 3-way merge) does NOT exist yet — task E1 (this harness) lands
-BEFORE task E2 (the INV catalog) and the Epic-A engine. The stub gives
-the state machine a runnable, meta-testable target TODAY whose verb
-surface, store layout, and observable state match what the real engine
-will expose, so swapping it in later is mechanical.
+E1 shipped this as a hand-rolled stub whose ``_engine_*`` bodies faked the
+store; E2 replaced each body with a call into the real engine
+(:mod:`setforge.reconcile_apply`, :mod:`setforge.reconcile.store`,
+:mod:`setforge.migrations`, :mod:`setforge.transitions`). The public verb
+methods (:meth:`install` / :meth:`sync` / :meth:`revert` / :meth:`migrate`)
+and the observable accessors (:meth:`store_index` / :meth:`live_bodies` /
+:meth:`base_plus_local` / :meth:`schema_version`) are the stable contract the
+invariants assert against, so the swap did not touch the state machine.
 
-EXTENSION POINT (E2 / Epic-A): replace each ``_engine_*`` method body
-with a call into the real reconcile engine. The public verb methods
-(:meth:`install` / :meth:`sync` / :meth:`revert` / :meth:`migrate`), the
-store accessors (:meth:`store_index` / :meth:`live_bodies` /
-:meth:`base_plus_local`), and the transition stack stay as the stable
-contract the invariants assert against.
+The engine is subprocess-free on this path: the merge is pure, the store does
+fsync-backed atomic writes, and the migration registry mutates a
+``setforge.yaml`` on disk via ruamel — no ``claude`` / ``code`` / ``gitleaks``
+shell-out is reached. The name ``StubReconcileModel`` is retained so the
+scaffold's meta-tests and ``scripts/author_invariants.py`` keep importing it.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from setforge import reconcile_apply, transitions
 from setforge.config import Config, resolve_profile
-
-# The store subdirectories, named to match RFC §9.3 verbatim so the real
-# engine and the stub agree on layout.
-_BASE = "base"
-_LOCAL = "local"
-_INDEX = "index"
-_TRANSITIONS = "transitions"
+from setforge.locking import profile_lock
+from setforge.migrations import (
+    MigrationRoots,
+    detect_current_schema,
+    find_migration_path,
+)
+from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
+from setforge.reconcile import (
+    ABSENT,
+    read_base,
+    read_index,
+    read_local,
+    reconstruct,
+    record,
+    verify,
+)
+from setforge.reconcile.types import Absent, FileId, file_id
+from setforge.reconcile_apply import ReconcileKind
 
 
 @dataclass(slots=True)
 class _Snapshot:
-    """One transition's pre-state, for revert.
+    """One transition's pre-state, captured immediately BEFORE a verb ran.
 
-    Holds the full live-body + store-index maps and the schema version
-    captured immediately BEFORE a verb mutated them, plus the verb label.
-    Revert pops the top snapshot and restores it — the stub analog of the
-    real transition record's reverse-patch. Capturing ``schema_version``
-    is what makes ``migrate`` reversible (INV-5): ``revert`` restores it
-    alongside ``live`` + ``index``.
+    ``store`` is the real per-file store-leg capture (local content, its
+    absence marker, the drafts manifest, the base, and the profile index) plus
+    the ``setforge.yaml`` bytes; restoring it is the real
+    :func:`transitions.restore_state_snapshots` reverse, so
+    ``revert ∘ verb == identity`` on the observable store (INV-3, INV-5).
+    ``live`` is the deployed-body map the harness threads through the verbs;
+    ``profile`` is the active profile at capture time — restored alongside
+    ``live`` so a revert that crosses a ``reconfigure`` profile switch reads the
+    store back under the SAME profile the live map belongs to (else INV-1 would
+    read the current profile's store against the old profile's live).
     """
 
     verb: str
+    profile: str
+    config: Config | None
     live: dict[str, str]
-    index: dict[str, dict[str, str]]
-    schema_version: str
+    store: tuple[transitions.StateSnapshotEntry, ...]
+    config_bytes: str | None
 
 
 @dataclass(slots=True)
 class StubReconcileModel:
-    """In-memory + on-disk model of the reconcile state.
+    """On-disk model of the real reconcile state, rooted at :attr:`root`.
 
-    ``live`` maps file-id → the current live body (what is "deployed").
-    ``index`` maps file-id → ``{"class": local|shared|pending}`` — the
-    §9.3 classification. ``_transitions`` is the revert stack. The store
-    is persisted to disk under :attr:`state_dir` so a future engine swap
-    and the fs-isolation fixtures both have a real on-disk surface to
-    assert against.
+    ``live`` maps file-id → the current deployed body. The classification
+    ``index`` and the ``base``/``local`` stores are the REAL on-disk stores
+    under :attr:`state_dir` (``$SETFORGE_STATE_DIR``); the invariants read them
+    back through the real store accessors, never a mirrored in-memory copy.
     """
 
     root: Path
@@ -76,9 +92,7 @@ class StubReconcileModel:
     profile: str = "default"
     config: Config | None = None
     live: dict[str, str] = field(default_factory=dict)
-    index: dict[str, dict[str, str]] = field(default_factory=dict)
     _transitions: list[_Snapshot] = field(default_factory=list)
-    _schema_version: str = "1.0"
 
     # -- construction --------------------------------------------------
 
@@ -86,164 +100,257 @@ class StubReconcileModel:
     def create(cls, root: Path) -> StubReconcileModel:
         """Build a model rooted at ``root`` with a fresh state dir.
 
-        The signature ``(Path) -> model`` is the ``model_factory``
-        contract :class:`tests.harness.invariants.InvariantStateMachine`
-        expects, so a subclass wires it with
-        ``model_factory = staticmethod(StubReconcileModel.create)``.
+        The ``(Path) -> model`` signature is the ``model_factory`` contract
+        :class:`tests.harness.invariants.InvariantStateMachine` expects.
+        ``$SETFORGE_STATE_DIR`` is pointed at ``state_dir`` by the machine's
+        setup so every real engine path lands inside ``root``.
         """
         state_dir = root / "state"
-        for sub in (_BASE, _LOCAL, _INDEX, _TRANSITIONS):
-            (state_dir / sub).mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
         return cls(root=root, state_dir=state_dir)
 
     def set_config(self, config: Config) -> None:
-        """Adopt a (generated) config and align the active profile.
+        """Adopt a (generated) config and align the active profile + on-disk YAML.
 
-        Picks the first profile in the config as the active one — the
-        scaffold reconciles a single profile at a time, matching the CLI's
-        ``--profile=`` contract. Does not itself reconcile; a following
-        ``install`` verb does.
+        Writes the config to ``root/setforge.yaml`` (the migration registry's
+        real target) and picks the first profile — the CLI's single-profile
+        ``--profile=`` contract. ``live`` is then pruned to the NEW profile's
+        tracked-file set: it models the deployed state of exactly the files the
+        active profile tracks, so a config change that drops a file (or switches
+        profile) drops it from live too. Carrying a live body the current profile
+        no longer tracks would be a spurious "live file with no store record" —
+        a model artifact, not a real no-silent-loss failure (the file simply
+        isn't a deploy target anymore). Does not reconcile; ``install`` does.
         """
         self.config = config
         self.profile = next(iter(config.profiles))
+        tracked = set(resolve_profile(config, self.profile).tracked_files)
+        self.live = {fid: body for fid, body in self.live.items() if fid in tracked}
+        self._write_config_yaml()
 
     # -- verbs (the @rule targets) -------------------------------------
 
     def install(self) -> None:
-        """Deploy tracked → live and record the §9.3 store.
+        """Deploy tracked → live via the real 3-way reconcile + store record.
 
-        EXTENSION POINT (E2 / A2): the real engine runs the line-level
-        3-way merge here and fires the conflict wizard on a true
-        conflict. The stub deploys verbatim (no merge) — enough to give
-        the state machine a non-trivial, idempotent transition to drive.
+        Each tracked file runs :func:`reconcile_apply.reconcile_plain_file`
+        (non-interactive: a genuine conflict DEFERS, writing nothing) and, on a
+        WRITE / REMOVE, advances the real base/local/index store under the
+        profile lock. An idempotent re-install is a store NOOP.
         """
         self._snapshot("install")
-        self._engine_install()
-        self._persist()
+        if self.config is None:
+            return
+        resolved = resolve_profile(self.config, self.profile)
+        with profile_lock(self.profile):
+            for fid_str in resolved.tracked_files:
+                self._install_one(fid_str)
+
+    def _install_one(self, fid_str: str) -> None:
+        assert self.config is not None
+        fid = file_id(fid_str)
+        tracked = self._tracked_body(fid_str).encode("utf-8")
+        live: bytes | Absent = (
+            self.live[fid_str].encode("utf-8") if fid_str in self.live else ABSENT
+        )
+        outcome = reconcile_apply.reconcile_plain_file(
+            self.profile, fid, live=live, tracked=tracked
+        )
+        if outcome.kind is ReconcileKind.WRITE:
+            content = outcome.content
+            assert isinstance(content, bytes)
+            assert outcome.new_base is not None
+            self.live[fid_str] = content.decode("utf-8", errors="surrogateescape")
+            record(self.profile, fid, base=outcome.new_base, local=content)
+        elif outcome.kind is ReconcileKind.REMOVE:
+            assert outcome.new_base is not None
+            self.live.pop(fid_str, None)
+            record(self.profile, fid, base=outcome.new_base, local=ABSENT)
 
     def sync(self) -> None:
-        """Capture live edits back into the store classification.
+        """Capture live back into the store, then verify the store invariants.
 
-        EXTENSION POINT (E2 / A5): the real engine captures newly-``share``d
-        hunks into ``tracked/``. The stub re-classifies every known file as
-        ``shared`` if it has a base, else leaves it ``pending``.
+        Re-records each live file's bytes as recorded-local against its stored
+        base (the capture path), then runs the real :func:`store.verify` — the
+        engine's own INV-2 + INV-10 fail-closed check — over the whole profile.
         """
         self._snapshot("sync")
-        self._engine_sync()
-        self._persist()
+        with profile_lock(self.profile):
+            for fid_str, body in self.live.items():
+                fid = file_id(fid_str)
+                base = read_base(self.profile, fid)
+                if base is None:
+                    continue
+                record(self.profile, fid, base=base, local=body.encode("utf-8"))
+            verify(self.profile)
 
     def migrate(self) -> None:
-        """Bump the schema version, snapshotting the pre-state.
+        """Run the real schema-migration chain on ``setforge.yaml``.
 
-        EXTENSION POINT (E2 / C-epic): the real engine runs the
-        config-reconcile + package-key reshape mapping. The stub only
-        toggles the recorded ``schema_version`` so ``revert`` has
-        something reversible to undo (INV-5: migrate reversible).
+        Resolves the on-disk ``schema_version`` and, when it differs from the
+        engine's expected version, applies the real
+        :func:`find_migration_path` chain (pure ruamel YAML edits — no
+        subprocess). A config already at the expected version is a no-op. The
+        pre-migrate ``setforge.yaml`` bytes are snapshotted so ``revert`` is a
+        byte-exact inverse (INV-5).
         """
         self._snapshot("migrate")
-        self._engine_migrate()
-        self._persist()
+        if self.config is None:
+            return
+        roots = MigrationRoots(
+            cfg_path=self._config_path(), repo_root=self.root, home=self.root
+        )
+        current = detect_current_schema(self._config_path())
+        chain = find_migration_path(from_v=current, to_v=self.config.schema_version)
+        for step in chain:
+            step.apply(roots=roots)
 
     def revert(self) -> None:
         """Undo the most recent verb by restoring its pre-state snapshot.
 
-        The stub silently no-ops where the real revert refuses cleanly
-        (nothing to undo) when the transition stack is empty. EXTENSION
-        POINT (E2 / A1+C4): the real engine reverses the on-disk patch +
-        the extension/plugin deltas; the stub restores the captured maps
-        and schema version (so ``revert ∘ migrate == identity``, INV-5).
+        No-ops on an empty stack (the real revert refuses cleanly with nothing
+        to undo). Restores the real store legs via
+        :func:`transitions.restore_state_snapshots` and rewrites the
+        pre-verb ``setforge.yaml`` bytes, so ``revert ∘ install`` and
+        ``revert ∘ migrate`` restore the byte-exact prior store (INV-3, INV-5).
         """
         if not self._transitions:
             return
         snap = self._transitions.pop()
+        # Restore the active profile + config FIRST so the store legs (captured
+        # under the snapshot's profile) and the restored live map are read back
+        # under the same profile — a revert may cross a reconfigure profile
+        # switch, and the restored config's profile chain must match.
+        self.profile = snap.profile
+        self.config = snap.config
+        with profile_lock(self.profile):
+            transitions.restore_state_snapshots(snap.store)
         self.live = dict(snap.live)
-        self.index = dict(snap.index)
-        self._schema_version = snap.schema_version
-        self._persist()
-
-    # -- engine seams (replace bodies in E2) ---------------------------
-
-    def _engine_install(self) -> None:
-        if self.config is None:
-            return
-        resolved = resolve_profile(self.config, self.profile)
-        for fid in resolved.tracked_files:
-            tracked_file = self.config.tracked_files[fid]
-            body = f"# tracked body for {fid}\nsrc={tracked_file.src}\n"
-            self.live[fid] = body
-            self._write_store(_BASE, fid, body)
-            self.index.setdefault(fid, {"class": "pending"})
-
-    def _engine_sync(self) -> None:
-        for fid in list(self.index):
-            base = self._read_store(_BASE, fid)
-            if base is not None:
-                self.index[fid] = {"class": "shared"}
-                self._write_store(_LOCAL, fid, self.live.get(fid, ""))
-
-    def _engine_migrate(self) -> None:
-        self._schema_version = "2.0" if self._schema_version == "1.0" else "1.0"
+        if snap.config_bytes is not None:
+            self._config_path().write_text(snap.config_bytes, encoding="utf-8")
 
     # -- observable state (the invariants read these) ------------------
 
     def store_index(self) -> dict[str, dict[str, str]]:
-        """The current §9.3 classification index (a copy)."""
-        return {fid: dict(entry) for fid, entry in self.index.items()}
+        """The current §9.3 classification index as a plain-dict view.
+
+        Reads the REAL ``index/<profile>.json`` back through the store codec
+        and projects each entry to ``{"present", "local_hash"}`` — the stable
+        shape the invariants assert against (the raw ``FileEntry`` carries a
+        hunk list this storage layer leaves empty).
+        """
+        index = read_index(self.profile)
+        return {
+            fid: {"present": str(entry.present), "local_hash": entry.local_hash or ""}
+            for fid, entry in index.files.items()
+        }
+
+    def indexed_file_ids(self) -> set[str]:
+        """Every file-id with a live index entry (INV-10 hook)."""
+        return set(read_index(self.profile).files)
 
     def live_bodies(self) -> dict[str, str]:
         """The current live file bodies (a copy)."""
         return dict(self.live)
 
-    def base_plus_local(self, file_id: str) -> str | None:
+    def base_plus_local(self, file_id_str: str) -> bytes | None:
         """Reconstruct ``base + recorded-local`` for a file (INV-2 hook).
 
-        The stub returns the recorded local body when present, else the
-        base — the trivial reconstruction. A real INV-2 compares this
-        against the live body. Returns ``None`` for an unknown file.
+        Delegates to the real :func:`store.reconstruct` (identity over the
+        recorded-local bytes in this storage layer). Returns the verbatim bytes,
+        ``None`` when nothing is recorded, or ``b""`` for the ABSENT sentinel so
+        the caller compares byte payloads without importing the store's Absent.
         """
-        local = self._read_store(_LOCAL, file_id)
-        if local is not None:
-            return local
-        return self._read_store(_BASE, file_id)
+        result = reconstruct(self.profile, file_id(file_id_str))
+        if result is ABSENT or result is None:
+            return None if result is None else b""
+        return result
+
+    def recorded_local(self, file_id_str: str) -> bytes | None | Absent:
+        """The raw recorded-local trichotomy for INV-2 (bytes / ABSENT / None)."""
+        return read_local(self.profile, file_id(file_id_str))
 
     def transition_count(self) -> int:
         """Number of revertible transitions currently on the stack."""
         return len(self._transitions)
 
     def schema_version(self) -> str:
-        """The recorded schema version (toggled by :meth:`migrate`)."""
-        return self._schema_version
+        """The on-disk ``setforge.yaml`` schema version (advanced by migrate)."""
+        return detect_current_schema(self._config_path())
+
+    def verify_store(self) -> None:
+        """Run the engine's own fail-closed INV-2/INV-10 store check.
+
+        Raises :class:`setforge.errors.InvariantViolation` on an orphan
+        classification or a local-byte hash mismatch — the real invariant the
+        store owns, surfaced to the harness as an assertion.
+        """
+        verify(self.profile)
 
     # -- internals -----------------------------------------------------
 
+    def _config_path(self) -> Path:
+        return self.root / "setforge.yaml"
+
+    def _write_config_yaml(self) -> None:
+        """Write the config to ``setforge.yaml`` at the ``1.0`` on-disk baseline.
+
+        The config's own ``schema_version`` field is the migrate TARGET (what a
+        later ``migrate`` advances the on-disk stamp toward); the file itself is
+        stamped at the pre-versioning ``1.0`` baseline so a target above ``1.0``
+        leaves a real, reachable chain for the migration registry to run.
+        """
+        assert self.config is not None
+        yaml = yaml_rt()
+        data = yaml.load(self.config.model_dump_json())
+        data["schema_version"] = "1.0"
+        atomic_write_yaml(self._config_path(), data)
+
+    def _tracked_body(self, fid_str: str) -> str:
+        assert self.config is not None
+        tracked_file = self.config.tracked_files[fid_str]
+        return f"# tracked body for {fid_str}\nsrc={tracked_file.src}\n"
+
+    def _capture_store(self) -> tuple[transitions.StateSnapshotEntry, ...]:
+        """Capture every store leg for the active profile's known file-ids + index."""
+        entries: list[transitions.StateSnapshotEntry] = []
+        keys: set[str] = set(self.live) | self.indexed_file_ids()
+        if self.config is not None:
+            keys |= set(resolve_profile(self.config, self.profile).tracked_files)
+        for key in sorted(keys):
+            entries.extend(transitions.reconcile_file_snapshots(self.profile, key))
+            entries.append(
+                transitions.snapshot_store_state(
+                    transitions.SnapshotStore.BASE, self.profile, key
+                )
+            )
+        entries.append(
+            transitions.snapshot_store_state(
+                transitions.SnapshotStore.INDEX, self.profile, ""
+            )
+        )
+        return tuple(entries)
+
     def _snapshot(self, verb: str) -> None:
+        cfg_path = self._config_path()
+        config_bytes = (
+            cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else None
+        )
         self._transitions.append(
             _Snapshot(
                 verb=verb,
+                profile=self.profile,
+                config=self.config,
                 live=dict(self.live),
-                index={fid: dict(entry) for fid, entry in self.index.items()},
-                schema_version=self._schema_version,
+                store=self._capture_store(),
+                config_bytes=config_bytes,
             )
         )
 
-    def _store_path(self, sub: str, file_id: str) -> Path:
-        if sub == _INDEX:
-            return self.state_dir / _INDEX / f"{self.profile}.json"
-        return self.state_dir / sub / self.profile / file_id
 
-    def _write_store(self, sub: str, file_id: str, body: str) -> None:
-        path = self._store_path(sub, file_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+__all__ = ["StubReconcileModel"]
 
-    def _read_store(self, sub: str, file_id: str) -> str | None:
-        path = self._store_path(sub, file_id)
-        if not path.exists():
-            return None
-        return path.read_text(encoding="utf-8")
 
-    def _persist(self) -> None:
-        """Flush the index to ``index/<profile>.json`` (on-disk truth)."""
-        index_path = self.state_dir / _INDEX / f"{self.profile}.json"
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        index_path.write_text(json.dumps(self.index, indent=2), encoding="utf-8")
+# Reference the module's typed re-exports so a linter does not flag the imports
+# that exist for the invariant machines' type annotations.
+_TYPES: tuple[object, ...] = (FileId,)

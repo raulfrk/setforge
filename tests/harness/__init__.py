@@ -13,22 +13,23 @@ It ships three composable pieces and one fixture seam:
   an :class:`~tests.harness.invariants.InvariantStateMachine` base class
   that asserts every registered invariant after each ``@rule`` step.
 - :mod:`tests.harness.model` — :class:`~tests.harness.model.StubReconcileModel`,
-  the thin seam the state machine drives. It mimics the install / sync /
-  revert / migrate transitions against a tmp_path-isolated store
-  (``base/`` + ``local/`` + ``index/`` per RFC §9.3) and a transition
-  snapshot stack. The REAL Epic-A reconcile engine replaces the stub's
-  ``_engine_*`` methods later (task E2); the verbs, store layout, and
-  invariant hook points stay identical so the swap is mechanical.
+  the seam the state machine drives. It runs the REAL install / sync /
+  revert / migrate reconcile engine (:mod:`setforge.reconcile_apply`,
+  :mod:`setforge.reconcile.store`, :mod:`setforge.migrations`,
+  :mod:`setforge.transitions`) against a ``self.root``-isolated store
+  (``base/`` + ``local/`` + ``index/`` per RFC §9.3) plus a transition
+  snapshot stack. The real path is subprocess-free (pure merge, fsync store
+  writes, ruamel migration edits); the ``StubReconcileModel`` name is retained
+  for continuity with the scaffold's importers.
 
-The harness is RUNNABLE and meta-tested TODAY (see
-``tests/harness/test_harness_meta.py``): the state machine drives the
-stub over generated sequences, the invariant helper catches a
-deliberately-violated toy invariant, and the fixtures isolate the fs +
-intercept the subprocess boundary.
-
-EXTENSION POINTS for later per-component tasks are marked inline with
-``EXTENSION POINT (E2/...)`` comments — that is where the real
-invariants and the real engine plug in.
+The harness is RUNNABLE and meta-tested (see
+``tests/harness/test_harness_meta.py``): the state machine drives the real
+engine over generated sequences, the invariant helper catches a
+deliberately-violated toy invariant, and per-example isolation (a
+``SETFORGE_STATE_DIR`` redirect + subprocess guard + ``teardown`` rmtree) keeps
+each example hermetic. The real INV-1..10 catalog lives in
+``tests/invariants/`` (task E2), assembled via the same ``@invariant()``
+registration MRO walk.
 """
 
 from __future__ import annotations
