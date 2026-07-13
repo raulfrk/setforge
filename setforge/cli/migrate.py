@@ -883,6 +883,18 @@ def _execute_chain(
     snapshots: dict[Path, bytes | None] = {
         path: (path.read_bytes() if path.exists() else None) for path in affected_paths
     }
+    # A ``writes_own_transition`` cutover mutates GLOBAL reconcile-store legs and
+    # commits a durable transition, both keyed off state_root() (SETFORGE_STATE_DIR)
+    # — NOT in the file snapshot above. Capture the WHOLE state tree at chain-start
+    # (BEFORE any cutover mutates) so a mid-chain failure after the cutover restores
+    # the store to its true pre-chain state and removes the phantom transition.
+    # None => not captured (plain chain owns no transition, no store restore). An
+    # empty dict is a LEGITIMATE snapshot (state tree empty at chain-start) that
+    # still drives a restore — deleting everything a cutover creates. The None-vs-{}
+    # distinction is why the sentinel is None.
+    store_snapshot: dict[Path, bytes] | None = (
+        transitions.snapshot_state_root() if _chain_owns_transition(chain) else None
+    )
     applied: list[str] = []
     for migration in chain:
         step = f"{migration.from_version} → {migration.to_version}"
@@ -895,7 +907,7 @@ def _execute_chain(
             # propagates as SIGINT (exit 130), never misreported as a migration
             # error (typer.Exit(1)). A second Ctrl-C during rollback may
             # propagate mid-restore (best-effort).
-            _rollback(snapshots)
+            _rollback(snapshots, store_snapshot=store_snapshot)
             typer.secho(
                 f"migration interrupted during step {step}; "
                 f"rolled back to the pre-migration state.",
@@ -904,7 +916,7 @@ def _execute_chain(
             )
             raise
         except Exception as exc:
-            _rollback(snapshots)
+            _rollback(snapshots, store_snapshot=store_snapshot)
             typer.secho(
                 f"migration step {step} failed after "
                 f"{len(applied)} completed step(s) "
@@ -918,19 +930,37 @@ def _execute_chain(
         typer.echo(f"  applied: {step}")
 
 
-def _rollback(snapshots: dict[Path, bytes | None]) -> None:
-    """Restore each affected path to its pre-migration snapshot.
+def _rollback(
+    snapshots: dict[Path, bytes | None],
+    *,
+    store_snapshot: Mapping[Path, bytes] | None = None,
+) -> None:
+    """Restore each affected path — and the reconcile store — to pre-chain state.
 
     ``None`` marks a path that did not exist before the migration — it is
     removed if a partial apply created it. Best-effort recovery path:
     direct writes (not atomic), since the goal is to undo a failed
     multi-step apply rather than to survive a crash mid-rollback.
+
+    ``store_snapshot`` is the chain-start image of the WHOLE state tree, or
+    ``None`` when the chain owns no transition (e.g. the finalize marker-strip
+    path) — ``None`` skips the store restore entirely, an empty dict still
+    restores (it means the tree was empty at chain-start, so the restore
+    deletes everything a cutover created). It is restored AFTER the file bytes
+    so it wins for any path present in both — the store restore is
+    authoritative — mirroring the inverse-order authority of ``revert``'s
+    ``_apply_revert`` (byte state_snapshots override the text patch).
     """
     for path, original in snapshots.items():
         if original is None:
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(original)
+    # None => plain chain, nothing to restore. A captured (even empty) snapshot
+    # DOES restore — an empty map means "the state tree was empty at chain-start"
+    # and the restore then deletes everything a cutover created.
+    if store_snapshot is not None:
+        transitions.restore_state_root(store_snapshot)
 
 
 def _run_post_apply_validate(*, cfg_path: Path) -> None:

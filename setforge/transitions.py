@@ -949,6 +949,48 @@ def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
             atomicio.atomic_write_bytes(target, entry.payload)
 
 
+def snapshot_state_root() -> dict[Path, bytes]:
+    """Capture every file currently under :func:`state_root` as path → bytes.
+
+    A migration-agnostic pre-image of the WHOLE state tree — the reconcile
+    store legs AND the transition log. A ``writes_own_transition`` cutover
+    mutates specific store legs (keyed off ``state_root``) and commits a
+    durable transition, but which legs it touches is known only to the
+    migration; the driver cannot recompute them. Snapshotting the entire
+    tree captures both regardless. Files present here but ABSENT after are
+    restored by :func:`restore_state_root`; files created after (a cutover's
+    new leg, its phantom transition) are absent from this map and get
+    removed. Missing root → empty map (nothing to restore to).
+    """
+    root = state_root()
+    if not root.exists():
+        return {}
+    return {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
+    """Restore the state tree to ``snapshot`` (from :func:`snapshot_state_root`).
+
+    Rewrites every captured file byte-exact, then removes any file now under
+    :func:`state_root` that was NOT in the snapshot — deleting a cutover's
+    freshly-seeded store leg and the phantom durable transition it committed,
+    so a later ``revert`` never reverses that transition against an
+    already-rolled-back tree. Best-effort (direct writes / unlinks): migrate
+    holds no ``profile_lock``, and a mid-``apply`` ``KeyboardInterrupt``
+    releases the cutover's own ``ExitStack`` lock before rollback runs, so
+    this restore is unlocked — acceptable for an interactive single-user undo.
+    """
+    for path, payload in snapshot.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomicio.atomic_write_bytes(path, payload)
+    root = state_root()
+    if not root.exists():
+        return
+    for p in root.rglob("*"):
+        if p.is_file() and p not in snapshot:
+            p.unlink(missing_ok=True)
+
+
 def _stage_state_snapshots(
     pending: Path, snapshots: tuple[StateSnapshotEntry, ...]
 ) -> None:
