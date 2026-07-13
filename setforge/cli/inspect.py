@@ -36,9 +36,10 @@ from setforge.compare import expand_tracked_file, resolve_dst, resolve_src
 from setforge.config import Config, ResolvedProfile, load_config, resolve_profile
 from setforge.locking import profile_lock
 from setforge.reconcile import store as reconcile_store
+from setforge.reconcile.index_model import FileEntry
 from setforge.reconcile.merge import merge
 from setforge.reconcile.merge_model import Conflict, MergeResult
-from setforge.reconcile.types import ABSENT, Absent, FileId, file_id
+from setforge.reconcile.types import ABSENT, Absent, FileId, HunkClass, file_id
 from setforge.ui import theme
 from setforge.ui.diffview import (
     RichLayout,
@@ -47,29 +48,29 @@ from setforge.ui.diffview import (
     two_way_lines,
 )
 
-# Below this console width the 3-column base|live|merge layout is unreadable, so
-# the panes stack. ``Console`` reports 80 for a non-tty stream, so a piped /
-# CliRunner invocation deterministically resolves to STACKED.
+# Below this width the panes stack; a non-tty Console reports 80, so a piped
+# invocation deterministically resolves to STACKED (never a live terminal width).
 _WIDE_THRESHOLD = 120
 
 
 def _resolve_fid(
     cfg: Config, resolved: ResolvedProfile, repo_root: Path, arg: str
-) -> tuple[FileId, Path] | None:
-    """Resolve ``arg`` to a ``(file-id, live-path)`` for a tracked file.
+) -> tuple[FileId, Path, Path] | None:
+    """Resolve ``arg`` to a ``(file-id, live-path, tracked-src-path)`` triple.
 
     Matches ``arg`` against each expanded tracked file's name / sub-name /
     live path / live basename — the same match set ``stage`` uses — so a
     directory member (``name/relpath``) resolves too. Returns ``None`` when
-    nothing matches (the caller maps that to exit 2).
+    nothing matches (the caller maps that to exit 2). Returning the tracked
+    ``src`` here spares a second full walk to fetch the merge ``theirs`` side.
     """
     for name in resolved.tracked_files:
         tracked_file = cfg.tracked_files[name]
         src = resolve_src(tracked_file, repo_root)
         dst = resolve_dst(tracked_file)
-        for sub_name, _sub_src, sub_dst in expand_tracked_file(name, src, dst):
+        for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
             if arg in (name, sub_name, str(sub_dst), sub_dst.name):
-                return file_id(sub_name), sub_dst
+                return file_id(sub_name), sub_dst, sub_src
     return None
 
 
@@ -115,29 +116,37 @@ def _merge_pane_text(result: MergeResult) -> str:
     return "".join(parts)
 
 
-def _index_summary(result: MergeResult) -> dict[str, list[dict[str, Any]]]:
-    """Per-hunk index: each conflict segment tagged, walked in document order.
+def _index_summary(
+    result: MergeResult, entry: FileEntry | None
+) -> dict[str, list[dict[str, Any]]]:
+    """Per-hunk index summary, drawn from the two authorities that each own a tag.
 
-    In this render the merge stream carries clean runs and conflict regions; a
-    conflict becomes a ``conflict`` entry, and each side's line count feeds a
-    ``kept_local`` (ours) / ``shared`` (theirs) tally. The line-range is the
-    conflict's position in the merged-preview line stream.
+    ``shared`` / ``kept_local`` are a STORE classification: they come from the
+    recorded index entry's ``hunks`` (``HunkClass.SHARED`` / ``HunkClass.LOCAL``),
+    NOT from a merge-conflict side — a genuinely kept-local hunk re-merges CLEAN,
+    so a conflict-only walk would miss it and report zero. These are honestly
+    empty in the current storage layer (``FileEntry.hunks`` is unpopulated until
+    the staging layer fills it) and auto-correct once it does.
+
+    ``conflict`` is a merge-time fact: each :class:`Conflict` segment, tagged with
+    its line-range in the merged-preview stream.
     """
     shared: list[dict[str, Any]] = []
     kept_local: list[dict[str, Any]] = []
+    for row in entry.hunks if entry is not None else []:
+        cls = row.get("cls")
+        if cls == HunkClass.SHARED.value:
+            shared.append({"label": row.get("label"), "tag": "shared"})
+        elif cls == HunkClass.LOCAL.value:
+            kept_local.append({"label": row.get("label"), "tag": "kept_local"})
+
     conflict: list[dict[str, Any]] = []
     line = 1
     for seg in result.segments:
         if isinstance(seg, Conflict):
-            ours = seg.ours.count(b"\n")
-            theirs = seg.theirs.count(b"\n")
-            span = {"start": line, "end": line + ours + theirs}
-            conflict.append({**span, "tag": "conflict"})
-            if ours:
-                kept_local.append({**span, "tag": "kept_local", "lines": ours})
-            if theirs:
-                shared.append({**span, "tag": "shared", "lines": theirs})
-            line += ours + theirs
+            span = line + seg.ours.count(b"\n") + seg.theirs.count(b"\n")
+            conflict.append({"start": line, "end": span, "tag": "conflict"})
+            line = span
         else:
             line += seg.bytes_.count(b"\n")
     return {"shared": shared, "kept_local": kept_local, "conflict": conflict}
@@ -166,33 +175,30 @@ def inspect(
             f"(run `setforge compare --profile={profile}` to list tracked files)",
         )
         raise typer.Exit(code=2)
-    fid, dst = match
+    fid, dst, src = match
 
     with profile_lock(profile):
         base = reconcile_store.read_base(profile, fid)
         recorded = reconcile_store.read_local(profile, fid)
+        entry = reconcile_store.read_index(profile).files.get(str(fid))
 
-    # "ours" is the current live file on disk (the state the user sees). When the
-    # file is absent live, fall back to the recorded-local trichotomy
-    # (bytes | None | ABSENT): a recorded ``b""`` (empty) is its own bytes value,
-    # while both None (nothing recorded) and ABSENT collapse to "the file is
-    # absent" — matched on the sentinel, never truthiness.
+    # "ours" is the live file; absent-live falls back to the recorded-local
+    # trichotomy (bytes | None | ABSENT), matched on the sentinel not truthiness.
     if dst.exists():
         live: bytes | Absent = dst.read_bytes()
     elif isinstance(recorded, bytes):
         live = recorded
     else:
-        live = ABSENT  # recorded is None or ABSENT → absent
-    upstream = _tracked_bytes(cfg, resolved, repo_root, fid)
+        live = ABSENT
+    upstream: bytes | Absent = src.read_bytes() if src.exists() else ABSENT
 
     base_present = base is not None
     if base is not None:
         result = merge(base, live, upstream)
         merge_pane = _merge_pane_text(result)
-        index = _index_summary(result)
+        index = _index_summary(result, entry)
         model = three_way_segments(result)
-    else:
-        # No recorded base → 2-pane live↔upstream diff (no merge to compute).
+    else:  # no recorded base → 2-pane live↔upstream diff (no merge to compute)
         live_bytes = b"" if live is ABSENT else live
         up_bytes = b"" if upstream is ABSENT else upstream
         model = two_way_lines(live_bytes, up_bytes)
@@ -226,25 +232,6 @@ def inspect(
         _render_index(console, index)
 
     render(ctx.obj, "inspect", data, human_fn=_human)
-
-
-def _tracked_bytes(
-    cfg: Config, resolved: ResolvedProfile, repo_root: Path, fid: FileId
-) -> bytes | Absent:
-    """The tracked (upstream) bytes for ``fid`` — the merge ``theirs`` side.
-
-    Re-walks the profile's expanded tracked files to find the src whose sub-name
-    matches ``fid``; :data:`ABSENT` when the tracked src is missing (an upstream
-    deletion). Mirrors the src resolution ``stage`` / ``compare`` use.
-    """
-    for name in resolved.tracked_files:
-        tracked_file = cfg.tracked_files[name]
-        src = resolve_src(tracked_file, repo_root)
-        dst = resolve_dst(tracked_file)
-        for sub_name, sub_src, _sub_dst in expand_tracked_file(name, src, dst):
-            if sub_name == str(fid):
-                return sub_src.read_bytes() if sub_src.exists() else ABSENT
-    return ABSENT
 
 
 def _render_index(console: Console, index: dict[str, list[dict[str, Any]]]) -> None:
@@ -284,9 +271,11 @@ def _emit_error(ctx_obj: OutputContext | None, message: str) -> None:
 
 
 def _empty_data() -> dict[str, Any]:
+    # ``data.errors`` mirrors the success shape; the message rides the envelope.
     return {
         "file": None,
         "base_present": False,
         "panes": {"base": None, "live": None, "merge": None},
         "index": {"shared": [], "kept_local": [], "conflict": []},
+        "errors": [],
     }
