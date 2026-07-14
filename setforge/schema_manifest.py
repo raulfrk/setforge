@@ -30,6 +30,8 @@ from setforge.config import (
     CargoPackage,
     ClaudePluginRef,
     Config,
+    ExtensionPackage,
+    ExtensionReconcile,
     Extensions,
     FileComponent,
     GitHubReleasePackage,
@@ -37,8 +39,11 @@ from setforge.config import (
     LocalPackage,
     MarketplaceSource,
     McpServerRef,
+    PluginPackage,
+    PluginReconcile,
     Profile,
     PythonPackage,
+    ReconcileSpec,
     ResolvedProfile,
     SectionTemplateRef,
     TrackedFile,
@@ -65,6 +70,11 @@ _MODELS: tuple[type[BaseModel], ...] = (
     BundleComponent,
     BundleSpec,
     FileComponent,
+    PluginPackage,
+    ExtensionPackage,
+    PluginReconcile,
+    ExtensionReconcile,
+    ReconcileSpec,
 )
 
 
@@ -112,7 +122,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "packages": (
             "dict[str, typing.Annotated[setforge.config.CargoPackage | "
             "setforge.config.PythonPackage | setforge.config.GoPackage | "
-            "setforge.config.GitHubReleasePackage | setforge.config.LocalPackage, "
+            "setforge.config.GitHubReleasePackage | setforge.config.LocalPackage | "
+            "setforge.config.PluginPackage | setforge.config.ExtensionPackage, "
             "FieldInfo(annotation=NoneType, required=True, "
             "discriminator='type')]]"
         ),
@@ -130,6 +141,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "cargo_binaries": "list[str]",
         "packages": "list[str]",
         "bundles": "list[str]",
+        "reconcile": "<class 'setforge.config.ReconcileSpec'>",
         "section_slots": "dict[str, str]",
     },
     "TrackedFile": {
@@ -166,6 +178,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "cargo_binaries": "list[str]",
         "packages": "list[str]",
         "bundles": "list[str]",
+        "reconcile": "<class 'setforge.config.ReconcileSpec'>",
         "section_slots": "dict[str, str]",
     },
     "CargoPackage": {
@@ -225,6 +238,25 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "mode": "int | None",
         "template": "<class 'bool'>",
         "symlink": "str | None",
+    },
+    "PluginPackage": {
+        "type": "typing.Literal[<PackageKind.PLUGIN: 'plugin'>]",
+        "plugin": "<class 'str'>",
+    },
+    "ExtensionPackage": {
+        "type": "typing.Literal[<PackageKind.EXTENSION: 'extension'>]",
+        "extension": "<class 'str'>",
+    },
+    "PluginReconcile": {
+        "policy": "<enum 'ReconcilePolicy'>",
+    },
+    "ExtensionReconcile": {
+        "exclude": "list[str]",
+        "policy": "<enum 'ReconcilePolicy'>",
+    },
+    "ReconcileSpec": {
+        "plugins": "<class 'setforge.config.PluginReconcile'>",
+        "extensions": "<class 'setforge.config.ExtensionReconcile'>",
     },
 }
 
