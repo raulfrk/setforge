@@ -1,5 +1,3 @@
-"""Tests for the W1 additive ``plugin``/``extension`` package kinds."""
-
 from pathlib import Path
 
 import pytest

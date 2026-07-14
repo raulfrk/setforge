@@ -1,16 +1,3 @@
-"""Wave-1 expand-window proof: OLD fields + NEW surface coexist, additive.
-
-Schema stays at major 5 this wave (see ``setforge/schema_manifest.py``).
-A config that sets BOTH the legacy scalar/list fields (``cargo_binaries``,
-``claude_plugins``, ``plugins_reconcile``, ``extensions``) AND the new
-``packages:``/``reconcile:`` surface must load and resolve cleanly, with
-both shapes carrying their own values simultaneously. The new surface is
-inert this wave — nothing consumes it yet — but it must round-trip through
-load + resolve without disturbing the old fields it duplicates in intent
-(e.g. ``rgx`` a cargo package that also exists as a bare ``cargo_binaries``
-entry for ``rg``).
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -61,7 +48,6 @@ profiles:
 
 
 def test_dual_shape_config_loads(tmp_path: Path) -> None:
-    """A config mixing old + new surface loads through the real validators."""
     config_path = tmp_path / "setforge.yaml"
     config_path.write_text(_DUAL_SHAPE_YAML)
 
@@ -73,15 +59,12 @@ def test_dual_shape_config_loads(tmp_path: Path) -> None:
 
 
 def test_dual_shape_config_resolves_old_and_new_together(tmp_path: Path) -> None:
-    """Old fields and new surface both carry their expected values after
-    resolution — neither shape clobbers or is clobbered by the other."""
     config_path = tmp_path / "setforge.yaml"
     config_path.write_text(_DUAL_SHAPE_YAML)
     config = load_config(config_path)
 
     resolved = resolve_profile(config, "base")
 
-    # --- old fields still live ---
     assert resolved.cargo_binaries == ["rg"]
     assert resolved.claude_plugins == ["my-plugin"]
     assert resolved.plugins_reconcile is ReconcilePolicy.PRUNE
@@ -89,7 +72,6 @@ def test_dual_shape_config_resolves_old_and_new_together(tmp_path: Path) -> None
     assert resolved.extensions.exclude == ["GitHub.copilot"]
     assert resolved.extensions.reconcile is ReconcilePolicy.ADDITIVE
 
-    # --- new surface, inert this wave but round-trips intact ---
     assert resolved.packages == ["rgx", "myplug", "pyext"]
     assert resolved.reconcile.plugins.policy is ReconcilePolicy.PRUNE
     assert resolved.reconcile.extensions.exclude == ["GitHub.copilot"]

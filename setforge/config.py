@@ -668,15 +668,8 @@ def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
 
 
 def _merge_reconcile(parent: ReconcileSpec, child: ReconcileSpec) -> ReconcileSpec:
-    """Merge two ``reconcile:`` blocks.
-
-    ``exclude`` concatenates parent+child (dedup, first-occurrence). Each
-    policy scalar overrides only when its nested block AND its ``policy``
-    key were explicitly present in the child's ``model_fields_set`` — a
-    default-constructed ``ReconcileSpec()`` leaves the nested sets empty,
-    so those two checks alone capture "explicitly set". Otherwise it
-    inherits the parent value.
-    """
+    """Policy overrides only if child's nested block+``policy`` are both in
+    ``model_fields_set``, else inherits; exclude concatenates+dedups."""
     merged_exclude = _merge_list(parent.extensions.exclude, child.extensions.exclude)
 
     child_plugins_set = (

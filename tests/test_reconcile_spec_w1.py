@@ -1,5 +1,3 @@
-"""Tests for the W1 additive ``reconcile:`` policy block on Profile."""
-
 import pytest
 from pydantic import ValidationError
 
