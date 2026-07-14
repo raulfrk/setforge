@@ -9,9 +9,11 @@ from setforge import reconcile_adapter
 from setforge.config import (
     CargoPackage,
     Config,
+    ExtensionPackage,
     GitHubReleasePackage,
     GoPackage,
     LocalPackage,
+    PluginPackage,
     PythonPackage,
     ResolvedProfile,
 )
@@ -50,7 +52,11 @@ def enumerate_lock_items(cfg: Config, resolved: ResolvedProfile) -> list[_LockIt
 
     for ref in resolved.packages:
         pkg = cfg.packages[ref]
-        if isinstance(pkg, LocalPackage):
+        # Plugin/extension packages lock via the adapter loops below (which
+        # union them with the OLD fields and yield the resolver-shaped
+        # PluginResolveItem / ExtensionResolveItem); enumerating them here too
+        # would double-lock AND hand the resolver a raw package it rejects.
+        if isinstance(pkg, LocalPackage | PluginPackage | ExtensionPackage):
             continue
         items.append(_LockItem(PackageType(pkg.type.value), pkg))
 
