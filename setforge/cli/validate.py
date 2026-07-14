@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from setforge import reconcile_adapter
 from setforge import source as source_mod
 from setforge.binaries import LOCAL_CONFIG_PATH as _LOCAL_CONFIG_PATH
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
@@ -337,7 +338,7 @@ def _check_marketplaces(
     ``_validate_plugin_references``.)
     """
     marketplace_keys = set(cfg.marketplaces)
-    for plugin_ref in resolved.claude_plugins:
+    for plugin_ref in reconcile_adapter.plugin_bare_names(cfg, resolved):
         bare_name = plugin_ref.split("@")[0]
         if bare_name in cfg.claude_plugins:
             mp_name = cfg.claude_plugins[bare_name].marketplace

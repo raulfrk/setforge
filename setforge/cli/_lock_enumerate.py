@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from setforge import reconcile_adapter
 from setforge.config import (
     CargoPackage,
     Config,
@@ -53,10 +54,10 @@ def enumerate_lock_items(cfg: Config, resolved: ResolvedProfile) -> list[_LockIt
             continue
         items.append(_LockItem(PackageType(pkg.type.value), pkg))
 
-    for bare_name in resolved.claude_plugins:
+    for bare_name in reconcile_adapter.plugin_bare_names(cfg, resolved):
         items.append(_LockItem(PackageType.PLUGIN, _plugin_item(cfg, bare_name)))
 
-    for ext_id in resolved.extensions.include:
+    for ext_id in reconcile_adapter.extensions_input(cfg, resolved).include:
         items.append(_LockItem(PackageType.EXTENSION, ExtensionResolveItem(key=ext_id)))
 
     return items

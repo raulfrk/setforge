@@ -22,7 +22,7 @@ from typing import Final
 
 import platformdirs
 
-from setforge import atomicio, marketplace_cache_wizard
+from setforge import atomicio, marketplace_cache_wizard, reconcile_adapter
 from setforge.binaries import stderr_of
 from setforge.config import (
     ClaudeInstallMode,
@@ -765,7 +765,7 @@ def sync_marketplace_cache(
     # via the top-level claude_plugins registry, mirroring reconcile's
     # logic.
     referenced: set[str] = set()
-    for bare_name in profile.claude_plugins:
+    for bare_name in reconcile_adapter.plugin_bare_names(cfg, profile):
         ref = cfg.claude_plugins.get(bare_name)
         if ref is None:
             raise ConfigError(

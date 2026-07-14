@@ -1757,9 +1757,11 @@ def _profile_referenced_marketplaces(
     caller's plugin reconcile path raises a clearer error for unknown
     plugin refs.
     """
+    from setforge import reconcile_adapter
+
     seen: set[str] = set()
     out: list[str] = []
-    for bare_name in resolved.claude_plugins:
+    for bare_name in reconcile_adapter.plugin_bare_names(config, resolved):
         ref = config.claude_plugins.get(bare_name)
         if ref is None:
             continue
