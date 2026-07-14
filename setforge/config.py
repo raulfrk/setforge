@@ -331,6 +331,8 @@ class PackageKind(StrEnum):
     GO = "go"
     GITHUB_RELEASE = "github_release"
     LOCAL = "local"
+    PLUGIN = "plugin"
+    EXTENSION = "extension"
 
 
 def _reject_path_in_bare_name(value: str, field_name: str) -> str:
@@ -414,8 +416,28 @@ class LocalPackage(BaseModel):
         return _reject_path_in_bare_name(v, info.field_name or "field")
 
 
+class PluginPackage(BaseModel):
+    model_config = _STRICT
+
+    type: Literal[PackageKind.PLUGIN] = PackageKind.PLUGIN
+    plugin: str
+
+
+class ExtensionPackage(BaseModel):
+    model_config = _STRICT
+
+    type: Literal[PackageKind.EXTENSION] = PackageKind.EXTENSION
+    extension: str
+
+
 Package = Annotated[
-    CargoPackage | PythonPackage | GoPackage | GitHubReleasePackage | LocalPackage,
+    CargoPackage
+    | PythonPackage
+    | GoPackage
+    | GitHubReleasePackage
+    | LocalPackage
+    | PluginPackage
+    | ExtensionPackage,
     Field(discriminator="type"),
 ]
 
