@@ -13,10 +13,12 @@ import setforge.provision.python as _python  # noqa: F401
 from setforge.config import (
     CargoPackage,
     Config,
+    ExtensionPackage,
     GitHubReleasePackage,
     GoPackage,
     LocalPackage,
     Package,
+    PluginPackage,
     PythonPackage,
     ReconcilePolicy,
     ResolvedProfile,
@@ -65,6 +67,12 @@ def resolve_provision_items(
 
     for ref in resolved.packages:
         pkg = cfg.packages[ref]
+        # Plugin / extension packages route to the legacy claude_plugins /
+        # vscode_extensions reconcile engines (via reconcile_adapter), NOT
+        # the add-only generic provisioner driver. Skip them here so they
+        # are not double-provisioned.
+        if isinstance(pkg, (PluginPackage, ExtensionPackage)):
+            continue
         _add(
             ProvisionItem(
                 type=pkg.type.value,

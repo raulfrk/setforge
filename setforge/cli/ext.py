@@ -9,7 +9,7 @@ from pathlib import Path
 
 import typer
 
-from setforge import vscode_extensions
+from setforge import reconcile_adapter, vscode_extensions
 from setforge.cli import _CONFIG_OPTION, _PROFILE_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import (
     EXT_ADD_EXAMPLES,
@@ -138,13 +138,14 @@ def ext_reconcile(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
+    ext = reconcile_adapter.extensions_input(cfg, resolved)
     try:
-        report = vscode_extensions.reconcile(resolved.extensions, dry_run=dry_run)
+        report = vscode_extensions.reconcile(ext, dry_run=dry_run)
     except ExtensionToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    is_read_only = resolved.extensions.reconcile is ReconcilePolicy.REPORT or dry_run
+    is_read_only = ext.reconcile is ReconcilePolicy.REPORT or dry_run
 
     failed_ids = {ext_id for ext_id, _ in report.failed}
     for ext_id in report.to_install:

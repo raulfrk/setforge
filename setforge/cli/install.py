@@ -444,6 +444,7 @@ def install(
             _collect_retry_failed_ids(profile) if retry_failed else frozenset()
         )
         ext_delta, ext_outcomes = _reconcile_extensions(
+            cfg,
             resolved,
             retry_failed_ids=retry_failed_ids,
             yes=yes,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from setforge import binaries
+from setforge import binaries, reconcile_adapter
 from setforge import claude_marketplace_cache as claude_mp_cache_mod
 from setforge import claude_plugins as claude_plugins_mod
 from setforge import claude_yaml_editor as claude_yaml_editor_mod
@@ -339,13 +339,14 @@ def plugin_reconcile(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
+    synth = reconcile_adapter.synth_plugin_profile(cfg, resolved)
     try:
-        report = claude_plugins_mod.reconcile(cfg, resolved, dry_run=dry_run)
+        report = claude_plugins_mod.reconcile(cfg, synth, dry_run=dry_run)
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    is_read_only = resolved.plugins_reconcile is ReconcilePolicy.REPORT or dry_run
+    is_read_only = synth.plugins_reconcile is ReconcilePolicy.REPORT or dry_run
     _render_reconcile_report(report, is_read_only=is_read_only)
     if not report:
         typer.echo("plugins: nothing to reconcile")

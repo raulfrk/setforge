@@ -15,13 +15,16 @@ import subprocess
 from typing import Any
 from unittest.mock import patch
 
+from setforge import reconcile_adapter
 from setforge.claude_plugins import reconcile as plugin_reconcile
 from setforge.config import (
     ClaudePluginRef,
+    Config,
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
     ReconcilePolicy,
+    resolve_profile,
 )
 from setforge.errors import ExtensionInstallFailed
 from setforge.vscode_extensions import reconcile
@@ -294,3 +297,71 @@ def test_plugin_dry_run_lists_diffs_without_subprocess() -> None:
     prov_enable.assert_not_called()
     add_mp.assert_not_called()
     plugin_disable.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# new-surface package reaches the engine VIA the reconcile adapter
+# ---------------------------------------------------------------------------
+#
+# A plugin / extension declared ONLY as a NEW ``packages`` entry (never the old
+# ``claude_plugins`` / ``extensions.include`` field) must still reach the
+# unchanged reconcile engine, because each call site now passes
+# ``reconcile_adapter.synth_plugin_profile`` / ``.extensions_input`` in place of
+# the raw resolved profile. These drive that seam end-to-end.
+
+_TF = {"t": {"src": "t", "dst": "~/t"}}
+_MP = {"mp": {"source": "github", "repo": "o/r"}}
+
+
+def test_plugin_package_only_reaches_engine_via_adapter() -> None:
+    """A plugin declared solely as a ``packages`` entry plans its install when
+    the call site's ``synth_plugin_profile`` output is fed to the engine."""
+    cfg = Config.model_validate(
+        {
+            "tracked_files": _TF,
+            "marketplaces": _MP,
+            "profiles": {"p": {"packages": ["sp"]}},
+            "claude_plugins": {"sp": {"marketplace": "mp"}},
+            "packages": {"sp": {"type": "plugin", "plugin": "sp"}},
+        }
+    )
+    resolved = resolve_profile(cfg, "p")
+    # The raw resolved profile has NO old-field plugin — only the package.
+    assert resolved.claude_plugins == []
+    synth = reconcile_adapter.synth_plugin_profile(cfg, resolved)
+    with (
+        patch(_LOCAL_MP_TO_ADD, return_value=[]),
+        patch(_LOCAL_ADD_MP),
+        patch(_PLUGIN_PROV_LIST, return_value={}),
+        patch(_PLUGIN_PROV_INSTALL) as prov_install,
+        patch(_PLUGIN_PROV_ENABLE),
+    ):
+        report = plugin_reconcile(cfg, synth)
+    # The engine saw the unioned selection and planned the package's install.
+    assert report.to_install == [("sp", "mp")]
+    prov_install.assert_called_once()
+
+
+def test_extension_package_only_reaches_engine_via_adapter() -> None:
+    """An extension declared solely as a ``packages`` entry plans its install
+    when the call site's ``extensions_input`` output is fed to the engine."""
+    cfg = Config.model_validate(
+        {
+            "tracked_files": _TF,
+            "profiles": {"p": {"packages": ["cop"]}},
+            "packages": {"cop": {"type": "extension", "extension": "pub.ext"}},
+        }
+    )
+    resolved = resolve_profile(cfg, "p")
+    # The raw resolved profile has NO old-field extension — only the package.
+    assert resolved.extensions.include == []
+    ext = reconcile_adapter.extensions_input(cfg, resolved)
+    with (
+        patch(_LOCAL_RESOLVE, return_value="/usr/bin/code"),
+        patch(_LIST, return_value=set()),
+        patch(_INSTALL) as install_one,
+    ):
+        report = reconcile(ext)
+    # The engine saw the unioned selection and planned the package's install.
+    assert report.to_install == ["pub.ext"]
+    install_one.assert_called_once()

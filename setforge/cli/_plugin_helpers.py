@@ -23,7 +23,12 @@ from typing import Any, Final
 
 import typer
 
-from setforge import claude_marketplace_cache, transitions, vscode_extensions
+from setforge import (
+    claude_marketplace_cache,
+    reconcile_adapter,
+    transitions,
+    vscode_extensions,
+)
 from setforge import claude_plugins as claude_plugins_mod
 from setforge._redact import redact_argv
 from setforge.binaries import load_host_local_config
@@ -168,6 +173,7 @@ def _walk_extension_failures(
 
 
 def _reconcile_extensions(
+    cfg: Config,
     resolved: ResolvedProfile,
     *,
     retry_failed_ids: frozenset[str] = frozenset(),
@@ -206,7 +212,9 @@ def _reconcile_extensions(
     """
     pins = pins or {}
     try:
-        report = vscode_extensions.reconcile(resolved.extensions, pins=pins)
+        report = vscode_extensions.reconcile(
+            reconcile_adapter.extensions_input(cfg, resolved), pins=pins
+        )
     except ExtensionToolMissing as exc:
         typer.secho(
             f"warning: skipping extension reconcile — {exc}",
@@ -553,7 +561,9 @@ def _reconcile_plugins(
         _warn_skip_reconcile(exc)
         return None, ()
     try:
-        plugin_report = claude_plugins_mod.reconcile(cfg, resolved, pins=pins)
+        plugin_report = claude_plugins_mod.reconcile(
+            cfg, reconcile_adapter.synth_plugin_profile(cfg, resolved), pins=pins
+        )
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)
         return None, ()

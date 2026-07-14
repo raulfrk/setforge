@@ -35,6 +35,7 @@ from setforge import (
     base_store,
     deploy,
     reconcile,
+    reconcile_adapter,
     reconcile_apply,
     transitions,
 )
@@ -1303,7 +1304,11 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
         typer.echo("  nothing declared")
         return
     try:
-        report = claude_plugins_mod.reconcile(ctx.cfg, ctx.resolved, dry_run=True)
+        report = claude_plugins_mod.reconcile(
+            ctx.cfg,
+            reconcile_adapter.synth_plugin_profile(ctx.cfg, ctx.resolved),
+            dry_run=True,
+        )
     except PluginToolMissing as exc:
         typer.echo(f"  skipped (plugin tool unavailable: {exc})")
         return
@@ -1338,7 +1343,7 @@ def _dry_run_emit_extension_reconcile(ctx: ProfileContext) -> None:
     that don't touch the extension layer at all).
     """
     typer.echo("=== would-be extension reconcile ===")
-    ext = ctx.resolved.extensions
+    ext = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
     if not (ext.include or ext.exclude):
         typer.echo("  nothing declared")
         return

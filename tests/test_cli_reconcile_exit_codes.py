@@ -15,13 +15,35 @@ loading are stubbed via ``monkeypatch`` (auto-reverted) so no real
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from setforge.cli import app
-from setforge.config import ReconcilePolicy
+from setforge.config import (
+    Config,
+    Extensions,
+    Profile,
+    ReconcilePolicy,
+    ResolvedProfile,
+    TrackedFile,
+)
+
+
+def _empty_config() -> Config:
+    """A minimal real ``Config`` (no packages / reconcile block).
+
+    The reconcile adapter now runs at these call sites, reading
+    ``cfg.packages`` and the resolved ``reconcile`` block; an opaque
+    ``SimpleNamespace`` no longer suffices. With no packages declared the
+    adapter returns the resolved profile's old-field values unchanged, so
+    the exit-code chain under test behaves identically.
+    """
+    return Config(
+        tracked_files={"d": TrackedFile(src=Path("t"), dst="~/t")},
+        profiles={"x": Profile()},
+    )
 
 
 def _stub_ext_config_layer(
@@ -30,15 +52,13 @@ def _stub_ext_config_layer(
     """Bypass source/config resolution for ``ext reconcile``.
 
     ``resolved.extensions`` carries the reconcile policy (used to compute
-    ``is_read_only``) and is otherwise opaque (the real reconcile is patched
-    per-test).
+    ``is_read_only``); the real reconcile is patched per-test.
     """
     import setforge.cli.ext as ext_mod
 
-    extensions = SimpleNamespace(reconcile=policy)
-    resolved = SimpleNamespace(extensions=extensions)
+    resolved = ResolvedProfile(extensions=Extensions(reconcile=policy))
     monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
-    monkeypatch.setattr(ext_mod, "load_config", lambda c: SimpleNamespace())
+    monkeypatch.setattr(ext_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(ext_mod, "resolve_profile", lambda cfg, profile: resolved)
 
 
@@ -52,9 +72,9 @@ def _stub_plugin_config_layer(
     """
     import setforge.cli.plugins as plugins_mod
 
-    resolved = SimpleNamespace(plugins_reconcile=policy)
+    resolved = ResolvedProfile(plugins_reconcile=policy)
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
-    monkeypatch.setattr(plugins_mod, "load_config", lambda c: SimpleNamespace())
+    monkeypatch.setattr(plugins_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(plugins_mod, "resolve_profile", lambda cfg, profile: resolved)
 
 
