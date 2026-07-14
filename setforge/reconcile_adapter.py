@@ -15,6 +15,11 @@ to today; a new-only config has ``old`` defaulted to ADDITIVE, so it returns
 
 Import discipline: this module imports FROM config and is imported BY
 read-sites; config.py and the engines never import it (no cycle).
+
+Load-time BATCHED validation of package plugin-refs arrives when the
+validators are repointed (a later task); until then the adapter raises at
+read-time with the single-offender message — the intended expand-window
+interim, not a bug.
 """
 
 from setforge.config import (
@@ -92,9 +97,10 @@ def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
     return _merge_list(
         [c.strip() for c in resolved.cargo_binaries if c.strip()],
         [
-            pkg.crate
+            pkg.crate.strip()
             for ref in resolved.packages
             if isinstance(pkg := cfg.packages[ref], CargoPackage)
+            if pkg.crate.strip()
         ],
     )
 

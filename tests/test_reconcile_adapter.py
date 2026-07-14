@@ -87,6 +87,22 @@ def test_plugin_ids_undeclared_raises_verbatim() -> None:
     )
 
 
+def test_plugin_ids_undeclared_via_package_raises_verbatim() -> None:
+    # Undeclared plugin arrives via the NEW PluginPackage surface, not the old
+    # claude_plugins field — the adapter must raise the same read-time message.
+    cfg = _cfg(
+        profiles={"p": {"packages": ["p"]}},
+        packages={"p": {"type": "plugin", "plugin": "ghost"}},
+    )
+    resolved = resolve_profile(cfg, "p")
+    with pytest.raises(ConfigError) as exc:
+        adapter.plugin_ids(cfg, resolved)
+    assert str(exc.value) == (
+        "profile references undeclared plugin: 'ghost' "
+        "(add it to top-level claude_plugins:)"
+    )
+
+
 # --- Test 4: extensions_input three-shape ----------------------------------
 
 
