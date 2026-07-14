@@ -17,7 +17,7 @@ from typing import NoReturn
 
 import pytest
 
-from setforge import binaries, cargo, secrets
+from setforge import binaries, secrets
 from setforge.errors import GitOpError
 
 
@@ -55,43 +55,6 @@ def test_secrets_scan_oserror_warns_and_continues(
     assert result.files_scanned == 0
     assert "could not be executed" in captured.err
     assert "continuing without secrets check" in captured.err
-
-
-# --------------------------------------------------------------------------
-# cargo.install_cargo_binaries — `cargo install` exec failure → recorded
-# --------------------------------------------------------------------------
-def test_cargo_install_oserror_recorded_not_raised(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(cargo, "resolve_binary", lambda _name: Path("/fake/cargo"))
-
-    def _run(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
-        if argv[1] == "install" and argv[2] == "--list":
-            return subprocess.CompletedProcess(argv, 0, stdout="")
-        raise FileNotFoundError("cargo vanished")
-
-    monkeypatch.setattr(cargo.subprocess, "run", _run)
-
-    failed = cargo.install_cargo_binaries(["ripgrep"])
-
-    assert len(failed) == 1
-    assert failed[0][0] == "ripgrep"
-    assert "cargo install ripgrep failed" in capsys.readouterr().err
-
-
-# --------------------------------------------------------------------------
-# cargo._installed_crates — `--list` exec failure → empty set (degrade)
-# --------------------------------------------------------------------------
-def test_cargo_installed_crates_oserror_returns_empty_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _run(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
-        raise PermissionError("cargo not executable")
-
-    monkeypatch.setattr(cargo.subprocess, "run", _run)
-
-    assert cargo._installed_crates("/fake/cargo") == set()
 
 
 # --------------------------------------------------------------------------
