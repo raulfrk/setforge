@@ -667,6 +667,43 @@ def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
     )
 
 
+def _merge_reconcile(
+    parent: ReconcileSpec, child: ReconcileSpec, child_has_reconcile: bool
+) -> ReconcileSpec:
+    """Merge two ``reconcile:`` blocks.
+
+    ``exclude`` concatenates parent+child (dedup, first-occurrence). Each
+    policy scalar overrides only when the FULL path was explicitly set on
+    the child — i.e. the top-level ``reconcile`` key was present AND the
+    relevant nested block AND its ``policy`` key were present in the
+    child's ``model_fields_set``. Otherwise it inherits the parent value.
+    """
+    merged_exclude = _merge_list(parent.extensions.exclude, child.extensions.exclude)
+
+    child_plugins_set = (
+        child_has_reconcile
+        and "plugins" in child.model_fields_set
+        and "policy" in child.plugins.model_fields_set
+    )
+    plugins_policy = (
+        child.plugins.policy if child_plugins_set else parent.plugins.policy
+    )
+
+    child_extensions_set = (
+        child_has_reconcile
+        and "extensions" in child.model_fields_set
+        and "policy" in child.extensions.model_fields_set
+    )
+    extensions_policy = (
+        child.extensions.policy if child_extensions_set else parent.extensions.policy
+    )
+
+    return ReconcileSpec(
+        plugins=PluginReconcile(policy=plugins_policy),
+        extensions=ExtensionReconcile(exclude=merged_exclude, policy=extensions_policy),
+    )
+
+
 def resolve_chain(config: Config, name: str) -> list[Profile]:
     """Walk ``extends:`` from leaf to root, return profiles root-first."""
     chain: list[Profile] = []
@@ -691,9 +728,11 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     - List fields (``tracked_files``, ``claude_plugins``, ``bootstrap``,
       ``extensions.include``, ``extensions.exclude``) are concatenated
       parent-first and deduplicated, preserving first occurrence.
-    - Scalar fields (``plugins_reconcile``, ``extensions.reconcile``)
+    - Scalar fields (``plugins_reconcile``, ``extensions.reconcile``,
+      ``reconcile.plugins.policy``, ``reconcile.extensions.policy``)
       are overridden by the child only when explicitly set in that
       child's ``model_fields_set``; otherwise they inherit.
+      ``reconcile.extensions.exclude`` concatenates like a list field.
     - A cycle in ``extends:`` raises :class:`ConfigError` with every
       profile name in the cycle.
     """
@@ -718,6 +757,9 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
                 profile.plugins_reconcile
                 if "plugins_reconcile" in fields_set
                 else resolved.plugins_reconcile
+            ),
+            reconcile=_merge_reconcile(
+                resolved.reconcile, profile.reconcile, "reconcile" in fields_set
             ),
         )
     return resolved
