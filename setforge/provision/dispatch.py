@@ -71,7 +71,7 @@ def resolve_provision_items(
         # vscode_extensions reconcile engines (via reconcile_adapter), NOT
         # the add-only generic provisioner driver. Skip them here so they
         # are not double-provisioned.
-        if isinstance(pkg, (PluginPackage, ExtensionPackage)):
+        if isinstance(pkg, PluginPackage | ExtensionPackage):
             continue
         _add(
             ProvisionItem(

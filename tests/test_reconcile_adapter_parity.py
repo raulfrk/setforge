@@ -1,8 +1,9 @@
-"""W2 acceptance-closing PARITY + SNAPSHOT hardening.
+"""Three-way (legacy / package / both) parity + ConfigError snapshot + casefold
++ marketplace-idempotency coverage for the reconcile adapter.
 
-Covers the remaining W2 acceptance gaps once the reconcile adapter unions the
-OLD declaration fields (``claude_plugins`` / ``extensions`` / ``cargo_binaries``
-/ ``plugins_reconcile``) with the NEW package + reconcile-block surface:
+Covers, once the reconcile adapter unions the OLD declaration fields
+(``claude_plugins`` / ``extensions`` / ``cargo_binaries`` /
+``plugins_reconcile``) with the NEW package + reconcile-block surface:
 
 1. THREE-WAY parity — one real config expressed via OLD fields, via NEW
    packages, and via BOTH must ``validate`` identically AND enumerate the same
@@ -10,10 +11,10 @@ OLD declaration fields (``claude_plugins`` / ``extensions`` / ``cargo_binaries``
 2. The two ConfigError message snapshots that must stay DISTINCT from the
    adapter/per-ref one: the lock-path ``_plugin_item`` raise and the aggregated
    load-time ``_validate_plugin_references`` raise.
-3. Casefold regression (spec §10): a NEW ExtensionPackage excluded via the new
+3. Casefold regression: a NEW ExtensionPackage excluded via the new
    reconcile block subtracts case-insensitively through the adapter.
-4. Marketplace idempotency (acceptance #6): reconciling a NEW-package plugin
-   twice adds the marketplace on the first run only.
+4. Marketplace idempotency: reconciling a NEW-package plugin twice adds the
+   marketplace on the first run only.
 """
 
 from __future__ import annotations
@@ -204,7 +205,7 @@ def test_the_three_undeclared_sites_stay_distinct() -> None:
     assert per_ref != aggregated
 
 
-# --- 3. Casefold regression (spec §10) -------------------------------------
+# --- 3. Casefold regression ------------------------------------------------
 
 
 @pytest.fixture
@@ -261,7 +262,7 @@ def test_casefold_exclude_via_new_reconcile_block_subtracts(
     assert report.to_install == []
 
 
-# --- 4. Marketplace idempotency (acceptance #6) via a NEW package ----------
+# --- 4. Marketplace idempotency via a NEW package --------------------------
 
 
 def _new_pkg_plugin_cfg() -> Config:

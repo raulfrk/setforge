@@ -163,6 +163,7 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
         marketplaces_payload.append(
             {"name": mp_name, "kind": src.source.value, "target": target}
         )
+    extensions = reconcile_adapter.extensions_input(profile_ctx.cfg, resolved)
     return {
         "profile": profile_ctx.profile,
         "tracked_files": list(resolved.tracked_files),
@@ -173,12 +174,8 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
         "host_local_sections": [],
         "bootstrap": [str(p) for p in resolved.bootstrap],
         "extensions": {
-            "include": list(
-                reconcile_adapter.extensions_input(profile_ctx.cfg, resolved).include
-            ),
-            "exclude": list(
-                reconcile_adapter.extensions_input(profile_ctx.cfg, resolved).exclude
-            ),
+            "include": list(extensions.include),
+            "exclude": list(extensions.exclude),
         },
         "preserve_user_keys": preserve_keys,
     }

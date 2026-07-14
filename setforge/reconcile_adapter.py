@@ -1,6 +1,6 @@
 """Union the OLD reconcile fields with the NEW package + reconcile-block surface.
 
-During the expand window both a pre-W1 config (old ``claude_plugins`` /
+During the expand window both a legacy-only config (old ``claude_plugins`` /
 ``extensions`` / ``cargo_binaries`` / ``plugins_reconcile`` fields) and a
 new-surface config (``packages`` + a ``reconcile`` block) must resolve
 identically. This module is the single place that unions the two so no
@@ -8,18 +8,20 @@ read-site or engine has to know both shapes.
 
 Policy rule ``new if new != ADDITIVE else old``: post-resolve both scalars
 always hold a value (ADDITIVE when unset), so we cannot tell an explicit
-ADDITIVE from a defaulted one. A pre-W1 config has no reconcile block, so
+ADDITIVE from a defaulted one. A legacy-only config has no reconcile block, so
 ``new`` is the default ADDITIVE and the rule returns ``old`` — byte-identical
-to today; a new-only config has ``old`` defaulted to ADDITIVE, so it returns
-``new``.
+to the old surface; a new-only config has ``old`` defaulted to ADDITIVE, so it
+returns ``new``.
 
-Import discipline: this module imports FROM config and is imported BY
-read-sites; config.py and the engines never import it (no cycle).
+Import discipline: this module imports FROM ``config`` at module level;
+``config.py`` imports it back via function-local (deferred) imports inside two
+functions, which avoids an import-TIME cycle. The reconcile engines never
+import it.
 
-Load-time BATCHED validation of package plugin-refs arrives when the
-validators are repointed (a later task); until then the adapter raises at
-read-time with the single-offender message — the intended expand-window
-interim, not a bug.
+Load-time validation batch-validates package plugin-refs (see
+``config._validate_plugin_references``), collecting every offender into one
+message; the adapter's read-time raise with the single-offender message is a
+backstop.
 """
 
 from setforge.config import (
@@ -51,7 +53,7 @@ def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
     """Resolve the unioned bare names to ``"name@marketplace"`` ids.
 
     Mirrors ``claude_plugins._declared_plugin_ids`` exactly, including its
-    undeclared-plugin ConfigError message, so a pre-W1 config produces a
+    undeclared-plugin ConfigError message, so a legacy-only config produces a
     byte-identical id set.
     """
     declared: set[str] = set()

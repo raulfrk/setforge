@@ -2,8 +2,8 @@
 
 The adapter unions the OLD-field declarations (``claude_plugins``,
 ``extensions``, ``cargo_binaries``, ``plugins_reconcile``) with the NEW
-package + reconcile-block surface, so a pre-W1 config and a new-surface
-config resolve identically during the expand window.
+package + reconcile-block surface, so a legacy-only config (using only the old
+fields) and a new-surface config resolve identically during the expand window.
 """
 
 from typing import Any
@@ -35,7 +35,7 @@ def _cfg(profiles: dict[str, Any], **top: Any) -> Config:
     return Config.model_validate(base)
 
 
-# --- Test 1: plugin_ids GOLDEN + pre-W1 parity -----------------------------
+# --- Test 1: plugin_ids GOLDEN + legacy-only parity ------------------------
 
 
 def test_plugin_ids_old_way_golden_and_declared_parity() -> None:
@@ -45,7 +45,7 @@ def test_plugin_ids_old_way_golden_and_declared_parity() -> None:
     )
     resolved = resolve_profile(cfg, "p")
     assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
-    # byte-identity proof against the live engine helper for a pre-W1 config.
+    # byte-identity proof against the live engine helper for a legacy-only config.
     assert adapter.plugin_ids(cfg, resolved) == _declared_plugin_ids(cfg, resolved)
 
 
