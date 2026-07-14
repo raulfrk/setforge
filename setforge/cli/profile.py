@@ -25,6 +25,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from setforge import reconcile_adapter
 from setforge.cli import _CONFIG_OPTION, _resolve_config_arg, app
 from setforge.cli._help_examples import PROFILE_LIST_EXAMPLES, PROFILE_SHOW_EXAMPLES
 from setforge.cli._helpers import ProfileContext
@@ -165,13 +166,19 @@ def _profile_show_json_data(profile_ctx: ProfileContext) -> dict[str, Any]:
     return {
         "profile": profile_ctx.profile,
         "tracked_files": list(resolved.tracked_files),
-        "claude_plugins": list(resolved.claude_plugins),
+        "claude_plugins": reconcile_adapter.plugin_bare_names(
+            profile_ctx.cfg, resolved
+        ),
         "marketplaces": marketplaces_payload,
         "host_local_sections": [],
         "bootstrap": [str(p) for p in resolved.bootstrap],
         "extensions": {
-            "include": list(resolved.extensions.include),
-            "exclude": list(resolved.extensions.exclude),
+            "include": list(
+                reconcile_adapter.extensions_input(profile_ctx.cfg, resolved).include
+            ),
+            "exclude": list(
+                reconcile_adapter.extensions_input(profile_ctx.cfg, resolved).exclude
+            ),
         },
         "preserve_user_keys": preserve_keys,
     }
@@ -324,7 +331,7 @@ def _render_tracked_files(ctx: ProfileContext, console: Console) -> None:
 
 def _render_plugins(ctx: ProfileContext, console: Console) -> None:
     """Render the resolved ``claude_plugins`` list with provenance."""
-    items = ctx.resolved.claude_plugins
+    items = reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
     console.print(f"claude_plugins ({len(items)} effective):")
     if not items:
         console.print("  (none)")
@@ -411,8 +418,9 @@ def _render_bootstrap(ctx: ProfileContext, console: Console) -> None:
 
 def _render_extensions(ctx: ProfileContext, console: Console) -> None:
     """Render the resolved ``extensions.include`` list with provenance."""
-    include = ctx.resolved.extensions.include
-    exclude = ctx.resolved.extensions.exclude
+    effective = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
+    include = effective.include
+    exclude = effective.exclude
     console.print(f"extensions.include ({len(include)} effective):")
     if include:
         chain_by_name = _extensions_chain_by_name(ctx.cfg, ctx.profile)

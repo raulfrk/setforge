@@ -1169,15 +1169,20 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
     """
     typer.echo("=== resolving profile + host overlay ===")
     typer.echo(f"profile {ctx.profile}")
+    ext = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved)
     typer.echo(f"  tracked_files:  {len(ctx.resolved.tracked_files)}")
     typer.echo(
-        "  extensions:     "
-        f"{len(ctx.resolved.extensions.include)} declared "
-        f"({len(ctx.resolved.extensions.exclude)} excluded)"
+        f"  extensions:     {len(ext.include)} declared ({len(ext.exclude)} excluded)"
     )
-    typer.echo(f"  claude_plugins: {len(ctx.resolved.claude_plugins)}")
+    typer.echo(
+        "  claude_plugins: "
+        f"{len(reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved))}"
+    )
     typer.echo(f"  mcp_servers:    {len(ctx.resolved.mcp_servers)}")
-    typer.echo(f"  cargo_binaries: {len(ctx.resolved.cargo_binaries)}")
+    typer.echo(
+        "  cargo_binaries: "
+        f"{len(reconcile_adapter.cargo_crates(ctx.cfg, ctx.resolved))}"
+    )
     typer.echo(f"  packages:       {len(ctx.resolved.packages)}")
     typer.echo(f"  bundles:        {len(ctx.resolved.bundles)}")
     typer.echo(f"  bootstrap:      {len(ctx.resolved.bootstrap)}")
@@ -1300,7 +1305,10 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     layer at all.
     """
     typer.echo("=== would-be plugin reconcile ===")
-    if not ctx.resolved.claude_plugins and not ctx.cfg.marketplaces:
+    if (
+        not reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
+        and not ctx.cfg.marketplaces
+    ):
         typer.echo("  nothing declared")
         return
     try:

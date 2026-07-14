@@ -37,8 +37,9 @@ def ext_list(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
-    declared_include = set(resolved.extensions.include)
-    declared_exclude = set(resolved.extensions.exclude)
+    effective = reconcile_adapter.extensions_input(cfg, resolved)
+    declared_include = set(effective.include)
+    declared_exclude = set(effective.exclude)
 
     try:
         installed = vscode_extensions.list_installed()

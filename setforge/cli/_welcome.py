@@ -35,7 +35,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from setforge import transitions
+from setforge import reconcile_adapter, transitions
 from setforge.cli._helpers import ProfileContext, _iter_all_tracked_files
 from setforge.errors import InvalidTransitionRecord, WelcomeRequiresInteractive
 
@@ -182,8 +182,10 @@ def build_welcome_inventory(ctx: ProfileContext) -> WelcomeInventory:
     return WelcomeInventory(
         tracked_file_count=tracked_file_count,
         dst_dirs_to_create=tuple(sorted(dst_dirs)),
-        plugin_count=len(ctx.resolved.claude_plugins),
-        extension_count=len(ctx.resolved.extensions.include),
+        plugin_count=len(reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)),
+        extension_count=len(
+            reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved).include
+        ),
         bootstrap_count=len(ctx.resolved.bootstrap),
         overlay_delta=_compute_overlay_delta(ctx),
         profile=ctx.profile,

@@ -57,7 +57,7 @@ def plugin_list(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
-    declared_ids = set(resolved.claude_plugins)
+    declared_ids = set(reconcile_adapter.plugin_bare_names(cfg, resolved))
 
     try:
         installed = claude_plugins_mod.list_installed()
