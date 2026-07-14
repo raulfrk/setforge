@@ -1684,13 +1684,15 @@ def _resolve_provenance_lists(
     surfaces those errors under the validate report-all-then-refuse
     contract.
     """
+    from setforge import reconcile_adapter
+
     resolved_plugins = resolve_plugin_overlay(
-        profile_plugins=list(resolved.claude_plugins),
+        profile_plugins=reconcile_adapter.plugin_bare_names(config, resolved),
         profile_name=profile_name,
         overlay=plugin_overlay,
     )
     resolved_extensions = resolve_extension_overlay(
-        profile_extensions=list(resolved.extensions.include),
+        profile_extensions=reconcile_adapter.extensions_input(config, resolved).include,
         profile_name=profile_name,
         overlay=extension_overlay,
     )

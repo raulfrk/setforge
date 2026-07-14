@@ -25,6 +25,7 @@ from setforge.config import (
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
+    PluginPackage,
     Profile,
     ResolvedProfile,
     apply_local_overlay,
@@ -82,6 +83,37 @@ def test_profile_only_plugin_with_existing_marketplace_passes(tmp_path: Path) ->
     )
     rp = _make_resolved(["sp"])
     apply_local_overlay(cfg, rp, "p", local_config_path=tmp_path / "absent.yaml")
+
+
+def test_overlay_remove_of_package_declared_plugin_resolves(tmp_path: Path) -> None:
+    """A local.yaml plugins.remove of a plugin declared ONLY via a new-surface
+    PluginPackage resolves without LocalOverlayError. This proves the overlay's
+    unknown-remove baseline is the OLD-union-NEW selection (from the adapter),
+    not just the raw old ``claude_plugins`` field."""
+    cfg = Config(
+        tracked_files={},
+        marketplaces={
+            "official": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="a/b"
+            )
+        },
+        claude_plugins={"pkg-plugin": ClaudePluginRef(marketplace="official")},
+        packages={"plug": PluginPackage(plugin="pkg-plugin")},
+        profiles={"p": Profile(packages=["plug"])},
+    )
+    # Old field empty; the plugin is present ONLY via the package ref.
+    rp = ResolvedProfile(claude_plugins=[], packages=["plug"])
+    local = _write_local(
+        tmp_path,
+        """\
+        plugins:
+          remove:
+            - pkg-plugin
+        """,
+    )
+    resolution = apply_local_overlay(cfg, rp, "p", local_config_path=local)
+    removed = [p for p in resolution.plugins if p.origin is OverlayOrigin.LOCAL_REMOVE]
+    assert any(p.value == "pkg-plugin" for p in removed)
 
 
 # ---------------------------------------------------------------------------
