@@ -667,22 +667,20 @@ def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
     )
 
 
-def _merge_reconcile(
-    parent: ReconcileSpec, child: ReconcileSpec, child_has_reconcile: bool
-) -> ReconcileSpec:
+def _merge_reconcile(parent: ReconcileSpec, child: ReconcileSpec) -> ReconcileSpec:
     """Merge two ``reconcile:`` blocks.
 
     ``exclude`` concatenates parent+child (dedup, first-occurrence). Each
-    policy scalar overrides only when the FULL path was explicitly set on
-    the child — i.e. the top-level ``reconcile`` key was present AND the
-    relevant nested block AND its ``policy`` key were present in the
-    child's ``model_fields_set``. Otherwise it inherits the parent value.
+    policy scalar overrides only when its nested block AND its ``policy``
+    key were explicitly present in the child's ``model_fields_set`` — a
+    default-constructed ``ReconcileSpec()`` leaves the nested sets empty,
+    so those two checks alone capture "explicitly set". Otherwise it
+    inherits the parent value.
     """
     merged_exclude = _merge_list(parent.extensions.exclude, child.extensions.exclude)
 
     child_plugins_set = (
-        child_has_reconcile
-        and "plugins" in child.model_fields_set
+        "plugins" in child.model_fields_set
         and "policy" in child.plugins.model_fields_set
     )
     plugins_policy = (
@@ -690,8 +688,7 @@ def _merge_reconcile(
     )
 
     child_extensions_set = (
-        child_has_reconcile
-        and "extensions" in child.model_fields_set
+        "extensions" in child.model_fields_set
         and "policy" in child.extensions.model_fields_set
     )
     extensions_policy = (
@@ -758,9 +755,7 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
                 if "plugins_reconcile" in fields_set
                 else resolved.plugins_reconcile
             ),
-            reconcile=_merge_reconcile(
-                resolved.reconcile, profile.reconcile, "reconcile" in fields_set
-            ),
+            reconcile=_merge_reconcile(resolved.reconcile, profile.reconcile),
         )
     return resolved
 

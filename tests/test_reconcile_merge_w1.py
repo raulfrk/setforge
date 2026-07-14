@@ -105,6 +105,50 @@ def test_extension_exclude_dedups_repeat_first_occurrence() -> None:
     assert resolved.reconcile.extensions.exclude == ["a", "b", "c"]
 
 
+# --- 3-level chain: grandparent policy survives two unset descendants ---
+
+
+def test_reconcile_policy_from_grandparent_survives_three_level_chain() -> None:
+    """Both policy axes set only at the grandparent must reach the leaf
+    unchanged through two profiles that omit ``reconcile`` entirely. The
+    merge rebuilds ``resolved.reconcile`` every loop iteration, so this
+    guards against an accumulation-reset regression."""
+    cfg = Config(
+        tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
+        profiles={
+            "grand": Profile.model_validate(
+                {
+                    "reconcile": {
+                        "plugins": {"policy": "prune"},
+                        "extensions": {"policy": "report"},
+                    }
+                }
+            ),
+            "parent": Profile.model_validate({"extends": "grand"}),
+            "child": Profile.model_validate({"extends": "parent"}),
+        },
+    )
+    resolved = resolve_profile(cfg, "child")
+    assert resolved.reconcile.plugins.policy is ReconcilePolicy.PRUNE
+    assert resolved.reconcile.extensions.policy is ReconcilePolicy.REPORT
+
+
+# --- sibling-set boundary: exclude set but policy left unset -------------
+
+
+def test_extension_policy_inherits_when_child_sets_only_exclude() -> None:
+    """A child that provides ``extensions.exclude`` but NOT
+    ``extensions.policy`` must still inherit the parent's policy — the
+    sibling-field-set-but-this-field-unset boundary the docstring flags."""
+    cfg = _cfg(
+        {"reconcile": {"extensions": {"policy": "prune"}}},
+        {"reconcile": {"extensions": {"exclude": ["x"]}}},
+    )
+    resolved = resolve_profile(cfg, "child")
+    assert resolved.reconcile.extensions.policy is ReconcilePolicy.PRUNE
+    assert resolved.reconcile.extensions.exclude == ["x"]
+
+
 # --- sanity: model_fields_set realism assumption underlying the above ---
 
 
