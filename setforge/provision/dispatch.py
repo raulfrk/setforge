@@ -67,10 +67,8 @@ def resolve_provision_items(
 
     for ref in resolved.packages:
         pkg = cfg.packages[ref]
-        # Plugin / extension packages route to the legacy claude_plugins /
-        # vscode_extensions reconcile engines (via reconcile_adapter), NOT
-        # the add-only generic provisioner driver. Skip them here so they
-        # are not double-provisioned.
+        # Plugin/extension packages route via reconcile_adapter, not this
+        # driver — skip them here so they are not double-provisioned.
         if isinstance(pkg, PluginPackage | ExtensionPackage):
             continue
         _add(

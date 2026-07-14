@@ -1,28 +1,9 @@
-"""Union the OLD reconcile fields with the NEW package + reconcile-block surface.
+"""Unions the OLD reconcile fields with the NEW package + reconcile-block surface.
 
-During the expand window both a legacy-only config (old ``claude_plugins`` /
-``extensions`` / ``cargo_binaries`` / ``plugins_reconcile`` fields) and a
-new-surface config (``packages`` + a ``reconcile`` block) must resolve
-identically. This module is the single place that unions the two so no
-read-site or engine has to know both shapes.
-
-Policy rule ``new if new != ADDITIVE else old``: post-resolve both scalars
-always hold a value (ADDITIVE when unset), so we cannot tell an explicit
-ADDITIVE from a defaulted one. A legacy-only config has no reconcile block, so
-``new`` is the default ADDITIVE and the rule returns ``old`` — byte-identical
-to the old surface; a new-only config has ``old`` defaulted to ADDITIVE, so it
-returns ``new``.
-
-Import discipline: this module imports FROM ``config`` at module level;
-``config.py`` imports it back via function-local (deferred) imports inside two
-functions, which avoids an import-TIME cycle. The reconcile engines never
-import it.
-
-Load-time validation batch-validates package plugin-refs (see
-``config._validate_plugin_references``), collecting every offender into one
-message; the adapter's read-time raise with the single-offender message is a
-backstop.
-"""
+Policy: ``new if new != ADDITIVE else old`` (both always hold a value
+post-resolve, so this is the only way to detect an unset ``new``). Imports
+FROM ``config`` at module level; ``config.py`` imports back only via
+function-local imports (dodges an import-time cycle)."""
 
 from setforge.config import (
     CargoPackage,
@@ -38,7 +19,6 @@ from setforge.errors import ConfigError
 
 
 def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
-    """Ordered union of old ``claude_plugins`` + plugin-package bare names."""
     return _merge_list(
         resolved.claude_plugins,
         [
@@ -50,12 +30,7 @@ def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
 
 
 def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
-    """Resolve the unioned bare names to ``"name@marketplace"`` ids.
-
-    Mirrors ``claude_plugins._declared_plugin_ids`` exactly, including its
-    undeclared-plugin ConfigError message, so a legacy-only config produces a
-    byte-identical id set.
-    """
+    # Mirrors claude_plugins._declared_plugin_ids exactly, incl. error text.
     declared: set[str] = set()
     for bare_name in plugin_bare_names(cfg, resolved):
         ref = cfg.claude_plugins.get(bare_name)
@@ -69,14 +44,12 @@ def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
 
 
 def plugin_policy(resolved: ResolvedProfile) -> ReconcilePolicy:
-    """Union old ``plugins_reconcile`` with the new ``reconcile.plugins.policy``."""
     new = resolved.reconcile.plugins.policy
     old = resolved.plugins_reconcile
     return new if new != ReconcilePolicy.ADDITIVE else old
 
 
 def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
-    """Union old ``extensions`` with extension packages + the reconcile block."""
     include = _merge_list(
         resolved.extensions.include,
         [
@@ -95,7 +68,6 @@ def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
 
 
 def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
-    """Union old ``cargo_binaries`` with cargo-package crate names."""
     return _merge_list(
         [c.strip() for c in resolved.cargo_binaries if c.strip()],
         [
@@ -108,12 +80,7 @@ def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
 
 
 def synth_plugin_profile(cfg: Config, resolved: ResolvedProfile) -> ResolvedProfile:
-    """Overlay the unioned plugin names + policy onto a copy of ``resolved``.
-
-    Lets the unchanged ``claude_plugins`` reconcile engine (which reads
-    ``profile.claude_plugins`` + ``profile.plugins_reconcile``) see the union
-    with no engine edit.
-    """
+    # Lets the unchanged claude_plugins engine see the union with no engine edit.
     return resolved.model_copy(
         update={
             "claude_plugins": plugin_bare_names(cfg, resolved),

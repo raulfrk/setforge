@@ -86,10 +86,7 @@ def test_profile_only_plugin_with_existing_marketplace_passes(tmp_path: Path) ->
 
 
 def test_overlay_remove_of_package_declared_plugin_resolves(tmp_path: Path) -> None:
-    """A local.yaml plugins.remove of a plugin declared ONLY via a new-surface
-    PluginPackage resolves without LocalOverlayError. This proves the overlay's
-    unknown-remove baseline is the OLD-union-NEW selection (from the adapter),
-    not just the raw old ``claude_plugins`` field."""
+    # The overlay's unknown-remove baseline is OLD-union-NEW, not just OLD.
     cfg = Config(
         tracked_files={},
         marketplaces={
@@ -101,7 +98,6 @@ def test_overlay_remove_of_package_declared_plugin_resolves(tmp_path: Path) -> N
         packages={"plug": PluginPackage(plugin="pkg-plugin")},
         profiles={"p": Profile(packages=["plug"])},
     )
-    # Old field empty; the plugin is present ONLY via the package ref.
     rp = ResolvedProfile(claude_plugins=[], packages=["plug"])
     local = _write_local(
         tmp_path,

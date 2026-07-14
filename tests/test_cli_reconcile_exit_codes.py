@@ -32,14 +32,6 @@ from setforge.config import (
 
 
 def _empty_config() -> Config:
-    """A minimal real ``Config`` (no packages / reconcile block).
-
-    The reconcile adapter now runs at these call sites, reading
-    ``cfg.packages`` and the resolved ``reconcile`` block; an opaque
-    ``SimpleNamespace`` no longer suffices. With no packages declared the
-    adapter returns the resolved profile's old-field values unchanged, so
-    the exit-code chain under test behaves identically.
-    """
     return Config(
         tracked_files={"d": TrackedFile(src=Path("t"), dst="~/t")},
         profiles={"x": Profile()},

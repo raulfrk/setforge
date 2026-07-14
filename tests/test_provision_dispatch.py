@@ -149,10 +149,6 @@ def test_blank_cargo_binary_skipped() -> None:
 
 
 def test_plugin_and_extension_packages_skipped_from_generic_dispatch() -> None:
-    # Plugin / extension packages route to the legacy claude_plugins /
-    # vscode_extensions reconcile engines (via reconcile_adapter), so the
-    # generic driver must skip them — an unfiltered new-surface plugin/ext
-    # package would otherwise hit ``_package_identity``'s ``case _`` raise.
     cfg = _cfg(
         packages={
             "rg": CargoPackage(crate="ripgrep"),

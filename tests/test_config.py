@@ -142,9 +142,6 @@ profiles:
 
 
 def test_load_config_rejects_undeclared_plugin_via_package(tmp_path: Path) -> None:
-    """A plugin declared through a new-surface PluginPackage but missing
-    from the top-level claude_plugins registry fails at LOAD with the same
-    aggregated 'undeclared plugin(s)' message — not only at read time."""
     config_path = tmp_path / "setforge.yaml"
     config_path.write_text(
         """\
