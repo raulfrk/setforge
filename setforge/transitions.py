@@ -950,17 +950,8 @@ def restore_state_snapshots(entries: Iterable[StateSnapshotEntry]) -> None:
 
 
 def snapshot_state_root() -> dict[Path, bytes]:
-    """Capture every file currently under :func:`state_root` as path → bytes.
-
-    A migration-agnostic pre-image of the WHOLE state tree — the reconcile
-    store legs AND the transition log. A ``writes_own_transition`` cutover
-    mutates specific store legs (keyed off ``state_root``) and commits a
-    durable transition, but which legs it touches is known only to the
-    migration; the driver cannot recompute them. Snapshotting the entire
-    tree captures both regardless. :func:`restore_state_root` restores this
-    image and sweeps files created after (see its delete-arm contract).
-    Missing root → empty map (nothing to restore to).
-    """
+    """Capture every file under :func:`state_root`: whole-tree, since only
+    the migration (not the driver) knows which store legs a cutover touches."""
     root = state_root()
     if not root.exists():
         return {}
@@ -968,32 +959,8 @@ def snapshot_state_root() -> dict[Path, bytes]:
 
 
 def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
-    """Restore the state tree to ``snapshot`` (from :func:`snapshot_state_root`).
-
-    Rewrites every captured file byte-exact, then removes files now under
-    :func:`state_root` that were NOT in the snapshot — a cutover's
-    freshly-seeded store leg and the phantom durable transition it committed,
-    so a later ``revert`` never reverses that transition against an
-    already-rolled-back tree.
-
-    Delete-arm blast radius (state_root is host-wide, shared across every
-    profile + command):
-
-    * Store legs (everything OUTSIDE ``transitions/``) are swept whole-tree —
-      which leg a cutover mutated is known only to the migration and cannot be
-      enumerated here. A concurrent install's freshly-seeded store leg could be
-      caught in this sweep; that residual window is accepted as documented
-      best-effort for an interactive single-user undo.
-    * Transition records (under ``transitions/``) are swept ONLY for the
-      migrate profile (``MIGRATE_TRANSITION_PROFILE``, by ``meta.json``
-      identity). Every ``writes_own_transition`` cutover commits under that
-      profile, so scoping still removes the phantom while leaving a concurrent
-      ``install``/``sync``'s own-profile transition record untouched.
-
-    Best-effort (direct writes / unlinks): migrate holds no ``profile_lock``,
-    and a mid-``apply`` ``KeyboardInterrupt`` releases the cutover's own
-    ``ExitStack`` lock before rollback runs, so this restore is unlocked.
-    """
+    """Restore ``snapshot``, then sweep post-snapshot files: store legs
+    whole-tree (best-effort), transition records scoped to this migrate."""
     for path, payload in snapshot.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         atomicio.atomic_write_bytes(path, payload)
@@ -1005,26 +972,15 @@ def restore_state_root(snapshot: Mapping[Path, bytes]) -> None:
         if not p.is_file() or p in snapshot:
             continue
         if _is_within(p, tx_root) and not _is_migrate_transition_file(p, tx_root):
-            # A concurrent install/sync's own-profile transition record — never
-            # this migrate's phantom. Leave it; the whole-tree sweep is scoped
-            # to migrate-profile transitions only.
             continue
         p.unlink(missing_ok=True)
 
 
 def _is_within(path: Path, parent: Path) -> bool:
-    """Whether ``path`` is ``parent`` itself or nested under it (lexical)."""
     return path == parent or parent in path.parents
 
 
 def _is_migrate_transition_file(path: Path, tx_root: Path) -> bool:
-    """Whether ``path`` lives in a MIGRATE-profile transition directory.
-
-    Identity is the transition dir's ``meta.json`` ``profile`` field (not the
-    dirname suffix, which could conflate a real ``migrate``-named profile). A
-    missing/unreadable meta is treated as NOT-migrate — the safe default is to
-    LEAVE the file (never delete another profile's record on ambiguity).
-    """
     try:
         tx_dir = path.relative_to(tx_root).parts[0]
     except (ValueError, IndexError):
