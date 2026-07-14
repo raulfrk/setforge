@@ -1487,6 +1487,14 @@ def _validate_plugin_references(config: Config) -> None:
                 continue
             if bare_name not in registry:
                 offenders.append((profile_name, bare_name))
+        # New surface: a PluginPackage referenced by the profile names a
+        # plugin that must also live in the top-level registry. Catch it at
+        # LOAD (batched) so the adapter's read-time single-offender raise is
+        # only a backstop.
+        for ref in profile.packages:
+            pkg = config.packages.get(ref)
+            if isinstance(pkg, PluginPackage) and pkg.plugin not in registry:
+                offenders.append((profile_name, pkg.plugin))
     if offenders:
         details = ", ".join(f"{profile}.{name}" for profile, name in offenders)
         raise ConfigError(

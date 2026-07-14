@@ -141,6 +141,40 @@ profiles:
     assert "ghost-b" in msg
 
 
+def test_load_config_rejects_undeclared_plugin_via_package(tmp_path: Path) -> None:
+    """A plugin declared through a new-surface PluginPackage but missing
+    from the top-level claude_plugins registry fails at LOAD with the same
+    aggregated 'undeclared plugin(s)' message — not only at read time."""
+    config_path = tmp_path / "setforge.yaml"
+    config_path.write_text(
+        """\
+version: 1
+tracked_files:
+  d:
+    src: x
+    dst: y
+marketplaces:
+  official:
+    source: github
+    repo: a/b
+packages:
+  ghostpkg:
+    type: plugin
+    plugin: missing-via-package
+profiles:
+  base:
+    tracked_files: [d]
+    packages: [ghostpkg]
+"""
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(config_path)
+    msg = str(exc_info.value)
+    assert "undeclared plugin(s)" in msg
+    assert "missing-via-package" in msg
+    assert "base" in msg
+
+
 def test_tracked_file_defaults() -> None:
     df = TrackedFile(src=Path("a"), dst="b")
     assert df.template is False
