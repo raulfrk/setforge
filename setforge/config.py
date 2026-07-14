@@ -518,6 +518,26 @@ class Extensions(BaseModel):
     reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
 
 
+class PluginReconcile(BaseModel):
+    model_config = _STRICT
+
+    policy: ReconcilePolicy = ReconcilePolicy.ADDITIVE
+
+
+class ExtensionReconcile(BaseModel):
+    model_config = _STRICT
+
+    exclude: list[str] = []
+    policy: ReconcilePolicy = ReconcilePolicy.ADDITIVE
+
+
+class ReconcileSpec(BaseModel):
+    model_config = _STRICT
+
+    plugins: PluginReconcile = PluginReconcile()
+    extensions: ExtensionReconcile = ExtensionReconcile()
+
+
 class Profile(BaseModel):
     model_config = _STRICT
 
@@ -531,6 +551,7 @@ class Profile(BaseModel):
     cargo_binaries: list[str] = []
     packages: list[str] = []
     bundles: list[str] = []
+    reconcile: ReconcileSpec = ReconcileSpec()
     section_slots: dict[str, str] = {}
     """Map a host-local user-section NAME → a template name in the
     top-level :attr:`Config.section_templates` registry.
@@ -562,6 +583,7 @@ class ResolvedProfile(BaseModel):
     cargo_binaries: list[str] = []
     packages: list[str] = []
     bundles: list[str] = []
+    reconcile: ReconcileSpec = ReconcileSpec()
     section_slots: dict[str, str] = {}
 
 
