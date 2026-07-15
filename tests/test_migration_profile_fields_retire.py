@@ -77,7 +77,6 @@ def test_forward_translates_four_fields(tmp_path: Path) -> None:
     }
 
     profile = data["profiles"]["default"]
-    # cargo -> plugin -> extension order.
     assert list(profile["packages"]) == ["rg", "my-plugin", "ms-python.python"]
     assert profile["reconcile"]["plugins"]["policy"] == "prune"
     assert dict(profile["reconcile"]["extensions"]) == {
@@ -95,7 +94,6 @@ def test_forward_translates_four_fields(tmp_path: Path) -> None:
         assert legacy not in profile
 
     assert data["schema_version"] == "6.0"
-    # The top-level registries are left untouched.
     assert "registry-entry" in data["claude_plugins"]
     assert "some-market" in data["marketplaces"]
 
@@ -110,9 +108,7 @@ def test_round_trip_restores_legacy_config(tmp_path: Path) -> None:
 
     restored = _plain(_load(roots))
     original_plain = _plain(original)
-    # The reverse deliberately LOWERS a stale >5.0 floor (an operator
-    # attestation, not user data) so the down-migrated 5.0 config loads on the
-    # 5.x engine the downgrade serves — everything ELSE round-trips exactly.
+    # The reverse LOWERS a stale >5.0 floor (operator attestation, not user data).
     assert restored["minimum_version"] == "1.0"
     restored.pop("minimum_version")
     original_plain.pop("minimum_version")
@@ -125,10 +121,7 @@ def test_round_trip_restores_legacy_config(tmp_path: Path) -> None:
     assert rev.reverse.to_version == "6.0"
 
 
-# A 6.0 config where the profile references a MINTED cargo entry (rg) plus a
-# NATIVE python package (mytool) authored directly against the 5.0-and-later
-# top-level `packages:` model. The reverse must reconstruct rg but leave mytool
-# and its top-level entry alone.
+# rg is a MINTED cargo ref; mytool is a NATIVE 5.0+ top-level package ref.
 _CFG_NATIVE_REF = """\
 schema_version: "6.0"
 minimum_version: "6.0"
@@ -153,11 +146,9 @@ def test_reverse_preserves_native_package_refs(tmp_path: Path) -> None:
 
     data = _load(roots)
     profile = data["profiles"]["default"]
-    # The minted cargo ref is reconstructed into the legacy field + dropped.
     assert list(profile["cargo_binaries"]) == ["rg"]
     assert "rg" not in data["packages"]
-    # The native python ref SURVIVES: it stays in the profile ref-list AND its
-    # top-level entry is intact (never minted, so never dropped).
+    # mytool was never minted, so the reverse never drops it.
     assert list(profile["packages"]) == ["mytool"]
     assert dict(data["packages"]["mytool"]) == {
         "type": "python",
@@ -205,7 +196,6 @@ def test_collision_same_body_dedups(tmp_path: Path) -> None:
     roots = _write_cfg(tmp_path, _CFG_COLLISION_SAME)
     ProfileFieldsRetireMigration().apply(roots=roots)
     data = _load(roots)
-    # Two profiles mint the SAME key + body -> one shared top-level entry.
     assert dict(data["packages"]["rg"]) == {"type": "cargo", "crate": "rg"}
     assert list(data["profiles"]["a"]["packages"]) == ["rg"]
     assert list(data["profiles"]["b"]["packages"]) == ["rg"]
@@ -240,8 +230,6 @@ def test_non_mapping_packages_refuses_without_clobbering(tmp_path: Path) -> None
     with pytest.raises(ConfigError) as exc:
         ProfileFieldsRetireMigration().apply(roots=roots)
     assert "packages" in str(exc.value)
-    # A refused apply mutates nothing — the malformed block is preserved,
-    # never clobbered with a fresh empty map.
     assert roots.cfg_path.read_bytes() == before
 
 
@@ -269,7 +257,6 @@ def test_floor_gate_refuses_below_6(tmp_path: Path, body: str) -> None:
     before = roots.cfg_path.read_bytes()
     with pytest.raises(ConfigError):
         ProfileFieldsRetireMigration().apply(roots=roots)
-    # A refused apply mutates nothing.
     assert roots.cfg_path.read_bytes() == before
 
 
@@ -300,10 +287,8 @@ def test_apply_writes_terminal_transition(tmp_path: Path, state_dir: Path) -> No
     meta = transitions.load_meta(latest)
     assert meta.command is transitions.TransitionCommand.MIGRATE
 
-    # No state snapshots — the threaded text patch is the sole reverse authority.
     assert transitions.load_state_snapshots(latest) is None
 
-    # The recorded patch reverses the transformed 6.0 image back to the origin.
     patch = (latest / "changes.patch").read_text(encoding="utf-8")
     assert patch == transitions.compute_patch(
         {roots.cfg_path: origin}, {roots.cfg_path: transformed}

@@ -392,7 +392,6 @@ profiles:
     text = p.read_text()
     # exclude entry should now sit under child
     assert "inherited.one" in text
-    # And it's still declared by parent — child override doesn't touch parent.
     assert "inherited.one" in _profile_ext_includes(p, "parent")
     assert "inherited.one" in _profile_ext_excludes(p, "child")
 
@@ -453,7 +452,6 @@ def test_add_to_include_idempotent(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
     added = add_to_include(cfg, "base", "keep.me")
     assert added is False
-    # The profile still references keep.me exactly once (no duplicate ref).
     from setforge.config import load_config
 
     prof = load_config(cfg).profiles["base"]
@@ -480,8 +478,6 @@ def test_remove_from_include_drops_entry(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
     changed = remove_from_include(cfg, "base", "keep.me")
     assert changed is True
-    # The profile no longer declares the extension (the top-level package entry
-    # may linger — it can be shared — but the profile ref is gone).
     assert "keep.me" not in _profile_ext_includes(cfg, "base")
 
 
@@ -491,7 +487,6 @@ def test_remove_from_include_with_exclude_flag_appends_to_exclude(
     cfg = _write_fixture(tmp_path)
     changed = remove_from_include(cfg, "base", "keep.me", add_to_exclude_list=True)
     assert changed is True
-    # No longer declared by the profile, now sits in the exclude list once.
     assert "keep.me" not in _profile_ext_includes(cfg, "base")
     assert "keep.me" in _profile_ext_excludes(cfg, "base")
 
@@ -512,7 +507,7 @@ def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
 
     cfg = _write_fixture(tmp_path)
     add_to_include(cfg, "base", "post.edit")
-    load_config(cfg)  # must still validate
+    load_config(cfg)
     assert "post.edit" in _profile_ext_includes(cfg, "base")
 
 
@@ -533,7 +528,6 @@ def test_capture_extensions_writes_installed_minus_exclude(
     assert "b.y" in text
     assert "extra.one" in text
     assert "drop.me" in text  # appears under exclude (already there)
-    # "drop.me" is excluded so it shouldn't end up in the new include list.
     assert "drop.me" not in _profile_ext_includes(cfg, "base")
     assert "drop.me" in _profile_ext_excludes(cfg, "base")
 

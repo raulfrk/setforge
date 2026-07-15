@@ -47,8 +47,6 @@ def test_marketplace_source_kinds() -> None:
 
 
 def test_reconcile_policy_parsed_as_enum() -> None:
-    # Reconcile-policy strings on the reconcile block parse into the
-    # ReconcilePolicy enum (additive/prune) rather than staying raw str.
     cfg = _cfg(
         {
             "base": Profile(
@@ -278,9 +276,6 @@ def test_resolve_single_profile() -> None:
 
 
 def test_resolve_two_level_chain_lists_and_scalars() -> None:
-    # Plugins/extensions now flow through package refs; reconcile policy
-    # through the reconcile block. Parent sets prune for both plugins and
-    # extensions; child leaves reconcile unset so it inherits.
     cfg = Config(
         tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
         claude_plugins={
@@ -376,8 +371,6 @@ def test_resolve_scalar_child_explicit_override() -> None:
 
 
 def test_resolve_extension_reconcile_inherits() -> None:
-    # Parent sets extensions reconcile=prune; child adds an extension
-    # package but leaves reconcile unset, so the parent policy inherits.
     cfg = Config(
         tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
         packages={"x-pkg": ExtensionPackage(extension="x")},

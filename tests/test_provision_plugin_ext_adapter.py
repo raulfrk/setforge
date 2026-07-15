@@ -339,8 +339,6 @@ def test_plugin_package_only_reaches_engine_via_adapter() -> None:
         }
     )
     resolved = resolve_profile(cfg, "p")
-    # The plugin reaches the engine only via the packages -> adapter path:
-    # it rides the resolved ``packages`` ref, and the adapter surfaces it.
     assert resolved.packages == ["sp"]
     assert reconcile_adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
     with (
@@ -368,9 +366,6 @@ def test_extension_package_only_reaches_engine_via_adapter() -> None:
         }
     )
     resolved = resolve_profile(cfg, "p")
-    # The extension reaches the engine only via the packages -> adapter path:
-    # it rides the resolved ``packages`` ref, and the adapter's ``include``
-    # surfaces it.
     assert resolved.packages == ["cop"]
     ext = reconcile_adapter.extensions_input(cfg, resolved)
     assert ext.include == ["pub.ext"]

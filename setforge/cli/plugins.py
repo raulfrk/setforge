@@ -203,12 +203,8 @@ def _register_plugin_in_yaml(
     if plugin_declared:
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
-    # Bind the profile to the BARE plugin name via a packages ref: the
-    # top-level registry key is the bare name (see yaml_add_plugin above), and
-    # every reader of the profile's plugin set (_validate_plugin_references,
-    # plugin_ids, sync_marketplace_cache) resolves the bare name through the
-    # minted plugin package. Writing the `@`-form here would brick the config
-    # on the next load_config.
+    # Bind via the BARE plugin name (see yaml_add_plugin above) — every reader
+    # resolves it through the minted package; the `@`-form would brick load_config.
     profile_added = claude_yaml_editor_mod.yaml_add_plugin_to_profile(
         config, profile, plugin_name
     )

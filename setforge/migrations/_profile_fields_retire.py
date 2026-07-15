@@ -71,13 +71,10 @@ __all__ = ["ProfileFieldsRetireMigration"]
 _FROM_VERSION = "5.0"
 _TO_VERSION = "6.0"
 
-# The three package kinds each legacy field folds into, in the order a
-# profile's `packages` ref-list is built (cargo -> plugin -> extension).
 _CARGO_KIND = "cargo"
 _PLUGIN_KIND = "plugin"
 _EXTENSION_KIND = "extension"
 
-# The four legacy per-profile fields this cutover folds away and drops.
 _LEGACY_FIELDS = (
     "cargo_binaries",
     "claude_plugins",
@@ -299,11 +296,10 @@ def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
         for profile in profiles.values():
             if isinstance(profile, CommentedMap):
                 _translate_profile(profile, registry, roots.cfg_path)
-    # A registry created but never minted into is dropped so a legacy-free
-    # config does not grow an empty `packages: {}` key.
+    # Drop an unminted registry so a legacy-free config doesn't grow `packages: {}`.
     if not registry and "packages" in data:
         del data["packages"]
-    # Overwrite-in-place so the key keeps its document position (idempotent).
+    # Overwrite-in-place to keep the key's document position (idempotent).
     data["schema_version"] = _TO_VERSION
 
 
@@ -412,7 +408,6 @@ class ProfileFieldsRetireMigration:
         yaml = yaml_rt()
         cfg_pre = roots.cfg_path.read_text(encoding="utf-8")
 
-        # --- Build the in-memory plan (no writes yet). ---
         with roots.cfg_path.open("r", encoding="utf-8") as fh:
             data = yaml.load(fh)
         data = _require_mapping_root(data, roots.cfg_path)
@@ -421,10 +416,8 @@ class ProfileFieldsRetireMigration:
         raw_version = data.get("schema_version")
         if raw_version is not None:
             parse_schema_version(str(raw_version))
-        # Collision guard runs inside the fold (raises before any write).
         _migrate_setforge_yaml(data, roots)
 
-        # --- Write under a snapshot+rollback guard. ---
         snapshot = roots.cfg_path.read_bytes() if roots.cfg_path.exists() else None
         try:
             atomic_write_yaml(roots.cfg_path, data)
@@ -550,7 +543,6 @@ def _minted_field(entry: object, ref: str) -> str | None:
     }.get(str(kind))
     if field is None:
         return None
-    # Exact identity shape: exactly {type, <field>} and <field> == the ref id.
     if set(entry) != {"type", field} or entry.get(field) != ref:
         return None
     return str(kind)

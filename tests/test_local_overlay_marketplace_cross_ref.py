@@ -386,10 +386,7 @@ def test_apply_local_overlay_mutates_resolved_plugins_in_place(
     assert "sp" not in bare
 
 
-# ---------------------------------------------------------------------------
-# Overlay mint collision: an add whose key already names a DIFFERENT-body
-# base package must raise, not silently reuse the wrong-typed entry.
-# ---------------------------------------------------------------------------
+# Overlay mint collision: a different-body key must raise, not silently reuse it.
 
 
 def test_overlay_plugin_add_colliding_with_base_cargo_entry_raises(

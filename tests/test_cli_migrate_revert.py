@@ -594,9 +594,6 @@ def test_chained_2_1_to_5_0_no_fold_single_revert_restores_config_and_store(
     assert reconcile.read_base("default", fid) is None
 
 
-# A 5.0-origin config carrying all four legacy per-profile fields plus the
-# operator floor the profile-fields contraction gates on. The 5.0 -> 6.0 fold
-# mints top-level packages + a reconcile block and drops the legacy keys.
 _CFG_AT_5_0_WITH_LEGACY = textwrap.dedent(
     """\
     version: 1
@@ -652,14 +649,9 @@ def test_migrate_to_6_then_one_revert_reaches_origin(
     assert cfg.read_bytes() == cfg_origin
 
 
-# A 4.0-origin config carrying the four legacy per-profile fields plus the
-# operator floor. Migrating --to=6.0 chains span-types (4.0->5.0) AND
-# profile-fields (5.0->6.0) — BOTH set `writes_own_transition`, so the chain
-# has two owners at once. A 4.0 origin (not 2.1) is the earliest that carries
-# the legacy profile fields and still validates: the pre-4.0 disposition- and
-# span-surface-retire steps each `Config.model_validate` the intermediate
-# config, and the modern Profile model forbids those legacy fields — so they
-# cannot coexist with a pre-4.0 origin. 4.0->6.0 is the two-owner span.
+# 4.0 (not 2.1) is the earliest origin that still validates with the legacy
+# profile fields present — earlier chain steps model_validate the intermediate
+# config, and the modern Profile model forbids these fields pre-4.0.
 _CHAIN_CFG_4_0_WITH_LEGACY = """schema_version: "4.0"
 minimum_version: "6.0"
 tracked_files: {}
@@ -700,7 +692,6 @@ def test_chained_4_0_to_6_0_single_revert_restores_config_to_origin(
     )
     assert apply.exit_code == 0, apply.output
     assert detect_current_schema(cfg) == "6.0"
-    # Both cutovers own a durable transition (the two-owner property).
     assert len(transitions.list_transitions(["migrate"])) == 2
 
     revert = runner.invoke(

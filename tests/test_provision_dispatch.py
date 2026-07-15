@@ -126,7 +126,6 @@ def test_resolves_cargo_package_to_item() -> None:
 
 
 def test_resolves_multiple_cargo_packages_to_items() -> None:
-    # Multiple cargo crates flow through the provisioner as items.
     cfg = _cfg(
         packages={
             "ag": CargoPackage(crate="ast-grep"),
@@ -140,8 +139,6 @@ def test_resolves_multiple_cargo_packages_to_items() -> None:
 
 
 def test_dedup_same_crate_across_two_package_refs() -> None:
-    # Two refs pointing at the same crate collapse to one provision item
-    # (identity-keyed dedup in resolve_provision_items).
     cfg = _cfg(
         packages={
             "rg": CargoPackage(crate="ripgrep"),
