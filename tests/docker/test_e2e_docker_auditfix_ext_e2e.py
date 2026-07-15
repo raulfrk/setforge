@@ -108,7 +108,9 @@ def test_ext_add_writes_yaml_and_installs(
     assert res.returncode == 0, combined
     # The id is now declared on the profile via the packages surface.
     assert _EXT_ID in c.read_text(_CFG_YAML), combined
-    assert f"added to base.packages: {_EXT_ID} (extension)" in res.stdout, combined
+    assert f"added to base.packages: {_EXT_ID} (extension {_EXT_ID})" in res.stdout, (
+        combined
+    )
     # The real `code` binary actually installed it.
     assert _EXT_ID.lower() in _list_extensions(c), combined
 
