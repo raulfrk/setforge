@@ -13,6 +13,7 @@ The fix matches each declared marketplace's source (``owner/repo`` slug or
 filesystem path) against the ``source`` field of each registered entry.
 """
 
+from setforge import reconcile_adapter
 from setforge.claude_plugins import reconcile
 from setforge.config import (
     MarketplaceSource,
@@ -47,7 +48,11 @@ def test_reconcile_skips_add_when_source_already_registered(fake_claude) -> None
     cfg = _anthropic_cfg()
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
 
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
 
     assert fake.mp_add_args() == []
     assert report.marketplaces_added == []
@@ -65,11 +70,19 @@ def test_reconcile_marketplace_add_is_idempotent_across_runs(fake_claude) -> Non
     cfg = _anthropic_cfg()
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
 
-    first = reconcile(cfg, profile)
+    first = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert first.marketplaces_added == ["anthropic"]
     assert len(fake.mp_add_args()) == 1
 
-    second = reconcile(cfg, profile)
+    second = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert second.marketplaces_added == []
     # No second add call recorded — total adds stays at one.
     assert len(fake.mp_add_args()) == 1
@@ -90,7 +103,11 @@ def test_reconcile_path_marketplace_matched_by_path(tmp_path, fake_claude) -> No
     )
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
 
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
 
     assert fake.mp_add_args() == []
     assert report.marketplaces_added == []
@@ -102,7 +119,11 @@ def test_reconcile_unregistered_marketplace_still_added(fake_claude) -> None:
     cfg = _anthropic_cfg()
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
 
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
 
     assert report.marketplaces_added == ["anthropic"]
     assert fake.mp_add_args() == ["anthropics/plugins"]

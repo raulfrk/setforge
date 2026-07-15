@@ -37,9 +37,8 @@ from setforge.config import (
     MarketplaceSource,
     MarketplaceSourceKind,
     ReconcilePolicy,
-    ResolvedProfile,
 )
-from setforge.errors import ConfigError, MarketplaceCacheMiss, PluginToolMissing
+from setforge.errors import MarketplaceCacheMiss, PluginToolMissing
 from setforge.provision import driver
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.resolve.protocol import ResolvedPin
@@ -504,25 +503,6 @@ def _add_declared_marketplaces(
             failed.append((mp_name, msg))
 
 
-def _declared_plugin_ids(cfg: Config, profile: ResolvedProfile) -> set[str]:
-    """Resolve the profile's bare plugin names to ``"name@marketplace"`` ids.
-
-    Bare profile names (e.g. ``"superpowers"``) resolve via the
-    top-level :attr:`Config.claude_plugins` registry. A name not
-    present in the registry raises :class:`ConfigError`.
-    """
-    declared: set[str] = set()
-    for bare_name in profile.claude_plugins:
-        ref = cfg.claude_plugins.get(bare_name)
-        if ref is None:
-            raise ConfigError(
-                f"profile references undeclared plugin: {bare_name!r} "
-                f"(add it to top-level claude_plugins:)"
-            )
-        declared.add(f"{bare_name}@{ref.marketplace}")
-    return declared
-
-
 def _plugin_state_diff(
     declared: set[str], policy: ReconcilePolicy
 ) -> tuple[list[str], list[str], list[str]]:
@@ -618,18 +598,19 @@ def _plugin_checkout_targets(
 
 def reconcile(
     cfg: Config,
-    profile: ResolvedProfile,
     *,
+    declared_plugin_ids: set[str],
+    policy: ReconcilePolicy,
     dry_run: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
 
     The plugin-state diff (``to_install`` / ``to_enable`` /
-    ``to_disable``) is computed by :func:`_plugin_state_diff`; bare
-    profile names resolve to ``"<name>@<marketplace>"`` form via
-    :func:`_declared_plugin_ids` before any subprocess work. Raises
-    :class:`ConfigError` when a profile name is absent from the registry.
+    ``to_disable``) is computed by :func:`_plugin_state_diff` over the
+    caller-supplied ``declared_plugin_ids`` (already in
+    ``"<name>@<marketplace>"`` form). ``policy`` is the resolved
+    reconcile policy for plugins.
 
     Marketplaces (always-on, regardless of policy): each declared
     marketplace whose SOURCE is not already registered (matched by
@@ -653,7 +634,7 @@ def reconcile(
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
 
-    declared = _declared_plugin_ids(cfg, profile)
+    declared = declared_plugin_ids
 
     # Host-local install-mode dispatch (LOCAL_CLONE swaps GitHub sources
     # for on-disk cache paths; see _add_declared_marketplaces). Loaded
@@ -669,7 +650,7 @@ def reconcile(
         cfg, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT
     )
 
-    report_only = dry_run or profile.plugins_reconcile is ReconcilePolicy.REPORT
+    report_only = dry_run or policy is ReconcilePolicy.REPORT
 
     items = [
         ProvisionItem(type="plugin", identity=Identity(key=pid, display=pid))
@@ -678,8 +659,8 @@ def reconcile(
 
     to_disable = (
         []
-        if profile.plugins_reconcile is ReconcilePolicy.ADDITIVE
-        else _plugin_state_diff(declared, profile.plugins_reconcile)[2]
+        if policy is ReconcilePolicy.ADDITIVE
+        else _plugin_state_diff(declared, policy)[2]
     )
 
     if report_only:
@@ -718,7 +699,7 @@ def reconcile(
         if o.outcome is Outcome.HARD
     ]
 
-    if profile.plugins_reconcile is ReconcilePolicy.PRUNE:
+    if policy is ReconcilePolicy.PRUNE:
         _reconcile_remove(to_disable, failed)
 
     return _build_report(

@@ -277,6 +277,7 @@ def test_checkout_targets_skip_path_marketplace(tmp_path: Path) -> None:
 
 def test_reconcile_threads_pins_into_checkout(monkeypatch, tmp_path: Path) -> None:
     import setforge.claude_plugins as cp
+    from setforge import reconcile_adapter
 
     cfg = _make_config(
         marketplaces={
@@ -320,7 +321,12 @@ def test_reconcile_threads_pins_into_checkout(monkeypatch, tmp_path: Path) -> No
         patch(_PLUGIN_INSTALL),
         patch(_PLUGIN_ENABLE),
     ):
-        cp.reconcile(cfg, resolved, pins=plugin_pins(lock))
+        cp.reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
+            policy=reconcile_adapter.plugin_policy(resolved),
+            pins=plugin_pins(lock),
+        )
 
     assert captured == {"revdiff@revdiff": (tmp_path / "cache" / "revdiff", _SHA)}
     chk.assert_called_once_with(tmp_path / "cache" / "revdiff", _SHA)

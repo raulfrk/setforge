@@ -165,7 +165,11 @@ def test_plugin_additive_install_failure_records_failed() -> None:
         ),
         patch(_PLUGIN_PROV_ENABLE),
     ):
-        report = plugin_reconcile(cfg, profile)
+        report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+        )
     assert report.to_install == [("a", "m1")]
     failed_ids = [pid for pid, _ in report.failed]
     assert "a@m1" in failed_ids
@@ -194,7 +198,11 @@ def test_plugin_marketplace_added_in_non_report_run() -> None:
         patch(_LOCAL_MP_LIST, return_value={}),
         patch(_LOCAL_MP_ADD) as marketplace_add,
     ):
-        report = plugin_reconcile(cfg, profile)
+        report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+        )
     assert report.marketplaces_added == ["anthropic"]
     marketplace_add.assert_called_once()
 
@@ -220,7 +228,11 @@ def test_plugin_prune_disables_extra_but_additive_does_not() -> None:
         patch("setforge.claude_plugins.list_installed", return_value=installed),
         patch(_LOCAL_PLUGIN_DISABLE) as plugin_disable_prune,
     ):
-        prune_report = plugin_reconcile(cfg, prune_profile)
+        prune_report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, prune_profile),
+            policy=reconcile_adapter.plugin_policy(prune_profile),
+        )
     assert prune_report.to_disable == ["extra@m1"]
     plugin_disable_prune.assert_called_once_with("extra@m1")
 
@@ -235,7 +247,11 @@ def test_plugin_prune_disables_extra_but_additive_does_not() -> None:
         patch("setforge.claude_plugins.list_installed", return_value=installed),
         patch(_LOCAL_PLUGIN_DISABLE) as plugin_disable_additive,
     ):
-        additive_report = plugin_reconcile(cfg, additive_profile)
+        additive_report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, additive_profile),
+            policy=reconcile_adapter.plugin_policy(additive_profile),
+        )
     assert additive_report.to_disable == []
     plugin_disable_additive.assert_not_called()
 
@@ -264,7 +280,11 @@ def test_plugin_report_policy_lists_diffs_without_subprocess() -> None:
         patch(_LOCAL_MP_ADD) as marketplace_add,
         patch(_LOCAL_PLUGIN_DISABLE) as plugin_disable,
     ):
-        report = plugin_reconcile(cfg, profile)
+        report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+        )
     assert report.dry_run is True
     assert report.to_install == [("a", "m1")]
     assert report.to_disable == ["extra@m1"]
@@ -289,7 +309,12 @@ def test_plugin_dry_run_lists_diffs_without_subprocess() -> None:
         patch(_LOCAL_ADD_MP) as add_mp,
         patch(_LOCAL_PLUGIN_DISABLE) as plugin_disable,
     ):
-        report = plugin_reconcile(cfg, profile, dry_run=True)
+        report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+            dry_run=True,
+        )
     assert report.dry_run is True
     assert report.to_install == [("a", "m1")]
     assert report.to_disable == ["extra@m1"]
@@ -315,7 +340,6 @@ def test_plugin_package_only_reaches_engine_via_adapter() -> None:
     )
     resolved = resolve_profile(cfg, "p")
     assert resolved.claude_plugins == []
-    synth = reconcile_adapter.synth_plugin_profile(cfg, resolved)
     with (
         patch(_LOCAL_MP_TO_ADD, return_value=[]),
         patch(_LOCAL_ADD_MP),
@@ -323,7 +347,11 @@ def test_plugin_package_only_reaches_engine_via_adapter() -> None:
         patch(_PLUGIN_PROV_INSTALL) as prov_install,
         patch(_PLUGIN_PROV_ENABLE),
     ):
-        report = plugin_reconcile(cfg, synth)
+        report = plugin_reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
+            policy=reconcile_adapter.plugin_policy(resolved),
+        )
     assert report.to_install == [("sp", "mp")]
     prov_install.assert_called_once()
 

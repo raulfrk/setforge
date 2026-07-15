@@ -17,6 +17,7 @@ path under LOCAL_CLONE.
 from pathlib import Path
 
 from setforge import claude_plugins as cp
+from setforge import reconcile_adapter
 from setforge.config import (
     ClaudeInstallMode,
     ClaudePluginRef,
@@ -43,10 +44,18 @@ def test_local_clone_second_reconcile_does_not_readd_marketplace(
     )
     profile = _make_resolved(claude_plugins=["a"])
 
-    first = cp.reconcile(cfg, profile)
+    first = cp.reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert first.marketplaces_added == ["anthropic"]
 
-    second = cp.reconcile(cfg, profile)
+    second = cp.reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     # The registered cache-path source now matches the declared identity,
     # so the second reconcile is a no-op for marketplaces.
     assert second.marketplaces_added == []

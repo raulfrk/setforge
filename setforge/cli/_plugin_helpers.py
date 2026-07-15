@@ -562,7 +562,10 @@ def _reconcile_plugins(
         return None, ()
     try:
         plugin_report = claude_plugins_mod.reconcile(
-            cfg, reconcile_adapter.synth_plugin_profile(cfg, resolved), pins=pins
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
+            policy=reconcile_adapter.plugin_policy(resolved),
+            pins=pins,
         )
     except PluginToolMissing as exc:
         _warn_skip_reconcile(exc)

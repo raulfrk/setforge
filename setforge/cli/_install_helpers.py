@@ -1314,7 +1314,8 @@ def _dry_run_emit_plugin_reconcile(ctx: ProfileContext) -> None:
     try:
         report = claude_plugins_mod.reconcile(
             ctx.cfg,
-            reconcile_adapter.synth_plugin_profile(ctx.cfg, ctx.resolved),
+            declared_plugin_ids=reconcile_adapter.plugin_ids(ctx.cfg, ctx.resolved),
+            policy=reconcile_adapter.plugin_policy(ctx.resolved),
             dry_run=True,
         )
     except PluginToolMissing as exc:

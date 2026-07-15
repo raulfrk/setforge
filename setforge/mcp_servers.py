@@ -198,7 +198,7 @@ def _declared_refs(
 
     A name absent from the top-level :attr:`Config.mcp_servers` registry
     raises :class:`ConfigError` — mirrors
-    :func:`setforge.claude_plugins._declared_plugin_ids`. (``load_config``
+    :func:`setforge.reconcile_adapter.plugin_ids`. (``load_config``
     already cross-validates, so this is a defensive second line.)
     """
     refs: list[tuple[str, McpServerRef]] = []

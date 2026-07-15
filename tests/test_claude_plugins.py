@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from setforge import claude_plugins as cp
+from setforge import reconcile_adapter
 from setforge.config import (
     ClaudePluginRef,
     MarketplaceSource,
@@ -327,7 +328,11 @@ def test_reconcile_fresh_host_installs_all(fake_claude) -> None:
         claude_plugins=["a", "b"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert sorted(report.to_install) == [("a", "m1"), ("b", "m1")]
     assert report.to_enable == []
     assert report.to_disable == []
@@ -352,7 +357,11 @@ def test_reconcile_fresh_install_lands_enabled(fake_claude) -> None:
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert fake.install_args() == ["a@m1"]
     assert fake.enable_args() == ["a@m1"]
     entry = next(p for p in fake._plugins if p["id"] == "a@m1")
@@ -398,7 +407,11 @@ def test_reconcile_fresh_install_failure_skips_enable(
         claude_plugins=["bad", "good"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     # bad@m1 never reached the enable loop; good@m1 did.
     assert fake.enable_args() == ["good@m1"]
     failed_pids = [pid for pid, _ in report.failed]
@@ -442,7 +455,11 @@ def test_reconcile_fresh_install_succeeds_then_enable_fails_records_failure(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     failed_pids = [pid for pid, _ in report.failed]
     assert "a@m1" in failed_pids
     failed_msg = next(msg for pid, msg in report.failed if pid == "a@m1")
@@ -468,7 +485,11 @@ def test_reconcile_declared_but_disabled_enables_not_reinstalls(
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_install == []
     assert report.to_enable == ["a@m1"]
     assert report.to_disable == []
@@ -492,7 +513,11 @@ def test_reconcile_additive_does_not_disable_extras(fake_claude) -> None:
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_disable == []
     assert fake.disable_args() == []
 
@@ -512,7 +537,11 @@ def test_reconcile_prune_disables_extras(fake_claude) -> None:
         claude_plugins=["a"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_disable == ["extra@m1"]
     assert fake.disable_args() == ["extra@m1"]
 
@@ -541,7 +570,11 @@ def test_reconcile_mixed_states_prune(fake_claude) -> None:
         claude_plugins=["a", "b"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_install == []
     assert report.to_enable == ["b@m1"]
     assert report.to_disable == ["c@m1"]
@@ -587,7 +620,11 @@ def test_reconcile_report_policy_runs_no_subprocesses(
         claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.REPORT,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.dry_run is True
     assert ("declared", "m1") in report.to_install
     assert report.to_disable == ["extra@m1"]
@@ -623,7 +660,12 @@ def test_reconcile_dry_run_runs_no_subprocess_writes(
         claude_plugins=["declared"],
         plugins_reconcile=ReconcilePolicy.PRUNE,
     )
-    report = reconcile(cfg, profile, dry_run=True)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+        dry_run=True,
+    )
     assert report.dry_run is True
     assert ("declared", "m1") in report.to_install
     assert "extra@m1" in report.to_disable
@@ -643,7 +685,11 @@ def test_reconcile_marketplaces_always_added(fake_claude) -> None:
         }
     )
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert len(fake.mp_add_args()) == 1
 
 
@@ -654,7 +700,11 @@ def test_reconcile_stale_marketplace_not_evicted(fake_claude) -> None:
     fake = fake_claude(marketplaces=[{"name": "stale", "source": "github:stale/mp"}])
     cfg = _make_config()  # no declared marketplaces
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.PRUNE)
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     remove_calls = [
         c for c in fake.calls if c[1:4] == ["plugin", "marketplace", "remove"]
     ]
@@ -671,7 +721,11 @@ def test_reconcile_additive_disabled_not_in_to_disable(fake_claude) -> None:
         claude_plugins=[],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_disable == []
 
 
@@ -699,7 +753,11 @@ def test_reconcile_resolves_bare_profile_names_via_registry(fake_claude) -> None
         claude_plugins=["superpowers"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_install == []
     assert report.to_enable == []
     assert report.to_disable == []
@@ -722,7 +780,11 @@ def test_reconcile_bare_name_to_install_emits_at_form_pair(fake_claude) -> None:
         claude_plugins=["new-plugin"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_install == [("new-plugin", "m1")]
     assert fake.install_args() == ["new-plugin@m1"]
 
@@ -742,7 +804,11 @@ def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
         claude_plugins=["wiki"],
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert report.to_install == []
     assert report.to_enable == ["wiki@llm-wiki"]
     assert fake.enable_args() == ["wiki@llm-wiki"]
@@ -760,7 +826,11 @@ def test_reconcile_undeclared_bare_name_raises_config_error(fake_claude) -> None
         plugins_reconcile=ReconcilePolicy.ADDITIVE,
     )
     with pytest.raises(ConfigError, match="mystery-plugin"):
-        reconcile(cfg, profile)
+        reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+            policy=reconcile_adapter.plugin_policy(profile),
+        )
     assert fake.install_args() == []
     assert fake.enable_args() == []
     assert fake.disable_args() == []
@@ -894,7 +964,11 @@ def test_reconcile_marketplaces_dry_run_not_added(
         }
     )
     profile = _make_resolved(plugins_reconcile=ReconcilePolicy.REPORT)
-    report = reconcile(cfg, profile)
+    report = reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert "anthropic" in report.marketplaces_added
     assert report.dry_run is True
 
@@ -1612,7 +1686,11 @@ def test_reconcile_local_clone_swaps_source_before_marketplace_add(
         claude_plugins={"a": ClaudePluginRef(marketplace="anthropic")},
     )
     profile = _make_resolved(claude_plugins=["a"])
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     # marketplace add was called with the local cache path, not the repo
     mp_add = fc.mp_add_args()
     assert len(mp_add) == 1
@@ -1637,7 +1715,11 @@ def test_reconcile_regular_mode_install_mode_unchanged(
         claude_plugins={"a": ClaudePluginRef(marketplace="anthropic")},
     )
     profile = _make_resolved(claude_plugins=["a"])
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     # Source argv = the github short form, no swap occurred
     mp_add = fc.mp_add_args()
     assert mp_add == ["anthropic/plug"]
@@ -1669,7 +1751,11 @@ def test_local_clone_repeat_install_is_offline(
     )
     profile = _make_resolved(claude_plugins=["a"])
     # First reconcile: clones the marketplace.
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert fake.clone_count() == 1
     # Drop git calls so the second reconcile's assertion is precise.
     fake.calls.clear()
@@ -1687,7 +1773,11 @@ def test_local_clone_repeat_install_is_offline(
     # and call `marketplace_add` again. That's harmless for the git
     # assertion — marketplace_add itself doesn't talk to git; the swap
     # site uses the existing cache without re-cloning.
-    reconcile(cfg, profile)
+    reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
     assert fake.clone_count() == 0, (
         f"expected zero git clones on repeat install, got "
         f"{[c for c in fake.calls if c[1:2] == ['clone']]}"

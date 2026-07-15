@@ -4,7 +4,7 @@ Audit finding (Critical): ``plugin add`` declared the plugin in the top-level
 ``claude_plugins:`` registry under the BARE name but bound it to the profile
 using the ``<name>@<marketplace>`` form. Every reader of
 ``profile.claude_plugins`` (``_validate_plugin_references``,
-``_declared_plugin_ids``, ``sync_marketplace_cache``) treats entries as bare
+``plugin_ids``, ``sync_marketplace_cache``) treats entries as bare
 registry keys, so the very next ``load_config`` raised ``ConfigError`` and the
 config was bricked until hand-edited.
 

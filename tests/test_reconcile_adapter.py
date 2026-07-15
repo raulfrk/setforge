@@ -3,7 +3,6 @@ from typing import Any
 import pytest
 
 from setforge import reconcile_adapter as adapter
-from setforge.claude_plugins import _declared_plugin_ids
 from setforge.config import (
     Config,
     ReconcilePolicy,
@@ -26,14 +25,13 @@ def _cfg(profiles: dict[str, Any], **top: Any) -> Config:
     return Config.model_validate(base)
 
 
-def test_plugin_ids_old_way_golden_and_declared_parity() -> None:
+def test_plugin_ids_old_way_golden() -> None:
     cfg = _cfg(
         profiles={"p": {"claude_plugins": ["sp"]}},
         claude_plugins={"sp": {"marketplace": "mp"}},
     )
     resolved = resolve_profile(cfg, "p")
     assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
-    assert adapter.plugin_ids(cfg, resolved) == _declared_plugin_ids(cfg, resolved)
 
 
 def test_plugin_ids_new_package_surface() -> None:
@@ -198,27 +196,3 @@ def test_cargo_crates_dedup_repeat() -> None:
     )
     resolved = resolve_profile(cfg, "p")
     assert adapter.cargo_crates(cfg, resolved) == ["rg"]
-
-
-def test_synth_plugin_profile() -> None:
-    cfg = _cfg(
-        profiles={
-            "p": {
-                "claude_plugins": ["sp"],
-                "packages": ["extra"],
-                "plugins_reconcile": "additive",
-                "reconcile": {"plugins": {"policy": "prune"}},
-                "tracked_files": ["t"],
-            }
-        },
-        claude_plugins={"sp": {"marketplace": "mp"}, "extra": {"marketplace": "mp"}},
-        packages={"extra": {"type": "plugin", "plugin": "extra"}},
-    )
-    resolved = resolve_profile(cfg, "p")
-    synth = adapter.synth_plugin_profile(cfg, resolved)
-    assert isinstance(synth, ResolvedProfile)
-    assert synth.claude_plugins == adapter.plugin_bare_names(cfg, resolved)
-    assert synth.plugins_reconcile == adapter.plugin_policy(resolved)
-    assert synth.tracked_files == resolved.tracked_files
-    assert synth.packages == resolved.packages
-    assert synth.reconcile == resolved.reconcile

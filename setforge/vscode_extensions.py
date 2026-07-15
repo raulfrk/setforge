@@ -32,6 +32,7 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
+from setforge import reconcile_adapter
 from setforge.atomicio import atomic_write_text
 from setforge.binaries import resolve_binary, stderr_of
 from setforge.config import (
@@ -469,7 +470,9 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     # Subtract `exclude` case-insensitively (VSCode extension IDs are
     # case-insensitive) so a lowercase exclude can't leak a differently
     # cased installed ID back into `include`.
-    exclude_keys = {e.casefold() for e in resolved.extensions.exclude}
+    exclude_keys = {
+        e.casefold() for e in reconcile_adapter.extensions_input(cfg, resolved).exclude
+    }
     new_include = sorted(i for i in installed if i.casefold() not in exclude_keys)
 
     yaml, doc = _load_yaml_doc(config_path)

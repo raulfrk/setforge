@@ -205,7 +205,7 @@ def _register_plugin_in_yaml(
 
     # Bind the profile to the BARE plugin name: the top-level registry key is
     # the bare name (see yaml_add_plugin above), and every reader of
-    # profile.claude_plugins (_validate_plugin_references, _declared_plugin_ids,
+    # profile.claude_plugins (_validate_plugin_references, plugin_ids,
     # sync_marketplace_cache) treats entries as bare registry keys. Writing the
     # `@`-form here would brick the config on the next load_config.
     profile_added = claude_yaml_editor_mod.yaml_add_plugin_to_profile(
@@ -339,14 +339,19 @@ def plugin_reconcile(
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     resolved = resolve_profile(cfg, profile)
-    synth = reconcile_adapter.synth_plugin_profile(cfg, resolved)
+    policy = reconcile_adapter.plugin_policy(resolved)
     try:
-        report = claude_plugins_mod.reconcile(cfg, synth, dry_run=dry_run)
+        report = claude_plugins_mod.reconcile(
+            cfg,
+            declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, resolved),
+            policy=policy,
+            dry_run=dry_run,
+        )
     except PluginToolMissing as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    is_read_only = synth.plugins_reconcile is ReconcilePolicy.REPORT or dry_run
+    is_read_only = policy is ReconcilePolicy.REPORT or dry_run
     _render_reconcile_report(report, is_read_only=is_read_only)
     if not report:
         typer.echo("plugins: nothing to reconcile")

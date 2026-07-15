@@ -30,7 +30,8 @@ def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
 
 
 def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
-    # Mirrors claude_plugins._declared_plugin_ids exactly, incl. error text.
+    # Resolves bare plugin names to "name@marketplace" ids; the sole source
+    # of the undeclared-plugin ConfigError text feeding the plugins engine.
     declared: set[str] = set()
     for bare_name in plugin_bare_names(cfg, resolved):
         ref = cfg.claude_plugins.get(bare_name)
@@ -76,14 +77,4 @@ def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
             if isinstance(pkg := cfg.packages[ref], CargoPackage)
             if pkg.crate.strip()
         ],
-    )
-
-
-def synth_plugin_profile(cfg: Config, resolved: ResolvedProfile) -> ResolvedProfile:
-    # Lets the unchanged claude_plugins engine see the union with no engine edit.
-    return resolved.model_copy(
-        update={
-            "claude_plugins": plugin_bare_names(cfg, resolved),
-            "plugins_reconcile": plugin_policy(resolved),
-        }
     )

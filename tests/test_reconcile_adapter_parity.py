@@ -203,12 +203,13 @@ def test_marketplace_add_idempotent_for_new_package_plugin(fake_claude) -> None:
     fake = fake_claude(marketplaces=[])
     cfg = _new_pkg_plugin_cfg()
     resolved = resolve_profile(cfg, "p")
-    synth = adapter.synth_plugin_profile(cfg, resolved)
+    declared = adapter.plugin_ids(cfg, resolved)
+    policy = adapter.plugin_policy(resolved)
 
-    first = plugin_reconcile(cfg, synth)
+    first = plugin_reconcile(cfg, declared_plugin_ids=declared, policy=policy)
     assert first.marketplaces_added == ["anthropic"]
     assert len(fake.mp_add_args()) == 1
 
-    second = plugin_reconcile(cfg, synth)
+    second = plugin_reconcile(cfg, declared_plugin_ids=declared, policy=policy)
     assert second.marketplaces_added == []
     assert len(fake.mp_add_args()) == 1
