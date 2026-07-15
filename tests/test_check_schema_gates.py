@@ -235,18 +235,18 @@ def test_run_all_gates_clean_tree_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_is_five_zero() -> None:
-    """The build now expects schema 5.0 after the span-types-retire bump."""
+def test_current_expected_is_six_zero() -> None:
+    """The build now expects schema 6.0 after the profile-fields-retire bump."""
     from setforge.migrations import current_expected_schema_version
 
-    assert current_expected_schema_version == "5.0"
+    assert current_expected_schema_version == "6.0"
 
 
-def test_schema_major_is_five() -> None:
-    """The frozen manifest now describes major 5."""
+def test_schema_major_is_six() -> None:
+    """The frozen manifest now describes major 6."""
     from setforge.schema_manifest import SCHEMA_MAJOR
 
-    assert SCHEMA_MAJOR == 5
+    assert SCHEMA_MAJOR == 6
 
 
 def test_coverage_reaches_two_zero_real_tree() -> None:

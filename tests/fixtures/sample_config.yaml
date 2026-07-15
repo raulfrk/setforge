@@ -1,4 +1,4 @@
-schema_version: '2.0'
+schema_version: '6.0'
 version: 1
 
 tracked_files:
@@ -24,16 +24,30 @@ claude_plugins:
   bd-reference:
     marketplace: official
 
+packages:
+  superpowers:
+    type: plugin
+    plugin: superpowers
+  bd-reference:
+    type: plugin
+    plugin: bd-reference
+  ms-python.python:
+    type: extension
+    extension: ms-python.python
+  rust-lang.rust-analyzer:
+    type: extension
+    extension: rust-lang.rust-analyzer
+
 profiles:
   base:
     tracked_files:
       - claude_md
-    extensions:
-      include:
-        - ms-python.python
-      reconcile: additive
-    claude_plugins:
+    packages:
       - superpowers
+      - ms-python.python
+    reconcile:
+      extensions:
+        policy: additive
     bootstrap:
       - ~/.claude/header.md
 
@@ -41,9 +55,9 @@ profiles:
     extends: base
     tracked_files:
       - vscode_settings
-    extensions:
-      include:
-        - rust-lang.rust-analyzer
-      reconcile: prune
-    claude_plugins:
+    packages:
       - bd-reference
+      - rust-lang.rust-analyzer
+    reconcile:
+      extensions:
+        policy: prune

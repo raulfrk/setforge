@@ -25,16 +25,7 @@ def _cfg(profiles: dict[str, Any], **top: Any) -> Config:
     return Config.model_validate(base)
 
 
-def test_plugin_ids_old_way_golden() -> None:
-    cfg = _cfg(
-        profiles={"p": {"claude_plugins": ["sp"]}},
-        claude_plugins={"sp": {"marketplace": "mp"}},
-    )
-    resolved = resolve_profile(cfg, "p")
-    assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
-
-
-def test_plugin_ids_new_package_surface() -> None:
+def test_plugin_ids_from_package_surface() -> None:
     cfg = _cfg(
         profiles={"p": {"packages": ["sp"]}},
         claude_plugins={"sp": {"marketplace": "mp"}},
@@ -42,28 +33,7 @@ def test_plugin_ids_new_package_surface() -> None:
     )
     resolved = resolve_profile(cfg, "p")
     assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
-
-
-def test_plugin_ids_old_and_new_dedup() -> None:
-    cfg = _cfg(
-        profiles={"p": {"claude_plugins": ["sp"], "packages": ["sp"]}},
-        claude_plugins={"sp": {"marketplace": "mp"}},
-        packages={"sp": {"type": "plugin", "plugin": "sp"}},
-    )
-    resolved = resolve_profile(cfg, "p")
-    assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
     assert adapter.plugin_bare_names(cfg, resolved) == ["sp"]
-
-
-def test_plugin_ids_undeclared_raises_verbatim() -> None:
-    cfg = _cfg(profiles={"p": {"claude_plugins": ["ghost"]}})
-    resolved = resolve_profile(cfg, "p")
-    with pytest.raises(ConfigError) as exc:
-        adapter.plugin_ids(cfg, resolved)
-    assert str(exc.value) == (
-        "profile references undeclared plugin: 'ghost' "
-        "(add it to top-level claude_plugins:)"
-    )
 
 
 def test_plugin_ids_undeclared_via_package_raises_verbatim() -> None:
@@ -85,13 +55,7 @@ def _ext_cfg(profile: dict[str, Any], **top: Any) -> tuple[Config, ResolvedProfi
     return cfg, resolve_profile(cfg, "p")
 
 
-def test_extensions_input_old_shape() -> None:
-    cfg, resolved = _ext_cfg({"extensions": {"include": ["A"]}})
-    got = adapter.extensions_input(cfg, resolved)
-    assert got.include == ["A"]
-
-
-def test_extensions_input_new_shape() -> None:
+def test_extensions_input_from_package_surface() -> None:
     cfg, resolved = _ext_cfg(
         {"packages": ["A"]},
         packages={"A": {"type": "extension", "extension": "A"}},
@@ -100,60 +64,52 @@ def test_extensions_input_new_shape() -> None:
     assert got.include == ["A"]
 
 
-def test_extensions_input_both_dedup() -> None:
+def test_extensions_input_exclude_from_reconcile_block() -> None:
     cfg, resolved = _ext_cfg(
-        {"extensions": {"include": ["A"]}, "packages": ["A"]},
-        packages={"A": {"type": "extension", "extension": "A"}},
+        {"reconcile": {"extensions": {"exclude": ["y"]}}},
     )
     got = adapter.extensions_input(cfg, resolved)
-    assert got.include == ["A"]
+    assert got.exclude == ["y"]
 
 
-def test_extensions_input_exclude_union() -> None:
-    cfg, resolved = _ext_cfg(
-        {
-            "extensions": {"include": ["A"], "exclude": ["x"]},
-            "reconcile": {"extensions": {"exclude": ["y"]}},
-        },
-    )
-    got = adapter.extensions_input(cfg, resolved)
-    assert got.exclude == ["x", "y"]
-
-
-def test_plugin_policy_preserves_prewave_old_via_inheritance() -> None:
+def test_extensions_input_exclude_merges_across_chain() -> None:
     cfg = _cfg(
         profiles={
-            "base": {"plugins_reconcile": "prune"},
-            "p": {"extends": "base"},
+            "base": {"reconcile": {"extensions": {"exclude": ["x"]}}},
+            "p": {"extends": "base", "reconcile": {"extensions": {"exclude": ["y"]}}},
         },
     )
     resolved = resolve_profile(cfg, "p")
-    assert adapter.plugin_policy(resolved) is ReconcilePolicy.PRUNE
+    assert adapter.extensions_input(cfg, resolved).exclude == ["x", "y"]
 
 
-def test_plugin_policy_new_block_only() -> None:
+def test_plugin_policy_from_reconcile_block() -> None:
     cfg = _cfg(profiles={"p": {"reconcile": {"plugins": {"policy": "prune"}}}})
     resolved = resolve_profile(cfg, "p")
     assert adapter.plugin_policy(resolved) is ReconcilePolicy.PRUNE
 
 
-def test_plugin_policy_new_additive_falls_to_old() -> None:
+def test_plugin_policy_inherits_across_chain() -> None:
     cfg = _cfg(
         profiles={
-            "p": {
-                "plugins_reconcile": "prune",
-                "reconcile": {"plugins": {"policy": "additive"}},
-            }
+            "base": {"reconcile": {"plugins": {"policy": "prune"}}},
+            "p": {"extends": "base"},
         },
     )
     resolved = resolve_profile(cfg, "p")
     assert adapter.plugin_policy(resolved) is ReconcilePolicy.PRUNE
 
 
-def test_extension_policy_preserves_prewave_old_via_inheritance() -> None:
+def test_extension_policy_from_reconcile_block() -> None:
+    cfg = _cfg(profiles={"p": {"reconcile": {"extensions": {"policy": "prune"}}}})
+    resolved = resolve_profile(cfg, "p")
+    assert adapter.extensions_input(cfg, resolved).reconcile is ReconcilePolicy.PRUNE
+
+
+def test_extension_policy_inherits_across_chain() -> None:
     cfg = _cfg(
         profiles={
-            "base": {"extensions": {"reconcile": "prune"}},
+            "base": {"reconcile": {"extensions": {"policy": "prune"}}},
             "p": {"extends": "base"},
         },
     )
@@ -161,38 +117,22 @@ def test_extension_policy_preserves_prewave_old_via_inheritance() -> None:
     assert adapter.extensions_input(cfg, resolved).reconcile is ReconcilePolicy.PRUNE
 
 
-def test_extension_policy_new_block_only() -> None:
-    cfg = _cfg(profiles={"p": {"reconcile": {"extensions": {"policy": "prune"}}}})
-    resolved = resolve_profile(cfg, "p")
-    assert adapter.extensions_input(cfg, resolved).reconcile is ReconcilePolicy.PRUNE
-
-
-def test_extension_policy_new_additive_falls_to_old() -> None:
+def test_cargo_crates_from_package_surface() -> None:
     cfg = _cfg(
-        profiles={
-            "p": {
-                "extensions": {"reconcile": "prune"},
-                "reconcile": {"extensions": {"policy": "additive"}},
-            }
-        },
-    )
-    resolved = resolve_profile(cfg, "p")
-    assert adapter.extensions_input(cfg, resolved).reconcile is ReconcilePolicy.PRUNE
-
-
-def test_cargo_crates_union() -> None:
-    cfg = _cfg(
-        profiles={"p": {"cargo_binaries": ["rg"], "packages": ["fd"]}},
+        profiles={"p": {"packages": ["fd"]}},
         packages={"fd": {"type": "cargo", "crate": "fd"}},
     )
     resolved = resolve_profile(cfg, "p")
-    assert adapter.cargo_crates(cfg, resolved) == ["rg", "fd"]
+    assert adapter.cargo_crates(cfg, resolved) == ["fd"]
 
 
-def test_cargo_crates_dedup_repeat() -> None:
+def test_cargo_crates_projects_each_ref_in_order() -> None:
     cfg = _cfg(
-        profiles={"p": {"cargo_binaries": ["rg"], "packages": ["rg"]}},
-        packages={"rg": {"type": "cargo", "crate": "rg"}},
+        profiles={"p": {"packages": ["rg", "fd"]}},
+        packages={
+            "rg": {"type": "cargo", "crate": "ripgrep"},
+            "fd": {"type": "cargo", "crate": "fd-find"},
+        },
     )
     resolved = resolve_profile(cfg, "p")
-    assert adapter.cargo_crates(cfg, resolved) == ["rg"]
+    assert adapter.cargo_crates(cfg, resolved) == ["ripgrep", "fd-find"]

@@ -47,14 +47,14 @@ from setforge.migrations._yaml_ops import atomic_write_yaml, rename_key, yaml_rt
 # ---------------------------------------------------------------------------
 
 
-def test_current_expected_schema_version_is_five_zero() -> None:
-    """The build now expects schema 5.0 after the span-types-retire bump."""
-    assert current_expected_schema_version == "5.0"
+def test_current_expected_schema_version_is_six_zero() -> None:
+    """The build now expects schema 6.0 after the profile-fields-retire bump."""
+    assert current_expected_schema_version == "6.0"
 
 
 def test_migrations_registry_has_the_version_stamp_chain() -> None:
-    """The registry ships the 1.0→1.1→1.2→2.0→2.1→3.0→4.0→5.0 chain, in order."""
-    assert len(MIGRATIONS) == 7
+    """The registry ships the 1.0→1.1→…→5.0→6.0 chain, in order."""
+    assert len(MIGRATIONS) == 8
     assert (MIGRATIONS[0].from_version, MIGRATIONS[0].to_version) == ("1.0", "1.1")
     assert (MIGRATIONS[1].from_version, MIGRATIONS[1].to_version) == ("1.1", "1.2")
     assert (MIGRATIONS[2].from_version, MIGRATIONS[2].to_version) == ("1.2", "2.0")
@@ -62,6 +62,7 @@ def test_migrations_registry_has_the_version_stamp_chain() -> None:
     assert (MIGRATIONS[4].from_version, MIGRATIONS[4].to_version) == ("2.1", "3.0")
     assert (MIGRATIONS[5].from_version, MIGRATIONS[5].to_version) == ("3.0", "4.0")
     assert (MIGRATIONS[6].from_version, MIGRATIONS[6].to_version) == ("4.0", "5.0")
+    assert (MIGRATIONS[7].from_version, MIGRATIONS[7].to_version) == ("5.0", "6.0")
     # Appended in from_version order so the forward walk never has to sort.
     assert isinstance(MIGRATIONS[1], RestampMigration)
 
@@ -227,7 +228,7 @@ def test_find_migration_path_reverse_one_step() -> None:
 def test_find_migration_path_unreachable_target_returns_empty() -> None:
     """A target no chain reaches terminates with () — never hangs."""
     assert find_migration_path(from_v="1.1", to_v="0.9") == ()
-    assert find_migration_path(from_v="1.0", to_v="6.0") == ()
+    assert find_migration_path(from_v="1.0", to_v="7.0") == ()
 
 
 def test_find_migration_path_malformed_version_raises_configerror() -> None:
@@ -785,7 +786,7 @@ def test_unmigrated_1_0_config_warns_once_non_fatal(
     captured = capsys.readouterr()
     assert captured.err.count("warning:") == 1
     assert "schema_version" in captured.err
-    assert "5.0" in captured.err
+    assert "6.0" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1039,12 +1040,18 @@ def _span_types_retire() -> Migration:
     return SpanTypesRetireMigration()
 
 
-def test_span_types_retire_is_registered_and_terminal() -> None:
-    """The 4.0 → 5.0 step is the LAST registered migration."""
+def test_span_types_retire_is_registered() -> None:
+    """The 4.0 → 5.0 span-types step is registered; the profile-fields step
+    that follows it is now the chain-terminal migration."""
+    from setforge.migrations import ProfileFieldsRetireMigration
     from setforge.migrations._span_types_retire import SpanTypesRetireMigration
 
-    assert isinstance(MIGRATIONS[-1], SpanTypesRetireMigration)
-    assert (MIGRATIONS[-1].from_version, MIGRATIONS[-1].to_version) == ("4.0", "5.0")
+    span_steps = [m for m in MIGRATIONS if isinstance(m, SpanTypesRetireMigration)]
+    assert len(span_steps) == 1
+    assert (span_steps[0].from_version, span_steps[0].to_version) == ("4.0", "5.0")
+
+    assert isinstance(MIGRATIONS[-1], ProfileFieldsRetireMigration)
+    assert (MIGRATIONS[-1].from_version, MIGRATIONS[-1].to_version) == ("5.0", "6.0")
     assert MIGRATIONS[-1].to_version == current_expected_schema_version
 
 

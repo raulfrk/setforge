@@ -100,8 +100,7 @@ def _check_profile(
         _check_tracked_srcs(tracked_file, repo_root, dot_ctx, failures)
         _check_no_markers_remain(tracked_file, repo_root, dot_ctx, failures)
 
-    _check_extension_includes(cfg, prof_name, ctx, failures)
-    _check_claude_plugins(cfg, prof_name, ctx, failures)
+    _check_package_refs(cfg, prof_name, ctx, failures)
     if not cross_ref_ran:
         _check_marketplaces(cfg, resolved, ctx, failures)
 
@@ -116,7 +115,7 @@ def _apply_local_overlay_check(
     """Apply the local.yaml overlay and report cross-ref status to the caller.
 
     ``apply_local_overlay`` runs ``_validate_overlay_marketplace_cross_ref``
-    over the mutated ``resolved.claude_plugins`` set as its final step.
+    over the mutated resolved plugin set as its final step.
     That is the SAME cross-ref invariant Check 6
     (``_check_marketplaces``) asserts, so re-running Check 6 after a
     completed overlay would emit a duplicate failure row per offender.
@@ -256,46 +255,27 @@ def _check_no_markers_remain(
         )
 
 
-def _check_extension_includes(
+def _check_package_refs(
     cfg: Config,
     prof_name: str,
     ctx: str,
     failures: list[ValidationErrorWithContext | str],
 ) -> None:
-    """Check 5: extension include list — non-empty IDs, no duplicates.
+    """Check 5: profile package refs — non-empty, no duplicates.
 
-    Walks the raw profile (before extends-merging) so duplicates that
-    ``_merge_list`` would silently drop are still caught.
+    Plugins, extensions, and cargo crates all declare through the
+    ``packages`` surface now, so their dedup / empty-ref coverage is one
+    walk of the profile's raw ``packages`` list. Walks the raw profile
+    (before extends-merging) so duplicates that ``_merge_list`` would
+    silently drop during ``resolve_profile`` are still caught.
     """
-    raw_include = cfg.profiles[prof_name].extensions.include
+    raw_packages = cfg.profiles[prof_name].packages
     _check_dedup(
-        raw_include,
+        raw_packages,
         ctx=ctx,
         failures=failures,
-        empty_msg="extensions.include contains empty ID",
-        dup_label="extensions.include duplicate",
-    )
-
-
-def _check_claude_plugins(
-    cfg: Config,
-    prof_name: str,
-    ctx: str,
-    failures: list[ValidationErrorWithContext | str],
-) -> None:
-    """Check 5b: claude_plugins list — non-empty refs, no duplicates.
-
-    Same raw-profile rationale as Check 5: ``_merge_list`` dedupes during
-    ``resolve_profile``, so duplicates would be silently swallowed by the
-    resolved list. Walk the raw list to catch them at config time.
-    """
-    raw_plugins = cfg.profiles[prof_name].claude_plugins
-    _check_dedup(
-        raw_plugins,
-        ctx=ctx,
-        failures=failures,
-        empty_msg="claude_plugins contains empty ref",
-        dup_label="claude_plugins duplicate",
+        empty_msg="packages contains empty ref",
+        dup_label="packages duplicate",
     )
 
 

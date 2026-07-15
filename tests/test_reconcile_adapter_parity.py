@@ -27,15 +27,9 @@ _HEAD = (
     "  sp: {marketplace: mp}\n"
 )
 
-_OLD_YAML = _HEAD + (
-    "profiles:\n"
-    "  p:\n"
-    "    tracked_files: [t]\n"
-    "    claude_plugins: [sp]\n"
-    "    extensions: {include: [Vendor.Ext]}\n"
-)
-
-_NEW_YAML = _HEAD + (
+# Plugins and extensions are declared through the packages surface: a profile
+# refs top-level PluginPackage / ExtensionPackage entries.
+_PKG_YAML = _HEAD + (
     "packages:\n"
     "  sp-pkg: {type: plugin, plugin: sp}\n"
     "  ext-pkg: {type: extension, extension: Vendor.Ext}\n"
@@ -44,20 +38,6 @@ _NEW_YAML = _HEAD + (
     "    tracked_files: [t]\n"
     "    packages: [sp-pkg, ext-pkg]\n"
 )
-
-_BOTH_YAML = _HEAD + (
-    "packages:\n"
-    "  sp-pkg: {type: plugin, plugin: sp}\n"
-    "  ext-pkg: {type: extension, extension: Vendor.Ext}\n"
-    "profiles:\n"
-    "  p:\n"
-    "    tracked_files: [t]\n"
-    "    claude_plugins: [sp]\n"
-    "    extensions: {include: [Vendor.Ext]}\n"
-    "    packages: [sp-pkg, ext-pkg]\n"
-)
-
-_SHAPES = {"old": _OLD_YAML, "new": _NEW_YAML, "both": _BOTH_YAML}
 
 
 def _load(yaml_text: str) -> Config:
@@ -73,34 +53,33 @@ def _lock_key_set(cfg: Config) -> set[tuple[str, str]]:
     }
 
 
-def test_three_way_validate_parity_all_clean() -> None:
-    configs = {name: _load(text) for name, text in _SHAPES.items()}
-    ids = {
-        name: adapter.plugin_ids(cfg, resolve_profile(cfg, "p"))
-        for name, cfg in configs.items()
-    }
-    assert ids["old"] == ids["new"] == ids["both"] == {"sp@mp"}
-    exts = {
-        name: adapter.extensions_input(cfg, resolve_profile(cfg, "p")).include
-        for name, cfg in configs.items()
-    }
-    assert exts["old"] == exts["new"] == exts["both"] == ["Vendor.Ext"]
+def test_validate_path_reads_packages_surface() -> None:
+    """The adapter projects the packages surface into the plugin ids +
+    extension include the validate path consumes."""
+    cfg = _load(_PKG_YAML)
+    resolved = resolve_profile(cfg, "p")
+    assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
+    assert adapter.extensions_input(cfg, resolved).include == ["Vendor.Ext"]
 
 
-def test_three_way_lock_enumeration_parity() -> None:
-    keys = {name: _lock_key_set(_load(text)) for name, text in _SHAPES.items()}
-    expected = {("plugin", "sp@mp"), ("extension", "Vendor.Ext")}
-    assert keys["old"] == expected
-    assert keys["new"] == expected
-    assert keys["both"] == expected
+def test_validate_and_lock_paths_enumerate_the_same_set() -> None:
+    """The validate-path adapter projection and the lock-path enumeration
+    agree on the same plugin + extension identities from one config."""
+    cfg = _load(_PKG_YAML)
+    resolved = resolve_profile(cfg, "p")
+    assert adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
+    assert adapter.extensions_input(cfg, resolved).include == ["Vendor.Ext"]
+    assert _lock_key_set(cfg) == {("plugin", "sp@mp"), ("extension", "Vendor.Ext")}
 
 
 def test_lock_path_undeclared_plugin_message_verbatim() -> None:
+    # A plugin package whose bare name is absent from the top-level registry.
     cfg = Config.model_validate(
         {
             "tracked_files": {"t": {"src": "t", "dst": "~/t"}},
             "marketplaces": {"mp": {"source": "github", "repo": "o/r"}},
-            "profiles": {"p": {"claude_plugins": ["ghost"]}},
+            "packages": {"ghost-pkg": {"type": "plugin", "plugin": "ghost"}},
+            "profiles": {"p": {"packages": ["ghost-pkg"]}},
         }
     )
     resolved = resolve_profile(cfg, "p")
@@ -117,10 +96,12 @@ def test_load_time_aggregated_undeclared_message_verbatim() -> None:
         "version: 1\n"
         "tracked_files:\n"
         "  t: {src: t, dst: ~/t}\n"
+        "packages:\n"
+        "  ghost-pkg: {type: plugin, plugin: ghost}\n"
         "profiles:\n"
         "  p:\n"
         "    tracked_files: [t]\n"
-        "    claude_plugins: [ghost]\n"
+        "    packages: [ghost-pkg]\n"
     )
     with pytest.raises(ConfigError) as exc:
         _load(yaml_text)

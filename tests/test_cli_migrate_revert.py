@@ -592,3 +592,61 @@ def test_chained_2_1_to_5_0_no_fold_single_revert_restores_config_and_store(
     fid = file_id("notes")
     assert "notes" not in reconcile.read_index("default").files
     assert reconcile.read_base("default", fid) is None
+
+
+# A 5.0-origin config carrying all four legacy per-profile fields plus the
+# operator floor the profile-fields contraction gates on. The 5.0 -> 6.0 fold
+# mints top-level packages + a reconcile block and drops the legacy keys.
+_CFG_AT_5_0_WITH_LEGACY = textwrap.dedent(
+    """\
+    version: 1
+    schema_version: "5.0"
+    minimum_version: "6.0"
+    tracked_files: {}
+    claude_plugins:
+      superpowers:
+        marketplace: mkt
+    profiles:
+      default:
+        cargo_binaries:
+          - ripgrep
+        claude_plugins:
+          - superpowers
+        plugins_reconcile: strict
+        extensions:
+          include:
+            - ms-python.python
+          exclude:
+            - GitHub.copilot
+          reconcile: strict
+    """
+)
+
+
+def test_migrate_to_6_then_one_revert_reaches_origin(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` after a 5.0->6.0 fold restores the config byte-exact.
+
+    The profile-fields contraction folds ``cargo_binaries`` / ``claude_plugins``
+    / ``plugins_reconcile`` / ``extensions`` into ``packages`` + ``reconcile``
+    and drops the four legacy keys, stamping 6.0. As the chain-terminal cutover
+    it threads the pre-migration origin image as its transition's text patch, so
+    a single ``setforge revert --profile=migrate`` byte-restores the 5.0 origin
+    — the reverse never re-runs the down-migration, so the restore is exact
+    against the original bytes (no ruamel re-dump skew).
+    """
+    cfg = _write_cfg(tmp_path, _CFG_AT_5_0_WITH_LEGACY)
+    cfg_origin = cfg.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "6.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+    assert detect_current_schema(cfg) == "6.0"
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+    assert cfg.read_bytes() == cfg_origin

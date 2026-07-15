@@ -296,6 +296,41 @@ pre-migration origin image, so a single `setforge revert --profile=migrate`
 byte-restores the entire chain's origin — config **and** every reconcile-store
 leg an earlier cutover seeded — not merely the intermediate `4.0` state.
 
+## Profile-fields contraction — the translating major bump
+
+The `5.0 → 6.0` migration retires four legacy per-profile fields —
+`cargo_binaries`, `claude_plugins`, `plugins_reconcile`, and `extensions` — by
+folding each into the general `packages` registry plus the `reconcile` block:
+every `cargo_binaries` / `claude_plugins` entry and every `extensions.include`
+id becomes a top-level `packages` entry (kind `cargo` / `plugin` / `extension`)
+referenced from the profile, `plugins_reconcile` and
+`extensions.{exclude,reconcile}` move under `reconcile.{plugins,extensions}`,
+and the four legacy keys are dropped. The `packages` / `reconcile` surface
+already existed at `5.0`, so this is an **expand → contract** step: the new home
+shipped additively first, and `6.0` removes the old one only after.
+
+Unlike the lossy one-way contract steps (`2.0 → 2.1`, `2.1 → 3.0`,
+`3.0 → 4.0`), whose down-migrations **refuse**, this reverse is a **real
+translating down-migration**, not a refuse: a single `migrate --to=5.0`
+unfolds the minted `packages` entries back into `cargo_binaries` /
+`claude_plugins` / `extensions.include` and rebuilds the legacy
+`plugins_reconcile` / `extensions` shape, preserving any natively-authored
+`packages` refs in place. It honors the *both ways* rule; the round-trip
+restores schema **shape and values**, not byte identity (`ruamel` normalizes on
+the first load).
+
+The forward drop is **irreversible on un-upgraded hosts**, so it is gated
+behind an operator-declared `minimum_version >= 6.0` floor — the attestation
+that every host reading this config already speaks the contracted shape. Below
+the floor, or with no floor declared, the migration **refuses cleanly** and
+mutates nothing.
+
+It remains a **MAJOR** bump (`5 → 6`) in **lockstep**: an older (`5.x`) engine
+reading a `6.0` config still **refuses cleanly** via the cross-major
+`schema_version` guard, and this cutover is the new **chain-terminal** step —
+threading the whole chain's origin image so one `setforge revert
+--profile=migrate` byte-restores the pre-migration origin.
+
 ## `validate` orphan-overlay diagnostics
 
 `local.yaml` may carry `tracked_files.<id>` overlay entries (per-host `mode` /

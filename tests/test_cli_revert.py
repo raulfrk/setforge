@@ -213,15 +213,24 @@ def test_revert_restores_extension_state_to_pre_install(
     cfg, dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
 
-    # Patch the fixture YAML to declare an extension include list.
+    # Patch the fixture YAML to declare an extension include list via the
+    # top-level packages registry + a profile packages ref (the post-contract
+    # surface for what used to be a profile ``extensions.include`` block).
     yaml = cfg.read_text(encoding="utf-8")
     yaml = yaml.replace(
+        "profiles:\n",
+        "packages:\n"
+        "  example.ext-a:\n"
+        "    type: extension\n"
+        "    extension: example.ext-a\n"
+        "  example.ext-b:\n"
+        "    type: extension\n"
+        "    extension: example.ext-b\n"
+        "profiles:\n",
+    )
+    yaml = yaml.replace(
         "    tracked_files: [greeting]\n",
-        "    tracked_files: [greeting]\n"
-        "    extensions:\n"
-        "      include:\n"
-        "        - example.ext-a\n"
-        "        - example.ext-b\n",
+        "    tracked_files: [greeting]\n    packages: [example.ext-a, example.ext-b]\n",
     )
     cfg.write_text(yaml, encoding="utf-8")
 
@@ -337,12 +346,19 @@ def test_revert_continues_after_extension_uninstall_failure(
 
     yaml = cfg.read_text(encoding="utf-8")
     yaml = yaml.replace(
+        "profiles:\n",
+        "packages:\n"
+        "  good.one:\n"
+        "    type: extension\n"
+        "    extension: good.one\n"
+        "  broken.one:\n"
+        "    type: extension\n"
+        "    extension: broken.one\n"
+        "profiles:\n",
+    )
+    yaml = yaml.replace(
         "    tracked_files: [greeting]\n",
-        "    tracked_files: [greeting]\n"
-        "    extensions:\n"
-        "      include:\n"
-        "        - good.one\n"
-        "        - broken.one\n",
+        "    tracked_files: [greeting]\n    packages: [good.one, broken.one]\n",
     )
     cfg.write_text(yaml, encoding="utf-8")
 

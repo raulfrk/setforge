@@ -25,6 +25,24 @@ from setforge.vscode_extensions import (
 )
 
 
+def _profile_ext_includes(config_path: Path, profile: str) -> set[str]:
+    """Resolved extension include ids a profile declares via packages."""
+    from setforge import reconcile_adapter
+    from setforge.config import load_config, resolve_profile
+
+    cfg = load_config(config_path)
+    resolved = resolve_profile(cfg, profile)
+    return set(reconcile_adapter.extensions_input(cfg, resolved).include)
+
+
+def _profile_ext_excludes(config_path: Path, profile: str) -> set[str]:
+    """A profile's literal ``reconcile.extensions.exclude`` set."""
+    from setforge.config import load_config
+
+    cfg = load_config(config_path)
+    return set(cfg.profiles[profile].reconcile.extensions.exclude)
+
+
 class _FakeRunState(TypedDict):
     """Mock-state shape for the in-test ``code`` CLI driver."""
 
@@ -327,12 +345,15 @@ def test_remove_from_include_errors_when_only_in_parent(tmp_path: Path) -> None:
 version: 1
 tracked_files:
   d: {src: x, dst: y}
+packages:
+  inherited.one:
+    type: extension
+    extension: inherited.one
 profiles:
   parent:
     tracked_files: [d]
-    extensions:
-      include:
-        - inherited.one
+    packages:
+      - inherited.one
   child:
     extends: parent
     tracked_files: [d]
@@ -351,12 +372,15 @@ def test_remove_from_include_with_exclude_flag_overrides_parent(
 version: 1
 tracked_files:
   d: {src: x, dst: y}
+packages:
+  inherited.one:
+    type: extension
+    extension: inherited.one
 profiles:
   parent:
     tracked_files: [d]
-    extensions:
-      include:
-        - inherited.one
+    packages:
+      - inherited.one
   child:
     extends: parent
     tracked_files: [d]
@@ -368,12 +392,9 @@ profiles:
     text = p.read_text()
     # exclude entry should now sit under child
     assert "inherited.one" in text
-    # And it's still under parent.include — child override doesn't touch parent
-    from setforge.config import load_config
-
-    cfg = load_config(p)
-    assert "inherited.one" in cfg.profiles["parent"].extensions.include
-    assert "inherited.one" in cfg.profiles["child"].extensions.exclude
+    # And it's still declared by parent — child override doesn't touch parent.
+    assert "inherited.one" in _profile_ext_includes(p, "parent")
+    assert "inherited.one" in _profile_ext_excludes(p, "child")
 
 
 # ---- YAML-edit helpers ---------------------------------------------------
@@ -387,17 +408,24 @@ tracked_files:
     src: x
     dst: y
 
+# Packages comment.
+packages:
+  keep.me:
+    type: extension
+    extension: keep.me
+
 profiles:
   base:
     # Base profile comment.
     tracked_files:
       - d
-    extensions:
-      include:
-        - keep.me
-      # Inline comment between keys.
-      exclude:
-        - drop.me
+    packages:
+      - keep.me
+    reconcile:
+      extensions:
+        # Inline comment between keys.
+        exclude:
+          - drop.me
   bare:
     tracked_files:
       - d
@@ -425,7 +453,11 @@ def test_add_to_include_idempotent(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
     added = add_to_include(cfg, "base", "keep.me")
     assert added is False
-    assert cfg.read_text().count("keep.me") == 1
+    # The profile still references keep.me exactly once (no duplicate ref).
+    from setforge.config import load_config
+
+    prof = load_config(cfg).profiles["base"]
+    assert prof.packages.count("keep.me") == 1
 
 
 def test_add_to_include_creates_extensions_block_when_missing(
@@ -448,7 +480,9 @@ def test_remove_from_include_drops_entry(tmp_path: Path) -> None:
     cfg = _write_fixture(tmp_path)
     changed = remove_from_include(cfg, "base", "keep.me")
     assert changed is True
-    assert "keep.me" not in cfg.read_text()
+    # The profile no longer declares the extension (the top-level package entry
+    # may linger — it can be shared — but the profile ref is gone).
+    assert "keep.me" not in _profile_ext_includes(cfg, "base")
 
 
 def test_remove_from_include_with_exclude_flag_appends_to_exclude(
@@ -457,10 +491,9 @@ def test_remove_from_include_with_exclude_flag_appends_to_exclude(
     cfg = _write_fixture(tmp_path)
     changed = remove_from_include(cfg, "base", "keep.me", add_to_exclude_list=True)
     assert changed is True
-    text = cfg.read_text()
-    assert "keep.me" in text  # under exclude now
-    # And no longer under include — count once total
-    assert text.count("keep.me") == 1
+    # No longer declared by the profile, now sits in the exclude list once.
+    assert "keep.me" not in _profile_ext_includes(cfg, "base")
+    assert "keep.me" in _profile_ext_excludes(cfg, "base")
 
 
 def test_remove_from_include_idempotent_when_absent(tmp_path: Path) -> None:
@@ -479,8 +512,8 @@ def test_yaml_edits_preserve_structure_via_pydantic_round_trip(
 
     cfg = _write_fixture(tmp_path)
     add_to_include(cfg, "base", "post.edit")
-    config = load_config(cfg)
-    assert "post.edit" in config.profiles["base"].extensions.include
+    load_config(cfg)  # must still validate
+    assert "post.edit" in _profile_ext_includes(cfg, "base")
 
 
 # ---- capture_extensions --------------------------------------------------
@@ -500,12 +533,9 @@ def test_capture_extensions_writes_installed_minus_exclude(
     assert "b.y" in text
     assert "extra.one" in text
     assert "drop.me" in text  # appears under exclude (already there)
-    # "drop.me" is excluded so it shouldn't end up in the new include list
-    from setforge.config import load_config
-
-    reloaded = load_config(cfg)
-    assert "drop.me" not in reloaded.profiles["base"].extensions.include
-    assert "drop.me" in reloaded.profiles["base"].extensions.exclude
+    # "drop.me" is excluded so it shouldn't end up in the new include list.
+    assert "drop.me" not in _profile_ext_includes(cfg, "base")
+    assert "drop.me" in _profile_ext_excludes(cfg, "base")
 
 
 def test_capture_extensions_preserves_comments(tmp_path: Path, fake_code) -> None:

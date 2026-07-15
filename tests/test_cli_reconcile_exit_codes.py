@@ -23,9 +23,11 @@ from typer.testing import CliRunner
 from setforge.cli import app
 from setforge.config import (
     Config,
-    Extensions,
+    ExtensionReconcile,
+    PluginReconcile,
     Profile,
     ReconcilePolicy,
+    ReconcileSpec,
     ResolvedProfile,
     TrackedFile,
 )
@@ -43,12 +45,15 @@ def _stub_ext_config_layer(
 ) -> None:
     """Bypass source/config resolution for ``ext reconcile``.
 
-    ``resolved.extensions`` carries the reconcile policy (used to compute
-    ``is_read_only``); the real reconcile is patched per-test.
+    ``resolved.reconcile.extensions.policy`` carries the reconcile policy
+    (used to compute ``is_read_only``); the real reconcile is patched
+    per-test.
     """
     import setforge.cli.ext as ext_mod
 
-    resolved = ResolvedProfile(extensions=Extensions(reconcile=policy))
+    resolved = ResolvedProfile(
+        reconcile=ReconcileSpec(extensions=ExtensionReconcile(policy=policy))
+    )
     monkeypatch.setattr(ext_mod, "_resolve_config_arg", lambda c: c)
     monkeypatch.setattr(ext_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(ext_mod, "resolve_profile", lambda cfg, profile: resolved)
@@ -59,12 +64,14 @@ def _stub_plugin_config_layer(
 ) -> None:
     """Bypass source/config resolution for ``plugin reconcile``.
 
-    ``resolved.plugins_reconcile`` carries the policy used to compute
+    ``resolved.reconcile.plugins.policy`` carries the policy used to compute
     ``is_read_only``.
     """
     import setforge.cli.plugins as plugins_mod
 
-    resolved = ResolvedProfile(plugins_reconcile=policy)
+    resolved = ResolvedProfile(
+        reconcile=ReconcileSpec(plugins=PluginReconcile(policy=policy))
+    )
     monkeypatch.setattr(plugins_mod, "_resolve_config_arg", lambda c: c)
     monkeypatch.setattr(plugins_mod, "load_config", lambda c: _empty_config())
     monkeypatch.setattr(plugins_mod, "resolve_profile", lambda cfg, profile: resolved)

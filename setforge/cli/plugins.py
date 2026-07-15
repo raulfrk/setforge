@@ -203,16 +203,17 @@ def _register_plugin_in_yaml(
     if plugin_declared:
         typer.echo(f"declared plugin: {plugin_name} @ {mp_name}")
 
-    # Bind the profile to the BARE plugin name: the top-level registry key is
-    # the bare name (see yaml_add_plugin above), and every reader of
-    # profile.claude_plugins (_validate_plugin_references, plugin_ids,
-    # sync_marketplace_cache) treats entries as bare registry keys. Writing the
-    # `@`-form here would brick the config on the next load_config.
+    # Bind the profile to the BARE plugin name via a packages ref: the
+    # top-level registry key is the bare name (see yaml_add_plugin above), and
+    # every reader of the profile's plugin set (_validate_plugin_references,
+    # plugin_ids, sync_marketplace_cache) resolves the bare name through the
+    # minted plugin package. Writing the `@`-form here would brick the config
+    # on the next load_config.
     profile_added = claude_yaml_editor_mod.yaml_add_plugin_to_profile(
         config, profile, plugin_name
     )
     if profile_added:
-        typer.echo(f"added to {profile}.claude_plugins: {plugin_name}")
+        typer.echo(f"added to {profile}.packages: {plugin_name} (plugin)")
 
 
 def _execute_plugin_add(plugin_name: str, mp_name: str) -> None:
@@ -290,7 +291,7 @@ def plugin_remove(
         help="Also run `claude plugin disable` after removing from YAML.",
     ),
 ) -> None:
-    """Remove a plugin from the profile's claude_plugins list."""
+    """Remove a plugin from the profile's packages list."""
     config = _resolve_config_arg(config)
     cfg = load_config(config)
     # Profile bindings are stored under the BARE plugin name (see plugin_add),
@@ -301,9 +302,9 @@ def plugin_remove(
         config, profile, bare_ref
     )
     if changed:
-        typer.echo(f"removed from {profile}.claude_plugins: {bare_ref}")
+        typer.echo(f"removed from {profile}.packages: {bare_ref} (plugin)")
     else:
-        typer.echo(f"not in {profile}.claude_plugins: {bare_ref}")
+        typer.echo(f"not in {profile}.packages: {bare_ref} (plugin)")
     if disable:
         # The claude `plugin disable` binary requires the full
         # <name>@<marketplace> id. When the user passed the bare form,

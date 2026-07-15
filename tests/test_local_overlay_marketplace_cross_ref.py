@@ -22,9 +22,10 @@ from setforge.cli import app
 from setforge.config import (
     ClaudePluginRef,
     Config,
-    Extensions,
+    ExtensionPackage,
     MarketplaceSource,
     MarketplaceSourceKind,
+    Package,
     PluginPackage,
     Profile,
     ResolvedProfile,
@@ -38,26 +39,34 @@ def _make_cfg(
     *,
     plugins: dict[str, str] | None = None,
     marketplaces: dict[str, MarketplaceSource] | None = None,
+    extensions: list[str] | None = None,
 ) -> Config:
+    """Build a Config whose profile ``p`` declares its plugins + extensions
+    through the ``packages`` surface (kind ``plugin`` / ``extension``)."""
     plugins = plugins or {}
     marketplaces = marketplaces or {}
+    extensions = extensions or []
+    packages: dict[str, Package] = {
+        name: PluginPackage(plugin=name) for name in plugins
+    }
+    packages.update({ext: ExtensionPackage(extension=ext) for ext in extensions})
     return Config(
         tracked_files={},
         marketplaces=marketplaces,
         claude_plugins={
             name: ClaudePluginRef(marketplace=mp) for name, mp in plugins.items()
         },
-        profiles={"p": Profile(claude_plugins=list(plugins.keys()))},
+        packages=packages,
+        profiles={"p": Profile(packages=list(packages))},
     )
 
 
 def _make_resolved(
     plugins: list[str], extensions: list[str] | None = None
 ) -> ResolvedProfile:
-    return ResolvedProfile(
-        claude_plugins=plugins,
-        extensions=Extensions(include=extensions or []),
-    )
+    """A resolved profile whose ``packages`` refs match the plugin + extension
+    package keys the companion :func:`_make_cfg` registers."""
+    return ResolvedProfile(packages=[*plugins, *(extensions or [])])
 
 
 def _write_local(tmp_path: Path, body: str) -> Path:
@@ -98,7 +107,7 @@ def test_overlay_remove_of_package_declared_plugin_resolves(tmp_path: Path) -> N
         packages={"plug": PluginPackage(plugin="pkg-plugin")},
         profiles={"p": Profile(packages=["plug"])},
     )
-    rp = ResolvedProfile(claude_plugins=[], packages=["plug"])
+    rp = ResolvedProfile(packages=["plug"])
     local = _write_local(
         tmp_path,
         """\
@@ -233,7 +242,14 @@ def test_marketplace_remove_leaving_orphaned_plugin_ref_errors(
 def test_plugin_add_intersect_remove_collision_errors_via_apply(
     tmp_path: Path,
 ) -> None:
-    cfg = _make_cfg()
+    cfg = _make_cfg(
+        plugins={"sp": "official"},
+        marketplaces={
+            "official": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="a/b"
+            )
+        },
+    )
     rp = _make_resolved(["sp"])
     local = _write_local(
         tmp_path,
@@ -256,7 +272,7 @@ def test_plugin_add_intersect_remove_collision_errors_via_apply(
 
 
 def test_extension_remove_not_in_profile_errors_via_apply(tmp_path: Path) -> None:
-    cfg = _make_cfg()
+    cfg = _make_cfg(extensions=["ms-python.python"])
     rp = _make_resolved([], extensions=["ms-python.python"])
     local = _write_local(
         tmp_path,
@@ -318,7 +334,9 @@ def test_empty_plugin_pid_raises_local_overlay_error(tmp_path: Path) -> None:
 def test_apply_local_overlay_mutates_resolved_extensions_in_place(
     tmp_path: Path,
 ) -> None:
-    cfg = _make_cfg()
+    from setforge import reconcile_adapter
+
+    cfg = _make_cfg(extensions=["ms-python.python", "redhat.vscode-yaml"])
     rp = _make_resolved([], extensions=["ms-python.python", "redhat.vscode-yaml"])
     local = _write_local(
         tmp_path,
@@ -331,9 +349,10 @@ def test_apply_local_overlay_mutates_resolved_extensions_in_place(
         """,
     )
     apply_local_overlay(cfg, rp, "p", local_config_path=local)
-    assert "vue.volar" in rp.extensions.include
-    assert "redhat.vscode-yaml" not in rp.extensions.include
-    assert "ms-python.python" in rp.extensions.include
+    include = reconcile_adapter.extensions_input(cfg, rp).include
+    assert "vue.volar" in include
+    assert "redhat.vscode-yaml" not in include
+    assert "ms-python.python" in include
 
 
 def test_apply_local_overlay_mutates_resolved_plugins_in_place(
@@ -358,9 +377,12 @@ def test_apply_local_overlay_mutates_resolved_plugins_in_place(
             - sp
         """,
     )
+    from setforge import reconcile_adapter
+
     apply_local_overlay(cfg, rp, "p", local_config_path=local)
-    assert "other-tool" in rp.claude_plugins
-    assert "sp" not in rp.claude_plugins
+    bare = reconcile_adapter.plugin_bare_names(cfg, rp)
+    assert "other-tool" in bare
+    assert "sp" not in bare
 
 
 def test_apply_local_overlay_synthesizes_claude_plugins_registry(
@@ -508,6 +530,7 @@ def test_apply_local_overlay_check_returns_false_on_resolver_error(
     cfg = _make_cfg(
         plugins={"sp": "ghost-mp"},
         marketplaces={},
+        extensions=["ms-python.python"],
     )
     rp = _make_resolved(["sp"], extensions=["ms-python.python"])
 
@@ -610,10 +633,14 @@ def test_resolver_error_via_cli_surfaces_check_6_fallback(
         claude_plugins:
           sp:
             marketplace: ghost-mp
+        packages:
+          sp:
+            type: plugin
+            plugin: sp
         profiles:
           p:
             tracked_files: [d]
-            claude_plugins: [sp]
+            packages: [sp]
         """
     )
     cfg_path = tmp_path / "setforge.yaml"

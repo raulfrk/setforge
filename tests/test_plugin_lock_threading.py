@@ -289,7 +289,7 @@ def test_reconcile_threads_pins_into_checkout(monkeypatch, tmp_path: Path) -> No
     )
     from setforge.config import ResolvedProfile
 
-    resolved = ResolvedProfile(claude_plugins=["revdiff"])
+    resolved = ResolvedProfile(packages=["revdiff"])
     lock = LockFile(version=1, packages=(_plugin_pin("revdiff@revdiff"),))
 
     monkeypatch.setattr(mp_cache, "MARKETPLACE_CACHE_ROOT", tmp_path / "cache")

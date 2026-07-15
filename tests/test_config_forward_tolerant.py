@@ -28,17 +28,17 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 
 def test_cross_major_newer_refuses_clean(tmp_path: Path) -> None:
-    """A major-6 config on the major-5 engine refuses cleanly."""
-    cfg = _write(tmp_path, _AT.format(ver='"6.0"'))
+    """A major-7 config on the major-6 engine refuses cleanly."""
+    cfg = _write(tmp_path, _AT.format(ver='"7.0"'))
     with pytest.raises(ConfigError, match="upgrade setforge"):
         load_config(cfg)
 
 
 def test_same_major_newer_minor_loads(tmp_path: Path) -> None:
-    """A 5.9 config on a 5.0 engine tolerates (loads) — no refusal."""
-    cfg = _write(tmp_path, _AT.format(ver='"5.9"'))
+    """A 6.9 config on a 6.0 engine tolerates (loads) — no refusal."""
+    cfg = _write(tmp_path, _AT.format(ver='"6.9"'))
     config = load_config(cfg)
-    assert config.schema_version == "5.9"
+    assert config.schema_version == "6.9"
 
 
 def test_malformed_schema_version_clean_error(tmp_path: Path) -> None:
@@ -92,8 +92,8 @@ def test_minimum_version_field_accepted(tmp_path: Path) -> None:
 
 
 def test_minimum_version_above_engine_same_major_refuses(tmp_path: Path) -> None:
-    """Floor 5.5 on a 5.0 engine refuses — inside the same-major-tolerant window."""
-    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"5.0"', floor='"5.5"'))
+    """Floor 6.5 on a 6.0 engine refuses — inside the same-major-tolerant window."""
+    cfg = _write(tmp_path, _WITH_FLOOR.format(ver='"6.0"', floor='"6.5"'))
     with pytest.raises(ConfigError, match="minimum_version") as exc:
         load_config(cfg)
     assert "upgrade setforge" in str(exc.value)
@@ -129,7 +129,7 @@ def test_minimum_version_refuses_before_unknown_key_validation(tmp_path: Path) -
     validated Config attribute that the forward-tolerant strip would eat.
     """
     body = (
-        'version: 1\nschema_version: "5.0"\nminimum_version: "5.5"\n'
+        'version: 1\nschema_version: "6.0"\nminimum_version: "6.5"\n'
         "tracked_files: {}\nprofiles:\n  default: {}\nstray_typo: 1\n"
     )
     cfg = _write(tmp_path, body)

@@ -49,7 +49,7 @@ from setforge.config import (
     TrackedFile,
 )
 
-SCHEMA_MAJOR: int = 5
+SCHEMA_MAJOR: int = 6
 """The major version :data:`FROZEN_FIELD_MANIFEST` describes."""
 
 _MODELS: tuple[type[BaseModel], ...] = (
@@ -133,12 +133,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     "Profile": {
         "extends": "str | None",
         "tracked_files": "list[str]",
-        "extensions": "<class 'setforge.config.Extensions'>",
-        "claude_plugins": "list[str]",
-        "plugins_reconcile": "<enum 'ReconcilePolicy'>",
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
-        "cargo_binaries": "list[str]",
         "packages": "list[str]",
         "bundles": "list[str]",
         "reconcile": "<class 'setforge.config.ReconcileSpec'>",
@@ -170,12 +166,8 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
     "ResolvedProfile": {
         "extends": "<class 'NoneType'>",
         "tracked_files": "list[str]",
-        "extensions": "<class 'setforge.config.Extensions'>",
-        "claude_plugins": "list[str]",
-        "plugins_reconcile": "<enum 'ReconcilePolicy'>",
         "bootstrap": "list[pathlib.Path]",
         "mcp_servers": "list[str]",
-        "cargo_binaries": "list[str]",
         "packages": "list[str]",
         "bundles": "list[str]",
         "reconcile": "<class 'setforge.config.ReconcileSpec'>",

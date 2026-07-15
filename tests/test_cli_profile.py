@@ -43,19 +43,28 @@ claude_plugins:
     marketplace: shared-market
   derived-plugin:
     marketplace: shared-market
+packages:
+  base-plugin:
+    type: plugin
+    plugin: base-plugin
+  derived-plugin:
+    type: plugin
+    plugin: derived-plugin
+  ms-python.python:
+    type: extension
+    extension: ms-python.python
+  ms-vscode.cpptools:
+    type: extension
+    extension: ms-vscode.cpptools
 profiles:
   base:
     tracked_files: [base_tracked, has_preserve]
-    claude_plugins: [base-plugin]
+    packages: [base-plugin, ms-python.python]
     bootstrap: [~/.claude/header.md]
-    extensions:
-      include: [ms-python.python]
   derived:
     extends: base
     tracked_files: [derived_tracked]
-    claude_plugins: [derived-plugin]
-    extensions:
-      include: [ms-vscode.cpptools]
+    packages: [derived-plugin, ms-vscode.cpptools]
 """
 
 

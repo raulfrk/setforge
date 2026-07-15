@@ -534,9 +534,9 @@ def compare_profile(
 
     Overlay contract (SPEC 2): this function re-resolves
     the profile via :func:`resolve_profile` and intentionally discards
-    any :func:`apply_local_overlay` mutations to
-    ``resolved.claude_plugins`` or ``resolved.extensions.include`` that
-    callers may have applied upstream. That's safe today because compare
+    any :func:`apply_local_overlay` mutations to the profile's plugin /
+    extension ``packages`` refs that callers may have applied
+    upstream. That's safe today because compare
     only iterates ``resolved.tracked_files`` — a field the overlay never
     touches. If compare ever starts reading plugin / extension lists
     (e.g. to surface overlay-tagged drift in the report), this

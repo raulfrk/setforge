@@ -5,14 +5,20 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from setforge import reconcile_adapter
 from setforge.config import (
     ClaudePluginRef,
     Config,
+    ExtensionPackage,
+    ExtensionReconcile,
     Extensions,
     MarketplaceSource,
     MarketplaceSourceKind,
+    PluginPackage,
+    PluginReconcile,
     Profile,
     ReconcilePolicy,
+    ReconcileSpec,
     ResolvedProfile,
     TrackedFile,
     load_config,
@@ -41,9 +47,26 @@ def test_marketplace_source_kinds() -> None:
 
 
 def test_reconcile_policy_parsed_as_enum() -> None:
-    cfg = load_config(FIXTURES / "sample_config.yaml")
-    assert cfg.profiles["base"].extensions.reconcile is ReconcilePolicy.ADDITIVE
-    assert cfg.profiles["child"].extensions.reconcile is ReconcilePolicy.PRUNE
+    # Reconcile-policy strings on the reconcile block parse into the
+    # ReconcilePolicy enum (additive/prune) rather than staying raw str.
+    cfg = _cfg(
+        {
+            "base": Profile(
+                tracked_files=["claude_md"],
+                reconcile=ReconcileSpec(
+                    extensions=ExtensionReconcile(policy="additive"),  # type: ignore[arg-type]
+                ),
+            ),
+            "child": Profile(
+                extends="base",
+                reconcile=ReconcileSpec(
+                    extensions=ExtensionReconcile(policy="prune"),  # type: ignore[arg-type]
+                ),
+            ),
+        }
+    )
+    assert cfg.profiles["base"].reconcile.extensions.policy is ReconcilePolicy.ADDITIVE
+    assert cfg.profiles["child"].reconcile.extensions.policy is ReconcilePolicy.PRUNE
 
 
 def test_unknown_reconcile_policy_rejected() -> None:
@@ -76,9 +99,9 @@ def test_load_config_empty_file(tmp_path: Path) -> None:
 
 
 def test_load_config_rejects_undeclared_plugin_reference(tmp_path: Path) -> None:
-    """A profile referencing a plugin missing from the top-level
-    claude_plugins registry raises ConfigError naming both the profile
-    and the offending plugin, before any subprocess work runs."""
+    """A profile referencing (via a plugin package) a plugin missing from
+    the top-level claude_plugins registry raises ConfigError naming both
+    the profile and the offending plugin, before any subprocess work runs."""
     config_path = tmp_path / "setforge.yaml"
     config_path.write_text(
         """\
@@ -94,13 +117,20 @@ marketplaces:
 claude_plugins:
   declared-plugin:
     marketplace: official
+packages:
+  declared-pkg:
+    type: plugin
+    plugin: declared-plugin
+  missing-pkg:
+    type: plugin
+    plugin: missing-plugin
 profiles:
   base:
     tracked_files:
       - d
-    claude_plugins:
-      - declared-plugin
-      - missing-plugin
+    packages:
+      - declared-pkg
+      - missing-pkg
 """
     )
     with pytest.raises(ConfigError) as exc_info:
@@ -113,8 +143,9 @@ profiles:
 def test_load_config_collects_multiple_undeclared_plugin_references(
     tmp_path: Path,
 ) -> None:
-    """When several profiles reference undeclared plugins, all offenders
-    appear in a single ConfigError message — no early-bail on the first."""
+    """When several profiles reference undeclared plugins (via plugin
+    packages), all offenders appear in a single ConfigError message — no
+    early-bail on the first."""
     config_path = tmp_path / "setforge.yaml"
     config_path.write_text(
         """\
@@ -123,15 +154,22 @@ tracked_files:
   d:
     src: x
     dst: y
+packages:
+  ghost-a-pkg:
+    type: plugin
+    plugin: ghost-a
+  ghost-b-pkg:
+    type: plugin
+    plugin: ghost-b
 profiles:
   alpha:
     tracked_files: [d]
-    claude_plugins:
-      - ghost-a
+    packages:
+      - ghost-a-pkg
   beta:
     tracked_files: [d]
-    claude_plugins:
-      - ghost-b
+    packages:
+      - ghost-b-pkg
 """
     )
     with pytest.raises(ConfigError) as exc_info:
@@ -204,9 +242,11 @@ def test_profile_defaults() -> None:
     p = Profile()
     assert p.extends is None
     assert p.tracked_files == []
-    assert p.extensions == Extensions()
-    assert p.claude_plugins == []
-    assert p.plugins_reconcile is ReconcilePolicy.ADDITIVE
+    assert p.packages == []
+    assert p.reconcile == ReconcileSpec()
+    assert p.reconcile.plugins.policy is ReconcilePolicy.ADDITIVE
+    assert p.reconcile.extensions.policy is ReconcilePolicy.ADDITIVE
+    assert p.reconcile.extensions.exclude == []
     assert p.bootstrap == []
 
 
@@ -238,28 +278,43 @@ def test_resolve_single_profile() -> None:
 
 
 def test_resolve_two_level_chain_lists_and_scalars() -> None:
-    cfg = _cfg(
-        {
+    # Plugins/extensions now flow through package refs; reconcile policy
+    # through the reconcile block. Parent sets prune for both plugins and
+    # extensions; child leaves reconcile unset so it inherits.
+    cfg = Config(
+        tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
+        claude_plugins={
+            "p1": ClaudePluginRef(marketplace="m"),
+            "p2": ClaudePluginRef(marketplace="m"),
+        },
+        packages={
+            "p1-pkg": PluginPackage(plugin="p1"),
+            "p2-pkg": PluginPackage(plugin="p2"),
+            "e1-pkg": ExtensionPackage(extension="e1"),
+            "e2-pkg": ExtensionPackage(extension="e2"),
+        },
+        profiles={
             "parent": Profile(
                 tracked_files=["a", "b"],
-                claude_plugins=["p1"],
-                extensions=Extensions(include=["e1"], reconcile=ReconcilePolicy.PRUNE),
-                plugins_reconcile=ReconcilePolicy.PRUNE,
+                packages=["p1-pkg", "e1-pkg"],
+                reconcile=ReconcileSpec(
+                    plugins=PluginReconcile(policy=ReconcilePolicy.PRUNE),
+                    extensions=ExtensionReconcile(policy=ReconcilePolicy.PRUNE),
+                ),
             ),
             "child": Profile(
                 extends="parent",
                 tracked_files=["b", "c"],
-                claude_plugins=["p2"],
-                extensions=Extensions(include=["e2"]),
+                packages=["p2-pkg", "e2-pkg"],
             ),
-        }
+        },
     )
     resolved = resolve_profile(cfg, "child")
     assert resolved.tracked_files == ["a", "b", "c"]
-    assert resolved.claude_plugins == ["p1", "p2"]
-    assert resolved.extensions.include == ["e1", "e2"]
-    assert resolved.extensions.reconcile is ReconcilePolicy.PRUNE
-    assert resolved.plugins_reconcile is ReconcilePolicy.PRUNE
+    assert reconcile_adapter.plugin_bare_names(cfg, resolved) == ["p1", "p2"]
+    assert reconcile_adapter.extensions_input(cfg, resolved).include == ["e1", "e2"]
+    assert resolved.reconcile.extensions.policy is ReconcilePolicy.PRUNE
+    assert resolved.reconcile.plugins.policy is ReconcilePolicy.PRUNE
 
 
 def test_resolve_three_level_chain() -> None:
@@ -288,38 +343,56 @@ def test_resolve_dedup_preserves_first_occurrence() -> None:
 def test_resolve_scalar_inherits_when_child_unset() -> None:
     cfg = _cfg(
         {
-            "parent": Profile(plugins_reconcile=ReconcilePolicy.PRUNE),
+            "parent": Profile(
+                reconcile=ReconcileSpec(
+                    plugins=PluginReconcile(policy=ReconcilePolicy.PRUNE),
+                ),
+            ),
             "child": Profile(extends="parent"),
         }
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.plugins_reconcile is ReconcilePolicy.PRUNE
+    assert resolved.reconcile.plugins.policy is ReconcilePolicy.PRUNE
 
 
 def test_resolve_scalar_child_explicit_override() -> None:
     cfg = _cfg(
         {
-            "parent": Profile(plugins_reconcile=ReconcilePolicy.PRUNE),
+            "parent": Profile(
+                reconcile=ReconcileSpec(
+                    plugins=PluginReconcile(policy=ReconcilePolicy.PRUNE),
+                ),
+            ),
             "child": Profile(
                 extends="parent",
-                plugins_reconcile=ReconcilePolicy.ADDITIVE,
+                reconcile=ReconcileSpec(
+                    plugins=PluginReconcile(policy=ReconcilePolicy.ADDITIVE),
+                ),
             ),
         }
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.plugins_reconcile is ReconcilePolicy.ADDITIVE
+    assert resolved.reconcile.plugins.policy is ReconcilePolicy.ADDITIVE
 
 
 def test_resolve_extension_reconcile_inherits() -> None:
-    cfg = _cfg(
-        {
-            "parent": Profile(extensions=Extensions(reconcile=ReconcilePolicy.PRUNE)),
-            "child": Profile(extends="parent", extensions=Extensions(include=["x"])),
-        }
+    # Parent sets extensions reconcile=prune; child adds an extension
+    # package but leaves reconcile unset, so the parent policy inherits.
+    cfg = Config(
+        tracked_files={"d": TrackedFile(src=Path("a"), dst="b")},
+        packages={"x-pkg": ExtensionPackage(extension="x")},
+        profiles={
+            "parent": Profile(
+                reconcile=ReconcileSpec(
+                    extensions=ExtensionReconcile(policy=ReconcilePolicy.PRUNE),
+                ),
+            ),
+            "child": Profile(extends="parent", packages=["x-pkg"]),
+        },
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.extensions.reconcile is ReconcilePolicy.PRUNE
-    assert resolved.extensions.include == ["x"]
+    assert resolved.reconcile.extensions.policy is ReconcilePolicy.PRUNE
+    assert reconcile_adapter.extensions_input(cfg, resolved).include == ["x"]
 
 
 def test_resolve_cycle_raises_with_chain() -> None:

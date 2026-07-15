@@ -75,10 +75,14 @@ marketplaces:
 claude_plugins:
   superpowers:
     marketplace: mp
+packages:
+  superpowers:
+    type: plugin
+    plugin: superpowers
 profiles:
   myprofile:
     tracked_files: [d]
-    claude_plugins: [superpowers]
+    packages: [superpowers]
 """
 
 

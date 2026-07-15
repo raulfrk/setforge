@@ -93,30 +93,6 @@ def test_locked_fails_when_lockable_package_missing_from_lock(
     assert "ripgrep" in result.output
 
 
-def test_locked_does_not_fail_on_cargo_binaries_absent_from_lock(
-    install_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # cargo_binaries is NOT lockable; absent from the lock must NOT fail --locked.
-    import setforge.provision.cargo as cargo_prov
-
-    monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
-    monkeypatch.setattr(
-        cargo_prov.CargoProvisioner,
-        "apply_one",
-        lambda self, item: ProvisionOutcome(
-            item=item, outcome=Outcome.OK, detail="installed"
-        ),
-    )
-    config = _write_config(
-        install_repo,
-        packages_block="",
-        profile_body="    cargo_binaries:\n      - ast-grep\n",
-    )
-    write_lock(LockFile(packages=()), lock_path(config))
-    result = _install(config, "--locked")
-    assert result.exit_code == 0, result.output
-
-
 def test_locked_passes_when_lockable_package_present(
     install_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -158,8 +134,8 @@ def test_no_lock_present_installs_from_spec_unchanged(
     )
     config = _write_config(
         install_repo,
-        packages_block="",
-        profile_body="    cargo_binaries:\n      - ast-grep\n",
+        packages_block="packages:\n  ag:\n    type: cargo\n    crate: ast-grep\n",
+        profile_body="    packages:\n      - ag\n",
     )
     assert not lock_path(config).exists()
     result = _install(config)

@@ -34,8 +34,12 @@ from setforge import claude_marketplace_cache as _mp_cache
 from setforge import claude_plugins as _cp
 from setforge.config import (
     Config,
+    Package,
+    PluginPackage,
+    PluginReconcile,
     Profile,
     ReconcilePolicy,
+    ReconcileSpec,
     ResolvedProfile,
     TrackedFile,
 )
@@ -231,12 +235,23 @@ def _make_config(
     marketplaces: dict | None = None,
     claude_plugins: dict | None = None,
 ) -> Config:
-    """Build a minimal Config for reconcile / sync-cache tests."""
+    """Build a minimal Config for reconcile / sync-cache tests.
+
+    Each ``claude_plugins`` registry key is also minted as a top-level
+    ``PluginPackage`` and referenced from the default profile, so the
+    reconcile adapter resolves the profile's plugin set through the
+    packages surface.
+    """
+    claude_plugins = claude_plugins or {}
+    packages: dict[str, Package] = {
+        name: PluginPackage(plugin=name) for name in claude_plugins
+    }
     return Config(
         tracked_files={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
         marketplaces=marketplaces or {},
-        claude_plugins=claude_plugins or {},
-        profiles={"default": Profile(tracked_files=["d"])},
+        claude_plugins=claude_plugins,
+        packages=packages,
+        profiles={"default": Profile(tracked_files=["d"], packages=list(packages))},
     )
 
 
@@ -245,9 +260,11 @@ def _make_resolved(
     claude_plugins: list[str] | None = None,
     plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE,
 ) -> ResolvedProfile:
+    """Resolved profile declaring plugins via ``packages`` refs (each name
+    is a ``PluginPackage`` ref the companion ``_make_config`` registers)."""
     return ResolvedProfile(
-        claude_plugins=claude_plugins or [],
-        plugins_reconcile=plugins_reconcile,
+        packages=list(claude_plugins or []),
+        reconcile=ReconcileSpec(plugins=PluginReconcile(policy=plugins_reconcile)),
     )
 
 

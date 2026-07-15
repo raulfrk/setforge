@@ -112,6 +112,7 @@ __all__ = [
     "MarkerRetireMigration",
     "Migration",
     "MigrationRoots",
+    "ProfileFieldsRetireMigration",
     "RestampMigration",
     "VersionStampMigration",
     "current_expected_schema_version",
@@ -125,7 +126,7 @@ __all__ = [
 ]
 
 
-current_expected_schema_version: Final[str] = "5.0"
+current_expected_schema_version: Final[str] = "6.0"
 """Schema version this build of setforge expects.
 
 When the user's ``setforge.yaml`` declares (or defaults to) a different
@@ -555,6 +556,9 @@ from setforge.migrations._disposition_retire import (  # noqa: E402
     DispositionRetireMigration,
 )
 from setforge.migrations._marker_retire import MarkerRetireMigration  # noqa: E402
+from setforge.migrations._profile_fields_retire import (  # noqa: E402
+    ProfileFieldsRetireMigration,
+)
 from setforge.migrations._span_surface_retire import (  # noqa: E402
     SpanSurfaceRetireMigration,
 )
@@ -570,6 +574,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
     DispositionRetireMigration(),
     SpanSurfaceRetireMigration(),
     SpanTypesRetireMigration(),
+    ProfileFieldsRetireMigration(),
 )
 """Ordered registry of available FORWARD migrations.
 

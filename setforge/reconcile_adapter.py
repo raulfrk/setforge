@@ -1,7 +1,8 @@
-"""Unions the OLD reconcile fields with the NEW package + reconcile-block surface.
+"""Projects the package + reconcile-block surface into the plugin/extension/cargo
+lists the provisioning engines consume.
 
-Policy: ``new if new != ADDITIVE else old`` (both always hold a value
-post-resolve, so this is the only way to detect an unset ``new``). Imports
+Reads plugin/extension/cargo intent from ``resolved.packages`` (keyed through
+``cfg.packages``) and reconcile policy from ``resolved.reconcile``. Imports
 FROM ``config`` at module level; ``config.py`` imports back only via
 function-local imports (dodges an import-time cycle)."""
 
@@ -13,20 +14,16 @@ from setforge.config import (
     PluginPackage,
     ReconcilePolicy,
     ResolvedProfile,
-    _merge_list,
 )
 from setforge.errors import ConfigError
 
 
 def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
-    return _merge_list(
-        resolved.claude_plugins,
-        [
-            pkg.plugin
-            for ref in resolved.packages
-            if isinstance(pkg := cfg.packages[ref], PluginPackage)
-        ],
-    )
+    return [
+        pkg.plugin
+        for ref in resolved.packages
+        if isinstance(pkg := cfg.packages.get(ref), PluginPackage)
+    ]
 
 
 def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
@@ -45,36 +42,24 @@ def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
 
 
 def plugin_policy(resolved: ResolvedProfile) -> ReconcilePolicy:
-    new = resolved.reconcile.plugins.policy
-    old = resolved.plugins_reconcile
-    return new if new != ReconcilePolicy.ADDITIVE else old
+    return resolved.reconcile.plugins.policy
 
 
 def extensions_input(cfg: Config, resolved: ResolvedProfile) -> Extensions:
-    include = _merge_list(
-        resolved.extensions.include,
-        [
-            pkg.extension
-            for ref in resolved.packages
-            if isinstance(pkg := cfg.packages[ref], ExtensionPackage)
-        ],
-    )
-    exclude = _merge_list(
-        resolved.extensions.exclude, resolved.reconcile.extensions.exclude
-    )
-    new_pol = resolved.reconcile.extensions.policy
-    old_pol = resolved.extensions.reconcile
-    reconcile = new_pol if new_pol != ReconcilePolicy.ADDITIVE else old_pol
+    include = [
+        pkg.extension
+        for ref in resolved.packages
+        if isinstance(pkg := cfg.packages.get(ref), ExtensionPackage)
+    ]
+    exclude = list(resolved.reconcile.extensions.exclude)
+    reconcile = resolved.reconcile.extensions.policy
     return Extensions(include=include, exclude=exclude, reconcile=reconcile)
 
 
 def cargo_crates(cfg: Config, resolved: ResolvedProfile) -> list[str]:
-    return _merge_list(
-        [c.strip() for c in resolved.cargo_binaries if c.strip()],
-        [
-            pkg.crate.strip()
-            for ref in resolved.packages
-            if isinstance(pkg := cfg.packages[ref], CargoPackage)
-            if pkg.crate.strip()
-        ],
-    )
+    return [
+        pkg.crate.strip()
+        for ref in resolved.packages
+        if isinstance(pkg := cfg.packages.get(ref), CargoPackage)
+        if pkg.crate.strip()
+    ]

@@ -113,16 +113,19 @@ profiles:
   base:
     tracked_files:
       - d
-    extensions:
-      include: []
-      exclude:
-        - github.copilot
+    reconcile:
+      extensions:
+        exclude:
+          - github.copilot
 """
 
 
 def test_capture_excludes_case_insensitively(tmp_path: Path, fake_code) -> None:
-    """capture must not write an excluded id back into ``include`` just
+    """capture must not write an excluded id back into the include set just
     because the installed set uses different casing."""
+    from setforge import reconcile_adapter
+    from setforge.config import resolve_profile
+
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML, encoding="utf-8")
     fake_code(["GitHub.copilot", "keep.me"])  # canonical casing from `code`
@@ -130,7 +133,8 @@ def test_capture_excludes_case_insensitively(tmp_path: Path, fake_code) -> None:
     capture_extensions(cfg, "base")
 
     reloaded = load_config(cfg)
-    include = reloaded.profiles["base"].extensions.include
+    resolved = resolve_profile(reloaded, "base")
+    include = reconcile_adapter.extensions_input(reloaded, resolved).include
     assert "GitHub.copilot" not in include
     assert "github.copilot" not in include
     assert "keep.me" in include

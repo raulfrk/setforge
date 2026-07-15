@@ -93,13 +93,16 @@ packages:
     asset: tool.tar.gz
     binary: tool
     install: "echo hi"
+  myplugin:
+    type: plugin
+    plugin: myplugin
+  esbenp.prettier-vscode:
+    type: extension
+    extension: esbenp.prettier-vscode
 profiles:
   p:
     tracked_files: [d]
-    packages: [ripgrep, black, local-thing, ghr-tool]
-    claude_plugins: [myplugin]
-    extensions:
-      include: [esbenp.prettier-vscode]
+    packages: [ripgrep, black, local-thing, ghr-tool, myplugin, esbenp.prettier-vscode]
 """
 
 

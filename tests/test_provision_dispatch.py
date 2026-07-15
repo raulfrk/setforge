@@ -125,27 +125,33 @@ def test_resolves_cargo_package_to_item() -> None:
     assert items[0].identity == Identity(key="ripgrep", display="ripgrep")
 
 
-def test_resolves_cargo_binaries_to_items() -> None:
-    # The :294 fix: cargo_binaries now flow through the provisioner as items.
-    cfg = _cfg()
-    resolved = ResolvedProfile(cargo_binaries=["ast-grep", "just"])
+def test_resolves_multiple_cargo_packages_to_items() -> None:
+    # Multiple cargo crates flow through the provisioner as items.
+    cfg = _cfg(
+        packages={
+            "ag": CargoPackage(crate="ast-grep"),
+            "jt": CargoPackage(crate="just"),
+        }
+    )
+    resolved = ResolvedProfile(packages=["ag", "jt"])
     items = resolve_provision_items(cfg, resolved)
     assert {i.identity.key for i in items} == {"ast-grep", "just"}
     assert all(i.type == "cargo" for i in items)
 
 
-def test_dedup_crate_in_both_packages_and_cargo_binaries() -> None:
-    cfg = _cfg(packages={"rg": CargoPackage(crate="ripgrep")})
-    resolved = ResolvedProfile(packages=["rg"], cargo_binaries=["ripgrep"])
+def test_dedup_same_crate_across_two_package_refs() -> None:
+    # Two refs pointing at the same crate collapse to one provision item
+    # (identity-keyed dedup in resolve_provision_items).
+    cfg = _cfg(
+        packages={
+            "rg": CargoPackage(crate="ripgrep"),
+            "rg2": CargoPackage(crate="ripgrep"),
+        }
+    )
+    resolved = ResolvedProfile(packages=["rg", "rg2"])
     items = resolve_provision_items(cfg, resolved)
     assert len(items) == 1
     assert items[0].identity.key == "ripgrep"
-
-
-def test_blank_cargo_binary_skipped() -> None:
-    cfg = _cfg()
-    resolved = ResolvedProfile(cargo_binaries=["", "  "])
-    assert resolve_provision_items(cfg, resolved) == []
 
 
 def test_plugin_and_extension_packages_skipped_from_generic_dispatch() -> None:
@@ -167,10 +173,10 @@ def test_plugin_and_extension_packages_skipped_from_generic_dispatch() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_run_provisioning_applies_cargo_binaries(
+def test_run_provisioning_applies_cargo_packages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # run_provisioning groups cargo_binaries under type=cargo, builds the real
+    # run_provisioning groups cargo packages under type=cargo, builds the real
     # CargoProvisioner, and reconciles them ADDITIVE. Stub apply_one so no real
     # cargo runs; assert both crates were applied through the driver.
     import setforge.provision.cargo as cargo_prov
@@ -183,8 +189,13 @@ def test_run_provisioning_applies_cargo_binaries(
 
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "apply_one", _apply)
-    cfg = _cfg()
-    resolved = ResolvedProfile(cargo_binaries=["ast-grep", "just"])
+    cfg = _cfg(
+        packages={
+            "ag": CargoPackage(crate="ast-grep"),
+            "jt": CargoPackage(crate="just"),
+        }
+    )
+    resolved = ResolvedProfile(packages=["ag", "jt"])
     results = run_provisioning(cfg, resolved)
     assert len(results) == 1  # one type group (cargo)
     assert set(applied) == {"ast-grep", "just"}
@@ -199,8 +210,8 @@ def test_report_only_applies_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "probe", lambda self: set())
     monkeypatch.setattr(cargo_prov.CargoProvisioner, "apply_one", _boom)
-    cfg = _cfg()
-    resolved = ResolvedProfile(cargo_binaries=["ast-grep"])
+    cfg = _cfg(packages={"ag": CargoPackage(crate="ast-grep")})
+    resolved = ResolvedProfile(packages=["ag"])
     results = run_provisioning(cfg, resolved, report_only=True)
     assert len(results) == 1
     assert results[0].reported is True
@@ -362,12 +373,16 @@ def _write_install_config(repo: Path, *, packages_block: str = "") -> Path:
         "  note:\n"
         "    src: note.md\n"
         "    dst: ~/.setforge_prov/note.md\n"
+        "packages:\n"
+        "  ripgrep:\n"
+        "    type: cargo\n"
+        "    crate: ripgrep\n"
         f"{packages_block}"
         "profiles:\n"
         f"  {_PROFILE}:\n"
         "    tracked_files:\n"
         "      - note\n"
-        "    cargo_binaries:\n"
+        "    packages:\n"
         "      - ripgrep\n",
         encoding="utf-8",
     )

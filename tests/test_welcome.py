@@ -19,6 +19,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner, Result
 
+from setforge import reconcile_adapter
 from setforge.cli import app
 from setforge.cli._helpers import ProfileContext
 from setforge.cli._welcome import (
@@ -183,18 +184,75 @@ def test_is_fresh_host_ignores_non_dir_children(
 # ---------------------------------------------------------------------------
 
 
-def test_build_welcome_inventory_counts(
-    fixture_repo: Path, sandboxed_home: Path
-) -> None:
-    """Inventory captures tracked / plugin / extension / bootstrap counts."""
-    ctx = _build_ctx(fixture_repo, profile="test-comprehensive")
+def _packages_ctx(tmp_path: Path) -> ProfileContext:
+    """Build a ProfileContext whose profile references plugin + extension
+    packages, so the welcome inventory's adapter-projected counts are
+    non-degenerate. Plugin/extension intent now flows through
+    ``packages`` refs, not old ``claude_plugins``/``extensions`` fields."""
+    yaml = """\
+version: 1
+tracked_files:
+  d:
+    src: x
+    dst: y
+marketplaces:
+  mp:
+    source: github
+    repo: o/r
+claude_plugins:
+  plug-a:
+    marketplace: mp
+  plug-b:
+    marketplace: mp
+packages:
+  pa:
+    type: plugin
+    plugin: plug-a
+  pb:
+    type: plugin
+    plugin: plug-b
+  ext-x:
+    type: extension
+    extension: editorconfig.editorconfig
+  ext-y:
+    type: extension
+    extension: ms-python.python
+profiles:
+  comp:
+    tracked_files: [d]
+    packages: [pa, pb, ext-x, ext-y]
+    bootstrap:
+      - ~/.setforge_e2e/boot.txt
+"""
+    config_path = tmp_path / "setforge.yaml"
+    config_path.write_text(yaml)
+    cfg = load_config(config_path)
+    return ProfileContext(
+        cfg=cfg,
+        resolved=resolve_profile(cfg, "comp"),
+        repo_root=tmp_path,
+        profile="comp",
+    )
+
+
+def test_build_welcome_inventory_counts(tmp_path: Path, sandboxed_home: Path) -> None:
+    """Inventory captures tracked / plugin / extension / bootstrap counts.
+
+    Plugin + extension counts are read through the adapter that projects
+    ``packages`` refs into the provisioning lists (2 plugins, 2 extensions
+    here), so the assertions stay non-degenerate.
+    """
+    ctx = _packages_ctx(tmp_path)
     inv = build_welcome_inventory(ctx)
     assert isinstance(inv, WelcomeInventory)
-    assert inv.profile == "test-comprehensive"
+    assert inv.profile == "comp"
     assert inv.tracked_file_count > 0
-    # Comprehensive fixture declares plugins + extensions + bootstrap.
-    assert inv.plugin_count == len(ctx.resolved.claude_plugins)
-    assert inv.extension_count == len(ctx.resolved.extensions.include)
+    plugins = reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
+    extensions = reconcile_adapter.extensions_input(ctx.cfg, ctx.resolved).include
+    assert len(plugins) == 2
+    assert len(extensions) == 2
+    assert inv.plugin_count == len(plugins)
+    assert inv.extension_count == len(extensions)
     assert inv.bootstrap_count == len(ctx.resolved.bootstrap)
 
 

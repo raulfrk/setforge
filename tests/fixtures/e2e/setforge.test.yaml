@@ -246,6 +246,18 @@ claude_plugins:
     marketplace: claude-plugins-official
 
 # ----------------------------------------------------------------------
+# Packages — plugin + extension refs test-comprehensive declares. Plugins
+# resolve their marketplace through the claude_plugins registry above.
+# ----------------------------------------------------------------------
+packages:
+  superpowers:
+    type: plugin
+    plugin: superpowers
+  editorconfig.editorconfig:
+    type: extension
+    extension: editorconfig.editorconfig
+
+# ----------------------------------------------------------------------
 # Section-template library — seed-once host-local section bodies.
 # ----------------------------------------------------------------------
 section_templates:
@@ -328,11 +340,9 @@ profiles:
       - comprehensive_json
       - comprehensive_jsonc
       - comprehensive_yaml
-    claude_plugins:
+    packages:
       - superpowers
-    extensions:
-      include:
-        - editorconfig.editorconfig
+      - editorconfig.editorconfig
     bootstrap:
       - ~/.setforge_e2e/comprehensive/bootstrap-stub.txt
 

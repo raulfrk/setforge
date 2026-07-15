@@ -76,13 +76,13 @@ def ext_add(
         help="Run code --install-extension after editing YAML.",
     ),
 ) -> None:
-    """Append an extension ID to the profile's extensions.include list."""
+    """Declare an extension ID on the profile via the packages surface."""
     config = _resolve_config_arg(config)
     added = vscode_extensions.add_to_include(config, profile, extension_id)
     if added:
-        typer.echo(f"added to {profile}.extensions.include: {extension_id}")
+        typer.echo(f"added to {profile}.packages: {extension_id} (extension)")
     else:
-        typer.echo(f"already in {profile}.extensions.include: {extension_id}")
+        typer.echo(f"already in {profile}.packages: {extension_id} (extension)")
     if install:
         try:
             vscode_extensions.install_one(extension_id)
@@ -106,19 +106,19 @@ def ext_remove(
     exclude: bool = typer.Option(
         False,
         "--exclude",
-        help="Also add to extensions.exclude so reconcile actively uninstalls.",
+        help="Also add to reconcile.extensions.exclude so reconcile uninstalls.",
     ),
 ) -> None:
-    """Remove an extension ID from the profile's extensions.include list."""
+    """Remove an extension ID from the profile's declared packages."""
     config = _resolve_config_arg(config)
     changed = vscode_extensions.remove_from_include(
         config, profile, extension_id, add_to_exclude_list=exclude
     )
     if changed:
-        target = "include + exclude" if exclude else "include"
-        typer.echo(f"updated {profile}.extensions.{target}: {extension_id}")
+        target = "packages + reconcile.extensions.exclude" if exclude else "packages"
+        typer.echo(f"updated {profile}.{target}: {extension_id}")
     else:
-        typer.echo(f"no change: {extension_id} not in include list")
+        typer.echo(f"no change: {extension_id} not declared by profile")
 
 
 @ext_app.command("reconcile", epilog=EXT_RECONCILE_EXAMPLES)

@@ -1,4 +1,4 @@
-"""Wire declared packages / ``cargo_binaries`` into the provisioner protocol."""
+"""Wire declared packages into the provisioner protocol."""
 
 from __future__ import annotations
 
@@ -78,16 +78,6 @@ def resolve_provision_items(
                 config=pkg,
                 version=getattr(pkg, "version", None),
                 checksum=getattr(pkg, "checksum", None),
-            )
-        )
-    for crate in resolved.cargo_binaries:
-        crate = crate.strip()
-        if not crate:
-            continue
-        _add(
-            ProvisionItem(
-                type="cargo",
-                identity=Identity(key=crate, display=crate),
             )
         )
     return items

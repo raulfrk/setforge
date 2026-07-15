@@ -8,11 +8,11 @@ Covers each of the six failure modes plus a clean-run baseline:
 5. Missing tracked src → exit 1.
 6. Unrenderable Jinja2 template → exit 1.
 7. claude_plugins references unknown marketplace → exit 1.
-8. Extension include: empty ID → exit 1.
-9. Extension include: duplicate ID → exit 1.
+8. packages: empty ref (extension package) → exit 1.
+9. packages: duplicate ref (extension package) → exit 1.
 10. Undefined template variable (StrictUndefined) → exit 1.
-11. claude_plugins: empty ref → exit 1.
-12. claude_plugins: duplicate ref → exit 1.
+11. packages: empty ref (plugin package) → exit 1.
+12. packages: duplicate ref (plugin package) → exit 1.
 """
 
 from pathlib import Path
@@ -49,10 +49,14 @@ marketplaces:
 claude_plugins:
   myplugin:
     marketplace: my-market
+packages:
+  myplugin:
+    type: plugin
+    plugin: myplugin
 profiles:
   p:
     tracked_files: [d]
-    claude_plugins: [myplugin]
+    packages: [myplugin]
 """
 
 
@@ -236,10 +240,14 @@ marketplaces: {}
 claude_plugins:
   myplugin:
     marketplace: ghost-market
+packages:
+  myplugin:
+    type: plugin
+    plugin: myplugin
 profiles:
   p:
     tracked_files: [d]
-    claude_plugins: [myplugin]
+    packages: [myplugin]
 """
     cfg = _write_config(tmp_path, bad_mp_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
@@ -249,38 +257,46 @@ profiles:
 
 
 # ---------------------------------------------------------------------------
-# Test 8: extension include — empty ID
+# Test 8: packages — empty ref (extension package)
 # ---------------------------------------------------------------------------
 
 
 def test_validate_ext_include_empty_id_exits_1(tmp_path: Path) -> None:
-    """An empty string in extensions.include → exit 1, message names the profile."""
+    """An empty string in a profile's packages list → exit 1, names the profile.
+
+    Extensions declare through the unified ``packages`` surface now, so the
+    empty-ref coverage that used to live on ``extensions.include`` is one
+    walk of the raw ``packages`` list emitting "packages contains empty ref".
+    """
     ext_empty_yaml = """\
 version: 1
 tracked_files:
   d:
     src: tracked_file.txt
     dst: ~/.some-tracked_file
+packages:
+  valid.ext:
+    type: extension
+    extension: valid.ext
 profiles:
   p:
     tracked_files: [d]
-    extensions:
-      include: ["valid.ext", ""]
+    packages: ["valid.ext", ""]
 """
     cfg = _write_config(tmp_path, ext_empty_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert "empty" in result.output or "extensions.include" in result.output
+    assert "packages contains empty ref" in result.output
     assert "p" in result.output
 
 
 # ---------------------------------------------------------------------------
-# Test 9: extension include — duplicate ID
+# Test 9: packages — duplicate ref (extension package)
 # ---------------------------------------------------------------------------
 
 
 def test_validate_ext_include_duplicate_exits_1(tmp_path: Path) -> None:
-    """A duplicate extension ID within a single profile's include list → exit 1.
+    """A duplicate extension ref within a single profile's packages → exit 1.
 
     The check runs against the raw profile (before extends-merging) so that
     duplicates silently dropped by _merge_list are still caught at their source.
@@ -291,17 +307,19 @@ tracked_files:
   d:
     src: tracked_file.txt
     dst: ~/.some-tracked_file
+packages:
+  foo.bar:
+    type: extension
+    extension: foo.bar
 profiles:
   p:
     tracked_files: [d]
-    extensions:
-      include: ["foo.bar", "foo.bar"]
+    packages: ["foo.bar", "foo.bar"]
 """
     cfg = _write_config(tmp_path, ext_dup_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert "foo.bar" in result.output
-    assert "duplicate" in result.output
+    assert "packages duplicate: 'foo.bar'" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +400,17 @@ profiles:
 
 
 # ---------------------------------------------------------------------------
-# Test 11: claude_plugins — empty ref
+# Test 11: packages — empty ref (plugin package)
 # ---------------------------------------------------------------------------
 
 
 def test_validate_empty_plugin_ref_exits_1(tmp_path: Path) -> None:
-    """An empty string in claude_plugins → exit 1, message names the profile."""
+    """An empty string in a profile's packages list → exit 1, names the profile.
+
+    Plugins declare through the unified ``packages`` surface now; the
+    empty-ref coverage that used to live on ``claude_plugins`` is one walk
+    of the raw ``packages`` list emitting "packages contains empty ref".
+    """
     empty_plugin_yaml = """\
 version: 1
 tracked_files:
@@ -397,22 +420,22 @@ tracked_files:
 profiles:
   p:
     tracked_files: [d]
-    claude_plugins: [""]
+    packages: [""]
 """
     cfg = _write_config(tmp_path, empty_plugin_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert "claude_plugins contains empty ref" in result.output
+    assert "packages contains empty ref" in result.output
     assert "p" in result.output
 
 
 # ---------------------------------------------------------------------------
-# Test 12: claude_plugins — duplicate ref
+# Test 12: packages — duplicate ref (plugin package)
 # ---------------------------------------------------------------------------
 
 
 def test_validate_duplicate_plugin_ref_exits_1(tmp_path: Path) -> None:
-    """A duplicate ref in claude_plugins → exit 1, message names the ref and profile.
+    """A duplicate plugin ref in packages → exit 1, names the ref and profile.
 
     The check runs against the raw profile (before extends-merging) so that
     duplicates silently dropped by _merge_list are still caught at their source.
@@ -430,23 +453,26 @@ marketplaces:
 claude_plugins:
   myplugin:
     marketplace: my-market
+packages:
+  myplugin:
+    type: plugin
+    plugin: myplugin
 profiles:
   p:
     tracked_files: [d]
-    claude_plugins: ["myplugin", "myplugin"]
+    packages: ["myplugin", "myplugin"]
 """
     cfg = _write_config(tmp_path, dup_plugin_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert "claude_plugins duplicate" in result.output
-    assert "'myplugin'" in result.output
+    assert "packages duplicate: 'myplugin'" in result.output
 
 
 def test_validate_double_empty_emits_single_message_per_field(tmp_path: Path) -> None:
-    """N empty entries collapse to one error line per field per profile.
+    """N empty entries collapse to one error line for the packages field.
 
     Without dedup, ['', ''] would produce two identical 'contains empty'
-    messages — same shape as Check 5 / 5b's loop firing per-iteration.
+    messages — same shape as Check 5's loop firing per-iteration.
     """
     double_empty_yaml = """\
 version: 1
@@ -464,24 +490,21 @@ claude_plugins:
 profiles:
   p:
     tracked_files: [d]
-    extensions:
-      include: ["", ""]
-    claude_plugins: ["", ""]
+    packages: ["", ""]
 """
     cfg = _write_config(tmp_path, double_empty_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert result.output.count("extensions.include contains empty ID") == 1
-    assert result.output.count("claude_plugins contains empty ref") == 1
+    assert result.output.count("packages contains empty ref") == 1
 
 
 def test_validate_triple_duplicate_emits_single_message_per_value(
     tmp_path: Path,
 ) -> None:
-    """N copies of the same value collapse to one duplicate line per value per field.
+    """N copies of the same value collapse to one duplicate line per value.
 
     Without dedup, ['x', 'x', 'x'] would produce two identical 'duplicate' messages
-    (one per repeat after the first) — same shape as Check 5 / 5b's loop firing
+    (one per repeat after the first) — same shape as Check 5's loop firing
     per-iteration on each subsequent occurrence.
     """
     triple_dup_yaml = """\
@@ -497,18 +520,19 @@ marketplaces:
 claude_plugins:
   myplugin:
     marketplace: my-market
+packages:
+  myplugin:
+    type: plugin
+    plugin: myplugin
 profiles:
   p:
     tracked_files: [d]
-    extensions:
-      include: ["foo.bar", "foo.bar", "foo.bar"]
-    claude_plugins: ["myplugin", "myplugin", "myplugin"]
+    packages: ["myplugin", "myplugin", "myplugin"]
 """
     cfg = _write_config(tmp_path, triple_dup_yaml)
     result = CliRunner().invoke(app, ["validate", "--profile=p", f"--config={cfg}"])
     assert result.exit_code == 1, result.output
-    assert result.output.count("extensions.include duplicate: 'foo.bar'") == 1
-    assert result.output.count("claude_plugins duplicate: 'myplugin'") == 1
+    assert result.output.count("packages duplicate: 'myplugin'") == 1
 
 
 # ---------------------------------------------------------------------------

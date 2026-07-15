@@ -543,12 +543,8 @@ class Profile(BaseModel):
 
     extends: str | None = None
     tracked_files: list[str] = []
-    extensions: Extensions = Extensions()
-    claude_plugins: list[str] = []
-    plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
-    cargo_binaries: list[str] = []
     packages: list[str] = []
     bundles: list[str] = []
     reconcile: ReconcileSpec = ReconcileSpec()
@@ -575,12 +571,8 @@ class ResolvedProfile(BaseModel):
 
     extends: None = None
     tracked_files: list[str] = []
-    extensions: Extensions = Extensions()
-    claude_plugins: list[str] = []
-    plugins_reconcile: ReconcilePolicy = ReconcilePolicy.ADDITIVE
     bootstrap: list[Path] = []
     mcp_servers: list[str] = []
-    cargo_binaries: list[str] = []
     packages: list[str] = []
     bundles: list[str] = []
     reconcile: ReconcileSpec = ReconcileSpec()
@@ -652,21 +644,6 @@ def _merge_dict[V](parent: dict[str, V], child: dict[str, V]) -> dict[str, V]:
     return {**parent, **child}
 
 
-def _merge_extensions(parent: Extensions, child: Extensions) -> Extensions:
-    """Merge two Extensions blocks. Lists concatenate; ``reconcile``
-    overrides only when explicitly set in child (per ``model_fields_set``)."""
-    merged_include = _merge_list(parent.include, child.include)
-    merged_exclude = _merge_list(parent.exclude, child.exclude)
-    reconcile = (
-        child.reconcile if "reconcile" in child.model_fields_set else parent.reconcile
-    )
-    return Extensions(
-        include=merged_include,
-        exclude=merged_exclude,
-        reconcile=reconcile,
-    )
-
-
 def _merge_reconcile(parent: ReconcileSpec, child: ReconcileSpec) -> ReconcileSpec:
     """Policy overrides only if child's nested block+``policy`` are both in
     ``model_fields_set``, else inherits; exclude concatenates+dedups."""
@@ -715,14 +692,12 @@ def resolve_chain(config: Config, name: str) -> list[Profile]:
 def resolve_profile(config: Config, name: str) -> ResolvedProfile:
     """Walk the ``extends:`` chain and produce a fully-merged profile.
 
-    - List fields (``tracked_files``, ``claude_plugins``, ``bootstrap``,
-      ``extensions.include``, ``extensions.exclude``) are concatenated
-      parent-first and deduplicated, preserving first occurrence.
-    - Scalar fields (``plugins_reconcile``, ``extensions.reconcile``,
-      ``reconcile.plugins.policy``, ``reconcile.extensions.policy``)
-      are overridden by the child only when explicitly set in that
-      child's ``model_fields_set``; otherwise they inherit.
-      ``reconcile.extensions.exclude`` concatenates like a list field.
+    - List fields (``tracked_files``, ``bootstrap``, ``mcp_servers``,
+      ``packages``, ``bundles``) are concatenated parent-first and
+      deduplicated, preserving first occurrence.
+    - The ``reconcile`` block (plugin + extension policies and the
+      extension exclude list) is merged child-over-parent for scalar
+      policies and concatenated for ``reconcile.extensions.exclude``.
     - A cycle in ``extends:`` raises :class:`ConfigError` with every
       profile name in the cycle.
     """
@@ -732,22 +707,13 @@ def resolve_profile(config: Config, name: str) -> ResolvedProfile:
 
     resolved = ResolvedProfile()
     for profile in chain:
-        fields_set = profile.model_fields_set
         resolved = ResolvedProfile(
             tracked_files=_merge_list(resolved.tracked_files, profile.tracked_files),
-            claude_plugins=_merge_list(resolved.claude_plugins, profile.claude_plugins),
             bootstrap=_merge_list(resolved.bootstrap, profile.bootstrap),
             mcp_servers=_merge_list(resolved.mcp_servers, profile.mcp_servers),
-            cargo_binaries=_merge_list(resolved.cargo_binaries, profile.cargo_binaries),
             packages=_merge_list(resolved.packages, profile.packages),
             bundles=_merge_list(resolved.bundles, profile.bundles),
-            extensions=_merge_extensions(resolved.extensions, profile.extensions),
             section_slots=_merge_dict(resolved.section_slots, profile.section_slots),
-            plugins_reconcile=(
-                profile.plugins_reconcile
-                if "plugins_reconcile" in fields_set
-                else resolved.plugins_reconcile
-            ),
             reconcile=_merge_reconcile(resolved.reconcile, profile.reconcile),
         )
     return resolved
@@ -952,7 +918,7 @@ def load_config(path: Path, *, tolerate_unknown: bool = True) -> Config:
     schema error with a "did you mean" suggestion instead.
 
     Raises :class:`ConfigError` on file-not-found, YAML parse errors, or
-    cross-field violations (e.g. profile ``claude_plugins`` referencing
+    cross-field violations (e.g. a profile plugin package referencing
     a name absent from the top-level ``claude_plugins:`` registry).
     Pydantic validation errors are propagated unchanged so the caller
     sees the full field-level message.
@@ -1470,25 +1436,20 @@ def collect_orphan_overlays(
 
 
 def _validate_plugin_references(config: Config) -> None:
-    """Verify every ``profile.claude_plugins`` entry exists in the
-    top-level ``Config.claude_plugins`` registry.
+    """Verify every profile's plugin refs exist in the top-level
+    ``Config.claude_plugins`` registry.
 
-    Collects every offender across every profile into a single
+    A profile declares plugins via ``packages`` entries of kind
+    :class:`PluginPackage`; each such plugin name must resolve in the
+    registry. Collects every offender across every profile into a single
     :class:`ConfigError` message so the user fixes all references in
     one round-trip, not one error per re-run.
     """
     registry = set(config.claude_plugins)
     offenders: list[tuple[str, str]] = []
     for profile_name, profile in config.profiles.items():
-        for bare_name in profile.claude_plugins:
-            # Skip empty/whitespace refs — Check 5b in _check_profile
-            # catches those with a dedicated "empty ref" message.
-            if not bare_name.strip():
-                continue
-            if bare_name not in registry:
-                offenders.append((profile_name, bare_name))
-        # A PluginPackage's plugin must also live in the registry; batched
-        # here so the adapter's read-time raise is only a backstop.
+        # A PluginPackage's plugin must live in the registry; batched here
+        # so the adapter's read-time raise is only a backstop.
         for ref in profile.packages:
             pkg = config.packages.get(ref)
             if isinstance(pkg, PluginPackage) and pkg.plugin not in registry:
@@ -1736,7 +1697,7 @@ def apply_local_overlay(
     )
     _apply_marketplace_mutations(config, marketplace_overlay)
     _apply_plugin_mutations(config, resolved, plugin_overlay)
-    _apply_extension_mutations(resolved, extension_overlay)
+    _apply_extension_mutations(config, resolved, extension_overlay)
     _validate_overlay_marketplace_cross_ref(config, resolved)
     return LocalOverlayResolution(
         plugins=resolved_plugins,
@@ -1750,7 +1711,8 @@ def _profile_referenced_marketplaces(
 ) -> list[str]:
     """Return marketplaces referenced by the resolved profile, in stable order.
 
-    Walks ``resolved.claude_plugins`` and looks up each bare name in
+    Walks the resolved profile's plugin bare-names (via
+    ``reconcile_adapter.plugin_bare_names``) and looks up each in
     ``config.claude_plugins`` to find its marketplace; the set is
     deduplicated while preserving first-occurrence order. Bare names
     absent from ``cfg.claude_plugins`` are silently skipped — the
@@ -1790,6 +1752,22 @@ def _apply_marketplace_mutations(config: Config, overlay: "MarketplaceOverlay") 
         config.marketplaces.pop(name, None)
 
 
+def _mint_package_ref(
+    config: Config, resolved: ResolvedProfile, ref: str, body: Package
+) -> None:
+    """Register ``ref -> body`` in ``config.packages`` and append it to the refs.
+
+    Mints the top-level ``packages`` entry when absent; reuses an existing
+    entry with an identical body (the migration's idempotent-collision rule).
+    Appends ``ref`` to ``resolved.packages`` only when it is not already
+    present, so a re-add of a profile plugin/extension does not duplicate.
+    """
+    if ref not in config.packages:
+        config.packages[ref] = body
+    if ref not in resolved.packages:
+        resolved.packages.append(ref)
+
+
 def _apply_plugin_mutations(
     config: Config, resolved: ResolvedProfile, overlay: "PluginOverlay"
 ) -> None:
@@ -1798,45 +1776,57 @@ def _apply_plugin_mutations(
     ``add`` entries use ``name@marketplace`` shape: synthesize a
     :class:`ClaudePluginRef` in ``cfg.claude_plugins`` (or replace an
     existing one when the user explicitly re-routed to a new
-    marketplace via local.yaml) and append the bare name to
-    ``resolved.claude_plugins``. ``remove`` entries are bare names;
-    drop matching entries from ``resolved.claude_plugins`` in place.
+    marketplace via local.yaml), mint a matching
+    :class:`PluginPackage` in ``cfg.packages`` when absent, and append
+    the bare name to ``resolved.packages``. ``remove`` entries are bare
+    names; drop from ``resolved.packages`` every ref whose top-level
+    entry is a :class:`PluginPackage` for a removed name.
 
-    A bare-name ``add`` without ``@`` synthesizes nothing (the user
+    A bare-name ``add`` without ``@`` mints no registry ref (the user
     must pair the bare name with a marketplace by other means); we
-    still add it to ``resolved.claude_plugins`` so the cross-ref check
+    still append it to ``resolved.packages`` so the cross-ref check
     surfaces the missing registry entry as a single error message
     rather than silently dropping the add.
     """
-    existing = list(resolved.claude_plugins)
     removed = set(overlay.remove)
-    pruned = [name for name in existing if name not in removed]
+    resolved.packages = [
+        ref
+        for ref in resolved.packages
+        if not (
+            isinstance(pkg := config.packages.get(ref), PluginPackage)
+            and pkg.plugin in removed
+        )
+    ]
     for raw in overlay.add:
         bare_name, marketplace = _parse_overlay_plugin_pid(raw)
         if marketplace is not None:
             config.claude_plugins[bare_name] = ClaudePluginRef(marketplace=marketplace)
-        if bare_name not in pruned:
-            pruned.append(bare_name)
-    resolved.claude_plugins = pruned
+        _mint_package_ref(config, resolved, bare_name, PluginPackage(plugin=bare_name))
 
 
 def _apply_extension_mutations(
-    resolved: ResolvedProfile, overlay: "ExtensionOverlay"
+    config: Config, resolved: ResolvedProfile, overlay: "ExtensionOverlay"
 ) -> None:
-    """Apply ``extensions.add`` / ``extensions.remove`` to resolved.extensions.include.
+    """Apply ``extensions.add`` / ``extensions.remove`` to resolved.packages.
 
-    Mutates the include list in place so downstream
+    ``add`` entries mint an :class:`ExtensionPackage` in ``cfg.packages``
+    when absent and append the id to ``resolved.packages`` so downstream
     :func:`setforge.vscode_extensions.reconcile` sees the merged set.
-    Excludes are profile-only — local.yaml has no extensions.exclude
-    overlay per SPEC 2.
+    ``remove`` entries drop every ref whose top-level entry is an
+    :class:`ExtensionPackage` for a removed id. Excludes are
+    profile-only — local.yaml has no extensions.exclude overlay.
     """
-    existing = list(resolved.extensions.include)
     removed = set(overlay.remove)
-    pruned = [ext_id for ext_id in existing if ext_id not in removed]
+    resolved.packages = [
+        ref
+        for ref in resolved.packages
+        if not (
+            isinstance(pkg := config.packages.get(ref), ExtensionPackage)
+            and pkg.extension in removed
+        )
+    ]
     for ext_id in overlay.add:
-        if ext_id not in pruned:
-            pruned.append(ext_id)
-    resolved.extensions = resolved.extensions.model_copy(update={"include": pruned})
+        _mint_package_ref(config, resolved, ext_id, ExtensionPackage(extension=ext_id))
 
 
 def _validate_overlay_marketplace_cross_ref(
@@ -1850,10 +1840,12 @@ def _validate_overlay_marketplace_cross_ref(
     name + the available-marketplaces set so the user can fix the
     right side (cf. SPEC 2 mockup validate-failure shape).
     """
+    from setforge import reconcile_adapter
+
     available = sorted(config.marketplaces)
     available_set = set(available)
     offenders: list[tuple[str, str]] = []
-    for bare_name in resolved.claude_plugins:
+    for bare_name in reconcile_adapter.plugin_bare_names(config, resolved):
         ref = config.claude_plugins.get(bare_name)
         if ref is None:
             offenders.append((bare_name, "<unknown plugin>"))

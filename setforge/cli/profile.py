@@ -280,8 +280,8 @@ def _chain_resolved_by_name_field(
     """Pre-compute resolved-up-to-ancestor item sets for one list field.
 
     ``field`` selects one of the flattened list-shaped attributes on
-    :class:`ResolvedProfile` (``tracked_files``, ``claude_plugins``,
-    ``bootstrap``). For every ancestor X in the extends chain
+    :class:`ResolvedProfile` (``tracked_files``, ``bootstrap``). For
+    every ancestor X in the extends chain
     (root → just-before-leaf), runs :func:`resolve_profile` on X and
     records its resolved items as a set, paired with the ancestor
     name. Returns ``[(ancestor_name, items_set), ...]`` ordered
@@ -326,6 +326,27 @@ def _render_tracked_files(ctx: ProfileContext, console: Console) -> None:
     console.print(table)
 
 
+def _plugins_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str]]]:
+    """Per-ancestor resolved plugin bare-names, root-first, for provenance.
+
+    Plugins live on the ``packages`` surface now, so their per-ancestor set
+    is projected through ``reconcile_adapter.plugin_bare_names`` rather than a
+    direct ``ResolvedProfile`` list attribute.
+    """
+    chain = resolve_chain(cfg, name)
+    out: list[tuple[str, set[str]]] = []
+    for ancestor_profile in chain[:-1]:
+        ancestor_name = _chain_label(cfg, ancestor_profile)
+        ancestor_resolved = resolve_profile(cfg, ancestor_name)
+        out.append(
+            (
+                ancestor_name,
+                set(reconcile_adapter.plugin_bare_names(cfg, ancestor_resolved)),
+            )
+        )
+    return out
+
+
 def _render_plugins(ctx: ProfileContext, console: Console) -> None:
     """Render the resolved ``claude_plugins`` list with provenance."""
     items = reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved)
@@ -333,9 +354,7 @@ def _render_plugins(ctx: ProfileContext, console: Console) -> None:
     if not items:
         console.print("  (none)")
         return
-    chain_by_name = _chain_resolved_by_name_field(
-        ctx.cfg, ctx.profile, field="claude_plugins"
-    )
+    chain_by_name = _plugins_chain_by_name(ctx.cfg, ctx.profile)
     table = Table.grid(padding=(0, 2))
     table.add_column(no_wrap=True)
     table.add_column()
@@ -441,11 +460,11 @@ def _render_extensions(ctx: ProfileContext, console: Console) -> None:
 
 
 def _extensions_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str]]]:
-    """Like :func:`_chain_resolved_by_name_field` but for extensions.include.
+    """Like :func:`_chain_resolved_by_name_field` but for extension includes.
 
-    Extensions are nested inside ``ResolvedProfile.extensions`` rather
-    than living on the top-level resolved object, so the generic
-    ``getattr(..., field)`` shape doesn't apply directly.
+    Extensions live on the ``packages`` surface now, so each ancestor's
+    include set is projected through ``reconcile_adapter.extensions_input``
+    rather than a direct ``ResolvedProfile`` list attribute.
     """
     chain = resolve_chain(cfg, name)
     out: list[tuple[str, set[str]]] = []
@@ -455,7 +474,7 @@ def _extensions_chain_by_name(cfg: Config, name: str) -> list[tuple[str, set[str
         out.append(
             (
                 ancestor_name,
-                {str(x) for x in ancestor_resolved.extensions.include},
+                set(reconcile_adapter.extensions_input(cfg, ancestor_resolved).include),
             )
         )
     return out

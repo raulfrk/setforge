@@ -816,15 +816,31 @@ def test_reconcile_bare_name_disabled_lands_in_to_enable(fake_claude) -> None:
 
 def test_reconcile_undeclared_bare_name_raises_config_error(fake_claude) -> None:
     """Profile lists a bare name not in the top-level registry → ConfigError
-    naming the offending plugin, before any plugin write subprocesses run."""
+    naming the offending plugin, before any plugin write subprocesses run.
+
+    The profile binds ``mystery-plugin`` through a ``PluginPackage`` ref that
+    resolves, but the top-level ``claude_plugins:`` registry has no matching
+    entry, so the adapter can't map it to a ``name@marketplace`` id.
+    """
     from setforge.claude_plugins import reconcile
+    from setforge.config import (
+        Config,
+        PluginPackage,
+        Profile,
+        ResolvedProfile,
+        TrackedFile,
+    )
 
     fake = fake_claude()
-    cfg = _make_config()  # empty registry
-    profile = _make_resolved(
-        claude_plugins=["mystery-plugin"],
-        plugins_reconcile=ReconcilePolicy.ADDITIVE,
+    # Package ref exists (so plugin_bare_names resolves it) but the bare name
+    # is absent from the claude_plugins registry (the undeclared condition).
+    cfg = Config(
+        tracked_files={"d": TrackedFile(src=Path("tracked/x"), dst="~/x")},
+        claude_plugins={},  # empty registry
+        packages={"mystery-plugin": PluginPackage(plugin="mystery-plugin")},
+        profiles={"default": Profile(tracked_files=["d"], packages=["mystery-plugin"])},
     )
+    profile = ResolvedProfile(packages=["mystery-plugin"])
     with pytest.raises(ConfigError, match="mystery-plugin"):
         reconcile(
             cfg,
@@ -1221,13 +1237,60 @@ _E2E_FIXTURE_YAML = _E2E_FIXTURE_DIR / "setforge.test.yaml"
 _E2E_FIXTURE_TRACKED = _E2E_FIXTURE_DIR / "tracked"
 
 
+def _rethread_comprehensive_to_packages(yaml_path: Path) -> None:
+    """Rewrite the copied fixture's plugin/extension bindings to schema-3.0.
+
+    The shared on-disk fixture still declares the retired profile-level
+    ``claude_plugins:`` / ``extensions:`` keys (the Docker e2e ring keeps
+    exercising that legacy corpus). The strict schema-3.0 model rejects those
+    keys, so this inner CliRunner ring rewrites its OWN copy in place:
+
+    * mint top-level ``packages`` entries — a ``PluginPackage`` for
+      ``superpowers`` and an ``ExtensionPackage`` for
+      ``editorconfig.editorconfig``;
+    * bind them from ``test-comprehensive`` via its ``packages`` list, dropping
+      the profile-level ``claude_plugins:`` / ``extensions:`` blocks.
+
+    The top-level ``claude_plugins:`` registry (bare name → marketplace) is
+    retained — the reconcile adapter still resolves through it. ``schema_version``
+    is bumped to the current major so the strict ``validate`` path stays clean.
+    """
+    from ruamel.yaml import YAML
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    data = yaml.load(yaml_path.read_text(encoding="utf-8"))
+    data["schema_version"] = "3.0"
+
+    packages = data.setdefault("packages", {})
+    packages["superpowers"] = {"type": "plugin", "plugin": "superpowers"}
+    packages["editorconfig.editorconfig"] = {
+        "type": "extension",
+        "extension": "editorconfig.editorconfig",
+    }
+
+    profile = data["profiles"]["test-comprehensive"]
+    profile.pop("claude_plugins", None)
+    profile.pop("extensions", None)
+    profile["packages"] = ["superpowers", "editorconfig.editorconfig"]
+
+    with yaml_path.open("w", encoding="utf-8") as handle:
+        yaml.dump(data, handle)
+
+
 def _copy_e2e_fixture(tmp_path: Path) -> Path:
     """Materialize the e2e fixture inside ``tmp_path`` and return the
-    yaml path. Mirror of ``test_cli_e2e.fixture_repo``."""
+    yaml path. Mirror of ``test_cli_e2e.fixture_repo``.
+
+    The copy is rethreaded to the schema-3.0 packages/reconcile surface
+    (:func:`_rethread_comprehensive_to_packages`) so the plugin/extension
+    bindings resolve under the strict model while the shared on-disk fixture
+    stays legacy for the Docker ring."""
     target = tmp_path / "repo"
     target.mkdir()
     shutil.copy2(_E2E_FIXTURE_YAML, target / "setforge.test.yaml")
     shutil.copytree(_E2E_FIXTURE_TRACKED, target / "tracked")
+    _rethread_comprehensive_to_packages(target / "setforge.test.yaml")
     return target / "setforge.test.yaml"
 
 

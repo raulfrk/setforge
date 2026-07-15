@@ -25,19 +25,25 @@ tracked_files:
   d:
     src: x
     dst: y
+packages:
+  declared.one:
+    type: extension
+    extension: declared.one
 profiles:
   vmh:
     tracked_files: [d]
-    extensions:
-      include:
-        - declared.one
-      reconcile: report
+    packages:
+      - declared.one
+    reconcile:
+      extensions:
+        policy: report
   prune:
     tracked_files: [d]
-    extensions:
-      include:
-        - declared.one
-      reconcile: prune
+    packages:
+      - declared.one
+    reconcile:
+      extensions:
+        policy: prune
 """
 
 

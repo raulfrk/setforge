@@ -392,9 +392,9 @@ class PluginOverlay(BaseModel):
     is a valid shape; the resolver merges them with the profile chain at
     load time via :func:`setforge.overlay_provenance.resolve_plugin_overlay`.
 
-    ``add`` entries use the same ``name@marketplace`` shape as
-    ``Profile.claude_plugins`` so the bare-name @ marketplace dispatch in
-    :mod:`setforge.claude_plugins` is unchanged.
+    ``add`` entries use the ``name@marketplace`` shape; the bare name
+    resolves through the top-level ``claude_plugins:`` registry so the
+    dispatch in :mod:`setforge.claude_plugins` is unchanged.
     """
 
     model_config = _STRICT

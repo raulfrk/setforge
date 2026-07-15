@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from setforge import reconcile_adapter
 from setforge.config import (
     BundleComponent,
     BundleSpec,
@@ -294,18 +295,26 @@ def test_resolve_merges_packages_and_bundles() -> None:
     assert resolved.bundles == ["x", "y"]
 
 
-# --- additive: cargo_binaries still works ----------------------------------
+# --- cargo crates resolve to provision items via the packages surface ------
 
 
-def test_cargo_binaries_still_resolves() -> None:
+def test_cargo_crates_still_resolve() -> None:
+    """Cargo crates now flow through ``packages`` CargoPackage refs; the
+    parent/child merge preserves parent-first order with dedup, and the
+    adapter projects the refs back to bare crate names."""
     cfg = _cfg(
         {
-            "parent": Profile(cargo_binaries=["ast-grep"]),
-            "child": Profile(extends="parent", cargo_binaries=["ripgrep"]),
-        }
+            "parent": Profile(packages=["ast_grep"]),
+            "child": Profile(extends="parent", packages=["ripgrep"]),
+        },
+        packages={
+            "ast_grep": {"type": "cargo", "crate": "ast-grep"},
+            "ripgrep": {"type": "cargo", "crate": "ripgrep"},
+        },
     )
     resolved = resolve_profile(cfg, "child")
-    assert resolved.cargo_binaries == ["ast-grep", "ripgrep"]
+    assert resolved.packages == ["ast_grep", "ripgrep"]
+    assert reconcile_adapter.cargo_crates(cfg, resolved) == ["ast-grep", "ripgrep"]
 
 
 # --- validate accepts a config carrying the new fields ---------------------

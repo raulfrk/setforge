@@ -237,9 +237,9 @@ def test_frozen_fixture_migrates_forward_to_current(
 
 
 def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
-    """A 6.0 (major-newer) config raises ConfigError, no traceback leak."""
+    """A 7.0 (major-newer) config raises ConfigError, no traceback leak."""
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text("schema_version: '6.0'\n" + _MINIMAL_BODY, encoding="utf-8")
+    cfg.write_text("schema_version: '7.0'\n" + _MINIMAL_BODY, encoding="utf-8")
     with pytest.raises(
         ConfigError, match=r"requires a newer setforge|upgrade setforge"
     ):
@@ -249,15 +249,15 @@ def test_major_newer_config_refuses_cleanly(tmp_path: Path) -> None:
 def test_same_major_newer_minor_config_loads_with_warning(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A 5.99 (same-major, newer-minor) config RETURNS a Config + warns.
+    """A 6.99 (same-major, newer-minor) config RETURNS a Config + warns.
 
     Asserts the RETURN + the emitted warning, NOT ``pytest.raises`` — a
     same-major newer-minor config is forward-tolerated, not refused.
     """
     cfg = tmp_path / "setforge.yaml"
-    cfg.write_text("schema_version: '5.99'\n" + _MINIMAL_BODY, encoding="utf-8")
+    cfg.write_text("schema_version: '6.99'\n" + _MINIMAL_BODY, encoding="utf-8")
     config = load_config(cfg)  # must NOT raise
-    assert config.schema_version == "5.99"
+    assert config.schema_version == "6.99"
     captured = capsys.readouterr()
     assert "warning:" in captured.err
     assert "schema_version" in captured.err

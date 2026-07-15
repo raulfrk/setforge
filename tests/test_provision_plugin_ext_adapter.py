@@ -339,7 +339,10 @@ def test_plugin_package_only_reaches_engine_via_adapter() -> None:
         }
     )
     resolved = resolve_profile(cfg, "p")
-    assert resolved.claude_plugins == []
+    # The plugin reaches the engine only via the packages -> adapter path:
+    # it rides the resolved ``packages`` ref, and the adapter surfaces it.
+    assert resolved.packages == ["sp"]
+    assert reconcile_adapter.plugin_ids(cfg, resolved) == {"sp@mp"}
     with (
         patch(_LOCAL_MP_TO_ADD, return_value=[]),
         patch(_LOCAL_ADD_MP),
@@ -365,8 +368,12 @@ def test_extension_package_only_reaches_engine_via_adapter() -> None:
         }
     )
     resolved = resolve_profile(cfg, "p")
-    assert resolved.extensions.include == []
+    # The extension reaches the engine only via the packages -> adapter path:
+    # it rides the resolved ``packages`` ref, and the adapter's ``include``
+    # surfaces it.
+    assert resolved.packages == ["cop"]
     ext = reconcile_adapter.extensions_input(cfg, resolved)
+    assert ext.include == ["pub.ext"]
     with (
         patch(_LOCAL_RESOLVE, return_value="/usr/bin/code"),
         patch(_LIST, return_value=set()),

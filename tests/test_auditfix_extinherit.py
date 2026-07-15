@@ -24,9 +24,10 @@ tracked_files:
 profiles:
   parent:
     tracked_files: [d]
-    extensions:
-      exclude:
-        - vendor.ext
+    reconcile:
+      extensions:
+        exclude:
+          - vendor.ext
   child:
     extends: parent
     tracked_files: [d]
@@ -39,9 +40,10 @@ tracked_files:
 profiles:
   grandparent:
     tracked_files: [d]
-    extensions:
-      exclude:
-        - vendor.ext
+    reconcile:
+      extensions:
+        exclude:
+          - vendor.ext
   parent:
     extends: grandparent
     tracked_files: [d]
@@ -49,6 +51,15 @@ profiles:
     extends: parent
     tracked_files: [d]
 """
+
+
+def _child_includes(cfg_path: Path) -> set[str]:
+    from setforge import reconcile_adapter
+    from setforge.config import resolve_profile
+
+    cfg = load_config(cfg_path)
+    resolved = resolve_profile(cfg, "child")
+    return set(reconcile_adapter.extensions_input(cfg, resolved).include)
 
 
 def _write(tmp_path: Path, fixture: str) -> Path:
@@ -64,8 +75,7 @@ def test_add_to_include_rejects_parent_excluded(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="parent"):
         add_to_include(p, "child", "vendor.ext")
     # And the file is not mutated — the addition was refused, not written.
-    cfg = load_config(p)
-    assert "vendor.ext" not in cfg.profiles["child"].extensions.include
+    assert "vendor.ext" not in _child_includes(p)
 
 
 def test_add_to_include_reject_message_mentions_exclude(tmp_path: Path) -> None:
@@ -86,5 +96,4 @@ def test_add_to_include_allows_unexcluded_in_child(tmp_path: Path) -> None:
     p = _write(tmp_path, _PARENT_EXCLUDE_FIXTURE)
     added = add_to_include(p, "child", "fine.ext")
     assert added is True
-    cfg = load_config(p)
-    assert "fine.ext" in cfg.profiles["child"].extensions.include
+    assert "fine.ext" in _child_includes(p)

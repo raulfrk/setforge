@@ -1,12 +1,13 @@
 """Ruamel.yaml editing helpers for ``setforge.yaml`` plugin blocks.
 
-Targets the ``claude_plugins:`` and ``marketplaces:`` blocks in
-``setforge.yaml``. Provides verb-shaped functions
-(``yaml_add_marketplace``, ``yaml_remove_marketplace``,
-``yaml_add_plugin``, ``yaml_add_plugin_to_profile``,
-``yaml_remove_plugin_from_profile``) that read, mutate, and write
-back the setforge config YAML. Round-trip preserves comments and
-key ordering via ruamel.yaml's ``rt`` mode.
+Targets the top-level ``claude_plugins:`` / ``marketplaces:`` / ``packages:``
+blocks and each profile's ``packages:`` ref-list in ``setforge.yaml``.
+Provides verb-shaped functions (``yaml_add_marketplace``,
+``yaml_remove_marketplace``, ``yaml_add_plugin``,
+``yaml_add_plugin_to_profile``, ``yaml_remove_plugin_from_profile``) that
+read, mutate, and write back the setforge config YAML. A profile declares a
+plugin through a ``packages`` ref to a minted top-level ``PluginPackage``.
+Round-trip preserves comments and key ordering via ruamel.yaml's ``rt`` mode.
 """
 
 from __future__ import annotations
@@ -23,7 +24,12 @@ from ruamel.yaml.comments import (
     CommentedSeq,
 )
 
-from setforge.config import MarketplaceSource, MarketplaceSourceKind, load_config
+from setforge.config import (
+    MarketplaceSource,
+    MarketplaceSourceKind,
+    PluginPackage,
+    load_config,
+)
 from setforge.errors import ConfigError, ProfileNotFound
 
 __all__ = [
@@ -174,29 +180,53 @@ def yaml_add_plugin(
     return True
 
 
+def _profile_plugin_refs(cfg: object, profile_name: str, plugin_ref: str) -> list[str]:
+    """Return the profile's ``packages`` refs that resolve to plugin ``plugin_ref``.
+
+    A profile declares a plugin through a ``packages`` ref whose top-level
+    entry is a :class:`PluginPackage` for that bare name. Returns every such
+    ref (usually zero or one) so callers can test membership and prune.
+    """
+    profile = cfg.profiles[profile_name]  # type: ignore[attr-defined]
+    out: list[str] = []
+    for ref in profile.packages:
+        pkg = cfg.packages.get(ref)  # type: ignore[attr-defined]
+        if isinstance(pkg, PluginPackage) and pkg.plugin == plugin_ref:
+            out.append(ref)
+    return out
+
+
 def yaml_add_plugin_to_profile(
     config_path: Path,
     profile_name: str,
     plugin_ref: str,
 ) -> bool:
-    """Append ``plugin_ref`` to ``profiles.<profile>.claude_plugins``.
+    """Declare ``plugin_ref`` on ``profiles.<profile>`` via the packages surface.
 
-    Idempotent: returns ``False`` if already present.
-    Raises :class:`ProfileNotFound` when the profile does not exist.
+    Mints a top-level ``packages`` entry (``type: plugin``) when absent and
+    appends the ref to the profile's ``packages`` list. Idempotent: returns
+    ``False`` when the profile already references the plugin. Raises
+    :class:`ProfileNotFound` when the profile does not exist.
     """
     cfg = load_config(config_path)
     if profile_name not in cfg.profiles:
         raise ProfileNotFound(f"profile not found: {profile_name}")
-    if plugin_ref in cfg.profiles[profile_name].claude_plugins:
+    if _profile_plugin_refs(cfg, profile_name, plugin_ref):
         return False
 
     yaml, doc = _load_yaml_doc(config_path)
     profiles = doc.get("profiles", {})
     if profile_name not in profiles:
         raise ProfileNotFound(f"profile not found: {profile_name}")
-    profile_block = profiles[profile_name]
-    cp_list = _ensure_list(profile_block, "claude_plugins")
-    cp_list.append(plugin_ref)
+    packages_block = _ensure_top_level_block(doc, "packages")
+    if plugin_ref not in packages_block:
+        entry = CommentedMap()
+        entry["type"] = "plugin"
+        entry["plugin"] = plugin_ref
+        packages_block[plugin_ref] = entry
+    pkg_list = _ensure_list(profiles[profile_name], "packages")
+    if plugin_ref not in pkg_list:
+        pkg_list.append(plugin_ref)
     _atomic_yaml_dump(yaml, doc, config_path)
     return True
 
@@ -206,24 +236,28 @@ def yaml_remove_plugin_from_profile(
     profile_name: str,
     plugin_ref: str,
 ) -> bool:
-    """Remove ``plugin_ref`` from ``profiles.<profile>.claude_plugins``.
+    """Drop ``plugin_ref``'s packages ref from ``profiles.<profile>``.
 
-    Idempotent: returns ``False`` if not present.
-    Raises :class:`ProfileNotFound` when the profile does not exist.
+    Removes every profile ``packages`` ref whose top-level entry is a
+    :class:`PluginPackage` for ``plugin_ref``. Idempotent: returns ``False``
+    when the profile does not reference the plugin. Raises
+    :class:`ProfileNotFound` when the profile does not exist. Leaves the
+    top-level ``packages`` entry in place — it may be shared by other profiles.
     """
     cfg = load_config(config_path)
     if profile_name not in cfg.profiles:
         raise ProfileNotFound(f"profile not found: {profile_name}")
-    if plugin_ref not in cfg.profiles[profile_name].claude_plugins:
+    refs = _profile_plugin_refs(cfg, profile_name, plugin_ref)
+    if not refs:
         return False
 
     yaml, doc = _load_yaml_doc(config_path)
     profiles = doc.get("profiles", {})
     if profile_name not in profiles:
         return False
-    profile_block = profiles[profile_name]
-    cp_list = profile_block.get("claude_plugins", [])
-    if plugin_ref in cp_list:
-        cp_list.remove(plugin_ref)
+    pkg_list = profiles[profile_name].get("packages", [])
+    for ref in refs:
+        if ref in pkg_list:
+            pkg_list.remove(ref)
     _atomic_yaml_dump(yaml, doc, config_path)
     return True

@@ -35,12 +35,18 @@ claude_plugins:
   existing-plugin:
     marketplace: existing-mp
 
+# Packages comment.
+packages:
+  existing-plugin:
+    type: plugin
+    plugin: existing-plugin
+
 profiles:
   myprofile:
     # Profile comment.
     tracked_files:
       - d
-    claude_plugins:
+    packages:
       - existing-plugin
   bare:
     tracked_files:
@@ -146,10 +152,11 @@ def test_yaml_add_plugin_to_profile(tmp_path: Path) -> None:
     yaml_add_plugin(p, "new-plugin", "existing-mp")
     added = yaml_add_plugin_to_profile(p, "myprofile", "new-plugin")
     assert added is True
-    from setforge.config import load_config
+    from setforge.config import PluginPackage, load_config
 
     cfg = load_config(p)
-    assert "new-plugin" in cfg.profiles["myprofile"].claude_plugins
+    assert "new-plugin" in cfg.profiles["myprofile"].packages
+    assert cfg.packages["new-plugin"] == PluginPackage(plugin="new-plugin")
 
 
 def test_yaml_add_plugin_to_profile_idempotent(tmp_path: Path) -> None:
@@ -166,10 +173,15 @@ def test_yaml_remove_plugin_from_profile(tmp_path: Path) -> None:
     p = _write_yaml_fixture(tmp_path)
     removed = yaml_remove_plugin_from_profile(p, "myprofile", "existing-plugin")
     assert removed is True
-    from setforge.config import load_config
+    from setforge.config import PluginPackage, load_config
 
     cfg = load_config(p)
-    assert "existing-plugin" not in cfg.profiles["myprofile"].claude_plugins
+    prof = cfg.profiles["myprofile"]
+    assert not any(
+        isinstance(pkg := cfg.packages.get(ref), PluginPackage)
+        and pkg.plugin == "existing-plugin"
+        for ref in prof.packages
+    )
 
 
 def test_yaml_comments_preserved_after_edits(tmp_path: Path) -> None:

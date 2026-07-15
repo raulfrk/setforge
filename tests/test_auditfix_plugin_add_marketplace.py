@@ -2,14 +2,16 @@
 
 Audit finding (Critical): ``plugin add`` declared the plugin in the top-level
 ``claude_plugins:`` registry under the BARE name but bound it to the profile
-using the ``<name>@<marketplace>`` form. Every reader of
-``profile.claude_plugins`` (``_validate_plugin_references``,
-``plugin_ids``, ``sync_marketplace_cache``) treats entries as bare
-registry keys, so the very next ``load_config`` raised ``ConfigError`` and the
-config was bricked until hand-edited.
+using the ``<name>@<marketplace>`` form. Every reader of the profile's plugin
+set (``_validate_plugin_references``, ``plugin_ids``, ``sync_marketplace_cache``)
+treats entries as bare registry keys, so the very next ``load_config`` raised
+``ConfigError`` and the config was bricked until hand-edited.
 
 These tests drive the real Typer CLI (``--no-install`` so no claude binary is
 needed) and then call ``load_config`` to prove the written config still loads.
+The profile now binds plugins through its ``packages`` list (refs to top-level
+``packages`` ``PluginPackage`` entries); the bare-name set is read back via the
+reconcile adapter's :func:`plugin_bare_names`.
 """
 
 from __future__ import annotations
@@ -20,8 +22,22 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from setforge import reconcile_adapter
 from setforge.cli import app
-from setforge.config import load_config
+from setforge.config import load_config, resolve_profile
+
+
+def _profile_plugin_names(cfg_path: Path, profile: str) -> list[str]:
+    """Reload the config and return the profile's bound bare plugin names.
+
+    Reads through the packages surface (profile.packages → PluginPackage refs)
+    via the reconcile adapter, so the assertion tracks the current binding
+    shape rather than the retired ``profile.claude_plugins`` field.
+    """
+    cfg = load_config(cfg_path)
+    resolved = resolve_profile(cfg, profile)
+    return reconcile_adapter.plugin_bare_names(cfg, resolved)
+
 
 # A profile + a pre-declared marketplace so `yaml_add_marketplace` is a no-op
 # (returns False) and `plugin add --no-install` never touches the claude binary.
@@ -75,7 +91,7 @@ def test_plugin_add_binds_bare_name_and_config_still_loads(tmp_path: Path) -> No
 
     # The bricking symptom: load_config must NOT raise.
     reloaded = load_config(cfg)
-    assert reloaded.profiles["myprofile"].claude_plugins == ["superpowers"]
+    assert _profile_plugin_names(cfg, "myprofile") == ["superpowers"]
     # The registry key matches the binding (bare name).
     assert "superpowers" in reloaded.claude_plugins
 
@@ -98,8 +114,7 @@ def test_plugin_add_at_form_argument_also_binds_bare_name(tmp_path: Path) -> Non
     )
     assert result.exit_code == 0, result.output
 
-    reloaded = load_config(cfg)
-    assert reloaded.profiles["myprofile"].claude_plugins == ["superpowers"]
+    assert _profile_plugin_names(cfg, "myprofile") == ["superpowers"]
 
 
 def test_plugin_remove_at_form_drops_bare_binding(tmp_path: Path) -> None:
@@ -126,7 +141,7 @@ def test_plugin_remove_at_form_drops_bare_binding(tmp_path: Path) -> None:
         ],
     )
     assert add.exit_code == 0, add.output
-    assert load_config(cfg).profiles["myprofile"].claude_plugins == ["superpowers"]
+    assert _profile_plugin_names(cfg, "myprofile") == ["superpowers"]
 
     # Remove using the @-form; without the strip the bare entry would survive.
     remove = CliRunner().invoke(
@@ -140,7 +155,7 @@ def test_plugin_remove_at_form_drops_bare_binding(tmp_path: Path) -> None:
         ],
     )
     assert remove.exit_code == 0, remove.output
-    assert load_config(cfg).profiles["myprofile"].claude_plugins == []
+    assert _profile_plugin_names(cfg, "myprofile") == []
 
 
 def test_marketplace_add_rolls_back_yaml_on_binary_failure(

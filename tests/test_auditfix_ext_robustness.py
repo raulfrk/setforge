@@ -170,12 +170,15 @@ _FIXTURE = """\
 version: 1
 tracked_files:
   d: {src: x, dst: y}
+packages:
+  existing.ext:
+    type: extension
+    extension: existing.ext
 profiles:
   main:
     tracked_files: [d]
-    extensions:
-      include:
-        - existing.ext
+    packages:
+      - existing.ext
 """
 
 

@@ -17,16 +17,19 @@ nothing was lost that a schema restamp cannot restore. Overwrite-in-place
 keeps the key at its document position, so an ``up → down → up`` cycle is
 byte-identical against the post-ruamel-normalization document.
 
-Transition ownership (INV-5): this is now the CHAIN-TERMINAL step. When a
-fresh config migrates all the way from an older schema in one command, an
-EARLIER cutover (span-surface-retire) records a transition whose ``file_post``
-is the 4.0 image — but this restamp advances the on-disk config to 5.0
-AFTER it. A single ``revert`` reverses only the LATEST transition, so if this
-step did not record one the newest transition's 4.0 ``file_post`` would no
-longer match the on-disk 5.0 and ``patch -R`` would fail. So the forward
-:meth:`apply` records its OWN terminal transition (``writes_own_transition``
-= ``True``) threading the driver's ``pre_chain_snapshot`` as ``file_pre``, so
-that ONE ``revert`` reaches the chain's byte-exact ORIGIN.
+Transition ownership (INV-5): this is the CHAIN-TERMINAL step for a migrate
+whose explicit target is ``5.0`` (a later cutover, profile-fields-retire,
+carries the chain past this restamp to ``6.0`` and owns the terminal transition
+for a chain that reaches that far). When a fresh config migrates all the way
+to 5.0 from an older schema in one command, an EARLIER cutover
+(span-surface-retire) records a transition whose ``file_post`` is the 4.0 image
+— but this restamp advances the on-disk config to 5.0 AFTER it. A single
+``revert`` reverses only the LATEST transition, so if this step did not record
+one the newest transition's 4.0 ``file_post`` would no longer match the on-disk
+5.0 and ``patch -R`` would fail. So the forward :meth:`apply` records its OWN
+terminal transition (``writes_own_transition`` = ``True``) threading the
+driver's ``pre_chain_snapshot`` as ``file_pre``, so that ONE ``revert`` reaches
+the chain's byte-exact ORIGIN.
 
 The step's OWN mutation touches only ``setforge.yaml`` (the schema stamp), but
 as the SOLE transition a single ``revert`` replays it must carry the FULL
