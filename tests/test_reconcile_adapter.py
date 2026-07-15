@@ -126,6 +126,15 @@ def test_cargo_crates_from_package_surface() -> None:
     assert adapter.cargo_crates(cfg, resolved) == ["fd"]
 
 
+def test_cargo_crates_drops_blank_crate() -> None:
+    cfg = _cfg(
+        profiles={"p": {"packages": ["blank"]}},
+        packages={"blank": {"type": "cargo", "crate": "  "}},
+    )
+    resolved = resolve_profile(cfg, "p")
+    assert adapter.cargo_crates(cfg, resolved) == []
+
+
 def test_cargo_crates_projects_each_ref_in_order() -> None:
     cfg = _cfg(
         profiles={"p": {"packages": ["rg", "fd"]}},

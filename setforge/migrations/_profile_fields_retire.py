@@ -104,12 +104,27 @@ def _package_body(kind: str, name: str) -> CommentedMap:
     return body
 
 
-def _packages_registry(data: CommentedMap) -> CommentedMap:
-    """Return the top-level ``packages`` mapping, creating it if absent."""
+def _packages_registry(data: CommentedMap, cfg_path: Path) -> CommentedMap:
+    """Return the top-level ``packages`` mapping, creating it if absent.
+
+    A missing ``packages:`` is created empty. A present-but-non-mapping
+    ``packages:`` (a hand-edited list/scalar) is refused with a clean
+    :class:`ConfigError` rather than clobbered — replacing it with a fresh
+    empty map would discard the user's data, violating the module's
+    all-or-nothing / refuse-cleanly contract.
+    """
     packages = data.get("packages")
-    if not isinstance(packages, CommentedMap):
+    if packages is None:
         packages = CommentedMap()
         data["packages"] = packages
+        return packages
+    if not isinstance(packages, CommentedMap):
+        raise ConfigError(
+            f"cannot fold legacy profile fields: top-level 'packages' in "
+            f"{cfg_path} must be a mapping, got {type(packages).__name__}. "
+            f"Fix the 'packages:' block (or remove it) and re-run "
+            f"(nothing was changed)."
+        )
     return packages
 
 
@@ -278,7 +293,7 @@ def _gate_floor(data: CommentedMap, path: Path) -> None:
 
 def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
     """Fold every profile's legacy fields + stamp 6.0 in place."""
-    registry = _packages_registry(data)
+    registry = _packages_registry(data, roots.cfg_path)
     profiles = data.get("profiles")
     if isinstance(profiles, CommentedMap):
         for profile in profiles.values():

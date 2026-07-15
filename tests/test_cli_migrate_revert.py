@@ -650,3 +650,61 @@ def test_migrate_to_6_then_one_revert_reaches_origin(
     )
     assert revert.exit_code == 0, revert.output
     assert cfg.read_bytes() == cfg_origin
+
+
+# A 4.0-origin config carrying the four legacy per-profile fields plus the
+# operator floor. Migrating --to=6.0 chains span-types (4.0->5.0) AND
+# profile-fields (5.0->6.0) — BOTH set `writes_own_transition`, so the chain
+# has two owners at once. A 4.0 origin (not 2.1) is the earliest that carries
+# the legacy profile fields and still validates: the pre-4.0 disposition- and
+# span-surface-retire steps each `Config.model_validate` the intermediate
+# config, and the modern Profile model forbids those legacy fields — so they
+# cannot coexist with a pre-4.0 origin. 4.0->6.0 is the two-owner span.
+_CHAIN_CFG_4_0_WITH_LEGACY = """schema_version: "4.0"
+minimum_version: "6.0"
+tracked_files: {}
+claude_plugins:
+  superpowers:
+    marketplace: mkt
+profiles:
+  default:
+    cargo_binaries: [ripgrep]
+    claude_plugins: [superpowers]
+    plugins_reconcile: strict
+    extensions:
+      include: [ms-python.python]
+      exclude: [GitHub.copilot]
+      reconcile: strict
+"""
+
+
+def test_chained_4_0_to_6_0_single_revert_restores_config_to_origin(
+    tmp_path: Path, state_dir: Path
+) -> None:
+    """ONE ``revert`` after a 4.0->6.0 chain with TWO owners reaches the origin.
+
+    This is the delicate INV-5 multi-owner property: the chain runs TWO cutovers
+    that BOTH own a transition — span-types-retire (4.0->5.0) AND the
+    chain-terminal profile-fields-retire (5.0->6.0). A single ``revert`` replays
+    only the LATEST (profile-fields) transition, which threads the FULL pre-chain
+    (4.0) image as its text patch. Byte-exact restoration of ``setforge.yaml``
+    proves one revert still reaches origin even when an EARLIER owner also stamped
+    a transition in the chain — the distinguishing case from the single-owner
+    5.0-origin terminal-revert test above.
+    """
+    cfg = _write_cfg(tmp_path, _CHAIN_CFG_4_0_WITH_LEGACY)
+    cfg_origin = cfg.read_bytes()
+
+    apply = runner.invoke(
+        app, ["migrate", "--config", str(cfg), "--to", "6.0", "--apply", "--yes"]
+    )
+    assert apply.exit_code == 0, apply.output
+    assert detect_current_schema(cfg) == "6.0"
+    # Both cutovers own a durable transition (the two-owner property).
+    assert len(transitions.list_transitions(["migrate"])) == 2
+
+    revert = runner.invoke(
+        app, ["revert", "--profile=migrate", f"--config={cfg}", "--yes"]
+    )
+    assert revert.exit_code == 0, revert.output
+    assert cfg.read_bytes() == cfg_origin

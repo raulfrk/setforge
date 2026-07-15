@@ -220,6 +220,31 @@ def test_collision_diff_body_raises(tmp_path: Path) -> None:
     assert "rename" in msg.lower()
 
 
+_CFG_MALFORMED_PACKAGES = """\
+schema_version: "5.0"
+minimum_version: "6.0"
+tracked_files: {}
+packages:
+  - not
+  - a
+  - mapping
+profiles:
+  default:
+    cargo_binaries: [rg]
+"""
+
+
+def test_non_mapping_packages_refuses_without_clobbering(tmp_path: Path) -> None:
+    roots = _write_cfg(tmp_path, _CFG_MALFORMED_PACKAGES)
+    before = roots.cfg_path.read_bytes()
+    with pytest.raises(ConfigError) as exc:
+        ProfileFieldsRetireMigration().apply(roots=roots)
+    assert "packages" in str(exc.value)
+    # A refused apply mutates nothing — the malformed block is preserved,
+    # never clobbered with a fresh empty map.
+    assert roots.cfg_path.read_bytes() == before
+
+
 _CFG_NO_FLOOR = """\
 schema_version: "5.0"
 tracked_files: {}
