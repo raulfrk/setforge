@@ -139,20 +139,21 @@ def test_ext_remove_drops_from_include(
     # Add to YAML only (skip the slow real install — we only assert YAML).
     add = _ext(c, "add", _EXT_ID, "--no-install")
     assert add.returncode == 0, add.stdout + add.stderr
-    # ext add mints a top-level packages entry (keyed by the id) AND appends a
-    # profile ref, so the id appears twice.
+    # ext add mints a top-level packages entry (the id is BOTH the map key and
+    # the ``extension:`` value → 2 occurrences) AND appends a profile ref
+    # (1 more), so the id appears three times.
     after_add = c.read_text(_CFG_YAML)
-    assert after_add.count(_EXT_ID) == 2, after_add
+    assert after_add.count(_EXT_ID) == 3, after_add
 
     rm = _ext(c, "remove", _EXT_ID)
     combined = rm.stdout + rm.stderr
     assert rm.returncode == 0, combined
     assert f"updated base.packages: {_EXT_ID}" in rm.stdout, combined
-    # ext remove drops only the profile ref; the top-level package entry may
-    # linger (it can be shared), so exactly one occurrence remains and the
+    # ext remove drops only the profile ref; the top-level package entry
+    # lingers (key + ``extension:`` value → 2 occurrences remain), and the
     # profile's packages list no longer references it.
     after_rm = c.read_text(_CFG_YAML)
-    assert after_rm.count(_EXT_ID) == 1, after_rm
+    assert after_rm.count(_EXT_ID) == 2, after_rm
 
 
 def test_ext_remove_no_change_when_absent(

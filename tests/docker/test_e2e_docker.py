@@ -1220,13 +1220,30 @@ def _patch_profile_for_failing_extension(c: ContainerHandle, extra_ext: str) -> 
     """
     out_path = "tests/fixtures/e2e/setforge.patched-ext.test.yaml"
     text = c.exec(["cat", CONFIG_FIXTURE], check=True).stdout
-    needle = "        - editorconfig.editorconfig\n"
-    if needle not in text:
+    # 6.0 shape: editorconfig lives as a top-level ``packages:`` map entry
+    # AND as a 6-space-indented ref under the profile's ``packages:`` list.
+    # Inject ``extra_ext`` in both places so the ref resolves to a declared
+    # package (else load_config rejects it before the reconcile-failure path).
+    profile_ref = "      - editorconfig.editorconfig\n"
+    pkg_entry = (
+        "  editorconfig.editorconfig:\n"
+        "    type: extension\n"
+        "    extension: editorconfig.editorconfig\n"
+    )
+    if profile_ref not in text or pkg_entry not in text:
         raise AssertionError(
             f"fixture {CONFIG_FIXTURE!r} no longer carries the "
             "editorconfig anchor; reconcile-failure patches need refresh"
         )
-    patched = text.replace(needle, needle + f"        - {extra_ext}\n", 1)
+    patched = text.replace(profile_ref, profile_ref + f"      - {extra_ext}\n", 1)
+    patched = patched.replace(
+        pkg_entry,
+        pkg_entry
+        + f"  {extra_ext}:\n"
+        + "    type: extension\n"
+        + f"    extension: {extra_ext}\n",
+        1,
+    )
     # ``write_text`` accepts an absolute container path; the fixture
     # already lives inside the bind-mounted repo at ``/workspace``.
     c.write_text(f"/workspace/{out_path}", patched)
