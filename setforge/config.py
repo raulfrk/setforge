@@ -1757,13 +1757,28 @@ def _mint_package_ref(
 ) -> None:
     """Register ``ref -> body`` in ``config.packages`` and append it to the refs.
 
-    Mints the top-level ``packages`` entry when absent; reuses an existing
-    entry with an identical body (the migration's idempotent-collision rule).
-    Appends ``ref`` to ``resolved.packages`` only when it is not already
-    present, so a re-add of a profile plugin/extension does not duplicate.
+    Mints the top-level ``packages`` entry when absent. An existing entry with
+    an EQUAL body is reused (idempotent), mirroring the migration's
+    idempotent-collision rule (:func:`_mint_package`); an existing entry with a
+    DIFFERENT body (e.g. a base ``CargoPackage`` already occupying the name an
+    overlay wants for a plugin/extension) is a collision across the flat
+    ``packages`` namespace and raises :class:`ConfigError` naming the clash,
+    rather than silently reusing the wrong-typed entry (which the adapter's
+    type-filtered projection would then drop, hiding the error). Appends ``ref``
+    to ``resolved.packages`` only when it is not already present, so a re-add of
+    a profile plugin/extension does not duplicate.
     """
-    if ref not in config.packages:
+    existing = config.packages.get(ref)
+    if existing is None:
         config.packages[ref] = body
+    elif existing != body:
+        raise ConfigError(
+            f"local.yaml overlay add {ref!r} collides with an existing "
+            f"top-level packages entry of a different type/body "
+            f"({existing!r} vs {body!r}). The packages namespace is flat, so "
+            f"give the overlay add a distinct name (or remove the clashing "
+            f"base entry) and re-run (nothing was changed)."
+        )
     if ref not in resolved.packages:
         resolved.packages.append(ref)
 
@@ -1782,11 +1797,11 @@ def _apply_plugin_mutations(
     names; drop from ``resolved.packages`` every ref whose top-level
     entry is a :class:`PluginPackage` for a removed name.
 
-    A bare-name ``add`` without ``@`` mints no registry ref (the user
-    must pair the bare name with a marketplace by other means); we
-    still append it to ``resolved.packages`` so the cross-ref check
-    surfaces the missing registry entry as a single error message
-    rather than silently dropping the add.
+    A bare-name ``add`` without ``@`` still mints a :class:`PluginPackage`
+    (via :func:`_mint_package_ref`) and appends it to ``resolved.packages``,
+    but synthesizes no ``claude_plugins`` marketplace entry — so the
+    cross-ref check surfaces the missing registry entry as a single error
+    message rather than silently dropping the add.
     """
     removed = set(overlay.remove)
     resolved.packages = [

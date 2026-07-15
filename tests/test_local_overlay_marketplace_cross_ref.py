@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 
 from setforge.cli import app
 from setforge.config import (
+    CargoPackage,
     ClaudePluginRef,
     Config,
     ExtensionPackage,
@@ -383,6 +384,67 @@ def test_apply_local_overlay_mutates_resolved_plugins_in_place(
     bare = reconcile_adapter.plugin_bare_names(cfg, rp)
     assert "other-tool" in bare
     assert "sp" not in bare
+
+
+# ---------------------------------------------------------------------------
+# Overlay mint collision: an add whose key already names a DIFFERENT-body
+# base package must raise, not silently reuse the wrong-typed entry.
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_plugin_add_colliding_with_base_cargo_entry_raises(
+    tmp_path: Path,
+) -> None:
+    """``plugins.add: [foo@mp]`` where ``foo`` is already a base ``CargoPackage``
+    is a flat-namespace collision — mint must refuse, not reuse the cargo entry
+    (which the plugin-typed adapter projection would then silently drop)."""
+    cfg = Config(
+        tracked_files={},
+        marketplaces={
+            "official": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB, repo="a/b"
+            )
+        },
+        packages={"foo": CargoPackage(crate="foo")},
+        profiles={"p": Profile(packages=["foo"])},
+    )
+    rp = ResolvedProfile(packages=["foo"])
+    local = _write_local(
+        tmp_path,
+        """\
+        plugins:
+          add:
+            - foo@official
+        """,
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        apply_local_overlay(cfg, rp, "p", local_config_path=local)
+    msg = str(exc_info.value)
+    assert "'foo'" in msg
+    assert "distinct name" in msg
+
+
+def test_overlay_extension_add_matching_identical_base_entry_reuses(
+    tmp_path: Path,
+) -> None:
+    """An overlay ``extensions.add`` whose key matches an IDENTICAL-body existing
+    entry is idempotent — no error, and the ref is not duplicated."""
+    from setforge import reconcile_adapter
+
+    cfg = _make_cfg(extensions=["ms-python.python"])
+    rp = _make_resolved([], extensions=["ms-python.python"])
+    local = _write_local(
+        tmp_path,
+        """\
+        extensions:
+          add:
+            - ms-python.python
+        """,
+    )
+    apply_local_overlay(cfg, rp, "p", local_config_path=local)
+    include = reconcile_adapter.extensions_input(cfg, rp).include
+    assert include == ["ms-python.python"]
+    assert rp.packages.count("ms-python.python") == 1
 
 
 def test_apply_local_overlay_synthesizes_claude_plugins_registry(
