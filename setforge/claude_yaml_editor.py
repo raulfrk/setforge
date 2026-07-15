@@ -25,6 +25,7 @@ from ruamel.yaml.comments import (
 )
 
 from setforge.config import (
+    Config,
     MarketplaceSource,
     MarketplaceSourceKind,
     PluginPackage,
@@ -180,17 +181,17 @@ def yaml_add_plugin(
     return True
 
 
-def _profile_plugin_refs(cfg: object, profile_name: str, plugin_ref: str) -> list[str]:
+def _profile_plugin_refs(cfg: Config, profile_name: str, plugin_ref: str) -> list[str]:
     """Return the profile's ``packages`` refs that resolve to plugin ``plugin_ref``.
 
     A profile declares a plugin through a ``packages`` ref whose top-level
     entry is a :class:`PluginPackage` for that bare name. Returns every such
     ref (usually zero or one) so callers can test membership and prune.
     """
-    profile = cfg.profiles[profile_name]  # type: ignore[attr-defined]
+    profile = cfg.profiles[profile_name]
     out: list[str] = []
     for ref in profile.packages:
-        pkg = cfg.packages.get(ref)  # type: ignore[attr-defined]
+        pkg = cfg.packages.get(ref)
         if isinstance(pkg, PluginPackage) and pkg.plugin == plugin_ref:
             out.append(ref)
     return out

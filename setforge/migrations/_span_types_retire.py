@@ -171,9 +171,11 @@ class SpanTypesRetireMigration:
 
     A symmetric restamp (see the module docstring): both endpoints carry
     ``schema_version``, so :attr:`reverse` down-stamps to 4.0 rather than
-    stripping the key. As the CHAIN-TERMINAL step it records its OWN durable
-    transition threading the chain origin, so ``writes_own_transition`` is
-    ``True`` (see the module docstring's INV-5 note).
+    stripping the key. It records its OWN durable transition threading the
+    chain origin, so ``writes_own_transition`` is ``True`` (see the module
+    docstring's INV-5 note). It is the chain terminal only for an explicit
+    ``--to=5.0``; a chain reaching 6.0 continues to profile-fields-retire,
+    which becomes the terminal owner.
     """
 
     from_version: str = "4.0"
@@ -181,7 +183,14 @@ class SpanTypesRetireMigration:
 
     @property
     def writes_own_transition(self) -> bool:
-        """Terminal step: records its own origin-threading stamp transition."""
+        """Owns its own stamp transition; chain-terminal only when 5.0 is target.
+
+        Records its own origin-threading transition (``True``). For an explicit
+        ``--to=5.0`` it is the chain terminal; for a chain reaching 6.0 the
+        later profile-fields-retire step is the terminal owner. Both owners in
+        such a chain is deliberate (the INV-5 multi-owner design) — a single
+        ``revert`` still reaches byte-exact origin.
+        """
         return True
 
     @property
