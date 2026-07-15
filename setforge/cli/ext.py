@@ -70,6 +70,11 @@ def ext_add(
     extension_id: str = typer.Argument(..., help="VSCode extension ID."),
     profile: str = _PROFILE_OPTION,
     config: Path = _CONFIG_OPTION,
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help="Package key for the packages: map entry (default: the extension ID).",
+    ),
     install: bool = typer.Option(
         True,
         "--install/--no-install",
@@ -78,11 +83,12 @@ def ext_add(
 ) -> None:
     """Declare an extension ID on the profile via the packages surface."""
     config = _resolve_config_arg(config)
-    added = vscode_extensions.add_to_include(config, profile, extension_id)
+    key = name or extension_id
+    added = vscode_extensions.add_to_include(config, profile, extension_id, key=key)
     if added:
-        typer.echo(f"added to {profile}.packages: {extension_id} (extension)")
+        typer.echo(f"added to {profile}.packages: {key} (extension {extension_id})")
     else:
-        typer.echo(f"already in {profile}.packages: {extension_id} (extension)")
+        typer.echo(f"already in {profile}.packages: {key} (extension {extension_id})")
     if install:
         try:
             vscode_extensions.install_one(extension_id)

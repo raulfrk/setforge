@@ -50,3 +50,118 @@ def test_ext_add_handles_install_failure(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.exit_code == 1
     assert "code --install-extension exited 1" in result.output
     assert "Traceback" not in result.output
+
+
+# ---- --name override + collision guard (real-config harness) -------------
+
+_ADD_FIXTURE = """\
+version: 1
+schema_version: "6.0"
+
+tracked_files:
+  d:
+    src: x
+    dst: y
+
+packages:
+  keep.me:
+    type: extension
+    extension: keep.me
+
+profiles:
+  base:
+    tracked_files:
+      - d
+    packages:
+      - keep.me
+"""
+
+
+def _write_add_fixture(tmp_path: Path) -> Path:
+    p = tmp_path / "setforge.yaml"
+    p.write_text(_ADD_FIXTURE, encoding="utf-8")
+    return p
+
+
+def _invoke_add(cfg: Path, args: list[str]):
+    """Run ``ext add`` against a real config with install disabled."""
+    runner = CliRunner()
+    # Point the config at the real fixture; skip the code CLI install.
+    return runner.invoke(
+        app,
+        ["ext", "add", *args, "--no-install", "--profile=base", f"--config={cfg}"],
+    )
+
+
+def test_ext_add_name_override_mints_under_new_key(tmp_path: Path) -> None:
+    """`ext add <id> --name <key>` mints packages:{<key>:{type:extension,
+    extension:<id>}} and appends <key> to the profile packages ref list."""
+    from setforge.config import ExtensionPackage, load_config
+
+    cfg = _write_add_fixture(tmp_path)
+    result = _invoke_add(cfg, ["ms-python.python", "--name", "py"])
+    assert result.exit_code == 0, result.output
+
+    loaded = load_config(cfg)
+    assert loaded.schema_version == "6.0"
+    entry = loaded.packages["py"]
+    assert isinstance(entry, ExtensionPackage)
+    assert entry.extension == "ms-python.python"
+    assert "py" in loaded.profiles["base"].packages
+
+
+def test_ext_add_colliding_key_raises(tmp_path: Path) -> None:
+    """`ext add K` where K already maps to a different-body package raises
+    ConfigError naming K + mentioning --name; the file is unchanged."""
+    fixture = """\
+version: 1
+schema_version: "6.0"
+
+tracked_files:
+  d:
+    src: x
+    dst: y
+
+packages:
+  ripgrep:
+    type: cargo
+    crate: ripgrep
+
+profiles:
+  base:
+    tracked_files:
+      - d
+    packages:
+      - ripgrep
+"""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(fixture, encoding="utf-8")
+    before = cfg.read_text()
+
+    result = _invoke_add(cfg, ["ripgrep"])
+    assert result.exit_code != 0
+    # The ConfigError propagates (main() renders it as `error: ...` + exit 1).
+    from setforge.errors import ConfigError
+
+    assert isinstance(result.exception, ConfigError)
+    message = str(result.exception)
+    assert "ripgrep" in message
+    assert "--name" in message
+    # Nothing was changed.
+    assert cfg.read_text() == before
+
+
+def test_ext_add_identical_body_is_idempotent(tmp_path: Path) -> None:
+    """Re-adding an id already mapped to the identical extension body reuses
+    the entry — no duplicate, no error."""
+    from setforge.config import load_config
+
+    cfg = _write_add_fixture(tmp_path)
+    result = _invoke_add(cfg, ["keep.me"])
+    assert result.exit_code == 0, result.output
+
+    loaded = load_config(cfg)
+    assert loaded.profiles["base"].packages.count("keep.me") == 1
+    text = cfg.read_text()
+    # No duplicate top-level entry.
+    assert text.count("extension: keep.me") == 1

@@ -416,30 +416,54 @@ def _extension_ref_for(cfg: Config, profile: str, ext_id: str) -> str | None:
     return None
 
 
-def _mint_extension_package(doc: CommentedMap, ext_id: str) -> None:
-    """Register a top-level ``packages`` ExtensionPackage for ``ext_id`` if absent."""
+def _mint_extension_package(doc: CommentedMap, key: str, ext_id: str) -> None:
+    """Register a top-level ``packages`` ExtensionPackage ``key -> ext_id``.
+
+    Mints the entry when absent. An existing entry with an EQUAL body (an
+    ExtensionPackage for the same ``ext_id``) is reused (idempotent). An
+    existing entry with a DIFFERENT type/body — e.g. a ``CargoPackage``
+    already occupying ``key`` — is a collision across the flat ``packages``
+    namespace and raises :class:`ConfigError` naming the clash, mirroring
+    :func:`config._mint_package_ref`; the ``--name`` override resolves it.
+    """
     packages = doc.setdefault("packages", CommentedMap())
-    if ext_id not in packages:
-        entry = CommentedMap()
-        entry["type"] = "extension"
-        entry["extension"] = ext_id
-        packages[ext_id] = entry
+    existing = packages.get(key)
+    if existing is not None:
+        if existing.get("type") == "extension" and existing.get("extension") == ext_id:
+            return
+        raise ConfigError(
+            f"ext add {key!r} collides with an existing top-level packages "
+            f"entry of a different type/body. The packages namespace is flat, "
+            f"so give the extension a distinct key via --name (or remove the "
+            f"clashing entry) and re-run (nothing was changed)."
+        )
+    entry = CommentedMap()
+    entry["type"] = "extension"
+    entry["extension"] = ext_id
+    packages[key] = entry
 
 
-def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
+def add_to_include(
+    config_path: Path, profile: str, ext_id: str, *, key: str | None = None
+) -> bool:
     """Declare ``ext_id`` on ``profiles.<profile>`` via the packages surface.
 
-    Mints a top-level ``packages`` ExtensionPackage when absent and appends
-    the ref to the profile's ``packages`` list. Idempotent: returns ``False``
-    if already declared. Comments and key order in the YAML document are
-    preserved via ruamel.yaml round-trip mode.
+    ``key`` (default: ``ext_id``) is the top-level ``packages`` map key AND
+    the profile ``packages`` ref; the ExtensionPackage body still carries
+    ``extension: ext_id`` (the real id). Mints a top-level ``packages``
+    ExtensionPackage when absent and appends the ref to the profile's
+    ``packages`` list. Idempotent: returns ``False`` if already declared.
+    Comments and key order in the YAML document are preserved via ruamel.yaml
+    round-trip mode.
 
     Raises :class:`ConfigError` if ``ext_id`` is in this profile's literal
     ``reconcile.extensions.exclude`` list — or in any ancestor profile's
     exclude via the ``extends:`` chain — since "exclude wins" (exclude is
     merged across the chain) would silently drop the new addition on the next
-    reconcile.
+    reconcile. Also raises :class:`ConfigError` (pointing at ``--name``) when
+    ``key`` already names a different-bodied top-level package.
     """
+    key = key or ext_id
     cfg = load_config(config_path)
     if profile not in cfg.profiles:
         raise ProfileNotFound(f"profile not found: {profile}")
@@ -456,16 +480,21 @@ def add_to_include(config_path: Path, profile: str, ext_id: str) -> bool:
             "first (e.g. by editing setforge.yaml) before adding it, since the merged "
             "'exclude wins' would silently drop the addition on reconcile"
         )
-    if ext_id in _profile_include_ids(cfg, profile):
+    existing_pkg = cfg.packages.get(key)
+    if (
+        key in cfg.profiles[profile].packages
+        and isinstance(existing_pkg, ExtensionPackage)
+        and existing_pkg.extension == ext_id
+    ):
         return False
 
     yaml, doc = _load_yaml_doc(config_path)
     if profile not in doc.get("profiles", {}):
         raise ProfileNotFound(f"profile not found: {profile}")
-    _mint_extension_package(doc, ext_id)
+    _mint_extension_package(doc, key, ext_id)
     pkg_list = _ensure_list(doc["profiles"][profile], "packages")
-    if ext_id not in pkg_list:
-        pkg_list.append(ext_id)
+    if key not in pkg_list:
+        pkg_list.append(key)
     _dump_yaml_doc(yaml, doc, config_path)
     return True
 
@@ -543,7 +572,7 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
         )
     ]
     for ext_id in new_include:
-        _mint_extension_package(doc, ext_id)
+        _mint_extension_package(doc, ext_id, ext_id)
         if ext_id not in kept:
             kept.append(ext_id)
     if kept:
