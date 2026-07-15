@@ -458,6 +458,75 @@ def test_add_to_include_idempotent(tmp_path: Path) -> None:
     assert prof.packages.count("keep.me") == 1
 
 
+def test_add_to_include_name_override_mints_under_key(tmp_path: Path) -> None:
+    """``key`` overrides the top-level packages map key + profile ref, while
+    the ExtensionPackage body still carries the real ``ext_id``."""
+    from setforge.config import ExtensionPackage, load_config
+
+    cfg = _write_fixture(tmp_path)
+    added = add_to_include(cfg, "base", "ms-python.python", key="py")
+    assert added is True
+
+    loaded = load_config(cfg)
+    entry = loaded.packages["py"]
+    assert isinstance(entry, ExtensionPackage)
+    assert entry.extension == "ms-python.python"
+    # The profile ref list carries the KEY, not the id.
+    assert "py" in loaded.profiles["base"].packages
+    assert "ms-python.python" not in loaded.profiles["base"].packages
+
+
+def test_add_to_include_colliding_key_raises_and_leaves_file_unchanged(
+    tmp_path: Path,
+) -> None:
+    """A key already occupied by a DIFFERENT-body top-level package (here a
+    CargoPackage) is a flat-namespace collision: ConfigError pointing at
+    ``--name``, and nothing on disk is mutated."""
+    from setforge.errors import ConfigError as _ConfigError
+
+    fixture = """\
+version: 1
+tracked_files:
+  d: {src: x, dst: y}
+packages:
+  ripgrep:
+    type: cargo
+    crate: ripgrep
+profiles:
+  base:
+    tracked_files: [d]
+    packages:
+      - ripgrep
+"""
+    cfg = tmp_path / "setforge.yaml"
+    cfg.write_text(fixture, encoding="utf-8")
+    before = cfg.read_text()
+
+    with pytest.raises(_ConfigError, match="--name") as exc_info:
+        add_to_include(cfg, "base", "ripgrep", key="ripgrep")
+    assert "ripgrep" in str(exc_info.value)
+    # Fail-closed: the collision mutated nothing.
+    assert cfg.read_text() == before
+
+
+def test_add_to_include_identical_body_under_new_key_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    """Two calls with the same key+id: the second is a no-op — no duplicate
+    top-level entry, no duplicate profile ref, no error."""
+    from setforge.config import load_config
+
+    cfg = _write_fixture(tmp_path)
+    first = add_to_include(cfg, "base", "ms-python.python", key="py")
+    second = add_to_include(cfg, "base", "ms-python.python", key="py")
+    assert first is True
+    assert second is False
+
+    loaded = load_config(cfg)
+    assert loaded.profiles["base"].packages.count("py") == 1
+    assert cfg.read_text().count("extension: ms-python.python") == 1
+
+
 def test_add_to_include_creates_extensions_block_when_missing(
     tmp_path: Path,
 ) -> None:
