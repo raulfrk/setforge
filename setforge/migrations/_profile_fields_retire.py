@@ -427,15 +427,19 @@ class ProfileFieldsRetireMigration:
 class _ProfileFieldsRetireReverse:
     """The inverse 6.0 -> 5.0 migration: unfold packages -> legacy profile fields.
 
-    For each profile, its ``packages`` refs are partitioned by the referenced
-    top-level entry's kind and rebuilt into ``cargo_binaries`` (cargo-kind),
-    ``claude_plugins`` (plugin-kind), and ``extensions.include``
-    (extension-kind); ``reconcile.plugins.policy`` -> ``plugins_reconcile`` and
+    For each profile, only the ``packages`` refs whose top-level entry has the
+    canonical MINTED shape the forward produces (:func:`_minted_field`) are
+    reconstructed into ``cargo_binaries`` / ``claude_plugins`` /
+    ``extensions.include`` and dropped from the top-level ``packages`` registry;
+    ``reconcile.plugins.policy`` -> ``plugins_reconcile`` and
     ``reconcile.extensions.{exclude, policy}`` -> ``extensions.{exclude,
-    reconcile}``. The minted cargo/plugin/extension-kind top-level ``packages``
-    entries are dropped, emptied ``packages`` / ``reconcile`` keys are removed
-    from the profile, and ``schema_version`` is RESTAMPED to ``5.0`` in place
-    (never stripped — a stripped key would misread as the 1.0 baseline).
+    reconcile}``. Because the ``packages`` model already existed at 5.0, a profile
+    may legitimately carry NATIVE refs (``python`` / ``go`` / ``github_release`` /
+    ``local``, or a native cargo/plugin/extension whose body isn't the identity
+    form) — those are PRESERVED in place with their top-level entries intact, so
+    the reverse NEVER silently drops data it did not mint. ``schema_version`` is
+    RESTAMPED to ``5.0`` in place (never stripped — a stripped key would misread
+    as the 1.0 baseline).
 
     A stale ``minimum_version`` floor above 5.0 is lowered so the down-migrated
     config loads on the 5.x engine the downgrade serves (mirrors
@@ -506,34 +510,84 @@ class _ProfileFieldsRetireReverse:
             raise
 
 
+def _minted_field(entry: object, ref: str) -> str | None:
+    """Return the legacy kind for ``entry`` IFF it has the canonical minted shape.
+
+    The forward mints exactly the identity body ``{type: cargo, crate: <key>}`` /
+    ``{type: plugin, plugin: <key>}`` / ``{type: extension, extension: <key>}``
+    where the inner field value equals the registry key (== the ref id). A ref is
+    treated as minted — reconstructed into a legacy field and dropped from the
+    top-level registry — ONLY when its entry matches that exact two-key shape.
+
+    Anything else is PRESERVED in place: a native ``python`` / ``go`` /
+    ``github_release`` / ``local`` package, a native cargo/plugin/extension whose
+    body carries extra fields or a non-identity value, or a dangling ref with no
+    top-level entry. Returning ``None`` for those is what keeps the reverse
+    lossless — it never reconstructs (and so never drops) a ref it did not mint.
+    """
+    if not isinstance(entry, CommentedMap):
+        return None
+    kind = entry.get("type")
+    field = {
+        _CARGO_KIND: "crate",
+        _PLUGIN_KIND: "plugin",
+        _EXTENSION_KIND: "extension",
+    }.get(str(kind))
+    if field is None:
+        return None
+    # Exact identity shape: exactly {type, <field>} and <field> == the ref id.
+    if set(entry) != {"type", field} or entry.get(field) != ref:
+        return None
+    return str(kind)
+
+
+def _classify_refs(
+    profile: CommentedMap, registry: CommentedMap, minted: set[str]
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Split a profile's ``packages`` refs into minted-by-kind + surviving.
+
+    A ref whose top-level entry has the canonical minted shape
+    (:func:`_minted_field`) is bucketed under its kind and recorded in
+    ``minted``; every other ref (native / non-identity / dangling) is returned as
+    surviving, preserving the original order within each partition.
+    """
+    by_kind: dict[str, list[str]] = {
+        _CARGO_KIND: [],
+        _PLUGIN_KIND: [],
+        _EXTENSION_KIND: [],
+    }
+    surviving: list[str] = []
+    for ref in _seq_of_str(profile.get("packages")):
+        kind = _minted_field(registry.get(ref), ref)
+        if kind is None:
+            surviving.append(ref)
+        else:
+            by_kind[kind].append(ref)
+            minted.add(ref)
+    return by_kind, surviving
+
+
 def _untranslate_profile(
     profile: CommentedMap, registry: CommentedMap, minted: set[str]
 ) -> None:
-    """Rebuild one profile's legacy fields from its ``packages`` refs + reconcile.
+    """Rebuild one profile's legacy fields from its MINTED ``packages`` refs.
 
-    Partitions the profile's ``packages`` refs by the referenced top-level
-    entry's kind -> ``cargo_binaries`` / ``claude_plugins`` /
-    ``extensions.include``; folds ``reconcile.plugins.policy`` ->
+    Classifies each ``packages`` ref by looking up its top-level entry: a ref
+    whose entry has the canonical minted shape (:func:`_minted_field`) is
+    reconstructed into ``cargo_binaries`` / ``claude_plugins`` /
+    ``extensions.include`` and recorded in ``minted`` (so the caller drops its
+    now-orphaned top-level entry); EVERY other ref — native
+    python/go/github_release/local, a native cargo/plugin/extension whose body
+    isn't the identity form, or a dangling ref — is PRESERVED in place with its
+    top-level entry intact. Also folds ``reconcile.plugins.policy`` ->
     ``plugins_reconcile`` and ``reconcile.extensions.{exclude, policy}`` ->
-    ``extensions.{exclude, reconcile}``. Records every consumed ref in
-    ``minted`` so the caller can drop the now-orphaned top-level entries. Drops
-    the emptied ``packages`` / ``reconcile`` keys.
+    ``extensions.{exclude, reconcile}``. The profile ``packages`` list is rebuilt
+    from only the surviving refs (original order), dropped only when none survive.
     """
-    cargo: list[str] = []
-    plugins: list[str] = []
-    extensions_include: list[str] = []
-    for ref in _seq_of_str(profile.get("packages")):
-        entry = registry.get(ref)
-        kind = entry.get("type") if isinstance(entry, CommentedMap) else None
-        if kind == _CARGO_KIND:
-            cargo.append(ref)
-            minted.add(ref)
-        elif kind == _PLUGIN_KIND:
-            plugins.append(ref)
-            minted.add(ref)
-        elif kind == _EXTENSION_KIND:
-            extensions_include.append(ref)
-            minted.add(ref)
+    by_kind, surviving = _classify_refs(profile, registry, minted)
+    cargo = by_kind[_CARGO_KIND]
+    plugins = by_kind[_PLUGIN_KIND]
+    extensions_include = by_kind[_EXTENSION_KIND]
 
     if cargo:
         profile["cargo_binaries"] = _str_seq(cargo)
@@ -548,7 +602,9 @@ def _untranslate_profile(
 
     if "reconcile" in profile:
         del profile["reconcile"]
-    if "packages" in profile:
+    if surviving:
+        profile["packages"] = _str_seq(surviving)
+    elif "packages" in profile:
         del profile["packages"]
 
 

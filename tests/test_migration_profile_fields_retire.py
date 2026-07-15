@@ -125,6 +125,48 @@ def test_round_trip_restores_legacy_config(tmp_path: Path) -> None:
     assert rev.reverse.to_version == "6.0"
 
 
+# A 6.0 config where the profile references a MINTED cargo entry (rg) plus a
+# NATIVE python package (mytool) authored directly against the 5.0-and-later
+# top-level `packages:` model. The reverse must reconstruct rg but leave mytool
+# and its top-level entry alone.
+_CFG_NATIVE_REF = """\
+schema_version: "6.0"
+minimum_version: "6.0"
+tracked_files: {}
+packages:
+  rg:
+    type: cargo
+    crate: rg
+  mytool:
+    type: python
+    package: mytool
+    version: "1.2.3"
+profiles:
+  default:
+    packages: [rg, mytool]
+"""
+
+
+def test_reverse_preserves_native_package_refs(tmp_path: Path) -> None:
+    roots = _write_cfg(tmp_path, _CFG_NATIVE_REF)
+    _ProfileFieldsRetireReverse().apply(roots=roots)
+
+    data = _load(roots)
+    profile = data["profiles"]["default"]
+    # The minted cargo ref is reconstructed into the legacy field + dropped.
+    assert list(profile["cargo_binaries"]) == ["rg"]
+    assert "rg" not in data["packages"]
+    # The native python ref SURVIVES: it stays in the profile ref-list AND its
+    # top-level entry is intact (never minted, so never dropped).
+    assert list(profile["packages"]) == ["mytool"]
+    assert dict(data["packages"]["mytool"]) == {
+        "type": "python",
+        "package": "mytool",
+        "version": "1.2.3",
+    }
+    assert data["schema_version"] == "5.0"
+
+
 def _plain(node: Any) -> Any:
     """Recursively convert a ruamel document into plain dict/list for equality."""
     from collections.abc import Mapping, Sequence
