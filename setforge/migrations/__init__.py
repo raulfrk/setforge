@@ -119,6 +119,7 @@ __all__ = [
     "find_migration_path",
     "known_versions",
     "markerless_conversion_schema_version",
+    "package_contract_schema_version",
     "parse_schema_version",
     "preserve_contract_schema_version",
 ]
@@ -148,6 +149,27 @@ fields (``preserve_user_sections`` / ``preserve_user_keys`` /
 ``preserve_user_keys_deep``). That drop is destructive and irreversible
 on hosts still reading the legacy shape, so it refuses unless the operator
 has attested an all-hosts floor of at least this version via
+``minimum_version`` (a FULL ``major.minor`` compare through
+:func:`_meets_floor`).
+
+This value is FROZEN: it records a historical fact (the version the
+contraction shipped at) and must NEVER be aliased to — or bumped
+alongside — :data:`current_expected_schema_version` (which keeps
+advancing). Tying the floor gate to the live expected version would
+silently move the gate on every future schema bump, exactly the footgun
+:data:`markerless_conversion_schema_version` guards against.
+"""
+
+
+package_contract_schema_version: Final[str] = "6.0"
+"""Schema version the legacy profile-fields contraction lands at.
+
+The 5.0 -> 6.0 CONTRACT migration folds the four legacy per-profile
+package/reconcile fields (``cargo_binaries`` / ``claude_plugins`` /
+``plugins_reconcile`` / ``extensions``) into the modern flat ``packages`` +
+``reconcile`` model, then drops the legacy keys. That drop is destructive and
+irreversible on hosts still reading the legacy shape, so it refuses unless the
+operator has attested an all-hosts floor of at least this version via
 ``minimum_version`` (a FULL ``major.minor`` compare through
 :func:`_meets_floor`).
 
