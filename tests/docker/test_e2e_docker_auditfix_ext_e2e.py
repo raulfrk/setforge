@@ -4,10 +4,11 @@ Pre-audit, only ``ext list`` had any e2e coverage
 (``test_e2e_docker_source_layer.py``). The mutating ext commands are
 exactly the integration-emergent surface the Docker suite exists to guard:
 
-- ``ext add`` rewrites ``setforge.yaml`` (``extensions.include`` via
-  ruamel round-trip) AND shells out to the real ``code
-  --install-extension``.
-- ``ext remove`` rewrites the include / exclude lists.
+- ``ext add`` rewrites ``setforge.yaml`` (mints a top-level ``packages``
+  extension entry + a profile ref via ruamel round-trip) AND shells out to
+  the real ``code --install-extension``.
+- ``ext remove`` drops the profile ref (and, with ``--exclude``, appends to
+  ``reconcile.extensions.exclude``).
 - standalone ``ext reconcile`` (non-dry-run) actually installs /
   uninstalls via the real ``code`` binary and carries distinct exit-code
   logic: read-only modes (REPORT policy or ``--dry-run``) exit 1 on any
@@ -43,25 +44,31 @@ _EXT_ID = "editorconfig.editorconfig"
 
 
 def _write_config(c: ContainerHandle, *, reconcile: str | None = None) -> None:
-    """Write a minimal config repo at ``_CFG_REPO`` with a ``base`` profile.
+    """Write a minimal 6.0 config repo at ``_CFG_REPO`` with a ``base`` profile.
 
-    When ``reconcile`` is given, the profile's ``extensions`` block
-    declares that ``reconcile:`` policy (e.g. ``report``) so the standalone
-    ``ext reconcile`` exit-code branches can be exercised.
+    When ``reconcile`` is given, the profile declares the extension through
+    the ``packages`` surface + a ``reconcile.extensions.policy`` (e.g.
+    ``report``) so the standalone ``ext reconcile`` exit-code branches can be
+    exercised. With no ``reconcile``, the profile declares no packages — the
+    ``ext add`` path mints the extension entry itself.
     """
-    ext_block = "    extensions:\n      include: []\n"
+    top_packages = ""
+    profile_body = "    packages: []\n"
     if reconcile is not None:
-        ext_block = (
-            "    extensions:\n"
-            f"      reconcile: {reconcile}\n"
-            "      include:\n"
-            f"        - {_EXT_ID}\n"
+        top_packages = (
+            f"packages:\n  {_EXT_ID}:\n    type: extension\n    extension: {_EXT_ID}\n"
+        )
+        profile_body = (
+            "    packages:\n"
+            f"      - {_EXT_ID}\n"
+            "    reconcile:\n"
+            "      extensions:\n"
+            f"        policy: {reconcile}\n"
         )
     c.write_text(
         _CFG_YAML,
-        "version: 1\nschema_version: '1.0'\n"
-        "tracked_files: {}\n"
-        "profiles:\n  base:\n" + ext_block,
+        "version: 1\nschema_version: '6.0'\n"
+        "tracked_files: {}\n" + top_packages + "profiles:\n  base:\n" + profile_body,
     )
 
 
@@ -92,16 +99,16 @@ def _list_extensions(c: ContainerHandle) -> str:
 def test_ext_add_writes_yaml_and_installs(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``ext add`` appends to ``extensions.include`` AND installs via ``code``."""
+    """``ext add`` declares the id via ``packages`` AND installs via ``code``."""
     c = docker_container()
     _write_config(c)
 
     res = _ext(c, "add", _EXT_ID)
     combined = res.stdout + res.stderr
     assert res.returncode == 0, combined
-    # The id is now declared in the profile's include list.
+    # The id is now declared on the profile via the packages surface.
     assert _EXT_ID in c.read_text(_CFG_YAML), combined
-    assert f"added to base.extensions.include: {_EXT_ID}" in res.stdout, combined
+    assert f"added to base.packages: {_EXT_ID} (extension)" in res.stdout, combined
     # The real `code` binary actually installed it.
     assert _EXT_ID.lower() in _list_extensions(c), combined
 
@@ -125,21 +132,27 @@ def test_ext_add_no_install_skips_code_invocation(
 def test_ext_remove_drops_from_include(
     docker_container: Callable[..., ContainerHandle],
 ) -> None:
-    """``ext remove`` deletes the id from the YAML include list."""
+    """``ext remove`` deletes the id from the profile's declared packages."""
     c = docker_container()
     _write_config(c)
 
     # Add to YAML only (skip the slow real install — we only assert YAML).
     add = _ext(c, "add", _EXT_ID, "--no-install")
     assert add.returncode == 0, add.stdout + add.stderr
-    assert _EXT_ID in c.read_text(_CFG_YAML)
+    # ext add mints a top-level packages entry (keyed by the id) AND appends a
+    # profile ref, so the id appears twice.
+    after_add = c.read_text(_CFG_YAML)
+    assert after_add.count(_EXT_ID) == 2, after_add
 
     rm = _ext(c, "remove", _EXT_ID)
     combined = rm.stdout + rm.stderr
     assert rm.returncode == 0, combined
-    assert f"updated base.extensions.include: {_EXT_ID}" in rm.stdout, combined
-    # The include list no longer mentions the id.
-    assert _EXT_ID not in c.read_text(_CFG_YAML), combined
+    assert f"updated base.packages: {_EXT_ID}" in rm.stdout, combined
+    # ext remove drops only the profile ref; the top-level package entry may
+    # linger (it can be shared), so exactly one occurrence remains and the
+    # profile's packages list no longer references it.
+    after_rm = c.read_text(_CFG_YAML)
+    assert after_rm.count(_EXT_ID) == 1, after_rm
 
 
 def test_ext_remove_no_change_when_absent(

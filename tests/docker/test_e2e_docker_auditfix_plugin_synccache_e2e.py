@@ -99,11 +99,13 @@ def _make_bare_marketplace_repo(c: ContainerHandle) -> None:
 # ---------------------------------------------------------------------------
 
 # A github-backed marketplace whose `repo` is the local bare repo path,
-# plus a plugin that references it so the profile's claude_plugins pulls
-# the marketplace into sync-cache's referenced set.
+# plus a plugin that references it so the profile's plugin package pulls
+# the marketplace into sync-cache's referenced set. The plugin flows through
+# a top-level ``packages`` entry (6.0 shape); the top-level ``claude_plugins``
+# registry (name -> marketplace) is retained.
 _GITHUB_MP_YAML = f"""\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -115,11 +117,15 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: fixture-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 
@@ -127,7 +133,7 @@ profiles:
 # the "no GitHub-backed marketplaces in profile" short-circuit.
 _PATH_MP_YAML = """\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -139,11 +145,15 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: path-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 
@@ -151,7 +161,7 @@ profiles:
 # clone-on-install attempt fails — exercises the cache-miss remediation.
 _MISSING_MP_YAML = """\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -163,11 +173,15 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: fixture-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 
@@ -319,7 +333,7 @@ _SHORTHAND_CACHE_DIR = (
 )
 _SHORTHAND_MP_YAML = f"""\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -331,11 +345,15 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: fixture-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 

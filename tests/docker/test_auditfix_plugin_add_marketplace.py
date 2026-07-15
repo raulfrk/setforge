@@ -51,7 +51,7 @@ def _bootstrap_config(c: ContainerHandle) -> None:
     c.write_text(
         f"{_SRC_REPO}/setforge.yaml",
         "version: 1\n"
-        "schema_version: '1.0'\n"
+        "schema_version: '6.0'\n"
         "tracked_files:\n"
         "  foo:\n"
         "    src: foo.md\n"

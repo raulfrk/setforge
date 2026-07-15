@@ -58,7 +58,7 @@ def _install(c: ContainerHandle, *, check: bool = True):
 
 _MCP_YAML = """\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -116,16 +116,20 @@ def test_mcp_register_revert_reinstall(
 
 _CARGO_YAML = """\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
     dst: /tmp/out/foo.md
+packages:
+  ast-grep:
+    type: cargo
+    crate: ast-grep
 profiles:
   base:
     tracked_files:
       - foo
-    cargo_binaries:
+    packages:
       - ast-grep
 """
 

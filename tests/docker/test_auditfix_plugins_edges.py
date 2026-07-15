@@ -42,7 +42,7 @@ _BARE_REPO = "/tmp/mp-reconcile-origin.git"
 # A profile with NO declared plugins → reconcile is a clean no-op.
 _NO_PLUGINS_YAML = """\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -56,9 +56,11 @@ profiles:
 # A profile that declares one plugin under a (report) reconcile policy. The
 # marketplace `repo` is a local bare repo so config validation passes; the
 # plugin is never actually installed, so a read-only reconcile sees drift.
+# The plugin flows through a top-level ``packages`` entry (6.0 shape); the
+# top-level ``claude_plugins`` registry (name -> marketplace) is retained.
 _REPORT_DRIFT_YAML = f"""\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -70,12 +72,18 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: fixture-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
-    plugins_reconcile: report
+    reconcile:
+      plugins:
+        policy: report
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 
@@ -83,7 +91,7 @@ profiles:
 # the run is still read-only and must exit 1 on drift without installing.
 _ADDITIVE_DRIFT_YAML = f"""\
 version: 1
-schema_version: '1.0'
+schema_version: '6.0'
 tracked_files:
   foo:
     src: foo.md
@@ -95,11 +103,15 @@ marketplaces:
 claude_plugins:
   some-plugin:
     marketplace: fixture-mp
+packages:
+  some-plugin:
+    type: plugin
+    plugin: some-plugin
 profiles:
   base:
     tracked_files:
       - foo
-    claude_plugins:
+    packages:
       - some-plugin
 """
 

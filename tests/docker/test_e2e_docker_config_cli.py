@@ -241,7 +241,7 @@ def test_config_show_effective_smoke_non_pty(
     c.write_text(
         "/tmp/cfg/setforge.yaml",
         "version: 1\n"
-        "schema_version: '1.0'\n"
+        "schema_version: '6.0'\n"
         "tracked_files:\n"
         "  foo:\n"
         "    src: foo.md\n"

@@ -105,7 +105,7 @@ def _orphan_yaml() -> str:
     and was never deployed, so it is not itself an orphan.
     """
     return (
-        "schema_version: '2.0'\n"
+        "schema_version: '6.0'\n"
         "tracked_files:\n"
         "  keeper:\n"
         "    src: json/settings.json\n"

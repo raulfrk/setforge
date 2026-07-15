@@ -32,7 +32,7 @@ _CRATE = "cfg-if"
 
 _CONFIG_YAML = f"""\
 version: 1
-schema_version: '5.0'
+schema_version: '6.0'
 tracked_files:
   note:
     src: note.md
@@ -49,6 +49,9 @@ packages:
     binary: jq
     install: /tmp/lock-out/bin
     extract: false
+  {_EXT_ID}:
+    type: extension
+    extension: {_EXT_ID}
 profiles:
   {_PROFILE}:
     tracked_files:
@@ -56,9 +59,7 @@ profiles:
     packages:
       - {_CRATE}
       - jq
-    extensions:
-      include:
-        - {_EXT_ID}
+      - {_EXT_ID}
 """
 
 
