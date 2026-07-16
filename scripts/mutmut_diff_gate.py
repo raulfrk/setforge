@@ -47,9 +47,11 @@ survivors". :func:`catastrophic_run` detects it two ways — the run exited
 nonzero with a baseline-abort signature in its output, OR ``mutmut results``
 parses ZERO TOTAL mutants when mutants were expected (distinct from "0
 survivors of N", a clean pass) — and :func:`main` returns exit 2 for it. A
-missing ``origin/main`` (no diff base) is likewise a :class:`GateFailClosed`
-exit 2, never a traceback. This mirrors the 0/1/2 fail-closed convention of the
-sibling gates ``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
+missing / unresolvable diff base ref (see :func:`_git_merge_base` — the ref is
+resolved dynamically: ``main``, ``origin/main``, or a ``--base`` override) is
+likewise a :class:`GateFailClosed` exit 2, never a traceback. This mirrors the
+0/1/2 fail-closed convention of the sibling gates
+``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
 
 Statuses collected as survivors: ``survived``, ``timeout``, ``suspicious``
 (NOT ``survived`` alone — a timeout or suspicious mutant is unkilled too, and
@@ -61,8 +63,9 @@ gate decides — the route for equivalent / integration-only-covered survivors.
 
 Invocation::
 
-    uv run python scripts/mutmut_diff_gate.py           # PR diff-scoped
-    uv run python scripts/mutmut_diff_gate.py --full     # nightly, whole core
+    uv run python scripts/mutmut_diff_gate.py             # PR diff-scoped
+    uv run python scripts/mutmut_diff_gate.py --full       # nightly, whole core
+    uv run python scripts/mutmut_diff_gate.py --base <ref> # override the diff base
 """
 
 from __future__ import annotations
@@ -351,7 +354,7 @@ def _existing_core_files() -> list[str]:
 
 class GateFailClosed(Exception):
     """A precondition failed such that the gate cannot compute a verdict (e.g.
-    ``origin/main`` is absent). Carries a user-facing diagnostic; ``main``
+    the diff base ref is absent). Carries a user-facing diagnostic; ``main``
     catches it and returns :data:`EXIT_FAILCLOSED`, never a traceback."""
 
 
@@ -374,8 +377,10 @@ def _resolve_base_ref(override: str | None = None) -> str:
     -> return ``"main"`` (use the local fork-point). This is the stale-origin
     case. When ``origin/main == main`` (CI after fetch) is-ancestor is also true,
     but the merge-base sha is IDENTICAL, so CI diff-scoping is provably unchanged.
-    When ``origin/main`` is AHEAD (is-ancestor false), or no local ``main`` ref
-    exists (some CI checkouts), fall through to ``"origin/main"``."""
+    When ``origin/main`` is ahead of or diverged from local ``main``
+    (is-ancestor false — covers both the ahead case and unrelated/diverged
+    histories), or no local ``main`` ref exists (some CI checkouts), fall
+    through to ``"origin/main"``."""
     if override is not None:
         return override
     default = "origin/main"

@@ -462,10 +462,29 @@ def test_base_ref_ci_equivalent_origin_equals_main_keeps_behavior(
 ) -> None:
     # CI after fetch: origin/main == local main. is-ancestor is still true, so the
     # resolver picks `main` — but the merge-base sha is IDENTICAL to origin/main's,
-    # so diff-scoping is provably unchanged. (Resolver returns the ref name; the
-    # sha-equivalence is what makes this safe.)
-    _stub_git_base(monkeypatch, local_main_exists=True, origin_is_ancestor_of_main=True)
+    # so diff-scoping is provably unchanged. Prove it: stub `git merge-base <ref>
+    # HEAD` so BOTH "main" and "origin/main" resolve to the SAME sha, then assert
+    # _git_merge_base returns that identical sha for either ref name.
+    import subprocess
+
+    same_sha = "deadbeef" * 5
+
+    def fake_run(cmd, *, check):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "merge-base"] and "--is-ancestor" in cmd:
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "merge-base"] and cmd[-1] == "HEAD":
+            # Both "main" and "origin/main" fork-point at the same commit.
+            return subprocess.CompletedProcess(
+                cmd, returncode=0, stdout=f"{same_sha}\n", stderr=""
+            )
+        raise AssertionError(f"unexpected git call: {cmd}")
+
+    monkeypatch.setattr(gate, "_run", fake_run)
     assert gate._resolve_base_ref() == "main"
+    assert gate._git_merge_base("main") == same_sha
+    assert gate._git_merge_base("origin/main") == same_sha
 
 
 def test_base_ref_keeps_origin_when_origin_is_ahead(
