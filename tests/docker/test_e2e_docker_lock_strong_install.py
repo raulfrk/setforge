@@ -235,7 +235,15 @@ def test_install_locked_plugin_hard_resets_cache_to_pinned_sha(
 _SRC_REPO_B = "/tmp/cfg-strong-vsix"
 _CONFIG_B = f"{_SRC_REPO_B}/setforge.yaml"
 _PROFILE_B = "strong-vsix"
-_EXT_ID = "esbenp.prettier-vscode"
+# A tiny, long-stable extension whose latest marketplace release still targets a
+# VS Code engine <= the Dockerfile-pinned 1.95.3. ``esbenp.prettier-vscode`` AND
+# ``editorconfig.editorconfig`` both ship current releases that require a newer
+# engine, so the real ``code --install-extension`` fails the compat check on
+# 1.95.3 (the locked install then *skips* the ext, exits 0, and leaves it
+# uninstalled). ``tomoki1207.pdf`` (PDF Preview, v1.2.2) is small, essentially
+# unbumped, and installs cleanly against 1.95.3 through the full lock → verify →
+# real-``code`` path.
+_EXT_ID = "tomoki1207.pdf"
 
 _VSIX_CONFIG_YAML = f"""\
 version: 1
