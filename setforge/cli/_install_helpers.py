@@ -1175,12 +1175,12 @@ def _dry_run_emit_profile_summary(ctx: ProfileContext) -> None:
         f"  extensions:     {len(ext.include)} declared ({len(ext.exclude)} excluded)"
     )
     typer.echo(
-        "  claude_plugins: "
+        "  plugins:        "
         f"{len(reconcile_adapter.plugin_bare_names(ctx.cfg, ctx.resolved))}"
     )
     typer.echo(f"  mcp_servers:    {len(ctx.resolved.mcp_servers)}")
     typer.echo(
-        "  cargo_binaries: "
+        "  cargo:          "
         f"{len(reconcile_adapter.cargo_crates(ctx.cfg, ctx.resolved))}"
     )
     typer.echo(f"  packages:       {len(ctx.resolved.packages)}")
