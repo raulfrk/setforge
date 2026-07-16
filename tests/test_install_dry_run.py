@@ -330,3 +330,39 @@ def test_no_git_fetch_under_dry_run(
     _invoke_dry_run(fixture_repo)
     fetches = [argv for argv in capture_subprocess if "fetch" in argv]
     assert fetches == [], f"unexpected git fetch under --dry-run: {fetches!r}"
+
+
+def test_profile_summary_emits_renamed_provisioning_labels(
+    fixture_repo: Path,
+    sandboxed_home: Path,
+    no_external_bins: None,
+) -> None:
+    """``_dry_run_emit_profile_summary`` uses the post-6.0 ``plugins``/``cargo`` labels.
+
+    ``claude_plugins``/``cargo_binaries`` stopped being settable profile
+    fields at schema 6.0 (see ``fix(cli): re-label retired field names in
+    dry-run summary``), so the summary block's labels were renamed to
+    ``plugins:``/``cargo:`` to stop implying they are live config keys.
+    That rename had no test anchoring the emitted text at any tier — a
+    revert to the old labels, or a mutation of the counts in
+    :func:`setforge.cli._install_helpers._dry_run_emit_profile_summary`,
+    would survive the whole suite. This test reads the dry-run summary
+    block off stdout and pins both the new labels and the counts (0 for
+    ``test-minimal``, which declares no packages), and asserts the
+    retired label spellings are absent so a straight revert goes red.
+    """
+    result = CliRunner().invoke(
+        app,
+        [
+            "install",
+            "--profile=test-minimal",
+            f"--config={fixture_repo}",
+            "--dry-run",
+            "--no-git-check",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "  plugins:        0" in result.output
+    assert "  cargo:          0" in result.output
+    assert "claude_plugins:" not in result.output
+    assert "cargo_binaries:" not in result.output
