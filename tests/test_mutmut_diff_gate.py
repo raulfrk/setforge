@@ -323,8 +323,11 @@ def _stub_edge(
     monkeypatch.setattr(gate, "_run_mutmut", fake_run_mutmut)
     monkeypatch.setattr(gate, "_mutmut_results", lambda: results)
     monkeypatch.setattr(gate, "read_allowlist", lambda: set())
+    # Pin the base ref so these tests never touch real git; the base-selection
+    # logic itself is covered by the dedicated base-ref tests below.
+    monkeypatch.setattr(gate, "_resolve_base_ref", lambda override=None: "origin/main")
     if diff is not None:
-        monkeypatch.setattr(gate, "_git_diff_core", lambda: diff)
+        monkeypatch.setattr(gate, "_git_diff_core", lambda base_ref: diff)
     return calls
 
 
@@ -365,7 +368,7 @@ def test_diff_mode_failclosed_on_baseline_abort(
 def test_diff_mode_failclosed_on_missing_origin_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def boom() -> str:
+    def boom(base_ref: str) -> str:
         raise GateFailClosed("origin/main not found")
 
     _stub_edge(monkeypatch, results="", diff=None)
@@ -404,6 +407,117 @@ def test_mutmut_results_raises_gatefailclosed_on_nonzero(
     monkeypatch.setattr(gate, "_run", fake_run)
     with pytest.raises(GateFailClosed):
         gate._mutmut_results()
+
+
+# --- base-ref resolution: prefer local main's fork-point when origin/main is
+# stale (this project's main is UNPUSHED, so origin/main lags local main). ---
+
+
+def _stub_git_base(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    local_main_exists: bool,
+    origin_is_ancestor_of_main: bool,
+) -> list[list[str]]:
+    """Stub the gate's ``_run`` so base-ref git probes answer deterministically.
+
+    Simulates the three git calls the resolver makes:
+
+    * ``git rev-parse --verify --quiet refs/heads/main`` — succeeds iff a local
+      ``main`` ref exists.
+    * ``git merge-base --is-ancestor origin/main main`` — exit 0 iff origin/main
+      is an ancestor of local main (i.e. origin/main is at-or-behind local main).
+
+    Returns the recorded arg-lists so a test can assert which base was probed."""
+    import subprocess
+
+    recorded: list[list[str]] = []
+
+    def fake_run(cmd, *, check):
+        recorded.append(cmd)
+        if cmd[:2] == ["git", "rev-parse"]:
+            rc = 0 if local_main_exists else 128
+            return subprocess.CompletedProcess(cmd, returncode=rc, stdout="", stderr="")
+        if cmd[:2] == ["git", "merge-base"] and "--is-ancestor" in cmd:
+            rc = 0 if origin_is_ancestor_of_main else 1
+            return subprocess.CompletedProcess(cmd, returncode=rc, stdout="", stderr="")
+        raise AssertionError(f"unexpected git call: {cmd}")
+
+    monkeypatch.setattr(gate, "_run", fake_run)
+    return recorded
+
+
+def test_base_ref_prefers_local_main_when_origin_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # origin/main lags local main (unpushed history): origin/main IS an ancestor
+    # of local main, and a local main ref exists -> use local `main`'s fork-point,
+    # NOT origin/main's tip.
+    _stub_git_base(monkeypatch, local_main_exists=True, origin_is_ancestor_of_main=True)
+    assert gate._resolve_base_ref() == "main"
+
+
+def test_base_ref_ci_equivalent_origin_equals_main_keeps_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CI after fetch: origin/main == local main. is-ancestor is still true, so the
+    # resolver picks `main` — but the merge-base sha is IDENTICAL to origin/main's,
+    # so diff-scoping is provably unchanged. (Resolver returns the ref name; the
+    # sha-equivalence is what makes this safe.)
+    _stub_git_base(monkeypatch, local_main_exists=True, origin_is_ancestor_of_main=True)
+    assert gate._resolve_base_ref() == "main"
+
+
+def test_base_ref_keeps_origin_when_origin_is_ahead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # origin/main is AHEAD of local main (is-ancestor false) -> keep origin/main.
+    _stub_git_base(
+        monkeypatch, local_main_exists=True, origin_is_ancestor_of_main=False
+    )
+    assert gate._resolve_base_ref() == "origin/main"
+
+
+def test_base_ref_keeps_origin_when_no_local_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # some CI checkouts have no local `main` ref -> keep origin/main (and never
+    # probe is-ancestor, which would be meaningless without local main).
+    recorded = _stub_git_base(
+        monkeypatch, local_main_exists=False, origin_is_ancestor_of_main=False
+    )
+    assert gate._resolve_base_ref() == "origin/main"
+    assert not any("--is-ancestor" in cmd for cmd in recorded)
+
+
+def test_git_merge_base_uses_supplied_base_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, *, check):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="abc123\n", stderr=""
+        )
+
+    monkeypatch.setattr(gate, "_run", fake_run)
+    assert gate._git_merge_base("main") == "abc123"
+    assert seen == [["git", "merge-base", "main", "HEAD"]]
+
+
+def test_base_override_bypasses_auto_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # --base <ref> overrides the auto-selection: the resolver must NOT run any git
+    # probe when an explicit base is supplied.
+    def boom(cmd, *, check):
+        raise AssertionError(f"resolver probed git despite --base override: {cmd}")
+
+    monkeypatch.setattr(gate, "_run", boom)
+    assert gate._resolve_base_ref(override="feature-x") == "feature-x"
 
 
 if __name__ == "__main__":

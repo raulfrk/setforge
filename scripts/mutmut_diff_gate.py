@@ -355,29 +355,71 @@ class GateFailClosed(Exception):
     catches it and returns :data:`EXIT_FAILCLOSED`, never a traceback."""
 
 
-def _git_merge_base() -> str:
-    """The ``git merge-base origin/main HEAD`` fork-point sha.
+def _resolve_base_ref(override: str | None = None) -> str:
+    """The ref to diff against — ``origin/main`` by default.
 
-    A missing ``origin/main`` (common on a fresh local clone that never fetched
-    it) makes ``git merge-base`` exit nonzero; that is surfaced as a
-    :class:`GateFailClosed` with a fix hint, not an uncaught traceback."""
-    proc = _run(["git", "merge-base", "origin/main", "HEAD"], check=False)
+    ``override`` (the ``--base`` CLI arg) wins outright: it is returned verbatim
+    with no git probing.
+
+    Absent an override, prefer LOCAL ``main``'s fork-point when ``origin/main``
+    is STALE. This project's ``main`` is often UNPUSHED, so ``origin/main`` lags
+    local ``main`` by all the unpushed history; diffing against ``origin/main``
+    would then span main's unpushed commits and mis-scope the gate. The rule:
+
+    * a local ``main`` ref exists (``git rev-parse --verify --quiet
+      refs/heads/main`` exits 0), AND
+    * ``origin/main`` is an ancestor of local ``main`` (``git merge-base
+      --is-ancestor origin/main main`` exits 0)
+
+    -> return ``"main"`` (use the local fork-point). This is the stale-origin
+    case. When ``origin/main == main`` (CI after fetch) is-ancestor is also true,
+    but the merge-base sha is IDENTICAL, so CI diff-scoping is provably unchanged.
+    When ``origin/main`` is AHEAD (is-ancestor false), or no local ``main`` ref
+    exists (some CI checkouts), fall through to ``"origin/main"``."""
+    if override is not None:
+        return override
+    default = "origin/main"
+    if (
+        _run(
+            ["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], check=False
+        ).returncode
+        != 0
+    ):
+        return default
+    if (
+        _run(
+            ["git", "merge-base", "--is-ancestor", "origin/main", "main"], check=False
+        ).returncode
+        == 0
+    ):
+        return "main"
+    return default
+
+
+def _git_merge_base(base_ref: str) -> str:
+    """The ``git merge-base <base_ref> HEAD`` fork-point sha.
+
+    A missing / unresolvable ``base_ref`` (e.g. ``origin/main`` on a fresh local
+    clone that never fetched it) makes ``git merge-base`` exit nonzero; that is
+    surfaced as a :class:`GateFailClosed` with a fix hint, not an uncaught
+    traceback."""
+    proc = _run(["git", "merge-base", base_ref, "HEAD"], check=False)
     if proc.returncode != 0 or not proc.stdout.strip():
         raise GateFailClosed(
-            "cannot locate the origin/main fork point "
-            "(`git merge-base origin/main HEAD` failed). Fetch it first "
+            f"cannot locate the {base_ref} fork point "
+            f"(`git merge-base {base_ref} HEAD` failed). Fetch it first "
             "(`git fetch origin main`), or the gate cannot scope the diff."
         )
     return proc.stdout.strip()
 
 
-def _git_diff_core() -> str:
+def _git_diff_core(base_ref: str) -> str:
     """``git diff --unified=0 <merge-base>...HEAD -- <core files>`` text.
 
     Three-dot against an explicit :func:`_git_merge_base` — never a two-dot
-    ``..HEAD`` (which would diff against origin/main's tip, not the fork point)
+    ``..HEAD`` (which would diff against ``base_ref``'s tip, not the fork point)
     — so the changed set is exactly what this branch introduced."""
-    base = _git_merge_base()
+    base = _git_merge_base(base_ref)
     result = _run(
         [
             "git",
@@ -466,10 +508,10 @@ def _run_full(allowlist: set[str]) -> int:
     return code
 
 
-def _run_diff(allowlist: set[str]) -> int:
+def _run_diff(allowlist: set[str], base_ref: str) -> int:
     """PR diff-scoped path: run mutmut over only the changed core modules and
     gate survivors whose function overlaps a changed line."""
-    diff_text = _git_diff_core()
+    diff_text = _git_diff_core(base_ref)
     changed = changed_lines_from_diff(diff_text)
     core = set(_existing_core_files())
     changed = {p: lines for p, lines in changed.items() if p in core}
@@ -505,11 +547,21 @@ def main(argv: list[str] | None = None) -> int:
         help="gate on every non-allowlisted survivor across the whole core "
         "(nightly), skipping the PR-diff line filter",
     )
+    parser.add_argument(
+        "--base",
+        metavar="REF",
+        default=None,
+        help="diff base ref to scope changed lines against, overriding the "
+        "auto-selection (default: origin/main, or local `main`'s fork-point "
+        "when origin/main is a stale ancestor of it). Ignored with --full.",
+    )
     args = parser.parse_args(argv)
 
     allowlist = read_allowlist()
     try:
-        return _run_full(allowlist) if args.full else _run_diff(allowlist)
+        if args.full:
+            return _run_full(allowlist)
+        return _run_diff(allowlist, _resolve_base_ref(args.base))
     except GateFailClosed as exc:
         _print_failclosed(str(exc))
         return EXIT_FAILCLOSED
