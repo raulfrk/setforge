@@ -157,12 +157,20 @@ def test_profile_show_provenance_tags_base_vs_derived(tmp_path: Path) -> None:
     # tracked_files: base_tracked inherited, derived_tracked leaf.
     assert "[from profile base]" in _line_for("base_tracked")
     assert "[from profile derived]" in _line_for("derived_tracked")
-    # claude_plugins: base-plugin inherited, derived-plugin leaf.
+    # claude_plugins: base-plugin inherited, derived-plugin leaf. Both
+    # base-plugin and derived-plugin are ``packages:`` entries (type:
+    # plugin), not raw claude_plugins list members — this is the exact
+    # regression shape from commit 447e6c0: a PluginPackage introduced on
+    # an ancestor must tag to that ancestor, not fall through to the leaf.
     assert "[from profile base]" in _line_for("base-plugin")
     assert "[from profile derived]" in _line_for("derived-plugin")
     # bootstrap: header.md is only defined on `base`.
     assert "[from profile base]" in _line_for("header.md")
-    # extensions.include: ms-python.python on base, ms-vscode.cpptools on leaf.
+    # extensions.include: ms-python.python on base, ms-vscode.cpptools on
+    # leaf. Both are also ``packages:`` entries (type: extension) — the
+    # ExtensionPackage counterpart of the same 447e6c0 regression shape,
+    # so this fixture exercises BOTH package kinds (plugin + extension)
+    # mis-tagged onto an ancestor, not just one.
     assert "[from profile base]" in _line_for("ms-python.python")
     assert "[from profile derived]" in _line_for("ms-vscode.cpptools")
 
