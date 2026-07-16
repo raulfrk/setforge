@@ -132,6 +132,12 @@ def test_probe_uses_list_timeout(fake_cargo) -> None:
     assert prov_cargo._LIST_TIMEOUT_S == 30
 
 
+def test_probe_fails_open_on_os_error(fake_cargo) -> None:
+    fake_cargo(installed={"ast-grep"}, list_error=OSError("cargo binary vanished"))
+    # Fail OPEN on OSError too — not just CalledProcessError.
+    assert prov_cargo.CargoProvisioner().probe() == set()
+
+
 # --- plan (PURE) -----------------------------------------------------------
 
 
@@ -178,6 +184,19 @@ def test_apply_soft_on_build_failure_with_stderr_detail(fake_cargo) -> None:
     # Build failure is SOFT and RECORDED, never HARD, never discarded.
     assert outcome.outcome is Outcome.SOFT
     assert "compile error boom" in outcome.detail
+
+
+def test_apply_soft_on_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # e.g. cargo binary vanishes mid-run (ENOENT) — must degrade to SOFT.
+    def _raise(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        raise OSError("cargo binary vanished")
+
+    monkeypatch.setattr(prov_cargo, "resolve_binary", lambda _n: Path("/fake/cargo"))
+    monkeypatch.setattr(prov_cargo.subprocess, "run", _raise)
+    outcome = prov_cargo.CargoProvisioner().apply_one(_item("ast-grep"))
+    # OSError degrades to SOFT and RECORDED, never HARD, never discarded.
+    assert outcome.outcome is Outcome.SOFT
+    assert "cargo binary vanished" in outcome.detail
 
 
 def test_apply_double_dash_before_dash_crate(fake_cargo) -> None:
@@ -228,6 +247,19 @@ def test_uninstall_tolerates_not_installed(monkeypatch: pytest.MonkeyPatch) -> N
     # Should not raise.
     prov_cargo.CargoProvisioner().uninstall_one(
         Identity(key="absent", display="absent")
+    )
+
+
+def test_uninstall_tolerates_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # cargo binary vanishing mid-uninstall (ENOENT) must be swallowed too.
+    def _raise(argv, **kwargs: Any) -> subprocess.CompletedProcess:
+        raise OSError("cargo binary vanished")
+
+    monkeypatch.setattr(prov_cargo, "resolve_binary", lambda _n: Path("/fake/cargo"))
+    monkeypatch.setattr(prov_cargo.subprocess, "run", _raise)
+    # Should not raise.
+    prov_cargo.CargoProvisioner().uninstall_one(
+        Identity(key="ast-grep", display="ast-grep")
     )
 
 
