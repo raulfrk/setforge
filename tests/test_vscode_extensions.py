@@ -620,6 +620,39 @@ def test_capture_extensions_idempotent(tmp_path: Path, fake_code) -> None:
     assert second is False
 
 
+def test_capture_extensions_subtracts_inherited_exclude(
+    tmp_path: Path, fake_code
+) -> None:
+    """A child profile's captured include set must also honor an ``exclude``
+    entry declared only on a parent's ``reconcile.extensions.exclude`` — the
+    merged (parent+child) exclude, not just the child's literal list."""
+    fixture = """\
+version: 1
+tracked_files:
+  d: {src: x, dst: y}
+profiles:
+  parent:
+    tracked_files: [d]
+    reconcile:
+      extensions:
+        exclude:
+          - drop.me
+  child:
+    extends: parent
+    tracked_files: [d]
+"""
+    p = tmp_path / "setforge.yaml"
+    p.write_text(fixture, encoding="utf-8")
+    fake_code(["keep.me", "drop.me"])
+
+    changed = capture_extensions(p, "child")
+
+    assert changed is True
+    includes = _profile_ext_includes(p, "child")
+    assert "keep.me" in includes
+    assert "drop.me" not in includes
+
+
 def test_capture_extensions_does_not_touch_exclude(tmp_path: Path, fake_code) -> None:
     cfg = _write_fixture(tmp_path)
     before = cfg.read_text()
