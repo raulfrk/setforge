@@ -623,9 +623,6 @@ def test_capture_extensions_idempotent(tmp_path: Path, fake_code) -> None:
 def test_capture_extensions_subtracts_inherited_exclude(
     tmp_path: Path, fake_code
 ) -> None:
-    """A child profile's captured include set must also honor an ``exclude``
-    entry declared only on a parent's ``reconcile.extensions.exclude`` — the
-    merged (parent+child) exclude, not just the child's literal list."""
     fixture = """\
 version: 1
 tracked_files:

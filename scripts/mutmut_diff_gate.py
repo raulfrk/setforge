@@ -47,11 +47,9 @@ survivors". :func:`catastrophic_run` detects it two ways — the run exited
 nonzero with a baseline-abort signature in its output, OR ``mutmut results``
 parses ZERO TOTAL mutants when mutants were expected (distinct from "0
 survivors of N", a clean pass) — and :func:`main` returns exit 2 for it. A
-missing / unresolvable diff base ref (see :func:`_git_merge_base` — the ref is
-resolved dynamically: ``main``, ``origin/main``, or a ``--base`` override) is
-likewise a :class:`GateFailClosed` exit 2, never a traceback. This mirrors the
-0/1/2 fail-closed convention of the sibling gates
-``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
+missing or unresolvable diff base ref is likewise a :class:`GateFailClosed`
+exit 2, never a traceback. This mirrors the 0/1/2 fail-closed convention of the
+sibling gates ``scripts/check_policy_lints.py`` / ``scripts/check_schema_gates.py``.
 
 Statuses collected as survivors: ``survived``, ``timeout``, ``suspicious``
 (NOT ``survived`` alone — a timeout or suspicious mutant is unkilled too, and
@@ -63,9 +61,8 @@ gate decides — the route for equivalent / integration-only-covered survivors.
 
 Invocation::
 
-    uv run python scripts/mutmut_diff_gate.py             # PR diff-scoped
-    uv run python scripts/mutmut_diff_gate.py --full       # nightly, whole core
-    uv run python scripts/mutmut_diff_gate.py --base <ref> # override the diff base
+    uv run python scripts/mutmut_diff_gate.py           # PR diff-scoped
+    uv run python scripts/mutmut_diff_gate.py --full     # nightly, whole core
 """
 
 from __future__ import annotations
@@ -359,28 +356,8 @@ class GateFailClosed(Exception):
 
 
 def _resolve_base_ref(override: str | None = None) -> str:
-    """The ref to diff against — ``origin/main`` by default.
-
-    ``override`` (the ``--base`` CLI arg) wins outright: it is returned verbatim
-    with no git probing.
-
-    Absent an override, prefer LOCAL ``main``'s fork-point when ``origin/main``
-    is STALE. This project's ``main`` is often UNPUSHED, so ``origin/main`` lags
-    local ``main`` by all the unpushed history; diffing against ``origin/main``
-    would then span main's unpushed commits and mis-scope the gate. The rule:
-
-    * a local ``main`` ref exists (``git rev-parse --verify --quiet
-      refs/heads/main`` exits 0), AND
-    * ``origin/main`` is an ancestor of local ``main`` (``git merge-base
-      --is-ancestor origin/main main`` exits 0)
-
-    -> return ``"main"`` (use the local fork-point). This is the stale-origin
-    case. When ``origin/main == main`` (CI after fetch) is-ancestor is also true,
-    but the merge-base sha is IDENTICAL, so CI diff-scoping is provably unchanged.
-    When ``origin/main`` is ahead of or diverged from local ``main``
-    (is-ancestor false — covers both the ahead case and unrelated/diverged
-    histories), or no local ``main`` ref exists (some CI checkouts), fall
-    through to ``"origin/main"``."""
+    """``override`` wins outright; else prefer local ``main`` over a stale
+    ``origin/main`` (this project's ``main`` is often unpushed)."""
     if override is not None:
         return override
     default = "origin/main"
@@ -402,12 +379,7 @@ def _resolve_base_ref(override: str | None = None) -> str:
 
 
 def _git_merge_base(base_ref: str) -> str:
-    """The ``git merge-base <base_ref> HEAD`` fork-point sha.
-
-    A missing / unresolvable ``base_ref`` (e.g. ``origin/main`` on a fresh local
-    clone that never fetched it) makes ``git merge-base`` exit nonzero; that is
-    surfaced as a :class:`GateFailClosed` with a fix hint, not an uncaught
-    traceback."""
+    """The ``git merge-base <base_ref> HEAD`` fork-point sha."""
     proc = _run(["git", "merge-base", base_ref, "HEAD"], check=False)
     if proc.returncode != 0 or not proc.stdout.strip():
         raise GateFailClosed(
