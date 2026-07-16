@@ -1516,3 +1516,15 @@ verdict = "keep"
 smoke = false
 signal = "install --locked passes on match, fails on a drifted checksum"
 verbs = ["install", "lock"]
+
+[tests."tests/docker/test_e2e_docker_lock_strong_install.py::test_install_locked_plugin_hard_resets_cache_to_pinned_sha"]
+verdict = "keep"
+smoke = false
+signal = "install --locked hard-resets a plugin's marketplace cache to the pinned commit SHA (offline, local-clone)"
+verbs = ["install", "lock"]
+
+[tests."tests/docker/test_e2e_docker_lock_strong_install.py::test_install_locked_extension_installs_verified_vsix_via_code"]
+verdict = "keep"
+smoke = false
+signal = "install --locked downloads + sha256-verifies the pinned VSIX and installs it via real code"
+verbs = ["install", "lock"]
