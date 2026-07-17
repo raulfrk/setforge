@@ -44,6 +44,7 @@ from typing import Self
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from ruamel.yaml import YAML
 
@@ -51,6 +52,7 @@ from setforge import jsonc, transitions, yaml_merge
 from setforge._editor import run_editor
 from setforge._redact import redact_argv
 from setforge.transitions import TransitionCommand
+from setforge.ui.text import sanitize_controls
 
 # Matches signal.signal's first-arg signature; aliased here so the
 # wizard's signal-handler save/restore typing is precise (mypy rejects
@@ -58,6 +60,11 @@ from setforge.transitions import TransitionCommand
 _SignalHandler = (
     Callable[[int, FrameType | None], object] | int | signal.Handlers | None
 )
+
+# Set by read_one_choice while stdin is in raw mode so a signal delivered
+# mid-keypress (SIGINT/SIGTERM/SIGHUP) can restore the terminal before the
+# process re-raises the signal and exits. None when not in raw mode.
+_active_raw_tty: tuple[int, list[int | list[bytes | int]]] | None = None
 
 __all__ = [
     "ActionResult",
@@ -132,7 +139,8 @@ class DriftItem:
     mode: DriftMode = DriftMode.SHALLOW
     """Whether the key sits in ``preserve_user_keys`` (shallow whole-leaf
     overlay) or ``preserve_user_keys_deep`` (recursive deep-merge).
-    Routes the [u]se-live action to the matching overlay variant.
+    Informational only — see :func:`_action_use_live`'s docstring;
+    the [u]se-live write primitive does not currently route on it.
     Defaults to ``"shallow"`` for back-compat with callers that
     construct :class:`DriftItem` without the field; trigger-specific
     walkers populate it from the tracked_file's two preserve lists."""
@@ -166,7 +174,7 @@ class Snapshot:
     def __enter__(self) -> Self:
         """Create snapshot dir and copy each file into it."""
         ts = time.strftime("%Y%m%dT%H%M%S")
-        self.snapshot_dir = self.snapshot_base / ts
+        self.snapshot_dir = self.snapshot_base / f"{ts}_{os.getpid()}"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         for original in self.files:
             if original.exists():
@@ -242,8 +250,10 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
             sys.stdout.write("\a")
             sys.stdout.flush()
 
+    global _active_raw_tty
     try:
         tty.setraw(fd)
+        _active_raw_tty = (fd, old)
         while True:
             ch = sys.stdin.read(1)
             if ch == "\x03":  # Ctrl-C
@@ -257,6 +267,7 @@ def read_one_choice(prompt: str, choices: set[str]) -> str:
             sys.stdout.write("\a")
             sys.stdout.flush()
     finally:
+        _active_raw_tty = None
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
@@ -272,8 +283,10 @@ def prompt_one(item: DriftItem, console: Console) -> str:
     :func:`read_one_choice` (single keypress, no Enter required).
     """
     sep = "─" * 57
+    safe_src_path = escape(sanitize_controls(str(item.src_path)))
+    safe_key_path = escape(sanitize_controls(item.key_path))
     console.print(f"\n[dim]{sep}[/dim]")
-    console.print(f" [bold]{item.src_path}[/bold] :: [cyan]{item.key_path}[/cyan]")
+    console.print(f" [bold]{safe_src_path}[/bold] :: [cyan]{safe_key_path}[/cyan]")
     console.print(f"[dim]{sep}[/dim]")
 
     # Two-row aligned block
@@ -372,12 +385,16 @@ def _action_use_live(item: DriftItem) -> ActionResult:
 def _action_save_as_preserved(
     item: DriftItem, setforge_yaml_path: Path
 ) -> ActionResult:
-    """Append ``item.key_path`` to the tracked_file's ``preserve_user_keys``."""
+    """Append ``item.key_path`` to the tracked_file's preserve-keys list.
+
+    Targets ``preserve_user_keys_deep`` for :attr:`DriftItem.mode`
+    ``DriftMode.DEEP``, else ``preserve_user_keys`` (shallow).
+    """
     y = YAML(typ="rt")
     with setforge_yaml_path.open("r", encoding="utf-8") as fh:
         doc = y.load(fh)
 
-    # Navigate: tracked_files -> <name> -> preserve_user_keys
+    # Navigate: tracked_files -> <name> -> preserve_user_keys[_deep]
     tracked_files_node = doc.get("tracked_files") if isinstance(doc, dict) else None
     if tracked_files_node is None:
         return ActionResult.SAVE_AS_PRESERVED
@@ -386,9 +403,14 @@ def _action_save_as_preserved(
     if tracked_file_node is None:
         return ActionResult.SAVE_AS_PRESERVED
 
-    puk = tracked_file_node.get("preserve_user_keys")
+    target_key = (
+        "preserve_user_keys_deep"
+        if item.mode is DriftMode.DEEP
+        else "preserve_user_keys"
+    )
+    puk = tracked_file_node.get(target_key)
     if puk is None:
-        tracked_file_node["preserve_user_keys"] = [item.key_path]
+        tracked_file_node[target_key] = [item.key_path]
     else:
         if item.key_path not in puk:
             puk.append(item.key_path)
@@ -420,6 +442,9 @@ def _make_signal_handler(
     """Return a signal handler that restores ``snapshot`` then re-raises the signal."""
 
     def _handler(signum: int, frame: FrameType | None) -> None:
+        if _active_raw_tty is not None:
+            fd, old = _active_raw_tty
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
         n = snapshot.restore()
         typer.echo(f"\nmerge cancelled ({sig_name}); reverted {n} file(s)", err=True)
         # Reset to default handler and re-raise so the process exits with
@@ -520,6 +545,13 @@ def run_wizard_loop(  # noqa: C901 — empty-drift short-circuit adds one branch
         130. The internal snapshot is preserved (not restored or
         discarded) so signal handlers — installed for the wizard's
         lifetime — can do the restore.
+    Exception
+        Any other exception raised while applying an action — e.g.
+        :func:`apply_action`'s ``ValueError`` for an unknown choice, or
+        I/O / YAML-parse errors propagating up from
+        :func:`_action_use_live` / :func:`_action_save_as_preserved` —
+        is caught, triggers ``snap.restore()``, and is then re-raised
+        to the caller.
     """
     items_list = list(items)
     decisions: list[tuple[DriftItem, ActionResult]] = []

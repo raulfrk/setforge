@@ -156,6 +156,10 @@ Examples:
 \b
   # YAML-only edit (skip the 'code --install-extension' call)
   setforge ext add ms-python.python --profile=<profile> --no-install
+
+\b
+  # Override the packages: map key (default: the extension ID)
+  setforge ext add ms-python.python --name my-python --profile=<profile>
 """
 
 EXT_REMOVE_EXAMPLES: str = """\

@@ -125,6 +125,14 @@ def _first_markdown_tracked_file(cfg: Config, resolved: ResolvedProfile) -> str 
     return None
 
 
+def _decode_live_text(live_now: bytes, dst: Path) -> str:
+    """Decode a live tracked file's bytes, raising ``ConfigError`` on bad UTF-8."""
+    try:
+        return live_now.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"live file not valid UTF-8: {dst} ({exc})") from exc
+
+
 def seed_section_slots_to_store(
     cfg: Config,
     resolved: ResolvedProfile,
@@ -210,7 +218,7 @@ def seed_section_slots_to_store(
     existing_hunks = list(entry.hunks) if entry is not None else []
 
     anchor = AnchorAtEndOfFile()
-    text = live_now.decode("utf-8")
+    text = _decode_live_text(live_now, dst)
     for _heading, cbody in residual:
         text = inject_body_at_anchor(text, anchor, cbody)
     new_live = text.encode("utf-8")

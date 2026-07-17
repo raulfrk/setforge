@@ -1,4 +1,4 @@
-"""Per-hunk staging model for A5 (RFC §9.3): extract base↔live diff hunks,
+"""Per-hunk staging model for A5 (RFC §9.2): extract base↔live diff hunks,
 classify them by a stable identity, reconstruct the shared-promotion of a file,
 and assert stage fidelity (INV-8).
 

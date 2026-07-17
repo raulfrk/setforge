@@ -37,7 +37,7 @@ def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
     # realpath both sides: catches a symlink under tracked/ aimed outside it too.
     real_root = Path(tracked_root).resolve()
     candidate = (real_root / rel).resolve()
-    if not _is_relative_to(candidate, real_root):
+    if not candidate.is_relative_to(real_root):
         raise LocalSourceError(
             f"tracked source {rel!r} resolves to {candidate}, which escapes "
             f"the tracked root {real_root} — rejected"
@@ -48,14 +48,6 @@ def _resolve_tracked_source(tracked_root: Path, rel: str) -> Path:
             "(expected a regular file under the tracked root)"
         )
     return candidate
-
-
-def _is_relative_to(path: Path, base: Path) -> bool:
-    try:
-        path.relative_to(base)
-    except ValueError:
-        return False
-    return True
 
 
 @register("local")

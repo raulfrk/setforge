@@ -10,10 +10,11 @@ The recipe is the standard write-temp-then-rename dance:
 1. Write the payload to a sibling temp file in the *same directory* as
    the destination (never ``/tmp`` — a cross-device ``os.replace`` would
    raise ``EXDEV`` and break the atomicity guarantee).
-2. ``fsync`` the temp file's data to disk (unless the caller opts out).
-3. ``os.fchmod`` the temp fd when the caller passes explicit ``mode``
+2. ``os.fchmod`` the temp fd when the caller passes explicit ``mode``
    bits — on the fd, never the path, so the perms land on the same FS
    object the rename publishes (no TOCTOU symlink-swap window).
+3. ``fsync`` the temp file's data to disk (unless the caller opts out),
+   which also covers the fchmod above since it lands on the same fd.
 4. Optionally rotate a ``.bak`` sibling (copy of the current
    destination) before the rename.
 5. ``os.replace`` the temp file onto the destination — atomic on POSIX.
@@ -47,7 +48,9 @@ def atomic_write_bytes(
     rename survives a crash. On any exception the temp file is removed.
 
     ``mode`` (keyword-only): explicit permission bits applied to the
-    temp fd via ``os.fchmod`` BEFORE the rename. ``None`` applies
+    temp fd via ``os.fchmod`` BEFORE the data ``fsync`` (so the mode
+    change is covered by the same fsync) and BEFORE the rename.
+    ``None`` applies
     nothing — the destination keeps the 0600 ``mkstemp`` default on a
     fresh write. There is deliberately no shared fallback: the legacy
     writers disagree (deploy copies the SOURCE mode, the migration YAML
@@ -79,11 +82,11 @@ def atomic_write_bytes(
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
+            if mode is not None:
+                os.fchmod(fh.fileno(), mode)
             if fsync:
                 fh.flush()
                 os.fsync(fh.fileno())
-            if mode is not None:
-                os.fchmod(fh.fileno(), mode)
         if backup:
             backup_path = path.with_name(path.name + ".bak")
             with contextlib.suppress(FileNotFoundError):

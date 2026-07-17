@@ -14,6 +14,11 @@ precedence:
    ``binaries: {code: /p, claude: /p, gitleaks: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).
 
+``SUPPORTED_BINARIES`` also includes ``cargo`` and ``go``, which
+resolve through this same chain via the env-var, config-file, and
+``which`` layers — but, unlike the other four, have no dedicated CLI
+flag.
+
 The CLI layer is set once at process start; env and config layers are
 read lazily on each lookup so tests can monkey-patch the environment or
 ``LOCAL_CONFIG_PATH`` between calls without touching module state.
@@ -303,7 +308,8 @@ def resolve_binary(name: str) -> Path | None:
     Raises :class:`BinaryOverrideInvalid` if a layer above ``which``
     produced a path that fails :func:`_validate`. (We do not silently
     fall through a broken override; an invalid override is a user
-    error worth surfacing.)
+    error worth surfacing.) Also propagates :class:`ConfigError` from
+    the config-file layer on malformed ``local.yaml``.
     """
     if (raw := _cli_overrides.get(name)) is not None:
         return _validate(name, raw, layer="cli")

@@ -27,8 +27,9 @@ def plugin_bare_names(cfg: Config, resolved: ResolvedProfile) -> list[str]:
 
 
 def plugin_ids(cfg: Config, resolved: ResolvedProfile) -> set[str]:
-    # Resolves bare plugin names to "name@marketplace" ids; the sole source
-    # of the undeclared-plugin ConfigError text feeding the plugins engine.
+    # Resolves bare plugin names to "name@marketplace" ids. The undeclared-
+    # plugin ConfigError text below is duplicated (not sourced solely here)
+    # in claude_marketplace_cache.py and cli/_lock_enumerate.py.
     declared: set[str] = set()
     for bare_name in plugin_bare_names(cfg, resolved):
         ref = cfg.claude_plugins.get(bare_name)

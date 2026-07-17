@@ -94,13 +94,14 @@ class InMemoryProvisioner(Provisioner):
     def uninstall_one(self, identity: Identity) -> None:
         """Remove one identity from the in-memory set (revert path).
 
-        Marker-mode removal arrives with the first real marker ecosystem
-        (go/github_release), which adds the receipt-removal verb; the reference
-        exercises only the in-memory revert.
+        Marker-mode receipt removal is exercised by the real ecosystems
+        (go, github_release), which call ``ReceiptStore.remove()``; the
+        reference provisioner only exercises the in-memory revert.
         """
         if self._receipts is not None:
             raise NotImplementedError(
-                "receipt-backed uninstall lands with the first marker ecosystem"
+                "the reference provisioner does not exercise marker-mode "
+                "(receipt-backed) uninstall"
             )
         self._installed.discard(identity)
 

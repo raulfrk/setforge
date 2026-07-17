@@ -113,6 +113,9 @@ class ReceiptStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 result.add(Identity(key=data["key"], display=data["display"]))
+            except FileNotFoundError:
+                # Unlinked between glob enumeration and read: not corrupt, just gone.
+                continue
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 raise CorruptReceiptError(path) from exc
         return result
@@ -126,6 +129,9 @@ class ReceiptStore:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 identity = Identity(key=data["key"], display=data["display"])
                 recorded = data.get("path")
+            except FileNotFoundError:
+                # Unlinked between glob enumeration and read: not corrupt, just gone.
+                continue
             except (json.JSONDecodeError, KeyError, TypeError):
                 yield ReceiptEntry(identity=None, path=None, corrupt_path=path)
                 continue

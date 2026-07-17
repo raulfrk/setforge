@@ -102,6 +102,9 @@ def copy_atomic(
 
     When the resulting content is byte-identical to the existing ``dst``,
     no write or backup is performed (action == :attr:`DeployAction.NOOP`).
+
+    Raises :class:`MissingTrackedFile` when ``src`` does not exist (propagated
+    from :func:`resolve_deploy`).
     """
     resolved = resolve_deploy(
         src,
@@ -143,6 +146,8 @@ def resolve_deploy(
     TOCTOU symlink-swap window and bypasses umask). When ``None``,
     the temp file inherits the source's mode via
     :func:`stat.S_IMODE` (today's behavior, zero regression).
+
+    Raises :class:`MissingTrackedFile` when ``src`` does not exist.
     """
     src = Path(src)
     dst = Path(str(dst)).expanduser()

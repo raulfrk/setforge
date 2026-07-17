@@ -256,7 +256,7 @@ def test_build_upgrade_plan_passes_through_pypi_version(
     _patch_notes(monkeypatch, notes="### Added\n- something")
     plan = _build_upgrade_plan(to=None, prerelease=False)
     assert plan.target_version == "0.5.0"
-    assert plan.release_notes is not None
+    assert plan.release_notes == "### Added\n- something"
     assert plan.schema_change.kind is SchemaChangeKind.NONE
 
 

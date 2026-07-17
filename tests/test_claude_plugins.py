@@ -216,6 +216,9 @@ def test_list_installed_non_json_raises_plugin_tool_missing(
         '{"name": "anthropic"}',  # JSON object, not a list
         '"anthropic"',  # JSON string
         "42",  # JSON number
+        "[42]",  # list of scalars, not dicts
+        '[["name"]]',  # list of lists, not dicts
+        "[null]",  # list of null
     ],
 )
 def test_list_marketplaces_wrong_shape_raises_plugin_tool_missing(
@@ -239,6 +242,9 @@ def test_list_marketplaces_wrong_shape_raises_plugin_tool_missing(
         '{"id": "cline@anthropic"}',  # JSON object, not a list
         '"cline"',  # JSON string
         "42",  # JSON number
+        "[42]",  # list of scalars, not dicts
+        '[["id"]]',  # list of lists, not dicts
+        "[null]",  # list of null
     ],
 )
 def test_list_installed_wrong_shape_raises_plugin_tool_missing(

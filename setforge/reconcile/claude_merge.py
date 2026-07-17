@@ -7,9 +7,10 @@ types an optional instruction, Claude drafts a merged version over a resumable
 :class:`~setforge.claude_session.ClaudeSession` (re-prompt resumes the same
 session), and the accepted draft folds back into the region as bytes.
 
-The module is **pure + dormant** — A0 wires :func:`make_claude_merge_fn` into
-``install`` later. Until then nothing constructs it, so the wizard keeps using
-the stub.
+:func:`make_claude_merge_fn` is live-wired into ``install``
+(``setforge/cli/_install_helpers.py``): the interactive wizard path
+constructs it, while a non-interactive / ``--auto`` / CI run keeps the
+unavailable stub so Claude is never auto-invoked.
 
 Failure policy (decision #4): any :class:`ClaudeSessionError` (incl. a missing
 binary) degrades to :data:`CANCEL`, which re-prompts the region — Ours / Theirs

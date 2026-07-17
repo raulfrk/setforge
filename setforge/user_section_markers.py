@@ -492,8 +492,8 @@ def strip_host_local_sections(
             ):
                 drop = True
                 continue
-            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, key=key) if (
-                key in names
+            case _EndMarker(semantics=SectionSemantics.HOST_LOCAL, name=name) if (
+                name in names
             ):
                 drop = False
                 continue

@@ -128,8 +128,19 @@ def test_to_rich_side_by_side_layout() -> None:
     result = MergeResult((Conflict(b"b\n", b"ours\n", b"theirs\n"),))
     m = diffview.three_way_segments(result)
     renderable = diffview.to_rich(m, layout=RichLayout.SIDE_BY_SIDE)
-    console = Console(file=io.StringIO(), force_terminal=True, color_system="truecolor")
+    sink = io.StringIO()
+    width = 80
+    console = Console(
+        file=sink, force_terminal=True, color_system="truecolor", width=width
+    )
     console.print(renderable)
+    lines = sink.getvalue().splitlines()
+    ours_line = next(line for line in lines if "-ours" in line)
+    theirs_line = next(line for line in lines if "+theirs" in line)
+    # LIVE rows (e.g. "ours") render in the left column, UPSTREAM rows
+    # (e.g. "theirs") in the right column.
+    assert ours_line.index("ours") < width // 2
+    assert theirs_line.index("theirs") >= width // 2
 
 
 def test_binary_stat_line_reports_byte_count() -> None:

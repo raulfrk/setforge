@@ -246,9 +246,11 @@ class TrackedFile(BaseModel):
     def _validate_mode(cls, v: object) -> int | None:
         return _validate_mode_policy(v)
 
-    @field_validator("src", "dst", mode="before")
+    @field_validator("src", "dst", "symlink", mode="before")
     @classmethod
     def _no_control_chars_in_path(cls, v: object) -> object:
+        if v is None:
+            return v
         return _reject_control_chars_in_path(v)
 
 
@@ -456,9 +458,11 @@ class FileComponent(BaseModel):
     def _validate_mode(cls, v: object) -> int | None:
         return _validate_mode_policy(v)
 
-    @field_validator("src", "dst", mode="before")
+    @field_validator("src", "dst", "symlink", mode="before")
     @classmethod
     def _no_control_chars_in_path(cls, v: object) -> object:
+        if v is None:
+            return v
         return _reject_control_chars_in_path(v)
 
 

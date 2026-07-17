@@ -184,7 +184,11 @@ def read_cache_aliases(cache_root: Path) -> dict[str, str]:
     unreadable sidecar is logged and treated as empty rather than raising —
     a corrupt alias file must not wedge every reconcile; the worst case is
     one re-fired collision wizard, the same as no sidecar at all. Only
-    ``str -> str`` entries are kept (defensive against hand-edited files).
+    ``str -> str`` entries are kept (defensive against hand-edited files),
+    and the value is further validated as a safe single-segment subdir name
+    (same predicate as :func:`_safe_cache_dir`) — a corrupt or hand-edited
+    sidecar must not feed an unchecked path segment into the cache-dir
+    computation; offending entries are dropped with a warning.
     """
     sidecar = cache_root / MARKETPLACE_ALIAS_SIDECAR
     try:
@@ -202,7 +206,20 @@ def read_cache_aliases(cache_root: Path) -> dict[str, str]:
             sidecar,
         )
         return {}
-    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+    aliases: dict[str, str] = {}
+    for k, v in raw.items():
+        if not (isinstance(k, str) and isinstance(v, str)):
+            continue
+        if v in ("", ".", "..") or "/" in v or "\\" in v:
+            LOGGER.warning(
+                "ignoring unsafe marketplace alias subdir %r for %r in %s",
+                v,
+                k,
+                sidecar,
+            )
+            continue
+        aliases[k] = v
+    return aliases
 
 
 def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
@@ -439,6 +456,12 @@ def _refresh_marketplace_cache(source: MarketplaceSource, cache_dir: Path) -> No
 
 
 def checkout_marketplace_at(cache_dir: Path, sha: str) -> None:
+    """Hard-reset the marketplace cache at ``cache_dir`` to the pinned ``sha``.
+
+    Raises :class:`MarketplaceCacheMiss` if ``sha`` is not a 40-hex commit
+    (a plugin pin must never be a moving ref), and propagates it from
+    :func:`_run_git` on ``git fetch``/``git reset`` failure.
+    """
     # Hard-resets to the PINNED sha, NOT origin/HEAD (otherwise the pin is defeated).
     if not _SHA_RE.match(sha):
         raise MarketplaceCacheMiss(

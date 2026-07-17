@@ -17,7 +17,8 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
@@ -71,27 +72,6 @@ def _parse_marketplace_from(from_: str) -> MarketplaceSource:
         fg=typer.colors.RED,
     )
     raise typer.Exit(code=1)
-
-
-@dataclass(slots=True, frozen=True)
-class ReconcileAttempt:
-    """One per-item reconcile attempt recorded as we walk the work list.
-
-    ``source`` is a human-tag describing where the item came from
-    (``"from profile"`` or ``"from local.yaml"``); today we always set
-    ``"from profile"`` since the per-source provenance split is
-    out of scope here. ``full_stderr`` carries the full captured
-    subprocess trace for the DIAGNOSE branch of
-    :func:`prompt_failure_action`.
-    """
-
-    item_id: str
-    started_at: datetime
-    ended_at: datetime
-    success: bool
-    error_summary: str | None
-    full_stderr: str | None
-    source: str
 
 
 def _stderr_full_from_failed(error_summary: str) -> str:
@@ -652,36 +632,48 @@ def _merge_retried_plugin_delta(
     )
 
 
+class _RetryOpKind(StrEnum):
+    """Closed set of originating ops a failed plugin item can map back to.
+
+    Returned by :func:`_classify_plugin_failure` and dispatched on by
+    :func:`_retry_plugin_op`. ``UNKNOWN`` reaches the RETRY branch only
+    when ``claude_plugins.reconcile`` introduces a new failure category
+    without updating the classifier — surfaces as a SKIP-equivalent
+    (the retry is a no-op).
+    """
+
+    INSTALL = "install"
+    ENABLE = "enable"
+    DISABLE = "disable"
+    MARKETPLACE_ADD = "marketplace_add"
+    UNKNOWN = "unknown"
+
+
 def _classify_plugin_failure(
     report: "claude_plugins_mod.ReconcileReport", failed_id: str
-) -> str:
+) -> _RetryOpKind:
     """Map a failed-id back to its originating op for the RETRY branch.
 
-    Returns one of ``"install"``, ``"enable"``, ``"disable"``,
-    ``"marketplace_add"``, or ``"unknown"``. The to_install field on
-    :class:`~claude_plugins.ReconcileReport` is a list of
-    ``(name, marketplace)`` tuples; we reassemble the ``name@marketplace``
-    pid before comparison. ``"unknown"`` reaches the RETRY branch only
-    when ``claude_plugins.reconcile`` introduces a new failure category
-    without updating this classifier — surfaces as a SKIP-equivalent
-    (the retry is a no-op).
+    The to_install field on :class:`~claude_plugins.ReconcileReport` is
+    a list of ``(name, marketplace)`` tuples; we reassemble the
+    ``name@marketplace`` pid before comparison.
     """
     install_pids = {f"{n}@{m}" for n, m in report.to_install}
     if failed_id in install_pids:
-        return "install"
+        return _RetryOpKind.INSTALL
     if failed_id in set(report.to_enable):
-        return "enable"
+        return _RetryOpKind.ENABLE
     if failed_id in set(report.to_disable):
-        return "disable"
+        return _RetryOpKind.DISABLE
     if failed_id in set(report.marketplaces_added):
-        return "marketplace_add"
-    return "unknown"
+        return _RetryOpKind.MARKETPLACE_ADD
+    return _RetryOpKind.UNKNOWN
 
 
 def _retry_plugin_op(
     cfg: Config,
     failed_id: str,
-    op_kind: str,
+    op_kind: _RetryOpKind,
     *,
     pins: dict[str, ResolvedPin] | None = None,
 ) -> str | None:
@@ -701,21 +693,22 @@ def _retry_plugin_op(
     the retry's error string (recorded SKIPPED), not a traceback.
     """
     try:
-        if op_kind == "install":
-            name, mp = failed_id.split("@", 1)
-            _retry_pin_marketplace(cfg, failed_id, pins or {})
-            claude_plugins_mod.plugin_install(name, mp)
-        elif op_kind == "enable":
-            claude_plugins_mod.plugin_enable(failed_id)
-        elif op_kind == "disable":
-            claude_plugins_mod.plugin_disable(failed_id)
-        elif op_kind == "marketplace_add":
-            source = cfg.marketplaces.get(failed_id)
-            if source is None:
-                return f"marketplace {failed_id!r} not in cfg.marketplaces"
-            claude_plugins_mod.marketplace_add(failed_id, source)
-        else:
-            return f"unknown op kind {op_kind!r} for retry"
+        match op_kind:
+            case _RetryOpKind.INSTALL:
+                name, mp = failed_id.split("@", 1)
+                _retry_pin_marketplace(cfg, failed_id, pins or {})
+                claude_plugins_mod.plugin_install(name, mp)
+            case _RetryOpKind.ENABLE:
+                claude_plugins_mod.plugin_enable(failed_id)
+            case _RetryOpKind.DISABLE:
+                claude_plugins_mod.plugin_disable(failed_id)
+            case _RetryOpKind.MARKETPLACE_ADD:
+                source = cfg.marketplaces.get(failed_id)
+                if source is None:
+                    return f"marketplace {failed_id!r} not in cfg.marketplaces"
+                claude_plugins_mod.marketplace_add(failed_id, source)
+            case _RetryOpKind.UNKNOWN:
+                return f"unknown op kind {op_kind!r} for retry"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         return claude_plugins_mod.stderr_of(exc)
     except (PluginToolMissing, MarketplaceCacheMiss) as exc:
@@ -757,11 +750,11 @@ def _retry_pin_marketplace(
 # are deliberately absent — _handle_plugin_failure treats a missing
 # entry as a SKIP-equivalent rather than a retried_ok with no delta
 # bookkeeping.
-_RETRY_PIECE_FIELD: Final[Mapping[str, str]] = {
-    "install": "installed",
-    "enable": "enabled",
-    "disable": "disabled",
-    "marketplace_add": "marketplaces_added",
+_RETRY_PIECE_FIELD: Final[Mapping[_RetryOpKind, str]] = {
+    _RetryOpKind.INSTALL: "installed",
+    _RetryOpKind.ENABLE: "enabled",
+    _RetryOpKind.DISABLE: "disabled",
+    _RetryOpKind.MARKETPLACE_ADD: "marketplaces_added",
 }
 
 
@@ -770,7 +763,7 @@ def _handle_plugin_failure(
     cfg: Config,
     failed_id: str,
     error_summary: str,
-    op_kind: str,
+    op_kind: _RetryOpKind,
     yes: bool,
     pins: dict[str, ResolvedPin],
     delta_so_far: transitions.PluginDelta,

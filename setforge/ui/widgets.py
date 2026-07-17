@@ -162,6 +162,16 @@ def _frame_width() -> int:
     return min(cols, _MAX_WIDTH)
 
 
+def _top_rule_fragments(title: str | None) -> _Fragments:
+    """Frame's top rule, styled — shared by every full-screen widget layout."""
+    return [("class:muted", frame([], title=title, width=_frame_width())[0])]
+
+
+def _bottom_rule_fragments() -> _Fragments:
+    """Frame's bottom rule, styled — shared by every full-screen widget layout."""
+    return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
+
+
 def _button_label(btn: Button[object], *, focused: bool) -> str:
     """Render one button's label: ``«Label»`` focused, ``[ Label ]`` idle."""
     return f"«{btn.label}»" if focused else f"[ {btn.label} ]"
@@ -214,15 +224,11 @@ def _build_layout(
     body: str | _Fragments | None,
 ) -> Layout:
     """Assemble the framed body/button-row/legend/cheat-sheet layout."""
-
-    def _top_rule() -> _Fragments:
-        return [("class:muted", frame([], title=title, width=_frame_width())[0])]
-
-    def _bottom_rule() -> _Fragments:
-        return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
-
     children: list[AnyContainer] = [
-        Window(content=FormattedTextControl(text=_top_rule), height=1)
+        Window(
+            content=FormattedTextControl(text=lambda: _top_rule_fragments(title)),
+            height=1,
+        )
     ]
     if body is not None:
         # A plain str is wrapped in the default text class (back-compat); a
@@ -265,7 +271,9 @@ def _build_layout(
             filter=Condition(lambda: state.cheat),
         )
     )
-    children.append(Window(content=FormattedTextControl(text=_bottom_rule), height=1))
+    children.append(
+        Window(content=FormattedTextControl(text=_bottom_rule_fragments), height=1)
+    )
     return Layout(HSplit(children))
 
 
@@ -399,9 +407,6 @@ def pager(
         visible = _pager_visible_rows()
         return list(lines[state.offset : state.offset + visible])
 
-    def _top_rule() -> _Fragments:
-        return [("class:muted", frame([], title=title, width=_frame_width())[0])]
-
     def _legend() -> _Fragments:
         return [
             (
@@ -410,9 +415,6 @@ def pager(
             )
         ]
 
-    def _bottom_rule() -> _Fragments:
-        return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
-
     body_window = Window(
         content=FormattedTextControl(text=_body, focusable=True),
         height=Dimension(min=1),
@@ -420,10 +422,17 @@ def pager(
     layout = Layout(
         HSplit(
             [
-                Window(content=FormattedTextControl(text=_top_rule), height=1),
+                Window(
+                    content=FormattedTextControl(
+                        text=lambda: _top_rule_fragments(title)
+                    ),
+                    height=1,
+                ),
                 body_window,
                 Window(content=FormattedTextControl(text=_legend), height=1),
-                Window(content=FormattedTextControl(text=_bottom_rule), height=1),
+                Window(
+                    content=FormattedTextControl(text=_bottom_rule_fragments), height=1
+                ),
             ]
         ),
         focused_element=body_window,
@@ -513,14 +522,11 @@ def _text_prompt_layout(
     the focused element so typed keys land in ``buffer``.
     """
 
-    def _top_rule() -> _Fragments:
-        return [("class:muted", frame([], title=title, width=_frame_width())[0])]
-
-    def _bottom_rule() -> _Fragments:
-        return [("class:muted", frame([], title=None, width=_frame_width())[-1])]
-
     children: list[AnyContainer] = [
-        Window(content=FormattedTextControl(text=_top_rule), height=1)
+        Window(
+            content=FormattedTextControl(text=lambda: _top_rule_fragments(title)),
+            height=1,
+        )
     ]
     if body is not None:
         body_frags: _Fragments = (
@@ -543,7 +549,9 @@ def _text_prompt_layout(
             height=1,
         )
     )
-    children.append(Window(content=FormattedTextControl(text=_bottom_rule), height=1))
+    children.append(
+        Window(content=FormattedTextControl(text=_bottom_rule_fragments), height=1)
+    )
     return Layout(HSplit(children), focused_element=input_window)
 
 

@@ -819,6 +819,10 @@ def _static_template_paths(scope: ConfigScope) -> list[str]:
         "tracked_files",
         "marketplaces",
         "claude_plugins",
+        "mcp_servers",
+        "section_templates",
+        "packages",
+        "bundles",
         "profiles",
     ]
 

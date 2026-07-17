@@ -305,6 +305,7 @@ def test_install_auto_accept_tracked_resolves_drift(
         ["install", "--profile=p", f"--config={cfg}", "--auto-accept-tracked", "--yes"],
     )
     assert result.exit_code == 0
+    assert transition_calls
 
 
 def test_install_auto_accept_live_resolves_drift(

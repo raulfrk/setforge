@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import io
-import os
 import stat
 import tarfile
 import tempfile
@@ -113,7 +112,7 @@ def _confine(install_dir: Path, name: str) -> Path:
             "('/' and '..' are rejected)"
         )
     dest = (install_dir / name).resolve()
-    if not _is_relative_to(dest, install_dir):
+    if not dest.is_relative_to(install_dir):
         raise InstallError(
             f"install target {dest} escapes the install directory {install_dir}"
         )
@@ -199,10 +198,10 @@ def _check_zip_member(info: zipfile.ZipInfo, dest: Path) -> None:
 
 
 def _reject_escape(name: str, dest: Path) -> None:
-    if name.startswith("/") or os.path.isabs(name):
+    if Path(name).is_absolute():
         raise InstallError(f"archive member {name!r} has an absolute path — rejected")
     resolved = (dest / name).resolve()
-    if not _is_relative_to(resolved, dest.resolve()):
+    if not resolved.is_relative_to(dest.resolve()):
         raise InstallError(
             f"archive member {name!r} escapes the extraction directory — rejected"
         )
@@ -212,7 +211,7 @@ def _read_picked(staging: Path, binary: str) -> bytes:
     if binary.startswith("/") or ".." in Path(binary).parts:
         raise InstallError(f"binary path {binary!r} must stay inside the archive")
     picked = (staging / binary).resolve()
-    if not _is_relative_to(picked, staging.resolve()):
+    if not picked.is_relative_to(staging.resolve()):
         raise InstallError(f"binary path {binary!r} escapes the archive — rejected")
     if not picked.is_file():
         raise InstallError(f"binary {binary!r} not found in the archive")
@@ -238,11 +237,3 @@ def _resolve_mode(chmod: str) -> int:
 
 def _exec_mode() -> int:
     return stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
-
-
-def _is_relative_to(path: Path, base: Path) -> bool:
-    try:
-        path.relative_to(base)
-    except ValueError:
-        return False
-    return True

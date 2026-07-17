@@ -85,14 +85,6 @@ class DirtySourceCheckout(SetforgeError):
     explicit recovery action."""
 
 
-class BackupCollision(SetforgeError):
-    """Reserved for backup-path collisions that cannot be safely overwritten.
-
-    Note: the default copy_atomic policy overwrites a pre-existing dst.bak
-    silently; this exception is for future strict-mode use.
-    """
-
-
 class MarkerError(SetforgeError):
     """Raised when user-section markers in a tracked file are malformed
     (mismatched start/end, nesting, or unknown directives)."""

@@ -822,55 +822,6 @@ def validate_source_dir(source: Source) -> Path:
     )
 
 
-def check_source_clean(source: Source) -> None:
-    """Pre-write gate: raise :class:`DirtySourceCheckout` on dirty source.
-
-    Scopes the porcelain check to ``tracked/`` (the engine's only write
-    surface). Non-git PathSource dirs skip the check (the user isn't
-    using git here; nothing to protect against). GitSource always runs
-    the check; if its clone is missing, :class:`SourceNotCloned` from
-    :func:`resolve_source_dir` propagates.
-    """
-    source_dir = resolve_source_dir(source)
-    if not git_ops.is_git_repo(source_dir):
-        return
-    porcelain = git_ops.status_porcelain(source_dir, path="tracked")
-    if not porcelain:
-        return
-    file_count = len([line for line in porcelain.splitlines() if line.strip()])
-    raise DirtySourceCheckout(
-        f"{source_dir}/tracked/ has uncommitted changes "
-        f"({file_count} file{'s' if file_count != 1 else ''}). "
-        "Commit or stash before retrying."
-    )
-
-
-def check_source_yaml_clean(source: Source) -> None:
-    """Pre-write gate for a ``setforge.yaml``-root write (the ``--shared`` path).
-
-    The sibling of :func:`check_source_clean`, but scoped to the
-    version-controlled ``setforge.yaml`` at the source ROOT rather than
-    the engine's ``tracked/`` write surface — :func:`check_source_clean`
-    deliberately misses the root config. The ``override --shared``
-    write mutates ``setforge.yaml`` in place, so a dirty / mid-rebase
-    config must refuse before the round-trip clobbers an uncommitted edit.
-
-    Non-git PathSource dirs skip the check (no git, nothing to protect).
-    GitSource always runs; a missing clone surfaces
-    :class:`SourceNotCloned` from :func:`resolve_source_dir`.
-    """
-    source_dir = resolve_source_dir(source)
-    if not git_ops.is_git_repo(source_dir):
-        return
-    porcelain = git_ops.status_porcelain(source_dir, path=CONFIG_FILENAME)
-    if not porcelain:
-        return
-    raise DirtySourceCheckout(
-        f"{source_dir}/{CONFIG_FILENAME} has uncommitted changes. "
-        "Commit or stash before retrying the --shared override."
-    )
-
-
 def _fast_forward_branch_ref(clone_dest: Path, ref: str) -> None:
     """Fast-forward a checked-out branch ref to its fetched remote-tracking tip.
 
@@ -987,8 +938,6 @@ __all__ = [
     "PluginOverlay",
     "Source",
     "SourceKind",
-    "check_source_clean",
-    "check_source_yaml_clean",
     "fetch_source",
     "format_post_write_hint",
     "get_resolved_source",

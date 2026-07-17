@@ -1,9 +1,9 @@
 """The per-profile index document and its fail-closed JSON codec.
 
-``index/<profile>.json`` classifies each tracked file's hunks. In this storage
-layer the ``hunks`` list is always empty (the store is the substrate; the later
-merge/staging layers produce hunks), but the on-disk shape is fixed now so those
-layers populate it without a schema migration::
+``index/<profile>.json`` classifies each tracked file's hunks. The ``hunks``
+list is populated by the staging layer (per-hunk classification rows); this
+storage layer just persists whatever it's given, validating the on-disk shape
+without interpreting hunk semantics::
 
     {
       "schema_version": "1.0",
@@ -38,7 +38,8 @@ class FileEntry:
     ``present`` is ``False`` for the explicit-absence sentinel (the file is
     absent on the recorded side), distinct from a zero-byte file. ``local_hash``
     is ``"sha256:<hex>"`` of the verbatim recorded-local bytes, or ``None`` when
-    nothing local is recorded. ``hunks`` is always empty in this storage layer.
+    nothing local is recorded. ``hunks`` is populated by the staging layer
+    (per-hunk classification rows); an empty list means no drafted hunks.
     """
 
     present: bool

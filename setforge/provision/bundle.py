@@ -186,9 +186,10 @@ def execute_bundle(
         target = provisioner if provisioner is not None else build(item)
         outcome = _apply(target, item)
         outcomes.append(outcome)
-        if outcome.outcome is Outcome.OK:
+        if outcome.outcome in (Outcome.OK, Outcome.SKIP):
             satisfied.add(component.id)
             applied_keys.add(item.identity.key)
+        if outcome.outcome is Outcome.OK:
             installed.append(item.identity)
 
     return ReconcileResult(

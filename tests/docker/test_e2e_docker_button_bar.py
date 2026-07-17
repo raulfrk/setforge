@@ -2,8 +2,8 @@
 
 Unlike the unit suite (which drives the Application headlessly via
 ``create_app_session`` + a pipe), this exercises the widget under a REAL TTY at
-a narrow ``cols=46`` so the responsive frame + button-row wrapping are proven
-against a genuine terminal. The driver is :mod:`tests.docker._button_bar_demo`,
+a narrow ``cols=46`` so the responsive frame is proven against a genuine
+terminal. The driver is :mod:`tests.docker._button_bar_demo`,
 which runs the bar once and prints ``CHOSE:<value>`` / ``CHOSE:CANCEL``.
 
 Harness: the pyte-emulated PTY (:class:`tests.docker.pyte_session.PyteSession`)
@@ -39,8 +39,9 @@ _DEMO_CMD = ["uv", "run", "python", "tests/docker/_button_bar_demo.py"]
 # but the corner glyph paints as one cell).
 _FRAME_GLYPH = "┌"
 
-# Narrow terminal: forces the responsive frame width down and the four buttons
-# to wrap to more than one row.
+# Narrow terminal: forces the responsive frame width down. The four bracketed
+# labels still fit on a single button row at this width (no wrap) — this
+# exercises the narrow, non-stacked render.
 _COLS = 46
 _LINES = 24
 
@@ -61,8 +62,8 @@ def test_button_bar_arrow_select(
     )
     # Wait for the frame to render — the focus fence.
     session.expect_in_display(_FRAME_GLYPH, timeout=60.0)
-    # The button row must have wrapped: at cols=46 the four bracketed labels
-    # cannot fit on one rule, so a wrapped row carries a focused/idle label.
+    # The button row fits on a single line at cols=46; assert the idle label
+    # rendered.
     session.expect_in_display("Ours", timeout=30.0)
     session.send_keys("\x1b[C\r")  # arrow-right → "Theirs", then Enter
     session.expect_in_display("CHOSE:theirs", timeout=60.0)

@@ -853,7 +853,6 @@ def _write_install_transition(
     *,
     source_dir: Path | None = None,
     reconcile_outcomes: tuple[transitions.ReconcileOutcome, ...] = (),
-    preserve_user_keys_applied: bool | None = None,
     state_snapshots: tuple[transitions.StateSnapshotEntry, ...] = (),
     mcp_delta: transitions.MCPDelta | None = None,
     file_modes: Mapping[Path, int] | None = None,
@@ -879,9 +878,7 @@ def _write_install_transition(
     ``plugins.json`` so ``install --retry-failed`` can rebuild the
     skipped-ids set on the next invocation).
 
-    ``preserve_user_keys_applied`` is retained on the transition record for
-    back-compat with pre-2.0 records; the install path no longer computes it
-    and always passes ``None``. ``command_line`` is captured from
+    ``command_line`` is captured from
     ``sys.argv[1:]`` here (via :func:`setforge._redact.redact_argv`) so
     callers don't have to thread it through, and ``end_timestamp`` is
     stamped at the moment of write — both align with the spec's
@@ -894,7 +891,6 @@ def _write_install_transition(
             source_dir=source_dir,
             end_timestamp=transitions.now_utc().astimezone(UTC).isoformat(),
             command_line=redact_argv(sys.argv[1:]),
-            preserve_user_keys_applied=preserve_user_keys_applied,
         ),
         file_pre,
         file_post,

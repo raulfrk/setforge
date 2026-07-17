@@ -174,6 +174,12 @@ def list_marketplaces() -> dict[str, dict]:
             "`claude plugin marketplace list` returned non-list JSON: "
             f"{result.stdout[:200]!r}"
         )
+    for e in entries:
+        if not isinstance(e, dict):
+            raise PluginToolMissing(
+                "`claude plugin marketplace list` returned a non-object list "
+                f"element: {e!r}"
+            )
     return {e["name"]: e for e in entries if "name" in e}
 
 
@@ -210,6 +216,11 @@ def list_installed() -> dict[str, dict]:
         raise PluginToolMissing(
             f"`claude plugin list` returned non-list JSON: {result.stdout[:200]!r}"
         )
+    for e in entries:
+        if not isinstance(e, dict):
+            raise PluginToolMissing(
+                f"`claude plugin list` returned a non-object list element: {e!r}"
+            )
     return {e["id"]: e for e in entries if "id" in e}
 
 
@@ -219,6 +230,7 @@ def marketplace_add(name: str, source: MarketplaceSource) -> None:
     The source argument is the repo path (``owner/repo``) for GitHub
     sources, or the absolute file-system path for local sources.
     """
+    LOGGER.info("adding marketplace: %s", name)
     claude = str(_get_claude_bin())
     if source.source is MarketplaceSourceKind.GITHUB:
         # narrows MarketplaceSource.repo (str | None) for mypy; upstream-guarded
@@ -379,7 +391,7 @@ def _source_identity(
             )
             alias = _mp_cache.read_cache_aliases(root).get(src.repo)
             subdir = alias if alias is not None else src.repo.rsplit("/", 1)[-1]
-            cache_dir = root / subdir
+            cache_dir = _mp_cache._safe_cache_dir(root, subdir)
             return str(cache_dir.expanduser())
         return _normalize_github_source(src.repo or "")
     return str(Path(src.path or "").expanduser())

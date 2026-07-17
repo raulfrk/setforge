@@ -253,10 +253,7 @@ def _deep_merge_dicts(
 def extract_keys(doc: Any, key_paths: list[str]) -> dict[str, Any]:
     """Return a flat ``{path: value}`` dict of values at each path in ``doc``.
 
-    Missing paths are silently skipped. Used by :mod:`setforge.capture` to
-    know which user-key values to strip from live before writing tracked,
-    and by :mod:`setforge.compare` to render an apples-to-apples view for
-    drift classification.
+    Missing paths are silently skipped.
     """
     result: dict[str, Any] = {}
     for path in key_paths:

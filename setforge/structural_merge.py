@@ -29,7 +29,6 @@ Three concerns are kept separate:
 
 import copy
 import datetime
-import io
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,7 +36,6 @@ from typing import Protocol
 
 from json5.dumper import ModelDumper
 from json5.dumper import dumps as _json5_dumps
-from json5.loader import ModelLoader
 from json5.loader import loads as _json5_loads
 from json5.model import (
     JSONArray,
@@ -45,7 +43,6 @@ from json5.model import (
     JSONText,
     Value,
 )
-from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq, TaggedScalar
 
 from setforge import jsonc
@@ -1269,33 +1266,9 @@ def _walk_ruamel_anchored_nodes(
 def is_structural(dst: Path) -> bool:
     """Whether ``dst`` routes through the structural (comment-tree) engine.
 
-    Public seam: the install (``deploy``) and capture paths dispatch span
-    handling on this predicate, so it is part of the module's surface rather
-    than a private helper.
+    Public seam: ``cli/_helpers.py``'s marker-duplicate pre-check uses this
+    predicate to skip structural files (JSON / JSONC / YAML carry no inline
+    user-section markers), so it is part of the module's surface rather than
+    a private helper.
     """
     return jsonc.is_jsonc_file(dst) or dst.suffix in {".yaml", ".yml"}
-
-
-def _load_structural(text: str, is_jsonc: bool) -> object:
-    """Parse ``text`` into a fresh comment-preserving model.
-
-    JSONC goes through json-five's :class:`~json5.loader.ModelLoader`
-    (comments / formatting on ``.wsc_before`` / ``.wsc_after``); YAML through
-    ruamel ``YAML(typ="rt")`` round-trip mode (comments / anchors / quotes
-    preserved).
-    """
-    if is_jsonc:
-        return _json5_loads(text, loader=ModelLoader())
-    yaml = _rt_yaml()
-    return yaml.load(io.StringIO(text))
-
-
-def _rt_yaml() -> YAML:
-    """Build a ruamel round-trip YAML configured for byte-faithful preserve.
-
-    ``preserve_quotes`` keeps a scalar's original quote style across the
-    round-trip, matching the project's preserve idiom.
-    """
-    yaml = YAML(typ="rt")
-    yaml.preserve_quotes = True
-    return yaml

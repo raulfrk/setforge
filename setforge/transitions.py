@@ -394,6 +394,38 @@ def _needs_quoting(s: str) -> bool:
     return any(c.isspace() or c in '"\\' for c in s)
 
 
+def _cunquote_path(s: str) -> str:
+    """Inverse of :func:`_cquote_path`.
+
+    If ``s`` is wrapped in C-style quotes (as emitted for spaced/special
+    paths), strip the quotes and unescape ``\\"``, ``\\\\``, ``\\n``,
+    ``\\t``. Otherwise return ``s`` unchanged — most diff headers carry a
+    plain root-relative path with no quoting at all.
+    """
+    if len(s) < 2 or not (s.startswith('"') and s.endswith('"')):
+        return s
+    inner = s[1:-1]
+    out = []
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\" and i + 1 < len(inner):
+            nxt = inner[i + 1]
+            if nxt == "n":
+                out.append("\n")
+            elif nxt == "t":
+                out.append("\t")
+            elif nxt in '"\\':
+                out.append(nxt)
+            else:
+                out.append(nxt)
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def _root_relative(path: Path) -> str:
     """Return ``path`` with any leading ``/`` stripped."""
     s = str(path)
@@ -1878,7 +1910,10 @@ def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
     real paths indicate modification.
 
     Path round-trip: :func:`_diff_path` strips the leading ``/`` to satisfy
-    GNU patch's safe-paths rule, so reversing means prepending ``/``.
+    GNU patch's safe-paths rule, so reversing means prepending ``/``. Paths
+    with whitespace/quote/backslash chars are additionally C-quoted by
+    :func:`_cquote_path`; :func:`_cunquote_path` reverses that before the
+    leading ``/`` is re-added.
     """
     patch_file = transition_dir / "changes.patch"
     if not patch_file.exists():
@@ -1894,8 +1929,8 @@ def summarize_transition(transition_dir: TransitionDir) -> dict[str, str]:
         if not lines[i + 1].startswith("+++ "):
             i += 1
             continue
-        from_path = lines[i][4:].split("\t", 1)[0]
-        to_path = lines[i + 1][4:].split("\t", 1)[0]
+        from_path = _cunquote_path(lines[i][4:].split("\t", 1)[0])
+        to_path = _cunquote_path(lines[i + 1][4:].split("\t", 1)[0])
         if from_path == "/dev/null" and to_path != "/dev/null":
             out["/" + to_path] = "created"
         elif to_path == "/dev/null" and from_path != "/dev/null":

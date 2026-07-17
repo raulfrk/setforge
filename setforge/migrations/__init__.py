@@ -17,10 +17,10 @@ Every Migration declares its full set of :meth:`Migration.affected_paths`
 so the ``migrate`` CLI's backup + multi-file diff preview + atomic
 rollback cover the whole footprint, not just ``setforge.yaml``.
 
-The registry :data:`MIGRATIONS` holds the version-stamp chain 1.0 → 1.1
-(:class:`VersionStampMigration`) → 1.2 (:class:`RestampMigration`).
-Future migrations are appended in ``from_version`` order so
-:func:`find_migration_path` can walk the chain forward.
+The registry :data:`MIGRATIONS` holds the version-stamp chain
+1.0 → 1.1 → 1.2 → 2.0 → 2.1 → 3.0 → 4.0 → 5.0 → 6.0. Future migrations
+are appended in ``from_version`` order so :func:`find_migration_path`
+can walk the chain forward.
 """
 
 from __future__ import annotations
@@ -580,11 +580,14 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
 
 Holds the version-stamp chain 1.0 → 1.1 (:class:`VersionStampMigration`)
 → 1.2 (:class:`RestampMigration`) → 2.0 (:class:`Contract20Migration`, the
-breaking preserve_* contraction). Future migrations are appended in
-``from_version`` order so :func:`find_migration_path` can walk the chain
-forward. Each migration's reverse is attached to its forward instance,
-never added here — that would make the forward walk cycle (see
-:class:`VersionStampMigration`).
+breaking preserve_* contraction) → 2.1 (:class:`MarkerRetireMigration`)
+→ 3.0 (:class:`DispositionRetireMigration`) → 4.0
+(:class:`SpanSurfaceRetireMigration`) → 5.0 (:class:`SpanTypesRetireMigration`)
+→ 6.0 (:class:`ProfileFieldsRetireMigration`). Future migrations are
+appended in ``from_version`` order so :func:`find_migration_path` can
+walk the chain forward. Each migration's reverse is attached to its
+forward instance, never added here — that would make the forward walk
+cycle (see :class:`VersionStampMigration`).
 """
 
 

@@ -462,6 +462,9 @@ def add_to_include(
     merged across the chain) would silently drop the new addition on the next
     reconcile. Also raises :class:`ConfigError` (pointing at ``--name``) when
     ``key`` already names a different-bodied top-level package.
+
+    Raises :class:`ProfileNotFound` if ``profile`` isn't declared in
+    ``cfg.profiles``.
     """
     key = key or ext_id
     cfg = load_config(config_path)
@@ -503,10 +506,12 @@ def _ancestor_declaring(cfg: Config, profile: str, ext_id: str) -> str | None:
     """Walk the extends: chain of ``profile`` (excluding ``profile`` itself)
     and return the first ancestor that declares ``ext_id`` via an extension
     package ref, or ``None``."""
+    visited: set[str] = {profile}
     current = cfg.profiles[profile].extends
     while current is not None:
-        if current not in cfg.profiles:
+        if current not in cfg.profiles or current in visited:
             return None
+        visited.add(current)
         if ext_id in _profile_include_ids(cfg, current):
             return current
         current = cfg.profiles[current].extends
@@ -519,10 +524,12 @@ def _ancestor_excluding(cfg: Config, profile: str, ext_id: str) -> str | None:
     lists ``ext_id``, or ``None``. Mirrors :func:`_ancestor_declaring` for the
     exclude side: merged exclude "always wins", so an inherited exclude would
     silently drop an addition to a child's includes on reconcile."""
+    visited: set[str] = {profile}
     current = cfg.profiles[profile].extends
     while current is not None:
-        if current not in cfg.profiles:
+        if current not in cfg.profiles or current in visited:
             return None
+        visited.add(current)
         if ext_id in _profile_exclude_ids(cfg, current):
             return current
         current = cfg.profiles[current].extends
@@ -541,6 +548,9 @@ def capture_extensions(config_path: Path, profile: str) -> bool:
     the captured set (minting any missing top-level ExtensionPackage), leaving
     non-extension package refs in place. Returns ``True`` iff the YAML changed.
     Comments and key order survive via ruamel.yaml round-trip.
+
+    Raises :class:`ProfileNotFound` if ``profile`` isn't declared in
+    ``cfg.profiles``.
     """
     cfg = load_config(config_path)
     resolved = resolve_profile(cfg, profile)
@@ -601,6 +611,9 @@ def remove_from_include(
     that case would be confusing UX. Pass ``--exclude`` (which sets
     ``add_to_exclude_list=True``) to override inherited declarations via the
     exclude mechanism.
+
+    Raises :class:`ProfileNotFound` if ``profile`` isn't declared in
+    ``cfg.profiles``.
     """
     cfg = load_config(config_path)
     if profile not in cfg.profiles:

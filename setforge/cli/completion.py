@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, assert_never
@@ -253,21 +254,32 @@ def _detect_wiring(rc_path: Path) -> bool:
 def _atomic_write_rc_file(rc_path: Path, content: str) -> None:
     """Atomically replace ``rc_path``'s content with ``content``.
 
-    Writes to ``<rc_path>.setforge-tmp`` in the same directory, mirrors
-    the existing file's mode bits via :func:`shutil.copystat`, then
-    ``os.replace`` swaps the tmp file over the target. The
-    same-directory placement is load-bearing — ``os.replace`` is only
-    atomic when source and destination live on the same filesystem,
-    which the parent-dir placement guarantees. The caller has already
-    validated that ``rc_path`` exists.
+    Writes to a uniquely-named ``<rc_path.name>.<rand>.setforge-tmp``
+    file in the same directory (so concurrent invocations don't collide
+    on a fixed tmp name), mirrors the existing file's mode bits via
+    :func:`shutil.copystat`, then ``os.replace`` swaps the tmp file over
+    the target. The same-directory placement is load-bearing —
+    ``os.replace`` is only atomic when source and destination live on
+    the same filesystem, which the parent-dir placement guarantees. The
+    caller has already validated that ``rc_path`` exists. On any
+    exception after the tmp file is created, it is removed before
+    re-raising so a failed write never leaves a stray tmp file behind.
     """
-    tmp = rc_path.parent / f"{rc_path.name}.setforge-tmp"
-    tmp.write_text(content, encoding="utf-8")
-    # Copy mode bits (+ atime/mtime + flags where supported) from the
-    # original BEFORE the replace so the swapped-in file inherits the
-    # user's chmod choices (e.g. 0600 on a private rc file).
-    shutil.copystat(rc_path, tmp)
-    os.replace(tmp, rc_path)
+    fd, name = tempfile.mkstemp(
+        dir=rc_path.parent, prefix=f"{rc_path.name}.", suffix=".setforge-tmp"
+    )
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        # Copy mode bits (+ atime/mtime + flags where supported) from the
+        # original BEFORE the replace so the swapped-in file inherits the
+        # user's chmod choices (e.g. 0600 on a private rc file).
+        shutil.copystat(rc_path, tmp)
+        os.replace(tmp, rc_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _write_wiring(rc_path: Path, body: str) -> None:

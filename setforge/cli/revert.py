@@ -57,6 +57,7 @@ from setforge.config import (
     resolve_profile,
 )
 from setforge.errors import (
+    InvalidTransitionRecord,
     NoTransitionFound,
     ProfileNotFound,
     RevertFailed,
@@ -111,7 +112,9 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
 
     Counts hunk-body ``+``/``-`` lines (skipping ``+++`` / ``---``
     headers). Paths are rebuilt from the ``+++`` line per
-    :func:`transitions._diff_path` (root-relative; prepend ``/``).
+    :func:`transitions._diff_path` (root-relative; prepend ``/``), reversing
+    any C-style quoting via :func:`transitions._cunquote_path` so this stays
+    symmetric with :func:`transitions.summarize_transition`.
     ``/dev/null`` paths use the corresponding ``--- a/<x>`` for deletions.
     """
     summaries: dict[str, str] = {}
@@ -120,11 +123,11 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
     minus = 0
     for line in patch_text.splitlines():
         if line.startswith("--- "):
-            from_path = line[4:].split("\t", 1)[0]
+            from_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
             current_path = "/" + from_path if from_path != "/dev/null" else None
             continue
         if line.startswith("+++ "):
-            to_path = line[4:].split("\t", 1)[0]
+            to_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
             if to_path != "/dev/null":
                 current_path = "/" + to_path
             plus = 0
@@ -234,6 +237,34 @@ def _extension_reconciles_from_transition(
     return tuple(reconciles)
 
 
+def _load_meta_touched_paths(transition: transitions.TransitionDir) -> list[Path]:
+    """Read the ``paths`` array recorded on ``transition``'s meta.json.
+
+    ``paths`` is not a :class:`transitions.TransitionMeta` field (it is
+    appended separately by :func:`transitions.write_meta`), so this reads
+    the raw payload rather than going through :func:`transitions.load_meta`.
+    Guards the payload shape explicitly — a corrupt/wrong-shape meta.json
+    (e.g. a top-level JSON list) must surface as a clean
+    :class:`InvalidTransitionRecord` here rather than an unwrapped
+    ``AttributeError`` from calling ``.get`` on a list.
+    """
+    meta_file = transition / "meta.json"
+    try:
+        payload = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidTransitionRecord(
+            f"cannot read meta.json at {meta_file}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise InvalidTransitionRecord(f"meta.json at {meta_file} is not a JSON object")
+    raw_paths = payload.get("paths", [])
+    if not isinstance(raw_paths, list):
+        raise InvalidTransitionRecord(
+            f"meta.json at {meta_file} has a non-list 'paths' field"
+        )
+    return [Path(p) for p in raw_paths]
+
+
 def _build_revert_plan(
     transition: transitions.TransitionDir, profile: str
 ) -> RevertPlan:
@@ -249,9 +280,8 @@ def _build_revert_plan(
     refusing-on-collision preserves the safety contract without
     re-implementing hunk parsing here.
     """
-    meta_payload = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
-    timestamp = datetime.fromisoformat(meta_payload["timestamp"])
-    age = _human_age(timestamp, datetime.now(UTC))
+    meta = transitions.load_meta(transition)
+    age = _human_age(meta.timestamp, datetime.now(UTC))
 
     patch_file = transition / "changes.patch"
     diff_summaries: dict[str, str] = {}
@@ -265,7 +295,7 @@ def _build_revert_plan(
     # in the preview so a mode-only revert (empty content patch) is not
     # silent. Missing file_modes.json (pre-bump) → empty map → no note.
     recorded_modes = transitions.load_file_modes(transition)
-    touched = [Path(p) for p in meta_payload.get("paths", [])]
+    touched = _load_meta_touched_paths(transition)
     # A content-NOOP + mode-only install records the path in file_modes but
     # NOT in meta.json's ``paths`` (no content delta), so union the
     # mode-only paths in — preserving the touched-paths order first — so the
@@ -285,7 +315,7 @@ def _build_revert_plan(
 
     return RevertPlan(
         transition_id=transition.name,
-        transition_type=str(meta_payload.get("command", "install")),
+        transition_type=str(meta.command),
         profile=profile,
         age_human=age,
         file_mutations=file_mutations,
@@ -377,8 +407,7 @@ def _apply_revert(
     transitions.ensure_state_dir_writable()
     typer.echo(f"reverting: {transition}")
 
-    meta_payload = json.loads((transition / "meta.json").read_text(encoding="utf-8"))
-    touched_paths = [Path(p) for p in meta_payload.get("paths", [])]
+    touched_paths = _load_meta_touched_paths(transition)
     file_pre = transitions.snapshot_paths(touched_paths)
 
     pre_store_state = transitions.load_state_snapshots(transition)
@@ -634,8 +663,7 @@ def _resolve_to_before_chain(
     live tree it was recorded from.
     """
     target_path = transitions.resolve_transition_prefix(to_before)
-    target_meta = json.loads((target_path / "meta.json").read_text(encoding="utf-8"))
-    target_profile = str(target_meta.get("profile", ""))
+    target_profile = transitions.load_meta(target_path).profile
     if target_profile != profile:
         raise SetforgeError(
             f"transition {target_path.name!r} is for profile "
@@ -866,42 +894,38 @@ def transitions_show(
 ) -> None:
     """Show the full audit-detail panel for one transition (mockup H)."""
     target = transitions.resolve_transition_prefix(prefix)
-    meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+    meta = transitions.load_meta(target)
     console = _wide_console()
-    profile = str(meta.get("profile", ""))
+    profile = meta.profile
     console.print(f"=== transition {target.name} ===")
-    console.print(f"  type:    {meta.get('command', '')}")
+    console.print(f"  type:    {meta.command}")
     console.print(f"  profile: {profile}")
-    if "timestamp" in meta:
-        timestamp = datetime.fromisoformat(meta["timestamp"])
-        # Render in the user's local timezone per mockup H
-        # (e.g. "2026-05-17 18:47:33 +0100"); insert a colon into the
-        # %z offset for readability.
-        local_strftime = timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
-        if len(local_strftime) >= 5 and local_strftime[-5] in "+-":
-            local_strftime = local_strftime[:-2] + ":" + local_strftime[-2:]
-        console.print(f"  start:   {local_strftime}")
-    if "host" in meta:
-        console.print(f"  host:    {meta['host']}")
-    if "version" in meta:
-        console.print(f"  version: {meta['version']}")
+    # Render in the user's local timezone per mockup H
+    # (e.g. "2026-05-17 18:47:33 +0100"); insert a colon into the
+    # %z offset for readability.
+    local_strftime = meta.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    if len(local_strftime) >= 5 and local_strftime[-5] in "+-":
+        local_strftime = local_strftime[:-2] + ":" + local_strftime[-2:]
+    console.print(f"  start:   {local_strftime}")
+    console.print(f"  host:    {meta.host}")
+    console.print(f"  version: {meta.version}")
     # Render the forward-compat fields populated by
     # install/sync/revert/wizard make_meta call sites. Each field is
-    # omit-when-None in the on-disk shape, so absence here is the
-    # pre-bump backward-compat path — silently skip.
-    if "end_timestamp" in meta:
-        end_ts = datetime.fromisoformat(meta["end_timestamp"])
+    # omit-when-None in the on-disk shape (and thus None on the loaded
+    # dataclass), so a None here is the pre-bump backward-compat path —
+    # silently skip.
+    if meta.end_timestamp is not None:
+        end_ts = datetime.fromisoformat(meta.end_timestamp)
         end_local = end_ts.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
         if len(end_local) >= 5 and end_local[-5] in "+-":
             end_local = end_local[:-2] + ":" + end_local[-2:]
         console.print(f"  end:     {end_local}")
-    if "command_line" in meta:
-        cmd_line = meta["command_line"]
-        if isinstance(cmd_line, list):
-            console.print(f"  argv:    {' '.join(cmd_line)}")
-    if "preserve_user_keys_applied" in meta:
-        applied = meta["preserve_user_keys_applied"]
-        console.print(f"  overlay: preserve_user_keys_applied={applied}")
+    if meta.command_line is not None:
+        console.print(f"  argv:    {' '.join(meta.command_line)}")
+    if meta.preserve_user_keys_applied is not None:
+        console.print(
+            f"  overlay: preserve_user_keys_applied={meta.preserve_user_keys_applied}"
+        )
 
     _render_files_section_show(target, console)
     _render_plugins_section_show(target, console)
