@@ -142,14 +142,7 @@ def _load_model(data: bytes, fmt: StructuredFormat) -> object:
 
 
 def _dump_model(model: object, fmt: StructuredFormat) -> bytes:
-    """Serialise ``model`` back to byte-faithful text for ``fmt``.
-
-    Wraps the serialize step in :class:`~setforge.errors.StructuredParseError`
-    (defense in depth) so a splice that produced an unrepresentable node — e.g. a
-    stray ABSENT sentinel from an unresolvable path — surfaces as the typed error
-    the stage walk already catches, never as a raw ruamel ``RepresenterError`` or
-    json5 dumper exception escaping to a caller.
-    """
+    """Serialise ``model`` back to byte-faithful text for ``fmt``."""
     try:
         if fmt is StructuredFormat.YAML:
             buf = io.StringIO()
@@ -219,14 +212,6 @@ def _walk_leaves(
     if isinstance(node, Mapping):
         for key, value in _own_items(node):
             if not isinstance(key, str):
-                # Fail closed on a non-string mapping key (an int/bool/date YAML
-                # key). Extraction would ``str(key)`` it into a path, but
-                # reconstruction resolves that path by EXACT-typed lookup
-                # (``node.get("1")`` MISSES the int key ``1``), splicing ABSENT
-                # and letting a raw ruamel RepresenterError escape at dump —
-                # or minting a duplicate key. Raising here routes the stage walk
-                # to line-level staging (a safe, lossless path) instead of
-                # minting an unresolvable path.
                 raise StructuredParseError(
                     f"structured input has a non-string mapping key: {key!r} "
                     f"({type(key).__name__})"

@@ -614,9 +614,6 @@ def test_nested_nondotted_key_row_survives_reclassify_unchanged() -> None:
     assert all(u.cls is HunkClass.SHARED for u in classified)
 
 
-# --- non-string mapping keys (fail-closed on extract) --------------------------
-
-
 @pytest.mark.parametrize(
     "text",
     [
@@ -626,16 +623,6 @@ def test_nested_nondotted_key_row_survives_reclassify_unchanged() -> None:
     ],
 )
 def test_extract_non_string_mapping_key_fails_closed(text: bytes) -> None:
-    """A mapping with a NON-STRING key fails closed as StructuredParseError.
-
-    Regression for the non-string-key bug: ``_walk_leaves`` stringified a
-    non-string YAML key on extraction (``str(key)``) but ``get_node_at_path``
-    resolves by EXACT-typed lookup on reconstruct, so a SHARED int key ``1``
-    minted the path ``"1"`` that ``node.get("1")`` then MISSED — splicing
-    :data:`ABSENT` in and letting a raw ``ruamel`` ``RepresenterError`` escape
-    at dump. Failing closed here routes the stage walk to line-level staging (a
-    safe, lossless path) instead of minting an unresolvable path.
-    """
     with pytest.raises(StructuredParseError):
         extract_structured_units(text, text, StructuredFormat.YAML)
 
