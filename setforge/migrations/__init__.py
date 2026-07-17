@@ -104,6 +104,43 @@ def _require_mapping_root(data: object, yaml_path: Path) -> CommentedMap:
     return data
 
 
+def _gate_floor(
+    data: CommentedMap,
+    path: Path,
+    *,
+    floor: str,
+    transition_label: str,
+    fields_label: str,
+) -> None:
+    """Refuse a destructive contract drop unless ``minimum_version >= floor``.
+
+    Reads the RAW ``minimum_version`` and requires it to satisfy the frozen
+    contract ``floor`` (a FULL ``major.minor`` compare via :func:`_meets_floor`).
+    An absent floor — no operator attestation — refuses too: the contraction is
+    irreversible on un-upgraded hosts, so it proceeds only on an explicit floor.
+
+    ``transition_label`` (e.g. ``"5.x -> 6.0"``) and ``fields_label`` (e.g.
+    ``"per-profile package/reconcile fields"``) reproduce each call site's exact
+    wording; every contract-drop migration shares this one gate so the two
+    cannot diverge.
+    """
+    raw_floor = data.get("minimum_version")
+    if raw_floor is None:
+        raise ConfigError(
+            f"{path}: the {transition_label} contract drops the legacy "
+            f"{fields_label} irreversibly on hosts still reading the legacy "
+            f"shape. Declare minimum_version >= {floor} to attest every host is "
+            f"upgraded before applying this migration."
+        )
+    supported = str(raw_floor)
+    if not _meets_floor(supported, floor):
+        raise ConfigError(
+            f"{path}: minimum_version {supported!r} is below the contract floor "
+            f"{floor!r} required to drop the legacy {fields_label}; raise "
+            f"minimum_version to >= {floor} first."
+        )
+
+
 __all__ = [
     "MIGRATIONS",
     "Contract20Migration",

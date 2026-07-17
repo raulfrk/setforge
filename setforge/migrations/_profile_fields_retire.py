@@ -56,7 +56,7 @@ from setforge.migrations import (
     ManifestEntry,
     ManifestType,
     MigrationRoots,
-    _meets_floor,
+    _gate_floor,
     _require_mapping_root,
     package_contract_schema_version,
     parse_schema_version,
@@ -273,36 +273,6 @@ def _str_seq(items: list[str]) -> CommentedSeq:
     return seq
 
 
-def _gate_floor(data: CommentedMap, path: Path) -> None:
-    """Refuse the destructive drop unless minimum_version >= 6.0.
-
-    Reads the RAW ``minimum_version`` and requires it to satisfy the frozen
-    :data:`package_contract_schema_version` floor (a FULL major.minor compare
-    via :func:`_meets_floor`). An absent floor — no operator attestation —
-    refuses too: the contraction is irreversible on un-upgraded hosts, so it
-    proceeds only on an explicit floor. Mirrors
-    :func:`setforge.migrations._contract_2_0._gate_floor` but gates on the
-    package-contract version, not the build's expected version.
-    """
-    raw_floor = data.get("minimum_version")
-    if raw_floor is None:
-        raise ConfigError(
-            f"{path}: the 5.x -> {_TO_VERSION} contract drops the legacy "
-            f"per-profile package/reconcile fields irreversibly on hosts still "
-            f"reading the legacy shape. Declare minimum_version >= "
-            f"{package_contract_schema_version} to attest every host is upgraded "
-            f"before applying this migration."
-        )
-    floor = str(raw_floor)
-    if not _meets_floor(floor, package_contract_schema_version):
-        raise ConfigError(
-            f"{path}: minimum_version {floor!r} is below the contract floor "
-            f"{package_contract_schema_version!r} required to drop the legacy "
-            f"per-profile package/reconcile fields; raise minimum_version to "
-            f">= {package_contract_schema_version} first."
-        )
-
-
 def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
     """Fold every profile's legacy fields + stamp 6.0 in place."""
     registry = _packages_registry(data, roots.cfg_path)
@@ -427,7 +397,13 @@ class ProfileFieldsRetireMigration:
             data = yaml.load(fh)
         data = _require_mapping_root(data, roots.cfg_path)
         # Floor gate FIRST — refuse + mutate nothing below the contract floor.
-        _gate_floor(data, roots.cfg_path)
+        _gate_floor(
+            data,
+            roots.cfg_path,
+            floor=package_contract_schema_version,
+            transition_label=f"5.x -> {_TO_VERSION}",
+            fields_label="per-profile package/reconcile fields",
+        )
         raw_version = data.get("schema_version")
         if raw_version is not None:
             parse_schema_version(str(raw_version))

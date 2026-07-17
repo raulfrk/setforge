@@ -298,6 +298,71 @@ def test_malformed_non_mapping_root_raises_config_error(tmp_path: Path) -> None:
         Contract20Migration().apply(roots=_roots(tmp_path))
 
 
+# Both contract-drop migrations route through the SINGLE shared
+# setforge.migrations._gate_floor, differing only in floor version + per-site
+# label. These bodies each carry NO minimum_version (None floor) and a
+# below-floor floor to exercise both refusal branches of the shared gate.
+_C20_NO_FLOOR = (
+    "schema_version: '1.2'\n"
+    "tracked_files:\n"
+    "  settings:\n"
+    "    src: settings.yaml\n"
+    "    dst: ~/settings.yaml\n"
+    "    preserve_user_keys:\n"
+    "      - editor.fontSize\n"
+)
+_C20_LOW_FLOOR = "minimum_version: '1.2'\n" + _C20_NO_FLOOR
+
+_PFR_NO_FLOOR = (
+    "schema_version: '5.0'\n"
+    "tracked_files: {}\n"
+    "profiles:\n"
+    "  default:\n"
+    "    cargo_binaries: [rg]\n"
+)
+_PFR_LOW_FLOOR = "minimum_version: '5.0'\n" + _PFR_NO_FLOOR
+
+
+def test_both_contract_gates_share_one_helper(tmp_path: Path) -> None:
+    """Both migrations gate identically via the shared helper, with their labels.
+
+    On a None floor and a below-floor value each refuses cleanly and mutates
+    nothing, and each site's message carries its own fields-label + floor
+    version (proving the shared gate reproduces per-site wording).
+    """
+    from setforge.migrations import Migration
+    from setforge.migrations._profile_fields_retire import (
+        ProfileFieldsRetireMigration,
+    )
+
+    cases: list[tuple[Migration, str, str, str]] = [
+        (Contract20Migration(), _C20_NO_FLOOR, "preserve_* fields", "2.0"),
+        (Contract20Migration(), _C20_LOW_FLOOR, "preserve_* fields", "2.0"),
+        (
+            ProfileFieldsRetireMigration(),
+            _PFR_NO_FLOOR,
+            "per-profile package/reconcile fields",
+            "6.0",
+        ),
+        (
+            ProfileFieldsRetireMigration(),
+            _PFR_LOW_FLOOR,
+            "per-profile package/reconcile fields",
+            "6.0",
+        ),
+    ]
+    for migration, body, label, floor in cases:
+        cfg = tmp_path / "setforge.yaml"
+        _write(cfg, body)
+        before = cfg.read_text(encoding="utf-8")
+        with pytest.raises(ConfigError) as exc:
+            migration.apply(roots=_roots(tmp_path))
+        msg = str(exc.value)
+        assert label in msg
+        assert floor in msg
+        assert cfg.read_text(encoding="utf-8") == before
+
+
 def test_all_or_nothing_rollback_on_mid_apply_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

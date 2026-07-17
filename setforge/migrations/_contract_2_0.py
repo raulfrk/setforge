@@ -46,7 +46,7 @@ from setforge.migrations import (
     ManifestEntry,
     ManifestType,
     MigrationRoots,
-    _meets_floor,
+    _gate_floor,
     _require_mapping_root,
     parse_schema_version,
     preserve_contract_schema_version,
@@ -323,35 +323,6 @@ def _migrate_local_yaml(data: CommentedMap) -> None:
         _del_if_present(tracked_file, "preserve_user_keys")
 
 
-def _gate_floor(data: CommentedMap, path: Path) -> None:
-    """Refuse the destructive drop unless minimum_version >= 2.0.
-
-    Reads the RAW ``minimum_version`` and requires it to satisfy the frozen
-    :data:`preserve_contract_schema_version` floor (a FULL major.minor compare
-    via :func:`_meets_floor`). An absent floor — no operator attestation —
-    refuses too: the contraction is irreversible on un-upgraded hosts, so it
-    proceeds only on an explicit floor. Mirrors
-    :func:`setforge.config._refuse_below_floor` but gates on the contract
-    version, not the build's expected version.
-    """
-    raw_floor = data.get("minimum_version")
-    if raw_floor is None:
-        raise ConfigError(
-            f"{path}: the 1.x -> {_TO_VERSION} contract drops the legacy "
-            f"preserve_* fields irreversibly on hosts still reading the legacy "
-            f"shape. Declare minimum_version >= {preserve_contract_schema_version} "
-            f"to attest every host is upgraded before applying this migration."
-        )
-    floor = str(raw_floor)
-    if not _meets_floor(floor, preserve_contract_schema_version):
-        raise ConfigError(
-            f"{path}: minimum_version {floor!r} is below the contract floor "
-            f"{preserve_contract_schema_version!r} required to drop the legacy "
-            f"preserve_* fields; raise minimum_version to "
-            f">= {preserve_contract_schema_version} first."
-        )
-
-
 def _registry_min_version() -> str:
     """Return the lowest schema version the migration registry can resolve to.
 
@@ -478,7 +449,13 @@ class Contract20Migration:
             cfg_data = yaml.load(fh)
         cfg_data = _require_mapping_root(cfg_data, roots.cfg_path)
         # Floor gate FIRST — refuse + mutate nothing below the contract floor.
-        _gate_floor(cfg_data, roots.cfg_path)
+        _gate_floor(
+            cfg_data,
+            roots.cfg_path,
+            floor=preserve_contract_schema_version,
+            transition_label=f"1.x -> {_TO_VERSION}",
+            fields_label="preserve_* fields",
+        )
         # Validate the declared version parses cleanly (clean ConfigError, not
         # a raw traceback, on a malformed schema_version).
         raw_version = cfg_data.get("schema_version")
