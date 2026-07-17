@@ -15,7 +15,7 @@ from setforge.deploy import (
     copy_atomic,
     validate_srcs_exist,
 )
-from setforge.errors import MissingTrackedFile
+from setforge.errors import ConfigError, MissingTrackedFile
 
 
 def test_fresh_deploy_creates_dst(tmp_path: Path) -> None:
@@ -236,3 +236,43 @@ def test_validate_srcs_exist_failure_leaves_live_untouched(tmp_path: Path) -> No
         validate_srcs_exist(cfg, resolved, repo)
     assert not (live / "a").exists()
     assert not (live / "ghost").exists()
+
+
+def test_validate_srcs_exist_rejects_absolute_src_escape(tmp_path: Path) -> None:
+    """An absolute ``src`` (e.g. ``/etc/passwd``) resolves outside
+    ``tracked/`` and would deploy content the gitleaks sweep never
+    scanned — must be refused."""
+    repo = tmp_path / "repo"
+    live = tmp_path / "live"
+    cfg = Config(
+        tracked_files={
+            "escape": TrackedFile(src=Path("/etc/passwd"), dst=str(live / "x")),
+        },
+        profiles={"p": Profile(tracked_files=["escape"])},
+    )
+    resolved = resolve_profile(cfg, "p")
+    with pytest.raises(ConfigError, match="outside"):
+        validate_srcs_exist(cfg, resolved, repo)
+
+
+def test_validate_srcs_exist_rejects_dotdot_src_escape(tmp_path: Path) -> None:
+    """A ``..``-escaping relative ``src`` resolves outside ``tracked/``
+    and must be refused."""
+    repo = tmp_path / "repo"
+    live = tmp_path / "live"
+    cfg = Config(
+        tracked_files={
+            "escape": TrackedFile(src=Path("../../etc/passwd"), dst=str(live / "x")),
+        },
+        profiles={"p": Profile(tracked_files=["escape"])},
+    )
+    resolved = resolve_profile(cfg, "p")
+    with pytest.raises(ConfigError, match="outside"):
+        validate_srcs_exist(cfg, resolved, repo)
+
+
+def test_validate_srcs_exist_allows_in_tracked_src(tmp_path: Path) -> None:
+    """A legitimate ``src`` under ``tracked/`` (including via a benign
+    ``..`` that stays confined) still passes the containment guard."""
+    repo, _, cfg, resolved = _build_profile(tmp_path, ["sub/a"], [])
+    validate_srcs_exist(cfg, resolved, repo)

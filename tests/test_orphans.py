@@ -24,7 +24,7 @@ from setforge.cli import app
 from setforge.cli import orphans as orphans_mod
 from setforge.compare import OrphanEntry, detect_orphans, load_ignored_orphans
 from setforge.config import Config, Profile, TrackedFile, resolve_profile
-from setforge.errors import OrphanCleanupRequiresInteractive
+from setforge.errors import ConfigError, OrphanCleanupRequiresInteractive
 
 _ANSI_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -218,10 +218,11 @@ def test_detect_orphans_excludes_tracked_source(tmp_path: Path) -> None:
     assert detection.skipped_source == 1
 
 
-def test_detect_orphans_src_set_catches_dotdot_escape(tmp_path: Path) -> None:
-    """A tracked_file `src` that escapes `tracked/` via `..` is guarded
-    by the explicit resolved-src set — the `tracked/` dir-prefix alone
-    would miss a src that lexically lands outside it."""
+def test_detect_orphans_refuses_dotdot_escape_src(tmp_path: Path) -> None:
+    """A tracked_file `src` that escapes `tracked/` via `..` is now
+    refused outright by `resolve_src`'s containment guard — an
+    out-of-tree src bypasses the gitleaks sweep, so it never reaches
+    the orphan set at all."""
     repo_root = tmp_path / "repo"
     transitions_dir = tmp_path / "transitions"
     # `src: ../outside/x.txt` resolves (lexically) to repo_root/outside/x.txt.
@@ -240,11 +241,10 @@ def test_detect_orphans_src_set_catches_dotdot_escape(tmp_path: Path) -> None:
             )
         }
     )
-    detection = detect_orphans(
-        resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
-    )
-    assert detection.orphans == []
-    assert detection.skipped_source == 1
+    with pytest.raises(ConfigError, match="outside"):
+        detect_orphans(
+            resolve_profile_wrap(config, "p"), config, transitions_dir, repo_root
+        )
 
 
 def test_detect_orphans_expands_directory_tracked_file_children(tmp_path: Path) -> None:

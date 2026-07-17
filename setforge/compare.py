@@ -43,7 +43,7 @@ from setforge.config import (
     TrackedFile,
     resolve_and_expand,
 )
-from setforge.errors import BaseStoreError
+from setforge.errors import BaseStoreError, ConfigError
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -304,9 +304,9 @@ def _tracked_source_paths(config: Config, repo_root: Path) -> set[Path]:
     A source path can never be a legitimate orphan — orphans are by
     definition deployed dst copies. Built from ALL ``config.tracked_files``
     (not just the active profile): a stale ``meta.json`` may carry a src
-    belonging to a tracked_file outside the resolved profile. This set is
-    the backstop for a ``src`` that escapes ``repo_root/tracked`` via
-    ``..`` (the field permits it).
+    belonging to a tracked_file outside the resolved profile. A ``src``
+    that escapes ``repo_root/tracked`` is refused by :func:`resolve_src`
+    before it can reach this set.
     """
     return {_norm(resolve_src(tf, repo_root)) for tf in config.tracked_files.values()}
 
@@ -448,7 +448,22 @@ def load_ignored_orphans() -> frozenset[str]:
 
 def resolve_src(tracked_file: TrackedFile, repo_root: Path) -> Path:
     """Resolve a tracked_file's ``src`` (relative to ``tracked/``) to an
-    absolute path inside the repo."""
+    absolute path inside the repo.
+
+    Refuses a ``src`` that escapes ``tracked/`` — via an absolute path or
+    a ``..`` climb — because the pre-deploy gitleaks sweep scans only
+    ``tracked/``, so an out-of-tree src would deploy content the secrets
+    sweep never saw. Mirrors the bundle-component guard in
+    :func:`setforge.config._gate_component_paths`.
+    """
+    tracked_root = (repo_root / "tracked").resolve()
+    resolved_src = (tracked_root / tracked_file.src).resolve()
+    if resolved_src != tracked_root and tracked_root not in resolved_src.parents:
+        raise ConfigError(
+            f"tracked_file src {tracked_file.src} resolves to {resolved_src} "
+            f"— outside {tracked_root}; a src outside tracked/ bypasses the "
+            "gitleaks secrets sweep."
+        )
     return repo_root / "tracked" / tracked_file.src
 
 
