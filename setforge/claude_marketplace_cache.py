@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
@@ -654,13 +656,19 @@ def _collision_keep(
 def _collision_update(source: MarketplaceSource, cache_dir: Path) -> MarketplaceSource:
     """``UPDATE``: re-clone ``source`` over the existing cache, clone-safe.
 
-    Stages the new clone in a temporary sibling dir, and only swaps it
-    into place once the clone succeeds. A failed clone (offline, auth,
-    bad repo) leaves the existing cache untouched — critical because in
-    LOCAL_CLONE mode that cache is the offline source of truth and the
-    UPDATE path is reached precisely when the network may be down. The
-    final swap (``rmtree`` then ``rename``) is not crash-atomic — an
-    interruption between the two leaves the cache absent — but that
+    Stages the new clone in a UNIQUE temp dir created via
+    :func:`tempfile.mkdtemp` alongside ``cache_dir`` (same parent, hence
+    same filesystem, so the final swap stays a same-device atomic
+    rename), and only swaps it into place once the clone succeeds. The
+    unique name — rather than a deterministic ``<name>.tmp`` sibling —
+    means two concurrent UPDATEs resolving the same colliding repo
+    cannot stomp each other's in-flight staging dir. A failed clone
+    (offline, auth, bad repo) leaves the existing cache untouched —
+    critical because in LOCAL_CLONE mode that cache is the offline source
+    of truth and the UPDATE path is reached precisely when the network
+    may be down; the staging dir is always cleaned up on the failure
+    path. The final swap (``rmtree`` then ``rename``) is not crash-atomic
+    — an interruption between the two leaves the cache absent — but that
     window is bounded and the clone-failure path above is the one that
     matters for the offline-fallback guarantee.
     """
@@ -669,21 +677,24 @@ def _collision_update(source: MarketplaceSource, cache_dir: Path) -> Marketplace
         source.repo,
         cache_dir,
     )
-    staging = cache_dir.with_name(cache_dir.name + ".tmp")
-    # A leftover staging dir from a prior interrupted run would make the
-    # clone-into-empty-dest fail; clear it before staging.
-    if staging.exists():
-        shutil.rmtree(staging)
+    # A unique staging dir (vs a shared ``<name>.tmp``) so concurrent
+    # UPDATEs of the same colliding repo cannot delete each other's
+    # in-flight clone. Sited in ``cache_dir.parent`` to keep the final
+    # rename onto ``cache_dir`` on the same device (atomic).
+    staging = Path(
+        tempfile.mkdtemp(dir=cache_dir.parent, prefix=cache_dir.name + ".tmp.")
+    )
     try:
+        # mkdtemp already created ``staging`` empty; ``_clone_marketplace``
+        # clones into it (git clones fine into an existing empty dir).
         _clone_marketplace(source, staging)
     except MarketplaceCacheMiss:
         # Clone failed — discard the partial staging dir and leave the
         # original cache intact so the offline fallback survives.
-        if staging.exists():
-            shutil.rmtree(staging)
+        shutil.rmtree(staging, ignore_errors=True)
         raise
     shutil.rmtree(cache_dir)
-    staging.rename(cache_dir)
+    os.replace(staging, cache_dir)
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=cache_dir,

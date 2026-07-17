@@ -177,28 +177,49 @@ def test_collision_update_success_swaps_in_new_clone(fake_git, tmp_path: Path) -
     assert "https://github.com/bob/tools" in clone_calls[0]
 
 
-def test_collision_update_clears_stale_staging_dir(fake_git, tmp_path: Path) -> None:
-    """A leftover ``.tmp`` staging dir from a prior run is cleared first.
+def test_collision_update_staging_dir_is_unique(fake_git, tmp_path: Path) -> None:
+    """The staging dir is a unique temp dir, not the deterministic ``.tmp`` sibling.
 
-    Without the pre-clean, cloning into a non-empty dest would fail.
+    Two concurrent UPDATEs resolving the SAME colliding repo must not
+    share a ``<name>.tmp`` staging dir — one process's clean-up would
+    otherwise delete the other's in-flight clone. Each invocation must
+    clone into its own unique sibling dir on the same filesystem as
+    ``cache_dir`` (so the final rename stays same-device atomic), and no
+    invocation may use the old deterministic ``cache_root/tools.tmp``.
     """
     from setforge.claude_marketplace_cache import _collision_update
 
-    fake_git(known_repos={"bob/tools"})
+    fake = fake_git(known_repos={"bob/tools"})
     cache_root = tmp_path / "marketplaces"
-    cache_dir = cache_root / "tools"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / ".git").mkdir()
-    # Simulate an interrupted prior UPDATE: a stale staging dir survives.
-    staging = cache_root / "tools.tmp"
-    staging.mkdir()
-    (staging / "junk").write_text("partial", encoding="utf-8")
-
     source = MarketplaceSource(source=MarketplaceSourceKind.GITHUB, repo="bob/tools")
 
-    out = _collision_update(source, cache_dir)
-    assert out.path == cache_dir
-    assert not staging.exists()
+    def _clone_dests() -> list[Path]:
+        # Every `git clone -- <repo> <dest>` records its dest at argv[3];
+        # for _collision_update that dest IS the staging dir it cloned into.
+        return [Path(c[4]) for c in fake.calls if c[1:3] == ["clone", "--"]]
+
+    def _one_update() -> Path:
+        cache_dir = cache_root / "tools"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / ".git").mkdir(exist_ok=True)
+        before = len(_clone_dests())
+        _collision_update(source, cache_dir)
+        # The clone dest recorded by this call is its staging dir.
+        return _clone_dests()[before]
+
+    staging_one = _one_update()
+    staging_two = _one_update()
+
+    deterministic = cache_root / "tools.tmp"
+    # Neither invocation used the old deterministic staging name.
+    assert staging_one != deterministic
+    assert staging_two != deterministic
+    # Two invocations produced distinct staging paths (concurrency-safe).
+    assert staging_one != staging_two
+    # Both staged on the same filesystem as cache_dir (same parent dir),
+    # keeping the final rename atomic (same-device).
+    assert staging_one.parent == cache_root
+    assert staging_two.parent == cache_root
 
 
 # ---------------------------------------------------------------------------
