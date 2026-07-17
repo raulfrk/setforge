@@ -673,8 +673,9 @@ def _collision_update(source: MarketplaceSource, cache_dir: Path) -> Marketplace
     (offline, auth, bad repo) leaves the existing cache untouched —
     critical because in LOCAL_CLONE mode that cache is the offline source
     of truth and the UPDATE path is reached precisely when the network
-    may be down; the staging dir is always cleaned up on the failure
-    path. The final swap (``rmtree`` then ``rename``) is not crash-atomic
+    may be down; the staging dir is always discarded via a ``finally``
+    cleanup on any failure or interruption, so a uniquely-named dir is
+    never orphaned. The final swap (``rmtree`` then ``rename``) is not crash-atomic
     — an interruption between the two leaves the cache absent — but that
     window is bounded and the clone-failure path above is the one that
     matters for the offline-fallback guarantee.
@@ -695,13 +696,17 @@ def _collision_update(source: MarketplaceSource, cache_dir: Path) -> Marketplace
         # mkdtemp already created ``staging`` empty; ``_clone_marketplace``
         # clones into it (git clones fine into an existing empty dir).
         _clone_marketplace(source, staging)
-    except MarketplaceCacheMiss:
-        # Clone failed — discard the partial staging dir and leave the
-        # original cache intact so the offline fallback survives.
+        # Reached only after a successful clone, so a failed clone leaves
+        # ``cache_dir`` intact — the offline-fallback guarantee.
+        shutil.rmtree(cache_dir)
+        os.replace(staging, cache_dir)
+    finally:
+        # Discard any leftover uniquely-named staging dir — clone failure,
+        # KeyboardInterrupt, or a swap that never completed. On success
+        # ``os.replace`` already moved it, so this is a no-op. Unlike the
+        # old deterministic ``<name>.tmp`` sibling, a unique staging dir is
+        # never reclaimed by a later run, so it must be cleaned here.
         shutil.rmtree(staging, ignore_errors=True)
-        raise
-    shutil.rmtree(cache_dir)
-    os.replace(staging, cache_dir)
     return MarketplaceSource(
         source=MarketplaceSourceKind.PATH,
         path=cache_dir,
