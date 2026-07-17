@@ -637,10 +637,12 @@ def reconcile(
 
     ``auto`` threads into :func:`_add_declared_marketplaces` (and onward to
     :func:`resolve_marketplace_source`), governing the cache-collision
-    wizard. Default ``False`` keeps the interactive behavior; a non-
-    interactive CLI path passes ``auto=True`` to refuse silent
-    auto-resolution rather than relying on a downstream ``isatty()``
-    heuristic to never hang.
+    wizard. Default ``False`` keeps the interactive behavior. ``auto`` is
+    an explicit opt-in seam: a programmatic or non-interactive caller may
+    pass ``auto=True`` to refuse silent auto-resolution. The current CLI
+    entry points leave it ``False`` and rely on the wizard's own non-TTY
+    ``isatty()`` backstop (which raises rather than prompting under
+    automation) to never hang.
     """
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
