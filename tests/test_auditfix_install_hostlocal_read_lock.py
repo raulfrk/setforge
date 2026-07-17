@@ -140,35 +140,3 @@ def test_install_reads_host_local_overlay_under_lock(
     assert events.index("read") < events.index("exit"), (
         f"overlay read must happen before lock release; observed order: {events}"
     )
-
-
-def test_dry_run_reads_host_local_overlay_under_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``install --dry-run`` must read the host-local overlay inside profile_lock."""
-    cfg, _dst = _setup_repo(tmp_path)
-    _state_root(tmp_path, monkeypatch)
-    _no_code(monkeypatch)
-
-    recording_lock, events = _recording_lock()
-    recording_read = _recording_read(events)
-    monkeypatch.setattr("setforge.cli._install_helpers.profile_lock", recording_lock)
-    monkeypatch.setattr(
-        "setforge.cli._install_helpers._load_validated_host_local_sections",
-        recording_read,
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["install", "--profile=vmh", f"--config={cfg}", "--dry-run"]
-    )
-    assert result.exit_code == 0, result.output
-
-    assert "enter" in events, "dry-run never acquired the profile lock"
-    assert "read" in events, "dry-run never read the host-local overlay"
-    assert events.index("enter") < events.index("read"), (
-        f"overlay read must happen inside the lock; observed order: {events}"
-    )
-    assert events.index("read") < events.index("exit"), (
-        f"overlay read must happen before lock release; observed order: {events}"
-    )

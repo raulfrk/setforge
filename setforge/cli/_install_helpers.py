@@ -79,7 +79,6 @@ from setforge.errors import (
     SetforgeError,
 )
 from setforge.host_local_inject import HOST_LOCAL_PROVENANCE_TAG
-from setforge.locking import profile_lock
 from setforge.reconcile import FileId
 from setforge.reconcile.claude_merge import make_claude_merge_fn
 from setforge.reconcile.host_local_view import host_local_sections_from_store
@@ -1125,39 +1124,29 @@ def _dry_run_pipeline(
     """
     typer.echo(_DRY_RUN_HEADER)
     _dry_run_emit_profile_summary(ctx)
-    # Take the profile lock around every store-backed read below so the
-    # overlay + drift snapshot is consistent, mirroring how ``setforge
-    # compare`` wraps its read+compare (compare.py) and the real install
-    # pipeline (install.py). The store projection does three unsynchronized
-    # reads (index → base → local) and ``compare_profile`` reads the store
-    # too; a concurrent install/sync's ``store.record`` (base+local before
-    # index) could otherwise hand this preview a stale-index / new-body
-    # pair. Dry-run is read-only and never nests inside the install lock —
-    # both call sites (``--dry-run`` and the fresh-host welcome preview)
-    # run BEFORE the mutating ``with profile_lock`` in install.
-    with profile_lock(ctx.profile):
-        # Thread the validated host_local_sections overlay into the drift
-        # compare so a live file that already received its injected
-        # host-local sections does NOT surface as spurious content drift —
-        # matching what ``setforge compare`` reports (compare.py threads the
-        # same overlay). Without this the dry-run report AND the fresh-host
-        # welcome preview (which both route through this function)
-        # over-report drift on any tracked_file using legacy
-        # host_local_sections marker injection. Loaded here rather than
-        # carried on ``ctx`` so this read-only path stays self-contained,
-        # mirroring ``_dry_run_emit_host_local_inject``.
-        host_local_sections_map = _load_validated_host_local_sections(
-            ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
-        )
-        drift_report = compare_mod.compare_profile(
-            ctx.cfg,
-            ctx.profile,
-            ctx.repo_root,
-            host_local_sections=host_local_sections_map,
-        )
-        _dry_run_emit_drift_gate(drift_report)
-        _dry_run_emit_deploys(ctx, drift_report)
-        _dry_run_emit_host_local_inject(ctx)
+    # NOT wrapped in profile_lock: dry-run must be zero-side-effect, and
+    # acquiring the lock creates the state dir / lock file — a filesystem
+    # mutation the dry-run e2e forbids. A torn store read in a read-only
+    # preview is acceptable; only the mutating install path takes the lock.
+    #
+    # Thread the validated host_local_sections overlay into the drift
+    # compare so a live file that already received its injected host-local
+    # sections does NOT surface as spurious content drift — matching what
+    # ``setforge compare`` reports. Without this the dry-run report and the
+    # fresh-host welcome preview over-report drift on any tracked_file using
+    # legacy host_local_sections marker injection.
+    host_local_sections_map = _load_validated_host_local_sections(
+        ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
+    )
+    drift_report = compare_mod.compare_profile(
+        ctx.cfg,
+        ctx.profile,
+        ctx.repo_root,
+        host_local_sections=host_local_sections_map,
+    )
+    _dry_run_emit_drift_gate(drift_report)
+    _dry_run_emit_deploys(ctx, drift_report)
+    _dry_run_emit_host_local_inject(ctx)
     _dry_run_emit_plugin_reconcile(ctx)
     _dry_run_emit_extension_reconcile(ctx)
     dry_run_packages(ctx.cfg, ctx.resolved)
