@@ -260,6 +260,48 @@ def test_floor_gate_refuses_below_6(tmp_path: Path, body: str) -> None:
     assert roots.cfg_path.read_bytes() == before
 
 
+_CFG_SCALAR_CARGO = """\
+schema_version: "5.0"
+minimum_version: "6.0"
+tracked_files: {}
+profiles:
+  default:
+    cargo_binaries: ripgrep
+"""
+
+_CFG_SCALAR_PLUGINS = """\
+schema_version: "5.0"
+minimum_version: "6.0"
+tracked_files: {}
+profiles:
+  default:
+    claude_plugins: my-plugin
+"""
+
+
+@pytest.mark.parametrize(
+    ("body", "field"),
+    [(_CFG_SCALAR_CARGO, "cargo_binaries"), (_CFG_SCALAR_PLUGINS, "claude_plugins")],
+)
+def test_scalar_legacy_field_refuses_without_dropping(
+    tmp_path: Path, body: str, field: str
+) -> None:
+    """A hand-edited SCALAR legacy list refuses cleanly, naming profile + field.
+
+    A scalar ``cargo_binaries: ripgrep`` (not a list) is malformed config; the
+    migration must refuse rather than silently coerce to ``[]`` and DROP the
+    value. The file is left untouched.
+    """
+    roots = _write_cfg(tmp_path, body)
+    before = roots.cfg_path.read_bytes()
+    with pytest.raises(ConfigError) as exc:
+        ProfileFieldsRetireMigration().apply(roots=roots)
+    msg = str(exc.value)
+    assert field in msg
+    assert "default" in msg
+    assert roots.cfg_path.read_bytes() == before
+
+
 @pytest.fixture
 def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state = tmp_path / "state"

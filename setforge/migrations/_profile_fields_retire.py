@@ -149,7 +149,7 @@ def _mint_package(
 
 
 def _translate_profile(
-    profile: CommentedMap, registry: CommentedMap, cfg_path: Path
+    profile: CommentedMap, registry: CommentedMap, cfg_path: Path, profile_name: str
 ) -> None:
     """Fold one profile's four legacy fields into packages + reconcile.
 
@@ -164,7 +164,7 @@ def _translate_profile(
         (_CARGO_KIND, "cargo_binaries"),
         (_PLUGIN_KIND, "claude_plugins"),
     ):
-        for name in _legacy_list(profile, field):
+        for name in _legacy_list(profile, field, profile_name):
             _mint_package(registry, name, _package_body(kind, name), cfg_path)
             refs.append(name)
 
@@ -238,9 +238,24 @@ def _extend_packages_ref(profile: CommentedMap, refs: list[str]) -> None:
             packages.append(ref)
 
 
-def _legacy_list(profile: CommentedMap, field: str) -> list[str]:
-    """Return ``profile[field]`` as a list of strings (empty when absent)."""
-    return _seq_of_str(profile.get(field))
+def _legacy_list(profile: CommentedMap, field: str, profile_name: str) -> list[str]:
+    """Return ``profile[field]`` as a list of strings (empty when absent).
+
+    A PRESENT-but-non-list value (a hand-edited scalar like ``cargo_binaries:
+    ripgrep``) is malformed config: coercing it to ``[]`` would SILENTLY DROP
+    the value on the destructive fold. This migration runs on a raw ruamel load
+    (pre-schema-validation), so such a hand-edit reaches here — refuse cleanly
+    with a :class:`ConfigError` naming the profile + field rather than drop it.
+    """
+    raw = profile.get(field)
+    if raw is not None and not isinstance(raw, list):
+        raise ConfigError(
+            f"cannot fold legacy profile fields: {field!r} in profile "
+            f"{profile_name!r} must be a list, got {type(raw).__name__} "
+            f"({raw!r}). Fix the {field!r} value to a list and re-run "
+            f"(nothing was changed)."
+        )
+    return _seq_of_str(raw)
 
 
 def _seq_of_str(raw: object) -> list[str]:
@@ -293,9 +308,9 @@ def _migrate_setforge_yaml(data: CommentedMap, roots: MigrationRoots) -> None:
     registry = _packages_registry(data, roots.cfg_path)
     profiles = data.get("profiles")
     if isinstance(profiles, CommentedMap):
-        for profile in profiles.values():
+        for name, profile in profiles.items():
             if isinstance(profile, CommentedMap):
-                _translate_profile(profile, registry, roots.cfg_path)
+                _translate_profile(profile, registry, roots.cfg_path, str(name))
     # Drop an unminted registry so a legacy-free config doesn't grow `packages: {}`.
     if not registry and "packages" in data:
         del data["packages"]
