@@ -16,7 +16,8 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from setforge.cli._anchor_picker import pick_anchor_line
+from setforge.cli._anchor_picker import _theme_style, pick_anchor_line
+from setforge.ui.theme import Role, pt_style
 
 
 class _CaptureOutput(DummyOutput):
@@ -133,6 +134,25 @@ def test_picker_arrow_up_retreats_cursor_from_middle() -> None:
     behavior at the top boundary and would still pass if Up were a no-op.
     """
     assert _drive(b"\x1b[B\x1b[B\x1b[A\r") == 2
+
+
+def test_picker_style_sources_the_shared_theme() -> None:
+    """The picker's style carries the shared theme's role colours.
+
+    Guards against the regression this fix addresses: a bare
+    ``Style.from_dict({})`` (empty) bypassed the shared setforge theme.
+    ``_theme_style`` must resolve each semantic role to its truecolor hex,
+    so the full-screen Application matches the rest of the TUI.
+    """
+    style = _theme_style()
+    rules = dict(style.style_rules)
+    # An empty Style.from_dict({}) would carry no rules at all.
+    assert rules, "picker style must not be empty"
+    for role, hex_value in (
+        (Role.ACCENT, pt_style()["class:accent"]),
+        (Role.MUTED, pt_style()["class:muted"]),
+    ):
+        assert rules[role.value] == hex_value
 
 
 def test_picker_status_bar_shows_filename_and_position() -> None:

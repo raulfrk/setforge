@@ -26,7 +26,21 @@ from prompt_toolkit.search import start_search
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import SearchToolbar
 
+from setforge.ui.theme import pt_style
+
 _PAGE_LINES: int = 10
+
+
+def _theme_style() -> Style:
+    """The shared setforge theme as a prompt_toolkit ``Style``.
+
+    Mirrors :func:`setforge.ui.widgets._theme_style`: strip ``pt_style()``'s
+    ``"class:"`` prefix (``Style.from_dict`` prepends its own) so the picker
+    resolves the same semantic role colours as every other TUI surface.
+    """
+    return Style.from_dict(
+        {key.removeprefix("class:"): value for key, value in pt_style().items()}
+    )
 
 
 def _move_down_clamped(buffer: Buffer, *, count: int) -> None:
@@ -194,7 +208,7 @@ def _run_picker(*, buffer: Buffer, filename: str) -> int | None:
     )
     layout = Layout(HSplit([body, status, search_toolbar]))
 
-    style = Style.from_dict({})
+    style = _theme_style()
     kb = _build_keybindings(
         buffer=buffer,
         buffer_control=buffer_control,
