@@ -29,7 +29,13 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    HSplit,
+    Layout,
+    VSplit,
+    Window,
+)
 from prompt_toolkit.layout.containers import AnyContainer
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
@@ -162,6 +168,31 @@ def _frame_width() -> int:
     return min(cols, _MAX_WIDTH)
 
 
+def _clamped_frame(children: list[AnyContainer]) -> VSplit:
+    """Stack ``children`` in a column clamped to :func:`_frame_width`.
+
+    The top/bottom rules are already drawn at ``_frame_width()`` by
+    :func:`box.frame`, but a bare :class:`HSplit` gives every child the full
+    terminal width — so wrapping body/button/legend rows run past the rule's
+    right edge. Wrapping the ``HSplit`` in a :class:`VSplit` whose content
+    column is pinned to ``_frame_width()`` (with a flexible filler eating the
+    remainder) makes every row wrap at the same width as the rules, left-anchored
+    to match the rules' left edge. A single ``VSplit`` child would instead be
+    stretched to full width, so the trailing filler ``Window`` is load-bearing.
+
+    The pin is a callable read at render time — never a build-time constant —
+    so it observes the live terminal width (and any resize), matching how the
+    rule fragments recompute ``_frame_width()`` on each paint. Fixing it at
+    build time would read the pre-run default size and desync from the rules.
+    """
+
+    def _pin() -> Dimension:
+        width = _frame_width()
+        return Dimension(max=width, preferred=width)
+
+    return VSplit([HSplit(children, width=_pin), Window()])
+
+
 def _top_rule_fragments(title: str | None) -> _Fragments:
     """Frame's top rule, styled — shared by every full-screen widget layout."""
     return [("class:muted", frame([], title=title, width=_frame_width())[0])]
@@ -274,7 +305,7 @@ def _build_layout(
     children.append(
         Window(content=FormattedTextControl(text=_bottom_rule_fragments), height=1)
     )
-    return Layout(HSplit(children))
+    return Layout(_clamped_frame(children))
 
 
 def _build_keybindings(
@@ -420,7 +451,7 @@ def pager(
         height=Dimension(min=1),
     )
     layout = Layout(
-        HSplit(
+        _clamped_frame(
             [
                 Window(
                     content=FormattedTextControl(
@@ -552,7 +583,7 @@ def _text_prompt_layout(
     children.append(
         Window(content=FormattedTextControl(text=_bottom_rule_fragments), height=1)
     )
-    return Layout(HSplit(children), focused_element=input_window)
+    return Layout(_clamped_frame(children), focused_element=input_window)
 
 
 def text_prompt(

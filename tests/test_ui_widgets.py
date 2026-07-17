@@ -11,7 +11,10 @@ terminating key (pipe EOF does NOT auto-exit a prompt_toolkit Application).
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
+from typing import Final
 
+import pyte
 import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.data_structures import Size
@@ -21,6 +24,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.styles import Style, merge_styles
 
 from setforge.ui.widgets import (
+    _MAX_WIDTH,
     _STYLE,
     CANCEL,
     Button,
@@ -508,3 +512,98 @@ def test_seed_prompt_summary_in_body() -> None:
             _seed_prompt_interactive("~/f", b"a\nb\n", b"a\nc\n")
     rendered = out.captured()
     assert "live vs upstream" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Frame-width clamp: every rendered row stays within the frame rule (deoq.9.8)
+# ---------------------------------------------------------------------------
+#
+# Regression guard for the widget-box overflow: the top/bottom rules are drawn
+# at ``_frame_width()`` (min(cols, 100)) but the body/button/legend Windows were
+# unbounded, so their rows ran to the raw terminal width past the frame border.
+# On a wide (140-col) terminal every non-blank row must now wrap at the SAME
+# width as the clamped rules. We feed the real prompt_toolkit byte stream into a
+# ``pyte`` grid and assert no rendered row exceeds ``_frame_width()`` columns.
+
+_WIDE_COLS: Final[int] = 140
+
+
+def _wide_row_widths(drive: Callable[[Vt100_Output], None]) -> list[int]:
+    """Render a widget on a 140-col terminal; return each non-blank row's width.
+
+    ``drive`` runs the widget (with its own piped input) against the passed
+    truecolor output. The emitted ANSI byte stream is replayed into a
+    ``pyte.Screen`` so we measure the ACTUAL on-screen grid, not the fragments.
+    """
+    buf = io.StringIO()
+    out = Vt100_Output(
+        buf,
+        lambda: Size(rows=30, columns=_WIDE_COLS),
+        default_color_depth=ColorDepth.DEPTH_24_BIT,
+    )
+    drive(out)
+    screen = pyte.Screen(_WIDE_COLS, 30)
+    pyte.Stream(screen).feed(buf.getvalue())
+    return [len(row.rstrip()) for row in screen.display if row.strip()]
+
+
+def test_button_bar_rows_stay_within_frame_on_wide_terminal() -> None:
+    # A body far wider than 100 cols must wrap at the frame width, not run to 140.
+    long_body = "word " * 40  # ~200 chars
+
+    def drive(out: Vt100_Output) -> None:
+        with create_pipe_input() as pipe:
+            pipe.send_bytes(b"\r")
+            with create_app_session(input=pipe, output=out):
+                button_bar(_BUTTONS, title="Conflict 1/1", body=long_body)
+
+    widths = _wide_row_widths(drive)
+    assert widths  # sanity: something rendered
+    assert max(widths) <= _MAX_WIDTH
+    assert max(widths) < _WIDE_COLS  # the bug rendered rows out to 140
+
+
+def test_pager_rows_stay_within_frame_on_wide_terminal() -> None:
+    long_lines: _PagerFragments = [
+        ("class:muted", "word " * 40 + "\n") for _ in range(5)
+    ]
+
+    def drive(out: Vt100_Output) -> None:
+        with create_pipe_input() as pipe:
+            pipe.send_bytes(b"q")
+            with create_app_session(input=pipe, output=out):
+                pager(long_lines, title="diff — f")
+
+    widths = _wide_row_widths(drive)
+    assert widths
+    assert max(widths) <= _MAX_WIDTH
+    assert max(widths) < _WIDE_COLS
+
+
+def test_text_prompt_rows_stay_within_frame_on_wide_terminal() -> None:
+    def drive(out: Vt100_Output) -> None:
+        with create_pipe_input() as pipe:
+            pipe.send_bytes(b"\r")
+            with create_app_session(input=pipe, output=out):
+                text_prompt(title="claude-merge", body="word " * 40, default="d")
+
+    widths = _wide_row_widths(drive)
+    assert widths
+    assert max(widths) <= _MAX_WIDTH
+    assert max(widths) < _WIDE_COLS
+
+
+def test_text_prompt_buffer_left_unclamped_cursor_edits_survive() -> None:
+    # The interactive Buffer window is intentionally NOT width-clamped; confirm
+    # cursor-dependent editing (backspace over a seeded default) still works on a
+    # wide terminal, i.e. the clamp did not decouple the cursor from the buffer.
+    out = Vt100_Output(
+        io.StringIO(),
+        lambda: Size(rows=30, columns=_WIDE_COLS),
+        default_color_depth=ColorDepth.DEPTH_24_BIT,
+    )
+    with create_pipe_input() as pipe:
+        pipe.send_bytes(b"\x7f\r")  # backspace then submit
+        with create_app_session(input=pipe, output=out):
+            result = text_prompt(title="T", default="abcd")
+    assert result == "abc"
