@@ -18,6 +18,7 @@ from setforge.cli._lock_enumerate import _LockItem, enumerate_lock_items
 from setforge.config import load_config, resolve_and_expand
 from setforge.errors import LockConflict, ResolveError
 from setforge.lockfile import LockFile, lock_path, parse_lock, write_lock
+from setforge.locking import lockfile_lock
 from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.provision.resolve.registry import get_resolver
 
@@ -110,18 +111,27 @@ def lock(
     resolved = resolve_and_expand(cfg, profile, repo_root)
 
     path = lock_path(config)
-    existing = _load_existing_lock(path)
     items = enumerate_lock_items(cfg, resolved)
 
-    if update is not None:
-        _run_update(items, existing, update, profile, path)
-        return
+    # The lockfile is shared across ALL profiles, so concurrent
+    # `setforge lock --profile=A` and `--profile=B` would each read the same
+    # baseline and clobber each other on write (silent lost update). Serialize
+    # the whole read -> merge -> write on the config dir, and re-read the
+    # existing lock UNDER the lock so a second writer sees the first's pins and
+    # merge_lock unions them. Keyed on the config dir (not the profile) because
+    # the lockfile is profile-independent.
+    with lockfile_lock(path.parent):
+        existing = _load_existing_lock(path)
 
-    typer.echo(f"resolving {len(items)} package(s) for profile {profile!r}…")
-    new_pins = resolve_pins(items, profile)
-    lockfile = merge_lock(existing, new_pins)
-    write_lock(lockfile, path)
-    typer.echo(f"wrote {path.name} ({len(lockfile.packages)} pin(s))")
+        if update is not None:
+            _run_update(items, existing, update, profile, path)
+            return
+
+        typer.echo(f"resolving {len(items)} package(s) for profile {profile!r}…")
+        new_pins = resolve_pins(items, profile)
+        lockfile = merge_lock(existing, new_pins)
+        write_lock(lockfile, path)
+        typer.echo(f"wrote {path.name} ({len(lockfile.packages)} pin(s))")
 
 
 def _run_update(

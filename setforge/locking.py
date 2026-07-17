@@ -85,3 +85,62 @@ def profile_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
             fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
     finally:
         fd.close()
+
+
+@contextmanager
+def lockfile_lock(config_dir: Path, timeout: float | None = None) -> Iterator[None]:
+    """Acquire an exclusive advisory lock scoped to a config dir's ``setforge.lock``.
+
+    The committed ``setforge.lock`` is a single file shared across ALL profiles
+    (``lock_path`` has no profile component), so ``setforge lock --profile=A``
+    and ``--profile=B`` running concurrently both read the same baseline, merge
+    only their own profile's pins, then write — the second write clobbers the
+    first (silent lost update).  This lock serializes the whole
+    load -> merge -> write critical section on the config dir, so a second
+    writer observes the first writer's pins and ``merge_lock`` unions them.
+
+    Unlike :func:`profile_lock`, this lock is keyed on the config DIR, not the
+    profile name — a profile-scoped lock would not serialize A vs B against the
+    profile-independent lockfile.
+
+    Creates ``<config-dir>/setforge.lock.lock`` (a sidecar; never the lockfile
+    itself, which is atomically replaced) and calls ``fcntl.flock(LOCK_EX)`` on
+    the open fd, released on normal exit or exception.
+
+    Args:
+        config_dir: Directory holding ``setforge.lock``; determines the sidecar
+            lockfile location.
+        timeout: If ``None`` (default), block indefinitely.  If set, poll every
+            ``_POLL_INTERVAL`` seconds up to ``timeout`` seconds and raise
+            :class:`SetforgeError` on contention.
+
+    Raises:
+        SetforgeError: When ``timeout`` is set and the lock cannot be acquired
+            within the deadline.
+    """
+    config_dir.mkdir(parents=True, exist_ok=True)
+    lock_path: Path = config_dir / "setforge.lock.lock"
+
+    fd = lock_path.open("a")
+    try:
+        if timeout is None:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SetforgeError(
+                            f"another setforge process holds the setforge.lock "
+                            f"lock for {config_dir}; retry shortly"
+                        ) from None
+                    time.sleep(_POLL_INTERVAL)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+    finally:
+        fd.close()
