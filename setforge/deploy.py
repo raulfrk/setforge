@@ -357,6 +357,12 @@ def deploy_symlinked_file(
        pattern :func:`_atomic_write` uses for regular files, closing
        the TOCTOU window between ``unlink`` and ``symlink``.
 
+    Raises :class:`AssertionError` when ``tracked_file.symlink`` is None —
+    a caller-contract violation (this function must only be called for a
+    tracked_file that declares ``symlink:``), not a runtime/config
+    condition. Raises :class:`MissingTrackedFile` when ``src`` does not
+    exist.
+
     Refusal contract: if ``dst`` already exists as a *regular file* or a
     *directory* (anything that is not a symlink), this function raises
     :class:`SetforgeError` — with a message distinguishing the two cases.
