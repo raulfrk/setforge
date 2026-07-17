@@ -11,12 +11,14 @@ profile x file enumeration (C-7) are pinned here end to end.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from setforge import reconcile
+from setforge import atomicio, locking, reconcile
 from setforge.errors import ConfigError, MarkerError
 from setforge.migrations import MigrationRoots
 from setforge.migrations._marker_retire import MarkerRetireMigration
@@ -247,3 +249,55 @@ def test_reverse_refuses_irreversible(tmp_path: Path) -> None:
     roots = _setup(tmp_path, tracked="x\n", live="x\n")
     with pytest.raises(ConfigError):
         rev.apply(roots=roots)
+
+
+# --- lock coverage over the destructive strip -------------------------------
+
+
+def test_apply_holds_profile_lock_over_destructive_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the destructive strip of plan.src/plan.dst (and the schema
+    # stamp) MUST run with the affected profile lock held, not just the store
+    # seed. A lock scoped to only the seed leaves a window in which a concurrent
+    # install/sync re-deploys plan.dst and has its bytes clobbered by the
+    # unlocked strip (lost update). We spy on the lock acquire/release and record
+    # the held-set at the moment of each destructive write.
+    held: set[str] = set()
+
+    real_profile_lock = locking.profile_lock
+
+    @contextlib.contextmanager
+    def spy_profile_lock(profile: str, timeout: float | None = None) -> Iterator[None]:
+        with real_profile_lock(profile, timeout):
+            held.add(profile)
+            try:
+                yield
+            finally:
+                held.discard(profile)
+
+    held_at_write: dict[Path, frozenset[str]] = {}
+    real_write = atomicio.atomic_write_text
+
+    def spy_write(path: Path, text: str, **kwargs: object) -> None:
+        held_at_write[path] = frozenset(held)
+        real_write(path, text, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(locking, "profile_lock", spy_profile_lock)
+    monkeypatch.setattr(atomicio, "atomic_write_text", spy_write)
+
+    body = "Use rg not grep.\n"
+    text = "# Rules\n" + _shared("rules", body, hash_=_h(body)) + "tail\n"
+    roots = _setup(tmp_path, tracked=text, live=text)
+
+    MarkerRetireMigration().apply(roots=roots)
+
+    # The destructive strips of BOTH the tracked-src and the live-dst ran, each
+    # while the "default" profile lock was held (the pre-fix code held no lock
+    # during either write — that is the lost-update window this pins shut).
+    tracked_src = _tracked_path(roots)
+    live_dst = _live_path()
+    assert tracked_src in held_at_write, "tracked-src strip never ran"
+    assert live_dst in held_at_write, "live-dst strip never ran"
+    assert "default" in held_at_write[tracked_src]
+    assert "default" in held_at_write[live_dst]

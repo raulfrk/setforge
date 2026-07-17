@@ -473,6 +473,8 @@ class MarkerRetireMigration:
 
     def apply(self, *, roots: MigrationRoots) -> None:
         """Retire every marker, then stamp 2.1 (see the class docstring)."""
+        import contextlib
+
         from setforge import locking, reconcile
         from setforge.atomicio import atomic_write_text
         from setforge.host_local_marker_migration import append_overlay_spans
@@ -480,12 +482,24 @@ class MarkerRetireMigration:
         plans = _file_plans(roots)  # pass 1: resolve + validate (fail-closed)
         local_yaml = _local_yaml_path(roots)
 
-        for plan in plans:  # pass 2: capture + seed + strip
-            base_text, local_text = _base_and_local(plan)
-            for profile in plan.profiles:
-                if not plan.dst.exists():
-                    continue  # nothing deployed on this host -> nothing to seed
-                with locking.profile_lock(profile):
+        # Acquire EVERY affected profile lock up front, in sorted order, and hold
+        # them across the whole seed + destructive-strip + stamp body — mirroring
+        # the sibling retire migrations. A per-file/per-profile lock scoped to
+        # just the store seed leaves the strips (plan.src/plan.dst) and the schema
+        # stamp unlocked, so a concurrent install/sync could re-deploy plan.dst in
+        # the window between seed and strip and have its bytes clobbered by the
+        # unlocked strip (lost update). sorted() keeps a consistent global lock
+        # ordering to avoid deadlock with those commands.
+        profiles = sorted({profile for plan in plans for profile in plan.profiles})
+        with contextlib.ExitStack() as locks:
+            for profile in profiles:
+                locks.enter_context(locking.profile_lock(profile))
+
+            for plan in plans:  # pass 2: capture + seed + strip
+                base_text, local_text = _base_and_local(plan)
+                for profile in plan.profiles:
+                    if not plan.dst.exists():
+                        continue  # nothing deployed on this host -> nothing to seed
                     if reconcile.read_base(profile, plan.fid) is not None:
                         continue  # already seeded (idempotent replay, MP-4)
                     reconcile.record(
@@ -494,21 +508,21 @@ class MarkerRetireMigration:
                         base=base_text.encode("utf-8"),
                         local=local_text.encode("utf-8"),
                     )
-            if not plan.has_markers:
-                continue
-            host_bodies = [
-                (section.name, section.body)
-                for section in parse_markers(plan.live_text)
-                if section.semantics != "shared"
-            ]
-            if host_bodies:  # DL4: capture BEFORE the strip deletes the bodies
-                append_overlay_spans(local_yaml, {plan.fid: host_bodies})
-            if plan.src.exists():
-                atomic_write_text(plan.src, strip_markers(plan.tracked_text))
-            if plan.dst.exists():
-                atomic_write_text(plan.dst, local_text)
+                if not plan.has_markers:
+                    continue
+                host_bodies = [
+                    (section.name, section.body)
+                    for section in parse_markers(plan.live_text)
+                    if section.semantics != "shared"
+                ]
+                if host_bodies:  # DL4: capture BEFORE the strip deletes the bodies
+                    append_overlay_spans(local_yaml, {plan.fid: host_bodies})
+                if plan.src.exists():
+                    atomic_write_text(plan.src, strip_markers(plan.tracked_text))
+                if plan.dst.exists():
+                    atomic_write_text(plan.dst, local_text)
 
-        _stamp_schema_version(roots.cfg_path, self.to_version)
+            _stamp_schema_version(roots.cfg_path, self.to_version)
 
 
 def _base_and_local(plan: _FilePlan) -> tuple[str, str]:
