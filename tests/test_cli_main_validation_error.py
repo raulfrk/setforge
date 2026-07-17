@@ -1,16 +1,4 @@
-"""``main()`` top-level ``pydantic.ValidationError`` handling.
-
-The package entry point :func:`setforge.cli.main` wraps ``app()`` with a
-top-level error handler. A malformed ``setforge.yaml`` makes
-``config.load_config`` raise a raw :class:`pydantic.ValidationError`; this
-suite pins that it is rendered with the SAME polished formatter
-``setforge validate`` already uses (human path) and as a versioned JSON
-error envelope on the ``-o json`` path — never as a raw Python traceback.
-
-``main()`` (not ``app()`` via ``CliRunner``) is exercised directly, because
-``CliRunner.invoke`` catches exceptions itself and never routes through
-``main()``'s handler — the exact seam the bug lived behind.
-"""
+"""Call ``main()`` directly — ``CliRunner`` swallows exceptions first."""
 
 from __future__ import annotations
 
@@ -34,7 +22,6 @@ profiles:
 
 @pytest.fixture
 def bad_config(tmp_path: Path) -> Path:
-    """A malformed setforge.yaml (``tracked_files: []`` should be a mapping)."""
     cfg = tmp_path / "setforge.yaml"
     cfg.write_text(_BAD_CONFIG)
     return cfg
@@ -44,7 +31,6 @@ def _run_main(
     argv: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> int:
-    """Drive ``main()`` with ``argv`` and return its ``SystemExit`` code."""
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as excinfo:
         main()
@@ -57,7 +43,6 @@ def test_main_renders_validation_error_politely(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A malformed config on ``compare`` → friendly formatter, no raw traceback."""
     code = _run_main(
         ["setforge", "compare", "--profile", "demo", "-c", str(bad_config)],
         monkeypatch,
@@ -76,13 +61,6 @@ def test_main_validation_error_attached_short_flag_anchors_real_path(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Click's attached short-flag ``-c<path>`` → report anchors the real file.
-
-    Click parses ``-cbad.yaml`` identically to ``-c bad.yaml``, so the command
-    loads and rejects the RIGHT file. The polished error report must anchor on
-    that same file — not degrade to the ``setforge.yaml:1`` placeholder that a
-    missed argv scan produces.
-    """
     code = _run_main(
         ["setforge", "compare", "--profile", "demo", f"-c{bad_config}"],
         monkeypatch,
@@ -100,7 +78,6 @@ def test_main_json_validation_error_envelope(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``-o json`` on a malformed config → parseable JSON error envelope on stdout."""
     argv = [
         "setforge",
         "-o",
