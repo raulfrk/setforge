@@ -367,7 +367,9 @@ def test_retry_pinned_install_repins_cache(monkeypatch, tmp_path: Path) -> None:
     )
 
     pins = {"revdiff@revdiff": _plugin_pin("revdiff@revdiff")}
-    err = ph._retry_plugin_op(cfg, "revdiff@revdiff", "install", pins=pins)
+    err = ph._retry_plugin_op(
+        cfg, "revdiff@revdiff", ph._RetryOpKind.INSTALL, pins=pins
+    )
 
     assert err is None
     assert order == [f"checkout:{_SHA}", "install:revdiff@revdiff"]
@@ -397,7 +399,7 @@ def test_retry_unpinned_install_does_not_repin(monkeypatch, tmp_path: Path) -> N
         lambda name, mp: installs.append((name, mp)),
     )
 
-    err = ph._retry_plugin_op(cfg, "revdiff@revdiff", "install", pins={})
+    err = ph._retry_plugin_op(cfg, "revdiff@revdiff", ph._RetryOpKind.INSTALL, pins={})
 
     assert err is None
     assert chk == []  # no re-pin without a lock
