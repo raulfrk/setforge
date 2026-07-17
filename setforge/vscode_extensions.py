@@ -56,6 +56,17 @@ from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
 from setforge.provision.protocol import Identity, Outcome, ProvisionItem
 from setforge.provision.resolve.protocol import ResolvedPin
 
+__all__ = [
+    "ReconcileReport",
+    "add_to_include",
+    "capture_extensions",
+    "install_one",
+    "list_installed",
+    "reconcile",
+    "remove_from_include",
+    "uninstall_one",
+]
+
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _CODE_BIN = "code"

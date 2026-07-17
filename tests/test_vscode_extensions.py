@@ -13,6 +13,7 @@ from typing import Any, TypedDict
 
 import pytest
 
+from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
 from setforge.errors import ExtensionToolMissing, ProfileNotFound
 from setforge.vscode_extensions import (
@@ -658,3 +659,21 @@ def test_capture_extensions_does_not_touch_exclude(tmp_path: Path, fake_code) ->
     after = cfg.read_text()
     # exclude block survives intact (drop.me still listed there once)
     assert before.count("drop.me") == after.count("drop.me")
+
+
+def test_module_all_declares_exactly_the_public_surface() -> None:
+    expected = {
+        "ReconcileReport",
+        "list_installed",
+        "reconcile",
+        "install_one",
+        "uninstall_one",
+        "add_to_include",
+        "capture_extensions",
+        "remove_from_include",
+    }
+    declared = set(vscode_extensions.__all__)
+    assert declared == expected
+    # Every name in __all__ resolves to a real module attribute.
+    for name in vscode_extensions.__all__:
+        assert getattr(vscode_extensions, name) is not None
