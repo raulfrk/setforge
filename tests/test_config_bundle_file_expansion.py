@@ -53,11 +53,11 @@ def test_expansion_registers_body_in_config() -> None:
     assert tf.mode == 0o755
 
 
-def test_expansion_threads_all_fields() -> None:
+def test_expansion_threads_mode_and_template() -> None:
     cfg = _cfg_with_bundle(
         BundleSpec(
             components=[
-                _file_comp("launcher", mode=0o755, template=True, symlink="~/x"),
+                _file_comp("launcher", mode=0o755, template=True),
             ]
         )
     )
@@ -66,7 +66,25 @@ def test_expansion_threads_all_fields() -> None:
     tf = cfg.tracked_files["revdiff.launcher"]
     assert tf.mode == 0o755
     assert tf.template is True
+
+
+def test_expansion_threads_symlink_and_template() -> None:
+    # ``mode`` and ``symlink`` are mutually exclusive on TrackedFile
+    # (chmod-on-symlink hits the target, not the link; deploy ignores
+    # mode for symlinked files), so field-threading is exercised with the
+    # symlink field paired with template rather than with mode.
+    cfg = _cfg_with_bundle(
+        BundleSpec(
+            components=[
+                _file_comp("launcher", template=True, symlink="~/x"),
+            ]
+        )
+    )
+    resolved = resolve_profile(cfg, _PROFILE)
+    expand_bundle_file_components(cfg, resolved, Path("/repo"))
+    tf = cfg.tracked_files["revdiff.launcher"]
     assert tf.symlink == "~/x"
+    assert tf.template is True
 
 
 def test_expansion_skips_non_file_components() -> None:
