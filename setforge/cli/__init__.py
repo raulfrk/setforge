@@ -15,14 +15,21 @@ import sys
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from setforge import binaries
 from setforge import source as source_mod
 from setforge._log_filter import RedactingFilter
-from setforge.cli._output import OutputContext, OutputFormat
+from setforge.cli._output import OutputContext, OutputFormat, wrap_json
 from setforge.errors import SetforgeError
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
+
+# Output format for the CURRENT invocation, set by the root callback so
+# main()'s top-level error handler can render an escaped exception in the
+# right mode after the Typer context is gone. Defaults to HUMAN for the
+# rare failure that aborts before the callback runs.
+_INVOCATION_FORMAT: OutputFormat = OutputFormat.HUMAN
 
 
 # ``rich_markup_mode=None`` is passed at every ``typer.Typer(...)``
@@ -260,6 +267,13 @@ def _root(
     binaries.ensure_local_config_stub()
     source_mod.set_cli_source(source)
     ctx.obj = OutputContext(format=output_format)
+    # Stash the resolved format module-level so main()'s top-level error
+    # handler — which runs AFTER the Typer context has unwound and can no
+    # longer reach ctx.obj — can pick the JSON envelope vs human rendering
+    # for an exception that escaped the command body (e.g. a
+    # pydantic.ValidationError from load_config on a malformed setforge.yaml).
+    global _INVOCATION_FORMAT
+    _INVOCATION_FORMAT = output_format
 
 
 # Subcommand modules — imported for the side effect of @app.command()
@@ -292,10 +306,72 @@ from setforge.cli import inspect as _inspect  # noqa: E402, F401 (A7 3-way viewe
 # isort: on
 
 
+def _config_path_from_argv() -> Path:
+    """Recover the effective ``setforge.yaml`` path for a failed invocation.
+
+    Scans ``sys.argv`` for the per-command ``--config`` / ``-c`` flag and
+    runs the value through the same :func:`_resolve_config_arg` source-layer
+    fallback the command bodies use, so the polished validation-error report
+    anchors its snippet + ``Fix:`` line on the real file. Best-effort: on any
+    resolution failure (no source configured, unreadable dir) it falls back
+    to the bare default so the error still renders — the downstream renderer
+    degrades gracefully to a ``(1, 1)`` placeholder when the file can't be
+    re-read.
+    """
+    argv = sys.argv[1:]
+    config = Path("setforge.yaml")
+    for i, arg in enumerate(argv):
+        if arg in ("--config", "-c") and i + 1 < len(argv):
+            config = Path(argv[i + 1])
+            break
+        if arg.startswith("--config="):
+            config = Path(arg.split("=", 1)[1])
+            break
+    try:
+        return _resolve_config_arg(config)
+    except SetforgeError:
+        return config
+
+
+def _handle_config_validation_error(exc: ValidationError) -> None:
+    """Render an escaped ``load_config`` ``ValidationError`` and exit non-zero.
+
+    Reuses ``validate``'s polished mockup-D formatter (imported lazily to
+    avoid a top-level import cycle: ``validate`` imports from this package).
+    Human mode prints the same ``✗ SCHEMA VALIDATION ERROR`` report
+    ``validate`` emits; JSON mode wraps the identical lines in the versioned
+    error envelope on stdout, matching the ``inspect`` JSON-error contract.
+    Exit code stays ``1``, mirroring the :class:`SetforgeError` branch — a
+    config-validation failure blocks the run.
+    """
+    from setforge.cli.validate import render_setforge_yaml_validation_error
+
+    config_path = _config_path_from_argv()
+    lines = render_setforge_yaml_validation_error(config_path, exc)
+    if _INVOCATION_FORMAT is OutputFormat.JSON:
+        sys.stdout.write(wrap_json("error", None, errors=lines))
+        sys.stdout.write("\n")
+    else:
+        for line in lines:
+            typer.echo(line, err=True)
+    sys.exit(1)
+
+
 def main() -> None:
-    """Entry point that wraps ``app`` with :class:`SetforgeError` handling."""
+    """Entry point that wraps ``app`` with top-level error handling.
+
+    Catches :class:`~setforge.errors.SetforgeError` (rendered as a one-line
+    red ``error:`` message) and :class:`pydantic.ValidationError` — the raw
+    schema error ``load_config`` raises on a malformed ``setforge.yaml``,
+    which would otherwise escape ``app()`` as a bare traceback. The latter is
+    routed through ``validate``'s polished formatter so every command that
+    loads config (``compare`` / ``install`` / ``sync`` / ...) reports a config
+    typo exactly as ``validate`` does, in human OR ``-o json`` mode.
+    """
     try:
         app()
     except SetforgeError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         sys.exit(1)
+    except ValidationError as exc:
+        _handle_config_validation_error(exc)

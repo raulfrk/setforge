@@ -935,6 +935,30 @@ def _build_fix_hint(
     return f"edit {home_path}:{line_1} — {msg}"
 
 
+def render_setforge_yaml_validation_error(
+    config_path: Path, exc: ValidationError
+) -> list[str]:
+    """Render a ``load_config`` ``ValidationError`` to polished failure lines.
+
+    The public reuse seam shared by :func:`validate` and the package-level
+    :func:`setforge.cli.main` top-level handler: both take the raw
+    :class:`pydantic.ValidationError` a malformed ``setforge.yaml`` makes
+    ``load_config`` raise and turn it into the same mockup-D
+    ``✗ SCHEMA VALIDATION ERROR`` lines (one string per Pydantic sub-error),
+    so ``compare`` / ``install`` / ``sync`` render config typos exactly as
+    ``validate`` does instead of leaking a raw traceback.
+
+    Routing + ``.lc`` line-resolution live in
+    :func:`_route_setforge_yaml_validation_error`; this wrapper collects the
+    carriers and hands them to :func:`_render_failures`, returning the
+    already-rendered lines split back out so callers can splice them into a
+    human report or a JSON ``errors`` array without re-deriving the layout.
+    """
+    failures: list[ValidationErrorWithContext | str] = []
+    _route_setforge_yaml_validation_error(config_path, exc, failures)
+    return _render_failures(failures).split("\n")
+
+
 def _route_setforge_yaml_validation_error(
     config_path: Path,
     exc: ValidationError,
