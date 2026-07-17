@@ -46,7 +46,9 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
     (repo / "tracked").mkdir(parents=True)
     src = repo / "tracked" / "greeting.md"
     src.write_text("hello\n", encoding="utf-8")
-    dst = tmp_path / "live" / "greeting.md"
+    # dst must stay under $HOME (the sandboxed home from the autouse isolation
+    # fixture) so the deploy-path home-confinement gate accepts it.
+    dst = Path.home() / "live" / "greeting.md"
     cfg = repo / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
     return cfg, dst
