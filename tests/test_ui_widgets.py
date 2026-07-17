@@ -515,7 +515,7 @@ def test_seed_prompt_summary_in_body() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frame-width clamp: every rendered row stays within the frame rule (deoq.9.8)
+# Frame-width clamp: every rendered row stays within the frame rule
 # ---------------------------------------------------------------------------
 #
 # Regression guard for the widget-box overflow: the top/bottom rules are drawn
