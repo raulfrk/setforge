@@ -1985,3 +1985,28 @@ def test_reconcile_default_is_interactive_auto_false(
         policy=reconcile_adapter.plugin_policy(profile),
     )
     assert captured["auto"] is False
+
+
+# ---------------------------------------------------------------------------
+# _plugin_state_diff narrowed to to_disable only
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_state_diff_returns_only_to_disable(fake_claude) -> None:
+    """_plugin_state_diff now returns just the to_disable list (PRUNE case)."""
+    fake_claude(
+        plugins=[
+            {"id": "keep@m1", "enabled": True},
+            {"id": "stale@m1", "enabled": True},
+        ]
+    )
+    declared = {"keep@m1"}
+    to_disable = cp._plugin_state_diff(declared, ReconcilePolicy.PRUNE)
+    assert to_disable == ["stale@m1"]
+
+
+def test_plugin_state_diff_additive_suppresses_to_disable(fake_claude) -> None:
+    """ADDITIVE policy still suppresses the to_disable diff (empty list)."""
+    fake_claude(plugins=[{"id": "stale@m1", "enabled": True}])
+    to_disable = cp._plugin_state_diff(set(), ReconcilePolicy.ADDITIVE)
+    assert to_disable == []

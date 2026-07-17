@@ -515,29 +515,20 @@ def _add_declared_marketplaces(
             failed.append((mp_name, msg))
 
 
-def _plugin_state_diff(
-    declared: set[str], policy: ReconcilePolicy
-) -> tuple[list[str], list[str], list[str]]:
-    """Diff ``declared`` against the live plugin state per spec § Δ2.
+def _plugin_state_diff(declared: set[str], policy: ReconcilePolicy) -> list[str]:
+    """Compute the ``to_disable`` set: enabled plugins not declared (PRUNE only).
 
-    States:
-    - ``to_install`` = declared - (enabled union disabled)   # genuinely absent
-    - ``to_enable``  = declared intersect disabled                # present but off
-    - ``to_disable`` = enabled - declared  (PRUNE only)
+    ``to_install`` / ``to_enable`` are NOT computed here — the report's
+    install/enable lists come from the ``driver.reconcile`` delta
+    (``result.delta.installed`` / ``.activated``), so recomputing them
+    here would be dead and misleading. ADDITIVE suppresses the diff
+    entirely (nothing is ever pruned).
     """
+    if policy is ReconcilePolicy.ADDITIVE:
+        return []
     installed = list_installed()
     enabled = {pid for pid, p in installed.items() if p.get("enabled", True)}
-    disabled = {pid for pid, p in installed.items() if not p.get("enabled", True)}
-
-    to_install = sorted(declared - (enabled | disabled))
-    to_enable = sorted(declared & disabled)
-    # Compute to_disable for PRUNE and REPORT (both need the diff);
-    # only ADDITIVE suppresses the diff entirely.
-    if policy is not ReconcilePolicy.ADDITIVE:
-        to_disable = sorted(enabled - declared)
-    else:
-        to_disable = []
-    return to_install, to_enable, to_disable
+    return sorted(enabled - declared)
 
 
 def _build_report(
@@ -619,10 +610,10 @@ def reconcile(
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
 
-    The plugin-state diff (``to_install`` / ``to_enable`` /
-    ``to_disable``) is computed by :func:`_plugin_state_diff` over the
-    caller-supplied ``declared_plugin_ids`` (already in
-    ``"<name>@<marketplace>"`` form). ``policy`` is the resolved
+    ``to_disable`` (PRUNE only) is computed by :func:`_plugin_state_diff`
+    over the caller-supplied ``declared_plugin_ids`` (already in
+    ``"<name>@<marketplace>"`` form); ``to_install`` / ``to_enable`` come
+    from the ``driver.reconcile`` delta. ``policy`` is the resolved
     reconcile policy for plugins.
 
     Marketplaces (always-on, regardless of policy): each declared
@@ -677,11 +668,7 @@ def reconcile(
         for pid in sorted(declared)
     ]
 
-    to_disable = (
-        []
-        if policy is ReconcilePolicy.ADDITIVE
-        else _plugin_state_diff(declared, policy)[2]
-    )
+    to_disable = _plugin_state_diff(declared, policy)
 
     if report_only:
         result = driver.reconcile(
