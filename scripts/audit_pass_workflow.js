@@ -138,8 +138,8 @@ log(`${RC}: ${unique.length} unique findings after dedupe (from ${auditResults.r
 // --- Phase 2: VERIFY (2 skeptics, majority-refute) ---------------------------
 phase('Verify')
 const SKEPTICS = [
-  { agentType: 'complexity-adversary', model: 'opus', angle: 'Is this over-stated / already-defended / a non-issue? Refute if the code actually handles it.' },
-  { agentType: 'general-purpose',      model: 'opus', angle: 'Try hard to REFUTE: is the evidence real and reproducible? Default to refuted=true if you cannot confirm the signal.' },
+  { agentType: 'complexity-adversary', model: 'sonnet', angle: 'Is this over-stated / already-defended / a non-issue? Refute if the code actually handles it.' },
+  { agentType: 'general-purpose',      model: 'sonnet', angle: 'Try hard to REFUTE: is the evidence real and reproducible? Default to refuted=true if you cannot confirm the signal.' },
 ]
 const verified = await parallel(unique.map((f) => () =>
   parallel(SKEPTICS.map((s) => () =>
