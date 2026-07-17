@@ -227,11 +227,18 @@ def read_cache_aliases(cache_root: Path) -> dict[str, str]:
 def _record_cache_alias(cache_root: Path, repo: str, cache_dir: Path) -> None:
     """Persist ``repo -> cache_dir.name`` into the cache-root alias sidecar.
 
-    Read-modify-write of the JSON map, written atomically via
-    :func:`setforge.atomicio.atomic_write_text`. The subdir *name* (not the
-    absolute path) is stored so the sidecar stays portable if the cache
-    root moves; the declared-identity computation rejoins it onto its own
-    ``cache_root``.
+    Read-modify-write of the JSON map: each individual *write* is torn-free
+    (:func:`setforge.atomicio.atomic_write_text` swaps the whole file into
+    place), but the read-modify-write as a whole is NOT serialized across
+    concurrent setforge processes sharing the same ``cache_root`` — there is
+    no lockfile. Two processes can interleave (A reads, B reads, A writes, B
+    writes) so the last writer's map wins and a freshly-added alias from the
+    other process is lost. That failure is bounded and self-healing: a lost
+    alias is not corruption — it merely re-fires the collision wizard on the
+    next reconcile, which rewrites the sidecar (same worst case as a missing
+    sidecar entry). The subdir *name* (not the absolute path) is stored so
+    the sidecar stays portable if the cache root moves; the declared-identity
+    computation rejoins it onto its own ``cache_root``.
     """
     aliases = read_cache_aliases(cache_root)
     aliases[repo] = cache_dir.name
