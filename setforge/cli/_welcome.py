@@ -262,8 +262,8 @@ def _make_signal_handler(
 ) -> Callable[[int, FrameType | None], None]:
     """Return SIGINT/SIGTERM/SIGHUP handler that restores terminal state, re-raises.
 
-    Mirrors :func:`setforge.wizard._make_signal_handler`: prompt_toolkit
-    leaves the terminal in raw mode if interrupted mid-render. The
+    prompt_toolkit leaves the terminal in raw mode if interrupted
+    mid-render. The
     handler resets previously-installed handlers, prints a one-line
     cancellation marker, then re-kills the process with the same signal
     so the parent shell sees the correct exit status (128 + signum).

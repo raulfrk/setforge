@@ -30,7 +30,7 @@ const SUBSYSTEMS = [
   { key: 'reconcile',    paths: 'setforge/reconcile/ setforge/reconcile_adapter.py setforge/structural_merge.py setforge/yaml_merge.py' },
   { key: 'provision',    paths: 'setforge/provision/ setforge/binaries.py' },
   { key: 'cli',          paths: 'setforge/cli/' },
-  { key: 'ui',           paths: 'setforge/ui/ setforge/wizard.py' },
+  { key: 'ui',           paths: 'setforge/ui/' },
   { key: 'plugins-ext',  paths: 'setforge/claude_plugins.py setforge/vscode_extensions.py setforge/claude_marketplace_cache.py' },
   { key: 'migration',    paths: 'setforge/migrations/ setforge/errors.py setforge/user_section_markers.py' },
 ]
@@ -61,7 +61,7 @@ const GLOBAL_LENSES = [
     ask: 'Produce a COVERAGE-GAP report per tier — UNIT (tests/test_*.py), INTEGRATION (cross-module seams: sync↔install↔reconcile), E2E (tests/docker). Name critical paths with no test at each tier. Numeric gap assessment, not pass/fail. Run `uv run pytest --cov --co -q` context if useful.' },
   { key: 'cli',       agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/cli/', dynamic: true,
     ask: 'CLI CORRECTNESS — audit every command for real. For each subcommand: arg parsing, exit codes, --help text, error messages, --profile handling. Prefer DRIVING the real binary (`uv run setforge <cmd> --help`, invalid-arg cases, `--profile=` missing) and checking output/exit code; supplement with reading cli/. Report wrong exit codes, misleading errors, broken help.' },
-  { key: 'visual',    agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/ui/ setforge/wizard.py', dynamic: true,
+  { key: 'visual',    agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/ui/', dynamic: true,
     ask: 'UI / VISUAL audit (dedicated visual-auditor agent is not yet registered this session — you are the fallback). Assess the terminal UI for visual bugs: alignment, wrapping/overflow (narrow AND wide), broken ANSI, color under 256 vs truecolor, malformed wizard/button-bar/dialog/diff-view panels. Use the tests/docker pyte harness (pyte_pty_session → .display grid) to SEE the rendered output if the e2e image is available; else read setforge/ui/ + theme logic and label findings UNCONFIRMED (static). A visual finding needs a captured grid excerpt.' },
   { key: 'migration', agentType: 'general-purpose',       model: 'sonnet', paths: 'setforge/migrations/ COMPATIBILITY.md',
     ask: 'MIGRATION / SCHEMA-COMPAT audit vs COMPATIBILITY.md guarantees: additive-first, expand→contract, an up AND down migration per schema_version bump, lockstep upgrade. Check every registered migration is reversible and floor-gated; flag any schema bump missing a down migration or a compat guarantee.' },

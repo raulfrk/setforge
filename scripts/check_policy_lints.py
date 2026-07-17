@@ -12,7 +12,7 @@ Rule          ID      What it bans
 shell=True    SAFE-1  ``subprocess(..., shell=True)`` — pass an argv list
 legacy-API    SAFE-2  new-engine code importing the legacy disposition /
                       sections / spans / overlay subsystem
-wizard-letter UX-1    ``setforge.wizard.read_one_choice`` letter menus
+wizard-letter UX-1    ``read_one_choice`` letter-menu prompts
 theme-hardcode UX-3   raw ANSI escapes / hex colours outside the theme
 theme-256     UX-4    a theme role with no valid curated 256-colour index
 ============  ======  =======================================================
@@ -84,7 +84,6 @@ LEGACY_MODULES: frozenset[str] = frozenset(
     {
         "setforge/config.py",  # UX-3: hardcoded \033[ warning prefixes
         "setforge/capture.py",  # UX-1: read_one_choice
-        "setforge/wizard.py",  # UX-1: defines + uses read_one_choice
     }
 )
 

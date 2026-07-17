@@ -177,7 +177,6 @@ def test_legacy_modules_allowlist_is_pinned() -> None:
     expected = {
         "setforge/config.py",
         "setforge/capture.py",
-        "setforge/wizard.py",
     }
     assert expected == LEGACY_MODULES
 
