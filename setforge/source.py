@@ -233,9 +233,8 @@ class _LocalTrackedFileOverlay(BaseModel):
     setforge.yaml can serve both.
 
     Always write the YAML-1.2 octal literal: ``mode: 0o755``. The
-    in-range bound is ``0..0o1777`` (1023 decimal + the 0o1000
-    sticky bit) — covers rwxrwxrwx (0o0777) plus the sticky bit
-    (0o1000). The setuid (0o4000) and setgid (0o2000) bits are
+    in-range bound is ``0..0o7777`` (4095 decimal). The setuid
+    (0o4000) and setgid (0o2000) bits are
     refused for security, mirroring
     :func:`setforge.config.TrackedFile._validate_mode`. The
     out-of-range check fires first (mode <= 0o7777 is the parse
