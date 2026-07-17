@@ -139,7 +139,7 @@ class ReconcileReport:
 # ---------------------------------------------------------------------------
 
 
-def list_marketplaces() -> dict[str, dict]:
+def list_marketplaces() -> dict[str, dict[str, object]]:
     """Return installed marketplaces as ``{name: entry_dict}``.
 
     Calls ``claude plugin marketplace list --json`` and parses the JSON
@@ -183,7 +183,7 @@ def list_marketplaces() -> dict[str, dict]:
     return {e["name"]: e for e in entries if "name" in e}
 
 
-def list_installed() -> dict[str, dict]:
+def list_installed() -> dict[str, dict[str, object]]:
     """Return installed plugins as ``{id: entry_dict}`` where ``id`` is
     ``"<name>@<marketplace>"``.
 
@@ -410,7 +410,7 @@ def _normalize_github_source(raw: str) -> str:
     return raw.removeprefix("github:")
 
 
-def _registered_source_identities(installed: dict[str, dict]) -> set[str]:
+def _registered_source_identities(installed: dict[str, dict[str, object]]) -> set[str]:
     """Collect canonical source identities of already-registered marketplaces.
 
     Each value from :func:`list_marketplaces` is a claude-reported entry
