@@ -146,6 +146,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "template": "<class 'bool'>",
         "mode": "int | None",
         "symlink": "str | None",
+        "allow_outside_home": "<class 'bool'>",
     },
     "Extensions": {
         "include": "list[str]",

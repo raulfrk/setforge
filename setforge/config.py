@@ -218,6 +218,17 @@ class TrackedFile(BaseModel):
     target equals the (expanded) ``dst`` — config-time guard against
     a tracked_file pointing at itself.
     """
+    allow_outside_home: bool = False
+    """Opt out of the out-of-$HOME deploy warning for this tracked_file.
+
+    When a resolved deploy ``dst`` lands outside $HOME the install path
+    warns (setforge is operator-authored, so the escape is deployed anyway —
+    the warning just catches an accidental ``..``). Set this ``true`` to
+    declare the out-of-$HOME target deliberate and deploy it *silently*.
+    Purely additive/optional (default ``false``): an old config omitting it
+    still validates, and an in-$HOME dst is unaffected by the flag either
+    way. See :func:`compare.warn_if_dst_outside_home`.
+    """
 
     @model_validator(mode="after")
     def _symlink_no_self_loop(self) -> Self:

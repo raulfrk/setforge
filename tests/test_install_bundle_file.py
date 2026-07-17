@@ -146,6 +146,64 @@ def test_install_refuses_out_of_home_dst(repo: Path) -> None:
     assert result.exit_code != 0, result.output
 
 
+def test_install_warns_out_of_home_dst_plain_tracked_file(repo: Path) -> None:
+    """The PLAIN tracked_files deploy path WARNS on an out-of-$HOME dst.
+
+    Unlike ``test_install_refuses_out_of_home_dst`` (the bundle FILE-component
+    gate, which still refuses): setforge is operator-authored, so a
+    config-authored plain ``tracked_files`` dst that escapes $HOME
+    (``~/../etc/cron.d/pwn``) deploys anyway (exit 0) with a warning. The
+    out-of-home target IS created.
+    """
+    (repo / "tracked").mkdir(parents=True, exist_ok=True)
+    (repo / "tracked" / "note.md").write_text("pwn\n", encoding="utf-8")
+    evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  note:\n"
+        "    src: note.md\n"
+        "    dst: ~/../etc/cron.d/pwn\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - note\n",
+        encoding="utf-8",
+    )
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "outside $HOME" in result.output
+    assert evil.exists()
+    assert evil.read_text(encoding="utf-8") == "pwn\n"
+
+
+def test_install_allow_outside_home_deploys_silently(repo: Path) -> None:
+    """``allow_outside_home: true`` deploys an out-of-$HOME dst with NO warning."""
+    (repo / "tracked").mkdir(parents=True, exist_ok=True)
+    (repo / "tracked" / "note.md").write_text("pwn\n", encoding="utf-8")
+    evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files:\n"
+        "  note:\n"
+        "    src: note.md\n"
+        "    dst: ~/../etc/cron.d/pwn\n"
+        "    allow_outside_home: true\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    tracked_files:\n"
+        "      - note\n",
+        encoding="utf-8",
+    )
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "outside $HOME" not in result.output
+    assert evil.exists()
+    assert evil.read_text(encoding="utf-8") == "pwn\n"
+
+
 def test_install_refuses_name_collision(repo: Path) -> None:
     _write_launcher(repo)
     (repo / "tracked" / "real.md").write_text("real body\n", encoding="utf-8")

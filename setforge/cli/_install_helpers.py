@@ -67,6 +67,7 @@ from setforge.compare import (
     expand_tracked_file,
     resolve_dst,
     resolve_src,
+    warn_if_dst_outside_home,
 )
 from setforge.config import (
     Config,
@@ -250,6 +251,7 @@ def _deploy_all_tracked_files(
         src = resolve_src(tracked_file, ctx.repo_root)
         dst = resolve_dst(tracked_file)
         for sub_name, sub_src, sub_dst in expand_tracked_file(name, src, dst):
+            warn_if_dst_outside_home(tracked_file, sub_dst)
             pending.append(
                 _resolve_one_pending(
                     profile,
