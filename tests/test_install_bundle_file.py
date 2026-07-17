@@ -147,14 +147,6 @@ def test_install_refuses_out_of_home_dst(repo: Path) -> None:
 
 
 def test_install_warns_out_of_home_dst_plain_tracked_file(repo: Path) -> None:
-    """The PLAIN tracked_files deploy path WARNS on an out-of-$HOME dst.
-
-    Unlike ``test_install_refuses_out_of_home_dst`` (the bundle FILE-component
-    gate, which still refuses): setforge is operator-authored, so a
-    config-authored plain ``tracked_files`` dst that escapes $HOME
-    (``~/../etc/cron.d/pwn``) deploys anyway (exit 0) with a warning. The
-    out-of-home target IS created.
-    """
     (repo / "tracked").mkdir(parents=True, exist_ok=True)
     (repo / "tracked" / "note.md").write_text("pwn\n", encoding="utf-8")
     evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"
@@ -179,7 +171,6 @@ def test_install_warns_out_of_home_dst_plain_tracked_file(repo: Path) -> None:
 
 
 def test_install_allow_outside_home_deploys_silently(repo: Path) -> None:
-    """``allow_outside_home: true`` deploys an out-of-$HOME dst with NO warning."""
     (repo / "tracked").mkdir(parents=True, exist_ok=True)
     (repo / "tracked" / "note.md").write_text("pwn\n", encoding="utf-8")
     evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"

@@ -1,22 +1,4 @@
-"""Regression: ``install`` must read the host-local overlay under ``profile_lock``.
-
-The host-local sections overlay is projected from the reconcile store via
-three unsynchronized reads (``read_index`` → ``read_base`` → ``read_local``),
-while ``store.record`` writes base+local BEFORE index. Reading the overlay
-OUTSIDE ``profile_lock`` lets a concurrent install/sync hand this reader a
-stale-index / already-rewritten-body pair, feeding a corrupt overlay into the
-pre-deploy drift gate and the dry-run display.
-
-``install`` previously loaded that overlay
-(``_load_validated_host_local_sections``) BEFORE entering
-``with profile_lock(profile):`` — the same anti-pattern
-``test_auditfix_revert_lock`` guards for ``revert``'s mutations. These tests
-assert the overlay read now happens INSIDE the lock frame, for both the
-mutating install path and the ``--dry-run`` preview path.
-
-They fail against the old (pre-lock) behavior: the read event was recorded
-BEFORE the lock's ``enter`` event.
-"""
+"""Regression: ``install`` must read the host-local overlay under ``profile_lock``."""
 
 import contextlib
 from collections.abc import Callable, Iterator
@@ -41,13 +23,10 @@ profiles:
 
 
 def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """Build a tracked/ tree + setforge.yaml at tmp_path. Returns (cfg, dst)."""
     repo = tmp_path / "repo"
     (repo / "tracked").mkdir(parents=True)
     src = repo / "tracked" / "greeting.md"
     src.write_text("hello\n", encoding="utf-8")
-    # dst must stay under $HOME (the sandboxed home from the autouse isolation
-    # fixture) so the deploy-path home-confinement gate accepts it.
     dst = Path.home() / "live" / "greeting.md"
     cfg = repo / "setforge.yaml"
     cfg.write_text(_FIXTURE_YAML.format(dst=dst), encoding="utf-8")
@@ -61,7 +40,6 @@ def _state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the `code` CLI absent so the extension leg warn-and-skips."""
     monkeypatch.setattr(
         "setforge.vscode_extensions.resolve_binary",
         lambda name: None,
@@ -69,12 +47,6 @@ def _no_code(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _recording_lock() -> tuple[Callable[..., object], list[str]]:
-    """A ``profile_lock`` stand-in that records ``enter`` / ``exit`` events.
-
-    Wraps the real :func:`setforge.locking.profile_lock` so serialization is
-    exercised for real while the enter/exit boundary is observable. Returns
-    ``(context_manager_factory, events)``.
-    """
     from setforge import locking
 
     events: list[str] = []
@@ -95,11 +67,6 @@ def _recording_lock() -> tuple[Callable[..., object], list[str]]:
 def _recording_read(
     events: list[str],
 ) -> Callable[..., dict[str, dict[HostLocalSectionName, HostLocalSection]]]:
-    """Wrap ``_load_validated_host_local_sections`` to append a ``read`` event.
-
-    Delegates to the real loader so the overlay projection still runs; the
-    event only marks WHEN the read fired relative to the lock's enter/exit.
-    """
     from setforge.cli import _install_helpers
 
     real_read = _install_helpers._load_validated_host_local_sections
@@ -116,7 +83,6 @@ def _recording_read(
 def test_install_reads_host_local_overlay_under_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Mutating ``install`` must read the host-local overlay inside profile_lock."""
     cfg, _dst = _setup_repo(tmp_path)
     _state_root(tmp_path, monkeypatch)
     _no_code(monkeypatch)

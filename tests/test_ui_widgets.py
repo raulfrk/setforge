@@ -514,27 +514,10 @@ def test_seed_prompt_summary_in_body() -> None:
     assert "live vs upstream" in rendered
 
 
-# ---------------------------------------------------------------------------
-# Frame-width clamp: every rendered row stays within the frame rule
-# ---------------------------------------------------------------------------
-#
-# Regression guard for the widget-box overflow: the top/bottom rules are drawn
-# at ``_frame_width()`` (min(cols, 100)) but the body/button/legend Windows were
-# unbounded, so their rows ran to the raw terminal width past the frame border.
-# On a wide (140-col) terminal every non-blank row must now wrap at the SAME
-# width as the clamped rules. We feed the real prompt_toolkit byte stream into a
-# ``pyte`` grid and assert no rendered row exceeds ``_frame_width()`` columns.
-
 _WIDE_COLS: Final[int] = 140
 
 
 def _wide_row_widths(drive: Callable[[Vt100_Output], None]) -> list[int]:
-    """Render a widget on a 140-col terminal; return each non-blank row's width.
-
-    ``drive`` runs the widget (with its own piped input) against the passed
-    truecolor output. The emitted ANSI byte stream is replayed into a
-    ``pyte.Screen`` so we measure the ACTUAL on-screen grid, not the fragments.
-    """
     buf = io.StringIO()
     out = Vt100_Output(
         buf,
@@ -548,8 +531,7 @@ def _wide_row_widths(drive: Callable[[Vt100_Output], None]) -> list[int]:
 
 
 def test_button_bar_rows_stay_within_frame_on_wide_terminal() -> None:
-    # A body far wider than 100 cols must wrap at the frame width, not run to 140.
-    long_body = "word " * 40  # ~200 chars
+    long_body = "word " * 40
 
     def drive(out: Vt100_Output) -> None:
         with create_pipe_input() as pipe:
@@ -558,9 +540,9 @@ def test_button_bar_rows_stay_within_frame_on_wide_terminal() -> None:
                 button_bar(_BUTTONS, title="Conflict 1/1", body=long_body)
 
     widths = _wide_row_widths(drive)
-    assert widths  # sanity: something rendered
+    assert widths
     assert max(widths) <= _MAX_WIDTH
-    assert max(widths) < _WIDE_COLS  # the bug rendered rows out to 140
+    assert max(widths) < _WIDE_COLS
 
 
 def test_pager_rows_stay_within_frame_on_wide_terminal() -> None:
@@ -594,16 +576,13 @@ def test_text_prompt_rows_stay_within_frame_on_wide_terminal() -> None:
 
 
 def test_text_prompt_buffer_left_unclamped_cursor_edits_survive() -> None:
-    # The interactive Buffer window is intentionally NOT width-clamped; confirm
-    # cursor-dependent editing (backspace over a seeded default) still works on a
-    # wide terminal, i.e. the clamp did not decouple the cursor from the buffer.
     out = Vt100_Output(
         io.StringIO(),
         lambda: Size(rows=30, columns=_WIDE_COLS),
         default_color_depth=ColorDepth.DEPTH_24_BIT,
     )
     with create_pipe_input() as pipe:
-        pipe.send_bytes(b"\x7f\r")  # backspace then submit
+        pipe.send_bytes(b"\x7f\r")
         with create_app_session(input=pipe, output=out):
             result = text_prompt(title="T", default="abcd")
     assert result == "abc"

@@ -628,17 +628,8 @@ def test_extract_non_string_mapping_key_fails_closed(text: bytes) -> None:
 
 
 def test_inv8_non_string_key_unreachable_via_extract() -> None:
-    """INV-8 never inherits the non-string-key crash: the extract-side guard
-    routes such a file to line-level staging BEFORE any unit is minted.
-
-    Every caller of ``assert_stage_fidelity_structured`` (compare / capture /
-    stage) first calls ``extract_structured_units`` to build ``units``. With a
-    non-string mapping key on either the base or live side that extract now
-    fails closed (``StructuredParseError``), so classification never runs and the
-    invariant path is never reached with such a file — the old fail-open-to-crash
-    (raw ruamel ``RepresenterError`` / duplicate-key output) is structurally
-    excluded, not merely caught downstream.
-    """
+    """The non-string-key crash is now structurally excluded upstream,
+    not merely caught."""
     base = b"1: alpha\nname: beta\n"
     live = b"1: alpha\nname: gamma\n"
 
@@ -647,16 +638,6 @@ def test_inv8_non_string_key_unreachable_via_extract() -> None:
 
 
 def test_inv8_residual_reconstruct_splice_fails_closed() -> None:
-    """Defense in depth: even if ``reconstruct_structured`` is reached directly
-    with a hand-built unit whose stringified path (``"1"``) cannot resolve the
-    int key ``1``, the ABSENT splice's serialise step surfaces as a typed
-    ``StructuredParseError`` — never a raw ruamel ``RepresenterError`` escaping
-    the INV-8 guard, and never duplicate-key bytes.
-
-    This is the exact crash the INV-8 fail-closed guard used to inherit; the
-    ``_dump_model`` wrap keeps it typed so ``assert_stage_fidelity_structured``
-    can only ever raise cleanly.
-    """
     base = b"1: alpha\nname: beta\n"
     live = b"1: zeta\nname: beta\n"
     units = [KeyUnit(HunkClass.SHARED, "1", "1", "sha256:x")]

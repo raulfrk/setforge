@@ -454,14 +454,7 @@ def resolve_src(tracked_file: TrackedFile, repo_root: Path) -> Path:
 
 def resolve_dst(tracked_file: TrackedFile) -> Path:
     """Resolve a tracked_file's ``dst`` template (if any) to an absolute path
-    via Jinja2 + ``~`` expansion.
-
-    Read-only path (compare / inspect / snapshots): NO $HOME check is
-    applied here so drift reporting still works against arbitrary paths. The
-    write-side check lives in :func:`warn_if_dst_outside_home`, invoked on the
-    deploy path (``install``) before any bytes are written — see
-    :func:`cli._install_helpers._deploy_all_tracked_files`.
-    """
+    via Jinja2 + ``~`` expansion."""
     raw = tracked_file.dst
     if tracked_file.template:
         raw = Template(raw).render(**template_context())
@@ -469,21 +462,7 @@ def resolve_dst(tracked_file: TrackedFile) -> Path:
 
 
 def warn_if_dst_outside_home(tracked_file: TrackedFile, dst: Path) -> None:
-    """Warn (do NOT refuse) when a resolved deploy ``dst`` escapes $HOME.
-
-    setforge is operator-authored (self-trust), so an out-of-$HOME target is
-    deployed regardless — the warning only catches an *accidental* ``..``
-    escape without blocking a deliberate one. A resolved ``dst`` that is
-    neither $HOME itself nor a descendant of it (``~/../../etc/cron.d/x``, an
-    absolute ``/etc/...``, or a symlinked-parent escape) triggers a one-line
-    stderr warning, mirroring the other operator warnings. ``.resolve()`` —
-    not a string prefix — collapses ``../`` and symlinked parents so the check
-    catches escapes a ``startswith()`` would miss.
-
-    The per-tracked-file :attr:`TrackedFile.allow_outside_home` opt-out
-    suppresses the warning: ``true`` declares the out-of-$HOME target
-    deliberate and deploys it silently. An in-$HOME dst never warns either way.
-    """
+    """Warn — do NOT refuse — on an out-of-$HOME dst (self-trust: still deploys)."""
     if tracked_file.allow_outside_home:
         return
     home = Path.home().resolve()

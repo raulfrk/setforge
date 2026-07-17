@@ -1126,17 +1126,7 @@ def _dry_run_pipeline(
     """
     typer.echo(_DRY_RUN_HEADER)
     _dry_run_emit_profile_summary(ctx)
-    # NOT wrapped in profile_lock: dry-run must be zero-side-effect, and
-    # acquiring the lock creates the state dir / lock file — a filesystem
-    # mutation the dry-run e2e forbids. A torn store read in a read-only
-    # preview is acceptable; only the mutating install path takes the lock.
-    #
-    # Thread the validated host_local_sections overlay into the drift
-    # compare so a live file that already received its injected host-local
-    # sections does NOT surface as spurious content drift — matching what
-    # ``setforge compare`` reports. Without this the dry-run report and the
-    # fresh-host welcome preview over-report drift on any tracked_file using
-    # legacy host_local_sections marker injection.
+    # NOT profile_lock'd: acquiring it would create the lock file, a dry-run mutation.
     host_local_sections_map = _load_validated_host_local_sections(
         ctx.cfg, ctx.resolved, ctx.repo_root, ctx.profile
     )

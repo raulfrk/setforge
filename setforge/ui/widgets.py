@@ -169,22 +169,7 @@ def _frame_width() -> int:
 
 
 def _clamped_frame(children: list[AnyContainer]) -> VSplit:
-    """Stack ``children`` in a column clamped to :func:`_frame_width`.
-
-    The top/bottom rules are already drawn at ``_frame_width()`` by
-    :func:`box.frame`, but a bare :class:`HSplit` gives every child the full
-    terminal width — so wrapping body/button/legend rows run past the rule's
-    right edge. Wrapping the ``HSplit`` in a :class:`VSplit` whose content
-    column is pinned to ``_frame_width()`` (with a flexible filler eating the
-    remainder) makes every row wrap at the same width as the rules, left-anchored
-    to match the rules' left edge. A single ``VSplit`` child would instead be
-    stretched to full width, so the trailing filler ``Window`` is load-bearing.
-
-    The pin is a callable read at render time — never a build-time constant —
-    so it observes the live terminal width (and any resize), matching how the
-    rule fragments recompute ``_frame_width()`` on each paint. Fixing it at
-    build time would read the pre-run default size and desync from the rules.
-    """
+    """Clamp ``children`` to :func:`_frame_width`; trailing filler is load-bearing."""
 
     def _pin() -> Dimension:
         width = _frame_width()
