@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from setforge.config import (
     Config,
+    TrackedFile,
     apply_host_local_tracked_file_overrides,
     load_config,
 )
@@ -157,3 +158,66 @@ def test_revalidate_catches_post_merge_self_loop(tmp_path: Path) -> None:
     )
     with pytest.raises(ValidationError, match=r"self-loop"):
         apply_host_local_tracked_file_overrides(cfg)
+
+
+_SYMLINK_BASE_YAML = (
+    "version: 1\n"
+    "tracked_files:\n"
+    "  hook:\n"
+    "    src: hook.sh\n"
+    "    dst: ~/.tracked-host/hook.sh\n"
+    "    symlink: ~/.local/share/hook.sh\n"
+    "profiles:\n"
+    "  p:\n"
+    "    tracked_files:\n"
+    "      - hook\n"
+)
+
+
+def test_revalidate_catches_mode_onto_symlink_tracked_file(
+    tmp_path: Path,
+) -> None:
+    """A mode-only overlay onto a tracked_file that already declares a
+    ``symlink`` target must be refused: the merged model carries both a
+    file mode and a symlink target, which is invalid (a symlink cannot
+    carry a file mode). The dump-and-revalidate path re-runs the
+    TrackedFile mutual-exclusion invariant against the merged shape."""
+    cfg = load_config(_write_cfg(tmp_path, _SYMLINK_BASE_YAML))
+    assert cfg.tracked_files["hook"].symlink == "~/.local/share/hook.sh"
+    (tmp_path / "local.yaml").write_text(
+        "tracked_files:\n  hook:\n    mode: 0o755\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match=r"mutually exclusive"):
+        apply_host_local_tracked_file_overrides(cfg)
+
+
+def test_tracked_file_mode_and_symlink_are_mutually_exclusive() -> None:
+    """Direct TrackedFile construction with both ``mode`` and ``symlink``
+    is refused by the model validator — a symlink cannot carry a mode."""
+    with pytest.raises(ValidationError, match=r"mutually exclusive"):
+        TrackedFile(
+            src=Path("hook.sh"),
+            dst="~/.tracked-host/hook.sh",
+            mode=0o755,
+            symlink="~/.local/share/hook.sh",
+        )
+
+
+def test_tracked_file_mode_without_symlink_is_allowed() -> None:
+    """A mode with no symlink is a valid TrackedFile (regression guard for
+    the mutual-exclusion validator not over-firing)."""
+    tf = TrackedFile(src=Path("hook.sh"), dst="~/.tracked-host/hook.sh", mode=0o755)
+    assert tf.mode == 0o755
+    assert tf.symlink is None
+
+
+def test_tracked_file_symlink_without_mode_is_allowed() -> None:
+    """A symlink with no mode is a valid TrackedFile."""
+    tf = TrackedFile(
+        src=Path("hook.sh"),
+        dst="~/.tracked-host/hook.sh",
+        symlink="~/.local/share/hook.sh",
+    )
+    assert tf.symlink == "~/.local/share/hook.sh"
+    assert tf.mode is None

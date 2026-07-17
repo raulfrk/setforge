@@ -242,6 +242,26 @@ class TrackedFile(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _mode_symlink_mutually_exclusive(self) -> Self:
+        """Refuse a TrackedFile carrying both a ``mode`` and a ``symlink``.
+
+        A ``mode`` sets POSIX file-mode bits on the deployed ``dst``, but a
+        ``symlink`` makes ``dst`` a symbolic link — a chmod on a symlink
+        modifies the target, not the link, so the two are contradictory.
+        The ``_LocalTrackedFileOverlay`` guard in ``source.py`` catches this
+        earlier for the overlay path with a friendlier message; this model
+        validator is the authoritative check that the merged-model
+        revalidation in :func:`apply_host_local_tracked_file_overrides`
+        actually re-runs against the combined shape.
+        """
+        if self.mode is not None and self.symlink is not None:
+            raise ValueError(
+                f"mode {oct(self.mode)} and symlink {self.symlink!r} are "
+                f"mutually exclusive — a symlink cannot carry a file mode."
+            )
+        return self
+
     @field_validator("mode", mode="before")
     @classmethod
     def _validate_mode(cls, v: object) -> int | None:
