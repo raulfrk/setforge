@@ -1917,3 +1917,71 @@ def test_reconcile_plugins_post_probe_tool_missing_keeps_landed_delta(
     assert isinstance(outcomes, tuple)
     landed_ids = {o.item_id for o in outcomes}
     assert "a@m1" in landed_ids
+
+
+# ---------------------------------------------------------------------------
+# auto threading through reconcile → _add_declared_marketplaces
+# ---------------------------------------------------------------------------
+
+
+def _spy_add_declared(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace ``_add_declared_marketplaces`` with a no-op spy capturing ``auto``."""
+    captured: dict[str, Any] = {}
+
+    def spy(
+        cfg: Any,
+        mps_to_add: Any,
+        install_mode: Any,
+        cache_root: Any,
+        failed: Any,
+        *,
+        auto: bool = False,
+    ) -> None:
+        captured["auto"] = auto
+
+    monkeypatch.setattr(cp, "_add_declared_marketplaces", spy)
+    return captured
+
+
+def _declared_marketplace_cfg() -> Any:
+    return _make_config(
+        marketplaces={
+            "anthropic": MarketplaceSource(
+                source=MarketplaceSourceKind.GITHUB,
+                repo="anthropics/plugins",
+            )
+        }
+    )
+
+
+def test_reconcile_auto_true_propagates_to_add_declared(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """reconcile(auto=True) must thread auto=True into _add_declared_marketplaces."""
+    fake_claude(marketplaces=[])
+    captured = _spy_add_declared(monkeypatch)
+    cfg = _declared_marketplace_cfg()
+    profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
+    cp.reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+        auto=True,
+    )
+    assert captured["auto"] is True
+
+
+def test_reconcile_default_is_interactive_auto_false(
+    fake_claude, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """reconcile() with no auto keeps the interactive default (auto=False)."""
+    fake_claude(marketplaces=[])
+    captured = _spy_add_declared(monkeypatch)
+    cfg = _declared_marketplace_cfg()
+    profile = _make_resolved(plugins_reconcile=ReconcilePolicy.ADDITIVE)
+    cp.reconcile(
+        cfg,
+        declared_plugin_ids=reconcile_adapter.plugin_ids(cfg, profile),
+        policy=reconcile_adapter.plugin_policy(profile),
+    )
+    assert captured["auto"] is False

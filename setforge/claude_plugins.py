@@ -615,6 +615,7 @@ def reconcile(
     policy: ReconcilePolicy,
     dry_run: bool = False,
     pins: dict[str, ResolvedPin] | None = None,
+    auto: bool = False,
 ) -> ReconcileReport:
     """Three-way reconcile per spec § Δ2.
 
@@ -642,6 +643,13 @@ def reconcile(
     its marketplace cache hard-reset to the pinned commit before ``claude
     plugin install`` (see :func:`_plugin_checkout_targets`); otherwise
     byte-identical to today.
+
+    ``auto`` threads into :func:`_add_declared_marketplaces` (and onward to
+    :func:`resolve_marketplace_source`), governing the cache-collision
+    wizard. Default ``False`` keeps the interactive behavior; a non-
+    interactive CLI path passes ``auto=True`` to refuse silent
+    auto-resolution rather than relying on a downstream ``isatty()``
+    heuristic to never hang.
     """
     # Lazy import breaks a module-scope cycle (plugin.py imports this module).
     from setforge.provision.plugin import PluginProvisioner
@@ -690,7 +698,12 @@ def reconcile(
 
     # Marketplace registration must precede the additive apply below.
     _add_declared_marketplaces(
-        cfg, mps_to_add, install_mode, _mp_cache.MARKETPLACE_CACHE_ROOT, failed
+        cfg,
+        mps_to_add,
+        install_mode,
+        _mp_cache.MARKETPLACE_CACHE_ROOT,
+        failed,
+        auto=auto,
     )
 
     checkouts = _plugin_checkout_targets(
