@@ -288,10 +288,6 @@ def install(
     active_lock = _prepare_lock(config, cfg, resolved, locked=locked)
     # Both overlays below must apply AFTER profile resolution.
     apply_host_local_tracked_file_overrides(cfg)
-    # STAGE B: sections live in the reconcile store now, threaded read-only.
-    host_local_sections_map = _load_validated_host_local_sections(
-        cfg, resolved, repo_root, profile
-    )
     apply_local_overlay(cfg, resolved, profile)
     ctx = ProfileContext(
         cfg=cfg, resolved=resolved, repo_root=repo_root, profile=profile
@@ -348,6 +344,16 @@ def install(
     with profile_lock(profile):
         if not no_transition:
             transitions.ensure_state_dir_writable()
+        # STAGE B: sections live in the reconcile store now, threaded
+        # read-only. Read INSIDE the lock so the overlay is a consistent
+        # store snapshot: the projection does three unsynchronized store
+        # reads (index → base → local), and a concurrent install/sync's
+        # `store.record` (which rewrites base+local before index) could
+        # otherwise hand this reader a stale-index / new-body pair. The lock
+        # is the same one `setforge compare` takes around this exact read.
+        host_local_sections_map = _load_validated_host_local_sections(
+            cfg, resolved, repo_root, profile
+        )
         deploy.validate_srcs_exist(cfg, resolved, repo_root)
         deploy.bootstrap_local(resolved.bootstrap)
         # SOFT failures warn but never gate; HARD gates. No revert tracking.
@@ -357,10 +363,10 @@ def install(
         # Only DRIFTED entries (existing live files that diverge from tracked
         # in unexpected ways) gate install. MISSING entries are expected on
         # first install and are handled by deploy below.
-        # Thread the validated host-local sections overlay (computed at
-        # line 246) so a live file that already received its injected
-        # host-local sections does NOT surface as spurious drift in the
-        # report feeding the section-reconcile gate — matching what the
+        # Thread the validated host-local sections overlay (computed at the
+        # top of this lock frame) so a live file that already received its
+        # injected host-local sections does NOT surface as spurious drift in
+        # the report feeding the section-reconcile gate — matching what the
         # standalone `setforge compare` reports.
         drift_report = compare_mod.compare_profile(
             cfg, profile, repo_root, host_local_sections=host_local_sections_map
