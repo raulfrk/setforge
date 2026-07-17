@@ -321,11 +321,18 @@ def _config_path_from_argv() -> Path:
     argv = sys.argv[1:]
     config = Path("setforge.yaml")
     for i, arg in enumerate(argv):
+        # Spaced form: `-c PATH` / `--config PATH` (value is the next argv).
         if arg in ("--config", "-c") and i + 1 < len(argv):
             config = Path(argv[i + 1])
             break
         if arg.startswith("--config="):
             config = Path(arg.split("=", 1)[1])
+            break
+        # Click's attached short form: `-cPATH` / `-c=PATH` (Click parses
+        # `-cbad.yaml` the same as `-c bad.yaml`). Only treat a non-empty
+        # remainder as attached — a bare `-c` is the spaced form handled above.
+        if arg.startswith("-c") and len(arg) > 2:
+            config = Path(arg[2:].removeprefix("="))
             break
     try:
         return _resolve_config_arg(config)
@@ -339,10 +346,11 @@ def _handle_config_validation_error(exc: ValidationError) -> None:
     Reuses ``validate``'s polished mockup-D formatter (imported lazily to
     avoid a top-level import cycle: ``validate`` imports from this package).
     Human mode prints the same ``✗ SCHEMA VALIDATION ERROR`` report
-    ``validate`` emits; JSON mode wraps the identical lines in the versioned
-    error envelope on stdout, matching the ``inspect`` JSON-error contract.
-    Exit code stays ``1``, mirroring the :class:`SetforgeError` branch — a
-    config-validation failure blocks the run.
+    ``validate`` emits; JSON mode reuses the same versioned error envelope
+    (``wrap_json`` with an ``errors`` array) that ``inspect`` emits, on
+    stdout — the envelope shape is shared, though the ``command`` / ``data``
+    fields differ per call site. Exit code stays ``1``, mirroring the
+    :class:`SetforgeError` branch — a config-validation failure blocks the run.
     """
     from setforge.cli.validate import render_setforge_yaml_validation_error
 

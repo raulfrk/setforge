@@ -71,6 +71,30 @@ def test_main_renders_validation_error_politely(
     assert code == 1
 
 
+def test_main_validation_error_attached_short_flag_anchors_real_path(
+    bad_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Click's attached short-flag ``-c<path>`` → report anchors the real file.
+
+    Click parses ``-cbad.yaml`` identically to ``-c bad.yaml``, so the command
+    loads and rejects the RIGHT file. The polished error report must anchor on
+    that same file — not degrade to the ``setforge.yaml:1`` placeholder that a
+    missed argv scan produces.
+    """
+    code = _run_main(
+        ["setforge", "compare", "--profile", "demo", f"-c{bad_config}"],
+        monkeypatch,
+    )
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "SCHEMA VALIDATION ERROR" in combined
+    assert f"({bad_config.name}:" in combined
+    assert "(setforge.yaml:1)" not in combined
+    assert code == 1
+
+
 def test_main_json_validation_error_envelope(
     bad_config: Path,
     monkeypatch: pytest.MonkeyPatch,
