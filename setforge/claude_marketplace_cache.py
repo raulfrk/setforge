@@ -824,6 +824,14 @@ def sync_marketplace_cache(
         if not source.repo:
             raise ConfigError(f"marketplace {mp_name!r}: GITHUB source missing 'repo'")
         cache_dir = _safe_cache_dir(root, source.repo.rsplit("/", 1)[-1])
+        # This exists()-then-act is check-then-use and is NOT safe against a
+        # concurrent setforge process mutating the same cache dir — there is
+        # no lockfile; single-invocation-per-cache-root is the supported
+        # model. If a concurrent _collision_update (rmtree + rename swap)
+        # lands between this check and the origin read / fetch below, the
+        # losing process reads a wrong/absent origin or fetches a
+        # half-removed dir, surfacing as a MarketplaceCacheMiss or a
+        # stale-origin read — not corruption of the winning process's cache.
         if cache_dir.exists():
             # The cache dir is keyed by repo basename, so two marketplaces
             # from different owners sharing a repo name (alice/tools vs
