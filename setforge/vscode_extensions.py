@@ -155,6 +155,9 @@ def reconcile(
     ``dry_run=True`` logs intended actions without invoking subprocess.
 
     ``pins`` routes a pinned extension through the byte-verified VSIX path.
+
+    Raises :class:`ExtensionToolMissing` when the ``code`` CLI can't be
+    resolved on PATH or via the binary-override config.
     """
     from setforge.provision.extension import ExtensionProvisioner
 
