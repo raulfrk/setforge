@@ -763,12 +763,7 @@ def _urls_equivalent(observed: str, declared: str) -> bool:
     Scope is intentionally github-only (YAGNI): every
     :class:`MarketplaceSourceKind` the project currently ships resolves
     to a github.com URL, so the hardcoded prefix list below covers the
-    full clone-rewrite surface in practice. When non-github
-    ``MarketplaceSourceKind`` support lands, the preferred fix is to
-    record the canonical URL into a sidecar file at clone time and
-    reduce this helper to a single byte-equal comparison — that path
-    also picks up SSH variants and arbitrary hosts the prefix list
-    cannot enumerate.
+    full clone-rewrite surface in practice.
     """
 
     def _normalize(url: str) -> str:
