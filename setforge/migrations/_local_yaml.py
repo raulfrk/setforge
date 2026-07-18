@@ -38,6 +38,7 @@ from typing import Final
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.error import YAMLError
 
 from setforge.errors import ConfigError
 from setforge.migrations import _require_mapping_root, parse_schema_version
@@ -77,14 +78,18 @@ def detect_local_yaml_schema(path: Path) -> str:
     ``schema_version`` key all resolve to
     :data:`LOCAL_YAML_BASELINE_VERSION`. Raises
     :class:`~setforge.errors.ConfigError` (via :func:`_require_mapping_root`)
-    when the root is a non-mapping, and may propagate a ruamel
-    ``YAMLError`` if the file is not well-formed YAML.
+    when the root is a non-mapping, and — a non-well-formed file — via a
+    wrap of the ruamel ``YAMLError``, naming the file, so the trust boundary
+    matches its ``setforge.yaml`` counterpart.
     """
     if not path.exists():
         return LOCAL_YAML_BASELINE_VERSION
     yaml = YAML(typ="rt")
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+    except YAMLError as exc:
+        raise ConfigError(f"malformed YAML in {path}: {exc}") from exc
     if data is None:
         return LOCAL_YAML_BASELINE_VERSION
     data = _require_mapping_root(data, path)

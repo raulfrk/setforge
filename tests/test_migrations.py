@@ -878,6 +878,20 @@ def test_detect_current_schema_non_mapping_root_raises_config_error(
         detect_current_schema(cfg)
 
 
+def test_detect_current_schema_malformed_yaml_raises_config_error(
+    tmp_path: Path,
+) -> None:
+    """A non-well-formed setforge.yaml raises ConfigError naming the file.
+
+    The raw ``yaml.load`` used to leak a ruamel ``YAMLError`` unwrapped, while
+    every other external-input access in the module routes through a domain
+    ``ConfigError``. The load is now wrapped so the trust boundary is uniform.
+    """
+    cfg = _seed_cfg(tmp_path, "key: [unclosed\n  nested: : :\n")
+    with pytest.raises(ConfigError, match=str(cfg)):
+        detect_current_schema(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Second real migration — restamp 1.1 → 1.2 (+ symmetric reverse).
 #

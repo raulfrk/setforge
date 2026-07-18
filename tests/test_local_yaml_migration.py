@@ -127,6 +127,19 @@ def test_detect_reads_version_through_forbidden_shape(tmp_path: Path) -> None:
     assert detect_local_yaml_schema(path) == "2.0"
 
 
+def test_detect_malformed_yaml_raises_config_error(tmp_path: Path) -> None:
+    """A non-well-formed local.yaml raises ConfigError naming the file.
+
+    The raw ``yaml.load`` used to propagate a ruamel ``YAMLError`` unwrapped
+    (the docstring even admitted it), diverging from the ``_require_mapping_root``
+    trust boundary applied on the next line. The load is now wrapped so a
+    malformed doc surfaces as a domain ``ConfigError``.
+    """
+    path = _write(tmp_path / "local.yaml", "key: [unclosed\n  nested: : :\n")
+    with pytest.raises(ConfigError, match=str(path)):
+        detect_local_yaml_schema(path)
+
+
 # --- Task 2: version-gated migration wrapper ---------------------------
 
 

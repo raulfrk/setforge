@@ -34,6 +34,7 @@ from typing import Final, Protocol, runtime_checkable
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.error import YAMLError
 
 from setforge.errors import ConfigError
 from setforge.migrations._yaml_ops import atomic_write_yaml, yaml_rt
@@ -673,12 +674,20 @@ def detect_current_schema(yaml_path: Path) -> str:
     file, or YAML without a top-level ``schema_version`` key all
     resolve to :data:`_DEFAULT_SCHEMA_VERSION` (= ``"1.0"``) — the
     pre-versioning baseline every existing user is implicitly on.
+
+    A non-well-formed file raises :class:`ConfigError` naming the file
+    (the ruamel ``YAMLError`` is wrapped), so every external-input access
+    in this module routes through the same domain error — matching the
+    :func:`_require_mapping_root` guard on the next line.
     """
     if not yaml_path.exists():
         return _DEFAULT_SCHEMA_VERSION
     yaml = YAML(typ="rt")
-    with yaml_path.open("r", encoding="utf-8") as fh:
-        data = yaml.load(fh)
+    try:
+        with yaml_path.open("r", encoding="utf-8") as fh:
+            data = yaml.load(fh)
+    except YAMLError as exc:
+        raise ConfigError(f"malformed YAML in {yaml_path}: {exc}") from exc
     if data is None:
         return _DEFAULT_SCHEMA_VERSION
     data = _require_mapping_root(data, yaml_path)
