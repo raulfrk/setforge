@@ -27,7 +27,6 @@ from setforge.provision.protocol import (
 )
 from setforge.provision.python import PythonProvisioner
 from setforge.provision.receipt import ReceiptStore
-from setforge.provision.reference import InMemoryProvisioner
 from setforge.provision.registry import build, register
 
 __all__ = [
@@ -35,7 +34,6 @@ __all__ = [
     "DesiredState",
     "GitHubReleaseProvisioner",
     "Identity",
-    "InMemoryProvisioner",
     "InstallError",
     "InstallSpec",
     "LocalProvisioner",
