@@ -5,11 +5,10 @@ colour roles (accent / success / error / ... — never raw hex at call sites),
 each carrying a truecolor ``#rrggbb`` and a curated official xterm-256 index for
 the fallback path. Dark-only; no light variant, no user overrides.
 
-Three render adapters project the one :data:`THEME` table onto the three colour
-surfaces the project uses — prompt_toolkit (:func:`pt_style`), rich
-(:func:`rich_style`), and raw SGR escapes (:func:`sgr` / :func:`styled`) — and
-their formats are never crossed (a rich style string is never fed to a pt
-``Style``, and vice versa).
+Two render adapters project the one :data:`THEME` table onto the two colour
+surfaces the project uses — prompt_toolkit (:func:`pt_style`) and raw SGR
+escapes (:func:`sgr` / :func:`styled`) — and their formats are never crossed
+(a prompt_toolkit style string is never fed to a raw SGR path, and vice versa).
 
 Capability is resolved *per destination stream*, re-evaluated on every call
 (:func:`capability`): ``NO_COLOR`` (set and non-empty) or a non-tty stream
@@ -151,20 +150,6 @@ def styled(text: str, role: Role, *, stream: object) -> str:
     if not introducer:
         return text
     return f"{introducer}{text}{RESET}"
-
-
-def rich_style(role: Role, *, stream: object) -> str:
-    """A rich style string for ``role`` on ``stream``.
-
-    Truecolor → hex (``"#7aa2f7"``); 256 → ``"color(N)"``; mono → ``"default"``.
-    """
-    color = THEME[role]
-    cap = capability(stream)
-    if cap is Cap.TRUECOLOR:
-        return color.truecolor
-    if cap is Cap.C256:
-        return f"color({color.xterm256})"
-    return "default"  # Cap.MONO
 
 
 def pt_style(theme: Mapping[Role, Color] = THEME) -> dict[str, str]:

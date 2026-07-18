@@ -24,7 +24,6 @@ from setforge.ui.theme import (
     capability,
     pt_style,
     render_demo,
-    rich_style,
     sgr,
     styled,
 )
@@ -154,7 +153,7 @@ def test_capability_is_per_stream(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Task 3 — render adapters (sgr / styled / pt_style / rich_style)
+# Task 3 — render adapters (sgr / styled / pt_style)
 # --------------------------------------------------------------------------- #
 def test_sgr_truecolor_introducer_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
@@ -193,23 +192,6 @@ def test_pt_style_keys() -> None:
     assert style["class:accent"] == "#7aa2f7"
     assert style["class:text"] == "#c0caf5"
     assert set(style) == {f"class:{role.value}" for role in Role}
-
-
-def test_rich_style_truecolor(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.setenv("COLORTERM", "truecolor")
-    assert rich_style(Role.ACCENT, stream=_TTY) == "#7aa2f7"
-
-
-def test_rich_style_256(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.delenv("COLORTERM", raising=False)
-    assert rich_style(Role.ACCENT, stream=_TTY) == "color(111)"
-
-
-def test_rich_style_mono(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NO_COLOR", "1")
-    assert rich_style(Role.ACCENT, stream=_TTY) == "default"
 
 
 # --------------------------------------------------------------------------- #

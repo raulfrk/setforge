@@ -13,7 +13,6 @@ from setforge.ui.theme import (
     Role,
     capability,
     pt_style,
-    rich_style,
     sgr,
     styled,
 )
@@ -29,7 +28,6 @@ __all__ = [
     "button_bar",
     "capability",
     "pt_style",
-    "rich_style",
     "sgr",
     "styled",
 ]
