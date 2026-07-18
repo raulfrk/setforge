@@ -1,7 +1,7 @@
 """Base-aware structural 3-way merge over comment-preserving trees.
 
-Generalizes the 2-way :func:`setforge.yaml_merge._deep_merge_dicts`
-(``{live → tracked}``) into a true 3-way merge of ``{base, ours, theirs}``
+Generalizes a 2-way ``{live → tracked}`` deep-merge of plain dicts
+into a true 3-way merge of ``{base, ours, theirs}``
 where ``ours`` is the live model and ``theirs`` is the upstream model. The
 ``ours`` model is mutated IN PLACE to produce the merged output, so every
 comment / anchor / key-order detail on untouched siblings survives. Diverged
@@ -899,11 +899,11 @@ def deep_merge_into_node(
 ) -> None:
     """Deep-merge a PLAIN ``live`` mapping OVER the WRAPPED ``target`` node in place.
 
-    The comment-preserving sibling of
-    :func:`setforge.yaml_merge._deep_merge_dicts`: that helper merges two PLAIN
-    dicts (the result carries no comment tokens), this one mutates the still-
-    WRAPPED backend node (ruamel ``CommentedMap`` / json-five ``JSONObject``) so
-    every untouched key — and the comment tokens attached to it — survives.
+    The comment-preserving analogue of a plain 2-way deep-merge: where that
+    would merge two PLAIN dicts (the result carries no comment tokens), this one
+    mutates the still-WRAPPED backend node (ruamel ``CommentedMap`` / json-five
+    ``JSONObject``) so every untouched key — and the comment tokens attached to
+    it — survives.
 
     Semantics mirror the plain deep merge so the two paths are interchangeable:
 
