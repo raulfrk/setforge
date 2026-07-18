@@ -121,7 +121,7 @@ def test_dst_collision_synthetic_vs_real() -> None:
 def test_dst_confinement_warns_out_of_home_and_passes(
     bad_dst: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Parity with plain tracked_files (.9.10): an out-of-$HOME dst WARNS and
+    # Parity with the plain tracked_files behavior: an out-of-$HOME dst WARNS and
     # validates (deploys anyway), it no longer refuses.
     cfg = _cfg(
         bundles={"b": BundleSpec(components=[_file_comp("one", dst=bad_dst)])},

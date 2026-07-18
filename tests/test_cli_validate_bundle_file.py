@@ -108,7 +108,9 @@ def test_validate_rejects_dst_collision(tmp_path: Path) -> None:
     assert result.exit_code != 0, result.output
 
 
-def test_validate_rejects_out_of_home_dst(tmp_path: Path) -> None:
+def test_validate_warns_out_of_home_dst(tmp_path: Path) -> None:
+    # An out-of-$HOME bundle dst now WARNS and validates (parity with the plain
+    # tracked_files warn-on-out-of-$HOME behavior), rather than refusing.
     repo = _repo_with_launcher(tmp_path)
     cfg = _write(
         repo,
@@ -117,7 +119,8 @@ def test_validate_rejects_out_of_home_dst(tmp_path: Path) -> None:
         + _profile_block(),
     )
     result = _validate(cfg)
-    assert result.exit_code != 0, result.output
+    assert result.exit_code == 0, result.output
+    assert "outside $HOME" in result.output
 
 
 def test_validate_sees_synthetic_entry_and_lints_missing_src(tmp_path: Path) -> None:
