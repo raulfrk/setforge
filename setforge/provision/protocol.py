@@ -129,4 +129,12 @@ class Provisioner(ABC):
 
     @abstractmethod
     def uninstall_one(self, identity: Identity) -> None:
-        """Undo one install (the revert path). Reconcile never calls this."""
+        """Undo one install for this ecosystem. Currently an UNWIRED seam.
+
+        No reconcile, revert, or cleanup path calls this today. Actual removal
+        is centralized in receipt-based cleanup
+        (``cli.cleanup.delete_provisioned`` -> ``_confined_unlink``), which
+        unlinks the installed binary recorded in the ``ReceiptStore``. Wiring
+        this method into a future revert path would require a SAFE-9 audit of
+        the removal.
+        """
