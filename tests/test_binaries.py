@@ -204,6 +204,25 @@ def test_resolve_invalid_config_override_raises(tmp_path) -> None:
     assert excinfo.value.layer == "config"
 
 
+def test_uv_in_supported_binaries() -> None:
+    """uv is a supported binary so its env/config overrides are honored."""
+    assert "uv" in binaries.SUPPORTED_BINARIES
+
+
+def test_resolve_uv_env_override(monkeypatch, tmp_path) -> None:
+    """SETFORGE_UV_BIN overrides uv resolution instead of being ignored."""
+    env_bin = _make_executable(tmp_path / "env-uv")
+    monkeypatch.setenv("SETFORGE_UV_BIN", str(env_bin))
+    assert binaries.resolve_binary("uv") == env_bin
+
+
+def test_resolve_uv_config_override(tmp_path) -> None:
+    """local.yaml binaries.uv overrides uv resolution instead of being ignored."""
+    cfg_bin = _make_executable(tmp_path / "cfg-uv")
+    binaries.LOCAL_CONFIG_PATH.write_text(f"binaries:\n  uv: {cfg_bin}\n")
+    assert binaries.resolve_binary("uv") == cfg_bin
+
+
 def test_ensure_stub_creates_file_when_absent() -> None:
     assert not binaries.LOCAL_CONFIG_PATH.exists()
     binaries.ensure_local_config_stub()

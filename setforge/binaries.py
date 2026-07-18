@@ -14,10 +14,10 @@ precedence:
    ``binaries: {code: /p, claude: /p, gitleaks: /p, patch: /p}``.
 4. ``shutil.which(name)`` (current behavior).
 
-``SUPPORTED_BINARIES`` also includes ``cargo`` and ``go``, which
-resolve through this same chain via the env-var, config-file, and
-``which`` layers — but, unlike the other four, have no dedicated CLI
-flag.
+``SUPPORTED_BINARIES`` also includes ``cargo``, ``go``, and ``uv``,
+which resolve through this same chain via the env-var, config-file,
+and ``which`` layers — but, unlike the other four, have no dedicated
+CLI flag.
 
 The CLI layer is set once at process start; env and config layers are
 read lazily on each lookup so tests can monkey-patch the environment or
@@ -47,6 +47,7 @@ SUPPORTED_BINARIES: Final[tuple[str, ...]] = (
     "patch",
     "cargo",
     "go",
+    "uv",
 )
 _ENV_VAR_PREFIX: Final[str] = "SETFORGE_"
 _ENV_VAR_SUFFIX: Final[str] = "_BIN"
