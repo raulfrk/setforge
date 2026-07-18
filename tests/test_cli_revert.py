@@ -869,3 +869,45 @@ def test_revert_skips_link_when_overlay_dropped_before_revert(
     # Without the overlay the resolved profile has symlink is None for
     # hook, so the link is not unlinked — it survives (accepted edge).
     assert dst.is_symlink()
+
+
+def test_diff_summary_counts_hunk_body_line_starting_with_dashdash() -> None:
+    """A hunk body that DELETES a line whose content begins ``-- `` (rendered
+    ``--- foo`` in the unified diff) must be counted as a deletion, not
+    mistaken for a ``--- `` file header.
+
+    Regression: the old parser reset ``current_path`` on the ``--- foo``
+    body line, producing a phantom ``/foo`` entry and zeroing the real
+    file's line counts. The fix tracks whether we are inside a hunk body
+    (post-``@@``) so header detection only fires in a header region.
+    """
+    from setforge.cli.revert import _diff_summaries_from_patch
+
+    # setforge emits root-relative paths (no ``a/``/``b/`` prefix). The hunk
+    # deletes a line whose content is ``-- foo`` -> renders as ``--- foo``.
+    patch = (
+        "--- root/foo.txt\n"
+        "+++ root/foo.txt\n"
+        "@@ -1,3 +1,2 @@\n"
+        " keep line\n"
+        "--- foo\n"
+        "+added line\n"
+    )
+    result = _diff_summaries_from_patch(patch)
+
+    # No phantom entry from the deleted ``--- foo`` body line.
+    assert "/foo" not in result
+    # Exactly one file summary, with the correct +1 -1 counts.
+    assert result == {"/root/foo.txt": "+1 -1"}
+
+
+def test_diff_summary_normalizes_leading_slash_no_double_slash() -> None:
+    """A header path that already carries a leading ``/`` must not render as
+    ``//root/...`` — the parser normalizes to exactly one leading slash.
+    """
+    from setforge.cli.revert import _diff_summaries_from_patch
+
+    patch = "--- /root/x.txt\n+++ /root/x.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n"
+    result = _diff_summaries_from_patch(patch)
+
+    assert result == {"/root/x.txt": "+1 -1"}

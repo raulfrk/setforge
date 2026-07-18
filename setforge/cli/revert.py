@@ -121,19 +121,32 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
     current_path: str | None = None
     plus = 0
     minus = 0
+    # Only ``--- ``/``+++ `` lines in a FILE-HEADER region are path headers;
+    # inside a hunk body a deleted line whose content starts with ``-- ``
+    # renders as ``--- foo`` and must be counted as a deletion, not mistaken
+    # for a header (else the real file's counts reset and a phantom entry
+    # appears). ``in_hunk`` is True once ``@@`` opens a hunk body and stays
+    # True until the next ``diff``/``index`` opens a fresh header region.
+    in_hunk = False
     for line in patch_text.splitlines():
-        if line.startswith("--- "):
-            from_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
-            current_path = "/" + from_path if from_path != "/dev/null" else None
+        if line.startswith(("diff ", "index ")):
+            in_hunk = False
             continue
-        if line.startswith("+++ "):
+        if not in_hunk and line.startswith("--- "):
+            from_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
+            current_path = (
+                _abs_diff_path(from_path) if from_path != "/dev/null" else None
+            )
+            continue
+        if not in_hunk and line.startswith("+++ "):
             to_path = transitions._cunquote_path(line[4:].split("\t", 1)[0])
             if to_path != "/dev/null":
-                current_path = "/" + to_path
+                current_path = _abs_diff_path(to_path)
             plus = 0
             minus = 0
             continue
         if line.startswith("@@"):
+            in_hunk = True
             continue
         if current_path is None:
             continue
@@ -143,6 +156,17 @@ def _diff_summaries_from_patch(patch_text: str) -> dict[str, str]:
             minus += 1
         summaries[current_path] = f"+{plus} -{minus}"
     return summaries
+
+
+def _abs_diff_path(path: str) -> str:
+    """Prepend a single leading ``/`` to a diff-header path.
+
+    setforge emits paths root-relative (no leading ``/``), so the preview
+    re-anchors them absolute. A path that already carries a leading ``/``
+    (e.g. a hand-authored or externally sourced patch) must not become
+    ``//root/...`` — normalize so exactly one leading slash results.
+    """
+    return "/" + path.lstrip("/")
 
 
 def _plugin_reconciles_from_transition(
