@@ -28,7 +28,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import typer
 from jinja2 import Template
 from rich.table import Table
 from ruamel.yaml import YAML
@@ -44,6 +43,7 @@ from setforge.config import (
     resolve_and_expand,
 )
 from setforge.errors import BaseStoreError, ConfigError
+from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.paths import template_context
 from setforge.source import HostLocalSection, HostLocalSectionName
 
@@ -482,13 +482,13 @@ def warn_if_dst_outside_home(tracked_file: TrackedFile, dst: Path) -> None:
         return
     home = Path.home().resolve()
     resolved = dst.resolve()
-    if resolved != home and home not in resolved.parents:
-        typer.secho(
-            f"warning: tracked_file dst {tracked_file.dst!r} resolves to "
-            f"{resolved} — outside $HOME ({home}); deploying anyway (set "
-            "allow_outside_home: true on this tracked_file to silence).",
-            err=True,
-            fg=typer.colors.YELLOW,
+    if is_outside_home(resolved, home):
+        warn_outside_home_dst(
+            label="tracked_file",
+            raw_dst=tracked_file.dst,
+            resolved=resolved,
+            home=home,
+            silence_hint="set allow_outside_home: true on this tracked_file",
         )
 
 

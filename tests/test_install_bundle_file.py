@@ -123,8 +123,11 @@ def test_no_bundle_file_profile_unchanged(repo: Path) -> None:
     assert not _launcher_live().exists()
 
 
-def test_install_refuses_out_of_home_dst(repo: Path) -> None:
+def test_install_warns_out_of_home_dst_bundle_file(repo: Path) -> None:
+    # Parity with plain tracked_files: an out-of-$HOME bundle file component
+    # WARNS and deploys anyway, it no longer refuses.
     _write_launcher(repo)
+    evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"
     config = repo / "setforge.yaml"
     config.write_text(
         "version: 1\n"
@@ -135,7 +138,7 @@ def test_install_refuses_out_of_home_dst(repo: Path) -> None:
         "      - id: launcher\n"
         "        file:\n"
         "          src: launch.sh\n"
-        "          dst: ~/../etc/evil\n"
+        "          dst: ~/../etc/cron.d/pwn\n"
         "profiles:\n"
         f"  {_PROFILE}:\n"
         "    bundles:\n"
@@ -143,7 +146,38 @@ def test_install_refuses_out_of_home_dst(repo: Path) -> None:
         encoding="utf-8",
     )
     result = _install(config)
-    assert result.exit_code != 0, result.output
+    assert result.exit_code == 0, result.output
+    assert "outside $HOME" in result.output
+    assert evil.exists()
+    assert evil.read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
+
+
+def test_install_allow_outside_home_bundle_file_deploys_silently(repo: Path) -> None:
+    _write_launcher(repo)
+    evil = Path.home().resolve().parent / "etc" / "cron.d" / "pwn"
+    config = repo / "setforge.yaml"
+    config.write_text(
+        "version: 1\n"
+        "tracked_files: {}\n"
+        "bundles:\n"
+        "  revdiff:\n"
+        "    components:\n"
+        "      - id: launcher\n"
+        "        file:\n"
+        "          src: launch.sh\n"
+        "          dst: ~/../etc/cron.d/pwn\n"
+        "          allow_outside_home: true\n"
+        "profiles:\n"
+        f"  {_PROFILE}:\n"
+        "    bundles:\n"
+        "      - revdiff\n",
+        encoding="utf-8",
+    )
+    result = _install(config)
+    assert result.exit_code == 0, result.output
+    assert "outside $HOME" not in result.output
+    assert evil.exists()
+    assert evil.read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
 
 
 def test_install_warns_out_of_home_dst_plain_tracked_file(repo: Path) -> None:

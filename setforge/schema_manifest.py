@@ -231,6 +231,7 @@ FROZEN_FIELD_MANIFEST: dict[str, dict[str, str]] = {
         "mode": "int | None",
         "template": "<class 'bool'>",
         "symlink": "str | None",
+        "allow_outside_home": "<class 'bool'>",
     },
     "PluginPackage": {
         "type": "typing.Literal[<PackageKind.PLUGIN: 'plugin'>]",

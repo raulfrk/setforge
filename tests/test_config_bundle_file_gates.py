@@ -118,13 +118,41 @@ def test_dst_collision_synthetic_vs_real() -> None:
     "bad_dst",
     ["~/../etc/passwd", "/etc/cronjob", "/tmp/outside"],
 )
-def test_dst_confinement_rejects_out_of_home(bad_dst: str) -> None:
+def test_dst_confinement_warns_out_of_home_and_passes(
+    bad_dst: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Parity with plain tracked_files (.9.10): an out-of-$HOME dst WARNS and
+    # validates (deploys anyway), it no longer refuses.
     cfg = _cfg(
         bundles={"b": BundleSpec(components=[_file_comp("one", dst=bad_dst)])},
     )
-    with pytest.raises(ConfigError) as exc:
-        validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
-    assert "b.one" in str(exc.value)
+    validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
+    err = capsys.readouterr().err
+    assert "outside $HOME" in err
+    assert "b.one" in err
+
+
+@pytest.mark.parametrize(
+    "bad_dst",
+    ["~/../etc/passwd", "/etc/cronjob", "/tmp/outside"],
+)
+def test_dst_confinement_allow_outside_home_suppresses_warning(
+    bad_dst: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = _cfg(
+        bundles={
+            "b": BundleSpec(
+                components=[_file_comp("one", dst=bad_dst, allow_outside_home=True)]
+            )
+        },
+    )
+    validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
+    assert capsys.readouterr().err == ""
+
+
+def test_allow_outside_home_defaults_false() -> None:
+    fc = FileComponent(src=Path("x"), dst="~/x")
+    assert fc.allow_outside_home is False
 
 
 def test_dst_confinement_accepts_under_home() -> None:
@@ -138,9 +166,13 @@ def test_dst_confinement_accepts_under_home() -> None:
     validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
 
 
-def test_dst_confinement_rejects_symlink_parent_escape(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_dst_confinement_warns_on_symlink_parent_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # .resolve() still collapses the symlink escape so it's SEEN as out-of-home;
+    # the change is refuse->warn, not dropping the resolution.
     home = tmp_path / "home"
     home.mkdir()
     outside = tmp_path / "outside"
@@ -154,8 +186,8 @@ def test_dst_confinement_rejects_symlink_parent_escape(
         },
     )
     monkeypatch.setenv("HOME", str(home))
-    with pytest.raises(ConfigError):
-        validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
+    validate_bundle_file_components(cfg, _resolved(cfg), Path("/repo"))
+    assert "outside $HOME" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("bad_component", ["a/b", "..", ".hidden", "x/../y"])

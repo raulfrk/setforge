@@ -26,6 +26,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.scalarint import OctalInt, ScalarInt
 
 from setforge.errors import ConfigError, ProfileNotFound
+from setforge.home_confinement import is_outside_home, warn_outside_home_dst
 from setforge.migrations import (
     _meets_floor,
     current_expected_schema_version,
@@ -516,6 +517,7 @@ class FileComponent(BaseModel):
     mode: int | None = None
     template: bool = False
     symlink: str | None = None
+    allow_outside_home: bool = False
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -820,6 +822,7 @@ def _synthetic_tracked_file(fc: "FileComponent") -> TrackedFile:
         mode=fc.mode,
         template=fc.template,
         symlink=fc.symlink,
+        allow_outside_home=fc.allow_outside_home,
     )
 
 
@@ -878,11 +881,17 @@ def _gate_component_paths(
             f"bundle file component {synthetic_id!r} dst {fc.dst!r} is not a "
             f"renderable Jinja2 template: {exc}"
         ) from exc
-    if resolved_dst != home and home not in resolved_dst.parents:
-        raise ConfigError(
-            f"bundle file component {synthetic_id!r} dst {fc.dst!r} resolves to "
-            f"{resolved_dst} — outside $HOME ({home}); refusing (dst must stay "
-            "under the home directory)."
+    if is_outside_home(resolved_dst, home) and not fc.allow_outside_home:
+        # Parity with plain tracked_files (warn, don't refuse): a bundle author
+        # may deliberately target outside $HOME. The .resolve() above still
+        # collapses ../ + symlink escapes; this is refuse->warn for out-of-$HOME
+        # only. The tracked/ src-confinement below stays a hard refuse.
+        warn_outside_home_dst(
+            label=f"bundle file component {synthetic_id!r}",
+            raw_dst=fc.dst,
+            resolved=resolved_dst,
+            home=home,
+            silence_hint="set allow_outside_home: true on this component's file",
         )
 
     prior = dst_owner.get(resolved_dst)
