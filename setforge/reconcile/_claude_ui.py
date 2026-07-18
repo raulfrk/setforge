@@ -20,8 +20,12 @@ def _themed_style() -> Style:
 
 def _fenced(label: str, data: bytes, token: str) -> str:
     """Fence ``data`` between two ``token`` lines as inert content; the caller
-    passes a fresh per-call token so fenced data can't spoof the delimiter."""
-    return f"--{label}--\n{token}\n{data.decode('utf-8')}\n{token}"
+    passes a fresh per-call token so fenced data can't spoof the delimiter.
+
+    ``data`` is display/prompt-only (embedded verbatim into the Claude prompt,
+    never hashed or reconstructed), so a stray non-UTF-8 byte decodes with
+    ``errors="replace"`` — rendering as U+FFFD rather than crashing the prompt."""
+    return f"--{label}--\n{token}\n{data.decode('utf-8', errors='replace')}\n{token}"
 
 
 def _strip_fence(text: str) -> str:

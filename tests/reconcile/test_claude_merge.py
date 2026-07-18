@@ -26,6 +26,7 @@ from prompt_toolkit.output import DummyOutput
 from setforge.reconcile import WizardResult, resolve_conflicts
 from setforge.reconcile.claude_merge import (
     _build_prompt,
+    _fenced,
     _strip_fence,
     _validate,
     make_claude_merge_fn,
@@ -232,6 +233,23 @@ def test_build_prompt_omits_instruction_block_when_empty() -> None:
     conflict = Conflict(base=b"BB\n", ours=b"OO\n", theirs=b"TT\n")
     prompt = _build_prompt(conflict, "", _DISPLAY)
     assert "YOUR INSTRUCTION" not in prompt
+
+
+def test_fenced_decodes_valid_utf8() -> None:
+    out = _fenced("BASE", "héllo\n".encode(), "TOK")
+    assert "héllo" in out
+    assert out == "--BASE--\nTOK\nhéllo\n\nTOK"
+
+
+def test_fenced_survives_non_utf8_bytes() -> None:
+    # Display/prompt-only data: a stray non-UTF-8 byte must not crash the prompt;
+    # it renders as the U+FFFD replacement char instead of raising.
+    out = _fenced("BASE", b"ab\xff\xfecd", "TOK")
+    assert isinstance(out, str)
+    assert "�" in out
+    assert out.startswith("--BASE--\nTOK\n")
+    assert "ab" in out
+    assert "cd" in out
 
 
 def test_make_fn_returns_cancel_sentinel_on_back(claude_stub: ClaudeStub) -> None:
