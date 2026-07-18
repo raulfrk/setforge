@@ -158,6 +158,33 @@ def test_delete_refuses_dotdot_escaping_confinement(
     assert store.installed() == {_ident("evil")}
 
 
+def test_delete_refuses_symlinked_parent_escaping_confinement(
+    tmp_path: Path, confine_root: Path
+) -> None:
+    # Parent is a symlink that escapes confinement: the path string stays under
+    # confine_root (a lexical is_relative_to would pass), but resolving the
+    # parent's symlink reveals the escape. Guards realpath/resolve of the parent.
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    victim = outside / "target.txt"
+    victim.write_text("keep me\n", encoding="utf-8")
+    link_dir = confine_root / "link"
+    link_dir.symlink_to(outside, target_is_directory=True)
+    escaped = link_dir / "target.txt"
+    assert escaped.is_relative_to(confine_root)
+
+    store = ReceiptStore(tmp_path / "receipts")
+    store.record(_ident("evil"), version="1", checksum=None, path=escaped)
+    item = cleanup_mod.CleanupItem(identity=_ident("evil"), path=escaped)
+
+    with pytest.raises(cleanup_mod.ConfinementError):
+        cleanup_mod.delete_provisioned(
+            store, item, confine_root=confine_root, console=Console()
+        )
+    assert victim.exists()
+    assert store.installed() == {_ident("evil")}
+
+
 def test_delete_uses_lstat_never_dereferences_symlink(
     tmp_path: Path, confine_root: Path
 ) -> None:
@@ -305,7 +332,21 @@ def test_no_rmtree_or_removedirs_in_cleanup_module() -> None:
             )
 
 
-def test_no_resolve_in_cleanup_delete_helpers() -> None:
+def _resolve_receiver_ok(recv: ast.expr) -> bool:
+    # `.resolve()` is only safe on the confinement root or on a `.parent` —
+    # never on the receipt path / unlink target (whose final component is the
+    # symlink we unlink, not follow). Allow `confine_root.resolve()` and any
+    # `<expr>.parent.resolve()`; forbid everything else.
+    if isinstance(recv, ast.Name) and recv.id == "confine_root":
+        return True
+    return isinstance(recv, ast.Attribute) and recv.attr == "parent"
+
+
+def test_no_resolve_on_unlink_target_in_cleanup_delete_helpers() -> None:
+    # `.resolve()` on a symlink before `.unlink()` torches the target; forbidden
+    # on the receipt path / unlink target in the delete helpers. Resolving the
+    # confinement root or the PARENT directory (for the containment check) is
+    # allowed — those are never the thing we unlink.
     helper_names = {"delete_provisioned", "_confined_unlink", "_lstat_safe"}
     for node in ast.walk(_cleanup_module_ast()):
         if not isinstance(node, ast.FunctionDef) or node.name not in helper_names:
@@ -313,10 +354,13 @@ def test_no_resolve_in_cleanup_delete_helpers() -> None:
         for inner in ast.walk(node):
             if (
                 isinstance(inner, ast.Call)
-                and getattr(inner.func, "attr", None) == "resolve"
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == "resolve"
+                and not _resolve_receiver_ok(inner.func.value)
             ):
                 raise AssertionError(
-                    f".resolve() forbidden in {node.name} at line {inner.lineno}"
+                    f".resolve() on the unlink target forbidden in {node.name} "
+                    f"at line {inner.lineno}"
                 )
 
 

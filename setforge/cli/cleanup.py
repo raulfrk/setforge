@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -116,10 +115,10 @@ def _lstat_safe(path: Path) -> bool:
 
 
 def _confined_unlink(path: Path, *, confine_root: Path, console: Console) -> None:
-    # realpath the PARENT only: collapses ".." / symlink swaps a lexical
+    # resolve() the PARENT only: collapses ".." / symlink swaps a lexical
     # is_relative_to would wrongly pass, without resolving the link we unlink.
-    root = Path(os.path.realpath(confine_root))
-    parent = Path(os.path.realpath(path.parent))
+    root = confine_root.resolve()
+    parent = path.parent.resolve()
     if not (parent == root or root in parent.parents):
         raise ConfinementError(
             f"refusing to delete {path}: outside confinement root {confine_root}"
