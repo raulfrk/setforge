@@ -242,6 +242,49 @@ def test_download_wire_cap_aborts_oversize_stream(tmp_path: Path, monkeypatch) -
         prov._download("https://github.com/owner/tool/releases/download/v1/tool.tar.gz")
 
 
+def test_download_deadline_aborts_slow_drip_stream(tmp_path: Path, monkeypatch) -> None:
+    prov = _real_download_prov(tmp_path)
+    # A slow-drip server: each read returns a small chunk under the per-read
+    # socket timeout, so the transfer never trips the stdlib timeout. Advance a
+    # fake clock past the overall deadline as chunks arrive.
+    clock = {"now": 0.0}
+    monkeypatch.setattr(gh.time, "monotonic", lambda: clock["now"])
+
+    class _DripResponse(_FakeResponse):
+        def read(self, n: int) -> bytes:
+            clock["now"] += gh._DOWNLOAD_DEADLINE_S  # one drip blows the budget
+            return super().read(n)
+
+    fake = _DripResponse(
+        chunks=[b"a", b"b", b"c", b"d"], final_url="https://github.com/x"
+    )
+
+    def _fake_urlopen(_request: object, timeout: float = 0) -> _DripResponse:
+        return fake
+
+    monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
+    with pytest.raises(gh.DownloadError, match="deadline"):
+        prov._download("https://github.com/owner/tool/releases/download/v1/tool.tar.gz")
+
+
+def test_download_fast_stream_completes_within_deadline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    prov = _real_download_prov(tmp_path)
+    # Clock never advances: a fast transfer stays well under the deadline.
+    monkeypatch.setattr(gh.time, "monotonic", lambda: 0.0)
+    fake = _FakeResponse(chunks=[b"aa", b"bb", b"cc"], final_url="https://github.com/x")
+
+    def _fake_urlopen(_request: object, timeout: float = 0) -> _FakeResponse:
+        return fake
+
+    monkeypatch.setattr(gh.urllib.request, "urlopen", _fake_urlopen)
+    data = prov._download(
+        "https://github.com/owner/tool/releases/download/v1/tool.tar.gz"
+    )
+    assert data == b"aabbcc"
+
+
 def test_probe_before_download_short_circuits(tmp_path: Path, monkeypatch) -> None:
     install_dir = tmp_path / "bin"
     data = _tar_gz({"tool": b"payload"})

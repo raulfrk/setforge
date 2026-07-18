@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -30,6 +31,12 @@ __all__ = ["DownloadError", "GitHubReleaseProvisioner"]
 LOGGER: logging.Logger = logging.getLogger(__name__)
 
 _DOWNLOAD_TIMEOUT_S = 120
+# The socket timeout above applies per connect + per blocking read, NOT to the
+# whole transfer, so a slow-drip server emitting a chunk just under it can hold
+# the read loop open indefinitely. This is a wall-clock cap on the entire
+# download; a few multiples of the per-read timeout leaves ample slack for a
+# legitimately large, honestly-paced asset while bounding a hostile drip.
+_DOWNLOAD_DEADLINE_S = 4 * _DOWNLOAD_TIMEOUT_S
 _MAX_WIRE_BYTES = 512 * 1024 * 1024  # 512 MiB
 _CHUNK = 64 * 1024
 
@@ -135,10 +142,16 @@ class GitHubReleaseProvisioner(Provisioner):
                     )
                 chunks: list[bytes] = []
                 total = 0
+                start = time.monotonic()
                 while True:
                     chunk = response.read(_CHUNK)
                     if not chunk:
                         break
+                    if time.monotonic() - start > _DOWNLOAD_DEADLINE_S:
+                        raise DownloadError(
+                            f"asset download exceeded the {_DOWNLOAD_DEADLINE_S}s "
+                            "deadline"
+                        )
                     total += len(chunk)
                     if total > _MAX_WIRE_BYTES:
                         raise DownloadError(
