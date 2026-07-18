@@ -16,6 +16,7 @@ import pytest
 from setforge import vscode_extensions
 from setforge.config import Extensions, ReconcilePolicy
 from setforge.errors import ExtensionToolMissing, ProfileNotFound
+from setforge.provision.resolve.protocol import ResolvedPin
 from setforge.vscode_extensions import (
     ReconcileReport,
     add_to_include,
@@ -677,3 +678,47 @@ def test_module_all_declares_exactly_the_public_surface() -> None:
     # Every name in __all__ resolves to a real module attribute.
     for name in vscode_extensions.__all__:
         assert getattr(vscode_extensions, name) is not None
+
+
+def _ext_pin() -> ResolvedPin:
+    from setforge.provision.resolve.protocol import IntegrityKind, PackageType
+
+    return ResolvedPin(
+        type=PackageType.EXTENSION,
+        key="pub.ext",
+        version="1.2.3",
+        integrity="sha256:" + "a" * 64,
+        integrity_kind=IntegrityKind.CHECKSUM,
+    )
+
+
+def test_install_pinned_download_failure_rewrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A ResolveError from the guarded fetch is caught and rewrapped as an
+    # ExtensionInstallFailed (the documented install-failed contract).
+    from setforge.errors import ExtensionInstallFailed, ResolveError
+
+    def _boom(*_a: Any, **_k: Any) -> bytes:
+        raise ResolveError("network error fetching vsix")
+
+    monkeypatch.setattr("setforge.provision.resolve.extension.download_vsix", _boom)
+    with pytest.raises(ExtensionInstallFailed) as excinfo:
+        vscode_extensions._install_pinned("pub.ext", _ext_pin())
+    assert "could not download the pinned" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ResolveError)
+
+
+def test_install_pinned_unrelated_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unrelated exception type (not a download failure) must propagate
+    # unchanged, NOT be masked as an ExtensionInstallFailed download failure.
+    def _bug(*_a: Any, **_k: Any) -> bytes:
+        raise KeyError("unexpected internal bug")
+
+    monkeypatch.setattr("setforge.provision.resolve.extension.download_vsix", _bug)
+    # The KeyError propagates unchanged; before the narrowing it would have
+    # been masked as an ExtensionInstallFailed download failure.
+    with pytest.raises(KeyError):
+        vscode_extensions._install_pinned("pub.ext", _ext_pin())

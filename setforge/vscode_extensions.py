@@ -50,6 +50,7 @@ from setforge.errors import (
     ExtensionInstallFailed,
     ExtensionToolMissing,
     ProfileNotFound,
+    ResolveError,
 )
 from setforge.provision import driver
 from setforge.provision.installer import _SHA256_HEX_LEN, _is_hex
@@ -284,7 +285,7 @@ def _install_pinned(ext_id: str, pin: ResolvedPin) -> None:
     publisher, name = _split_ext_id(ext_id)
     try:
         data = download_vsix(publisher, name, pin.version)
-    except Exception as exc:  # ResolveError (guarded fetch) or malformed id
+    except ResolveError as exc:  # guarded fetch failure or malformed id
         raise ExtensionInstallFailed(
             f"install of {ext_id!r} failed: could not download the pinned "
             f"VSIX ({pin.version}): {exc}"
