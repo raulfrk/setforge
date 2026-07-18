@@ -145,11 +145,11 @@ def _gate_floor(
 def _registry_min_version() -> str:
     """Return the lowest schema version the migration registry can resolve to.
 
-    A lazy local import sidesteps the import cycle: the retirement modules
-    that call this are imported at the tail of this package (before
-    ``known_versions`` is even defined), but ``_lower_floor`` only ever runs
-    from a reverse ``apply`` — long after the package finished initializing —
-    so the symbol resolves.
+    ``known_versions`` is a deferred module-level forward reference: it is
+    defined later in this package, and the retirement modules that reach this
+    helper are imported at the package tail (before ``known_versions`` exists),
+    but this only ever runs from a reverse ``apply`` — long after the package
+    finished initializing — so the name resolves at call time.
     """
     return min(known_versions(), key=parse_schema_version)
 
