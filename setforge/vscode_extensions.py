@@ -121,6 +121,9 @@ def list_installed() -> set[str]:
     silently dropped — the Remote-SSH ``code`` CLI emits a header line
     (``"Extensions installed on SSH: <ip>:"``) on stdout before the IDs.
 
+    Raises :class:`ExtensionToolMissing` when the ``code`` CLI can't be
+    resolved on PATH or via the binary-override config.
+
     Raises :class:`ExtensionInstallFailed` if the underlying ``code``
     invocation exits non-zero or times out.
     """
