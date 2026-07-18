@@ -21,10 +21,21 @@ _SHA = "4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f"
 _LS_REMOTE_HEAD = f"{_SHA}\tHEAD\n"
 
 
-def _runner_ok(stdout: str = _LS_REMOTE_HEAD, captured: list[list[str]] | None = None):
-    def _run(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+def _runner_ok(
+    stdout: str = _LS_REMOTE_HEAD,
+    captured: list[list[str]] | None = None,
+    captured_env: list[dict[str, str] | None] | None = None,
+):
+    def _run(
+        argv: list[str],
+        *,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         if captured is not None:
             captured.append(argv)
+        if captured_env is not None:
+            captured_env.append(env)
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
     return _run
@@ -55,6 +66,39 @@ def test_argv_has_options_terminator_before_url() -> None:
     assert argv[dd + 1 :] == ["https://github.com/owner/mp", "HEAD"]  # after terminator
 
 
+def test_ls_remote_restricts_git_transports() -> None:
+    captured_env: list[dict[str, str] | None] = []
+    resolver = PluginResolver(runner=_runner_ok(captured_env=captured_env))
+    resolver.resolve(_item())
+    env = captured_env[0]
+    assert env is not None
+    assert env.get("GIT_ALLOW_PROTOCOL") == "https:ssh:file"
+    # A copy of the real environment is passed, not a bare dict.
+    assert "PATH" in env
+
+
+def test_ls_remote_env_refuses_ext_transport_helper() -> None:
+    # Fake a git that honors GIT_ALLOW_PROTOCOL: an ext:: URL is refused.
+    def _run(
+        argv: list[str],
+        *,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        allowed = (env or {}).get("GIT_ALLOW_PROTOCOL", "")
+        url = argv[argv.index("--") + 1]
+        scheme = url.split("::", 1)[0] if "::" in url else url.split("://", 1)[0]
+        if scheme not in allowed.split(":"):
+            return subprocess.CompletedProcess(
+                argv, 128, stdout="", stderr=f"transport '{scheme}' not allowed"
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout=_LS_REMOTE_HEAD, stderr="")
+
+    resolver = PluginResolver(runner=_run)
+    with pytest.raises(ResolveError, match="not allowed"):
+        resolver.resolve(_item(git_url="ext::sh -c 'touch /tmp/pwned'"))
+
+
 def test_resolve_concrete_sha_not_ref_name() -> None:
     resolver = PluginResolver(runner=_runner_ok())
     pin = resolver.resolve(_item(ref="HEAD"))
@@ -64,7 +108,12 @@ def test_resolve_concrete_sha_not_ref_name() -> None:
 
 
 def test_resolve_git_failure_raises_clean_error() -> None:
-    def _run(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def _run(
+        argv: list[str],
+        *,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
             argv, 128, stdout="", stderr="repo not found"
         )
@@ -74,7 +123,12 @@ def test_resolve_git_failure_raises_clean_error() -> None:
 
 
 def test_resolve_timeout_surfaces_as_resolve_error() -> None:
-    def _run(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def _run(
+        argv: list[str],
+        *,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
 
     with pytest.raises(ResolveError, match="timed out"):

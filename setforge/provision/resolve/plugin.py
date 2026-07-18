@@ -3,6 +3,7 @@ ls-remote``, never a moving ref, WITHOUT cloning."""
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,10 @@ __all__ = ["PluginResolveItem", "PluginResolver", "marketplace_git_url"]
 _GIT_BIN_NAME = "git"
 _LS_REMOTE_TIMEOUT_S = 30.0
 _DEFAULT_REF = "HEAD"
+# Refuse transport-helper prefixes (ext::/fd::/transport::...) that run a shell
+# command; `--` stops flag parsing but git still honors them in the URL. Only the
+# real network/filesystem schemes are allowed for the ls-remote subprocess.
+_ALLOWED_GIT_PROTOCOLS = "https:ssh:file"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -51,7 +56,7 @@ def marketplace_git_url(source: MarketplaceSource) -> str:
 
 
 def _default_runner(
-    argv: list[str], *, timeout: float
+    argv: list[str], *, timeout: float, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
@@ -59,6 +64,7 @@ def _default_runner(
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=env,
     )
 
 
@@ -91,8 +97,12 @@ class PluginResolver:
         )
 
     def _ls_remote_sha(self, argv: list[str], git_url: str, ref: str) -> str:
+        # Copy the real environment so PATH/SSH config survive, then pin the
+        # transport allowlist so a malicious git_url can't invoke a shell helper.
+        env = dict(os.environ)
+        env["GIT_ALLOW_PROTOCOL"] = _ALLOWED_GIT_PROTOCOLS
         try:
-            completed = self._runner(argv, timeout=_LS_REMOTE_TIMEOUT_S)
+            completed = self._runner(argv, timeout=_LS_REMOTE_TIMEOUT_S, env=env)
         except subprocess.TimeoutExpired as exc:
             raise ResolveError(
                 f"`git ls-remote {git_url} {ref}` timed out after "
