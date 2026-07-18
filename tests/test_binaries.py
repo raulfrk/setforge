@@ -387,3 +387,19 @@ def test_stub_template_documents_claude_install_mode() -> None:
     assert "claude:" in text
     assert "install_mode" in text
     assert "local-clone" in text
+
+
+def test_stub_template_omits_unimplemented_knobs() -> None:
+    """Stub must not advertise knobs no code reads (invites cargo-culting)."""
+    binaries.ensure_local_config_stub()
+    text = binaries.LOCAL_CONFIG_PATH.read_text(encoding="utf-8")
+    assert "claude_log_level" not in text
+    assert "cache_max_age_days" not in text
+
+
+def test_stub_template_still_valid_yaml() -> None:
+    """Generated stub round-trips through the config loader after edits."""
+    binaries.ensure_local_config_stub()
+    cfg = load_host_local_config()
+    assert isinstance(cfg, HostLocalConfig)
+    assert cfg.claude.install_mode is ClaudeInstallMode.REGULAR

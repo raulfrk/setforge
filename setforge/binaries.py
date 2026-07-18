@@ -69,9 +69,6 @@ _STUB_TEMPLATE: Final[str] = """\
 #
 # claude:
 #   install_mode: regular        # or "local-clone"
-#   # Future knobs (not yet implemented):
-#   # claude_log_level: info
-#   # cache_max_age_days: 30
 #
 # ---------------------------------------------------------------------------
 # Per-host overlay classes (commented examples — uncomment + edit to use).
