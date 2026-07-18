@@ -1688,6 +1688,15 @@ def apply_patch_reverse(
         )
     # Run with cwd=/ and -p0 so root-relative paths in the diff
     # (per :func:`_diff_path`) resolve to absolute targets.
+    #
+    # No $HOME/path-confinement guard here (unlike the SPANS-store and
+    # payload_file legs, which reject absolute/``..`` keys in
+    # :func:`_spans_manifest_path` and :func:`_validate_one_state_snapshot`).
+    # The patch body is machine-authored under the user-owned state dir
+    # (``~/.local/state/setforge/transitions/``): having written it already
+    # required the same privileges this revert grants, so confinement adds no
+    # boundary. The dry-run-first pass below also aborts on any drift before a
+    # byte is written. Accepted-as-safe, not an oversight.
     base_args = [
         str(patch_bin),
         "-p0",
