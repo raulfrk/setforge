@@ -174,17 +174,50 @@ def _check_yaml_octal_mode(value: object, source_label: str) -> int | None:
     return int(value)
 
 
+def _enforce_mode_bits_policy(mode: int, label: str) -> None:
+    """Shared file-mode security policy: range 0o0..0o7777, no setuid/setgid.
+
+    The sticky bit (0o1000) is permitted; only setuid/setgid (0o6000) are
+    refused. Used by both the ``tracked_files`` ``mode`` path and the
+    package ``chmod`` path so the two config-driven file-mode surfaces
+    stay symmetric.
+    """
+    if not (0o0 <= mode <= 0o7777):
+        raise ValueError(f"{label} {oct(mode)} out of range 0o0..0o7777")
+    if mode & 0o6000:
+        raise ValueError(
+            f"{label} {oct(mode)} sets setuid/setgid bit — refusing for security."
+        )
+
+
 def _validate_mode_policy(v: object) -> int | None:
     mode = _check_yaml_octal_mode(v, "mode")
     if mode is None:
         return None
-    if not (0o0 <= mode <= 0o7777):
-        raise ValueError(f"mode {oct(mode)} out of range 0o0..0o7777")
-    if mode & 0o6000:
-        raise ValueError(
-            f"mode {oct(mode)} sets setuid/setgid bit — refusing for security."
-        )
+    _enforce_mode_bits_policy(mode, "mode")
     return mode
+
+
+def _validate_package_chmod(v: str) -> str:
+    """Policy-check a package ``chmod`` string, mirroring ``mode`` policy.
+
+    The symbolic ``"+x"`` form is passed through unchanged. An octal
+    string (e.g. ``"755"`` / ``"0755"``) is parsed and subjected to the
+    same setuid/setgid rejection and 0o0..0o7777 range as the
+    ``tracked_files`` ``mode`` field. Non-octal strings are left for the
+    installer to reject at parse time (its error message is authoritative
+    for the accepted forms).
+    """
+    if v == "+x":
+        return v
+    try:
+        mode = int(v, 8)
+    except ValueError:
+        # Not octal: defer to the installer's _resolve_mode error, which
+        # names the accepted forms ('+x' or a bare octal mode).
+        return v
+    _enforce_mode_bits_policy(mode, "chmod")
+    return v
 
 
 class TrackedFile(BaseModel):
@@ -418,6 +451,11 @@ class GitHubReleasePackage(BaseModel):
             return None
         return _reject_path_in_bare_name(v, info.field_name or "field")
 
+    @field_validator("chmod")
+    @classmethod
+    def _chmod_policy(cls, v: str) -> str:
+        return _validate_package_chmod(v)
+
 
 class LocalPackage(BaseModel):
     model_config = _STRICT
@@ -437,6 +475,11 @@ class LocalPackage(BaseModel):
         if v is None:
             return None
         return _reject_path_in_bare_name(v, info.field_name or "field")
+
+    @field_validator("chmod")
+    @classmethod
+    def _chmod_policy(cls, v: str) -> str:
+        return _validate_package_chmod(v)
 
 
 class PluginPackage(BaseModel):

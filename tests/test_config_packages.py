@@ -186,6 +186,58 @@ def test_local_rejects_degenerate_rename(bad: str) -> None:
         LocalPackage(path="p.tgz", binary="mytool", install="~/bin/x", rename=bad)
 
 
+# --- chmod file-mode security policy (mirrors tracked_files mode) -----------
+
+
+@pytest.mark.parametrize("bad", ["4755", "2755", "6755", "07777"])
+def test_github_release_rejects_setuid_setgid_chmod(bad: str) -> None:
+    """setuid/setgid chmod is refused at config load — symmetric with mode."""
+    with pytest.raises(ValidationError, match="setuid/setgid"):
+        GitHubReleasePackage(
+            repo="o/r",
+            tag="v1",
+            asset="a.tgz",
+            binary="fd",
+            install="~/bin/x",
+            chmod=bad,
+        )
+
+
+@pytest.mark.parametrize("bad", ["4755", "2755", "07777"])
+def test_local_rejects_setuid_setgid_chmod(bad: str) -> None:
+    with pytest.raises(ValidationError, match="setuid/setgid"):
+        LocalPackage(path="p.tgz", binary="mytool", install="~/bin/x", chmod=bad)
+
+
+def test_github_release_rejects_out_of_range_chmod() -> None:
+    """A chmod above 0o7777 is refused for range, matching mode policy."""
+    with pytest.raises(ValidationError, match="out of range"):
+        GitHubReleasePackage(
+            repo="o/r",
+            tag="v1",
+            asset="a.tgz",
+            binary="fd",
+            install="~/bin/x",
+            chmod="17777",
+        )
+
+
+@pytest.mark.parametrize("good", ["+x", "0755", "0644", "755", "1755"])
+def test_package_accepts_safe_chmod(good: str) -> None:
+    """'+x', plain octals, and the sticky bit (0o1000) stay valid."""
+    gh = GitHubReleasePackage(
+        repo="o/r",
+        tag="v1",
+        asset="a.tgz",
+        binary="fd",
+        install="~/bin/x",
+        chmod=good,
+    )
+    lo = LocalPackage(path="p.tgz", binary="mytool", install="~/bin/x", chmod=good)
+    assert gh.chmod == good
+    assert lo.chmod == good
+
+
 def test_bare_binary_name_accepted() -> None:
     pkg = LocalPackage(path="p.tgz", binary="my-tool", install="~/bin/x")
     assert pkg.binary == "my-tool"
