@@ -164,6 +164,56 @@ def test_meets_floor_rejects_malformed_cleanly(bad: str) -> None:
         _meets_floor("1.2", bad)
 
 
+def test_both_contractions_share_the_one_lower_floor_helper() -> None:
+    """The 1.2->2.0 and 5.0->6.0 reverses lower the floor via ONE shared helper.
+
+    Both modules previously carried a verbatim copy of ``_lower_floor`` /
+    ``_registry_min_version``; both now import the single package-level
+    ``_lower_floor``. Assert the imported symbol is literally the same object in
+    both modules so a future edit to the shared helper cannot silently diverge
+    the two reverses.
+    """
+    from setforge.migrations import _contract_2_0, _lower_floor, _profile_fields_retire
+
+    assert _contract_2_0._lower_floor is _lower_floor
+    assert _profile_fields_retire._lower_floor is _lower_floor
+
+
+def test_shared_lower_floor_lowers_stale_floor_to_registry_minimum() -> None:
+    """A floor ABOVE to_version is lowered to the registry's lowest version.
+
+    Both reverses call the shared helper with their own ``to_version``; the
+    behavior is identical, so one direct exercise of the shared helper covers
+    both. A floor at/below ``to_version`` is left untouched.
+    """
+    from ruamel.yaml.comments import CommentedMap
+
+    from setforge.migrations import (
+        _lower_floor,
+        _registry_min_version,
+        parse_schema_version,
+    )
+
+    reg_min = _registry_min_version()
+    # to_version below the stale floor -> lowered to the registry minimum.
+    high = CommentedMap({"minimum_version": "6.0"})
+    _lower_floor(high, "5.0")
+    assert high["minimum_version"] == reg_min
+
+    # A floor at/below to_version is untouched.
+    low = CommentedMap({"minimum_version": reg_min})
+    _lower_floor(low, "5.0")
+    assert low["minimum_version"] == reg_min
+
+    # An absent floor is a no-op (nothing to lower).
+    absent: CommentedMap = CommentedMap()
+    _lower_floor(absent, "5.0")
+    assert "minimum_version" not in absent
+
+    # The registry minimum can never lock out any served target.
+    assert parse_schema_version(reg_min) <= parse_schema_version("5.0")
+
+
 # ---------------------------------------------------------------------------
 # reverse + registry guard
 # ---------------------------------------------------------------------------

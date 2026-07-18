@@ -47,6 +47,7 @@ from setforge.migrations import (
     ManifestType,
     MigrationRoots,
     _gate_floor,
+    _lower_floor,
     _require_mapping_root,
     parse_schema_version,
     preserve_contract_schema_version,
@@ -321,74 +322,6 @@ def _migrate_local_yaml(data: CommentedMap) -> None:
                 for path in add:
                     _upsert_span(spans, _overlay_span(str(path)))
         _del_if_present(tracked_file, "preserve_user_keys")
-
-
-def _registry_min_version() -> str:
-    """Return the lowest schema version the migration registry can resolve to.
-
-    A lazy local import sidesteps the import cycle: this module is imported at
-    the tail of :mod:`setforge.migrations` (before ``known_versions`` is even
-    defined), but ``_lower_floor`` only ever runs from the reverse ``apply`` —
-    long after the package finished initializing — so the symbol resolves.
-    """
-    from setforge.migrations import known_versions
-
-    return min(known_versions(), key=parse_schema_version)
-
-
-def _lower_floor(data: CommentedMap, to_version: str) -> None:
-    """Lower a stale ``minimum_version`` floor so the down-migrated config loads.
-
-    The forward contract GATES on ``minimum_version >= 2.0`` (the operator
-    attestation that every host is upgraded) but never touched the floor when
-    re-stamping. The reverse therefore left a config carrying
-    ``schema_version: 1.2`` AND ``minimum_version: 2.0`` — which the very 1.2
-    engine the downgrade exists to serve refuses, because its expected schema
-    (1.2) is below the floor (2.0). The floor is an operator attestation, not
-    user data, so the reverse owns restoring the floor state the config
-    plausibly had before the forward contraction.
-
-    This reverse is the ONLY chain step that touches the floor: the deeper
-    same-major reverses (1.2 -> 1.1 -> 1.0) re-stamp ``schema_version`` but
-    never the floor. So when this single step does NOT lower the floor low
-    enough, a cross-major downgrade to 1.1 / 1.0 ends carrying a floor that
-    still exceeds the target engine's expected schema, and that engine refuses
-    the very config the downgrade existed to serve. Because this step cannot
-    see the chain's ULTIMATE target, the lowering must clear every 1.x target:
-
-    * A floor that satisfies the CONTRACT floor (``>= 2.0``) is the stale
-      cross-major attestation. The reverse just restored a 1.x-loadable shape,
-      so that attestation is wholesale invalid — lower it to the registry's
-      LOWEST schema version, which can never lock out any 1.x target the
-      downgrade serves (a target engine always satisfies a floor at or below
-      the registry minimum).
-    * A floor strictly between ``to_version`` and the contract floor (e.g. a
-      hand-authored same-major ``1.5``) is ALSO lowered to the registry
-      minimum. Lowering it only to ``to_version`` (this step's 1.2) would
-      still lock out a chain whose ultimate target is 1.1 / 1.0, because the
-      deeper same-major reverses never lower the floor further — the exact
-      cross-major-downgrade lockout this helper exists to prevent. Since this
-      step cannot see the ultimate target, the registry minimum is the only
-      value guaranteed to satisfy every reachable 1.x target. (The residual
-      cost is a floor that under-states the down-translated content's needs
-      when the chain stops above the registry minimum; that only ever
-      under-warns a sub-target engine, never blocks the intended target — the
-      strictly safer failure direction. The fully precise fix would clamp the
-      floor to the chain's final target in the chain driver, which this single
-      step has no visibility into.)
-    * A floor AT or BELOW ``to_version`` — including a hand-authored low
-      same-major floor — is left untouched, since it never blocks the target.
-    """
-    raw_floor = data.get("minimum_version")
-    if raw_floor is None:
-        return
-    floor = str(raw_floor)
-    # Any floor ABOVE this step's to_version (whether the cross-major contract
-    # floor or a hand-authored same-major floor) is lowered to the registry
-    # minimum — see the docstring for why to_version alone is insufficient. A
-    # floor at/below to_version never blocks the target and is left untouched.
-    if parse_schema_version(floor) > parse_schema_version(to_version):
-        data["minimum_version"] = _registry_min_version()
 
 
 @dataclass(slots=True, frozen=True)

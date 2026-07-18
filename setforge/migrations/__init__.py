@@ -141,6 +141,43 @@ def _gate_floor(
         )
 
 
+def _registry_min_version() -> str:
+    """Return the lowest schema version the migration registry can resolve to.
+
+    A lazy local import sidesteps the import cycle: the retirement modules
+    that call this are imported at the tail of this package (before
+    ``known_versions`` is even defined), but ``_lower_floor`` only ever runs
+    from a reverse ``apply`` — long after the package finished initializing —
+    so the symbol resolves.
+    """
+    return min(known_versions(), key=parse_schema_version)
+
+
+def _lower_floor(data: CommentedMap, to_version: str) -> None:
+    """Lower a stale ``minimum_version`` floor above ``to_version``.
+
+    A forward contract GATES on ``minimum_version >= <its floor>`` but never
+    touches the floor when re-stamping, so a reverse can leave a config
+    carrying a low ``schema_version`` AND a higher floor — which the very
+    lower-schema engine the downgrade serves refuses. The floor is an operator
+    attestation, not user data, so the reverse lowers any floor above
+    ``to_version`` to the registry's LOWEST schema version (which can never
+    lock out a served target).
+
+    Lowering to the registry minimum rather than to ``to_version`` alone is
+    deliberate: this single step cannot see a chain's ULTIMATE target, and the
+    deeper same-major reverses never lower the floor further, so only the
+    registry minimum is guaranteed to satisfy every reachable target. A floor
+    AT or BELOW ``to_version`` is left untouched — it never blocks the target.
+    """
+    raw_floor = data.get("minimum_version")
+    if raw_floor is None:
+        return
+    floor = str(raw_floor)
+    if parse_schema_version(floor) > parse_schema_version(to_version):
+        data["minimum_version"] = _registry_min_version()
+
+
 __all__ = [
     "MIGRATIONS",
     "Contract20Migration",

@@ -57,6 +57,7 @@ from setforge.migrations import (
     ManifestType,
     MigrationRoots,
     _gate_floor,
+    _lower_floor,
     _require_mapping_root,
     package_contract_schema_version,
     parse_schema_version,
@@ -441,8 +442,8 @@ class _ProfileFieldsRetireReverse:
     as the 1.0 baseline).
 
     A stale ``minimum_version`` floor above 5.0 is lowered so the down-migrated
-    config loads on the 5.x engine the downgrade serves (mirrors
-    :func:`setforge.migrations._contract_2_0._lower_floor`).
+    config loads on the 5.x engine the downgrade serves (via the shared
+    :func:`setforge.migrations._lower_floor`).
 
     The round-trip restores schema SHAPE + values, NOT byte identity (ruamel
     normalizes on the first load->dump).
@@ -663,34 +664,3 @@ def _drop_minted_packages(
             del registry[name]
     if not registry and "packages" in data:
         del data["packages"]
-
-
-def _registry_min_version() -> str:
-    """Return the lowest schema version the migration registry can resolve to.
-
-    A lazy local import sidesteps the import cycle: this module is imported at
-    the tail of :mod:`setforge.migrations`, but ``_lower_floor`` only runs from
-    the reverse ``apply`` — long after the package finished initializing.
-    """
-    from setforge.migrations import known_versions
-
-    return min(known_versions(), key=parse_schema_version)
-
-
-def _lower_floor(data: CommentedMap, to_version: str) -> None:
-    """Lower a stale ``minimum_version`` floor above ``to_version``.
-
-    The forward contract GATES on ``minimum_version >= 6.0`` but never touched
-    the floor when stamping, so the reverse leaves a config carrying
-    ``schema_version: 5.0`` AND a >5.0 floor — which the very 5.x engine the
-    downgrade serves refuses. The floor is an operator attestation, not user
-    data, so the reverse lowers any floor above ``to_version`` to the registry's
-    LOWEST schema version (which can never lock out a served target). Mirrors
-    :func:`setforge.migrations._contract_2_0._lower_floor`.
-    """
-    raw_floor = data.get("minimum_version")
-    if raw_floor is None:
-        return
-    floor = str(raw_floor)
-    if parse_schema_version(floor) > parse_schema_version(to_version):
-        data["minimum_version"] = _registry_min_version()
