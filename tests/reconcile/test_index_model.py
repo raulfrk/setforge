@@ -8,6 +8,8 @@ from setforge.errors import CorruptIndexError, IndexVersionError
 from setforge.reconcile.index_model import (
     CURRENT_VERSION,
     FileEntry,
+    HunkCls,
+    HunkKind,
     Index,
     dumps,
     loads,
@@ -35,6 +37,46 @@ def test_key_kind_hunk_row_round_trips() -> None:
     )
     out = loads(dumps(idx))
     assert out.files["s.yaml"].hunks[0]["path"] == "editor.fontSize"
+
+
+def test_discriminators_serialise_to_bare_on_disk_strings() -> None:
+    """The local StrEnums persist byte-identically to the frozen on-disk schema.
+
+    ``HunkKind``/``HunkCls`` members ARE ``str`` and equal their ``.value``, so
+    ``dumps`` must emit the bare discriminator strings — no ``"HunkKind.KEY"`` /
+    enum-qualified leak. Asserting on the raw JSON text proves the StrEnum
+    conversion did not change the persisted format.
+    """
+    # members equal their exact on-disk byte-strings
+    assert HunkKind.LINE == "line"
+    assert HunkKind.KEY == "key"
+    assert HunkCls.LOCAL == "local"
+    assert HunkCls.SHARED == "shared"
+    assert HunkCls.PENDING == "pending"
+    assert HunkCls.SHARED_DRAFTED == "shared_drafted"
+
+    row = {
+        "kind": HunkKind.KEY,
+        "cls": HunkCls.SHARED_DRAFTED,
+        "label": "editor.fontSize",
+        "path": "editor.fontSize",
+        "value_hash": "sha256:v",
+        "draft_hash": "sha256:d",
+    }
+    idx = Index(
+        files={"s.yaml": FileEntry(present=True, local_hash="sha256:l", hunks=[row])}
+    )
+    text = dumps(idx)
+    # raw persisted text carries the bare literals, never an enum-qualified name
+    assert '"kind": "key"' in text
+    assert '"cls": "shared_drafted"' in text
+    assert "HunkKind" not in text
+    assert "HunkCls" not in text
+    # and the bytes round-trip back to the same literal strings
+    out = loads(text)
+    hunk = out.files["s.yaml"].hunks[0]
+    assert hunk["kind"] == "key"
+    assert hunk["cls"] == "shared_drafted"
 
 
 def test_line_row_without_kind_still_valid() -> None:

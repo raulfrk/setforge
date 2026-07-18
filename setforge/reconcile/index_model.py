@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Final
 
 from setforge.errors import CorruptIndexError, IndexVersionError
@@ -149,11 +150,41 @@ def _parse_entry(fid: str, raw: object) -> FileEntry:
     return FileEntry(present=raw["present"], local_hash=local_hash, hunks=hunks)
 
 
-#: The two ``kind`` discriminators of a persisted hunk row — the frozen on-disk
-#: schema values this module owns. ``line`` is a markdown line-hunk row; ``key``
-#: is a structured key-unit row.
-KIND_LINE: Final = "line"
-KIND_KEY: Final = "key"
+class HunkKind(StrEnum):
+    """The two ``kind`` discriminators of a persisted hunk row — the frozen
+    on-disk schema values this module owns.
+
+    ``LINE`` is a markdown line-hunk row; ``KEY`` is a structured key-unit row.
+    Each member ``.value`` is the exact byte-string written to / read from disk;
+    because :class:`~enum.StrEnum` members *are* ``str`` and equal their value,
+    ``json.dumps`` emits the bare string and comparisons against parsed strings
+    keep working. Defined locally (not imported) to keep this codec a leaf with
+    no dependency on the staging layer.
+    """
+
+    LINE = "line"
+    KEY = "key"
+
+
+class HunkCls(StrEnum):
+    """The valid ``cls`` values of a persisted hunk row — the on-disk mirror of
+    :class:`setforge.reconcile.types.HunkClass`'s value set.
+
+    Defined locally (not imported) to keep this codec a leaf with no dependency
+    on the staging layer; the values are a frozen part of the on-disk schema and
+    must stay byte-identical to ``types.HunkClass``.
+    """
+
+    LOCAL = "local"
+    SHARED = "shared"
+    PENDING = "pending"
+    SHARED_DRAFTED = "shared_drafted"
+
+
+#: Backwards-compatible aliases for the ``kind`` discriminators (the staging
+#: layer imports :data:`KIND_KEY`); both equal their bare on-disk string.
+KIND_LINE: Final = HunkKind.LINE
+KIND_KEY: Final = HunkKind.KEY
 
 #: The keys a LINE hunk row must carry (mirrors ``hunks.serialize``). ``line`` is
 #: the default ``kind``, so a legacy row with no ``kind`` stays valid + byte-stable.
@@ -163,11 +194,9 @@ _HUNK_ROW_KEYS_LINE: Final = ("cls", "label", "live_hash", "anchor")
 #: identity in place of the line row's ``anchor`` + ``live_hash``.
 _HUNK_ROW_KEYS_KEY: Final = ("cls", "label", "path", "value_hash")
 #: Valid ``kind`` discriminators; an absent ``kind`` defaults to ``line``.
-_HUNK_KINDS: Final = frozenset({KIND_LINE, KIND_KEY})
-#: Valid ``cls`` values — the :class:`~setforge.reconcile.types.HunkClass` value set.
-#: Inlined (not imported) to keep this codec a leaf with no dependency on the
-#: staging layer; the values are a frozen part of the on-disk schema.
-_HUNK_CLASSES: Final = frozenset({"local", "shared", "pending", "shared_drafted"})
+_HUNK_KINDS: Final = frozenset(HunkKind)
+#: Valid ``cls`` values, derived from the local :class:`HunkCls` StrEnum.
+_HUNK_CLASSES: Final = frozenset(HunkCls)
 
 
 def _check_hunk_row(fid: str, row: object) -> None:
@@ -207,7 +236,7 @@ def _check_hunk_row(fid: str, row: object) -> None:
             f"index entry for {fid!r} has a hunk row with an unknown cls {row['cls']!r}"
         )
     draft_hash = row.get("draft_hash")
-    if row["cls"] == "shared_drafted":
+    if row["cls"] == HunkCls.SHARED_DRAFTED:
         if not isinstance(draft_hash, str):
             raise CorruptIndexError(
                 f"index entry for {fid!r} has a 'shared_drafted' hunk row with a "
