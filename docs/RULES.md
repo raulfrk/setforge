@@ -116,7 +116,7 @@ Part 2(b)).
 | PROV-2 | The revert delta records **only successful** installs (no half-applied rollback). | DETERMINISTIC | provisioner-protocol tests + `@invariant` (INV-3) |
 | PROV-3 | `REPORT` / dry-run performs **no writes** (pure diff). | DETERMINISTIC | provisioner-protocol tests (no-write assertion) |
 | PROV-4 | Idempotent skip: a component whose key already matches installed state is a **no-op**. | DETERMINISTIC | provisioner-protocol tests + `@invariant` (INV-7) |
-| PROV-5 | User-scope by default; system (apt) needs `allow_system: true` **and** runtime root/sudo capability, else **soft-fail** (warn + skip, never hang). | DETERMINISTIC | e2e (soft-fail path) + `design-invariant-reviewer` |
+| PROV-5 | User-scope by default; system (apt) needs `allow_system: true` **and** runtime root/sudo capability, else **soft-fail** (warn + skip, never hang). | DETERMINISTIC | `test_provision_no_system_scope` (user-scope-by-construction: no apt/apt-get/dpkg/sudo shell-out) + `design-invariant-reviewer`; the e2e soft-fail path becomes required + authorable once a genuine system(apt) provisioner exists |
 | PROV-6 | `plugin` provisioning never writes `enabledPlugins` directly — it uses the `claude plugin` CLI. | DETERMINISTIC | `legacy-API-ban` lint + e2e |
 
 ---
