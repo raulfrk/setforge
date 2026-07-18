@@ -52,7 +52,9 @@ from setforge.jsonc import (
 from setforge.scalar_merge import ABSENT, ScalarOutcome, ScalarResolution
 from setforge.yaml_merge import _MISSING, PathTokenKind, _navigate, _parse_path
 
-_LIST_SUFFIX_KINDS: frozenset[str] = frozenset({"key_each", "key_whole"})
+_LIST_SUFFIX_KINDS: frozenset[PathTokenKind] = frozenset(
+    {PathTokenKind.KEY_EACH, PathTokenKind.KEY_WHOLE}
+)
 
 
 # ---------------------------------------------------------------------------
