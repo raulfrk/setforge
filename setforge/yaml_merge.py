@@ -263,28 +263,3 @@ def _navigate(node: Any, tokens: list[tuple[str, str]]) -> Any:
     if kind == "key":
         return _navigate(node[key], rest)
     return node[key]
-
-
-def delete_keys(doc: Any, key_paths: list[str]) -> None:
-    """Mutate ``doc`` in place, removing the value at every path in
-    ``key_paths``. Missing paths are silently skipped.
-
-    For ``[*]`` and ``[]`` paths the entire list at the path is removed
-    (per-element delete is meaningless for capture's strip use case).
-    """
-    for path in key_paths:
-        tokens = _parse_path(path)
-        _delete_path(doc, tokens)
-
-
-def _delete_path(node: Any, tokens: list[tuple[str, str]]) -> None:
-    if not tokens:
-        return
-    _kind, key = tokens[0]
-    rest = tokens[1:]
-    if not isinstance(node, MutableMapping) or key not in node:
-        return
-    if not rest:
-        del node[key]
-        return
-    _delete_path(node[key], rest)
