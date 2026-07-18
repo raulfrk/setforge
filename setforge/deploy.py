@@ -21,7 +21,6 @@ from setforge import atomicio
 from setforge.config import Config, ResolvedProfile, TrackedFile
 from setforge.errors import MissingTrackedFile, SetforgeError
 from setforge.markdown_merge import LineConflict
-from setforge.source import HostLocalSection, HostLocalSectionName
 from setforge.structural_merge import PathConflict
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -88,7 +87,6 @@ def copy_atomic(
     dst: Path,
     *,
     backup: bool = True,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
 ) -> DeployResult:
     """Atomically deploy ``src`` to ``dst`` verbatim.
@@ -110,7 +108,6 @@ def copy_atomic(
     resolved = resolve_deploy(
         src,
         dst,
-        host_local_sections=host_local_sections,
         mode=mode,
     )
     return write_resolved_deploy(resolved, backup=backup)
@@ -120,7 +117,6 @@ def resolve_deploy(
     src: Path,
     dst: Path,
     *,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
     mode: int | None = None,
 ) -> ResolvedDeploy:
     """Compute a verbatim deploy's content WITHOUT writing anything.
@@ -137,10 +133,9 @@ def resolve_deploy(
     so this function deploys ``src`` verbatim and leaves ``new_base`` /
     ``merge_conflicts`` inert.
 
-    ``host_local_sections`` is a vestigial parameter: host-local content is now
-    owned by the reconcile engine (the marker-injection path was retired with
-    the user-section markers). It is retained on the signature for caller
-    symmetry and threaded inertly.
+    Host-local content is owned by the reconcile engine (the marker-injection
+    path was retired with the user-section markers), so this pass does not take
+    any host-local overlay.
 
     ``mode`` is the POSIX file-mode bits to apply to ``dst`` via
     ``os.fchmod`` on the temp fd BEFORE ``os.replace`` (closes the
@@ -342,7 +337,6 @@ def deploy_symlinked_file(
     tracked_file: TrackedFile,
     *,
     backup: bool = True,
-    host_local_sections: dict[HostLocalSectionName, HostLocalSection] | None = None,
 ) -> DeployResult:
     """Deploy a tracked_file that declares ``symlink:``.
 

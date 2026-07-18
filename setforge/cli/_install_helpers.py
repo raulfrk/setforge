@@ -547,7 +547,6 @@ def _resolve_one_pending(
     resolved = deploy.resolve_deploy(
         sub_src,
         sub_dst,
-        host_local_sections=host_local,
         mode=tracked_file.mode,
     )
     return _PendingDeploy(
@@ -694,7 +693,6 @@ def _execute_pending_deploys(
                 record.sub_src,
                 record.sub_dst,
                 tracked_file,
-                host_local_sections=record.host_local,
             )
             typer.echo(
                 f"{result.action.value:>8}  {record.sub_dst} -> {tracked_file.symlink}"
