@@ -31,7 +31,9 @@ _DEFAULT_REF = "HEAD"
 # command; `--` stops flag parsing but git still honors them in the URL. Only the
 # real network/filesystem schemes are allowed for the ls-remote subprocess.
 _ALLOWED_GIT_PROTOCOLS = "https:ssh:file"
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# Exactly 40 (SHA-1) or 64 (SHA-256) lowercase hex chars — git's two object-id
+# formats. Nothing in between is a valid object id.
+_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -124,7 +126,7 @@ class PluginResolver:
 
 
 def _parse_ls_remote_sha(stdout: str, git_url: str, ref: str) -> str:
-    # 40-hex validated so a moving ref or malformed line fails closed.
+    # SHA-1/SHA-256 hex validated so a moving ref or malformed line fails closed.
     for line in stdout.splitlines():
         stripped = line.strip()
         if not stripped:

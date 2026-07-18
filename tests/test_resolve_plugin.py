@@ -12,6 +12,7 @@ from setforge.errors import ResolveError
 from setforge.provision.resolve.plugin import (
     PluginResolveItem,
     PluginResolver,
+    _parse_ls_remote_sha,
     marketplace_git_url,
 )
 from setforge.provision.resolve.protocol import IntegrityKind, PackageType
@@ -160,6 +161,33 @@ def test_marketplace_git_url_passes_through_full_url() -> None:
         source=MarketplaceSourceKind.GITHUB, repo="https://example.com/x.git"
     )
     assert marketplace_git_url(src) == "https://example.com/x.git"
+
+
+_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_parse_accepts_sha1_object_id() -> None:
+    assert _parse_ls_remote_sha(f"{_SHA}\tHEAD\n", "u", "HEAD") == _SHA
+
+
+def test_parse_accepts_sha256_object_id() -> None:
+    assert _parse_ls_remote_sha(f"{_SHA256}\tHEAD\n", "u", "HEAD") == _SHA256
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "a" * 39,  # 39 hex — too short for SHA-1
+        "a" * 41,  # 41 hex — between SHA-1 and SHA-256
+        "a" * 63,  # 63 hex — one short of SHA-256
+        "a" * 65,  # 65 hex — one over SHA-256
+        "A" * 64,  # 64 hex but uppercase
+        "z" * 40,  # right length, non-hex
+    ],
+)
+def test_parse_rejects_non_object_ids(bad: str) -> None:
+    with pytest.raises(ResolveError, match="non-SHA"):
+        _parse_ls_remote_sha(f"{bad}\tHEAD\n", "u", "HEAD")
 
 
 def test_resolve_registered_and_retrievable() -> None:
