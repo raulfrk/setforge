@@ -15,9 +15,9 @@ from typing import Any
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
 
 from setforge.secrets import SecretAction, SecretFinding
+from setforge.ui import box, theme
 
 __all__ = ["prompt_secret_action"]
 
@@ -31,19 +31,36 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401 — PEP 562 module hook retur
 
 
 def _render_panel(finding: SecretFinding, console: Console) -> None:
-    """Render the mockup-T panel describing a single finding."""
-    body = (
-        f"[bold]rule:[/bold]      {finding.secret_kind}\n"
-        f"[bold]file:[/bold]      {finding.file_path}:{finding.line_number}\n"
-        f"[bold]snippet:[/bold]   {finding.snippet!r}"
+    """Frame the mockup-T finding through the shared ``box.frame`` helper.
+
+    Uses the same ``┌─┐`` box the button widgets on this surface draw
+    (:mod:`setforge.ui.box`) — one consistent frame style — and paints it via
+    the theme's :data:`~setforge.ui.theme.Role.WARNING` role (the security
+    accent) rather than a hardcoded Rich ``border_style``. ``box.frame``
+    measures body lines by ``len()`` and truncates to fit, so the body rows are
+    plain text (no Rich markup that would corrupt the width arithmetic); the
+    theme's per-stream SGR is applied to the already-framed lines and degrades
+    to plain text on a non-tty / ``NO_COLOR`` stream.
+    """
+    body = [
+        f"rule:      {finding.secret_kind}",
+        f"file:      {finding.file_path}:{finding.line_number}",
+        f"snippet:   {finding.snippet!r}",
+    ]
+    framed = box.frame(
+        body,
+        title="⚠ POTENTIAL SECRET DETECTED",
+        width=console.width,
     )
-    console.print(
-        Panel.fit(
-            body,
-            title="[yellow]⚠ POTENTIAL SECRET DETECTED[/yellow]",
-            border_style="yellow",
+    for line in framed:
+        # markup=False + highlight=False: the theme's WARNING SGR is the SOLE
+        # color source. Rich's auto-highlighter would otherwise re-tint the
+        # digits (``:42``) and the quoted snippet, competing with the theme.
+        console.print(
+            theme.styled(line, theme.Role.WARNING, stream=console.file),
+            markup=False,
+            highlight=False,
         )
-    )
 
 
 def prompt_secret_action(finding: SecretFinding, yes: bool = False) -> SecretAction:

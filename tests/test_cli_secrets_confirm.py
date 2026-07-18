@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from rich.console import Console
 
 from setforge.cli import _secrets_confirm
 from setforge.secrets import SecretAction, SecretFinding
@@ -59,6 +61,36 @@ def _force_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _secrets_confirm.sys.stdin, "isatty", lambda: True, raising=False
     )
+
+
+# ---------------------------------------------------------------------------
+# Panel construction / render (box.frame conversion)
+# ---------------------------------------------------------------------------
+
+
+def test_render_panel_frames_heading_and_body_without_raising() -> None:
+    """``_render_panel`` must build and print the framed box without crashing.
+
+    Scripting the button_bar callback (the tests above) bypasses this render
+    path entirely, so a real box.frame construction crash would go unseen.
+    This exercises the actual frame + theme-style + print pipeline and asserts
+    the framed output is a non-empty ``┌─┐`` box carrying the warning heading
+    and every body field.
+    """
+    finding = _make_finding()
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+
+    _secrets_confirm._render_panel(finding, console)
+
+    out = buf.getvalue()
+    assert out.strip() != ""  # something was actually rendered
+    for corner in ("┌", "┐", "└", "┘"):
+        assert corner in out  # a full ┌─┐ box was drawn
+    assert "POTENTIAL SECRET DETECTED" in out  # warning heading survives
+    assert finding.secret_kind in out  # rule/kind body field
+    assert f":{finding.line_number}" in out  # file:line body field
+    assert finding.snippet in out  # snippet body field
 
 
 # ---------------------------------------------------------------------------
